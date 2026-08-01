@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backend Standards — Setup Guide</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #6b6b6b; --line: #e4e4e4;
+    --code-bg: #f6f6f4; --accent: #b8552f; --accent-soft: #fdf3ee;
+    --warn-bg: #fdf6e7; --warn-line: #e8cf9a; --ok-bg: #eef6ee; --ok-line: #b9d6ba;
+    --t1: #eaf0f6; --t1-line: #b6c8da; --t2: #f3eef7; --t2-line: #c9b6d8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1b1a; --fg: #e8e6e3; --muted: #a3a09b; --line: #333230;
+      --code-bg: #252523; --accent: #e08a5f; --accent-soft: #2a201b;
+      --warn-bg: #2b2519; --warn-line: #5c4c2b; --ok-bg: #1d2620; --ok-line: #37503c;
+      --t1: #1e252b; --t1-line: #3a4a58; --t2: #251e2b; --t2-line: #4a3a58;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 48px 24px 96px; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin: 0 0 8px; font-size: 15px; }
+  .ver { color: var(--muted); font-size: 13px; margin: 0 0 40px; }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); font-weight: 600; margin: 48px 0 16px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  h3 { font-size: 17px; margin: 32px 0 8px; letter-spacing: -0.01em; }
+  p { margin: 0 0 14px; }
+  code { font: 13.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         background: var(--code-bg); padding: 2px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+        padding: 14px 16px; overflow-x: auto; margin: 14px 0; }
+  pre code { background: none; padding: 0; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  td code { font-size: 12.5px; }
+  .step { display: flex; gap: 14px; align-items: baseline; margin: 40px 0 12px; }
+  .num { flex: none; width: 26px; height: 26px; border-radius: 50%;
+         background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
+         display: grid; place-items: center; transform: translateY(3px); }
+  .step h3 { margin: 0; font-size: 19px; }
+  .note, .warn, .ok { border-left: 3px solid var(--accent); background: var(--accent-soft);
+        padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 16px 0; font-size: 14.5px; }
+  .warn { border-left-color: var(--warn-line); background: var(--warn-bg); }
+  .ok { border-left-color: var(--ok-line); background: var(--ok-bg); }
+  .note strong, .warn strong, .ok strong { display: block; margin-bottom: 3px; }
+  ul, ol { margin: 12px 0; padding-left: 22px; }
+  li { margin: 6px 0; }
+  .tree { font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 16px; margin: 16px 0; white-space: pre; overflow-x: auto; }
+  .dim { color: var(--muted); }
+  .tiers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 20px 0; }
+  @media (max-width: 620px) { .tiers { grid-template-columns: 1fr; } }
+  .tier { border-radius: 8px; padding: 14px 16px; font-size: 14.5px; }
+  .tier.one { background: var(--t1); border: 1px solid var(--t1-line); }
+  .tier.two { background: var(--t2); border: 1px solid var(--t2-line); }
+  .tier b { display: block; margin-bottom: 6px; font-size: 13px;
+            text-transform: uppercase; letter-spacing: 0.05em; }
+  .tier ul { margin: 8px 0 0; padding-left: 18px; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0; }
+  footer { color: var(--muted); font-size: 13.5px; margin-top: 56px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Backend Standards</h1>
+<p class="sub">A folder you copy into a Python/FastAPI project. No install, no plugin registry, no build step.</p>
+<p class="ver">v2.2 — two tiers · 11 generic skills + 1 optional · Windows and Unix installers · Python hooks</p>
+
+<h2>The one idea that matters</h2>
+
+<p>The package is split by <strong>who owns each file</strong>. That split is what makes updating safe.</p>
+
+<div class="tiers">
+  <div class="tier one">
+    <b>Tier 1 — generic</b>
+    Reusable across every project. <strong>Overwritten on update.</strong> Don't edit these.
+    <ul>
+      <li>11 skills</li>
+      <li>3 agents, 4 commands</li>
+      <li>hooks, layer checker</li>
+    </ul>
+  </div>
+  <div class="tier two">
+    <b>Tier 2 — yours</b>
+    True only in this project. <strong>Never touched by an update.</strong>
+    <ul>
+      <li><code>project-conventions</code> skill</li>
+      <li>its failure-modes log</li>
+      <li><code>CLAUDE.md</code>, CI thresholds</li>
+    </ul>
+  </div>
+</div>
+
+<p>Anything true only in one project goes in tier 2. That is the whole rule, and it is what lets you take an update without losing project knowledge.</p>
+
+<h2>What's in the box</h2>
+
+<div class="tree">backend-standards/
+├── .claude/
+│   ├── skills/                    <span class="dim">11 generic + your project-conventions</span>
+│   ├── agents/                    <span class="dim">code-reviewer, architecture-reviewer, debugger</span>
+│   ├── commands/                  <span class="dim">/review /ship /debug /adr-new</span>
+│   ├── hooks/                     <span class="dim">format, commit guard, test-on-stop</span>
+│   └── settings.json              <span class="dim">wires the hooks up</span>
+├── optional/skills/               <span class="dim">opt-in, installed with --with</span>
+│   └── tenant-isolation/
+├── scripts/check_layers.py        <span class="dim">import-boundary gate</span>
+├── .github/workflows/             <span class="dim">CI, release, security</span>
+├── .pre-commit-config.yaml
+├── CLAUDE.md                      <span class="dim">short router</span>
+├── install.ps1                    <span class="dim">Windows</span>
+└── install.sh                     <span class="dim">macOS / Linux</span></div>
+
+<table>
+  <tr><th>File</th><th>Edit per project?</th></tr>
+  <tr><td><code>.claude/skills/project-conventions/</code></td><td><strong>Yes — the important one</strong></td></tr>
+  <tr><td><code>CLAUDE.md</code></td><td><strong>Yes</strong> — describes your layout</td></tr>
+  <tr><td><code>.github/workflows/ci.yml</code></td><td><strong>Yes</strong> — coverage threshold, Python versions</td></tr>
+  <tr><td>Everything else</td><td>No</td></tr>
+</table>
+
+<h2>Where the files go</h2>
+
+<p>The <strong>contents</strong> go into your project root. The <code>backend-standards/</code> folder itself never enters your project — it stays where you unzipped it, as the source you re-run updates from.</p>
+
+<div class="tree">your-project/
+├── .claude/                     <span class="dim">&lt;- .claude/ from the package</span>
+├── scripts/check_layers.py
+├── .github/workflows/
+├── .pre-commit-config.yaml
+├── CLAUDE.md
+├── src/                         <span class="dim">&lt;- your code, untouched</span>
+└── pyproject.toml</div>
+
+<p>It has to be the root: <code>.claude/</code> is only discovered there, <code>.github/workflows/</code> is a path GitHub requires exactly, and pre-commit reads its config from the root. Nested inside a folder, none of it loads.</p>
+
+<p>Never copied in: <code>README.md</code>, both installers, <code>optional/</code> (only the skill you name, into <code>.claude/skills/</code>), and <code>settings.windows.json</code>.</p>
+
+<h3>Collisions in an existing project</h3>
+
+<p>Nothing is ever overwritten. Where you already have a file, the package version is written beside it as <code>&lt;name&gt;.new</code>, and every one is listed at the end of the run.</p>
+
+<table>
+  <tr><th>You already have</th><th>What happens</th></tr>
+  <tr><td><code>scripts/</code>, <code>.claude/agents,commands,hooks</code></td><td><strong>Merged.</strong> Your own files survive.</td></tr>
+  <tr><td><code>.github/workflows/deploy.yml</code></td><td><strong>Merged per file</strong> — you still receive <code>ci.yml</code>, <code>release.yml</code>, <code>security.yml</code></td></tr>
+  <tr><td><code>.github/workflows/ci.yml</code></td><td>Yours kept; ours staged as <code>ci.yml.new</code></td></tr>
+  <tr><td><code>.pre-commit-config.yaml</code>, <code>CLAUDE.md</code></td><td>Yours kept; ours staged as <code>.new</code></td></tr>
+  <tr><td><code>.claude/settings.json</code></td><td>Yours kept; staged as <code>.new</code> — merge the <code>hooks</code> block</td></tr>
+</table>
+
+<p class="warn"><strong>An unmerged <code>.new</code> file enforces nothing</strong>The installer lists every one at the end of the run precisely so it can't be missed. Diff each pair, merge what you want, then delete the <code>.new</code>.</p>
+
+<h2>Setup</h2>
+
+<div class="step"><span class="num">1</span><h3>Unzip it somewhere permanent</h3></div>
+<p>Not <code>Downloads</code> — you come back to this folder every time you start or update a project.</p>
+<p class="dim" style="font-size:13px;margin-bottom:4px">PowerShell</p>
+<pre><code>Expand-Archive backend-standards-dropin.zip -DestinationPath C:\dev\
+cd C:\dev\backend-standards</code></pre>
+<p class="dim" style="font-size:13px;margin-bottom:4px">bash</p>
+<pre><code>unzip backend-standards-dropin.zip -d ~/dev/
+cd ~/dev/backend-standards &amp;&amp; chmod +x install.sh</code></pre>
+<p class="ok"><strong>No shell dependency</strong>The hooks are Python, not shell scripts — so there is no bash requirement, no <code>chmod</code> on the hooks, and no PowerShell/bash divergence. The same three files run on Windows, macOS, and Linux.</p>
+
+<div class="step"><span class="num">2</span><h3>Copy it into your project</h3></div>
+<pre><code>.\install.ps1 C:\dev\your-project        <span class="dim"># PowerShell</span>
+./install.sh /path/to/your-project      <span class="dim"># bash</span></code></pre>
+<p>Add optional skills your project actually needs:</p>
+<pre><code>.\install.ps1 C:\dev\your-project -With tenant-isolation
+./install.sh /path/to/your-project --with tenant-isolation</code></pre>
+<p class="note"><strong>The two installers do the same thing</strong>Use whichever matches your shell. <code>install.ps1</code> additionally writes the Windows variant of <code>settings.json</code>, which calls <code>python</code> and uses <code>%CLAUDE_PROJECT_DIR%</code>; the bash one writes the POSIX variant with <code>python3</code> and <code>$CLAUDE_PROJECT_DIR</code>. If your interpreter is <code>py</code>, edit those three command strings.</p>
+<table>
+  <tr><th>Optional skill</th><th>Install when</th></tr>
+  <tr><td><code>tenant-isolation</code></td><td>Separate customer organisations share a database and must never see each other's data</td></tr>
+</table>
+<p>Once installed, an optional skill refreshes on every later update — you don't need the flag again.</p>
+<p class="warn"><strong>If the project already has <code>.claude/settings.json</code></strong>The script writes <code>settings.json.new</code> beside it rather than overwriting. Merge the <code>hooks</code> block by hand.</p>
+
+<div class="step"><span class="num">3</span><h3>Fill in tier 2 — do this first</h3></div>
+<p><code>.claude/skills/project-conventions/SKILL.md</code> ships as a template. It is the highest-value file in the package and the only part you can't download:</p>
+<ul>
+  <li><strong>Settled decisions</strong> — with the reason, and what would reopen them</li>
+  <li><strong>Domain vocabulary</strong> — words that mean something specific here. Ambiguity in this table is how scope bugs get built.</li>
+  <li><strong>House conventions</strong> — where this project overrides a generic standard</li>
+  <li><strong>Guardrails</strong> — invariants every build must preserve</li>
+  <li><strong><code>references/failure-modes.md</code></strong> — what has actually gone wrong here</li>
+</ul>
+<p class="ok"><strong>Why the failure log earns its place</strong>Generic standards encode what <em>usually</em> goes wrong. The failure log encodes what has gone wrong <em>in this codebase</em> — a far better predictor of the next defect. Add a row whenever something is found the hard way, including near-misses, and write it the same day.</p>
+
+<div class="step"><span class="num">4</span><h3>Edit the other two project files</h3></div>
+<p><strong>CLAUDE.md</strong> — the routing table works as-is; change the layout section to describe your actual tree. Keep the file short: it loads on every turn, so anything added is a cost paid by every task.</p>
+<p><strong>.github/workflows/ci.yml</strong> — set the coverage gate to your <em>current</em> coverage:</p>
+<pre><code>--cov=src/your_package     <span class="dim"># not src/app</span>
+--cov-fail-under=62        <span class="dim"># whatever you have today</span></code></pre>
+<p class="warn"><strong>Do not start at 85%</strong>On an existing codebase that fails every PR on day one for code nobody in the PR wrote. Start where you are and raise it a few points a quarter. A gate people route around is worse than no gate.</p>
+
+<div class="step"><span class="num">5</span><h3>Check where you stand</h3></div>
+<pre><code>cd C:\dev\your-project
+python scripts\check_layers.py</code></pre>
+<p>Violations are fine — you don't have to fix them now. Relax the rules and tighten later:</p>
+<pre><code>[tool.check-layers.allowed]
+api = ["domain", "infra", "core"]   <span class="dim"># permissive for now</span>
+domain = ["core"]                   <span class="dim"># the one that matters — keep strict</span></code></pre>
+
+<div class="step"><span class="num">6</span><h3>Turn on the blocking gates — last</h3></div>
+<pre><code>pip install pre-commit
+pre-commit install --install-hooks</code></pre>
+<p><code>make check</code> needs <code>make</code>, which Windows does not ship. Run the gate directly instead:</p>
+<pre><code>uv run ruff format --check .
+uv run ruff check .
+uv run mypy src
+uv run python scripts\check_layers.py
+uv run pytest -q</code></pre>
+<p class="ok"><strong>Order for an existing codebase</strong><code>.claude/</code> → fill in tier 2 → layer check by hand → CI at current coverage → pre-commit. Advisory first, blocking last. New project: everything on, thresholds at target.</p>
+
+<h2>The workflow the skills enforce</h2>
+
+<pre><code>Discuss → Confidence Check → Checklist → Definition of Done → Implement → Docs + Commit</code></pre>
+
+<p>Then a <strong>Build Verification Gate</strong> before moving on. Two constraints do most of the work:</p>
+<ul>
+  <li><strong>The checklist and DoD are approved as text</strong>, with no tool calls in the same response. A response that proposes a plan and starts executing it hasn't been approved — it's been announced.</li>
+  <li><strong>Deep checks report findings only.</strong> Reviews, debugs, and audits never edit until the fix and its impact are approved.</li>
+</ul>
+
+<h2>Skills</h2>
+
+<p>You don't invoke these. Claude loads one when the work matches its description.</p>
+
+<table>
+  <tr><th>Skill</th><th>Fires when</th></tr>
+  <tr><td><code>build-workflow</code></td><td>Starting any non-trivial work; checking if it's done</td></tr>
+  <tr><td><code>project-conventions</code></td><td><strong>Tier 2</strong> — how <em>this</em> project does it</td></tr>
+  <tr><td><code>project-structure</code></td><td>Creating a file; where code lives; commenting norms</td></tr>
+  <tr><td><code>persistence-patterns</code></td><td>Models, queries, sessions, identifiers</td></tr>
+  <tr><td><code>api-designer</code></td><td>Adding or changing an endpoint</td></tr>
+  <tr><td><code>db-migration</code></td><td>Any schema change</td></tr>
+  <tr><td><code>test-writer</code></td><td>Writing or reviewing tests</td></tr>
+  <tr><td><code>security-checker</code></td><td>Auth, user input, SQL, uploads, PII</td></tr>
+  <tr><td><code>observability</code></td><td>Adding logging, metrics, tracing</td></tr>
+  <tr><td><code>deploy-workflow</code></td><td>Branching, merging, promoting, rollback</td></tr>
+  <tr><td><code>release-notes</code></td><td>Cutting a release, writing a changelog</td></tr>
+  <tr><td><code>adr</code></td><td>A decision with long-term consequences</td></tr>
+  <tr><td><code>tenant-isolation</code> <span class="dim">(optional)</span></td><td>A query touches data one customer must never see from another</td></tr>
+</table>
+
+<h3>Commands and hooks</h3>
+<table>
+  <tr><th>Command</th><th>Does</th></tr>
+  <tr><td><code>/review</code></td><td>Runs the gate, spawns the review agents in parallel, applies whichever skill checklists the diff triggers, then the PR Review Procedure</td></tr>
+  <tr><td><code>/ship</code></td><td>Pre-merge gate: checks, tests, conventional commits</td></tr>
+  <tr><td><code>/debug</code></td><td>Hands a failure to the debugger agent so its searching stays out of your context</td></tr>
+  <tr><td><code>/adr-new</code></td><td>Scaffolds a decision record</td></tr>
+</table>
+<p>Hooks fire invisibly: format on edit, block direct commits to <code>main</code> and <code>--no-verify</code>, run tests touching what changed. All exit cleanly if the tool is missing.</p>
+
+<h2>Updating a project later</h2>
+<pre><code>cd C:\dev\backend-standards
+.\install.ps1 C:\dev\your-project       <span class="dim"># PowerShell</span>
+./install.sh /path/to/your-project     <span class="dim"># bash</span></code></pre>
+<p>Tier 1 is refreshed. Tier 2 — your <code>project-conventions</code>, failure log, <code>CLAUDE.md</code>, and CI thresholds — is left alone. Any optional skill already present is refreshed too.</p>
+<p>To force everything including tier 2:</p>
+<pre><code>.\install.ps1 C:\dev\your-project -Force
+./install.sh /path/to/your-project --force</code></pre>
+<p class="warn"><strong><code>--force</code> overwrites your project knowledge</strong>It replaces <code>project-conventions</code> and the failure log with the blank templates. Commit before running it.</p>
+
+<h2>Troubleshooting</h2>
+<table>
+  <tr><th>Symptom</th><th>Cause</th></tr>
+  <tr><td>Skills never load</td><td><code>.claude/</code> isn't at the repo root, or Claude was opened in a parent directory</td></tr>
+  <tr><td>Hooks do nothing</td><td><code>python</code> not on PATH, or named <code>py</code>/<code>python3</code> — edit the commands in <code>.claude/settings.json</code></td></tr>
+<tr><td><code>make: command not found</code></td><td>Windows has no <code>make</code> — run the gate commands directly (Step 6)</td></tr>
+  <tr><td><code>Source package not found</code></td><td>Run from the repo root, or set <code>[tool.check-layers] source</code></td></tr>
+  <tr><td><code>Multiple packages under src/</code></td><td>Name the right one in <code>pyproject.toml</code></td></tr>
+  <tr><td>Layer check passes suspiciously fast</td><td>Confirm the path it prints in <code>Layer boundaries OK (...)</code></td></tr>
+  <tr><td>CI fails immediately on coverage</td><td>Threshold set to target instead of current — lower it</td></tr>
+  <tr><td>Project conventions vanished after an update</td><td><code>--force</code> was used; recover from git</td></tr>
+</table>
+
+<hr>
+
+<footer>
+Two rules, if you keep nothing else: <strong>domain code imports no framework</strong>, and <strong>anything true only in this project lives in tier 2.</strong>
+</footer>
+
+</main>
+</body>
+</html>
