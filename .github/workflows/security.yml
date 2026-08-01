@@ -1,0 +1,102 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so newly-disclosed CVEs in unchanged dependencies still surface.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  # gitleaks-action reads the PR's commit list to scan only what the PR adds.
+  # Without this it gets a 403 on /pulls/{n}/commits and the job fails — which is
+  # exactly how it failed on the first run.
+  pull-requests: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sast:
+    name: Static analysis (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-extras --dev
+
+      # Selected from scripts/check.py, which also carries `-c pyproject.toml`.
+      # Restating the command here had already dropped that flag, so [tool.bandit]
+      # applied locally and was ignored in CI.
+      - name: Bandit (medium severity and above)
+        run: uv run python scripts/check.py --only security
+
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-extras --dev
+
+      # Audit the resolved lockfile, not the installed environment.
+      #
+      # Auditing the environment fails: our own package is installed editable and
+      # is not on PyPI, so it can never be audited, and --strict correctly refuses
+      # to pass on a package it could not check. --skip-editable does not help --
+      # a skipped package is still an unaudited one as far as --strict is
+      # concerned.
+      #
+      # --no-emit-project excludes only our own package, by construction rather
+      # than by suppression, so --strict keeps its meaning for all 180-odd real
+      # dependencies. Dropping --strict would have turned this build green while
+      # silencing every genuine un-auditable dependency along with it.
+      - name: Export the locked dependencies
+        run: uv export --format requirements-txt --no-emit-project --all-extras --no-hashes -o requirements-audit.txt
+
+      - name: pip-audit
+        run: uv run pip-audit --strict -r requirements-audit.txt
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a secret removed in a later commit is still exposed.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# CodeQL is deliberately absent.
+#
+# It requires GitHub Advanced Security to upload results on a private repository.
+# This repo is private under a personal account, where `security_and_analysis` is
+# null, so the analysis ran to completion and then failed at upload with
+# "Resource not accessible by integration". No permissions change fixes that.
+#
+# It is removed rather than left in with `continue-on-error` or an `if:` guard,
+# because a job that is skipped or that swallows its exit code still renders as a
+# green check — and a green check that never ran is worse than a missing one.
+#
+# What covers the gap in the meantime: bandit (SAST) above, ruff's `S` ruleset in
+# the lint job, and pip-audit for known CVEs. What is genuinely lost is CodeQL's
+# dataflow analysis — taint tracking across function boundaries — which none of
+# those do. Recorded as a known blind spot in the project-conventions skill.
+#
+# To restore: enable GitHub Advanced Security, or make the repository public,
+# then re-add a codeql job with `security-events: write` and `actions: read`.

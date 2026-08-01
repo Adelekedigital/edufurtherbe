@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  quality:
+    name: Lint, types, layers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      # Selected from scripts/check.py rather than restated here, so the command
+      # strings exist in one place and CI cannot drift from the local gate.
+      - name: Format, lint, types, layers
+        run: uv run python scripts/check.py --only format,lint,types,layers
+
+  # No interpreter matrix. A matrix earns its keep for a library consumed on many
+  # Python versions; this is an application deployed on exactly one, pinned by
+  # .python-version. A second job would double the minutes to test a
+  # configuration that never runs anywhere.
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      # PYTEST_ADDOPTS carries the reporting flags that only CI needs, so the
+      # coverage thresholds themselves stay defined in scripts/check.py.
+      - name: Run tests with coverage
+        env:
+          PYTEST_ADDOPTS: --cov-report=xml --junitxml=junit.xml
+        run: uv run python scripts/check.py --only tests
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    needs: [quality, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build
+        run: uv build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

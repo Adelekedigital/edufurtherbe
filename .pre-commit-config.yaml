@@ -1,0 +1,80 @@
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+      # Direct commits to main bypass review, CODEOWNERS, and the CI gate.
+      - id: no-commit-to-branch
+        args: [--branch, main]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.1
+    hooks:
+      - id: ruff
+        args: [--fix]
+        exclude: ^\.claude/
+      - id: ruff-format
+        exclude: ^\.claude/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.3.0
+    hooks:
+      - id: mypy
+        args: [--strict]
+        additional_dependencies: [pydantic, pydantic-settings, fastapi, structlog]
+        files: ^src/
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        args: [-q, -ll, -c, pyproject.toml]
+        additional_dependencies: ["bandit[toml]"]
+        exclude: ^tests/
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, perf, refactor, docs, test, build, ci, chore, revert]
+
+  # `uv run` is load-bearing on these two, not decoration. With `language: system`
+  # the entry resolves against whatever PATH the caller had. `uv run pre-commit`
+  # happens to expose the project venv, so these passed when run that way — but
+  # the real git hook does not, and `pytest` then resolved to a system install
+  # where `app` is not importable. The hook failed only at commit time, after
+  # reporting green on `pre-commit run --all-files`.
+  - repo: local
+    hooks:
+      - id: check-layers
+        name: architectural import boundaries
+        entry: uv run python scripts/check_layers.py
+        language: system
+        pass_filenames: false
+        files: ^src/
+
+      # Unit tests only — they are the fast tier and must stay that way. If this
+      # hook starts costing more than a couple of seconds, the fix is faster
+      # tests, not moving it to CI: a slow pre-commit teaches people --no-verify,
+      # which disables the secret and lint gates above it too.
+      - id: pytest-unit
+        name: unit tests
+        entry: uv run pytest tests/unit -q -p no:randomly
+        language: system
+        pass_filenames: false
+        files: ^(src|tests)/
