@@ -1,0 +1,138 @@
+[project]
+name = "edufurtherbe"
+version = "0.1.0"
+description = "Backend API for EduFurther — mentorship platform connecting African students with graduate school mentors."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "structlog>=24.4.0",
+]
+
+[dependency-groups]
+dev = [
+    # Pinned exactly, and kept equal to the `rev:` values in
+    # .pre-commit-config.yaml. These three decide whether code passes, and their
+    # verdicts change between versions — a floor range lets the venv drift away
+    # from the hooks, so pre-commit and CI start disagreeing about identical
+    # code. After `pre-commit autoupdate`, update these to match.
+    "ruff==0.16.1",
+    "mypy==2.3.0",
+    "bandit[toml]==1.9.4",
+
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "pytest-randomly>=3.16.0",
+    "httpx>=0.27.0",
+    "pip-audit>=2.7.0",
+    "pre-commit>=4.6.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.ruff]
+# 100, not the default 88, so scripts/check_layers.py stays byte-identical to the
+# shared package copy. It is documented as drop-in reusable; reformatting it here
+# would create a diff against every future update.
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+# Matches the `exclude: ^\.claude/` on the ruff hooks in .pre-commit-config.yaml.
+# Without it, CI's bare `ruff check .` would lint files pre-commit skips, and the
+# local gate would disagree with the remote one.
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "W",    # warnings
+    "I",    # isort
+    "N",    # naming
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "A",    # builtin shadowing
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+    "S",    # bandit overlap — catches issues before commit
+    "ARG",  # unused arguments
+    "PTH",  # pathlib over os.path
+    "TID",  # tidy imports
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # assert is the point of a test
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "slow: deselect with '-m \"not slow\"'",
+]
+
+[tool.coverage.run]
+source = ["src/app"]
+branch = true
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build", "dist"]
+
+[tool.check-layers]
+# Defaults are correct for this layout; stated explicitly so the boundary is
+# visible in the repo rather than implied. Do not widen to make a check pass.
+source = "src/app"
+package = "app"
+exempt = ["main.py", "api/deps.py"]
+
+[tool.check-layers.allowed]
+api = ["domain", "core"]
+domain = ["core"]
+infra = ["domain", "core"]
+core = []
+
+[tool.check-layers.forbidden-external]
+domain = [
+    "fastapi",
+    "starlette",
+    "sqlalchemy",
+    "alembic",
+    "httpx",
+    "requests",
+    "redis",
+    "boto3",
+    "celery",
+    "pymongo",
+]

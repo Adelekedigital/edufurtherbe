@@ -1,0 +1,13 @@
+# Normalise to LF in the repository. Windows dev machines, Linux CI, and a
+# separate Next.js frontend all read this tree; without this, checkout-time
+# conversion produces CRLF shebangs that fail with "bad interpreter" and makes
+# the mixed-line-ending pre-commit hook fight core.autocrlf.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+
+uv.lock linguist-generated=true
