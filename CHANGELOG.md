@@ -15,6 +15,8 @@ released. A tag with no matching section here fails the release job.
 - ADR 0002 (Bubble export strategy) and ADR 0003 (read-only freeze cutover).
 - `project-conventions` filled in with the project's settled decisions, domain
   vocabulary, guardrails, and the current enforcement blind spots.
+- A `references/failure-modes.md` row for the stacked-PR merge that closed a
+  dependent pull request irrecoverably, and the merge order that prevents it.
 
 ### Changed
 
