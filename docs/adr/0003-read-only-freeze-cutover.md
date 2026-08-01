@@ -8,6 +8,18 @@ Accepted
 
 ## Context
 
+> **Correction, 2026-08-01.** The community figures below were taken from the
+> public site before the legacy data model was available, and are wrong. The
+> database holds **1,200 users, of whom 44 are mentors, and 1,073 session
+> bookings** — see `docs/bubble-data-model.md`, which is canonical. The original
+> text is left intact because this record is immutable.
+>
+> **The decision is unaffected.** The argument against dual-run does not rest on
+> headcount but on the two schemas deliberately differing, which no correction
+> changes. A scheduled write freeze remains cheap at 1,200 users: sessions are
+> still scheduled rather than continuous, and there is still no revenue to
+> interrupt.
+
 The Bubble application must be replaced by this backend and the new Next.js
 frontend. There are three usual ways to move:
 
