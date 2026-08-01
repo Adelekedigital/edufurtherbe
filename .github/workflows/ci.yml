@@ -42,13 +42,13 @@ jobs:
       - name: Architectural boundaries
         run: uv run python scripts/check_layers.py
 
+  # No interpreter matrix. A matrix earns its keep for a library consumed on many
+  # Python versions; this is an application deployed on exactly one, pinned by
+  # .python-version. A second job would double the minutes to test a
+  # configuration that never runs anywhere.
   test:
-    name: Tests (py${{ matrix.python-version }})
+    name: Tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +58,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev --python ${{ matrix.python-version }}
+        run: uv sync --all-extras --dev
 
       - name: Run tests with coverage
         run: >-
@@ -74,7 +74,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ matrix.python-version }}
+          name: coverage
           path: coverage.xml
           if-no-files-found: ignore
 

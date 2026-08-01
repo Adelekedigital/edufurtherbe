@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def reject_unknown_prefixed_variables(self) -> "Settings":
+    def reject_unknown_prefixed_variables(self) -> Settings:
         """Fail startup on a misspelled ``EDUFURTHER_`` variable.
 
         ``extra="forbid"`` does not cover this. pydantic-settings only collects

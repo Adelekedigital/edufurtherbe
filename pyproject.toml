@@ -3,7 +3,10 @@ name = "edufurtherbe"
 version = "0.1.0"
 description = "Backend API for EduFurther — mentorship platform connecting African students with graduate school mentors."
 readme = "README.md"
-requires-python = ">=3.12"
+# One version, tested, claimed. A wider floor than CI actually exercises is an
+# unverified compatibility promise; this is a deployed application, not a library
+# consumed on many interpreters, so there is nothing to gain by making one.
+requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -43,7 +46,7 @@ packages = ["src/app"]
 # shared package copy. It is documented as drop-in reusable; reformatting it here
 # would create a diff against every future update.
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 src = ["src", "tests"]
 # Matches the `exclude: ^\.claude/` on the ruff hooks in .pre-commit-config.yaml.
 # Without it, CI's bare `ruff check .` would lint files pre-commit skips, and the
@@ -76,7 +79,7 @@ select = [
 ban-relative-imports = "all"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 warn_unreachable = true
 warn_unused_ignores = true
