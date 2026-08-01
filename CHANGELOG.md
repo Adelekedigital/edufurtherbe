@@ -15,6 +15,14 @@ released. A tag with no matching section here fails the release job.
 - Target Python 3.14 across `.python-version`, `requires-python`, ruff and mypy.
 - CI tests a single interpreter instead of a 3.12/3.13 matrix — this is a
   deployed application, not a library consumed on many Python versions.
+- CI and the release workflow select steps from `scripts/check.py` with `--only`
+  instead of restating the commands, so the gate is defined once. The bandit
+  step gains `-c pyproject.toml`, which the restated CI copy had dropped.
+
+### Fixed
+
+- The shared `settings` test fixture no longer reads the developer's `.env`;
+  any field it did not pin explicitly was taking that file's value.
 
 ## [0.1.0] - 2026-08-01
 
