@@ -1,0 +1,88 @@
+name: Main guard
+
+# Fails when a commit reaches `main` without an associated pull request.
+#
+# BLIND SPOT, STATED PLAINLY: this prevents nothing. The commit is already on
+# `main` by the time this job runs. It converts a silent bypass into a red check
+# and a notification, and that is the whole of what it does. Detection is
+# materially weaker than prevention and must not be reported as equivalent.
+#
+# Prevention needs a server-side rule. Both the classic branch-protection API and
+# the rulesets API return 403 on a private repository on the Free plan — rulesets
+# are not a free workaround. That decision (GitHub Pro, or make the repository
+# public) is issue #9.
+#
+# The only exemption is a commit with no parents: the repository's root commit
+# predates the existence of any pull request. Deliberately narrow — a broader
+# `if:` guard would turn this into a check that cannot fail, which is the failure
+# already recorded twice in project-conventions/references/failure-modes.md.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  # Reading the pull requests associated with a commit.
+  pull-requests: read
+
+concurrency:
+  group: main-guard-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  pull-request-origin:
+    name: Commit arrived via pull request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the pushed commit against its pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          parents="$(gh api "repos/$REPO/commits/$SHA" --jq '.parents | length')"
+          if [ "$parents" -eq 0 ]; then
+            echo "Root commit $SHA has no parents and predates any pull request. Exempt."
+            exit 0
+          fi
+
+          # Retry only before reporting a violation, never to turn a failure into a
+          # pass. The association is created by the merge itself, but this job is
+          # triggered by the same event, so a first call can race it. Three tries
+          # over ~20s is enough for that race and far short of hiding a real bypass.
+          for attempt in 1 2 3; do
+            count="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq 'length')"
+            if [ "$count" -gt 0 ]; then
+              gh api "repos/$REPO/commits/$SHA/pulls" \
+                --jq '.[] | "Arrived via pull request #\(.number): \(.title)"'
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "No pull request associated yet (attempt $attempt/3); retrying in 10s."
+              sleep 10
+            fi
+          done
+
+          author="$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.author.name')"
+          subject="$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.message | split("\n")[0]')"
+
+          echo "::error title=Direct push to main::$SHA by $author reached main without a pull request."
+          {
+            echo "### Direct push to \`main\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`$SHA\` |"
+            echo "| Author | $author |"
+            echo "| Subject | $subject |"
+            echo
+            echo "This commit is **already on \`main\`** — this check reports it, it did not stop it."
+            echo "Review it, and revert if it was not intended."
+            echo
+            echo "Server-side prevention is issue #9."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit 1

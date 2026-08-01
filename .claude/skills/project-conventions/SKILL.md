@@ -156,11 +156,17 @@ edit only that. Duplicated facts drift, and the copy you forget becomes wrong.
 
 State a gate's blind spots next to its coverage, every time.
 
-- **Branch protection does not exist yet.** CI runs on pull requests and
-  `no-commit-to-branch` blocks local commits to `main`, but nothing is enforced
-  server-side. Until a GitHub ruleset requires a PR and passing checks, this is
-  convention that catches accidents, not a control that stops intent. There is no
-  CODEOWNERS file despite `.pre-commit-config.yaml` citing one.
+- **Nothing server-side *prevents* a bad merge; one thing *detects* it.** CI runs
+  on pull requests, `no-commit-to-branch` blocks local commits to `main`, and
+  `main-guard.yml` fails when a commit reaches `main` without an associated pull
+  request. That last one runs *after* the push has landed — it turns a silent
+  bypass into a red check, and it cannot stop anything. Treating detection as
+  equivalent to prevention is how a gap gets closed on paper and stays open in
+  fact. Real prevention needs a GitHub ruleset, and both the classic
+  branch-protection and rulesets APIs return 403 on a private repo on the Free
+  plan — rulesets are not a free workaround. The choice between GitHub Pro and
+  making the repo public is issue #9. There is still no CODEOWNERS file despite
+  `.pre-commit-config.yaml` citing one.
 - **There is no dataflow analysis.** CodeQL is absent from the Security workflow
   because uploading results needs GitHub Advanced Security, which a private
   personal repo does not have. bandit, ruff's `S` ruleset and pip-audit cover
