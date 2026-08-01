@@ -31,6 +31,7 @@ migration/out/
 
 # Tooling leftovers
 *.new
+requirements-audit.txt
 
 # Local agent overrides (personal, not shared)
 .claude/settings.local.json

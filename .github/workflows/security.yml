@@ -47,8 +47,23 @@ jobs:
 
       - run: uv sync --all-extras --dev
 
+      # Audit the resolved lockfile, not the installed environment.
+      #
+      # Auditing the environment fails: our own package is installed editable and
+      # is not on PyPI, so it can never be audited, and --strict correctly refuses
+      # to pass on a package it could not check. --skip-editable does not help --
+      # a skipped package is still an unaudited one as far as --strict is
+      # concerned.
+      #
+      # --no-emit-project excludes only our own package, by construction rather
+      # than by suppression, so --strict keeps its meaning for all 180-odd real
+      # dependencies. Dropping --strict would have turned this build green while
+      # silencing every genuine un-auditable dependency along with it.
+      - name: Export the locked dependencies
+        run: uv export --format requirements-txt --no-emit-project --all-extras --no-hashes -o requirements-audit.txt
+
       - name: pip-audit
-        run: uv run pip-audit --strict
+        run: uv run pip-audit --strict -r requirements-audit.txt
 
   secrets:
     name: Secret scan
