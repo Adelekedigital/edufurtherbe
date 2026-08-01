@@ -10,6 +10,12 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Added
+
+- ADR 0002 (Bubble export strategy) and ADR 0003 (read-only freeze cutover).
+- `project-conventions` filled in with the project's settled decisions, domain
+  vocabulary, guardrails, and the current enforcement blind spots.
+
 ### Changed
 
 - Target Python 3.14 across `.python-version`, `requires-python`, ruff and mypy.
