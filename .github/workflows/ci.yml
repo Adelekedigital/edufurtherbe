@@ -30,17 +30,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Format check
-        run: uv run ruff format --check .
-
-      - name: Lint
-        run: uv run ruff check --output-format=github .
-
-      - name: Type check
-        run: uv run mypy src
-
-      - name: Architectural boundaries
-        run: uv run python scripts/check_layers.py
+      # Selected from scripts/check.py rather than restated here, so the command
+      # strings exist in one place and CI cannot drift from the local gate.
+      - name: Format, lint, types, layers
+        run: uv run python scripts/check.py --only format,lint,types,layers
 
   # No interpreter matrix. A matrix earns its keep for a library consumed on many
   # Python versions; this is an application deployed on exactly one, pinned by
@@ -60,15 +53,12 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
+      # PYTEST_ADDOPTS carries the reporting flags that only CI needs, so the
+      # coverage thresholds themselves stay defined in scripts/check.py.
       - name: Run tests with coverage
-        run: >-
-          uv run pytest
-          --cov=src/app
-          --cov-branch
-          --cov-report=term-missing
-          --cov-report=xml
-          --cov-fail-under=85
-          --junitxml=junit.xml
+        env:
+          PYTEST_ADDOPTS: --cov-report=xml --junitxml=junit.xml
+        run: uv run python scripts/check.py --only tests
 
       - name: Upload coverage
         if: always()

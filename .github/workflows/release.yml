@@ -34,13 +34,7 @@ jobs:
           fi
 
       - name: Run the full gate before publishing
-        run: |
-          uv run ruff format --check .
-          uv run ruff check .
-          uv run mypy src
-          uv run python scripts/check_layers.py
-          uv run pytest --cov=src/app --cov-branch --cov-fail-under=85
-          uv run bandit -q -ll -r src
+        run: uv run python scripts/check.py
 
       - name: Build distribution
         run: uv build

@@ -32,8 +32,11 @@ jobs:
 
       - run: uv sync --all-extras --dev
 
+      # Selected from scripts/check.py, which also carries `-c pyproject.toml`.
+      # Restating the command here had already dropped that flag, so [tool.bandit]
+      # applied locally and was ignored in CI.
       - name: Bandit (medium severity and above)
-        run: uv run bandit -q -ll -r src
+        run: uv run python scripts/check.py --only security
 
   dependencies:
     name: Dependency audit
