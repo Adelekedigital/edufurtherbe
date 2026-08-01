@@ -17,6 +17,9 @@ released. A tag with no matching section here fails the release job.
   vocabulary, guardrails, and the current enforcement blind spots.
 - A `references/failure-modes.md` row for the stacked-PR merge that closed a
   dependent pull request irrecoverably, and the merge order that prevents it.
+- `main-guard.yml`, which fails when a commit reaches `main` without a pull
+  request. It detects a bypass after the fact and cannot prevent one; server-side
+  prevention needs GitHub Pro or a public repository (issue #9).
 
 ### Changed
 
