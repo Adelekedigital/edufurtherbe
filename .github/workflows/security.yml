@@ -10,7 +10,10 @@ on:
 
 permissions:
   contents: read
-  security-events: write
+  # gitleaks-action reads the PR's commit list to scan only what the PR adds.
+  # Without this it gets a 403 on /pulls/{n}/commits and the job fails — which is
+  # exactly how it failed on the first run.
+  pull-requests: read
 
 concurrency:
   group: security-${{ github.ref }}
@@ -61,17 +64,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  codeql:
-    name: CodeQL
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: python
-          queries: security-and-quality
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@v3
+# CodeQL is deliberately absent.
+#
+# It requires GitHub Advanced Security to upload results on a private repository.
+# This repo is private under a personal account, where `security_and_analysis` is
+# null, so the analysis ran to completion and then failed at upload with
+# "Resource not accessible by integration". No permissions change fixes that.
+#
+# It is removed rather than left in with `continue-on-error` or an `if:` guard,
+# because a job that is skipped or that swallows its exit code still renders as a
+# green check — and a green check that never ran is worse than a missing one.
+#
+# What covers the gap in the meantime: bandit (SAST) above, ruff's `S` ruleset in
+# the lint job, and pip-audit for known CVEs. What is genuinely lost is CodeQL's
+# dataflow analysis — taint tracking across function boundaries — which none of
+# those do. Recorded as a known blind spot in the project-conventions skill.
+#
+# To restore: enable GitHub Advanced Security, or make the repository public,
+# then re-add a codeql job with `security-events: write` and `actions: read`.
