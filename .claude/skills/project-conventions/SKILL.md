@@ -33,36 +33,48 @@ a mapping, never a template.
 | 5 | Cut over behind a read-only freeze. No dual-run, no dual-write (ADR 0003) | A sync layer is the most defect-prone part of a migration, and here the schemas deliberately differ so it would have to maintain a bidirectional transform between shapes that never corresponded | Revenue or usage grows enough that a scheduled write outage is unacceptable |
 | 6 | Bubble export is snapshot-first, and the transport sits behind a port (ADR 0002) | The freeze is short and Bubble goes away after; a transform bug must be re-runnable against the original bytes | Never |
 | 7 | Identity does not migrate. Accounts match on email; every user does a magic-link or reset on first login | Bubble password hashes are not exportable. This is a constraint, not a preference | Bubble ever exposes usable hashes |
-| 8 | Money is integer minor units with an explicit currency on the same row | Floats do not represent money. Mentees are African and mentors are global, so cross-currency is structural, and the FX rate belongs *on the transaction*, not looked up later | Never |
-| 9 | Build the payout **ledger**; do the payouts by hand | A ledger is expensive to retrofit and impossible to reconstruct after the fact. Automating payouts for 15 mentors is not | Mentor count makes manual payouts impractical |
-| 10 | Payment provider: **undecided** | Collections are African (Paystack/Flutterwave territory), payouts are global (Stripe/Wise territory). The two halves may not share a provider | — decide before payments work begins; it needs its own ADR |
+| 8 | **Payments are out of scope for the initial build.** It delivers the core product backend and the Bubble migration; the legacy app has no payment integration to migrate | Nothing to carry across, and the pricing model is still being explored. Building a payment layer around an undecided model is how you get one you cannot change | The core backend and migration are done |
+| 9 | A mentor sets their own **rate**; the platform offers a derived **pricing guide** as a suggestion | Mentors price their own time. The guide helps them choose without the platform setting the price | The platform ever takes pricing control |
+| 10 | When payments arrive: money as integer minor units with an explicit currency; mentor payouts through an append-only **ledger**, paid by hand at first; the rate **snapshotted onto the purchase**, never read live from the profile | Floats do not represent money, and cross-currency is structural here. A ledger cannot be reconstructed after the fact. A live rate lookup means a mentor raising their price silently rewrites history | Never for the first two. The third only if rates become immutable |
+| 11 | Payment provider: **undecided**, and not yet needed | Collections are African (Paystack/Flutterwave territory), payouts are global (Stripe/Wise territory). The two halves may not share a provider | — decide before payments work begins; it needs its own ADR |
 
 Anything conflicting with a row here is an **ADR**, not an implementation detail.
 
 ## Domain vocabulary
 
-> **This table is incomplete and the gaps are load-bearing.** The rows below are
-> what the product surface and our decisions establish. The open questions after
-> it are genuinely open — if a requirement uses one of those words, **ask**. Do
-> not resolve it toward whichever reading is easier to build.
+> **Two rows are still open, and the gaps are load-bearing.** If a requirement uses
+> one of those words, **ask**. Do not resolve it toward whichever reading is easier
+> to build.
 
 | Term | Means precisely | Does **not** mean |
 |---|---|---|
 | **Mentee** | The student receiving mentorship | Not "user" — mentors are users too |
-| **Mentor** | The person providing mentorship, typically at an institution abroad | Not "coach" until we decide whether those are the same role |
+| **Mentor** | The person providing mentorship, typically at an institution abroad | **There is no separate "coach".** "Mentor/coach" in product copy is one role, and the codebase uses `mentor` throughout |
 | **Availability** | A mentor-declared window in which they *can* be booked | Not a session. An availability with no booking is not an event that happened |
-| **Booking** | A mentee claiming a specific slot | Not a session — a booking can be cancelled before it ever occurs |
-| **Session** | Mentorship that actually took place, and the unit that gets paid for | Not a booking |
+| **Booking** | A mentee claiming a seat in a specific slot | Not a session — a booking can be cancelled before it ever occurs |
+| **Session** | Mentorship that actually took place | Not a booking |
+| **Rate** | What a mentor charges, set by the mentor | Not the pricing guide |
+| **Pricing guide** | A platform-computed *suggestion* derived from the mentor's experience and profile | **Not a price.** Advisory only, never persisted as the agreed amount |
 | **`legacy_id`** | The Bubble `_id` a row came from | Not our primary key, and never exposed in an API |
 
-**Open — do not guess:**
+**Session shape.** Sessions may be 1:1 **or group**. Group is a new capability
+that does not exist in the legacy app — **every legacy record is 1:1**, so the
+migration never encounters a group session and the importer does not need to
+handle one. When group is built, the booking invariant is **capacity, not
+exclusivity**, so it cannot be a plain uniqueness constraint on the slot.
 
-- Is a "coach" a distinct role from a mentor, or the same role differently priced?
-  The next phase is described as "paid mentor/coach sessions", which reads both ways.
-- Does a mentee pay per session, per package, or by subscription?
-- Who sets the price — the mentor, the platform, or a banded scheme?
-- What is the cancellation and refund window, and who absorbs the fee?
-- Is a session always 1:1, or can it be group?
+**Still open — do not guess:**
+
+- **Does a mentee pay per session, per package, or by subscription?** Deliberately
+  undecided while the model is explored. Do not hard-code any one of them. The
+  shape that keeps all three open is to separate what was *purchased* from what
+  was *booked*, so a new model is a new purchase type rather than a migration.
+- **What is the cancellation and refund window, and who absorbs the fee?**
+  Deliberately undecided. Express it as a parameterised policy in `domain/`, not
+  as constants in a handler, so changing it changes parameters.
+
+Neither blocks the initial build: **payments are out of scope until the core
+product backend and the migration are done.**
 
 ## House conventions
 
@@ -75,8 +87,9 @@ Anything conflicting with a row here is an **ADR**, not an implementation detail
 - **Identifiers:** three distinct spaces, never interchangeable — our internal
   primary key, the `legacy_id` from Bubble, and any provider-side id (payment
   intent, payout). Translate at the boundary; do not compare across spaces.
-- **Money:** integer minor units plus currency. Never a float, never a bare number.
-- **Ledger:** append-only. Corrections are new entries, never `UPDATE`s.
+- **Money** *(when payments arrive — not in the initial build)*: integer minor
+  units plus currency, never a float. The ledger is append-only; corrections are
+  new entries, never `UPDATE`s.
 - **Vendor SDKs:** may be imported only inside `infra/`. `domain/` expresses the
   need as a Protocol in `domain/ports.py`.
 - **Errors:** subclasses of `core.errors.AppError`, which is transport-agnostic.
@@ -99,10 +112,13 @@ section of each Definition of Done.
 - [ ] Bubble snapshots stay out of git — `data/`, `exports/`, `*.csv` are ignored
       because they hold ~700 members' PII, which `gitleaks` does not scan for
 - [ ] Every migrated table has `legacy_id`; importers are idempotent on it
-- [ ] Money is integer minor units with a currency; no float touches an amount
-- [ ] Booking overlap is prevented by a **database constraint**, not an
-      application-level check-then-insert
+- [ ] Overbooking is prevented by a **database constraint**, not an
+      application-level check-then-insert. While every session is 1:1 a uniqueness
+      constraint suffices; group sessions make the invariant capacity rather than
+      exclusivity, and the constraint has to change with it
 - [ ] Times stored UTC, with the mentor's IANA zone as a separate column
+- [ ] *(once payments exist)* Money is integer minor units with a currency; no
+      float touches an amount
 - [ ] No threshold lowered to go green
 
 ## Commands
