@@ -8,6 +8,18 @@ Accepted
 
 ## Context
 
+> **Correction, 2026-08-01.** The figures below were taken from the public site
+> before the legacy data model was available, and are wrong. The database holds
+> **1,200 users, of whom 44 are mentors, and 1,073 session bookings** — see
+> `docs/bubble-data-model.md`, which is canonical. The original text is left
+> intact below because this record is immutable and should show what was believed
+> when the decision was made.
+>
+> **The decision is unaffected.** At 1,073 sessions this is still a fidelity
+> problem rather than a throughput one, and every numbered choice below stands.
+> The one judgement that weakens slightly is "hand-check every mentor record":
+> tedious at 44, where it was trivial at 15, but still viable.
+
 The legacy application is a Bubble app at `app.edufurther.org`. Its data has to
 reach the new Postgres schema once, correctly, during a short read-only freeze
 (see ADR 0003). Several facts shape how:

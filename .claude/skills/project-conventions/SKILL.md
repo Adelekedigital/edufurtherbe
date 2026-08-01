@@ -16,11 +16,15 @@ international graduate school with mentors at institutions worldwide. It is
 replacing a Bubble low-code application, with a separate Next.js frontend, while
 adding paid mentor sessions.
 
-Two facts drive most decisions: **the data is small** (roughly 700 community
-members, 15 mentors, 5,000 logged mentoring minutes) and **the migration is a
-reshape, not a copy**. Small data means correctness is affordable and throughput
-machinery is not worth building. A reshape means the Bubble schema is an input to
-a mapping, never a template.
+Two facts drive most decisions: **the data is small** (1,200 users, of whom 44
+are mentors; 1,073 session bookings) and **the migration is a reshape, not a
+copy**. Small data means correctness is affordable and throughput machinery is
+not worth building. A reshape means the Bubble schema is an input to a mapping,
+never a template.
+
+Figures come from `docs/bubble-data-model.md`, which is canonical. Do not quote
+the numbers on the public site — they are marketing figures and understate the
+database by roughly 3x on mentors.
 
 ## Settled decisions
 
@@ -110,7 +114,9 @@ section of each Definition of Done.
 - [ ] No vendor SDK imported outside `infra/`
 - [ ] Secrets never reach a log line, a response body, or git
 - [ ] Bubble snapshots stay out of git — `data/`, `exports/`, `*.csv` are ignored
-      because they hold ~700 members' PII, which `gitleaks` does not scan for
+      because they hold 1,200 users' PII, plus 858 personal-info and 940
+      education rows, which `gitleaks` does not scan for. It finds credentials,
+      not people
 - [ ] Every migrated table has `legacy_id`; importers are idempotent on it
 - [ ] Overbooking is prevented by a **database constraint**, not an
       application-level check-then-insert. While every session is 1:1 a uniqueness
@@ -140,6 +146,7 @@ uv run python scripts/check.py                          # the same gate, without
 | This file | Settled decisions, vocabulary, guardrails | `.claude/skills/project-conventions/` |
 | `docs/adr/` | Decisions and their rationale | repo root |
 | `references/failure-modes.md` | What has actually gone wrong here | alongside this file |
+| `docs/bubble-data-model.md` | Legacy Bubble shape, fields, and row counts | repo root |
 | `README.md` | Human-facing setup and layout | repo root |
 
 **Canonical copy rule.** Where a doc is duplicated, **name the one that wins** and
