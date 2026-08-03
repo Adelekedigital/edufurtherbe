@@ -35,13 +35,12 @@ database by roughly 3x on mentors.
 | 3 | `scripts/check.py` is the single definition of the local gate; `make check` is a thin wrapper | `make` is absent on Windows dev machines. Two hand-maintained copies of a gate drift, and the forgotten copy is the one that stops catching things | `make` becomes universally available here |
 | 4 | ruff, mypy and bandit are pinned with `==` and kept equal to the `rev:` values in `.pre-commit-config.yaml` | They decide whether code passes, and their verdicts change between versions. A floor range let the venv drift a full major version from the hooks | Never. If it is painful, the fix is updating both sites together |
 | 5 | Cut over behind a read-only freeze. No dual-run, no dual-write (ADR 0003) | A sync layer is the most defect-prone part of a migration, and here the schemas deliberately differ so it would have to maintain a bidirectional transform between shapes that never corresponded | Revenue or usage grows enough that a scheduled write outage is unacceptable |
-| 6 | Bubble export is snapshot-first, and the transport sits behind a port (ADR 0002) | The freeze is short and Bubble goes away after; a transform bug must be re-runnable against the original bytes | Never |
+| 6 | Bubble export is snapshot-first. The transport is the **Bubble Data API**, staged as raw `jsonb` in a `staging` schema, and still sits behind a port (ADR 0002, deferral resolved by ADR 0007) | The freeze is short and Bubble goes away after; a transform bug must be re-runnable against the original bytes rather than a rate-limited API. The Data API is subject to privacy rules, so per-Thing field-set verification is **mandatory** — a 200 response is not evidence of a complete record | Never for snapshot-first. The transport, only if the Data API proves lossy |
 | 7 | Identity does not migrate. Accounts match on email; every user does a magic-link or reset on first login | Bubble password hashes are not exportable. This is a constraint, not a preference | Bubble ever exposes usable hashes |
 | 8 | **Payments are out of scope for the initial build.** It delivers the core product backend and the Bubble migration; the legacy app has no payment integration to migrate | Nothing to carry across, and the pricing model is still being explored. Building a payment layer around an undecided model is how you get one you cannot change | The core backend and migration are done |
 | 9 | A mentor sets their own **rate**; the platform offers a derived **pricing guide** as a suggestion | Mentors price their own time. The guide helps them choose without the platform setting the price | The platform ever takes pricing control |
 | 10 | When payments arrive: money as integer minor units with an explicit currency; mentor payouts through an append-only **ledger**, paid by hand at first; the rate **snapshotted onto the purchase**, never read live from the profile | Floats do not represent money, and cross-currency is structural here. A ledger cannot be reconstructed after the fact. A live rate lookup means a mentor raising their price silently rewrites history | Never for the first two. The third only if rates become immutable |
 | 11 | Payment provider: **undecided**, and not yet needed | Collections are African (Paystack/Flutterwave territory), payouts are global (Stripe/Wise territory). The two halves may not share a provider | — decide before payments work begins; it needs its own ADR |
-
 | 12 | **Supabase** for Postgres, auth and storage, this phase. Used *as Postgres* — no PostgREST, no RLS as application logic (ADR 0005) | One vendor and one credential set during the cutover, and magic-link login arrives without being built, which decision #7 needs for all 1,200 users. A policy in the database is invisible to `check_layers.py` and unreachable by a unit test, so authorization expressed there drifts from the Python that appears to implement it | Auth or storage needs to diverge from the database, or one shared failure domain across all three stops being acceptable |
 | 13 | **FastAPI Cloud**, with Railway as the named fallback | Chosen deliberately. The escape stays real only by keeping a standalone Dockerfile exercised in CI and using no platform-native queue, cron or secrets store — an untested exit is an intention, not a plan | The platform cannot carry the freeze rehearsal, or a platform-native primitive becomes tempting |
 | 14 | LLM access goes through a **provider-agnostic port**. No gateway | A port gives model swappability without a gateway's fee, extra hop, and flattening to the intersection of every provider. Adapters may use each provider's own caching, structured outputs and thinking configuration; the port must not degrade to the lowest common denominator | Never for the port. Which model is default is a config change, not a decision |
@@ -50,6 +49,7 @@ database by roughly 3x on mentors.
 | 17 | Institutions are identified by **ROR ID**, synced locally from ROR's data dump. hipolabs is a fallback and the source of email domains | A persistent identifier survives renames and merges; a free-text university name cannot be matched later. Storage is not the constraint — the whole registry is trivial for Postgres — the dependency on someone else's uptime was | ROR stops being maintained |
 | 18 | WhatsApp is **platform→user transactional only**. Mentor↔mentee conversation stays in-platform (ADR 0006) | Handing both sides of a paid booking a direct off-platform channel is disintermediation by default rather than by decision | Never, while the platform takes a fee |
 | 19 | ADRs use **Nygard** format, per ADR 0001 — *not* MADR | `/adr-new` ships with the tier-1 package and refers to the MADR template. Tier 1 is overwritten on update, so correcting the command would not survive; tier 2 does. Nygard is also the lower-ceremony format, and 0002 and 0003 already carry considered-options reasoning inside it without strain | ADR 0001 is superseded — which is itself an ADR |
+| 20 | `docs/edufurther-migration/` is the **canonical target data model** — received, committed, and never edited here (ADR 0007) | It is the only artefact describing the target schema rather than the route to it, and part of its value is being a dated record from outside this repo. A transcribed copy would be a second copy that drifts from the DDL you actually run | A decision supersedes part of it — which is a new ADR, never an edit to the package |
 
 Anything conflicting with a row here is an **ADR**, not an implementation detail.
 
@@ -64,14 +64,14 @@ Anything conflicting with a row here is an **ADR**, not an implementation detail
 | **Mentee** | The student receiving mentorship | Not "user" — mentors are users too |
 | **Mentor** | The person providing mentorship, typically at an institution abroad | **There is no separate "coach".** "Mentor/coach" in product copy is one role, and the codebase uses `mentor` throughout |
 | **Availability** | A mentor-declared window in which they *can* be booked | Not a session. An availability with no booking is not an event that happened |
-| **Booking** | A mentee claiming a seat in a specific slot | Not a session — a booking can be cancelled before it ever occurs |
-| **Session** | Mentorship that actually took place | Not a booking |
+| **Booking** | The *act* of a mentee claiming a slot. It creates a `sessions` row (ADR 0007) | **Not a separate entity.** There is no `bookings` table — the legacy `SessionBooking`/`SessionTracker` split was a Bubble workaround, not a domain distinction |
+| **Session** | The `sessions` row itself, from the moment it is claimed through whatever it becomes | **Not "mentorship that took place"** — that is `status = 'completed'`. A cancelled session is still a session row, still counted, and is never soft-deleted |
 | **Rate** | What a mentor charges, set by the mentor | Not the pricing guide |
 | **Pricing guide** | A platform-computed *suggestion* derived from the mentor's experience and profile | **Not a price.** Advisory only, never persisted as the agreed amount |
-| **`legacy_id`** | The Bubble `_id` a row came from | Not our primary key, and never exposed in an API |
+| **`legacy_bubble_id`** | The Bubble `_id` a row came from. ADR 0002 called it `legacy_id`; renamed by ADR 0007 | Not our primary key, and never exposed in an API |
 | **Port** | An interface `domain/` owns — a Protocol in `domain/ports.py` — implemented by an adapter in `infra/` and wired in `api/deps.py`. Swapping a vendor is a new adapter class and one wiring line | Not a network port. Not a thin wrapper around a vendor SDK either — if the vendor's vocabulary shows through the Protocol, `domain/` is still coupled to it |
 | **`ror_id`** | The Research Organization Registry identifier for an institution. The canonical reference for "which university" | Not a university name. A name is a display string; it is never what another row points at |
-| **`conversation_id`** | Zernio's WhatsApp thread identifier, stable per participant and sending account, stored on the user record | Not a message id. Unrelated to booking-scoped message threads (ADR 0006), which are ours and live in our database |
+| **`whatsapp_conversation_id`** | Zernio's WhatsApp thread identifier, stable per participant and sending account, stored on the user record. Renamed by ADR 0007 — a vendor identifier carries the vendor's name | Not a message id. Unrelated to our own `conversation_id`, which is the primary key of our booking-scoped message threads (ADR 0006) and lives in our database |
 
 **Session shape.** Sessions may be 1:1 **or group**. Group is a new capability
 that does not exist in the legacy app — **every legacy record is 1:1**, so the
@@ -101,7 +101,7 @@ product backend and the migration are done.**
 - **Secrets:** `SecretStr`, never logged, never in a response body. In a committed
   `.mcp.json` or similar, referenced as `${ENV_VAR}` and never inline.
 - **Identifiers:** three distinct spaces, never interchangeable — our internal
-  primary key, the `legacy_id` from Bubble, and any provider-side id (payment
+  primary key, the `legacy_bubble_id` from Bubble, and any provider-side id (payment
   intent, payout). Translate at the boundary; do not compare across spaces.
 - **Money** *(when payments arrive — not in the initial build)*: integer minor
   units plus currency, never a float. The ledger is append-only; corrections are
@@ -128,8 +128,16 @@ section of each Definition of Done.
 - [ ] Bubble snapshots stay out of git — `data/`, `exports/`, `*.csv` are ignored
       because they hold 1,200 users' PII, plus 858 personal-info and 940
       education rows, which `gitleaks` does not scan for. It finds credentials,
-      not people
-- [ ] Every migrated table has `legacy_id`; importers are idempotent on it
+      not people. **The extract now lands in a `staging` schema rather than in
+      files** (ADR 0007), so the same data sits inside the Supabase project from
+      ADR 0005 — out of git is still necessary and no longer sufficient
+- [ ] **Credential fields are redacted at extraction, before the insert into
+      `staging`** — `calAccessToken`, `calRefreshToken` and their expiry columns
+      are live OAuth credentials sitting on the legacy `User` table. They are
+      never migrated, but "extract everything, then transform" (ADR 0007) lands
+      them in the database first and leaves them there through every rehearsal.
+      Dropping them at load is too late; the exposure is the staging row
+- [ ] Every migrated table has `legacy_bubble_id`; importers are idempotent on it
 - [ ] Overbooking is prevented by a **database constraint**, not an
       application-level check-then-insert. While every session is 1:1 a uniqueness
       constraint suffices; group sessions make the invariant capacity rather than
@@ -159,6 +167,7 @@ uv run python scripts/check.py                          # the same gate, without
 | `docs/adr/` | Decisions and their rationale | repo root |
 | `references/failure-modes.md` | What has actually gone wrong here | alongside this file |
 | `docs/bubble-data-model.md` | Legacy Bubble shape, fields, and row counts | repo root |
+| `docs/edufurther-migration/` | The **target** schema, field mapping and runbook | repo root — **received, never edited here** (ADR 0007) |
 | `README.md` | Human-facing setup and layout | repo root |
 
 **Canonical copy rule.** Where a doc is duplicated, **name the one that wins** and

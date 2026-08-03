@@ -14,6 +14,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0004](0004-calendar-integration.md) | Own the OAuth client, write events, read availability on demand | Accepted |
 | [0005](0005-data-platform.md) | Use Supabase for Postgres, auth and storage — as Postgres, not as a backend | Accepted |
 | [0006](0006-messaging-build-vs-buy.md) | Build booking-scoped messaging; keep mentor–mentee conversation on-platform | Accepted |
+| [0007](0007-adopt-the-migration-package-as-the-target-data-model.md) | Adopt the migration package as the target data model | Accepted |
 
 ## Conventions
 
@@ -33,6 +34,12 @@ record; the old one stays in place with its status set to `Superseded by NNNN`.
 Where a record's premises turn out to be wrong, the correction goes in as a note
 at the top and the original text stays — ADRs 0002 and 0003 both carry one. The
 history of what was believed and when is the point.
+
+**Where only part of a record is superseded, the status names the part.** ADR
+0002 reads `Accepted — point 4 superseded by ADR 0007`, not `Superseded by 0007`,
+because eight of its nine decisions still stand and blanket-marking it would
+retire them silently. A reader who needs to know whether a record still applies
+is badly served by a status that overstates in either direction.
 
 **Numbers carry their provenance.** A figure that justifies a decision names its
 source next to it. Row counts come from `docs/bubble-data-model.md`, which is
