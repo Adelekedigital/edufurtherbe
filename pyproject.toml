@@ -127,6 +127,7 @@ infra = ["domain", "core"]
 core = []
 
 [tool.check-layers.forbidden-external]
+# Frameworks, drivers and vendor SDKs that must never reach the pure layer.
 domain = [
     "fastapi",
     "starlette",
@@ -138,4 +139,64 @@ domain = [
     "boto3",
     "celery",
     "pymongo",
+    # Vendor SDKs — see the shared list note under [tool.check-layers] api below.
+    "composio",
+    "composio_core",
+    "supabase",
+    "gotrue",
+    "postgrest",
+    "storage3",
+    "realtime",
+    "supafunc",
+    "posthog",
+    "qstash",
+    "upstash_qstash",
+]
+
+# `api/` is transport. It may import the web framework, and nothing that speaks to
+# a third party — that belongs in `infra/`, behind a Protocol in `domain/ports.py`.
+#
+# THIS IS A DENYLIST, AND THAT IS ITS LIMIT. It catches the vendors we have
+# actually adopted, by name. It cannot catch an SDK nobody has added to it, so a
+# newly adopted vendor is unguarded until its package name is listed here. Add the
+# name in the same change that adds the dependency. ADR 0004/0005/0006 state this
+# boundary; this list is the only thing that makes any of it mechanical.
+api = [
+    "composio",
+    "composio_core",
+    "supabase",
+    "gotrue",
+    "postgrest",
+    "storage3",
+    "realtime",
+    "supafunc",
+    "posthog",
+    "qstash",
+    "upstash_qstash",
+    "boto3",
+    "celery",
+    "sqlalchemy",
+    "alembic",
+]
+
+# `core/` is configuration and the base error taxonomy. Listed so that "no vendor
+# SDK outside infra/" is true of every layer rather than of two of the three.
+core = [
+    "composio",
+    "composio_core",
+    "supabase",
+    "gotrue",
+    "postgrest",
+    "storage3",
+    "realtime",
+    "supafunc",
+    "posthog",
+    "qstash",
+    "upstash_qstash",
+    "boto3",
+    "celery",
+    "sqlalchemy",
+    "alembic",
+    "fastapi",
+    "starlette",
 ]

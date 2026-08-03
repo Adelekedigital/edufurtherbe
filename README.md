@@ -65,6 +65,35 @@ place. Secrets are `SecretStr` and are never logged.
 Bubble migration output lands — it contains member PII and must never enter the
 repository history.
 
+## Stack
+
+The pre-cutover set — what the initial build targets. **Nothing here is
+integrated yet**: `src/` currently holds configuration, the error taxonomy and a
+health endpoint. This table is a record of decisions, not of code, and it grows
+as each piece lands.
+
+| Concern | Choice | Notes |
+|---|---|---|
+| Database, auth, file storage | Supabase | Used *as Postgres* — no PostgREST, no RLS as application logic ([ADR 0005](docs/adr/0005-data-platform.md)) |
+| Hosting | FastAPI Cloud | Railway is the named fallback; a standalone Dockerfile keeps the exit real |
+| Scheduled and background jobs | Upstash QStash | HTTP delivery, so no always-on worker process |
+| Transactional email | Emailit | Behind a port, like every vendor — this one has already been swapped twice |
+| Video sessions | Daily | |
+| Product analytics | PostHog | |
+| Google Calendar | Composio | Our own OAuth client; write events, read free/busy on demand ([ADR 0004](docs/adr/0004-calendar-integration.md)) |
+| HTML to PDF and image | MarkupGo | |
+| Institution data | ROR | Synced from ROR's data dump; hipolabs is the fallback and the source of email domains |
+| Push notifications | Native Web Push | VAPID and a service worker, no vendor. iOS delivers only to installed PWAs |
+| LLM access | Provider-agnostic port | No gateway — a port gives swappability without flattening provider features |
+
+WhatsApp, prompt tooling, payments, in-app messaging and internal analytics are
+deliberately absent: they land after the cutover and are recorded in
+[`docs/adr/`](docs/adr/README.md) as they are decided.
+
+Each is to be reached through a Protocol in `domain/ports.py`, implemented in
+`infra/` and wired in `api/deps.py`, so that `domain/` never learns a vendor's
+name. That file does not exist yet — it appears with the first adapter.
+
 ## Contributing
 
 Conventional Commits are enforced by a `commit-msg` hook; the release tooling
