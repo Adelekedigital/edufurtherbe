@@ -11,7 +11,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
 | [0002](0002-bubble-export-strategy.md) | Bubble export strategy — snapshot-first, transport behind a port | Accepted |
 | [0003](0003-read-only-freeze-cutover.md) | Cut over behind a read-only freeze | Accepted |
-| [0004](0004-calendar-integration.md) | Own the OAuth client, write events, read availability on demand | Proposed |
+| [0004](0004-calendar-integration.md) | Own the OAuth client, write events, read availability on demand | Accepted |
 | [0005](0005-data-platform.md) | Use Supabase for Postgres, auth and storage — as Postgres, not as a backend | Proposed |
 | [0006](0006-messaging-build-vs-buy.md) | Build booking-scoped messaging; keep mentor–mentee conversation on-platform | Proposed |
 
