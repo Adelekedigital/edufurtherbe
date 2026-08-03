@@ -27,6 +27,7 @@ Anything true only here goes in `project-conventions`, never in a generic skill.
 | Writing tests | `test-writer` |
 | Adding or changing an endpoint | `api-designer` |
 | Any schema change | `db-migration` — expand/contract, never one release |
+| What the new schema should be | `docs/edufurther-migration/` — canonical, never edited here (ADR 0007) |
 | Auth / input / SQL / PII touched | `security-checker` |
 | Data one customer must never see from another | `tenant-isolation` *(if installed)* |
 | Adding logs or metrics | `observability` |

@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EduFurther — Migration Handoff</title>
+<style>
+  :root {
+    --ink: #14181d;
+    --ink-soft: #3d454e;
+    --mute: #6b7480;
+    --faint: #9aa2ac;
+    --line: #e2e5ea;
+    --line-soft: #eef0f3;
+    --paper: #fbfbf9;
+    --card: #ffffff;
+    --accent: #1b5e5a;        /* deep teal — schema/structure */
+    --accent-soft: #e6efee;
+    --amber: #a8630a;         /* risk / attention */
+    --amber-soft: #f8efe0;
+    --violet: #5b4b8a;        /* deferred */
+    --violet-soft: #ece9f4;
+    --rose: #a83250;          /* revised / correction */
+    --rose-soft: #f7e8ec;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--sans);
+    color: var(--ink);
+    background: var(--paper);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    font-size: 15px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; }
+  }
+
+  .shell { display: grid; grid-template-columns: 268px 1fr; max-width: 1360px; margin: 0 auto; }
+
+  /* ---- sidebar ---- */
+  aside {
+    position: sticky; top: 0; align-self: start; height: 100vh;
+    border-right: 1px solid var(--line);
+    padding: 32px 24px 40px; overflow-y: auto;
+    background: var(--card);
+  }
+  .brand { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+  .brand span { color: var(--accent); }
+  .brand-sub { font-size: 11.5px; color: var(--mute); margin-top: 3px; letter-spacing: .02em; text-transform: uppercase; font-weight: 600; }
+  nav { margin-top: 30px; }
+  nav a {
+    display: block; text-decoration: none; color: var(--ink-soft);
+    font-size: 13.5px; padding: 6px 10px; border-radius: 6px; margin-bottom: 1px;
+    border-left: 2px solid transparent; transition: background .12s, color .12s;
+  }
+  nav a:hover { background: var(--line-soft); color: var(--ink); }
+  nav a.group { margin-top: 18px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 700; padding-left: 10px; pointer-events: none; }
+  nav a.sub { padding-left: 18px; font-size: 12.5px; color: var(--mute); }
+
+  /* ---- main ---- */
+  main { padding: 0; min-width: 0; }
+  .band { padding: 56px 60px; border-bottom: 1px solid var(--line); }
+  .band:nth-child(even) { background: var(--card); }
+  section { scroll-margin-top: 20px; }
+
+  .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--accent); font-weight: 700; margin-bottom: 14px; }
+  h1 { font-size: 40px; line-height: 1.08; letter-spacing: -0.025em; font-weight: 800; }
+  h1 .thin { color: var(--mute); font-weight: 400; }
+  .lede { font-size: 17px; color: var(--ink-soft); margin-top: 18px; max-width: 60ch; }
+  h2 { font-size: 25px; letter-spacing: -0.02em; font-weight: 750; margin-bottom: 6px; }
+  h2 .num { font-family: var(--mono); font-size: 14px; color: var(--accent); font-weight: 600; margin-right: 12px; vertical-align: 3px; }
+  .section-note { color: var(--mute); margin-bottom: 30px; max-width: 66ch; font-size: 14.5px; }
+  h3 { font-size: 15px; font-weight: 700; margin: 26px 0 10px; letter-spacing: -0.01em; }
+
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--line-soft); padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+
+  /* ---- stat strip ---- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 34px; }
+  .stat { background: var(--card); padding: 20px 22px; }
+  .stat .n { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+  .stat .n small { font-size: 15px; color: var(--mute); font-weight: 600; }
+  .stat .l { font-size: 12px; color: var(--mute); margin-top: 4px; }
+
+  /* ---- generic tables ---- */
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 4px; font-size: 13.5px; }
+  th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); font-weight: 700; padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.mono, .mono-col { font-family: var(--mono); font-size: 12px; }
+  td .n { font-variant-numeric: tabular-nums; }
+  .rows-num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); }
+
+  /* ---- pills ---- */
+  .pill { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 20px; letter-spacing: .02em; white-space: nowrap; }
+  .p-crit { background: var(--amber-soft); color: var(--amber); }
+  .p-high { background: var(--amber-soft); color: var(--amber); }
+  .p-med  { background: var(--accent-soft); color: var(--accent); }
+  .p-low  { background: var(--line-soft); color: var(--mute); }
+  .p-rev  { background: var(--rose-soft); color: var(--rose); }
+  .p-new  { background: var(--accent-soft); color: var(--accent); }
+
+  /* ---- decision cards ---- */
+  .decisions { display: grid; gap: 14px; }
+  .dc { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 18px 20px; }
+  .dc.revised { border-left: 3px solid var(--rose); }
+  .dc-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+  .dc-id { font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 700; }
+  .dc-title { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+  .dc-body { font-size: 13.5px; color: var(--ink-soft); }
+  .dc-body strong { color: var(--ink); }
+  .dc-was { margin-top: 9px; padding: 9px 12px; background: var(--rose-soft); border-radius: 7px; font-size: 12.5px; color: #7a2438; }
+  .dc-was b { color: var(--rose); }
+
+  /* ---- phase timeline ---- */
+  .track-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); margin: 24px 0 12px; display: flex; align-items: center; gap: 10px; }
+  .track-label::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .track-label.build { color: var(--violet); }
+  .phase { display: grid; grid-template-columns: 62px 1fr auto; gap: 16px; align-items: center; padding: 12px 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); margin-bottom: 8px; }
+  .phase-code { font-family: var(--mono); font-weight: 700; font-size: 14px; color: var(--accent); }
+  .phase.build .phase-code { color: var(--violet); }
+  .phase-what { font-size: 13.5px; }
+  .phase-what .tables { color: var(--mute); font-size: 12.5px; margin-top: 2px; }
+  .phase-meta { text-align: right; white-space: nowrap; }
+  .phase-rows { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+
+  .callout { border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--card); border-radius: 8px; padding: 15px 18px; margin: 16px 0; font-size: 13.5px; color: var(--ink-soft); }
+  .callout.warn { border-left-color: var(--amber); }
+  .callout.warn strong { color: var(--amber); }
+  .callout b, .callout strong { color: var(--ink); }
+  .callout .k { font-weight: 700; display: block; margin-bottom: 3px; color: var(--ink); font-size: 13px; }
+
+  ul.clean { list-style: none; margin: 6px 0; }
+  ul.clean li { padding: 6px 0 6px 22px; position: relative; font-size: 13.5px; color: var(--ink-soft); border-bottom: 1px solid var(--line-soft); }
+  ul.clean li:last-child { border-bottom: none; }
+  ul.clean li::before { content: ""; position: absolute; left: 4px; top: 13px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  ul.clean li b { color: var(--ink); }
+  ul.clean.no li::before { background: var(--faint); }
+
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 20px 22px; }
+  .card h3 { margin-top: 0; }
+
+  .deferred-item { border: 1px solid var(--line); border-left: 3px solid var(--violet); border-radius: 8px; background: var(--card); padding: 15px 18px; margin-bottom: 10px; }
+  .deferred-item .di-top { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; margin-bottom: 5px; }
+  .deferred-item .di-name { font-weight: 700; font-size: 14.5px; }
+  .deferred-item .di-trig { font-size: 12px; color: var(--violet); font-weight: 600; white-space: nowrap; }
+  .deferred-item .di-why { font-size: 13px; color: var(--ink-soft); }
+
+  footer { padding: 40px 60px; color: var(--mute); font-size: 12.5px; }
+  footer .files { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); margin-top: 10px; line-height: 1.9; }
+
+  .open-q { display: grid; grid-template-columns: 28px 1fr; gap: 14px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); margin-bottom: 10px; }
+  .open-q .qn { font-family: var(--mono); font-weight: 700; color: var(--amber); font-size: 16px; }
+  .open-q .qt { font-weight: 700; font-size: 14.5px; margin-bottom: 3px; }
+  .open-q .qd { font-size: 13px; color: var(--ink-soft); }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+    aside { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+    nav { columns: 2; }
+    .band { padding: 40px 26px; }
+    .stats, .two { grid-template-columns: 1fr 1fr; }
+    .phase { grid-template-columns: 50px 1fr; }
+    .phase-meta { grid-column: 2; text-align: left; }
+    h1 { font-size: 30px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside>
+    <div class="brand">Edu<span>Further</span></div>
+    <div class="brand-sub">Migration Handoff</div>
+    <nav>
+      <a href="#top" class="group">Overview</a>
+      <a href="#scale" class="sub">Scale &amp; scope</a>
+      <a href="#principles" class="sub">Core principles</a>
+      <a href="#split" class="group">The schema</a>
+      <a href="#split" class="sub">Splitting User</a>
+      <a href="#decisions" class="sub">Decisions (35)</a>
+      <a href="#revised" class="sub">What changed</a>
+      <a href="#phases" class="group">Execution</a>
+      <a href="#phases" class="sub">Phase plan</a>
+      <a href="#risks" class="sub">Where the risk is</a>
+      <a href="#notbuild" class="group">Boundaries</a>
+      <a href="#notbuild" class="sub">Not this phase</a>
+      <a href="#deferred" class="sub">Deferred &amp; triggers</a>
+      <a href="#open" class="sub">Open decisions</a>
+      <a href="#files" class="sub">Files</a>
+    </nav>
+  </aside>
+
+  <main>
+    <!-- OVERVIEW -->
+    <div class="band" id="top">
+      <section>
+        <div class="eyebrow">Backend data model · Bubble → self-hosted Postgres</div>
+        <h1>Migrating EduFurther <span class="thin">off a low-code platform and onto a schema built for scale.</span></h1>
+        <p class="lede">Sixteen Bubble tables carrying legacy workarounds become 66 focused Postgres tables where every fact has exactly one home. This is the summary; the full DDL, decisions log, field mapping, and runbook live alongside it.</p>
+
+        <div class="stats" id="scale">
+          <div class="stat"><div class="n">16<small> → 66</small></div><div class="l">Tables (each does one job)</div></div>
+          <div class="stat"><div class="n">~6.8<small>k</small></div><div class="l">Rows to migrate</div></div>
+          <div class="stat"><div class="n">246</div><div class="l">DDL statements, all validated</div></div>
+          <div class="stat"><div class="n">40</div><div class="l">Enums · 0 forward refs</div></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- PRINCIPLES -->
+    <div class="band" id="principles">
+      <section>
+        <h2><span class="num">§</span>Five principles that shape everything</h2>
+        <p class="section-note">If you understand only these, you understand the design. Each prevents a specific class of bug that Bubble either caused or couldn't stop.</p>
+
+        <ul class="clean">
+          <li><b>Authorization is profile existence, not a role column.</b> <code>primary_role</code> only picks which dashboard someone lands on. Permissions check whether a <code>mentor_profiles</code> or <code>mentee_goals</code> row exists — which is what makes dual roles free from day one, and why a role column can never silently disagree with reality.</li>
+          <li><b><code>user_id</code> is the primary key of every 1:1 extension.</b> Profiles, onboarding, standing, goals — all keyed on <code>user_id</code>, no surrogate. This erases the <code>mentor_profile_id</code>-vs-<code>user_id</code> ambiguity: they're the same value everywhere.</li>
+          <li><b>Derived data is never stored.</b> Session counts, review counts, availability status, unread counts — all computed at query time. Storing them recreates the exact drift that made the legacy front-search table untrustworthy. (The one exception, a message preview, is trigger-maintained.)</li>
+          <li><b>Soft delete everywhere, with the partial unique index.</b> <code>WHERE deleted_at IS NULL</code> on unique indexes, or a deleted user permanently blocks their own email from re-registering. Soft delete is never a status, and cascade is banned.</li>
+          <li><b>Timestamps are enforced, not intended.</b> Every table has <code>created_at</code> + <code>updated_at</code> (<code>timestamptz</code>), auto-triggered, with a CI query that fails the build if one is missing.</li>
+        </ul>
+      </section>
+    </div>
+
+    <!-- SPLITTING USER -->
+    <div class="band" id="split">
+      <section>
+        <h2><span class="num">§</span>The central move: unbundling <code>User</code></h2>
+        <p class="section-note">The legacy <code>User</code> table did five jobs in ~30 columns — identity, profile, OAuth credentials, billing, and onboarding all shared one row, so every profile edit touched the same record as every login. It becomes nine tables.</p>
+        <table>
+          <thead><tr><th>New table</th><th>Holds</th><th>Why it left User</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">users</td><td>Identity + auth only</td><td>The hot path; keep it lean</td></tr>
+            <tr><td class="mono">user_profiles</td><td>Bio, avatar, socials, countries</td><td>Merged with legacy PersonalInfo, 1:1</td></tr>
+            <tr><td class="mono">auth_identities</td><td>One row per OAuth provider</td><td>Legacy allowed only one provider per user</td></tr>
+            <tr><td class="mono">auth_codes</td><td>OTP login codes (hashed)</td><td>Replaces password reset; OTP is primary auth</td></tr>
+            <tr><td class="mono">calendar_connections</td><td>Composio reference, no tokens</td><td>8 cal* columns, most Cal.com dead weight</td></tr>
+            <tr><td class="mono">user_onboarding</td><td>Step, completion, terms</td><td>Had two duplicate "completed" fields</td></tr>
+            <tr><td class="mono">user_languages</td><td>Spoken languages (ISO 639-3)</td><td>"list of X" → junction table</td></tr>
+            <tr><td class="mono">admin_users</td><td>RBAC with revoke + audit</td><td>Admin role was un-revocable on User</td></tr>
+            <tr><td class="mono">credit_lots</td><td>Credit batches</td><td>Billing shouldn't sit on the user row</td></tr>
+          </tbody>
+        </table>
+        <div class="callout"><span class="k">Same pattern throughout</span>Every legacy "list of X" (languages, goals, block-dates, services) becomes a junction table, and every FK flips from parent-holds-list to child-holds-FK — the shift from Bubble's model to a relational one.</div>
+      </section>
+    </div>
+
+    <!-- DECISIONS -->
+    <div class="band" id="decisions">
+      <section>
+        <h2><span class="num">§</span>The decisions that matter most</h2>
+        <p class="section-note">35 decisions are logged in full in <code>01_DECISIONS.md</code>. These are the ones most likely to look arbitrary — or get "re-fixed" — without the reasoning.</p>
+
+        <div class="decisions">
+
+          <div class="dc">
+            <div class="dc-head"><span class="dc-id">D4</span><span class="dc-title">Keep mentor_id + mentee_id on sessions</span></div>
+            <div class="dc-body">Moving them into a participants table felt cleaner, but the double-booking <strong>exclusion constraint can't reference a joined table</strong> — you'd lose the one guard Bubble never had. And RLS would run a subquery per row on the most-read table. These columns encode a domain invariant: sessions are 1:1 by design.</div>
+          </div>
+
+          <div class="dc">
+            <div class="dc-head"><span class="dc-id">D5</span><span class="dc-title">Session status is not derived from attendance</span></div>
+            <div class="dc-body">Status exists <strong>before anyone attends</strong> — a session is pending at creation, cancelled if called off, with no attendance data either way. Attendance <em>informs</em> one transition (confirmed → completed | no_show); it doesn't define the lifecycle.</div>
+          </div>
+
+          <div class="dc">
+            <div class="dc-head"><span class="dc-id">D6</span><span class="dc-title">session_events with reason_code AND reason_text</span></div>
+            <div class="dc-body">Free text can't answer "what % of mentor cancellations are scheduling conflicts" — which decides whether you build reschedule flows. The <strong>enum drives refund policy</strong>; the text is for humans. This log also makes "cancelled within 24h of start" answerable for the first time.</div>
+          </div>
+
+          <div class="dc">
+            <div class="dc-head"><span class="dc-id">D8</span><span class="dc-title">Credits are a ledger, not a counter</span></div>
+            <div class="dc-body">A balance can't survive refunds (no record it happened), concurrency (lost-update race), abuse detection, or accounting once credits are bought. <code>credit_transactions</code> is append-only; balance is a sum.</div>
+          </div>
+
+          <div class="dc">
+            <div class="dc-head"><span class="dc-id">D12</span><span class="dc-title">One shared service_offerings vocabulary</span></div>
+            <div class="dc-body">Matching failed in Bubble because mentee goals and mentor services were <strong>two separate option sets with no mapping</strong>. Point both at one lookup and matching becomes a join — before any AI. This table is also the seed for the future tags taxonomy.</div>
+          </div>
+
+          <div class="dc">
+            <div class="dc-head"><span class="dc-id">D26</span><span class="dc-title">OTP over magic link</span></div>
+            <div class="dc-body">Magic links break twice: Outlook Safe Links prefetches and burns the token, and WhatsApp's in-app browser opens a different session. A 6-digit OTP works everywhere — <strong>with</strong> hashing, attempt-locking, single-active-code, and per-destination rate limits, because 6 digits is brute-forceable.</div>
+          </div>
+
+          <div class="dc">
+            <div class="dc-head"><span class="dc-id">D33</span><span class="dc-title">audit_log separate from session_events</span></div>
+            <div class="dc-body">One is domain state queried by features and needs a rigid schema; the other is the generic catch-all with jsonb before/after snapshots. Both append-only. Don't collapse them.</div>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+    <!-- REVISED -->
+    <div class="band" id="revised">
+      <section>
+        <h2><span class="num">§</span>What changed during design</h2>
+        <p class="section-note">Six decisions were revised mid-process. Recording both the original and why it was wrong is what stops someone re-introducing the earlier version.</p>
+
+        <div class="decisions">
+          <div class="dc revised">
+            <div class="dc-head"><span class="dc-id">D7</span><span class="dc-title">Credit periods → credit lots</span><span class="pill p-rev">revised</span></div>
+            <div class="dc-body">The lot model handles free and paid credits with different lifecycles in one structure.</div>
+            <div class="dc-was"><b>Was:</b> monthly-reset periods — which assumed all credits are free. <b>Paid credits must never expire</b> (that's a chargeback), so a single balance couldn't represent both.</div>
+          </div>
+          <div class="dc revised">
+            <div class="dc-head"><span class="dc-id">D13</span><span class="dc-title">Scholarship data moved to user level</span><span class="pill p-rev">revised</span></div>
+            <div class="dc-body">A <code>relationship</code> field (awarded / applied / advised) lets one table serve both a mentee's credential and a mentor's capability.</div>
+            <div class="dc-was"><b>Was:</b> filed under mentor services — conflating "I won Chevening" (a fact about a person) with "I advise on Chevening" (a mentor offering).</div>
+          </div>
+          <div class="dc revised">
+            <div class="dc-head"><span class="dc-id">D15</span><span class="dc-title">Institutions: registry, not mirror</span><span class="pill p-rev">revised</span></div>
+            <div class="dc-body">Populate on demand from Hipolabs autocomplete — ~200–400 rows of what's actually referenced, not a 9,000-row mirror. But still a table, so country derives once and FK integrity holds.</div>
+            <div class="dc-was"><b>Was:</b> seed the whole ROR catalogue. Storing only the string would've returned you to 940 rows of free text.</div>
+          </div>
+          <div class="dc revised">
+            <div class="dc-head"><span class="dc-id">D20</span><span class="dc-title">listing_status binary, availability derived</span><span class="pill p-rev">revised</span></div>
+            <div class="dc-body">One field plus an internal reason. Profile-page access is a viewer-side rule, not a column.</div>
+            <div class="dc-was"><b>Was:</b> two booleans — but <code>is_available</code> was derivable (drift risk), and "paused but visible" conflated searchability with access.</div>
+          </div>
+          <div class="dc revised">
+            <div class="dc-head"><span class="dc-id">D22</span><span class="dc-title">Notifications: hybrid typed FK + jsonb</span><span class="pill p-rev">revised</span></div>
+            <div class="dc-body">Typed FK only for the three entities needing cascade or list-join (session, review, conversation); everything else in a <code>context</code> jsonb read by templates, never logic.</div>
+            <div class="dc-was"><b>Was:</b> a typed column per type — a migration every time a notification kind is added.</div>
+          </div>
+          <div class="dc revised">
+            <div class="dc-head"><span class="dc-id">D32</span><span class="dc-title">Multi-tenancy deferred, not pre-built</span><span class="pill p-rev">revised</span></div>
+            <div class="dc-body">Retrofit is a weekend on this schema. Only guard against globally-unique human-readable keys meanwhile.</div>
+            <div class="dc-was"><b>Was:</b> "add organization_id now, it's cheap." It isn't free — every query, index, and RLS policy carries it indefinitely for a maybe.</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- PHASES -->
+    <div class="band" id="phases">
+      <section>
+        <h2><span class="num">§</span>Migration plan — two tracks</h2>
+        <p class="section-note">The migration track has Bubble source data and follows FK dependencies. The build track is greenfield and runs partly in parallel. Each migration phase is extract → stage → transform → load → reconcile, and never advances until reconciliation passes.</p>
+
+        <div class="track-label">Migration track · has source data</div>
+        <div class="phase"><span class="phase-code">M0</span><div class="phase-what">Foundation<div class="tables">extensions, enums, countries + languages seeds, triggers</div></div><div class="phase-meta"><span class="pill p-low">low</span></div></div>
+        <div class="phase"><span class="phase-code">M1</span><div class="phase-what">Identity<div class="tables">users, profiles, auth, onboarding, admin, languages, calendar</div></div><div class="phase-meta"><span class="phase-rows">~2,100</span> <span class="pill p-crit">critical</span></div></div>
+        <div class="phase"><span class="phase-code">M2</span><div class="phase-what">Attributes<div class="tables">education, institutions, goals, mentor profiles, awards, services</div></div><div class="phase-meta"><span class="phase-rows">~1,750</span> <span class="pill p-med">medium</span></div></div>
+        <div class="phase"><span class="phase-code">M3</span><div class="phase-what">Availability<div class="tables">rules, exceptions — timezone / DST transform</div></div><div class="phase-meta"><span class="phase-rows">~200</span> <span class="pill p-high">high</span></div></div>
+        <div class="phase"><span class="phase-code">M4</span><div class="phase-what">Sessions<div class="tables">merged bookings + trackers, participants, events</div></div><div class="phase-meta"><span class="phase-rows">~2,000</span> <span class="pill p-high">high</span></div></div>
+        <div class="phase"><span class="phase-code">M5</span><div class="phase-what">Derived<div class="tables">reviews, opening credit balances</div></div><div class="phase-meta"><span class="phase-rows">~70</span> <span class="pill p-low">low</span></div></div>
+        <div class="phase"><span class="phase-code">M6</span><div class="phase-what">Communications<div class="tables">notifications, recipients, conversations, messages</div></div><div class="phase-meta"><span class="phase-rows">~750</span> <span class="pill p-low">low</span></div></div>
+
+        <div class="track-label build">Build track · greenfield</div>
+        <div class="phase build"><span class="phase-code">B1</span><div class="phase-what">Credits &amp; referrals<div class="tables">lots, transactions, referrals, unlocks</div></div><div class="phase-meta phase-rows">needs M1</div></div>
+        <div class="phase build"><span class="phase-code">B2</span><div class="phase-what">Policy &amp; standing<div class="tables">booking limits, infractions, standing, blocks, reports</div></div><div class="phase-meta phase-rows">needs M4</div></div>
+        <div class="phase build"><span class="phase-code">B3</span><div class="phase-what">Notification delivery<div class="tables">outbox, push, whatsapp templates, channel prefs</div></div><div class="phase-meta phase-rows">needs M6</div></div>
+        <div class="phase build"><span class="phase-code">B4</span><div class="phase-what">Session types &amp; intake<div class="tables">types, configs, questions, options, submissions, answers</div></div><div class="phase-meta phase-rows">needs M2</div></div>
+        <div class="phase build"><span class="phase-code">B5</span><div class="phase-what">Vision boards<div class="tables">redesign, then hand-migrate 10 rows</div></div><div class="phase-meta phase-rows">needs M1</div></div>
+        <div class="phase build"><span class="phase-code">B6</span><div class="phase-what">Reporting<div class="tables">curated views for Metabase</div></div><div class="phase-meta phase-rows">needs M4</div></div>
+
+        <div class="callout"><span class="k">Cross-cutting — start day one</span>File migration off Bubble's S3 (avatars, banners, vision-board images) is network-bound, slow, and schema-independent. Google OAuth verification (calendar scopes, weeks of paperwork) and Meta Business verification for WhatsApp are both long-lead and calendar-time, not eng-time.</div>
+      </section>
+    </div>
+
+    <!-- RISKS -->
+    <div class="band" id="risks">
+      <section>
+        <h2><span class="num">§</span>Where the risk actually is</h2>
+        <p class="section-note">Most of the ~6,800 rows are low-risk. Three things aren't, and each has a specific check to run before cutover.</p>
+        <div class="two">
+          <div class="card">
+            <h3>M3 · Availability &amp; DST</h3>
+            <p class="dc-body">Legacy stored pre-formatted local time <em>strings</em>. Getting the timezone conversion wrong produces silently-wrong slots, and DST breaks it twice a year.</p>
+            <div class="callout warn" style="margin-bottom:0"><strong>Check:</strong> reconstruct a known mentor's next 7 days across a DST boundary and compare against what Bubble shows. Test 5 mentors in 3+ timezones.</div>
+          </div>
+          <div class="card">
+            <h3>M4 · The booking/tracker merge</h3>
+            <p class="dc-body">1,073 bookings vs 935 trackers. The gap and any multi-tracker bookings (reschedules) determine the merge strategy.</p>
+            <div class="callout warn" style="margin-bottom:0"><strong>Check:</strong> run the reconciliation query <em>before</em> writing the transform — confirm the ~138-row gap is cancellations, and find any booking with multiple trackers.</div>
+          </div>
+          <div class="card">
+            <h3>M4 · The exclusion constraint</h3>
+            <p class="dc-body">Legacy data almost certainly contains double-bookings Bubble allowed. The new constraint will reject overlapping active sessions.</p>
+            <div class="callout warn" style="margin-bottom:0"><strong>Check:</strong> find overlaps in staging first. Completed sessions pass (the constraint only covers pending/confirmed); resolve genuinely conflicting active ones by hand.</div>
+          </div>
+          <div class="card">
+            <h3>Files · Bubble S3 dependency</h3>
+            <p class="dc-body">Every avatar and banner URL points at Bubble — a live dependency on the platform you're leaving.</p>
+            <div class="callout warn" style="margin-bottom:0"><strong>Check:</strong> before cutover, every image URL query must return zero rows matching <code>%bubble%</code>.</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- NOT THIS PHASE -->
+    <div class="band" id="notbuild">
+      <section>
+        <h2><span class="num">§</span>Deliberately not built this phase</h2>
+        <p class="section-note">Each was considered and rejected for a reason — at 1,200 users most performance infrastructure is premature.</p>
+        <div class="two">
+          <ul class="clean no">
+            <li><b>Redis / caching</b> — indexes + TanStack Query cover it; adding it now buys an invalidation bug, not speed</li>
+            <li><b>Typesense / Meilisearch</b> — Postgres FTS + trigram is enough until ~10k mentors</li>
+            <li><b>Third-party chat</b> — ~$400+/mo for 13 conversations; Supabase Realtime is free and present</li>
+            <li><b>Novu</b> — 681 notifications don't justify it; two tables + a dispatcher suffice</li>
+          </ul>
+          <ul class="clean no">
+            <li><b>Multi-tenancy</b> — retrofit is a weekend; just avoid globally-unique human-readable keys</li>
+            <li><b>Capacitor</b> — ship the PWA, measure iOS install rate first</li>
+            <li><b>pgvector matching</b> — 44 mentors is too small for embeddings to beat filters + rating</li>
+            <li><b>tags taxonomy</b> — deferred; service_offerings is the seed</li>
+          </ul>
+        </div>
+        <h3>Do build now, though</h3>
+        <ul class="clean">
+          <li><b>Cursor pagination on every list endpoint</b> — retrofitting is a breaking API change</li>
+          <li><b>Idempotency keys on booking</b> — a retried POST double-books and double-charges; mandatory before payments</li>
+          <li><b>The reporting schema</b> — makes dashboards survive refactors and makes Metabase's natural-language querying actually work</li>
+          <li><b>message_type + payload columns</b> — two columns now make slash-command action cards a frontend project later, not a migration</li>
+        </ul>
+      </section>
+    </div>
+
+    <!-- DEFERRED -->
+    <div class="band" id="deferred">
+      <section>
+        <h2><span class="num">§</span>Deferred work &amp; its triggers</h2>
+        <p class="section-note">Every deferred item has a defined escape hatch — that's what makes deferring safe. None require a redesign later.</p>
+
+        <div class="deferred-item"><div class="di-top"><span class="di-name">Tags / AI matching taxonomy</span><span class="di-trig">→ when AI matching begins</span></div><div class="di-why">service_offerings already gives both sides a shared vocabulary; basic matching is a join today. Migration to tags is one pass, no redesign.</div></div>
+        <div class="deferred-item"><div class="di-top"><span class="di-name">pgvector embeddings</span><span class="di-trig">→ ~200+ mentors</span></div><div class="di-why">Filter-first-rank-second means structured fields are needed regardless. Build match_impressions / match_outcomes early — that's training signal you can't create retroactively.</div></div>
+        <div class="deferred-item"><div class="di-top"><span class="di-name">Payments</span><span class="di-trig">→ business decision</span></div><div class="di-why">The lot model already accommodates it: unit_cost_cents and currency sit at zero, paid credits never expire. Consider Paystack / Flutterwave for Nigeria over Stripe.</div></div>
+        <div class="deferred-item"><div class="di-top"><span class="di-name">Award verification</span><span class="di-trig">→ if claims drive bookings</span></div><div class="di-why">Self-reported this phase; columns exist and default to unverified. Enabling verify-on-request is a feature flag.</div></div>
+        <div class="deferred-item"><div class="di-top"><span class="di-name">Slash-command action cards</span><span class="di-trig">→ product decision</span></div><div class="di-why">Schema is ready. Card state derives from the referenced session, cards expire, and actions reuse the normal booking endpoint.</div></div>
+        <div class="deferred-item"><div class="di-top"><span class="di-name">Composio replacement (Nango / direct)</span><span class="di-trig">→ if token custody becomes a requirement</span></div><div class="di-why">calendar_connections stores a reference, not tokens — switching touches one table and one module.</div></div>
+      </section>
+    </div>
+
+    <!-- OPEN -->
+    <div class="band" id="open">
+      <section>
+        <h2><span class="num">§</span>Open decisions</h2>
+        <p class="section-note">Two remain. Neither blocks starting M0 or M1.</p>
+        <div class="open-q"><div class="qn">1</div><div><div class="qt">What counts as a qualifying invite?</div><div class="qd">Recommend invitee-completes-onboarding. Email-verified alone is farmable with disposable addresses; session-completed delays the referrer's reward and weakens the loop. <span style="color:var(--violet);font-weight:600;">Blocks B1.</span></div></div></div>
+        <div class="open-q"><div class="qn">2</div><div><div class="qt">Payments architecture</div><div class="qd">Separate discussion. The lot model keeps it additive, so it doesn't gate the migration. <span style="color:var(--violet);font-weight:600;">Blocks nothing now.</span></div></div></div>
+        <div class="callout" style="margin-top:20px"><span class="k">Already resolved</span>Dual roles (profile-existence authorization makes it free), verification policy (self-reported this phase), institutions (lazy registry), and scholarship modelling (user-level) were all open earlier and are now settled.</div>
+      </section>
+    </div>
+
+    <!-- FILES -->
+    <div class="band" id="files">
+      <section>
+        <h2><span class="num">§</span>What's in the package</h2>
+        <p class="section-note">This HTML is a summary. The authoritative artifacts are the Markdown docs and the numbered DDL, which run in order against an empty Postgres 14+ database.</p>
+        <div class="two">
+          <div class="card">
+            <h3>docs/</h3>
+            <ul class="clean">
+              <li><b>00_HANDOFF</b> — architecture, conventions, phases</li>
+              <li><b>01_DECISIONS</b> — all 35 decisions with reasoning</li>
+              <li><b>02_FIELD_MAPPING</b> — every legacy field → new home</li>
+              <li><b>03_MIGRATION_RUNBOOK</b> — ETL, reconciliation, cutover</li>
+              <li><b>04_DEFERRED</b> — what's not built and its triggers</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>schema/ · run in order</h3>
+            <div class="files">
+              00_foundation.sql<br>
+              01_identity.sql<br>
+              02_profiles.sql<br>
+              03_availability.sql<br>
+              04_sessions.sql<br>
+              05_credits_reviews.sql<br>
+              06_policy_standing.sql<br>
+              07_communications.sql<br>
+              08_features_platform.sql<br>
+              09_reporting.sql
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer>
+      EduFurther migration handoff · summary view · 66 tables, 40 enums, 246 statements validated against the Postgres grammar.
+      This document summarizes the accompanying Markdown and SQL; where they differ, the source files are authoritative.
+    </footer>
+
+  </main>
+</div>
+</body>
+</html>

@@ -4,7 +4,9 @@ Date: 2026-08-01
 
 ## Status
 
-Accepted
+Accepted — point 4 superseded by ADR 0007 (the anchor column is
+`legacy_bubble_id`); the transport deferral is resolved by ADR 0007 (the Bubble
+Data API), which activates the field-completeness clause in Consequences below.
 
 ## Context
 

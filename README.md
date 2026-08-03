@@ -39,6 +39,8 @@ src/app/infra/     adapters — DB, cache, outbound clients
 src/app/core/      configuration and the base error taxonomy
 tests/{unit,integration,e2e}/
 docs/adr/          decision records — read before proposing a rewrite
+docs/edufurther-migration/   the target schema, field mapping and runbook —
+                   received from the migration work, never edited here
 scripts/           the layer check and the local gate
 ```
 
@@ -61,9 +63,11 @@ All configuration flows through `src/app/core/config.py`, read from
 prefixed variable fails at startup rather than silently leaving a default in
 place. Secrets are `SecretStr` and are never logged.
 
-`.env` is git-ignored. So are `data/`, `exports/`, and `*.csv`, which is where
-Bubble migration output lands — it contains member PII and must never enter the
-repository history.
+`.env` is git-ignored. So are `data/`, `exports/`, and `*.csv`. Those cover file
+output; the Bubble extract itself now lands in a `staging` schema inside the
+database ([ADR 0007](docs/adr/0007-adopt-the-migration-package-as-the-target-data-model.md)),
+so it holds 1,200 users' PII somewhere `.gitignore` cannot reach. Keeping it out
+of the repository is still necessary and is no longer sufficient.
 
 ## Stack
 
