@@ -20,6 +20,9 @@ released. A tag with no matching section here fails the release job.
 - `main-guard.yml`, which fails when a commit reaches `main` without a pull
   request. It detects a bypass after the fact and cannot prevent one; server-side
   prevention needs GitHub Pro or a public repository (issue #9).
+- ADR 0004 (calendar integration), 0005 (data platform) and 0006 (messaging
+  build-vs-buy), plus `docs/adr/README.md` as the index, and settled decisions
+  12–19 with the `port`, `ror_id` and `conversation_id` vocabulary.
 
 ### Changed
 
@@ -29,6 +32,10 @@ released. A tag with no matching section here fails the release job.
 - CI and the release workflow select steps from `scripts/check.py` with `--only`
   instead of restating the commands, so the gate is defined once. The bandit
   step gains `-c pyproject.toml`, which the restated CI copy had dropped.
+- `[tool.check-layers.forbidden-external]` now covers `api` and `core` as well as
+  `domain`, and names the adopted vendor SDKs, so "no vendor SDK outside `infra/`"
+  is enforced rather than only documented. It is a denylist: a newly adopted
+  vendor is unguarded until its package name is added alongside the dependency.
 
 ### Fixed
 

@@ -127,9 +127,13 @@ features not yet built.
 
 ### Confirmation
 
-- **Mechanical:** no chat-vendor SDK appears in `pyproject.toml`, and none may be
-  imported outside `infra/` under `scripts/check_layers.py`. Buying a chat
+- **Mechanical:** no chat-vendor SDK appears in `pyproject.toml`. Buying a chat
   platform would be a visible dependency change.
+- **Not mechanical, until there is a vendor to name:** `check_layers.py` blocks
+  vendor SDKs by package name in `[tool.check-layers.forbidden-external]`. No
+  chat vendor has been chosen — that is the point of this record — so there is no
+  name to list, and the import boundary for one is unenforced until there is.
+  Whoever adopts a chat SDK adds it to that list in the same change.
 - **Mechanical, once built:** thread access is derived from the booking, so an
   authorization test on bookings covers it. A thread reachable without its
   booking would be a test failure rather than a review finding.

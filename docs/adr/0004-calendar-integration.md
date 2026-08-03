@@ -167,9 +167,12 @@ that times are stored UTC with the mentor's IANA zone in a separate column.
 
 Partially mechanical, and the gaps are the interesting part.
 
-- **Mechanical:** no vendor SDK may be imported outside `infra/`, enforced by
-  `scripts/check_layers.py`. A calendar client reaching into `domain/` fails the
-  gate.
+- **Mechanical, for named vendors:** `composio` is listed in
+  `[tool.check-layers.forbidden-external]` for both `domain` and `api`, so
+  `scripts/check_layers.py` fails on a Composio import in either. The list is a
+  **denylist**: it catches the vendors written into it and cannot catch an SDK
+  nobody has added, so a newly adopted vendor is unguarded until its package name
+  is listed. Add the name in the same change that adds the dependency.
 - **Mechanical, once built:** the absence of a scheduled calendar-reading job is
   visible in the job definitions. A recurring calendar read would be a reviewable
   addition, not a silent one.
