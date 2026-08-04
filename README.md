@@ -47,7 +47,8 @@ docs/edufurther-migration/   the target schema, field mapping and runbook —
 migrations/        the Alembic chain — outside src/ so it is neither packaged
                    into the wheel nor scanned by the layer check
 alembic.ini        migration config; carries no database URL, by design
-scripts/           the layer check and the local gate
+scripts/           the layer check, the local gate, and the reference-data
+                   generator whose output is committed as a migration
 ```
 
 `api/deps.py` and `main.py` are the only sanctioned wiring points.
@@ -90,6 +91,39 @@ uv run alembic downgrade -1                   # step back one
 
 Migrations run as a separate deploy step, never on application startup — startup
 migrations race across replicas.
+
+### Reference data
+
+`countries` (ISO 3166-1, 249 rows) and `languages` (ISO 639-3, 7,078 living
+languages) are seeded by a migration. Both are foreign-key targets — six columns
+across identity and profiles reference `countries(code)` — so they must be
+complete before any user data loads.
+
+The rows are **embedded in the migration**, not read from a data file. A
+migration must produce the same result whenever it runs; one that reads a file
+produces whatever the file says at the time, so a fresh environment and an
+existing one silently diverge the moment anyone regenerates it.
+
+```bash
+uv run python scripts/generate_reference_seeds.py \
+    --revision <new-id> --down-revision <head> --output migrations/versions/<name>.py
+```
+
+The annual ISO refresh is therefore a **new migration**, never an edit to a
+shipped one. Do not hand-edit the generated file — change the generator and
+regenerate.
+
+Rows are derived from [`pycountry`](https://pypi.org/project/pycountry/), which
+packages the Debian [`iso-codes`](https://salsa.debian.org/iso-codes-team/iso-codes)
+database (LGPL-2.1-or-later), publishing the ISO 3166-1 country codes and the
+SIL-maintained ISO 639-3 language codes. `pycountry` is a **development**
+dependency only: the data is baked into the migration, so nothing needs it at
+runtime.
+
+ISO 639-3 rather than 639-1 because the two-letter set covers ~184 languages and
+omits Nigerian Pidgin (`pcm`) entirely, which for this platform's market is not
+an acceptable gap. Macrolanguages (`ara`, `swa`) are kept deliberately — for
+"what languages do you speak", that is the right granularity.
 
 ### Tests that need a database
 

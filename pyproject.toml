@@ -46,6 +46,11 @@ dev = [
     # container. A DATABASE URL from docker-compose locally and a `services:`
     # block in CI give the same real-Postgres guarantee with no dependency.
     "pytest-asyncio>=1.0",
+    # Generator-only, and deliberately not a runtime dependency. Reference rows
+    # are baked into a migration by scripts/generate_reference_seeds.py, so the
+    # application never needs this at import or request time — shipping it would
+    # be dead weight in the image and another entry in the weekly pip-audit.
+    "pycountry>=24.6.1",
     "httpx>=0.27.0",
     "pip-audit>=2.7.0",
     "pre-commit>=4.6.1",
