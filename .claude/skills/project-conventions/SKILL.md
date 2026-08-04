@@ -129,6 +129,12 @@ section of each Definition of Done.
 - [ ] Object-level authorization is scoped **in the query**, on every read *and*
       write path — never checked after fetching
 - [ ] No vendor SDK imported outside `infra/`
+- [ ] **A new dependency's import name is added to
+      `[tool.check-layers.forbidden-external]` in the same change.** The list is a
+      denylist — default-allow — so an unlisted vendor is unguarded, and a vendor
+      that arrives as a *transitive* of an extra is unguarded and unannounced. The
+      guard also skips `main.py` and `api/deps.py`, which is where wiring lives, so
+      it prevents an accidental import rather than a deliberate one
 - [ ] Secrets never reach a log line, a response body, or git
 - [ ] Bubble snapshots stay out of git — `data/`, `exports/`, `*.csv` are ignored
       because they hold 1,200 users' PII, plus 858 personal-info and 940

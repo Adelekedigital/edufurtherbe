@@ -54,6 +54,38 @@ released. A tag with no matching section here fails the release job.
   through Emailit. Drops `auth_codes`, `auth_code_purpose` and
   `users.password_hash` from the target schema, and makes `users.id` the Supabase
   auth user id.
+- ADR 0008 (institutions) — the hipolabs registry, populated on demand and stored
+  once referenced, with a surrogate `uuid` primary key and `domain` as the natural
+  key. **No `ror_id` column**, which supersedes settled decision 17 in full and
+  retires the `ror_id` vocabulary term — both **on acceptance**, along with
+  `README.md`'s stack table. The record is `Proposed`, and the settled-decisions
+  table is loaded at the start of every build, so it is not rewritten to describe
+  a decision that has not been made. Same sequencing as ADR 0009.
+  The record makes no deviation from the migration package, whose own D15
+  had already been revised from seeding ROR to populating from hipolabs. It records
+  two M2 prerequisites the M0 chain does not provide — the `pg_trgm` extension and
+  the `lookup_status` enum — and that nothing monitors the hipolabs dependency the
+  decision accepts.
+- `fastapi[standard]` replaces the bare `fastapi` dependency, adding `jinja2`,
+  `python-multipart`, `email-validator` and the `fastapi` CLI — 14 packages in
+  total. The extra also pulls `fastapi-cloud-cli`, which depends on **`sentry-sdk`**,
+  so an error-reporting SDK is now a runtime dependency that arrived without an
+  ADR. It is listed in `[tool.check-layers.forbidden-external]` for `domain`,
+  `api` and `core`, and **that entry is narrower than it sounds**: it covers those
+  three layers *except the composition roots*. `main.py` and `api/deps.py` are
+  exempt, and `main.py` is skipped before exemption is even consulted because it
+  sits outside any layer — so the one file where `sentry_sdk.init(dsn=…)` would
+  naturally be written is the one file the guard does not read. What makes this
+  safe is not the denylist: `sentry_sdk` is inert without an `init()` call, nothing
+  calls it, and no DSN is configured. The entry prevents an accidental import;
+  initialising it deliberately would be an ADR. The guard was verified by importing
+  `sentry_sdk` into `domain/` and then `core/` and watching `check_layers.py` fail
+  on each before the probes were removed.
+  `fastapi[standard-no-fastapi-cloud-cli]` is the upstream extra that excludes
+  both, and was considered and declined: FastAPI Cloud is the deploy target and
+  the CLI is used. The standing cost is that `pip-audit --strict` now covers 14
+  more packages, so a future `sentry-sdk` advisory will break the weekly security
+  workflow for a dependency the application never calls.
 
 ### Changed
 
