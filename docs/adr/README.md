@@ -18,7 +18,7 @@ answer is a new record that supersedes the old one, not an edit.
 | 0008 | Institutions — ROR ID vs hipolabs registry | Reserved by 0007 |
 | 0009 | First-login authentication — magic link vs OTP | Reserved by 0007 |
 | 0010 | Message thread scope — booking-scoped vs standalone | Reserved by 0007 |
-| [0011](0011-alembic-is-the-migration-chain.md) | Alembic is the migration chain; the package DDL is its specification | Proposed |
+| [0011](0011-alembic-is-the-migration-chain.md) | Alembic is the migration chain; the package DDL is its specification | Accepted |
 
 ## Conventions
 

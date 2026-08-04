@@ -4,7 +4,7 @@ Date: 2026-08-03
 
 ## Status
 
-Proposed
+Accepted
 
 > Numbered 0011 rather than 0008. ADR 0007 allocates 0008, 0009 and 0010 to the
 > three conflicts it deferred — institutions, first-login authentication, and
