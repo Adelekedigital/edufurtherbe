@@ -54,6 +54,15 @@ released. A tag with no matching section here fails the release job.
   through Emailit. Drops `auth_codes`, `auth_code_purpose` and
   `users.password_hash` from the target schema, and makes `users.id` the Supabase
   auth user id.
+- ADR 0008 (institutions) — the hipolabs registry, populated on demand and stored
+  once referenced, with a surrogate `uuid` primary key and `domain` as the natural
+  key. **No `ror_id` column**, which supersedes settled decision 17 in full and
+  retires the `ror_id` vocabulary term; `README.md`'s stack table is corrected to
+  match. The record makes no deviation from the migration package, whose own D15
+  had already been revised from seeding ROR to populating from hipolabs. It notes
+  that `pg_trgm` is an M2 prerequisite the M0 migration does not install.
+- `fastapi[standard]` replaces the bare `fastapi` dependency, adding `jinja2`,
+  `python-multipart`, `email-validator` and the `fastapi` CLI.
 
 ### Changed
 
