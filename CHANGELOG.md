@@ -34,6 +34,26 @@ released. A tag with no matching section here fails the release job.
   to ADRs 0008–0010. Adds a guardrail requiring credential fields to be redacted
   at extraction rather than at load, and records in `docs/adr/README.md` how a
   partially superseded record states its status.
+- ADR 0011 (Alembic is the migration chain) and the persistence foundation:
+  SQLAlchemy 2.0 with asyncpg, the async engine and session factory in
+  `infra/db/`, the Alembic chain outside `src/`, a Postgres 17 compose service on
+  port 55432, and database tests that skip locally without `TEST_DATABASE_URL`
+  but fail in CI, where `REQUIRE_DB_TESTS=1` turns the skip into an error. The
+  first migration installs `pgcrypto`, `uuid_generate_v7()` and `set_updated_at()`.
+- `countries` (249 rows) and `languages` (7,078 rows), seeded from ISO 3166-1 and
+  ISO 639-3 by `scripts/generate_reference_seeds.py`, which emits the migration
+  rather than the migration being hand-written. Both are keyed on their natural
+  ISO code. Languages use 639-3 because 639-1 omits Nigerian Pidgin entirely, and
+  only 174 of the 7,078 carry a two-letter code at all.
+- Settled decisions 21–25: phase-scoped enums and lookups with the foundation
+  exception, natural keys on ISO lookups, the per-table `updated_at` trigger, no
+  `legacy_bubble_id` on reference tables, and the Alembic chain.
+- ADR 0009 (first-login authentication) — Supabase Auth for every login, a
+  6-digit email code as the default with a sign-in link offered as a choice,
+  delivered through a Send Email Hook that also routes authentication mail
+  through Emailit. Drops `auth_codes`, `auth_code_purpose` and
+  `users.password_hash` from the target schema, and makes `users.id` the Supabase
+  auth user id.
 
 ### Changed
 
