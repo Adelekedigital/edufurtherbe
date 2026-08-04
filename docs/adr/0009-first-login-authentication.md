@@ -223,14 +223,21 @@ may return for that purpose alone. Deferred, not decided.
 
 ### Confirmation
 
-- **Mechanical:** no `auth_codes` table, no `auth_code_purpose` type and no
-  `users.password_hash` column appear in the schema. Their absence is visible in
-  the migration chain.
-- **Mechanical:** `users.id` carries no `DEFAULT`. The every-model test that
-  already asserts the timestamp rule is where this belongs, and a default
-  reintroduced later would otherwise be invisible until an orphan row appeared.
-- **Mechanical:** a test asserts that account linking rejects an unverified
-  provider email, once the linking code exists in M1.
+All three of the checkable items below are **`Mechanical, once built`** rather
+than mechanical: identity lands in M1, and none of these can run against a chain
+that stops at reference data. Labelling them plain `Mechanical` would put this
+record's own confirmations in the category the section exists to keep them out of.
+
+- **Mechanical, once built:** no `auth_codes` table, no `auth_code_purpose` type
+  and no `users.password_hash` column appear in the schema. Their absence becomes
+  visible in the migration chain when M1 writes the identity tables — until then
+  the chain creates nothing for them to be absent from.
+- **Mechanical, once built:** `users.id` carries no `DEFAULT`. The every-model
+  test that already asserts the timestamp rule is where this belongs, and a
+  default reintroduced later would otherwise be invisible until an orphan row
+  appeared. The assertion is written with the `users` model, not before it.
+- **Mechanical, once built:** a test asserts that account linking rejects an
+  unverified provider email, once the linking code exists in M1.
 - **Not mechanical:** nothing verifies the OTP expiry is actually set to 10
   minutes in the Supabase project. It is dashboard configuration, invisible to
   this repository, and it will look identical whether or not anybody set it.
