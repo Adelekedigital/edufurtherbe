@@ -26,6 +26,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import get_settings
+from app.infra.db import models
 from app.infra.db.base import Base
 from app.infra.db.engine import resolve_async_dsn, to_async_dsn
 
@@ -34,10 +35,19 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Autogenerate compares against this. It is empty until the first model lands in
-# PR 2 — which is correct, not an oversight: an empty metadata means autogenerate
-# would propose dropping every table, so autogenerate must not be run until there
-# are models. The M0 migration is hand-written for that reason among others.
+# Importing `models` is what puts the tables on Base.metadata — a model that is
+# never imported is invisible here, and autogenerate then proposes DROPPING the
+# table it describes. That failure is destructive and completely silent.
+#
+# The guard below is not decoration: it uses the import, so `ruff --fix` cannot
+# prune it as unused, and it converts "the models package was emptied or renamed"
+# from a destructive autogenerate into a refusal to run at all.
+if not models.__all__:
+    raise RuntimeError(
+        "app.infra.db.models exports no models. Autogenerate would read an empty "
+        "schema and propose dropping every table; refusing to continue."
+    )
+
 target_metadata = Base.metadata
 
 # `config.attributes["dsn"]` is how a caller injects a URL programmatically — the
