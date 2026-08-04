@@ -8,7 +8,7 @@ readme = "README.md"
 # consumed on many interpreters, so there is nothing to gain by making one.
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.115.0",
+    "fastapi[standard]>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
