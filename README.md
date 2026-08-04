@@ -163,7 +163,7 @@ is a decision with no code behind it yet.
 | Product analytics | PostHog | |
 | Google Calendar | Composio | Our own OAuth client; write events, read free/busy on demand ([ADR 0004](docs/adr/0004-calendar-integration.md)) |
 | HTML to PDF and image | MarkupGo | |
-| Institution data | hipolabs | Autocomplete served live; a row is stored only once someone selects it, so reads never depend on it ([ADR 0008](docs/adr/0008-institutions-hipolabs-registry.md)) |
+| Institution data | ROR | Synced from ROR's data dump; hipolabs is the fallback and the source of email domains |
 | Push notifications | Native Web Push | VAPID and a service worker, no vendor. iOS delivers only to installed PWAs |
 | LLM access | Provider-agnostic port | No gateway — a port gives swappability without flattening provider features |
 

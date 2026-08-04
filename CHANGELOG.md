@@ -57,8 +57,11 @@ released. A tag with no matching section here fails the release job.
 - ADR 0008 (institutions) — the hipolabs registry, populated on demand and stored
   once referenced, with a surrogate `uuid` primary key and `domain` as the natural
   key. **No `ror_id` column**, which supersedes settled decision 17 in full and
-  retires the `ror_id` vocabulary term; `README.md`'s stack table is corrected to
-  match. The record makes no deviation from the migration package, whose own D15
+  retires the `ror_id` vocabulary term — both **on acceptance**, along with
+  `README.md`'s stack table. The record is `Proposed`, and the settled-decisions
+  table is loaded at the start of every build, so it is not rewritten to describe
+  a decision that has not been made. Same sequencing as ADR 0009.
+  The record makes no deviation from the migration package, whose own D15
   had already been revised from seeding ROR to populating from hipolabs. It records
   two M2 prerequisites the M0 chain does not provide — the `pg_trgm` extension and
   the `lookup_status` enum — and that nothing monitors the hipolabs dependency the

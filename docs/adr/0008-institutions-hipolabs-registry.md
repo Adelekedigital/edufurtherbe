@@ -157,10 +157,17 @@ catalogue and the same argument against it.
 ## Consequences
 
 **Settled decision #17 is superseded in full**, not in part: both its identifier
-and its sync strategy are replaced. The `ror_id` domain-vocabulary entry is
-retired with it — that one mattered more than the decision row, because it read as
-an instruction to create the column rather than as a rationale for a choice.
-`README.md`'s stack table is corrected in the same change.
+and its sync strategy are replaced. The `ror_id` domain-vocabulary entry goes with
+it — that one matters more than the decision row, because it reads as an
+instruction to create the column rather than as a rationale for a choice.
+
+**On acceptance**, and not before: decision #17 is rewritten to the hipolabs
+registry, the `ror_id` vocabulary entry is replaced by `institutions.domain`, and
+`README.md`'s stack table is corrected to match. They are deliberately *not*
+changed while this record is `Proposed`. The settled-decisions table is described
+as "choices already made" and is loaded at the start of every build, so a row
+there asserting an unaccepted decision would direct work before the decision
+exists — the same sequencing ADR 0009 states for decisions #7 and #12.
 
 **ADR 0007's deferral table is now stale in two ways.** It says this conflict
 blocks M0, which ADR 0011 already corrected, and it frames the conflict as
