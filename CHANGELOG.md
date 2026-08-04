@@ -89,6 +89,20 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **ADR 0008 is accepted**, and no live assertion of ROR survives. Settled
+  decision 17 becomes the hipolabs registry — populated on demand, surrogate
+  `uuid` primary key, `domain` as the natural key, no `ror_id` — with the
+  reasoning that the dependency lands on writes only and that Bubble already runs
+  on hipolabs autocomplete. The `ror_id` vocabulary term is replaced by
+  `institutions.domain`; that one mattered more than the decision row, because it
+  read as an instruction to create a column the target schema does not have.
+  `README.md`'s stack table is corrected to match.
+- **ADR 0007's status now names its resolved deferrals** — institutions by ADR
+  0008, first-login authentication by ADR 0009, with message-thread scope still
+  reserved for ADR 0010. ADR 0002's status already carried its transport deferral
+  this way and 0007 did not, which made two records with the same shape read
+  differently. Its deferral table is deliberately left as written, including the
+  stale claim that institutions block M0.
 - **ADR 0009 is accepted**, and the documents that assumed a magic link now agree
   with it. Settled decision 7 describes the decided mechanism — OAuth for Google
   or LinkedIn, and on email a 6-digit code by default with a sign-in link as a
