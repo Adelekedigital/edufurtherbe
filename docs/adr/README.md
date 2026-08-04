@@ -15,6 +15,10 @@ answer is a new record that supersedes the old one, not an edit.
 | [0005](0005-data-platform.md) | Use Supabase for Postgres, auth and storage — as Postgres, not as a backend | Accepted |
 | [0006](0006-messaging-build-vs-buy.md) | Build booking-scoped messaging; keep mentor–mentee conversation on-platform | Accepted |
 | [0007](0007-adopt-the-migration-package-as-the-target-data-model.md) | Adopt the migration package as the target data model | Accepted |
+| 0008 | Institutions — ROR ID vs hipolabs registry | Reserved by 0007 |
+| 0009 | First-login authentication — magic link vs OTP | Reserved by 0007 |
+| 0010 | Message thread scope — booking-scoped vs standalone | Reserved by 0007 |
+| [0011](0011-alembic-is-the-migration-chain.md) | Alembic is the migration chain; the package DDL is its specification | Accepted |
 
 ## Conventions
 

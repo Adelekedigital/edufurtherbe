@@ -1,0 +1,37 @@
+# Local PostgreSQL for development and for the `db`-marked tests.
+#
+# Not testcontainers. That library pulls the Docker SDK and its requests/urllib3
+# chain into `uv export`, which feeds `pip-audit --strict` on a weekly schedule —
+# a permanent CVE surface for a package whose only job is starting a container.
+# A compose file does the same work with no dependency at all.
+#
+# Port 55432, not 5432, so this never collides with a PostgreSQL someone already
+# runs on the default port.
+#
+# Version 17 to match what Supabase currently provisions. When the project's real
+# version is known, change it here and re-run the suite — the uuidv7 shim and the
+# updated_at trigger are the two things that would notice.
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: edufurther-postgres
+    environment:
+      # Local-only credentials. Nothing here is a secret, and nothing here is
+      # ever used outside this compose file — the deployed database gets its DSN
+      # from EDUFURTHER_DATABASE_URL like every other setting.
+      POSTGRES_USER: edufurther
+      POSTGRES_PASSWORD: edufurther
+      POSTGRES_DB: edufurther
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edufurther -d edufurther"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - edufurther-pgdata:/var/lib/postgresql/data
+
+volumes:
+  edufurther-pgdata:

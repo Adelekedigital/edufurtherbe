@@ -8,7 +8,7 @@ import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "EDUFURTHER_"
@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     environment: Environment = "local"
     debug: bool = False
     cors_origins: list[str] = Field(default_factory=list)
+
+    # Optional, and deliberately so. ``main.py`` builds the application at import
+    # time (``app = create_app()``), so a required field would make
+    # ``import app.main`` fail on any machine without a database configured —
+    # including every unit test and the pre-commit hook that runs them. The
+    # engine factory raises ``ConfigurationError`` at the point of use instead,
+    # which is where a missing DSN is actually actionable.
+    #
+    # ``SecretStr`` because a DSN carries a password: ``repr`` and any log line
+    # render it as ``**********``. Read the value with ``.get_secret_value()``,
+    # and only inside ``infra/``.
+    database_url: SecretStr | None = None
 
     @model_validator(mode="after")
     def reject_unknown_prefixed_variables(self) -> Settings:

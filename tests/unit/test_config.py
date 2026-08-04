@@ -34,10 +34,47 @@ def test_settings_read_from_prefixed_environment(monkeypatch: pytest.MonkeyPatch
 
 
 def test_unknown_prefixed_variable_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``DATABSE`` is misspelled on purpose, and the misspelling is load-bearing.
+
+    ``EDUFURTHER_DATABASE_URL`` is now a real field, so correcting the typo would
+    turn this into a test that a *valid* variable is accepted — the opposite
+    assertion, passing for the wrong reason. Change the probe only to another
+    variable that does not exist.
+    """
     monkeypatch.setenv("EDUFURTHER_DATABSE_URL", "postgresql://localhost/x")
 
     with pytest.raises(PydanticValidationError):
         Settings(_env_file=None)
+
+
+def test_database_url_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EDUFURTHER_DATABASE_URL", raising=False)
+
+    assert Settings(_env_file=None).database_url is None
+
+
+def test_database_url_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EDUFURTHER_DATABASE_URL", "postgresql://u:pw@localhost:5432/db")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.database_url is not None
+    assert settings.database_url.get_secret_value() == "postgresql://u:pw@localhost:5432/db"
+
+
+def test_database_url_is_masked_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A DSN carries a password, and ``repr`` is what ends up in a traceback.
+
+    Probes the password specifically rather than asserting the mask is present:
+    a plain ``str`` field would also render *something*, and only the absence of
+    the secret distinguishes the two.
+    """
+    monkeypatch.setenv("EDUFURTHER_DATABASE_URL", "postgresql://u:sup3rs3cret@localhost/db")
+
+    rendered = repr(Settings(_env_file=None))
+
+    assert "sup3rs3cret" not in rendered
+    assert "**********" in rendered
 
 
 def test_get_settings_returns_the_same_instance() -> None:
