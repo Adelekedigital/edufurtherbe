@@ -4,9 +4,16 @@ Date: 2026-08-01
 
 ## Status
 
-Accepted — point 4 superseded by ADR 0007 (the anchor column is
-`legacy_bubble_id`); the transport deferral is resolved by ADR 0007 (the Bubble
-Data API), which activates the field-completeness clause in Consequences below.
+Accepted, with two points superseded and one deferral resolved. Seven of the nine
+numbered decisions below stand untouched:
+
+- **Point 4** — superseded by ADR 0007: the anchor column is `legacy_bubble_id`.
+- **Point 9** — superseded *on the mechanism* by ADR 0009: first login is a
+  6-digit email code by default, with a sign-in link offered as a choice, rather
+  than a magic link. The substance of point 9 is unchanged — identity does not
+  migrate, accounts match on email, and every user re-authenticates passwordlessly.
+- **The transport deferral** — resolved by ADR 0007 (the Bubble Data API), which
+  activates the field-completeness clause in Consequences below.
 
 ## Context
 

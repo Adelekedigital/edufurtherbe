@@ -4,7 +4,15 @@ Date: 2026-08-03
 
 ## Status
 
-Accepted
+Accepted. The decision itself stands; one of its open questions is superseded:
+
+- **"Whether Supabase Auth's magic-link flow satisfies decision #7 exactly"** —
+  superseded by ADR 0009, which makes a 6-digit email code the default and offers
+  the link as a choice. The question is **moot rather than answered**: the
+  magic-link flow is no longer the mechanism, so whether it satisfies decision #7
+  no longer decides anything. The equivalent question for the code flow is open in
+  ADR 0009, which records that first login cannot be tested end to end until M1
+  builds it. Nothing here has been verified against the 1,200 migrated users.
 
 ## Context
 
