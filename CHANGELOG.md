@@ -89,6 +89,17 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **ADR 0009 is accepted**, and the documents that assumed a magic link now agree
+  with it. Settled decision 7 describes the decided mechanism — OAuth for Google
+  or LinkedIn, and on email a 6-digit code by default with a sign-in link as a
+  choice — while its substance and its reopen condition are unchanged. Settled
+  decision 12 no longer justifies Supabase on *magic-link* login specifically;
+  passwordless email login still arrives without being built, which is what that
+  argument needed. ADR 0002's status names **point 9** as superseded on the
+  mechanism, restructured as a list so three qualifications stay readable, and its
+  body is untouched. ADR 0004 is deliberately left alone: it cites decision 7 for
+  the fact that users are already re-authenticating when the calendar reconnect
+  arrives, and that holds whichever mechanism they are in.
 - Target Python 3.14 across `.python-version`, `requires-python`, ruff and mypy.
 - CI tests a single interpreter instead of a 3.12/3.13 matrix — this is a
   deployed application, not a library consumed on many Python versions.
