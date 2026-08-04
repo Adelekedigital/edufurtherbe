@@ -7422,6 +7422,11 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("code", name="pk_countries"),
+        # ISO guarantees alpha-3 is unique; nothing else here would. The seeded
+        # rows satisfy it by construction, so the case this actually guards is the
+        # annual refresh — a new migration, per this file's own rule — introducing
+        # a duplicate that would otherwise be accepted silently.
+        sa.UniqueConstraint("code_alpha3", name="uq_countries_code_alpha3"),
     )
 
     op.create_table(
@@ -7442,6 +7447,10 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("code_639_3", name="pk_languages"),
+        # Unique only where present. PostgreSQL treats nulls as distinct in a
+        # UNIQUE constraint, which is exactly what this table needs: 6,904 of
+        # 7,078 rows have no two-letter code and all of them must remain valid.
+        sa.UniqueConstraint("code_639_1", name="uq_languages_code_639_1"),
     )
 
     # Attached per table, in the migration that creates the table. The handoff

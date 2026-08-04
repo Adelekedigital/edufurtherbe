@@ -30,7 +30,9 @@ class Country(TimestampMixin, Base):
     __tablename__ = "countries"
 
     code: Mapped[str] = mapped_column(CHAR(2), primary_key=True)
-    code_alpha3: Mapped[str] = mapped_column(CHAR(3), nullable=False)
+    # `unique=True`, not `index=True` — the constraint creates its own index, and
+    # adding a second would be pure write overhead.
+    code_alpha3: Mapped[str] = mapped_column(CHAR(3), nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
 
 
@@ -48,5 +50,7 @@ class Language(TimestampMixin, Base):
     __tablename__ = "languages"
 
     code_639_3: Mapped[str] = mapped_column(CHAR(3), primary_key=True)
-    code_639_1: Mapped[str | None] = mapped_column(CHAR(2), nullable=True)
+    # Unique where present. PostgreSQL treats nulls as distinct, so the ~98% of
+    # rows with no two-letter code are unaffected.
+    code_639_1: Mapped[str | None] = mapped_column(CHAR(2), nullable=True, unique=True)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)

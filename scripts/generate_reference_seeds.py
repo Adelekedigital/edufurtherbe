@@ -134,6 +134,11 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("code", name="pk_countries"),
+        # ISO guarantees alpha-3 is unique; nothing else here would. The seeded
+        # rows satisfy it by construction, so the case this actually guards is the
+        # annual refresh — a new migration, per this file's own rule — introducing
+        # a duplicate that would otherwise be accepted silently.
+        sa.UniqueConstraint("code_alpha3", name="uq_countries_code_alpha3"),
     )
 
     op.create_table(
@@ -154,6 +159,10 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("code_639_3", name="pk_languages"),
+        # Unique only where present. PostgreSQL treats nulls as distinct in a
+        # UNIQUE constraint, which is exactly what this table needs: 6,904 of
+        # 7,078 rows have no two-letter code and all of them must remain valid.
+        sa.UniqueConstraint("code_639_1", name="uq_languages_code_639_1"),
     )
 
     # Attached per table, in the migration that creates the table. The handoff
@@ -260,9 +269,19 @@ def main() -> int:
     parser.add_argument("--revision", required=True, help="new revision id (12 hex chars)")
     parser.add_argument("--down-revision", required=True, help="parent revision id")
     parser.add_argument("--output", required=True, type=Path, help="migration file to write")
+    # Regenerating an existing revision must produce a file that differs only by
+    # the change you made to this script. With the timestamp taken from the clock,
+    # every regeneration also rewrites the header, so the diff can no longer be
+    # read as "only my change" — which is the whole point of "edit the script and
+    # regenerate" rather than hand-editing.
+    parser.add_argument(
+        "--created",
+        default=None,
+        help="Create Date header; pass the existing value when regenerating a shipped revision",
+    )
     args = parser.parse_args()
 
-    created = dt.datetime.now(tz=dt.UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+    created = args.created or dt.datetime.now(tz=dt.UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
     args.output.write_text(
         render(args.revision, args.down_revision, created), encoding="utf-8", newline="\n"
     )

@@ -8,6 +8,7 @@ seed had changed under a chain that is supposed to be immutable.
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -169,3 +170,45 @@ async def test_updated_at_actually_moves_on_a_seeded_table(db_engine: AsyncEngin
 
     assert before.year == 2019, "the trigger was not disabled; the old value never landed"
     assert after > before
+
+
+async def test_a_duplicate_alpha3_is_rejected(db_engine: AsyncEngine) -> None:
+    """ISO guarantees alpha-3 is unique; the schema has to as well.
+
+    The seeded rows satisfy this by construction, so only a constraint can catch
+    the case that actually threatens it: an annual ISO refresh, which the
+    generator specifies as a *new migration* rather than an edit, introducing a
+    duplicate that nothing would otherwise reject.
+    """
+    async with db_engine.connect() as conn:
+        with pytest.raises(IntegrityError):
+            await conn.execute(
+                text(
+                    "INSERT INTO countries (code, code_alpha3, display_name) "
+                    "VALUES ('ZZ', 'NGA', 'Duplicate Alpha3')"
+                )
+            )
+
+
+async def test_a_duplicate_639_1_is_rejected(db_engine: AsyncEngine) -> None:
+    """Unique only where present — most rows are null and must stay insertable."""
+    async with db_engine.connect() as conn:
+        with pytest.raises(IntegrityError):
+            await conn.execute(
+                text(
+                    "INSERT INTO languages (code_639_3, code_639_1, display_name) "
+                    "VALUES ('zzz', 'en', 'Duplicate 639-1')"
+                )
+            )
+
+
+async def test_many_languages_share_a_null_639_1(db_engine: AsyncEngine) -> None:
+    """The constraint above must not make the null case unique.
+
+    Without this, a UNIQUE that accidentally treated nulls as equal would pass
+    both tests above and break the 6,904 rows that legitimately have no
+    two-letter code.
+    """
+    count = await scalar(db_engine, "SELECT count(*) FROM languages WHERE code_639_1 IS NULL")
+
+    assert count == LANGUAGE_COUNT - LANGUAGES_WITH_639_1
