@@ -23,3 +23,13 @@ class ConflictError(AppError):
 
 class ValidationError(AppError):
     """Input violated a domain rule, as opposed to failing a schema check."""
+
+
+class ConfigurationError(AppError):
+    """A required setting is absent or unusable, found when something needs it.
+
+    Distinct from the others: this is an operator fault, not a caller fault, and
+    it must never be mapped to a 4xx. Raised where the setting is consumed rather
+    than at startup, because settings load before a database is necessarily
+    reachable and a required field would break ``import app.main``.
+    """

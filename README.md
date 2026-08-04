@@ -12,6 +12,9 @@ separate Next.js app that consumes this API.
 ```bash
 uv sync --all-extras --dev      # install
 uv run pre-commit install       # install the git hooks (pre-commit + commit-msg)
+cp .env.example .env            # local settings, including the database URL
+docker compose up -d            # PostgreSQL 17 on port 55432
+uv run alembic upgrade head     # apply the migration chain
 make check                      # the full local gate — run before every commit
 ```
 
@@ -41,6 +44,9 @@ tests/{unit,integration,e2e}/
 docs/adr/          decision records — read before proposing a rewrite
 docs/edufurther-migration/   the target schema, field mapping and runbook —
                    received from the migration work, never edited here
+migrations/        the Alembic chain — outside src/ so it is neither packaged
+                   into the wheel nor scanned by the layer check
+alembic.ini        migration config; carries no database URL, by design
 scripts/           the layer check and the local gate
 ```
 
@@ -69,12 +75,49 @@ database ([ADR 0007](docs/adr/0007-adopt-the-migration-package-as-the-target-dat
 so it holds 1,200 users' PII somewhere `.gitignore` cannot reach. Keeping it out
 of the repository is still necessary and is no longer sufficient.
 
+## The database
+
+PostgreSQL, reached through SQLAlchemy 2.0 with `asyncpg`. **Alembic is the chain
+of record**; the DDL in `docs/edufurther-migration/schema/` is a specification
+that is read and transcribed, never executed ([ADR 0011](docs/adr/0011-alembic-is-the-migration-chain.md)).
+
+```bash
+docker compose up -d                          # start PostgreSQL 17 locally
+uv run alembic upgrade head                   # apply migrations
+uv run alembic revision -m "what it does"     # new migration, hand-written
+uv run alembic downgrade -1                   # step back one
+```
+
+Migrations run as a separate deploy step, never on application startup — startup
+migrations race across replicas.
+
+### Tests that need a database
+
+Tests marked `db` read `TEST_DATABASE_URL`. Each one creates a database of its
+own and drops it afterwards, so they are safe to run against the local instance
+and are order-independent under `pytest-randomly`.
+
+```bash
+export TEST_DATABASE_URL=postgresql://edufurther:edufurther@localhost:55432/edufurther
+uv run pytest
+```
+
+**Without that variable they skip**, with a message saying what to set — no
+Docker required to run the rest of the suite. CI sets `REQUIRE_DB_TESTS=1`, which
+turns that skip into a failure: a skipped test and a passing test look identical
+in a summary line, so without it the entire database tier could disappear and the
+check would stay green.
+
 ## Stack
 
-The pre-cutover set — what the initial build targets. **Nothing here is
-integrated yet**: `src/` currently holds configuration, the error taxonomy and a
-health endpoint. This table is a record of decisions, not of code, and it grows
-as each piece lands.
+The pre-cutover set — what the initial build targets. This table is a record of
+decisions, not of code, and it grows as each piece lands.
+
+**Only the database is integrated so far**, and only as PostgreSQL: `src/`
+holds configuration, the error taxonomy, a health endpoint, and the engine and
+session factory in `infra/db/`. Supabase's auth and storage are decided
+([ADR 0005](docs/adr/0005-data-platform.md)) and unbuilt. Every other row below
+is a decision with no code behind it yet.
 
 | Concern | Choice | Notes |
 |---|---|---|

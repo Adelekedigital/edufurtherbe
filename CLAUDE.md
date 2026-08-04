@@ -41,6 +41,8 @@ Anything true only here goes in `project-conventions`, never in a generic skill.
 
 ```bash
 uv sync                        # install (frozen in CI)
+docker compose up -d           # local Postgres on 55432; tests marked `db` skip without it
+uv run alembic upgrade head    # apply migrations — never on app startup
 uv run uvicorn app.main:app --reload --app-dir src
 uv run pytest -q               # full suite
 make check                     # the full local gate — before every commit
@@ -72,6 +74,7 @@ src/app/domain/    the product — pure Python, no I/O, no framework
 src/app/infra/     adapters — DB, cache, outbound clients
 src/app/core/      config and base errors
 tests/{unit,integration,e2e}/
+migrations/        Alembic chain — outside src/, so unpackaged and unscanned
 docs/adr/          decision records — read before proposing a rewrite
 ```
 

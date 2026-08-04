@@ -13,6 +13,14 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "structlog>=24.4.0",
+    # Persistence. The `asyncio` extra pulls greenlet, which SQLAlchemy's async
+    # layer requires rather than merely benefits from.
+    "sqlalchemy[asyncio]>=2.0.36",
+    "alembic>=1.14",
+    # 0.31 is the first release with a cp314 wheel. A lower floor resolves and
+    # then tries to build from source on a machine with no C compiler, which is
+    # every Windows dev box here.
+    "asyncpg>=0.31",
 ]
 
 [dependency-groups]
@@ -29,6 +37,15 @@ dev = [
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
     "pytest-randomly>=3.16.0",
+    # 1.x, not 0.x: the configuration keys below are the 1.0 spelling, and 0.x
+    # silently ignores them.
+    #
+    # No testcontainers. It pulls the Docker SDK and its requests/urllib3 chain
+    # into `uv export`, which feeds `pip-audit --strict` on a weekly schedule —
+    # a standing CVE surface for a package whose only job is starting a
+    # container. A DATABASE URL from docker-compose locally and a `services:`
+    # block in CI give the same real-Postgres guarantee with no dependency.
+    "pytest-asyncio>=1.0",
     "httpx>=0.27.0",
     "pip-audit>=2.7.0",
     "pre-commit>=4.6.1",
@@ -92,8 +109,15 @@ disallow_untyped_defs = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers --strict-config"
+# Explicit, not "auto". Auto mode collects every async def as a test, including
+# ones that were never meant to be, and the failure is a silent skip rather than
+# an error. Both keys are required on pytest-asyncio 1.x — omitting the loop
+# scope emits a deprecation warning on every run.
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: deselect with '-m \"not slow\"'",
+    "db: needs a live PostgreSQL; set TEST_DATABASE_URL or these skip",
 ]
 
 [tool.coverage.run]

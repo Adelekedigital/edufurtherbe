@@ -28,9 +28,20 @@ repos:
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v2.3.0
     hooks:
+      # This hook runs mypy in its own isolated environment, so every library
+      # whose types are needed under src/ must be listed here as well as in
+      # pyproject.toml. Miss one and `make check` passes — it uses the project
+      # venv — while the real git hook fails on import-not-found. That split is
+      # how the ruff/mypy pin drift and the pytest PATH bug both reached commit
+      # time; see references/failure-modes.md.
+      #
+      # alembic is deliberately absent: nothing under src/ imports it, and the
+      # migration files that do live at the repo root, outside `files: ^src/`.
+      # An alembic import under src/ means adding it here in the same change.
       - id: mypy
         args: [--strict]
-        additional_dependencies: [pydantic, pydantic-settings, fastapi, structlog]
+        additional_dependencies:
+          [pydantic, pydantic-settings, fastapi, structlog, sqlalchemy]
         files: ^src/
 
   - repo: https://github.com/PyCQA/bandit
