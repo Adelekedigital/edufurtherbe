@@ -16,12 +16,19 @@ standing.
 **The migration package already argued this out and changed its mind.** D15 is
 marked **[REVISED]**: it opens *"Original suggestion: seed from ROR, thousands of
 rows"* and records the pushback as correct — *"mirroring a catalogue you can query
-live is pointless"*. Its DDL followed. `institutions` in `00_foundation.sql` has
-`id`, `name`, `domain`, `country_code`, `source`, `status`, `merged_into_id` and
-`usage_count`, and **no `ror_id` column at all**. ADR 0007 itself records this in
-point 5. ROR survives in exactly one place: as a permitted value in
+live is pointless"*. Its DDL followed: `institutions` in `00_foundation.sql` has
+**no `ror_id` column at all**, which ADR 0007 itself records in point 5. ROR
+survives in exactly one place, as a permitted value in
 `source CHECK (source IN ('hipolabs', 'manual', 'ror'))` — a provenance label, not
 an identifier.
+
+**The table is anchored to `countries`.** `country_code` is
+`char(2) NOT NULL REFERENCES countries(code)`, which is what makes D15's *"country
+derives once at write"* structural rather than a convention somebody has to
+remember. It also means `institutions` cannot ship before `countries` — and
+`countries` shipped in M0 under settled decision #21's standing exception, *"a
+foundation phase may carry a lookup whose rows the next phase's foreign keys
+require."* That exception was written for this foreign key.
 
 **So the conflict is not package-versus-repository. It is one settled decision
 standing alone against everything else**, which is a different problem and has a
@@ -73,8 +80,11 @@ rows that exist are the ones somebody chose.
 
 **One weakness is real and belongs in the record rather than in a footnote.** The
 package states that *"Hipolabs is incomplete for African institutions"* — which is
-this platform's primary market, not an edge case. `source='manual'` exists for
-exactly that gap. Nobody has measured how large it is.
+this platform's primary market, not an edge case, and nobody has measured how
+large it is. Three mechanisms recover from it, and they are worth naming because
+the gap reads worse than it is: `alt_names text[]` holds local aliases, the
+trigram index on `name` makes fuzzy matching cheap, and `source='manual'` covers
+what neither reaches. The last of those is the fallback, not the plan.
 
 **This record blocks nothing.** ADR 0007's deferral table says institutions block
 M0 because `institutions` is created in `00_foundation.sql`. ADR 0011 already
@@ -165,15 +175,20 @@ not broken, and invisible until somebody reports it. This is the same shape as t
 Composio outage in `failure-modes.md`, where an integration was dead for an unknown
 length of time because nothing was watching. Naming it here does not fix it.
 
-**`pg_trgm` must be installed before `institutions` ships.** The package declares
-it in `00_foundation.sql` for `idx_institutions_name_trgm`, which serves fuzzy name
-matching. The M0 migration installs `pgcrypto` only. This is an M2 prerequisite and
-is recorded here so it is not discovered late.
+**Two M2 prerequisites exist that the M0 chain does not provide**, and they are
+recorded here so they are not discovered when the migration is being written. The
+`pg_trgm` extension serves `idx_institutions_name_trgm` and the fuzzy matching
+above; the M0 migration installs `pgcrypto` only. The `lookup_status` enum
+(`'approved'`, `'pending_review'`, `'merged'`, `'rejected'`) types
+`institutions.status`, and settled decision #21 deliberately defers enums to the
+phase that first uses them, so it is correctly absent rather than missing. Both
+belong in the migration that creates the table.
 
 **The African-coverage gap becomes a data-quality workstream, not a schema
-question.** If the match rate against the legacy 940 entries is poor,
-`source='manual'` carries more weight than "fills gaps" implies, and somebody has
-to curate those rows. The schema handles it; nobody has sized it.
+question.** If the match rate against the legacy 940 entries is poor, the recovery
+is alias curation and fuzzy-match tuning before it is `source='manual'`, and
+somebody has to do that work. The schema carries all three paths; nobody has sized
+which one does the heavy lifting.
 
 ### Confirmation
 
@@ -184,6 +199,12 @@ to curate those rows. The schema handles it; nobody has sized it.
   and `institution_id` is nullable. These are what make an incomplete registry
   survivable, so they are the assertions worth holding, and they arrive with the
   education tables.
+- **Mechanical, once built, and only if somebody writes it:** that the migration
+  creating `institutions` also creates `pg_trgm` and `lookup_status`. The chain
+  test asserts extensions, functions and table names against fixed literals — it
+  has **no type assertion at all** and inherits nothing automatically. M2 must
+  extend it. Stated this way because "the test will catch it" is what would
+  otherwise be assumed, and it would not.
 - **Not mechanical:** nothing detects hipolabs becoming unavailable. There is no
   health check, no alert, and no synthetic lookup. The failure is silent and
   partial by construction.

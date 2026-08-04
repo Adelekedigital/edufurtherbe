@@ -180,6 +180,11 @@ domain = [
     "posthog",
     "qstash",
     "upstash_qstash",
+    # Arrived as a transitive of `fastapi[standard]` -> fastapi-cloud-cli, not by a
+    # decision to adopt error reporting. Listed so it cannot be imported by accident
+    # simply because it happens to be installed. See the note under `core` below for
+    # what this entry does and does not protect.
+    "sentry_sdk",
 ]
 
 # `api/` is transport. It may import the web framework, and nothing that speaks to
@@ -206,10 +211,24 @@ api = [
     "celery",
     "sqlalchemy",
     "alembic",
+    "sentry_sdk",
 ]
 
 # `core/` is configuration and the base error taxonomy. Listed so that "no vendor
 # SDK outside infra/" is true of every layer rather than of two of the three.
+#
+# ON `sentry_sdk` SPECIFICALLY, AND THE LIMIT OF LISTING IT HERE. The entry stops
+# `domain/`, `api/` and `core/` importing it — but NOT the composition roots. Both
+# `exempt` paths are skipped, and `main.py` is skipped before exemption is even
+# consulted because it sits outside any layer. `sentry_sdk.init(dsn=…)` in `main.py`
+# is exactly how error reporting would be wired, and exactly what this list does not
+# see. It also does nothing about the package shipping in the production image.
+#
+# What makes that safe is not this entry: `sentry_sdk` is inert without an `init()`
+# call, nothing calls it, and no DSN is configured. Treat the entry as preventing an
+# accidental import, not as a control. Initialising it deliberately is an ADR — an
+# observability vendor plus stack traces carrying user emails and ids — not a
+# one-line change to `main.py`.
 core = [
     "composio",
     "composio_core",
@@ -228,4 +247,5 @@ core = [
     "alembic",
     "fastapi",
     "starlette",
+    "sentry_sdk",
 ]
