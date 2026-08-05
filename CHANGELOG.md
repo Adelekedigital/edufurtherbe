@@ -86,6 +86,20 @@ released. A tag with no matching section here fails the release job.
   the CLI is used. The standing cost is that `pip-audit --strict` now covers 14
   more packages, so a future `sentry-sdk` advisory will break the weekly security
   workflow for a dependency the application never calls.
+- ADR 0012 (Google OAuth scopes and client split) — both Google integrations stay
+  inside the **non-sensitive** scope tier, and sign-in and calendar move to
+  **separate Cloud projects**. Calendar uses `calendar.freebusy` to read
+  availability and `calendar.app.created` to write events into a secondary
+  calendar the application creates; the latter is a full create/change/delete
+  capability and is non-sensitive, because the application can only ever touch a
+  calendar it made. Sign-in keeps `openid`, `userinfo.email` and
+  `userinfo.profile`. The projects are split because the consent screen — branding,
+  scopes, verification status — is project-level, so a sensitive scope added for
+  44 mentors would attach a user cap to 1,200 sign-in users. It supersedes ADR
+  0004's "submit it for sensitive-scope verification" clause, and records that two
+  behaviours it depends on are untested: whether an app-created calendar sends
+  attendee invitations, and whether its busy intervals reach the mentor's own
+  free/busy.
 
 ### Changed
 
