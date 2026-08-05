@@ -67,9 +67,12 @@ and calendar live in separate Cloud projects.**
 
 1. **Calendar uses exactly two scopes**: `.../auth/calendar.freebusy` to read
    availability, and `.../auth/calendar.app.created` to write events. Nothing
-   else. `calendar.events.freebusy` and `calendar.events.public.readonly` are
-   dropped as redundant — the first overlaps `calendar.freebusy`, and nothing
-   needs the second.
+   else. `calendar.events.public.readonly` is dropped because nothing needs it.
+   `calendar.events.freebusy` is dropped as **apparently** redundant against
+   `calendar.freebusy` — apparently, because the overlap has not been verified and
+   the open question below asks whether `calendar.freebusy` reaches a mentor's
+   institutional calendar. If it does not, the two are not redundant at all, one
+   is simply broader, and this choice is the one to revisit first.
 2. **Sign-in uses `openid`, `.../auth/userinfo.email` and
    `.../auth/userinfo.profile`**, and never a calendar scope.
 3. **Session events live in a secondary calendar the application creates** in the
