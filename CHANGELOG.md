@@ -89,6 +89,21 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **ADRs 0004 and 0009 carry correction notes: Google OAuth verification is not on
+  the critical path, and never was.** Both records treated sensitive-scope review
+  as unavoidable — 0004 stating that "Google Calendar scopes are in the *sensitive*
+  tier" and gating calendar connect on weeks of queue time, 0009 calling
+  verification "the long pole" that "gates the majority login path". Checked
+  against the scope list in the Google Cloud console rather than recalled, the
+  scopes both decisions actually need are **non-sensitive**: `openid`,
+  `userinfo.email` and `userinfo.profile` for sign-in, and `calendar.freebusy`
+  plus `calendar.app.created` for calendar — the latter granting full create,
+  change and delete on secondary calendars the application makes. No app review,
+  no user cap, no unverified-app warning. Neither decision changes; both are
+  better served, because the scope pair is strictly narrower than either record
+  contemplated. Recorded as **v1 of the Google integration** — sensitive scopes
+  remain available later, with a record of their own, if a capability needs them.
+  Original text left intact in both, per the convention ADRs 0002 and 0003 set.
 - **ADR 0008 is accepted**, and no live assertion of ROR survives. Settled
   decision 17 becomes the hipolabs registry — populated on demand, surrogate
   `uuid` primary key, `domain` as the natural key, no `ror_id` — with the
