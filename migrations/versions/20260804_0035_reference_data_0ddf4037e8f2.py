@@ -47,6 +47,15 @@ depends_on: str | Sequence[str] | None = None
 # Lightweight table constructs for bulk_insert. Deliberately not the ORM models:
 # a migration must describe the schema as it was at this revision, and a model
 # that changes later would silently rewrite history.
+#
+# `id` is deliberately absent: the rows below omit it and the column default
+# generates one per row. Committing 7,327 literal UUIDs would add ~286 KB to this
+# file, taking it past pre-commit's 500 KB ceiling — the same limit this file
+# already hit once. Deriving them from the ISO code instead (uuid5) was rejected
+# on principle: a surrogate computed from the natural key changes whenever ISO
+# retires or reassigns a code, which is exactly the volatility a surrogate exists
+# to absorb. Reference ids therefore differ per environment, and nothing may
+# depend on a literal one — look up by code.
 countries_table = sa.table(
     "countries",
     sa.column("code", sa.CHAR(2)),
@@ -7406,6 +7415,10 @@ def upgrade() -> None:
     """Upgrade schema."""
     op.create_table(
         "countries",
+        # Surrogate primary key, like every other table (ADR 0014). The ISO code
+        # keeps its own UNIQUE constraint and remains the human-facing key — it
+        # is simply not what foreign keys store.
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
         sa.Column("code", sa.CHAR(2), nullable=False),
         sa.Column("code_alpha3", sa.CHAR(3), nullable=False),
         sa.Column("display_name", sa.Text(), nullable=False),
@@ -7421,7 +7434,11 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.PrimaryKeyConstraint("code", name="pk_countries"),
+        sa.PrimaryKeyConstraint("id", name="pk_countries"),
+        # The alpha-2 code was the primary key until ADR 0014. It stays UNIQUE
+        # and NOT NULL, so nothing about lookup-by-code changes; what changes is
+        # that a referencing row stores the id instead.
+        sa.UniqueConstraint("code", name="uq_countries_code"),
         # ISO guarantees alpha-3 is unique; nothing else here would. The seeded
         # rows satisfy it by construction, so the case this actually guards is the
         # annual refresh — a new migration, per this file's own rule — introducing
@@ -7431,6 +7448,7 @@ def upgrade() -> None:
 
     op.create_table(
         "languages",
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
         sa.Column("code_639_3", sa.CHAR(3), nullable=False),
         sa.Column("code_639_1", sa.CHAR(2), nullable=True),
         sa.Column("display_name", sa.Text(), nullable=False),
@@ -7446,7 +7464,8 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.PrimaryKeyConstraint("code_639_3", name="pk_languages"),
+        sa.PrimaryKeyConstraint("id", name="pk_languages"),
+        sa.UniqueConstraint("code_639_3", name="uq_languages_code_639_3"),
         # Unique only where present. PostgreSQL treats nulls as distinct in a
         # UNIQUE constraint, which is exactly what this table needs: 6,904 of
         # 7,078 rows have no two-letter code and all of them must remain valid.

@@ -200,8 +200,13 @@ def upgrade() -> None:
 
     op.create_table(
         "users",
-        # No server_default. ADR 0009 §9 — this id is issued by Supabase Auth.
-        sa.Column("id", sa.Uuid(), nullable=False),
+        # Ours (ADR 0013, superseding ADR 0009 §9): a vendor id as our primary
+        # key would put a Supabase-issued value in every foreign key in the
+        # schema.
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        # The Supabase auth user id. Nullable, so M1c loads 1,200 users without
+        # calling Supabase; `auth_id IS NULL` means "has never authenticated".
+        sa.Column("auth_id", sa.Uuid(), nullable=True),
         sa.Column("email", postgresql.CITEXT(), nullable=False),
         sa.Column("email_verified_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column("first_name", sa.Text(), nullable=True),
@@ -244,6 +249,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name="pk_users"),
         sa.UniqueConstraint("legacy_bubble_id", name="uq_users_legacy_bubble_id"),
+        sa.UniqueConstraint("auth_id", name="uq_users_auth_id"),
     )
     # THE PARTIAL UNIQUE INDEX PEOPLE FORGET. Without `WHERE deleted_at IS NULL`
     # a soft-deleted user permanently blocks their own email from re-registering,
@@ -376,8 +382,9 @@ def upgrade() -> None:
 
     op.create_table(
         "user_languages",
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
         sa.Column("user_id", sa.Uuid(), nullable=False),
-        sa.Column("language_code", sa.CHAR(length=3), nullable=False),
+        sa.Column("language_id", sa.Uuid(), nullable=False),
         sa.Column(
             "proficiency",
             _enum("language_proficiency"),
@@ -398,17 +405,26 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.ForeignKeyConstraint(
-            ["language_code"],
-            ["languages.code_639_3"],
-            name="fk_user_languages_language_code_languages",
+            ["language_id"],
+            ["languages.id"],
+            name="fk_user_languages_language_id_languages",
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
             ["user_id"], ["users.id"], name="fk_user_languages_user_id_users", ondelete="CASCADE"
         ),
-        sa.PrimaryKeyConstraint("user_id", "language_code", name="pk_user_languages"),
+        sa.PrimaryKeyConstraint("id", name="pk_user_languages"),
     )
-    op.create_index("ix_user_languages_language", "user_languages", ["language_code"], unique=False)
+    op.create_index("ix_user_languages_language", "user_languages", ["language_id"], unique=False)
+    # The composite that was the primary key until ADR 0014. Without it a user
+    # can list the same language twice — an invariant the old key gave for free
+    # and a surrogate key does not.
+    op.create_index(
+        "ix_user_languages_user_language",
+        "user_languages",
+        ["user_id", "language_id"],
+        unique=True,
+    )
     # At most one primary language per user. A plain unique on (user_id,
     # is_primary) would instead permit exactly one *non*-primary language.
     op.create_index(
@@ -468,6 +484,7 @@ def upgrade() -> None:
 
     op.create_table(
         "user_onboarding",
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
         sa.Column("user_id", sa.Uuid(), nullable=False),
         sa.Column("last_step", sa.Text(), nullable=True),
         sa.Column("completed_at", sa.TIMESTAMP(timezone=True), nullable=True),
@@ -486,18 +503,21 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["user_id"], ["users.id"], name="fk_user_onboarding_user_id_users", ondelete="CASCADE"
         ),
-        sa.PrimaryKeyConstraint("user_id", name="pk_user_onboarding"),
+        sa.PrimaryKeyConstraint("id", name="pk_user_onboarding"),
+        # Carries the 1:1 invariant the primary key used to carry.
+        sa.UniqueConstraint("user_id", name="uq_user_onboarding_user_id"),
     )
 
     op.create_table(
         "user_profiles",
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
         sa.Column("user_id", sa.Uuid(), nullable=False),
         sa.Column("avatar_url", sa.Text(), nullable=True),
         sa.Column("banner_url", sa.Text(), nullable=True),
         sa.Column("about_me", sa.Text(), nullable=True),
         sa.Column("gender", sa.Text(), nullable=True),
-        sa.Column("origin_country_code", sa.CHAR(length=2), nullable=True),
-        sa.Column("current_country_code", sa.CHAR(length=2), nullable=True),
+        sa.Column("origin_country_id", sa.Uuid(), nullable=True),
+        sa.Column("current_country_id", sa.Uuid(), nullable=True),
         sa.Column("social_linkedin", sa.Text(), nullable=True),
         sa.Column("social_twitter", sa.Text(), nullable=True),
         sa.Column("social_youtube", sa.Text(), nullable=True),
@@ -516,28 +536,30 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.ForeignKeyConstraint(
-            ["current_country_code"],
-            ["countries.code"],
-            name="fk_user_profiles_current_country_code_countries",
+            ["current_country_id"],
+            ["countries.id"],
+            name="fk_user_profiles_current_country_id_countries",
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
-            ["origin_country_code"],
-            ["countries.code"],
-            name="fk_user_profiles_origin_country_code_countries",
+            ["origin_country_id"],
+            ["countries.id"],
+            name="fk_user_profiles_origin_country_id_countries",
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
             ["user_id"], ["users.id"], name="fk_user_profiles_user_id_users", ondelete="CASCADE"
         ),
-        sa.PrimaryKeyConstraint("user_id", name="pk_user_profiles"),
+        sa.PrimaryKeyConstraint("id", name="pk_user_profiles"),
+        # Carries the 1:1 invariant the primary key used to carry.
+        sa.UniqueConstraint("user_id", name="uq_user_profiles_user_id"),
         sa.UniqueConstraint("legacy_bubble_id", name="uq_user_profiles_legacy_bubble_id"),
     )
     op.create_index(
-        "ix_user_profiles_current_country", "user_profiles", ["current_country_code"], unique=False
+        "ix_user_profiles_current_country", "user_profiles", ["current_country_id"], unique=False
     )
     op.create_index(
-        "ix_user_profiles_origin_country", "user_profiles", ["origin_country_code"], unique=False
+        "ix_user_profiles_origin_country", "user_profiles", ["origin_country_id"], unique=False
     )
 
     # Attached per table, in the migration that creates it — settled decision

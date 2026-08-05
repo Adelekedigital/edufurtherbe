@@ -4,7 +4,15 @@ Date: 2026-08-04
 
 ## Status
 
-Accepted
+Accepted — **point 9 superseded by ADR 0013**.
+
+> Point 9 made `users.id` the Supabase auth user id, with no `DEFAULT`.
+> ADR 0013 reverses that: the id is ours and the Supabase id is a nullable
+> `auth_id` column. Everything else here stands — Supabase Auth as the
+> identity provider, the email code as the default with a link offered as a
+> choice, the absence of `auth_codes` and `password_hash`, and the retention
+> of `auth_identities`. The status names the part, rather than
+> blanket-marking a record whose other eight points are unaffected.
 
 ## Context
 

@@ -21,8 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 INSERT_USER = """
-INSERT INTO users (id, email, slug, deleted_at)
-VALUES (:id, :email, :slug, :deleted_at)
+INSERT INTO users (email, slug, deleted_at)
+VALUES (:email, :slug, :deleted_at)
+RETURNING id
 """
 
 
@@ -33,22 +34,40 @@ async def add_user(
     slug: str | None = None,
     deleted_at: datetime | None = None,
 ) -> uuid.UUID:
-    """Insert a user and return its id.
+    """Insert a user and return the id the database generated.
 
-    The id is supplied rather than defaulted, because ``users`` is the one table
-    with no ``DEFAULT`` on its primary key — ADR 0009 §9. In production this
-    value comes from Supabase Auth; here any uuid4 will do, and using uuid4
-    rather than uuid7 mirrors what Supabase actually issues.
+    The id is **not** supplied. ADR 0013 made it ours and gave it back its
+    ``uuid_generate_v7()`` default, so letting the column fill itself is both
+    what production does and a standing check that the default is still there —
+    a test that passed its own id would keep passing after somebody removed it.
+
+    ``auth_id`` is left null, which is the state every migrated user starts in.
     """
-    user_id = uuid.uuid4()
-    await conn.execute(
+    created = await conn.execute(
         text(INSERT_USER),
-        {"id": user_id, "email": email, "slug": slug, "deleted_at": deleted_at},
+        {"email": email, "slug": slug, "deleted_at": deleted_at},
     )
-    return user_id
+    return uuid.UUID(str(created.scalar_one()))
 
 
 LONG_AGO = datetime(2020, 1, 1, tzinfo=UTC)
+
+
+async def language_id(conn: AsyncConnection, code: str) -> uuid.UUID:
+    """Resolve an ISO 639-3 code to its surrogate id.
+
+    Reference ids are generated per environment (ADR 0014), so no test may name
+    one literally — the code is still the human-facing key and every lookup goes
+    through it.
+    """
+    found = await conn.execute(text("SELECT id FROM languages WHERE code_639_3 = :c"), {"c": code})
+    return uuid.UUID(str(found.scalar_one()))
+
+
+async def country_id(conn: AsyncConnection, code: str) -> uuid.UUID:
+    """Resolve an ISO 3166-1 alpha-2 code to its surrogate id."""
+    found = await conn.execute(text("SELECT id FROM countries WHERE code = :c"), {"c": code})
+    return uuid.UUID(str(found.scalar_one()))
 
 
 async def user_exists(conn: AsyncConnection, user_id: uuid.UUID) -> bool:
@@ -325,22 +344,13 @@ async def test_one_user_may_hold_two_different_roles(db_engine: AsyncEngine) -> 
 async def test_a_user_has_at_most_one_primary_language(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
         user_id = await add_user(conn, "polyglot@example.com")
-        await conn.execute(
-            text(
-                "INSERT INTO user_languages (user_id, language_code, is_primary) "
-                "VALUES (:u, 'eng', true)"
-            ),
-            {"u": user_id},
+        insert = text(
+            "INSERT INTO user_languages (user_id, language_id, is_primary) VALUES (:u, :lang, true)"
         )
+        await conn.execute(insert, {"u": user_id, "lang": await language_id(conn, "eng")})
 
         with pytest.raises(IntegrityError):
-            await conn.execute(
-                text(
-                    "INSERT INTO user_languages (user_id, language_code, is_primary) "
-                    "VALUES (:u, 'yor', true)"
-                ),
-                {"u": user_id},
-            )
+            await conn.execute(insert, {"u": user_id, "lang": await language_id(conn, "yor")})
 
 
 async def test_a_user_may_hold_several_non_primary_languages(db_engine: AsyncEngine) -> None:
@@ -355,10 +365,10 @@ async def test_a_user_may_hold_several_non_primary_languages(db_engine: AsyncEng
         for code in ("eng", "yor", "pcm"):
             await conn.execute(
                 text(
-                    "INSERT INTO user_languages (user_id, language_code, is_primary) "
-                    "VALUES (:u, :code, false)"
+                    "INSERT INTO user_languages (user_id, language_id, is_primary) "
+                    "VALUES (:u, :lang, false)"
                 ),
-                {"u": user_id, "code": code},
+                {"u": user_id, "lang": await language_id(conn, code)},
             )
 
         rows = await conn.execute(
@@ -483,8 +493,10 @@ async def test_an_unknown_country_code_is_rejected(db_engine: AsyncEngine) -> No
 
         with pytest.raises(IntegrityError):
             await conn.execute(
-                text("INSERT INTO user_profiles (user_id, origin_country_code) VALUES (:u, 'ZZ')"),
-                {"u": user_id},
+                text(
+                    "INSERT INTO user_profiles (user_id, origin_country_id) VALUES (:u, :country)"
+                ),
+                {"u": user_id, "country": uuid.uuid4()},
             )
 
 
@@ -494,14 +506,22 @@ async def test_a_known_country_code_is_accepted(db_engine: AsyncEngine) -> None:
         user_id = await add_user(conn, "traveller@example.com")
         await conn.execute(
             text(
-                "INSERT INTO user_profiles (user_id, origin_country_code, current_country_code) "
-                "VALUES (:u, 'NG', 'GB')"
+                "INSERT INTO user_profiles (user_id, origin_country_id, current_country_id) "
+                "VALUES (:u, :origin, :current)"
             ),
-            {"u": user_id},
+            {
+                "u": user_id,
+                "origin": await country_id(conn, "NG"),
+                "current": await country_id(conn, "GB"),
+            },
         )
 
+        # Read back through the join, because that is what every caller now does.
         stored = await conn.execute(
-            text("SELECT origin_country_code FROM user_profiles WHERE user_id = :u"),
+            text(
+                "SELECT c.code FROM user_profiles p JOIN countries c ON c.id = p.origin_country_id "
+                "WHERE p.user_id = :u"
+            ),
             {"u": user_id},
         )
         assert stored.scalar_one() == "NG"
@@ -517,8 +537,8 @@ async def test_a_referenced_country_cannot_be_deleted(db_engine: AsyncEngine) ->
     async with db_engine.begin() as conn:
         user_id = await add_user(conn, "traveller@example.com")
         await conn.execute(
-            text("INSERT INTO user_profiles (user_id, origin_country_code) VALUES (:u, 'NG')"),
-            {"u": user_id},
+            text("INSERT INTO user_profiles (user_id, origin_country_id) VALUES (:u, :country)"),
+            {"u": user_id, "country": await country_id(conn, "NG")},
         )
 
         with pytest.raises(IntegrityError):
@@ -536,10 +556,14 @@ async def test_an_unknown_language_code_is_rejected(db_engine: AsyncEngine) -> N
     async with db_engine.begin() as conn:
         user_id = await add_user(conn, "polyglot@example.com")
 
+        # `ave` (Avestan) is absent from the M0 seed because it filtered to
+        # living languages, so there is no id to resolve — which is exactly the
+        # shape the M1c transform will hit. A random uuid stands in for "a
+        # language this database does not have".
         with pytest.raises(IntegrityError):
             await conn.execute(
-                text("INSERT INTO user_languages (user_id, language_code) VALUES (:u, 'ave')"),
-                {"u": user_id},
+                text("INSERT INTO user_languages (user_id, language_id) VALUES (:u, :lang)"),
+                {"u": user_id, "lang": uuid.uuid4()},
             )
 
 
@@ -565,7 +589,8 @@ OWNED_ROWS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "user_languages",
-        "INSERT INTO user_languages (user_id, language_code) VALUES (:u, 'eng')",
+        "INSERT INTO user_languages (user_id, language_id) "
+        "VALUES (:u, (SELECT id FROM languages WHERE code_639_3 = 'eng'))",
         "SELECT count(*) FROM user_languages WHERE user_id = :u",
     ),
     (
