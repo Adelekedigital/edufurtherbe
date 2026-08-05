@@ -18,7 +18,19 @@ from app.infra.db.base import Base
 # Every model the project is expected to define. Update deliberately, in the same
 # change that adds a model — this is what turns "somebody forgot to import it"
 # from a silently smaller test run into a failure.
-EXPECTED_MODELS = {"Country", "Language"}
+EXPECTED_MODELS = {
+    "Country",
+    "Language",
+    # M1 identity
+    "User",
+    "UserProfile",
+    "AuthIdentity",
+    "UserOnboarding",
+    "UserLanguage",
+    "AdminUser",
+    "LegalDocument",
+    "UserLegalConsent",
+}
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
 
@@ -83,3 +95,38 @@ def test_no_model_declares_an_orm_side_onupdate() -> None:
 
         assert column.onupdate is None, f"{mapper.class_.__name__}.updated_at has an ORM onupdate"
         assert column.server_onupdate is None, f"{mapper.class_.__name__}.updated_at"
+
+
+def test_the_users_id_has_no_default_of_any_kind() -> None:
+    """ADR 0009 §9 names this assertion, and it is the only thing that holds it.
+
+    ``users.id`` *is* the Supabase auth user id. A default — ORM-side or
+    server-side — would quietly mint a valid-looking id for any insert that
+    forgot to pass the real one, producing a row that can never be logged into
+    and that looks entirely normal in every query, dashboard and export.
+
+    Every other table in the schema takes ``uuid_generate_v7()``, so restoring
+    this one "for consistency" is a natural-looking change with no visible
+    consequence until a user cannot sign in.
+    """
+    column = models.User.__table__.columns["id"]
+
+    assert column.default is None, "users.id has an ORM-side default"
+    assert column.server_default is None, "users.id has a server default"
+
+
+def test_every_other_table_does_generate_its_own_id() -> None:
+    """The counterweight to the test above.
+
+    Asserting only that ``users.id`` has no default would be satisfied by a
+    schema in which nothing generates ids at all — every insert then depends on
+    the caller remembering, which is the failure mode ``users`` accepts
+    deliberately and no other table should.
+    """
+    generated = {
+        mapper.class_.__name__
+        for mapper in Base.registry.mappers
+        if "id" in mapper.columns and mapper.columns["id"].server_default is not None
+    }
+
+    assert generated == {"AdminUser", "AuthIdentity", "LegalDocument", "UserLegalConsent"}

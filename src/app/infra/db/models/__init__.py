@@ -12,6 +12,26 @@ class for its timestamp columns can only see models that have been imported, so
 an omission here makes that test pass by looking at less.
 """
 
+from app.infra.db.models.admin import AdminUser
+from app.infra.db.models.legal import LegalDocument, UserLegalConsent
 from app.infra.db.models.reference import Country, Language
+from app.infra.db.models.user import (
+    AuthIdentity,
+    User,
+    UserLanguage,
+    UserOnboarding,
+    UserProfile,
+)
 
-__all__ = ["Country", "Language"]
+__all__ = [
+    "AdminUser",
+    "AuthIdentity",
+    "Country",
+    "Language",
+    "LegalDocument",
+    "User",
+    "UserLanguage",
+    "UserLegalConsent",
+    "UserOnboarding",
+    "UserProfile",
+]

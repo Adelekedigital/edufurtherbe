@@ -18,6 +18,43 @@ pytestmark = pytest.mark.db
 
 FUNCTION_NAMES = ("set_updated_at", "uuid_generate_v7")
 
+# Extensions the chain is expected to install. `citext` arrives with M1, for
+# `users.email`; `pgcrypto` with the foundation revision.
+EXTENSION_NAMES = ("citext", "pgcrypto")
+
+# The exact set of tables at head, in the order `table_names` returns them.
+#
+# Asserting the exact list rather than a subset is what catches the reverse
+# mistake: a table dropped, renamed, or never created because a migration was
+# written but not added to the chain. It has to be updated in the same change
+# that adds a table, which is the point — the same discipline as EXPECTED_MODELS
+# in tests/unit/test_models.py.
+EXPECTED_TABLES = [
+    # M0 — reference data
+    "countries",
+    "languages",
+    # M1 — identity
+    "admin_users",
+    "auth_identities",
+    "legal_documents",
+    "user_languages",
+    "user_legal_consents",
+    "user_onboarding",
+    "user_profiles",
+    "users",
+]
+
+# The five enum types M1 creates. Named here because a type outlives the table
+# that used it: `DROP TABLE` does not remove one, so a downgrade that forgets
+# leaves an orphan and the next upgrade fails with "type already exists".
+ENUM_TYPE_NAMES = (
+    "admin_role",
+    "auth_provider",
+    "language_proficiency",
+    "legal_document_type",
+    "primary_role",
+)
+
 ConfigFactory = Callable[[str], Config]
 
 
@@ -42,6 +79,49 @@ def function_count(url: str) -> int:
 
 def has_pgcrypto(url: str) -> bool:
     return scalar(url, "SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto'") == 1
+
+
+def extension_names(url: str) -> list[str]:
+    """The extensions this project installs, by name.
+
+    Returns names rather than a count, and filters in Python rather than in an
+    interpolated ``IN`` list: a count tells you something is missing, a name
+    tells you which. The query itself takes no input, so there is no string
+    building to get wrong.
+    """
+
+    async def _run() -> list[str]:
+        conn = await asyncpg.connect(url)
+        try:
+            rows = await conn.fetch("SELECT extname FROM pg_extension ORDER BY extname")
+            return [row["extname"] for row in rows if row["extname"] in EXTENSION_NAMES]
+        finally:
+            await conn.close()
+
+    return asyncio.run(_run())
+
+
+def enum_type_names(url: str) -> list[str]:
+    """Enum types in the public schema, whether or not any table still uses one.
+
+    Deliberately not scoped to types a column references — an orphaned type is
+    exactly the failure being watched for, and scoping the query that way would
+    make it invisible.
+    """
+
+    async def _run() -> list[str]:
+        conn = await asyncpg.connect(url)
+        try:
+            rows = await conn.fetch(
+                "SELECT t.typname FROM pg_type t "
+                "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                "WHERE t.typtype = 'e' AND n.nspname = 'public' ORDER BY t.typname"
+            )
+            return [row["typname"] for row in rows]
+        finally:
+            await conn.close()
+
+    return asyncio.run(_run())
 
 
 def table_names(url: str) -> list[str]:
@@ -71,8 +151,10 @@ def test_chain_applies_to_an_empty_database(
     command.upgrade(make_alembic_config(disposable_database), "head")
 
     assert has_pgcrypto(disposable_database)
+    assert extension_names(disposable_database) == sorted(EXTENSION_NAMES)
     assert function_count(disposable_database) == len(FUNCTION_NAMES)
-    assert table_names(disposable_database) == ["countries", "languages"]
+    assert sorted(table_names(disposable_database)) == sorted(EXPECTED_TABLES)
+    assert enum_type_names(disposable_database) == sorted(ENUM_TYPE_NAMES)
 
 
 def test_models_and_the_chain_agree(
@@ -99,9 +181,17 @@ def test_upgrade_downgrade_upgrade_is_clean(
 ) -> None:
     """An untested downgrade is decoration, so this actually runs one.
 
-    The extension deliberately survives the downgrade; only the functions are
+    Extensions deliberately survive the downgrade; only the functions are
     dropped. Asserting that explicitly stops someone "fixing" the asymmetry
     without reading why it exists.
+
+    **Enum types must NOT survive it**, and that is the assertion this test
+    exists for now that M1 creates five of them. ``DROP TABLE`` removes a
+    table's indexes, constraints and triggers but leaves an enum type standing —
+    types are schema-level objects with their own lifetime, and autogenerate
+    never emits the ``DROP TYPE``. The orphan is invisible until the *second*
+    upgrade fails with ``type "primary_role" already exists``, which is why the
+    re-upgrade below is not ceremony.
     """
     config = make_alembic_config(disposable_database)
 
@@ -110,7 +200,11 @@ def test_upgrade_downgrade_upgrade_is_clean(
 
     assert function_count(disposable_database) == 0
     assert has_pgcrypto(disposable_database)
+    assert enum_type_names(disposable_database) == [], (
+        "enum types outlived their tables; the next upgrade will fail on 'type already exists'"
+    )
 
     command.upgrade(config, "head")
 
     assert function_count(disposable_database) == len(FUNCTION_NAMES)
+    assert enum_type_names(disposable_database) == sorted(ENUM_TYPE_NAMES)

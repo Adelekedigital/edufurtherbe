@@ -86,12 +86,26 @@ $$;
 # passes a hand-written probe that changes the value and fails the real access
 # pattern — a guard that looks correct and protects nothing.
 #
-# THE FIX THAT DOES: keep the source system's timestamps as their own columns on
-# migrated tables — legacy_created_at / legacy_modified_at alongside
-# legacy_bubble_id — and let created_at/updated_at mean what they mean
-# everywhere else. Bubble's modified date is source data, not our row's metadata,
-# and giving it its own home is this schema's stated principle rather than a
-# workaround. Those columns land with the first migrated table, in M1.
+# THE FIX THIS COMMENT ORIGINALLY PROPOSED, AND WHICH WAS NOT ADOPTED: keep the
+# source system's timestamps as their own columns on migrated tables —
+# legacy_created_at / legacy_modified_at alongside legacy_bubble_id — and let
+# created_at/updated_at mean what they mean everywhere else. That was written
+# here before M1 existed, and it promised columns that M1 does not create.
+#
+# THE FIX ACTUALLY ADOPTED, in revision 1aa10cb07322: Bubble's Creation Date
+# lands in created_at and its Modified Date in updated_at, and **the loader
+# disables trg_set_updated_at for the duration of the import**. One anchor column
+# (legacy_bubble_id), no parallel timestamp space, and created_at means "when
+# this account began" on every row rather than "when the ETL ran" on 1,200 of
+# them.
+#
+# The hazard the withdrawn fix addressed is real and is now carried by the
+# loader instead of by the schema: this trigger is unconditional, so an
+# idempotent importer re-running would otherwise stamp every migrated row with
+# its own clock — silently, with row counts and null-rate reconciliation both
+# still passing. Disabling the trigger is therefore not an optimisation, and
+# M1c's reconciliation asserts updated_at matches staging rather than trusting
+# that somebody remembered.
 CREATE_SET_UPDATED_AT = """
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS trigger
