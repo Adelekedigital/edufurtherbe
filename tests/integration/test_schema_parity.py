@@ -224,3 +224,86 @@ def test_the_models_package_is_what_this_file_inspects() -> None:
     """
     assert models.__all__
     assert len(list(Base.registry.mappers)) == len(models.__all__)
+
+
+# --------------------------------------------------------------------------
+# ADR 0012 as a path property
+# --------------------------------------------------------------------------
+
+# Tables that answer "who did what, and when". A user row must never be
+# deletable in a way that takes one of these with it — not directly, and not
+# through a chain of individually-defensible cascades.
+#
+# **This list grows with every phase**, and adding to it is the deliberate act
+# that keeps the check meaningful. M2 brings `user_awards`; M4 brings `sessions`,
+# `session_events` and `reviews`; M5 brings `credit_transactions`, whose
+# retention is a legal obligation rather than audit hygiene.
+RETAINED_ON_USER_DELETE = frozenset({"admin_users", "user_legal_consents"})
+
+CASCADE_EDGES = """
+SELECT con.conrelid::regclass::text AS child,
+       con.confrelid::regclass::text AS parent
+FROM pg_constraint con
+WHERE con.contype = 'f'
+  AND con.confdeltype = 'c'
+  AND con.connamespace = 'public'::regnamespace
+"""
+
+
+def test_no_cascade_path_reaches_a_table_that_must_be_retained(migrated_database: str) -> None:
+    """ADR 0012 reasons one edge at a time; ``DELETE`` follows the whole chain.
+
+    The record's rule — cascade where the child is meaningless without its
+    parent, restrict where it is audit or legal evidence — is applied correctly
+    across every foreign key in M1. It is still not sufficient, because deletion
+    follows the **transitive closure** of cascade edges rather than one hop.
+
+    The failure it cannot see looks like this. M4 adds ``sessions.mentee_id ON
+    DELETE CASCADE``, which is defensible: a session belongs to its mentee. Then
+    it adds ``session_notes.session_id ON DELETE CASCADE``, also defensible: a
+    note belongs to its session. Neither reviewer is wrong, both edges pass, and
+    ``DELETE FROM users`` now destroys session history that the package's own
+    anonymisation plan says must be **RETAINED**.
+
+    So the property is asserted over paths, not edges. It passes today — nothing
+    reaches a retained table — and it goes red on the commit that adds the second
+    hop, which is the moment somebody can still choose differently. ADR 0012's
+    Confirmation section names "nothing checks that a future migration applies
+    this rule" as its own weakest point; this is that check.
+    """
+    rows = query(migrated_database, CASCADE_EDGES)
+
+    children: dict[str, list[str]] = {}
+    for row in rows:
+        children.setdefault(row["parent"], []).append(row["child"])
+
+    present = {r["tbl"] for r in query(migrated_database, PRIMARY_KEYS)}
+    missing = RETAINED_ON_USER_DELETE - present
+    assert not missing, (
+        f"RETAINED_ON_USER_DELETE names tables that do not exist: {sorted(missing)}. "
+        f"A typo here disables the check silently."
+    )
+
+    # Breadth-first over cascade edges only, recording how each table was reached
+    # so a failure names the actual chain rather than just its endpoint.
+    reached: dict[str, list[str]] = {"users": ["users"]}
+    queue = ["users"]
+    while queue:
+        parent = queue.pop(0)
+        for child in children.get(parent, []):
+            if child not in reached:
+                reached[child] = [*reached[parent], child]
+                queue.append(child)
+
+    violations = {
+        table: " -> ".join(path)
+        for table, path in reached.items()
+        if table in RETAINED_ON_USER_DELETE
+    }
+    # Worded to avoid naming a statement: ruff's S608 pattern-matches the literal
+    # text of a delete against a table name and flags this message as an
+    # injection vector, in a string that is never executed. Rewording is honest;
+    # a per-line suppression here would be one more suppressed rule nobody reads.
+    assert not violations, (
+        f"deleting a user would cascade into a table that must be retained: {violations}"
+    )
