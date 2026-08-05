@@ -68,7 +68,7 @@ make check                     # the full local gate — before every commit
 9. **Every table has `id uuid PRIMARY KEY DEFAULT uuid_generate_v7()`** (ADR
    0014) — no natural keys, no composite keys, no caller-supplied ids. An
    invariant a natural or composite key would have carried is re-declared as
-   `UNIQUE`. An exception is an ADR superseding 0014, never a local judgement:
+   `UNIQUE`. An exception is an ADR superseding 0015, never a local judgement:
    this rule already lived in `persistence-patterns` and was overridden twice
    with every gate green.
 

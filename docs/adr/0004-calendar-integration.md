@@ -8,6 +8,42 @@ Accepted
 
 ## Context
 
+> **Correction, 2026-08-05.** This record states that "Google Calendar scopes are
+> in the *sensitive* tier", and treats sensitive-scope verification as unavoidable
+> and as weeks of queue time gating calendar connect at cutover. That is wrong.
+> Calendar scopes span both tiers, and the ones this decision needs are
+> **non-sensitive**, confirmed against the scope list in the Google Cloud console
+> rather than recalled:
+>
+> - `.../auth/calendar.freebusy` — read availability. **Non-sensitive.**
+> - `.../auth/calendar.app.created` — *"make secondary Google calendars, and see,
+>   create, change, and delete events on them"*. **Non-sensitive**, and it is a
+>   full write capability.
+>
+> `calendar.events` and `calendar.events.owned` *are* sensitive, and are what this
+> record assumed would be needed. They are not: a secondary calendar the
+> application creates carries every event it needs to write.
+>
+> **So there is no app review, no user cap, and no unverified-app warning.** The
+> consequence below that "verification is queue time we do not control, measured
+> in weeks" does not apply, and neither does the instruction to start it before
+> implementation. The paragraph on Testing publishing status stands and remains
+> worth reading — it is simply no longer the only alternative to a review.
+>
+> **The decision is unaffected, and better served than it was.** Owning the OAuth
+> client, writing events, and reading free/busy on demand all stand, and the
+> reasoning about Composio's managed auth is untouched. The scope pair is strictly
+> narrower than what this record contemplated: free/busy reveals when a mentor is
+> busy and never what they are doing, and an app-created calendar means the
+> application cannot read or alter anything it did not write. Least privilege by
+> construction rather than by policy.
+>
+> **This is v1 of the Google integration**, deliberately built entirely on
+> non-sensitive scopes. Sensitive scopes — writing to a mentor's primary calendar,
+> reading event details — remain available later if a capability genuinely
+> requires them, at the cost of the review this note says we are avoiding. That is
+> a decision to take then, with a record of its own.
+
 The legacy Bubble application connects mentor calendars through Composio. On
 2026-08-03, every connected account in the Composio dashboard was found to be
 **revoked**. Nothing alerted; the state was discovered by opening the dashboard

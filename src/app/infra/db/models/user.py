@@ -50,10 +50,10 @@ class User(TimestampMixin, Base):
 
     __tablename__ = "users"
 
-    # Ours, generated here, like every other table (ADR 0014).
+    # Ours, generated here, like every other table (ADR 0015).
     #
     # ADR 0009 §9 originally made this column the Supabase auth user id, with no
-    # default. ADR 0013 reverses that: a provider's identifier as our primary key
+    # default. ADR 0014 reverses that: a provider's identifier as our primary key
     # would put a vendor-issued value in every foreign key of all sixty-six
     # tables, which is what tier-2's identifier rule — "translate at the
     # boundary; do not compare across spaces" — exists to prevent.
@@ -215,7 +215,7 @@ class UserProfile(TimestampMixin, Base):
     gender: Mapped[str | None] = mapped_column(Text)
 
     # RESTRICT is spelled out rather than left to PostgreSQL's NO ACTION default
-    # (ADR 0012). The two behave identically here — nothing defers a constraint —
+    # (ADR 0013). The two behave identically here — nothing defers a constraint —
     # so the clause buys no behaviour. What it buys is that a reader can tell a
     # decision from an omission, which on a reference table nobody expects to
     # delete from is otherwise impossible.
@@ -266,7 +266,7 @@ class AuthIdentity(TimestampMixin, Base):
 
     This cannot be fixed with a partial index: the predicate would have to
     reference ``users.deleted_at``, which lives on another table. **It is a
-    requirement on the deletion path instead** — ADR 0012 and the package's
+    requirement on the deletion path instead** — ADR 0013 and the package's
     anonymisation plan both say ``auth_identities`` is hard-deleted, and this is
     the constraint that makes that mandatory rather than tidy. Nothing enforces
     it yet; the deletion path does not exist.

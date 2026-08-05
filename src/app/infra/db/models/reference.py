@@ -4,7 +4,7 @@ Both are foreign-key targets rather than free-standing lookups — several colum
 across identity and profiles reference ``countries``, and ``user_languages``
 references ``languages`` — so both must be complete before M1 loads a single row.
 
-**Surrogate primary keys, like every other table (ADR 0014).** An earlier version
+**Surrogate primary keys, like every other table (ADR 0015).** An earlier version
 of this file keyed both on their ISO code and argued the case at length: the code
 is externally standardised, stable, and already the value a foreign key would
 store, so a surrogate meant holding a UUID that had to be joined back to recover
@@ -52,7 +52,7 @@ class Country(TimestampMixin, Base):
     )
     # `unique=True`, not `index=True` — the constraint creates its own index, and
     # adding a second would be pure write overhead. This was the primary key
-    # until ADR 0014; it stays unique and not-null, so nothing about looking a
+    # until ADR 0015; it stays unique and not-null, so nothing about looking a
     # country up by code changed.
     code: Mapped[str] = mapped_column(CHAR(2), nullable=False, unique=True)
     code_alpha3: Mapped[str] = mapped_column(CHAR(3), nullable=False, unique=True)

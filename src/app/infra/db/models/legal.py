@@ -58,7 +58,7 @@ class LegalDocument(TimestampMixin, Base):
 class UserLegalConsent(TimestampMixin, Base):
     """A specific user accepting a specific document version.
 
-    **Both foreign keys are ``RESTRICT``** (ADR 0012). This is the row that
+    **Both foreign keys are ``RESTRICT``** (ADR 0013). This is the row that
     answers "prove they agreed", and it is worthless if a cascade nobody was
     thinking about can destroy it. ``legal_document_id`` restricts for the
     mirror-image reason: deleting a document that people consented to would leave

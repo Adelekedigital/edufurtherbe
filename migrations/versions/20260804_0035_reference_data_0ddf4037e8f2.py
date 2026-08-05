@@ -7415,7 +7415,7 @@ def upgrade() -> None:
     """Upgrade schema."""
     op.create_table(
         "countries",
-        # Surrogate primary key, like every other table (ADR 0014). The ISO code
+        # Surrogate primary key, like every other table (ADR 0015). The ISO code
         # keeps its own UNIQUE constraint and remains the human-facing key — it
         # is simply not what foreign keys store.
         sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
@@ -7435,7 +7435,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id", name="pk_countries"),
-        # The alpha-2 code was the primary key until ADR 0014. It stays UNIQUE
+        # The alpha-2 code was the primary key until ADR 0015. It stays UNIQUE
         # and NOT NULL, so nothing about lookup-by-code changes; what changes is
         # that a referencing row stores the id instead.
         sa.UniqueConstraint("code", name="uq_countries_code"),

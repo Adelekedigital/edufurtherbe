@@ -36,7 +36,7 @@ async def add_user(
 ) -> uuid.UUID:
     """Insert a user and return the id the database generated.
 
-    The id is **not** supplied. ADR 0013 made it ours and gave it back its
+    The id is **not** supplied. ADR 0014 made it ours and gave it back its
     ``uuid_generate_v7()`` default, so letting the column fill itself is both
     what production does and a standing check that the default is still there —
     a test that passed its own id would keep passing after somebody removed it.
@@ -56,7 +56,7 @@ LONG_AGO = datetime(2020, 1, 1, tzinfo=UTC)
 async def language_id(conn: AsyncConnection, code: str) -> uuid.UUID:
     """Resolve an ISO 639-3 code to its surrogate id.
 
-    Reference ids are generated per environment (ADR 0014), so no test may name
+    Reference ids are generated per environment (ADR 0015), so no test may name
     one literally — the code is still the human-facing key and every lookup goes
     through it.
     """
@@ -477,7 +477,7 @@ async def test_a_user_cannot_consent_to_one_document_twice(db_engine: AsyncEngin
 
 
 # --------------------------------------------------------------------------
-# reference-table foreign keys — RESTRICT, per ADR 0012
+# reference-table foreign keys — RESTRICT, per ADR 0013
 # --------------------------------------------------------------------------
 
 
@@ -530,7 +530,7 @@ async def test_a_known_country_code_is_accepted(db_engine: AsyncEngine) -> None:
 async def test_a_referenced_country_cannot_be_deleted(db_engine: AsyncEngine) -> None:
     """RESTRICT on a reference table, asserted rather than assumed.
 
-    ADR 0012 lists all twelve foreign keys with their rule; three of them point
+    ADR 0013 lists all twelve foreign keys with their rule; three of them point
     at ``countries`` and ``languages`` and would otherwise be the only ones in
     that table with no test behind them.
     """
@@ -568,7 +568,7 @@ async def test_an_unknown_language_code_is_rejected(db_engine: AsyncEngine) -> N
 
 
 # --------------------------------------------------------------------------
-# ON DELETE — ADR 0012
+# ON DELETE — ADR 0013
 # --------------------------------------------------------------------------
 
 # (table, insert, count) as literal SQL rather than a table name interpolated
@@ -655,7 +655,7 @@ async def test_an_audit_row_blocks_deleting_the_user(
     blocking_table: str,
     add_blocker: Callable[[AsyncConnection, uuid.UUID], Awaitable[None]],
 ) -> None:
-    """ADR 0012, and the half that matters.
+    """ADR 0013, and the half that matters.
 
     A test asserting only the cascades above would pass unchanged against blanket
     ``ON DELETE CASCADE`` — which is what ``01_identity.sql`` writes and what
@@ -673,7 +673,7 @@ async def test_an_audit_row_blocks_deleting_the_user(
     # Which constraint refused matters. "Some IntegrityError was raised" would
     # also be satisfied by an unrelated failure — a not-null violation in the
     # fixture, say — and would then report a passing test for a schema that
-    # cascades exactly as ADR 0012 forbids.
+    # cascades exactly as ADR 0013 forbids.
     assert blocking_table in str(caught.value), (
         f"the delete was blocked, but not by {blocking_table}: {caught.value}"
     )

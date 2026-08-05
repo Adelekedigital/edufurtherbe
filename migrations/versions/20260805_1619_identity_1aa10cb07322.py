@@ -64,7 +64,7 @@ because this list is only useful if it is exhaustive — a reader diffing this
 migration against the spec would otherwise find an unexplained gap in the file
 whose job is to explain them.
 
-**6. ``ON DELETE`` is not uniform**, per ADR 0012. The package contradicts itself
+**6. ``ON DELETE`` is not uniform**, per ADR 0013. The package contradicts itself
 — ``00_HANDOFF.md`` principle 4 bans cascade outright and ``01_identity.sql``
 cascades every child of ``users``. Cascade where the child is meaningless without
 its parent; RESTRICT on ``admin_users`` and ``user_legal_consents``, which are
@@ -200,7 +200,7 @@ def upgrade() -> None:
 
     op.create_table(
         "users",
-        # Ours (ADR 0013, superseding ADR 0009 §9): a vendor id as our primary
+        # Ours (ADR 0014, superseding ADR 0009 §9): a vendor id as our primary
         # key would put a Supabase-issued value in every foreign key in the
         # schema.
         sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
@@ -305,7 +305,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        # All three RESTRICT (ADR 0012): this is the audit trail for elevated
+        # All three RESTRICT (ADR 0013): this is the audit trail for elevated
         # access, and a cascade would let a hard DELETE destroy it.
         sa.ForeignKeyConstraint(
             ["granted_by"],
@@ -416,7 +416,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_user_languages"),
     )
     op.create_index("ix_user_languages_language", "user_languages", ["language_id"], unique=False)
-    # The composite that was the primary key until ADR 0014. Without it a user
+    # The composite that was the primary key until ADR 0015. Without it a user
     # can list the same language twice — an invariant the old key gave for free
     # and a surrogate key does not.
     op.create_index(
@@ -459,7 +459,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        # Both RESTRICT (ADR 0012): this row is the answer to "prove they
+        # Both RESTRICT (ADR 0013): this row is the answer to "prove they
         # agreed", and it is worthless if a cascade can destroy it.
         sa.ForeignKeyConstraint(
             ["legal_document_id"],

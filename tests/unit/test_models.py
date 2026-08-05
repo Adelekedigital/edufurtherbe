@@ -102,7 +102,7 @@ def test_no_model_declares_an_orm_side_onupdate() -> None:
 
 
 def test_every_model_has_a_generated_surrogate_id() -> None:
-    """ADR 0014, on the model side. **No exceptions, and that is the point.**
+    """ADR 0015, on the model side. **No exceptions, and that is the point.**
 
     ``persistence-patterns`` already required this, and it was overridden twice
     anyway — once for ISO lookups keyed on their code, once for 1:1 extensions
@@ -137,7 +137,7 @@ def test_every_model_has_a_generated_surrogate_id() -> None:
 
 
 def test_the_supabase_auth_id_is_a_column_not_the_key() -> None:
-    """ADR 0013, superseding ADR 0009 §9.
+    """ADR 0014, superseding ADR 0009 §9.
 
     A provider's identifier as our primary key would put a Supabase-issued value
     in every foreign key of all sixty-six tables — collapsing two of the three

@@ -22,7 +22,7 @@ from app.infra.db.types import pg_enum
 class AdminUser(TimestampMixin, Base):
     """One row per (user, role) grant, revoked in place rather than deleted.
 
-    **All three foreign keys are ``RESTRICT``** (ADR 0012). This table is an
+    **All three foreign keys are ``RESTRICT``** (ADR 0013). This table is an
     audit trail, and a cascade would let a hard ``DELETE`` on ``users`` destroy
     the record of who held elevated access — partly reinstating the very defect
     the table exists to fix.
@@ -30,7 +30,7 @@ class AdminUser(TimestampMixin, Base):
     ``granted_by`` and ``revoked_by`` restrict as well, so a user who granted
     someone administrative access cannot be hard-deleted out from under the
     grant. Whether ``SET NULL`` would be the better rule for those two is the
-    open question on ADR 0012; it is theoretical while deletion means
+    open question on ADR 0013; it is theoretical while deletion means
     anonymisation, which preserves the row and its id.
     """
 

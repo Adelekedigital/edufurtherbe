@@ -4,10 +4,10 @@ Date: 2026-08-04
 
 ## Status
 
-Accepted — **point 9 superseded by ADR 0013**.
+Accepted — **point 9 superseded by ADR 0014**.
 
 > Point 9 made `users.id` the Supabase auth user id, with no `DEFAULT`.
-> ADR 0013 reverses that: the id is ours and the Supabase id is a nullable
+> ADR 0014 reverses that: the id is ours and the Supabase id is a nullable
 > `auth_id` column. Everything else here stands — Supabase Auth as the
 > identity provider, the email code as the default with a link offered as a
 > choice, the absence of `auth_codes` and `password_hash`, and the retention
@@ -15,6 +15,28 @@ Accepted — **point 9 superseded by ADR 0013**.
 > blanket-marking a record whose other eight points are unaffected.
 
 ## Context
+
+> **Correction, 2026-08-05.** The Consequences below say that "Google OAuth
+> verification is now the long pole and it is calendar time, not engineering
+> time", that it "gates the majority login path", and that it should start the day
+> this record is accepted. That is wrong on the premise. Sign-in uses `openid`,
+> `.../auth/userinfo.email` and `.../auth/userinfo.profile`, and Google classifies
+> all three as **non-sensitive** — no app review, no 100-user cap, no
+> unverified-app warning. Verification never gated the login path.
+>
+> Nor does it gate the calendar work ADR 0004 specifies, which is achievable on
+> `.../auth/calendar.freebusy` and `.../auth/calendar.app.created`, both also
+> non-sensitive. ADR 0004 carries the matching correction.
+>
+> **The decision is unaffected.** Google remains the identity provider for the
+> majority path, OAuth remains a single click for most of the 1,200, and every
+> numbered choice below stands. Only the urgency was invented: what looked like
+> weeks of external paperwork on the critical path is not on it at all.
+>
+> **This is v1 of the Google integration**, built deliberately on non-sensitive
+> scopes. If a later capability needs a sensitive or restricted scope, the review
+> this note says we are avoiding becomes real, and that is a decision to take then
+> rather than a cost to pay now.
 
 ADR 0007 deferred this and named it as blocking **M1, the critical phase** —
 ~2,100 rows on which everything downstream depends. Nothing in the migration can

@@ -139,7 +139,7 @@ GROUP BY c.relname, d.adbin, d.adrelid
 
 
 def test_every_table_has_a_generated_surrogate_primary_key(migrated_database: str) -> None:
-    """ADR 0014, and **this test is the decision** — the record only explains it.
+    """ADR 0015, and **this test is the decision** — the record only explains it.
 
     The rule "every table carries its own surrogate id" was already written, in
     tier-1 ``persistence-patterns``. It was overridden twice anyway — once for
@@ -227,7 +227,7 @@ def test_the_models_package_is_what_this_file_inspects() -> None:
 
 
 # --------------------------------------------------------------------------
-# ADR 0012 as a path property
+# ADR 0013 as a path property
 # --------------------------------------------------------------------------
 
 # Tables that answer "who did what, and when". A user row must never be
@@ -251,7 +251,7 @@ WHERE con.contype = 'f'
 
 
 def test_no_cascade_path_reaches_a_table_that_must_be_retained(migrated_database: str) -> None:
-    """ADR 0012 reasons one edge at a time; ``DELETE`` follows the whole chain.
+    """ADR 0013 reasons one edge at a time; ``DELETE`` follows the whole chain.
 
     The record's rule — cascade where the child is meaningless without its
     parent, restrict where it is audit or legal evidence — is applied correctly
@@ -267,7 +267,7 @@ def test_no_cascade_path_reaches_a_table_that_must_be_retained(migrated_database
 
     So the property is asserted over paths, not edges. It passes today — nothing
     reaches a retained table — and it goes red on the commit that adds the second
-    hop, which is the moment somebody can still choose differently. ADR 0012's
+    hop, which is the moment somebody can still choose differently. ADR 0013's
     Confirmation section names "nothing checks that a future migration applies
     this rule" as its own weakest point; this is that check.
     """
