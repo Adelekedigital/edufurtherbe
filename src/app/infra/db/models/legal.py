@@ -37,9 +37,7 @@ class LegalDocument(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
     )
-    type: Mapped[LegalDocumentType] = mapped_column(
-        pg_enum(LegalDocumentType, "legal_document_type"), nullable=False
-    )
+    type: Mapped[LegalDocumentType] = mapped_column(pg_enum(LegalDocumentType), nullable=False)
 
     # Free text rather than a parsed semantic version. What matters is that two
     # published documents are distinguishable and that a consent names one

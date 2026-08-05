@@ -21,15 +21,43 @@ from enum import StrEnum
 
 from sqlalchemy.dialects.postgresql import ENUM
 
+from app.domain.enums import (
+    AdminRole,
+    AuthProvider,
+    LanguageProficiency,
+    LegalDocumentType,
+    PrimaryRole,
+)
 
-def pg_enum[E: StrEnum](enum_cls: type[E], name: str) -> ENUM:
+# Every closed vocabulary that has a PostgreSQL type, and the name of that type.
+#
+# A registry rather than a per-column argument, because it is the only thing a
+# test can iterate. `alembic check` is **blind to enum labels** — verified, not
+# assumed: after `ALTER TYPE language_proficiency ADD VALUE 'expert'` on a
+# migrated database it still reports "No new upgrade operations detected". So
+# adding a member to a StrEnum and forgetting the migration passes ruff, mypy,
+# the layer check, `alembic check` and the whole suite, then fails at runtime
+# with `invalid input value for enum` on the first insert that uses it.
+#
+# `test_every_enum_type_matches_its_python_class` walks this mapping, and a
+# second test asserts the mapping covers every StrEnum in `domain.enums`, so a
+# new vocabulary cannot be omitted from the check by being forgotten here.
+PG_ENUM_TYPES: dict[type[StrEnum], str] = {
+    PrimaryRole: "primary_role",
+    AdminRole: "admin_role",
+    AuthProvider: "auth_provider",
+    LanguageProficiency: "language_proficiency",
+    LegalDocumentType: "legal_document_type",
+}
+
+
+def pg_enum[E: StrEnum](enum_cls: type[E]) -> ENUM:
     """A PostgreSQL enum whose labels are the member *values*.
 
-    ``name`` is passed explicitly rather than derived from the class, because it
-    is the database type name and it must match
-    `docs/edufurther-migration/schema/00_foundation.sql` exactly — deriving it
-    would couple a schema identifier to a Python class name that is free to
-    change.
+    The type name comes from ``PG_ENUM_TYPES`` rather than from the class name:
+    it is a schema identifier that must match
+    `docs/edufurther-migration/schema/00_foundation.sql` exactly, and deriving it
+    would couple it to a Python class name that is free to change.
 
     ``create_type=False`` says SQLAlchemy must not emit ``CREATE TYPE`` of its
     own accord; the migration creates and drops every type by hand, so that the
@@ -47,7 +75,7 @@ def pg_enum[E: StrEnum](enum_cls: type[E], name: str) -> ENUM:
     """
     return ENUM(
         enum_cls,
-        name=name,
+        name=PG_ENUM_TYPES[enum_cls],
         create_type=False,
         values_callable=_values,
     )

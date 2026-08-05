@@ -55,6 +55,15 @@ would otherwise stamp every migrated row with its own clock, silently, with row
 counts and null-rate reconciliation both still passing. The failure log's
 ``set_updated_at`` row is amended accordingly.
 
+**5b. The package's deferred foreign-key attachments are not made here.**
+``01_identity.sql`` ends by attaching ``institutions.created_by`` and
+``scholarship_programs.created_by``/``approved_by`` to ``users``, because in the
+package those two tables are created in ``00_foundation.sql``. Under settled
+decision #21 they arrive in M2, so the attachments arrive with them. Stated
+because this list is only useful if it is exhaustive — a reader diffing this
+migration against the spec would otherwise find an unexplained gap in the file
+whose job is to explain them.
+
 **6. ``ON DELETE`` is not uniform**, per ADR 0012. The package contradicts itself
 — ``00_HANDOFF.md`` principle 4 bans cascade outright and ``01_identity.sql``
 cascades every child of ``users``. Cascade where the child is meaningless without
@@ -134,7 +143,30 @@ def _enum(name: str) -> postgresql.ENUM:
 
 
 def upgrade() -> None:
-    """Upgrade schema."""
+    """Upgrade schema.
+
+    **Indexes are built non-concurrently, deliberately.** The `db-migration`
+    standard requires `CREATE INDEX CONCURRENTLY` on a live table; every index
+    here is on a table this same migration just created, so it is empty and
+    invisible to any other session until commit. Building it inline is
+    instantaneous, and `CONCURRENTLY` would be actively worse: it cannot run
+    inside a transaction, so it would force this migration out of its
+    `autocommit_block` and give up all-or-nothing application of the eight
+    tables in exchange for nothing.
+    """
+    # The only lock contention this migration can meet is on `countries` and
+    # `languages`: an inline REFERENCES takes SHARE ROW EXCLUSIVE on the
+    # referenced table, which blocks writes to it (not reads) for the duration.
+    #
+    # That is a near-zero risk today — those tables are written only by
+    # migrations — but a blocked ALTER in PostgreSQL also blocks every query
+    # queued behind it, so the failure mode is a table-wide stall rather than one
+    # slow statement. Failing fast and retrying is strictly better than holding
+    # the queue open, and this migration will eventually run against a populated
+    # production database where that distinction matters.
+    op.execute("SET lock_timeout = '5s'")
+    op.execute("SET statement_timeout = '60s'")
+
     op.execute(CREATE_CITEXT)
 
     for name, labels in ENUM_TYPES.items():
@@ -197,8 +229,18 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
+        # NOTE THE BARE NAME. The `ck` convention on Base.metadata is
+        # `ck_%(table_name)s_%(constraint_name)s`, and `op.create_table` applies
+        # it — so passing the already-rendered `ck_users_slug_is_url_safe` here
+        # produces `ck_users_ck_users_slug_is_url_safe` in the database while the
+        # model reports the single-prefixed name. `compare_metadata` does not
+        # diff CHECK constraints, so nothing catches it, and the first migration
+        # to `op.drop_constraint("ck_users_slug_is_url_safe", ...)` fails in every
+        # environment. `pk`, `uq` and `fk` are unaffected: their templates carry
+        # no `%(constraint_name)s` token, so an explicit name is used verbatim.
         sa.CheckConstraint(
-            "slug IS NULL OR slug ~ '^[a-z0-9-]+$'", name="ck_users_slug_is_url_safe"
+            "slug IS NULL OR (slug ~ '^[a-z0-9-]+$' AND char_length(slug) BETWEEN 1 AND 60)",
+            name="slug_is_url_safe",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_users"),
         sa.UniqueConstraint("legacy_bubble_id", name="uq_users_legacy_bubble_id"),
@@ -273,6 +315,13 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(
             ["user_id"], ["users.id"], name="fk_admin_users_user_id_users", ondelete="RESTRICT"
+        ),
+        # A row naming a revoker while `revoked_at` is null still matches the
+        # active-grant index below — an audit trail reading "revoked by X" on a
+        # grant the system considers live.
+        sa.CheckConstraint(
+            "revoked_by IS NULL OR revoked_at IS NOT NULL",
+            name="revoker_implies_revocation",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_admin_users"),
     )
@@ -508,6 +557,17 @@ def downgrade() -> None:
     """Downgrade schema.
 
     Drops the eight tables in reverse dependency order, then the five enum types.
+
+    **THIS IS DESTRUCTIVE ON A POPULATED DATABASE.** It drops every user,
+    profile, linked identity, admin grant and consent record, and no downgrade
+    can put them back. Reversible today only because these tables have never held
+    a row outside a test.
+
+    Once M1c has loaded, the rollback plan for this revision is **roll forward
+    with a fix, plus a verified backup** — not `alembic downgrade`. The downgrade
+    exists so the chain can be exercised from empty in CI, which is what proves
+    the DROP TYPE statements below are right; it is not an operational recovery
+    tool and should not be mistaken for one.
 
     **The DROP TYPE statements are the point of writing this by hand.**
     ``DROP TABLE`` removes a table's indexes, constraints and triggers, but it

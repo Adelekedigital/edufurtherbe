@@ -10,7 +10,7 @@ the reviewer who read the migration.
 """
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -51,6 +51,17 @@ async def add_user(
 LONG_AGO = datetime(2020, 1, 1, tzinfo=UTC)
 
 
+async def user_exists(conn: AsyncConnection, user_id: uuid.UUID) -> bool:
+    """Read the row back.
+
+    Every "the insert succeeded" assertion goes through this rather than through
+    ``assert user_id is not None`` — ``add_user`` returns a uuid4 on every path,
+    so that comparison can never fail and describes nothing about the schema.
+    """
+    found = await conn.execute(text("SELECT count(*) FROM users WHERE id = :u"), {"u": user_id})
+    return bool(found.scalar_one() == 1)
+
+
 # --------------------------------------------------------------------------
 # users.email — the partial unique index
 # --------------------------------------------------------------------------
@@ -80,7 +91,15 @@ async def test_a_soft_deleted_user_frees_their_email(db_engine: AsyncEngine) -> 
         # defect being guarded against.
         user_id = await add_user(conn, "returning@example.com")
 
-    assert user_id is not None
+        # Read the row back. `assert user_id is not None` would be vacuous —
+        # `add_user` returns a uuid4 on every path, so it can never be None and
+        # the line describes nothing about the schema.
+        live = await conn.execute(
+            text("SELECT count(*) FROM users WHERE email = :e AND deleted_at IS NULL"),
+            {"e": "returning@example.com"},
+        )
+        assert live.scalar_one() == 1
+        assert await user_exists(conn, user_id)
 
 
 async def test_email_comparison_ignores_case(db_engine: AsyncEngine) -> None:
@@ -118,7 +137,11 @@ async def test_a_soft_deleted_user_frees_their_slug(db_engine: AsyncEngine) -> N
 
         user_id = await add_user(conn, "b@example.com", slug="ada-lovelace")
 
-    assert user_id is not None
+        assert await user_exists(conn, user_id)
+        live = await conn.execute(
+            text("SELECT count(*) FROM users WHERE slug = 'ada-lovelace' AND deleted_at IS NULL")
+        )
+        assert live.scalar_one() == 1
 
 
 async def test_many_users_may_have_no_slug(db_engine: AsyncEngine) -> None:
@@ -157,7 +180,79 @@ async def test_a_url_safe_slug_is_accepted(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
         user_id = await add_user(conn, "a@example.com", slug="sakiratu-adeleke")
 
-    assert user_id is not None
+        assert await user_exists(conn, user_id)
+
+
+async def test_an_absurdly_long_slug_is_rejected_as_validation(db_engine: AsyncEngine) -> None:
+    """Without the length bound this fails as a storage error, not a validation one.
+
+    ``slug`` is unbounded ``text`` under a unique btree, so a value past roughly
+    2,700 bytes raises ``index row size exceeds btree version 4 maximum`` — and
+    anything under that but over a few hundred characters is accepted while being
+    useless in a URL. The CHECK turns both into one predictable rejection.
+    """
+    async with db_engine.begin() as conn:
+        with pytest.raises(IntegrityError):
+            await add_user(conn, "a@example.com", slug="a" * 61)
+
+
+# --------------------------------------------------------------------------
+# auth_identities — the provider identity is the account-takeover surface
+# --------------------------------------------------------------------------
+
+
+async def test_one_provider_identity_cannot_attach_to_two_users(db_engine: AsyncEngine) -> None:
+    """The unique index with the most serious consequence if it were missing.
+
+    ``(provider, provider_user_id)`` is what "this Google account is this user"
+    means. Without uniqueness, a second row linking the same Google subject to a
+    different local user makes first login ambiguous — and ADR 0009 §6 auto-links
+    a migrated user on a provider-verified email, so the accounts most worth
+    claiming are exactly the ones this protects.
+    """
+    async with db_engine.begin() as conn:
+        first = await add_user(conn, "one@example.com")
+        second = await add_user(conn, "two@example.com")
+
+        await conn.execute(
+            text(
+                "INSERT INTO auth_identities (user_id, provider, provider_user_id) "
+                "VALUES (:u, 'google', 'google-subject-1')"
+            ),
+            {"u": first},
+        )
+
+        with pytest.raises(IntegrityError):
+            await conn.execute(
+                text(
+                    "INSERT INTO auth_identities (user_id, provider, provider_user_id) "
+                    "VALUES (:u, 'google', 'google-subject-1')"
+                ),
+                {"u": second},
+            )
+
+
+async def test_one_user_may_link_two_different_providers(db_engine: AsyncEngine) -> None:
+    """The positive case, and the whole reason this is its own table.
+
+    Legacy ``Registration format`` was a single option set, so a user who signed
+    up with Google could never also link LinkedIn.
+    """
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "both@example.com")
+        for provider, subject in (("google", "g-1"), ("linkedin", "l-1")):
+            await conn.execute(
+                text(
+                    "INSERT INTO auth_identities (user_id, provider, provider_user_id) "
+                    "VALUES (:u, :p, :s)"
+                ),
+                {"u": user_id, "p": provider, "s": subject},
+            )
+
+        linked = await conn.execute(
+            text("SELECT count(*) FROM auth_identities WHERE user_id = :u"), {"u": user_id}
+        )
+        assert linked.scalar_one() == 2
 
 
 # --------------------------------------------------------------------------
@@ -272,6 +367,164 @@ async def test_a_user_may_hold_several_non_primary_languages(db_engine: AsyncEng
         assert rows.scalar_one() == 3
 
 
+async def test_a_revoker_without_a_revocation_time_is_rejected(db_engine: AsyncEngine) -> None:
+    """``revoked_by`` set while ``revoked_at`` is null is an incoherent audit row.
+
+    It still matches ``WHERE revoked_at IS NULL``, so the active-grant index
+    counts it as live while the trail reads "revoked by X". On a table whose
+    entire purpose is being auditable, the two have to move together.
+    """
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "admin@example.com")
+
+        with pytest.raises(IntegrityError):
+            await conn.execute(
+                text(
+                    "INSERT INTO admin_users (user_id, admin_role, revoked_by) "
+                    "VALUES (:u, 'super_admin', :u)"
+                ),
+                {"u": user_id},
+            )
+
+
+async def test_a_revocation_records_both_time_and_actor(db_engine: AsyncEngine) -> None:
+    """The positive half: a complete revocation is accepted."""
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "admin@example.com")
+        await conn.execute(
+            text(
+                "INSERT INTO admin_users (user_id, admin_role, revoked_at, revoked_by) "
+                "VALUES (:u, 'super_admin', now(), :u)"
+            ),
+            {"u": user_id},
+        )
+
+        revoked = await conn.execute(
+            text(
+                "SELECT count(*) FROM admin_users "
+                "WHERE user_id = :u AND revoked_at IS NOT NULL AND revoked_by IS NOT NULL"
+            ),
+            {"u": user_id},
+        )
+        assert revoked.scalar_one() == 1
+
+
+# --------------------------------------------------------------------------
+# legal documents and consents
+# --------------------------------------------------------------------------
+
+
+async def test_a_document_version_is_unique_per_type(db_engine: AsyncEngine) -> None:
+    """Two rows claiming to be terms 'v1' make a consent ambiguous about what
+    was accepted, which is the one thing this table exists to answer."""
+    async with db_engine.begin() as conn:
+        insert = text(
+            "INSERT INTO legal_documents (type, version, content_url, effective_from) "
+            "VALUES ('terms_of_service', 'v1', 'https://example.com/terms', now())"
+        )
+        await conn.execute(insert)
+
+        with pytest.raises(IntegrityError):
+            await conn.execute(insert)
+
+
+async def test_the_same_version_may_exist_for_two_document_types(db_engine: AsyncEngine) -> None:
+    """Uniqueness is per (type, version), not per version. Terms v1 and the
+    privacy policy v1 are different documents that happen to share a label."""
+    async with db_engine.begin() as conn:
+        for doc_type in ("terms_of_service", "privacy_policy"):
+            await conn.execute(
+                text(
+                    "INSERT INTO legal_documents (type, version, content_url, effective_from) "
+                    "VALUES (:t, 'v1', 'https://example.com/doc', now())"
+                ),
+                {"t": doc_type},
+            )
+
+        count = await conn.execute(text("SELECT count(*) FROM legal_documents WHERE version='v1'"))
+        assert count.scalar_one() == 2
+
+
+async def test_a_user_cannot_consent_to_one_document_twice(db_engine: AsyncEngine) -> None:
+    """A second acceptance of the same version is not a new fact."""
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "signer@example.com")
+        document_id = uuid.uuid4()
+        await conn.execute(
+            text(
+                "INSERT INTO legal_documents (id, type, version, content_url, effective_from) "
+                "VALUES (:d, 'terms_of_service', 'v1', 'https://example.com/terms', now())"
+            ),
+            {"d": document_id},
+        )
+        insert = text(
+            "INSERT INTO user_legal_consents (user_id, legal_document_id) VALUES (:u, :d)"
+        )
+        await conn.execute(insert, {"u": user_id, "d": document_id})
+
+        with pytest.raises(IntegrityError):
+            await conn.execute(insert, {"u": user_id, "d": document_id})
+
+
+# --------------------------------------------------------------------------
+# reference-table foreign keys — RESTRICT, per ADR 0012
+# --------------------------------------------------------------------------
+
+
+async def test_an_unknown_country_code_is_rejected(db_engine: AsyncEngine) -> None:
+    """``origin_country_code`` is a real foreign key, not a two-letter string.
+
+    The M1c transform maps country *names* from the legacy text columns, so a
+    name that fails to resolve must fail here rather than land as a plausible
+    two-letter value nobody can join on.
+    """
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "traveller@example.com")
+
+        with pytest.raises(IntegrityError):
+            await conn.execute(
+                text("INSERT INTO user_profiles (user_id, origin_country_code) VALUES (:u, 'ZZ')"),
+                {"u": user_id},
+            )
+
+
+async def test_a_known_country_code_is_accepted(db_engine: AsyncEngine) -> None:
+    """The positive half, against a code the M0 seed really contains."""
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "traveller@example.com")
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, origin_country_code, current_country_code) "
+                "VALUES (:u, 'NG', 'GB')"
+            ),
+            {"u": user_id},
+        )
+
+        stored = await conn.execute(
+            text("SELECT origin_country_code FROM user_profiles WHERE user_id = :u"),
+            {"u": user_id},
+        )
+        assert stored.scalar_one() == "NG"
+
+
+async def test_a_referenced_country_cannot_be_deleted(db_engine: AsyncEngine) -> None:
+    """RESTRICT on a reference table, asserted rather than assumed.
+
+    ADR 0012 lists all twelve foreign keys with their rule; three of them point
+    at ``countries`` and ``languages`` and would otherwise be the only ones in
+    that table with no test behind them.
+    """
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "traveller@example.com")
+        await conn.execute(
+            text("INSERT INTO user_profiles (user_id, origin_country_code) VALUES (:u, 'NG')"),
+            {"u": user_id},
+        )
+
+        with pytest.raises(IntegrityError):
+            await conn.execute(text("DELETE FROM countries WHERE code = 'NG'"))
+
+
 async def test_an_unknown_language_code_is_rejected(db_engine: AsyncEngine) -> None:
     """This is the assertion that will fire during M1c.
 
@@ -375,7 +628,7 @@ async def add_admin_grant(conn: AsyncConnection, user_id: uuid.UUID) -> None:
 async def test_an_audit_row_blocks_deleting_the_user(
     db_engine: AsyncEngine,
     blocking_table: str,
-    add_blocker: Callable[[AsyncConnection, uuid.UUID], object],
+    add_blocker: Callable[[AsyncConnection, uuid.UUID], Awaitable[None]],
 ) -> None:
     """ADR 0012, and the half that matters.
 
@@ -387,7 +640,7 @@ async def test_an_audit_row_blocks_deleting_the_user(
     """
     async with db_engine.begin() as conn:
         user_id = await add_user(conn, "protected@example.com")
-        await add_blocker(conn, user_id)  # type: ignore[misc]
+        await add_blocker(conn, user_id)
 
         with pytest.raises(IntegrityError) as caught:
             await conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": user_id})

@@ -10,10 +10,14 @@ actually attached, so ``updated_at`` moves — needs a database and lives in
 trigger are different facts, and only one of them is visible from the model.
 """
 
+from enum import StrEnum
+
 from sqlalchemy import TIMESTAMP
 
+from app.domain import enums
 from app.infra.db import models
 from app.infra.db.base import Base
+from app.infra.db.types import PG_ENUM_TYPES
 
 # Every model the project is expected to define. Update deliberately, in the same
 # change that adds a model — this is what turns "somebody forgot to import it"
@@ -130,3 +134,32 @@ def test_every_other_table_does_generate_its_own_id() -> None:
     }
 
     assert generated == {"AdminUser", "AuthIdentity", "LegalDocument", "UserLegalConsent"}
+
+
+def test_every_domain_enum_has_a_postgresql_type() -> None:
+    """``PG_ENUM_TYPES`` is what the label-parity test iterates.
+
+    An enum missing from it is not checked against the database at all, and the
+    omission is invisible — the parity test simply inspects one fewer type and
+    still reports green. That is the "check that scans zero things" shape this
+    repository keeps meeting, so the registry's completeness is asserted rather
+    than assumed.
+    """
+    declared = {
+        obj
+        for obj in vars(enums).values()
+        if isinstance(obj, type) and issubclass(obj, StrEnum) and obj is not StrEnum
+    }
+
+    assert declared, "no enums found; this test would otherwise pass by inspecting nothing"
+    assert declared == set(PG_ENUM_TYPES), (
+        f"not registered in PG_ENUM_TYPES: {declared - set(PG_ENUM_TYPES)}"
+    )
+
+
+def test_postgresql_type_names_are_unique() -> None:
+    """Two classes mapped to one type name would make the parity test compare
+    one of them against the other's labels and pass for the wrong reason."""
+    names = list(PG_ENUM_TYPES.values())
+
+    assert len(names) == len(set(names)), f"duplicate type names in PG_ENUM_TYPES: {names}"

@@ -11,7 +11,7 @@ out of 43.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, ForeignKey, Index, Uuid, text
+from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import AdminRole
@@ -42,7 +42,7 @@ class AdminUser(TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
-    admin_role: Mapped[AdminRole] = mapped_column(pg_enum(AdminRole, "admin_role"), nullable=False)
+    admin_role: Mapped[AdminRole] = mapped_column(pg_enum(AdminRole), nullable=False)
 
     # Nullable, and null is the honest value for every migrated row: the legacy
     # option set recorded that someone was an admin, never who made them one. A
@@ -70,5 +70,14 @@ class AdminUser(TimestampMixin, Base):
             "admin_role",
             unique=True,
             postgresql_where=text("revoked_at IS NULL"),
+        ),
+        # `revoked_by` without `revoked_at` is a row that names a revoker while
+        # still matching `WHERE revoked_at IS NULL` — i.e. it counts as an active
+        # grant in the index above while the audit trail reads "revoked by X".
+        # For a table whose entire purpose is being auditable, the two must move
+        # together. Bare name: the `ck` convention renders the prefix.
+        CheckConstraint(
+            "revoked_by IS NULL OR revoked_at IS NOT NULL",
+            name="revoker_implies_revocation",
         ),
     )

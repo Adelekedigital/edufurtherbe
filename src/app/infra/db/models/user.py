@@ -86,7 +86,7 @@ class User(TimestampMixin, Base):
 
     # UX hint. NEVER an authorization check — see PrimaryRole.
     primary_role: Mapped[PrimaryRole] = mapped_column(
-        pg_enum(PrimaryRole, "primary_role"),
+        pg_enum(PrimaryRole),
         nullable=False,
         server_default=text("'mentee'"),
     )
@@ -137,8 +137,17 @@ class User(TimestampMixin, Base):
         # What it does guarantee is the part that matters — URL-safety, and a
         # case-stable value, so the unique index above cannot be defeated by
         # `Sakiratu-Adeleke` alongside `sakiratu-adeleke`.
+        # The length bound is not decoration. `slug` is unbounded `text` under a
+        # unique btree, so without it a ~2,700-byte value fails as a raw storage
+        # error (`index row size exceeds btree maximum`) rather than as
+        # validation, and anything under that but over a few hundred characters
+        # is accepted while being unusable in a URL.
+        #
+        # The name is bare. The `ck` convention renders it to
+        # `ck_users_slug_is_url_safe`; passing that rendered form would produce
+        # `ck_users_ck_users_slug_is_url_safe`.
         CheckConstraint(
-            "slug IS NULL OR slug ~ '^[a-z0-9-]+$'",
+            "slug IS NULL OR (slug ~ '^[a-z0-9-]+$' AND char_length(slug) BETWEEN 1 AND 60)",
             name="slug_is_url_safe",
         ),
     )
@@ -230,6 +239,20 @@ class AuthIdentity(TimestampMixin, Base):
     Email 37 / Google 6 / LinkedIn 0, which inverts ADR 0009's premise that
     Google was the dominant path; the production split is still uncounted and is
     an open question that record asks to be answered when M1 starts.
+
+    **The uniqueness on ``(provider, provider_user_id)`` is not partial, and it
+    interacts with soft delete in a way the deletion path must handle.** A
+    soft-deleted user frees their email — that is what ``ix_users_email_live``
+    is for — but their ``auth_identities`` row survives, because ``CASCADE``
+    fires only on a hard delete that nothing performs. So the same Google
+    subject cannot be linked again afterwards.
+
+    This cannot be fixed with a partial index: the predicate would have to
+    reference ``users.deleted_at``, which lives on another table. **It is a
+    requirement on the deletion path instead** — ADR 0012 and the package's
+    anonymisation plan both say ``auth_identities`` is hard-deleted, and this is
+    the constraint that makes that mandatory rather than tidy. Nothing enforces
+    it yet; the deletion path does not exist.
     """
 
     __tablename__ = "auth_identities"
@@ -240,9 +263,7 @@ class AuthIdentity(TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    provider: Mapped[AuthProvider] = mapped_column(
-        pg_enum(AuthProvider, "auth_provider"), nullable=False
-    )
+    provider: Mapped[AuthProvider] = mapped_column(pg_enum(AuthProvider), nullable=False)
     provider_user_id: Mapped[str] = mapped_column(Text, nullable=False)
 
     linked_at: Mapped[datetime] = mapped_column(
@@ -310,7 +331,7 @@ class UserLanguage(TimestampMixin, Base):
         primary_key=True,
     )
     proficiency: Mapped[LanguageProficiency] = mapped_column(
-        pg_enum(LanguageProficiency, "language_proficiency"),
+        pg_enum(LanguageProficiency),
         nullable=False,
         server_default=text("'fluent'"),
     )
