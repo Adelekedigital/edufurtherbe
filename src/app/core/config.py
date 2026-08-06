@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     # and only inside ``infra/``.
     database_url: SecretStr | None = None
 
+    # The Bubble Data API, used to extract the legacy snapshot. Both optional for
+    # the same reason as ``database_url``: the application imports on machines
+    # that will never run an extract, and the script raises at the point of use.
+    #
+    # The URL carries the environment in its path — ``/version-test/`` is the dev
+    # app and its absence is production — so it is configuration rather than a
+    # constant. Trailing slashes are stripped by the adapter.
+    bubble_api_url: str | None = None
+    bubble_api_token: SecretStr | None = None
+
     @model_validator(mode="after")
     def reject_unknown_prefixed_variables(self) -> Settings:
         """Fail startup on a misspelled ``EDUFURTHER_`` variable.

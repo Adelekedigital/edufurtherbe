@@ -21,6 +21,19 @@ dependencies = [
     # then tries to build from source on a machine with no C compiler, which is
     # every Windows dev box here.
     "asyncpg>=0.31",
+    # The IANA time-zone database, as a package rather than a system dependency.
+    #
+    # `zoneinfo` has no bundled data: it reads the operating system's database,
+    # and Windows has none. `available_timezones()` returns **zero** on a Windows
+    # dev machine without this, so every `ZoneInfo("Africa/Lagos")` raises — while
+    # CI on ubuntu passes, because Linux ships the database. A slim container
+    # image usually does not.
+    #
+    # That matters here beyond convenience: `users.timezone` stores IANA names, a
+    # guardrail requires the mentor's zone as its own column, and M3 availability
+    # is entirely time-zone conversion. Pinning the data as a dependency makes the
+    # three environments agree instead of differing by platform.
+    "tzdata>=2025.1",
 ]
 
 [dependency-groups]
