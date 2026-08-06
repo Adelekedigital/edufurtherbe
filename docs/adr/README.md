@@ -23,6 +23,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0013](0013-foreign-key-deletion-policy-for-user-owned-rows.md) | Foreign-key deletion policy for user-owned rows | Accepted |
 | [0014](0014-our-own-user-id-with-supabase-auth-as-a-column.md) | `users.id` is ours; the Supabase auth id is a column | Accepted |
 | [0015](0015-every-table-has-a-surrogate-primary-key.md) | Every table has a generated surrogate primary key | Accepted |
+| [0016](0016-api-contract-foundations.md) | API contract foundations — Problem Details, cursor pagination, normalisation at the boundary | Accepted |
 
 ## Conventions
 

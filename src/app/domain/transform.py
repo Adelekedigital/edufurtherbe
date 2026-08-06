@@ -142,10 +142,12 @@ def to_user(record: dict[str, Any], *, export_timezone: tzinfo | None = None) ->
 
     return UserRow(
         legacy_bubble_id=bubble_id,
-        # Lowercased and trimmed on the way in. The column is citext so a
-        # comparison would match either way, but the partial unique index is on
-        # the stored value, and two rows differing only in case would be one
-        # collision the index reports and a human cannot see.
+        # Lowercased and trimmed on the way in, and this is now load-bearing
+        # rather than tidy: the column is plain `text` with
+        # `CHECK (email = lower(email))`, so a mixed-case value is **rejected**
+        # rather than quietly accepted. That is deliberate (ADR 0016) —
+        # normalisation belongs at the boundary and the constraint proves the
+        # boundary did its job.
         email=str(email).strip().lower(),
         primary_role=PRIMARY_ROLES[str(role_raw)],
         timezone=_resolve_timezone(record.get("UserTimezonID"), bubble_id),
@@ -203,9 +205,10 @@ def transform_users(
         except TransformError as exc:
             errors.append(str(exc))
 
-    # Compared case-insensitively because `users.email` is citext: `A@x.com` and
-    # `a@x.com` are one address to the index, and comparing the raw strings here
-    # would report no duplicate and then fail at insert.
+    # Folded before comparing. Every row here has already been lowercased by
+    # `to_user`, so this is belt-and-braces — but it costs nothing and it is the
+    # half that would still be right if a future caller built a UserRow directly
+    # rather than through the transform.
     by_email: dict[str, list[str]] = {}
     for row in rows:
         by_email.setdefault(row.email.lower(), []).append(row.legacy_bubble_id)
