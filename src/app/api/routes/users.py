@@ -7,7 +7,7 @@ from fastapi import APIRouter, status
 from app.api.deps import CurrentUserDep
 from app.api.schemas.user import UserProfileRead, UserRead
 
-router = APIRouter(prefix="/api", tags=["users"])
+router = APIRouter(prefix="/api/v1", tags=["users"])
 
 # Documented per route rather than left to the function name, because these
 # descriptions are the contract the Next.js client is built against — a reader

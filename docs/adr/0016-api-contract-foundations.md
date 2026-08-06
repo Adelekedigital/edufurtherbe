@@ -83,6 +83,25 @@ to learn how a call can fail.
 phases and then adding routing means the schema is never exercised by real usage
 until it is expensive to change.
 
+**6. The version is in the path, from the first endpoint: `/api/v1/...`.** Not
+because a v2 is foreseen — it is not — but because the cost is asymmetric. A
+version segment added now is one string in one router. Added after the Next.js
+client ships, it is either a breaking change for that client or an unversioned
+alias maintained indefinitely, and `project-conventions` already records that the
+client "will encode whatever shape ships first".
+
+Header versioning was not considered seriously: it is harder to debug, cache and
+log, and a path segment is legible in an access log without tooling.
+
+**`/health` stays unversioned.** It is read by the platform's health check, not
+by a client, and it is not part of the contract a v2 would fork. Moving it under
+`/api/v1/` would tie an operational probe to a client-facing version number and
+break the probe on the day that number changes.
+
+**A v2 is a fork of `api/schemas/` only.** Both versions map to the same domain
+services; the moment `domain/` learns which version called it, the layer boundary
+this record relies on for testability is gone.
+
 ### Rejected alternatives
 
 **FastAPI's default `{"detail": "..."}`.** Free, and already what unhandled

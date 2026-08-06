@@ -98,7 +98,7 @@ async def seed_user(engine: AsyncEngine, auth_id: UUID, *, admin: bool = False) 
 
 
 async def test_no_token_is_refused(client: httpx.AsyncClient) -> None:
-    response = await client.get("/api/me")
+    response = await client.get("/api/v1/me")
 
     assert response.status_code == 401
     assert response.headers["content-type"].startswith(PROBLEM_JSON)
@@ -109,19 +109,19 @@ async def test_an_unsigned_token_is_refused(client: httpx.AsyncClient) -> None:
     verifier that trusts the header's algorithm instead of naming its own."""
     unsigned = jwt.encode({"sub": str(uuid4()), "aud": "authenticated"}, key="", algorithm="none")
 
-    assert (await client.get("/api/me", headers=header(unsigned))).status_code == 401
+    assert (await client.get("/api/v1/me", headers=header(unsigned))).status_code == 401
 
 
 async def test_a_token_signed_with_the_wrong_key_is_refused(client: httpx.AsyncClient) -> None:
     assert (
-        await client.get("/api/me", headers=header(token(uuid4(), secret=OTHER_SECRET)))
+        await client.get("/api/v1/me", headers=header(token(uuid4(), secret=OTHER_SECRET)))
     ).status_code == 401
 
 
 async def test_an_expired_token_is_refused(client: httpx.AsyncClient) -> None:
     stale = token(uuid4(), exp=datetime.now(UTC) - timedelta(seconds=1))
 
-    assert (await client.get("/api/me", headers=header(stale))).status_code == 401
+    assert (await client.get("/api/v1/me", headers=header(stale))).status_code == 401
 
 
 async def test_a_token_for_another_audience_is_refused(client: httpx.AsyncClient) -> None:
@@ -129,22 +129,24 @@ async def test_a_token_for_another_audience_is_refused(client: httpx.AsyncClient
     audience is a token for a different system, however genuine its signature."""
     elsewhere = token(uuid4(), aud="some-other-service")
 
-    assert (await client.get("/api/me", headers=header(elsewhere))).status_code == 401
+    assert (await client.get("/api/v1/me", headers=header(elsewhere))).status_code == 401
 
 
 async def test_a_subject_that_is_not_a_uuid_is_refused(client: httpx.AsyncClient) -> None:
     """It could never match ``users.auth_id``. Letting it through would turn an
     authentication failure into a database error somewhere less obvious."""
-    assert (await client.get("/api/me", headers=header(token("not-a-uuid")))).status_code == 401
+    assert (await client.get("/api/v1/me", headers=header(token("not-a-uuid")))).status_code == 401
 
 
 async def test_every_refusal_reads_the_same(client: httpx.AsyncClient) -> None:
     """Telling a caller *why* their token failed tells anyone probing which half
     of the guess was right."""
     bodies = [
-        (await client.get("/api/me", headers=header(token(uuid4(), secret=OTHER_SECRET)))).json(),
-        (await client.get("/api/me", headers=header("not.a.token"))).json(),
-        (await client.get("/api/me")).json(),
+        (
+            await client.get("/api/v1/me", headers=header(token(uuid4(), secret=OTHER_SECRET)))
+        ).json(),
+        (await client.get("/api/v1/me", headers=header("not.a.token"))).json(),
+        (await client.get("/api/v1/me")).json(),
     ]
 
     assert len({body.get("detail") for body in bodies}) == 1, bodies
@@ -163,7 +165,7 @@ async def test_a_valid_token_with_no_linked_account_is_a_404(client: httpx.Async
     failure, and reporting it as one would send an operator looking at the wrong
     thing during cutover.
     """
-    response = await client.get("/api/me", headers=header(token(uuid4())))
+    response = await client.get("/api/v1/me", headers=header(token(uuid4())))
 
     assert response.status_code == 404
     assert response.headers["content-type"].startswith(PROBLEM_JSON)
@@ -175,7 +177,7 @@ async def test_the_signed_in_user_is_returned(
     auth_id = uuid4()
     await seed_user(db_engine, auth_id)
 
-    body = (await client.get("/api/me", headers=header(token(auth_id)))).json()
+    body = (await client.get("/api/v1/me", headers=header(token(auth_id)))).json()
 
     assert body["email"] == "someone@example.com"
     assert body["first_name"] == "Ada"
@@ -193,7 +195,7 @@ async def test_the_vendor_and_migration_identifiers_are_never_returned(
     auth_id = uuid4()
     await seed_user(db_engine, auth_id)
 
-    body = (await client.get("/api/me", headers=header(token(auth_id)))).json()
+    body = (await client.get("/api/v1/me", headers=header(token(auth_id)))).json()
 
     assert "auth_id" not in body
     assert "legacy_bubble_id" not in body
@@ -207,12 +209,16 @@ async def test_is_admin_reflects_a_live_grant(
     auth_id = uuid4()
     await seed_user(db_engine, auth_id, admin=True)
 
-    assert (await client.get("/api/me", headers=header(token(auth_id)))).json()["is_admin"] is True
+    assert (await client.get("/api/v1/me", headers=header(token(auth_id)))).json()[
+        "is_admin"
+    ] is True
 
     async with db_engine.begin() as conn:
         await conn.execute(text("UPDATE admin_users SET revoked_at = now()"))
 
-    assert (await client.get("/api/me", headers=header(token(auth_id)))).json()["is_admin"] is False
+    assert (await client.get("/api/v1/me", headers=header(token(auth_id)))).json()[
+        "is_admin"
+    ] is False
 
 
 async def test_a_soft_deleted_user_cannot_sign_in(
@@ -224,4 +230,4 @@ async def test_a_soft_deleted_user_cannot_sign_in(
     async with db_engine.begin() as conn:
         await conn.execute(text("UPDATE users SET deleted_at = now()"))
 
-    assert (await client.get("/api/me", headers=header(token(auth_id)))).status_code == 404
+    assert (await client.get("/api/v1/me", headers=header(token(auth_id)))).status_code == 404
