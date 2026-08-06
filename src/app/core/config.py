@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     bubble_api_url: str | None = None
     bubble_api_token: SecretStr | None = None
 
+    # Supabase. Optional for the same reason as the others: importing the
+    # application must not require credentials that only some code paths need,
+    # and the point of use raises `ConfigurationError` with something actionable.
+    #
+    # Projects differ on signing: newer ones sign asymmetrically and publish a
+    # JWKS, older ones use a shared HS256 secret. Set whichever the dashboard
+    # shows; the verifier prefers the JWKS when both are present.
+    supabase_url: str | None = None
+    supabase_jwks_url: str | None = None
+    supabase_jwt_secret: SecretStr | None = None
+    # Bypasses RLS and can create or delete users. Never the anon key, never sent
+    # to a browser, and used only by the provisioning CLI.
+    supabase_service_role_key: SecretStr | None = None
+
     @model_validator(mode="after")
     def reject_unknown_prefixed_variables(self) -> Settings:
         """Fail startup on a misspelled ``EDUFURTHER_`` variable.

@@ -34,6 +34,8 @@ dependencies = [
     # is entirely time-zone conversion. Pinning the data as a dependency makes the
     # three environments agree instead of differing by platform.
     "tzdata>=2025.1",
+    "pyjwt>=2.13.0",
+    "cryptography>=50.0.0",
 ]
 
 [dependency-groups]
@@ -172,6 +174,9 @@ core = []
 # Frameworks, drivers and vendor SDKs that must never reach the pure layer.
 domain = [
     "fastapi",
+    # Token verification is a transport concern and a vendor-shaped one; the
+    # verifier lives in infra/auth and is wired in api/deps.py.
+    "jwt",
     "starlette",
     "sqlalchemy",
     "alembic",

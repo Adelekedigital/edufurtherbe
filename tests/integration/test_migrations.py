@@ -18,9 +18,13 @@ pytestmark = pytest.mark.db
 
 FUNCTION_NAMES = ("set_updated_at", "uuid_generate_v7")
 
-# Extensions the chain is expected to install. `citext` arrives with M1, for
-# `users.email`; `pgcrypto` with the foundation revision.
-EXTENSION_NAMES = ("citext", "pgcrypto")
+# Extensions the chain is expected to install, at head.
+#
+# `citext` is deliberately absent: M1 created it for `users.email` and
+# `e25541374c03` dropped it again when normalisation moved to the boundary. The
+# chain still creates and drops it in between, which is why this asserts the
+# state at head rather than every extension the chain has ever touched.
+EXTENSION_NAMES = ("pgcrypto",)
 
 # The exact set of tables at head, in the order `table_names` returns them.
 #

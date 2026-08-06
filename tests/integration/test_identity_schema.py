@@ -121,20 +121,36 @@ async def test_a_soft_deleted_user_frees_their_email(db_engine: AsyncEngine) -> 
         assert await user_exists(conn, user_id)
 
 
-async def test_email_comparison_ignores_case(db_engine: AsyncEngine) -> None:
-    """``citext``, so every call site is case-insensitive rather than the ones
-    somebody remembered to ``lower()``."""
+async def test_a_non_lowercase_email_is_rejected(db_engine: AsyncEngine) -> None:
+    """The CHECK that replaced ``citext``.
+
+    Normalisation happens at the boundary — the ETL transform and the API schema
+    both lowercase before a value reaches here — so every stored address is
+    already canonical. This is what fails loudly when a future writer forgets,
+    which is the case ``citext`` was insuring against. The difference is that a
+    constraint refuses where a case-insensitive type would have silently accepted
+    a second spelling nobody could find again.
+    """
     async with db_engine.begin() as conn:
-        await add_user(conn, "Mixed.Case@Example.COM")
+        with pytest.raises(IntegrityError, match="email_is_lowercase"):
+            await add_user(conn, "Mixed.Case@Example.COM")
+
+
+async def test_a_normalised_email_is_accepted_and_found(db_engine: AsyncEngine) -> None:
+    """The positive half.
+
+    Asserting only the rejection would pass against a CHECK that refused
+    everything. This also proves the column is plain ``text`` now: an exact match
+    on the stored value is what every lookup will do.
+    """
+    async with db_engine.begin() as conn:
+        await add_user(conn, "mixed.case@example.com")
 
         found = await conn.execute(
             text("SELECT count(*) FROM users WHERE email = :email"),
             {"email": "mixed.case@example.com"},
         )
         assert found.scalar_one() == 1
-
-        with pytest.raises(IntegrityError):
-            await add_user(conn, "MIXED.CASE@EXAMPLE.COM")
 
 
 # --------------------------------------------------------------------------

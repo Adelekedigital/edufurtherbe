@@ -37,7 +37,6 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import AuthProvider, LanguageProficiency, PrimaryRole
@@ -73,11 +72,16 @@ class User(TimestampMixin, Base):
     # a soft-deleted user cannot block one.
     auth_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True)
 
-    # citext, so `WHERE email = :x` is case-insensitive at every call site rather
-    # than at the ones somebody remembered to lower(). Verified against
-    # `compare_metadata` before adoption: reflection returns CITEXT, not TEXT, so
-    # `alembic check` sees no spurious diff.
-    email: Mapped[str] = mapped_column(CITEXT, nullable=False)
+    # Plain text, lowercased by whoever writes it — the ETL transform and the API
+    # schema both normalise before a value gets here. `citext` was adopted first
+    # and reversed: a case-insensitive type is a second mechanism for an invariant
+    # the boundary already holds, and it was the only object in the chain whose
+    # behaviour on Supabase was unverified.
+    #
+    # The CHECK below is not redundant with that. It is what fails loudly when a
+    # future writer forgets, which is the case citext was insuring against —
+    # except a constraint refuses where a type would have silently accepted.
+    email: Mapped[str] = mapped_column(Text, nullable=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     first_name: Mapped[str | None] = mapped_column(Text)
@@ -160,6 +164,8 @@ class User(TimestampMixin, Base):
             "slug IS NULL OR (slug ~ '^[a-z0-9-]+$' AND char_length(slug) BETWEEN 1 AND 60)",
             name="slug_is_url_safe",
         ),
+        # Bare name; the `ck` convention renders the `ck_users_` prefix.
+        CheckConstraint("email = lower(email)", name="email_is_lowercase"),
     )
 
 

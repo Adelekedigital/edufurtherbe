@@ -33,3 +33,16 @@ class ConfigurationError(AppError):
     than at startup, because settings load before a database is necessarily
     reachable and a required field would break ``import app.main``.
     """
+
+
+class AuthenticationError(AppError):
+    """The caller could not be authenticated.
+
+    Lives here rather than beside the token verifier that raises it. ``api`` may
+    not import ``infra``, so an error defined there is an error the transport
+    layer cannot map — it fell through to a 500 exactly once, which is how this
+    ended up in the taxonomy where it belonged all along.
+
+    One error for every cause. A caller learning *which* check failed learns
+    which half of their guess was right.
+    """
