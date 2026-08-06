@@ -1,7 +1,7 @@
 """The legacy snapshot, as the rest of the system is allowed to see it.
 
 **The transform must never know which source a record came from.** Bubble's Data
-API and its Data-tab export disagree on five things, and every one of them would
+API and its Data-tab export disagree on six things, and every one of them would
 otherwise leak into the mapping code as a branch:
 
 | | Export | Data API | Canonical |
@@ -11,6 +11,7 @@ otherwise leak into the mapping code as a branch:
 | list of X | ``"a , b"`` | ``["a", "b"]`` | ``list[str]`` |
 | empty value | ``""`` | key absent entirely | absent |
 | timestamps | ``Sep 3, 2025 5:31 am`` | ``2025-09-03T05:31:00.000Z`` | aware UTC |
+| created key | ``Creation Date`` | ``Created Date`` | ``created_at`` |
 
 Each adapter absorbs its own quirks and emits the shape in the right-hand
 column. Nothing downstream branches on provenance.
@@ -19,7 +20,13 @@ column. Nothing downstream branches on provenance.
 ones — ``'Admin \N{TOP HAT}'``, ``'\N{BUSTS IN SILHOUETTE}Role'``,
 ``'registration completed '`` with its trailing space. That was verified against
 real responses rather than assumed, and it is why there is no key-translation
-table here: only the five rows above differ.
+table here: only the six rows above differ.
+
+The sixth arrived late and is worth the note. The first five were derived by
+reading both formats; ``Creation Date`` versus ``Created Date`` was found only
+by dry-running the loader against the real export, which refused **all 43
+records** for a missing timestamp. Reading two documents side by side is how the
+first five were found and is exactly what missed the sixth.
 """
 
 from collections.abc import Iterable, Mapping

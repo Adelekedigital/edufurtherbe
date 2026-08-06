@@ -180,6 +180,32 @@ def test_no_credential_survives_the_export_reader(tmp_path: Path) -> None:
         assert str(value) not in written
 
 
+def test_both_sources_agree_on_the_timestamp_key(tmp_path: Path) -> None:
+    """The export says ``Creation Date``; the API says ``Created Date``.
+
+    A sixth difference between the two, and the one that was missed: the first
+    list had five. It surfaced by dry-running the loader against the real export,
+    which refused **all 43 records** for a missing timestamp — loud, but only
+    because something ran it. Both keys now become ``created_at``, a name neither
+    source uses, so the transform cannot accidentally depend on one of them.
+    """
+    directory = write_export(
+        tmp_path, [{"unique id": "1x2", "Creation Date": "Sep 3, 2025 5:31 am"}]
+    )
+    (from_export,) = JsonExportSource(directory, timezone=NEW_YORK).read("user")
+
+    source = api_source(
+        [{"results": [{"_id": "1x2", "Created Date": "2025-09-03T09:31:00Z"}], "remaining": 0}]
+    )
+    (from_api,) = source.read("user")
+
+    assert from_export["created_at"] == "Sep 3, 2025 5:31 am"
+    assert from_api["created_at"] == "2025-09-03T09:31:00Z"
+    for record in (from_export, from_api):
+        assert "Creation Date" not in record
+        assert "Created Date" not in record
+
+
 def test_a_record_without_an_id_is_refused(tmp_path: Path) -> None:
     directory = write_export(tmp_path, [{"First Name": "Ada"}])
 
