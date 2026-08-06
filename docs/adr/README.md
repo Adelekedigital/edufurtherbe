@@ -24,7 +24,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0014](0014-our-own-user-id-with-supabase-auth-as-a-column.md) | `users.id` is ours; the Supabase auth id is a column | Accepted |
 | [0015](0015-every-table-has-a-surrogate-primary-key.md) | Every table has a generated surrogate primary key | Accepted |
 | [0016](0016-api-contract-foundations.md) | API contract foundations — Problem Details, cursor pagination, normalisation at the boundary | Accepted |
-| [0017](0017-deployment-and-how-migrations-run.md) | Deployment — a built Dockerfile, and migrations from a dispatched workflow | Proposed |
+| [0017](0017-deployment-and-how-migrations-run.md) | Deployment — no Dockerfile, and migrations from a dispatched workflow | Proposed |
 
 ## Conventions
 
