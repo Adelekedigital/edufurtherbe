@@ -16,10 +16,13 @@ answer is a new record that supersedes the old one, not an edit.
 | [0006](0006-messaging-build-vs-buy.md) | Build booking-scoped messaging; keep mentor–mentee conversation on-platform | Accepted |
 | [0007](0007-adopt-the-migration-package-as-the-target-data-model.md) | Adopt the migration package as the target data model | Accepted |
 | [0008](0008-institutions-hipolabs-registry.md) | Institutions — the hipolabs registry, populated on demand | Accepted |
-| [0009](0009-first-login-authentication.md) | First-login authentication — Supabase Auth, email code by default, link as a choice | Accepted |
+| [0009](0009-first-login-authentication.md) | First-login authentication — Supabase Auth, email code by default, link as a choice | Accepted — point 9 superseded by 0013 |
 | 0010 | Message thread scope — booking-scoped vs standalone | Reserved by 0007 |
 | [0011](0011-alembic-is-the-migration-chain.md) | Alembic is the migration chain; the package DDL is its specification | Accepted |
 | [0012](0012-google-oauth-scopes-and-client-split.md) | Google OAuth — non-sensitive scopes, and one Cloud project per purpose | Proposed |
+| [0013](0013-foreign-key-deletion-policy-for-user-owned-rows.md) | Foreign-key deletion policy for user-owned rows | Accepted |
+| [0014](0014-our-own-user-id-with-supabase-auth-as-a-column.md) | `users.id` is ours; the Supabase auth id is a column | Accepted |
+| [0015](0015-every-table-has-a-surrogate-primary-key.md) | Every table has a generated surrogate primary key | Accepted |
 
 ## Conventions
 
@@ -30,9 +33,18 @@ is being honoured, and explicitly which parts nothing checks. Stating a gate's
 blind spots next to its coverage is a house rule, and a record with no blind
 spots listed has usually not looked.
 
-**Status starts at `Proposed`.** The pull request discussion is the design
-review. On approval the status flips to `Accepted` and merges as
-`docs(adr): accept NNNN — <title>`.
+**Status starts at `Proposed` when the decision *blocks* work.** The pull request
+discussion is the design review. On approval the status flips to `Accepted` and
+merges as `docs(adr): accept NNNN — <title>`. ADRs 0008 and 0009 went this way:
+each gated a migration phase that could not start until it was settled, so each
+earned a review of its own.
+
+**A record *implemented by* the same pull request lands `Accepted` directly.**
+ADR 0011 shipped with the M0 migration chain it describes, and 0013 with the M1
+schema that expresses it. Splitting these in two would review the rule apart from
+the code enforcing it — reviewing it twice and testing it never. The two flows
+were not distinguished here until 0013; before that the paragraph above described
+0008 and 0009 as though they were the only shape.
 
 **Records are immutable once accepted.** A decision that changes gets a new
 record; the old one stays in place with its status set to `Superseded by NNNN`.

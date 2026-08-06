@@ -83,10 +83,16 @@ async def test_an_explicit_updated_at_cannot_be_forced(probe: AsyncConnection) -
     """``updated_at`` is our row's metadata, and a caller cannot forge it.
 
     This is asserted rather than assumed because it has a direct consequence for
-    the migration: an importer cannot carry Bubble's modified date across by
-    writing it into this column. It must go in ``legacy_modified_at``, which is
-    where source-system timestamps belong — the same rule that puts
-    ``legacy_bubble_id`` in its own column instead of the primary key.
+    the migration: an importer **cannot** carry Bubble's modified date across by
+    writing it into this column while the trigger is enabled. The write is
+    accepted and then overwritten, silently.
+
+    The fix first proposed was a separate ``legacy_modified_at`` column. That was
+    withdrawn (settled decision #29): Bubble's Modified Date lands in
+    ``updated_at`` directly, and **the loader disables** ``trg_set_updated_at``
+    for the duration of the import. This test is what makes that step mandatory
+    rather than an optimisation — it demonstrates precisely what happens to a
+    migrated timestamp if anyone skips it.
 
     A conditional trigger was tried first, so that an explicit write would win.
     It cannot work: an idempotent importer writes the value the row already
