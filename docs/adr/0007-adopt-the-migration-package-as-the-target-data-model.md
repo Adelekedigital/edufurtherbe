@@ -4,7 +4,29 @@ Date: 2026-08-03
 
 ## Status
 
-Accepted. Two of the three conflicts this record deferred are now resolved:
+Accepted.
+
+> **Correction, 2026-08-06.** The Consequences below state that "the raw extract
+> will contain **live OAuth credentials**", naming `calAccessToken` and
+> `calRefreshToken`. That is wrong on two counts, and the error was inferring a
+> credential's nature from its field name without decoding one.
+>
+> They are **Cal.com** managed-user tokens, not Google's — Google's OAuth access
+> tokens are opaque `ya29.` strings, never JWTs, and the accompanying numeric
+> `calClientId` and `calDefaultScheduleId` are Cal.com's shape. They belong to
+> the abandoned integration this record's own field mapping already marks DROP.
+>
+> They are also **not live**. Decoded from the dev extract: both access tokens
+> expired over 400 days ago and both refresh tokens expired more than 50 days
+> ago. Every one is dead.
+>
+> The exposure this record describes is further reduced by dropping the staging
+> schema — with the transform reading a snapshot directly, these values never
+> reach PostgreSQL at all. Redaction is retained as hygiene rather than as an
+> incident response, and it is cheap enough not to argue about. The original
+> text stands as what was believed.
+
+Two of the three conflicts this record deferred are now resolved:
 
 - **Institutions** — by ADR 0008: the hipolabs registry, populated on demand,
   with no `ror_id` column.

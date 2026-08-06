@@ -151,12 +151,14 @@ section of each Definition of Done.
       not people. **The extract now lands in a `staging` schema rather than in
       files** (ADR 0007), so the same data sits inside the Supabase project from
       ADR 0005 — out of git is still necessary and no longer sufficient
-- [ ] **Credential fields are redacted at extraction, before the insert into
-      `staging`** — `calAccessToken`, `calRefreshToken` and their expiry columns
-      are live OAuth credentials sitting on the legacy `User` table. They are
-      never migrated, but "extract everything, then transform" (ADR 0007) lands
-      them in the database first and leaves them there through every rehearsal.
-      Dropping them at load is too late; the exposure is the staging row
+- [ ] **Credential fields are dropped at extraction, before anything is
+      written** — `calAccessToken`, `calRefreshToken` and their expiry columns.
+      **They are expired Cal.com tokens from the abandoned integration, not live
+      Google credentials**: decoded, both access tokens expired over 400 days ago
+      and both refresh tokens over 50. Three records asserted otherwise, inferred
+      from the field names. Redaction stays because it costs a field list and
+      makes the snapshots boring, not because there is an incident. `composioAuthId`
+      is **not** redacted — it is a vendor reference, not a token, and it migrates
 - [ ] Every table derived from its own Bubble Thing has `legacy_bubble_id`, and
       importers are idempotent on it. **Narrowed by decision #27** — a table
       derived from *columns of* a parent Thing anchors on the parent's foreign
