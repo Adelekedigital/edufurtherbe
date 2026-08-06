@@ -1,4 +1,4 @@
-# 12. Foreign-key deletion policy for user-owned rows
+# 13. Foreign-key deletion policy for user-owned rows
 
 Date: 2026-08-05
 
