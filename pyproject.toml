@@ -78,6 +78,21 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/app"]
 
+# The deployed entrypoint, stated rather than discovered.
+#
+# `fastapi run` otherwise looks for six fixed paths relative to the working
+# directory — main.py, app.py, api.py, app/main.py, app/app.py, app/api.py — and
+# `src/app/main.py` is none of them. This key is read by
+# `fastapi_cli.config.FastAPIConfig` from `[tool.fastapi]` in the pyproject.toml
+# **of the current directory**, so the run has to start at the repository root.
+# That is the default; leave FastAPI Cloud's Application Directory unset.
+#
+# `app.main:app`, not `src.app.main:app`: `src` is not a package and has no
+# `__init__.py`. The wheel installs `src/app` as the top-level `app`, which is
+# the same import string the README and Makefile already use.
+[tool.fastapi]
+entrypoint = "app.main:app"
+
 [tool.ruff]
 # 100, not the default 88, so scripts/check_layers.py stays byte-identical to the
 # shared package copy. It is documented as drop-in reusable; reformatting it here
