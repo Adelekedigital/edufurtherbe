@@ -68,6 +68,8 @@ def describe(plan: IdentityPlan) -> None:
 
 
 async def load(plan: IdentityPlan) -> int:
+    """Load, reconcile, and report. Returns 0 clean, 2 if a name went unresolved."""
+    unresolved = False
     engine = create_async_engine(resolve_async_dsn(get_settings()))
     try:
         async with engine.begin() as connection:
@@ -100,7 +102,10 @@ async def load(plan: IdentityPlan) -> int:
                 if skipped:
                     # By name, not by count: the next action is always to decide
                     # an alias or widen a seed, and a number supports neither.
-                    print(f"UNRESOLVED {label}: {', '.join(skipped)}")
+                    # On stderr, because it is the stream that survives a caller
+                    # keeping stdout for the load summary.
+                    unresolved = True
+                    print(f"UNRESOLVED {label}: {', '.join(skipped)}", file=sys.stderr)
 
             result = await reconcile_users(connection, plan.users)
             print(result.report())
@@ -111,6 +116,21 @@ async def load(plan: IdentityPlan) -> int:
                 raise RuntimeError("reconciliation failed; rolling back")
     finally:
         await engine.dispose()
+
+    if unresolved:
+        # The load committed and is correct as far as it goes — skipping an
+        # unresolvable name is the policy, not a failure. But `resolve.py` says an
+        # unresolved name "has to reach a human", and exit 0 is the one signal
+        # that says nothing needs attention. A green run during the freeze is what
+        # an operator acts on, and ADR 0003 gives them exactly one attempt.
+        #
+        # 2, not 1: 1 means "refused, nothing was written". A runbook has to be
+        # able to tell "done, now decide something" from "done nothing".
+        print(
+            "\nloaded, but names above resolved to nothing — add an alias or widen the seed",
+            file=sys.stderr,
+        )
+        return 2
 
     return 0
 

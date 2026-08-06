@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.domain.resolve import COUNTRY_ALIASES, LANGUAGE_ALIASES, resolve_names
 from app.domain.transform import TransformError, plan_identity, to_admin_grant, to_identities
+from app.infra.db.engine import to_async_dsn
 from app.infra.etl.loader import UserLoader
 from app.infra.etl.satellites import SatelliteLoader, reference_maps, user_id_map
 
@@ -329,3 +330,36 @@ def test_the_export_timezone_constant_matches_the_extractor() -> None:
     from scripts import extract_bubble, load_identity
 
     assert str(extract_bubble.EXPORT_TIMEZONE) == str(load_identity.EXPORT_TIMEZONE)
+
+
+async def test_an_unresolved_name_makes_the_run_exit_two(
+    migrated_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A committed load that skipped a name is not a clean run.
+
+    `resolve.py` says an unresolved name "has to reach a human". Exit 0 is the one
+    signal saying nothing needs attention, and during the read-only freeze a green
+    run is what the operator acts on — ADR 0003 gives them one attempt.
+
+    **2 rather than 1 is the assertion that matters.** 1 already means "refused,
+    nothing written"; a runbook has to tell that apart from "written, now go
+    decide something". Asserting merely non-zero would pass if the two collapsed.
+
+    This drives the real ``load()``. Only the DSN is redirected — reimplementing
+    its reporting tail here would assert the test's own arithmetic, which is the
+    failure mode this file's neighbours exist to catch.
+    """
+    from scripts import load_identity
+
+    monkeypatch.setattr(
+        load_identity, "resolve_async_dsn", lambda _settings: to_async_dsn(migrated_database)
+    )
+
+    unresolvable = plan_identity([user()], [profile(**{"list-Language": "Yoruba , Avestan"})])
+    assert unresolvable.ok, unresolvable.errors
+
+    assert await load_identity.load(unresolvable) == 2
+
+    resolvable = plan_identity([user()], [profile(**{"list-Language": "Yoruba , English"})])
+
+    assert await load_identity.load(resolvable) == 0, "a clean load must still exit 0"
