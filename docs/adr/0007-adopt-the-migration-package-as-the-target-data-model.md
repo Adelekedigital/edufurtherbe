@@ -4,7 +4,19 @@ Date: 2026-08-03
 
 ## Status
 
-Accepted. Two of the three conflicts this record deferred are now resolved:
+Accepted, with one decision superseded. A factual correction to Consequences is
+recorded at the head of Context below.
+
+**Decision 3's `staging` schema is dropped.** That decision reads "staged as raw
+`jsonb` in a `staging` schema before any transform"; the transform reads the
+snapshot directly instead, and no `staging` schema is created. The rest of
+decision 3 stands — the transport is still the Bubble Data API, and the
+per-Thing field-set verification it activates in ADR 0002 is still mandatory.
+Recorded here rather than left inside the correction note it was first mentioned
+in: a fact this record got wrong is a correction, but a decision it made and we
+no longer follow is a supersession, and the two do not belong in one paragraph.
+
+Two of the three conflicts this record deferred are now resolved:
 
 - **Institutions** — by ADR 0008: the hipolabs registry, populated on demand,
   with no `ror_id` column.
@@ -18,6 +30,25 @@ institutions conflict as package-versus-repository, which ADR 0008 shows it was
 not. Both are what was believed when this record was written.
 
 ## Context
+
+> **Correction, 2026-08-06.** The Consequences below state that "the raw extract
+> will contain **live OAuth credentials**", naming `calAccessToken` and
+> `calRefreshToken`. That is wrong on two counts, and the error was inferring a
+> credential's nature from its field name without decoding one.
+>
+> They are **Cal.com** managed-user tokens, not Google's — Google's OAuth access
+> tokens are opaque `ya29.` strings, never JWTs, and the accompanying numeric
+> `calClientId` and `calDefaultScheduleId` are Cal.com's shape. They belong to
+> the abandoned integration this record's own field mapping already marks DROP.
+>
+> They are also **not live**. Decoded from the dev extract: both access tokens
+> expired over 400 days ago and both refresh tokens expired more than 50 days
+> ago. Every one is dead.
+>
+> Redaction is retained as hygiene rather than as an incident response, and it is
+> cheap enough not to argue about. The original text stands as what was believed.
+> The related dropping of the `staging` schema is a *decision* rather than a
+> correction, and is recorded in Status above.
 
 A migration package was produced for the Bubble reshape and sits at
 `docs/edufurther-migration/`: 66 tables and 40 enums — both counted from the DDL
