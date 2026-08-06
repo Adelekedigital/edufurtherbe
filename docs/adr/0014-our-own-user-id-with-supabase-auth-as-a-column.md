@@ -1,4 +1,4 @@
-# 13. `users.id` is ours; the Supabase auth id is a column
+# 14. `users.id` is ours; the Supabase auth id is a column
 
 Date: 2026-08-05
 

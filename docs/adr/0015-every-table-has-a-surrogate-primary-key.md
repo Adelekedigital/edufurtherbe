@@ -1,4 +1,4 @@
-# 14. Every table has a generated surrogate primary key, without exception
+# 15. Every table has a generated surrogate primary key, without exception
 
 Date: 2026-08-05
 
