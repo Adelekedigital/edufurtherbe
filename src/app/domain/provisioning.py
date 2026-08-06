@@ -14,9 +14,14 @@ which is the worst moment to discover it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
+
+#: What the identity provider holds for an address, or nothing. A callable rather
+#: than a client, so this module stays free of HTTP and of ``infra``.
+type Lookup = Callable[[str], UUID | None]
 
 
 class Action(StrEnum):
@@ -66,6 +71,28 @@ def decide(candidate: Candidate, existing_auth_id: UUID | None) -> Plan:
     if existing_auth_id is not None:
         return Plan(candidate=candidate, action=Action.LINK, existing_auth_id=existing_auth_id)
     return Plan(candidate=candidate, action=Action.CREATE)
+
+
+def plan_for(candidate: Candidate, lookup: Lookup) -> Plan:
+    """Decide one candidate, consulting the provider only when the decision needs it.
+
+    ``lookup`` answers "what account does the provider hold for this address" and
+    is injected, so this stays pure and testable with no network — the same shape
+    as ``domain.bubble.BubbleSource``, which the ETL already reads through.
+
+    **It is typed on ``UUID``, not on the adapter's user object.** Depending on
+    ``infra.auth.admin.AuthUser`` for the one field it reads is what kept this
+    function stranded in the script; the composition root adapts.
+
+    The early return repeats ``decide``'s first branch, and that is the point of
+    having both in one file rather than one of them in a caller: an already-linked
+    row is skipped **without consulting the provider at all**, so a re-run of a
+    provisioned population costs zero API calls. Splitting the two across a layer
+    boundary meant the condition existed twice with nothing holding it together.
+    """
+    if candidate.auth_id is not None:
+        return decide(candidate, None)
+    return decide(candidate, lookup(candidate.email))
 
 
 @dataclass(frozen=True, slots=True)

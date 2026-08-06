@@ -1,5 +1,9 @@
 """Writing transformed rows, with Bubble's timestamps intact.
 
+The mechanism that makes that possible — ``timestamps_from_source`` — moved to
+``infra/db/triggers.py`` once a second, non-ETL writer needed it. Re-exported
+here so this module still reads as the complete account of the problem.
+
 The whole file exists for one problem. ``trg_set_updated_at`` is unconditional
 by design — settled decision #29, and a guarded version was tried and withdrawn
 because an idempotent importer writes the value a row already holds, so "the
@@ -24,16 +28,16 @@ false assurance this note exists to prevent.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Sequence
 from dataclasses import asdict
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.transform import UserRow
+from app.infra.db.triggers import timestamps_from_source
 
-TRIGGER = "trg_set_updated_at"
+__all__ = ["UPSERT_USER", "UserLoader", "timestamps_from_source"]
 
 UPSERT_USER = """
 INSERT INTO users (
@@ -57,45 +61,6 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     slug              = EXCLUDED.slug,
     last_active_at    = EXCLUDED.last_active_at
 """
-
-
-@asynccontextmanager
-async def timestamps_from_source(connection: AsyncConnection, table: str) -> AsyncIterator[None]:
-    """Hold ``trg_set_updated_at`` off for the duration of a load.
-
-    A context manager rather than two calls, so the pair cannot be half-written
-    — and exported rather than private, because every later phase's loader needs
-    exactly this and copying two SQL statements around is how one of them ends up
-    missing its partner.
-
-    **``ENABLE`` runs on the success path only, and that is deliberate.** The
-    obvious shape here is ``try/finally``, and it is wrong: ``ALTER TABLE ...
-    DISABLE TRIGGER`` is transactional in PostgreSQL, so a failed load rolls the
-    disable back along with everything else. A ``finally`` would instead fire
-    inside an already-aborted transaction, raise ``InFailedSQLTransactionError``,
-    fail to re-enable anything, **and replace the original exception with a
-    misleading one** — hiding the constraint violation that actually stopped the
-    load. That was written, tested, and caught here rather than in a rehearsal.
-
-    The correctness of this therefore rests on the caller being **inside a
-    transaction**. Outside one, each statement autocommits, a mid-load failure
-    leaves the trigger disabled, and nothing puts it back.
-
-    ``DISABLE TRIGGER`` takes an ACCESS EXCLUSIVE lock and requires table
-    ownership. Both are fine here: the migration role owns the table, and the
-    load runs during the cutover freeze when nothing else is writing.
-    """
-    if not connection.in_transaction():
-        raise RuntimeError(
-            "the trigger must be disabled inside a transaction, so a failed load "
-            "rolls it back — see this function's docstring"
-        )
-
-    await connection.execute(text(f"ALTER TABLE {table} DISABLE TRIGGER {TRIGGER}"))
-    yield
-    # No `finally`: on failure the rollback restores the trigger, and re-enabling
-    # here would raise inside the aborted transaction and mask the real error.
-    await connection.execute(text(f"ALTER TABLE {table} ENABLE TRIGGER {TRIGGER}"))
 
 
 class UserLoader:
