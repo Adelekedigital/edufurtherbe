@@ -72,10 +72,22 @@ def _canonicalise(record: dict[str, Any], *, id_field: str) -> dict[str, Any]:
     auth = fields.pop("authentication", None) or {}
     email = fields.pop("email", None) or (auth.get("email") or {}).get("email")
 
+    # The export says `Creation Date`; the API says `Created Date`. Found by
+    # dry-running the loader against the real export, which refused all 43
+    # records for a missing timestamp — the sixth difference between the two
+    # sources and the one that was not in the original list.
+    #
+    # Both become `created_at`/`modified_at`, so the transform reads a name
+    # neither source uses and cannot accidentally depend on one of them.
+    created = fields.pop("Creation Date", None) or fields.pop("Created Date", None)
+    modified = fields.pop("Modified Date", None)
+
     return {
         **fields,
         "bubble_id": str(identifier),
         "email": email,
+        "created_at": created,
+        "modified_at": modified,
         "provider_identities": _identities(record),
     }
 
