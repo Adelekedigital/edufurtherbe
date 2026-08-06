@@ -1,12 +1,16 @@
 """Fixtures shared across every tier."""
 
 import asyncio
+import importlib.util
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
+from types import ModuleType
 
 import asyncpg
+import httpx
 import pytest
 import pytest_asyncio
 from alembic import command
@@ -16,7 +20,9 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
+from app.infra.auth.admin import SupabaseAdminClient
 from app.infra.db.engine import create_database_engine
+from app.infra.db.provisioning_store import ProvisioningStore
 from app.main import create_app
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -169,3 +175,128 @@ async def db_engine(migrated_database: str) -> AsyncIterator[AsyncEngine]:
         yield engine
     finally:
         await engine.dispose()
+
+
+# --------------------------------------------------------------------------
+# Provisioning: one Supabase double, and one representation of its paging
+#
+# There were three copies of "how GoTrue answers a list request" — one in the
+# integration suite, one in the unit suite, one in the stress harness — and all
+# three omitted `per_page`, which is why a client asking for a single row passed
+# every test while permanently stranding any user whose address is a substring of
+# a newer one. The third copy was written as the *fix* for that defect and had it
+# too. The paging rule now exists once.
+#
+# These live in the root conftest rather than beside either suite because
+# `tests/` has no `__init__.py`; a fixture is the sanctioned way to share a
+# helper across files here, which is the same reason `make_alembic_config` is one.
+# --------------------------------------------------------------------------
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def gotrue_page(rows: list[dict[str, str]], request: httpx.Request) -> httpx.Response:
+    """Slice an ordered result set the way GoTrue's admin list endpoint does.
+
+    Newest-first is the caller's job; paging is this function's. A short page
+    means "no more", which is the signal the client stops on.
+    """
+    page = int(request.url.params.get("page", 1))
+    per_page = int(request.url.params.get("per_page", 50))
+    start = (page - 1) * per_page
+    return httpx.Response(200, json={"users": rows[start : start + per_page]})
+
+
+class FakeSupabase:
+    """Enough of the Admin API to be re-run against.
+
+    Stateful rather than a stub sequence, because every property worth testing
+    here is about what a *second* run does: it must cost nothing, find what the
+    first run created, and never make a second account for one address.
+
+    ``fail_for`` makes one address error, which is how "a bad user does not end
+    the run" is tested without waiting for a real one.
+    """
+
+    def __init__(self, *, fail_for: str | None = None) -> None:
+        self.accounts: dict[str, uuid.UUID] = {}
+        self.creates: list[str] = []
+        self.lookups: list[str] = []
+        self.fail_for = fail_for
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return self._create(request)
+        # `GET /admin/users` is a search; `GET /admin/users/{id}` is a fetch.
+        tail = request.url.path.rsplit("/", 1)[-1]
+        return self._find(request) if tail == "users" else self._get(tail)
+
+    def _create(self, request: httpx.Request) -> httpx.Response:
+        email = json.loads(request.content)["email"]
+        self.creates.append(email)
+        if email == self.fail_for:
+            return httpx.Response(500, json={"msg": "boom"})
+        if email in self.accounts:
+            return httpx.Response(422, json={"error_code": "email_exists"})
+        self.accounts[email] = uuid.uuid4()
+        return httpx.Response(200, json={"id": str(self.accounts[email]), "email": email})
+
+    def _find(self, request: httpx.Request) -> httpx.Response:
+        needle = request.url.params.get("filter", "")
+        self.lookups.append(needle)
+        if needle == self.fail_for:
+            return httpx.Response(500, json={"msg": "boom"})
+        # Substring match, newest-first — insertion order reversed stands in for
+        # age. Both halves matter: the substring is what makes a one-row page
+        # return the wrong account, and newest-first is what puts it there.
+        matches = [
+            {"id": str(identifier), "email": address}
+            for address, identifier in reversed(list(self.accounts.items()))
+            if needle in address
+        ]
+        return gotrue_page(matches, request)
+
+    def _get(self, identifier: str) -> httpx.Response:
+        for address, known in self.accounts.items():
+            if str(known) == identifier:
+                return httpx.Response(200, json={"id": identifier, "email": address})
+        return httpx.Response(404)
+
+    def client(self) -> SupabaseAdminClient:
+        return SupabaseAdminClient(
+            base_url="https://project.supabase.co",
+            service_role_key="test-key",
+            client=httpx.Client(transport=httpx.MockTransport(self.handle)),
+            sleep=lambda _: None,
+        )
+
+
+@pytest.fixture
+def fake_supabase() -> type[FakeSupabase]:
+    """The stateful Admin API double, as a class so a test can configure it."""
+    return FakeSupabase
+
+
+@pytest.fixture
+def gotrue_paging() -> Callable[[list[dict[str, str]], httpx.Request], httpx.Response]:
+    """The paging rule alone, for tests that script responses rather than state."""
+    return gotrue_page
+
+
+@pytest.fixture
+def provision_script() -> ModuleType:
+    """``scripts/provision_auth.py``, which is a script rather than a module."""
+    spec = importlib.util.spec_from_file_location(
+        "provision_auth", PROJECT_ROOT / "scripts" / "provision_auth.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest_asyncio.fixture
+async def store(db_engine: AsyncEngine) -> ProvisioningStore:
+    """The provisioning store, bound to this test's disposable database."""
+    return ProvisioningStore(db_engine)

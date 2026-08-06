@@ -10,10 +10,8 @@ It was proved by mutation — pointing ``create_user`` at ``INVITE_ENDPOINTS[0]`
 and confirming that exactly this test went red while the rest stayed green.
 """
 
-import importlib.util
 import json
 from collections.abc import Callable
-from pathlib import Path
 from types import ModuleType
 from uuid import UUID, uuid4
 
@@ -36,20 +34,9 @@ BASE = "https://project.supabase.co"
 KEY = "service-role-key-never-logged"
 EMAIL = "ada@example.com"
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def load_script() -> ModuleType:
-    """Import scripts/provision_auth.py, which is a script rather than a module."""
-    spec = importlib.util.spec_from_file_location(
-        "provision_auth", PROJECT_ROOT / "scripts" / "provision_auth.py"
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+#: GoTrue's paging rule, supplied by the `gotrue_paging` fixture so this suite
+#: and the integration suite share one representation of it.
+type PagingRule = Callable[[list[dict[str, str]], httpx.Request], httpx.Response]
 
 
 class Recorder:
@@ -321,33 +308,38 @@ def test_every_user_lands_in_exactly_one_counter() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_an_address_is_normalised_before_it_reaches_the_database() -> None:
+def test_an_address_is_normalised_before_it_reaches_the_database(
+    provision_script: ModuleType,
+) -> None:
     """``users.email`` carries ``CHECK (email = lower(email))``, so an operator
     typing a capital would otherwise get a constraint violation instead of a
     user — normalisation at the boundary, and this is the boundary."""
-    script = load_script()
 
-    args = script.parse_args(["--create", "--email", " Ada@Example.COM ", "--role", "mentee"])
+    args = provision_script.parse_args(
+        ["--create", "--email", " Ada@Example.COM ", "--role", "mentee"]
+    )
 
     assert args.email == "ada@example.com"
 
 
-def test_a_role_from_the_wrong_vocabulary_is_refused() -> None:
+def test_a_role_from_the_wrong_vocabulary_is_refused(
+    provision_script: ModuleType,
+) -> None:
     """``--role super_admin`` on ``--create`` would otherwise reach the enum and
     fail with a bare ``ValueError``."""
-    script = load_script()
 
     with pytest.raises(SystemExit) as raised:
-        script.primary_role("super_admin")
+        provision_script.primary_role("super_admin")
 
     assert "mentee" in str(raised.value)
 
 
-def test_a_mode_is_required() -> None:
-    script = load_script()
+def test_a_mode_is_required(
+    provision_script: ModuleType,
+) -> None:
 
     with pytest.raises(SystemExit):
-        script.parse_args(["--email", "ada@example.com"])
+        provision_script.parse_args(["--email", "ada@example.com"])
 
 
 # --------------------------------------------------------------------------
@@ -355,27 +347,21 @@ def test_a_mode_is_required() -> None:
 # --------------------------------------------------------------------------
 
 
-def listing(*rows: dict[str, str]) -> Callable[[httpx.Request], httpx.Response]:
-    """Answer like GoTrue: one ordered result set, sliced by ``page``/``per_page``.
+def listing(paging: PagingRule, *rows: dict[str, str]) -> Callable[[httpx.Request], httpx.Response]:
+    """Answer like GoTrue, through the shared paging rule in ``conftest``.
 
-    **It honours ``per_page``, and that is the whole point of it.** The first
-    version took a pre-built page map and ignored the parameter, which meant a
-    client asking for a single row was served a full page anyway — so restoring
-    the one-row lookup left this test green. A fake that ignores a request
-    parameter cannot test the client's decision to send it, which is exactly how
-    the defect reached review in the first place.
+    **Honouring ``per_page`` is the whole point.** A private version of this
+    ignored it, so a client asking for a single row was served a full page and
+    restoring the one-row lookup left the test green. That was the third copy of
+    this rule to carry the same omission, and it was written as the fix for the
+    first two. There is now one copy.
     """
-
-    def answer(request: httpx.Request) -> httpx.Response:
-        page = int(request.url.params.get("page", 1))
-        per_page = int(request.url.params.get("per_page", 1))
-        start = (page - 1) * per_page
-        return ok({"users": list(rows[start : start + per_page])})
-
-    return answer
+    return lambda request: paging(list(rows), request)
 
 
-def test_an_exact_match_behind_a_substring_neighbour_is_found() -> None:
+def test_an_exact_match_behind_a_substring_neighbour_is_found(
+    gotrue_paging: PagingRule,
+) -> None:
     """``filter`` is a substring search returning newest-first, so the address
     asked for is not necessarily on the first page.
 
@@ -386,7 +372,7 @@ def test_an_exact_match_behind_a_substring_neighbour_is_found() -> None:
     wanted = uuid4()
     # Newest-first, so a full page of neighbours precedes the address asked for.
     neighbours = [account(uuid4(), f"neighbour{n}@x.com") for n in range(LOOKUP_PAGE_SIZE)]
-    recorder = Recorder(answer=listing(*neighbours, account(wanted, "ada@x.com")))
+    recorder = Recorder(answer=listing(gotrue_paging, *neighbours, account(wanted, "ada@x.com")))
 
     found = recorder.client().find_by_email("ada@x.com")
 
@@ -446,19 +432,21 @@ def test_a_negative_retry_after_does_not_become_a_crash() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_provisioning_without_a_service_role_key_names_the_variable() -> None:
-    script = load_script()
+def test_provisioning_without_a_service_role_key_names_the_variable(
+    provision_script: ModuleType,
+) -> None:
 
     with pytest.raises(ConfigurationError) as raised:
-        script.build_client(Settings(_env_file=None), httpx.Client())
+        provision_script.build_client(Settings(_env_file=None), httpx.Client())
 
     assert "SERVICE_ROLE_KEY" in str(raised.value)
 
 
-def test_flags_a_mode_ignores_are_refused_rather_than_dropped() -> None:
+def test_flags_a_mode_ignores_are_refused_rather_than_dropped(
+    provision_script: ModuleType,
+) -> None:
     """``--verify --email ada@example.com`` reads as "verify this one user". It
     does not, and silently ignoring the flag is how an operator believes it did."""
-    script = load_script()
 
     with pytest.raises(SystemExit):
-        script.parse_args(["--verify", "--email", "ada@example.com"])
+        provision_script.parse_args(["--verify", "--email", "ada@example.com"])

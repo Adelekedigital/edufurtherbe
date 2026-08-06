@@ -64,13 +64,18 @@ make check                     # the full local gate — before every commit
    Secrets are `SecretStr` and never logged.
 7. **Deep checks report findings only.** Never edit during a review, a debug, or
    an audit until the fix and its impact are approved.
-8. **Conventional Commits.** The release tooling parses them.
-9. **Every table has `id uuid PRIMARY KEY DEFAULT uuid_generate_v7()`** (ADR
-   0014) — no natural keys, no composite keys, no caller-supplied ids. An
-   invariant a natural or composite key would have carried is re-declared as
-   `UNIQUE`. An exception is an ADR superseding 0015, never a local judgement:
-   this rule already lived in `persistence-patterns` and was overridden twice
-   with every gate green.
+8. **One rule, one representation.** A predicate, mapping, constant or test
+   double that exists in a second place is a **defect**, not a style question —
+   extract it, or pin the copies with a test that fails when they diverge. Every
+   duplication this project has shipped was found by a human after a copy was
+   missed; no gate sees them.
+9. **Conventional Commits.** The release tooling parses them.
+10. **Every table has `id uuid PRIMARY KEY DEFAULT uuid_generate_v7()`** (ADR
+    0015) — no natural keys, no composite keys, no caller-supplied ids. An
+    invariant a natural or composite key would have carried is re-declared as
+    `UNIQUE`. An exception is an ADR superseding 0015, never a local judgement:
+    this rule already lived in `persistence-patterns` and was overridden twice
+    with every gate green.
 
 ## Layout
 
@@ -84,7 +89,10 @@ migrations/        Alembic chain — outside src/, so unpackaged and unscanned
 docs/adr/          decision records — read before proposing a rewrite
 ```
 
-`api/deps.py` and `main.py` are the only sanctioned wiring points.
+`api/deps.py` and `main.py` are the sanctioned wiring points inside `src/`.
+`scripts/*.py` is a third composition root — it may construct concrete `infra`
+classes, and it may hold **no business rules and no SQL** (see
+`project-conventions`, which explains why the gates cannot see it).
 
 ## Before saying it's done
 
