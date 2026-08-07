@@ -77,6 +77,35 @@ make check                     # the full local gate — before every commit
     this rule already lived in `persistence-patterns` and was overridden twice
     with every gate green.
 
+## How we work
+
+Six rules, added after a retrospective on M1. Each one is here because it cost
+real time — the count is in `failure-modes.md`.
+
+1. **Never stack pull requests.** Branch from `main`, merge to `main`, one at a
+   time. Every stack so far needed rebase surgery and a force-push; one PR was
+   destroyed outright. Sequential work waits.
+2. **An ADR lands `Accepted` in the PR that implements it.** `Proposed` plus a
+   second acceptance PR is for a decision that genuinely blocks someone else —
+   not the default. Two PRs per decision was pure overhead.
+3. **Record a decision only if reversing it later is expensive *and* a competent
+   engineer would be surprised.** Otherwise a settled-decision row is enough.
+   Eighteen ADRs before the second endpoint is a signal, not an achievement.
+4. **Verify before asserting or acting.** One command to check the branch, the
+   file, or the platform's documentation — before claiming state, and before
+   writing code against a tool's behaviour. This rule alone would have prevented
+   an entire merged-then-deleted PR and two false "main is broken" reports.
+5. **Decide only where the answer is already settled** — the repo says it, or the
+   same pattern was handled before. Anything that is genuinely a choice comes back
+   for approval. Speed is not a reason to decide on someone's behalf.
+6. **Report in plain words, short.** Verdict first, evidence in a table, prose
+   only for the one thing that matters. If the reader cannot act on it in under a
+   minute, it is too long — and a decision nobody can follow is a decision nobody
+   can make.
+
+Working alone in the repository is assumed. When another session may be active,
+use `git worktree` rather than switching the shared checkout.
+
 ## Layout
 
 ```
