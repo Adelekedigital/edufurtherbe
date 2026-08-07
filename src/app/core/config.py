@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     # to a browser, and used only by the provisioning CLI.
     supabase_service_role_key: SecretStr | None = None
 
+    # Where re-hosted profile images live. A plain name, not a secret: it appears
+    # in every public image URL. The bucket is created once by an operator in the
+    # dashboard, not by the migration script — see `infra/storage/supabase.py`.
+    supabase_storage_bucket: str = "profile-images"
+
     @model_validator(mode="after")
     def reject_unknown_prefixed_variables(self) -> Settings:
         """Fail startup on a misspelled ``EDUFURTHER_`` variable.

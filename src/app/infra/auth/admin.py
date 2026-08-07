@@ -33,6 +33,7 @@ from uuid import UUID
 import httpx
 
 from app.core.errors import AppError
+from app.infra.http.retry import send_with_backoff
 
 # Create, list and fetch all hang off this one path. Named for the resource
 # rather than for one verb, because it is used for three.
@@ -46,18 +47,12 @@ INVITE_ENDPOINTS = ("/auth/v1/invite", "/auth/v1/admin/generate_link")
 # previous attempt created the account and failed before recording it.
 ALREADY_REGISTERED = "email_exists"
 
-# Supabase rate-limits the Admin API. Provisioning makes ~2,400 calls in one run,
-# so a 429 is an expected event mid-cutover rather than an exceptional one, and
-# treating it as a failure would abandon a user the next attempt has to find
-# again. Five attempts with doubling backoff spans ~15s, comfortably longer than
-# any published Supabase window.
-MAX_ATTEMPTS = 5
-BACKOFF_SECONDS = 1.0
+# Supabase rate-limits the Admin API, and provisioning makes ~2,400 calls in one
+# run. The policy itself lives in `infra/http/retry.py`: the asset uploader is its
+# second caller, and a retry policy is exactly the thing that gets copied and then
+# diverges silently, because both copies keep working and only one gets the fix.
 LOOKUP_PAGE_SIZE = 200
 MAX_LOOKUP_PAGES = 20
-# A misconfigured proxy can answer `Retry-After: 3600`. Waiting an hour inside a
-# freeze is worse than failing the user and letting the operator re-run.
-MAX_BACKOFF_SECONDS = 30.0
 
 
 class AdminApiError(AppError):
@@ -94,6 +89,10 @@ class SupabaseAdminClient:
         # Injected so a retry test asserts the backoff without spending it.
         self._sleep = sleep
 
+    def _send(self, request: Callable[[], httpx.Response]) -> httpx.Response:
+        """Retry a 429, and nothing else. See `infra/http/retry.py`."""
+        return send_with_backoff(request, self._sleep)
+
     @property
     def _headers(self) -> dict[str, str]:
         # Supabase wants the key in both places: `apikey` routes the request and
@@ -103,37 +102,6 @@ class SupabaseAdminClient:
             "Authorization": f"Bearer {self._key}",
             "Content-Type": "application/json",
         }
-
-    def _send(self, request: Callable[[], httpx.Response]) -> httpx.Response:
-        """Perform a request, retrying only a 429.
-
-        Deliberately narrow. A 5xx is *not* retried on the create path: a
-        timed-out create may well have succeeded, and a blind retry would either
-        make a second account or rely on the ``email_exists`` branch to clean up
-        after it. Re-running the whole command is the safe recovery, because
-        every action here is idempotent by design.
-        """
-        attempt = 0
-        while True:
-            response = request()
-            attempt += 1
-            if response.status_code != httpx.codes.TOO_MANY_REQUESTS or attempt >= MAX_ATTEMPTS:
-                return response
-            self._sleep(self._backoff(response, attempt))
-
-    @staticmethod
-    def _backoff(response: httpx.Response, attempt: int) -> float:
-        """Supabase's ``Retry-After`` when it gives one, doubling otherwise."""
-        header: str = response.headers.get("Retry-After", "")
-        try:
-            # `max(0.0, ...)`: a proxy answering a negative value would reach
-            # `time.sleep(-5)`, which raises — recorded by the caller as a
-            # provisioning failure for a user who only needed to wait.
-            return max(0.0, min(float(header), MAX_BACKOFF_SECONDS))
-        except ValueError:
-            # Absent, or an HTTP-date rather than seconds. Either way, fall back
-            # rather than fail — the point is to wait, not to parse.
-            return min(BACKOFF_SECONDS * 2.0 ** (attempt - 1), MAX_BACKOFF_SECONDS)
 
     def create_user(self, email: str) -> AuthUser:
         """Create a confirmed account, silently.

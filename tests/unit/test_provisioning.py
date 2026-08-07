@@ -24,11 +24,11 @@ from app.domain.provisioning import Action, Candidate, Outcome, decide
 from app.infra.auth.admin import (
     INVITE_ENDPOINTS,
     LOOKUP_PAGE_SIZE,
-    MAX_ATTEMPTS,
     MAX_LOOKUP_PAGES,
     AdminApiError,
     SupabaseAdminClient,
 )
+from app.infra.http.retry import MAX_ATTEMPTS
 
 BASE = "https://project.supabase.co"
 KEY = "service-role-key-never-logged"
