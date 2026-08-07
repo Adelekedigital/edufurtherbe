@@ -100,6 +100,31 @@ released. A tag with no matching section here fails the release job.
   behaviours it depends on are untested: whether an app-created calendar sends
   attendee invitations, and whether its busy intervals reach the mentor's own
   free/busy.
+- **M2's four lookup catalogues** — `institutions`, `degree_levels`,
+  `service_offerings` and `scholarship_programs` — with the `pg_trgm` extension
+  and the `lookup_status` enum. Two are open, with `status`, `merged_into_id` and
+  `usage_count` for the curation queue ADR 0008 and package D15 require; two are
+  closed vocabularies the product defines. `institutions` ships empty by design,
+  populated on demand. Only `lookup_status` is created — the other six enums in
+  `02_profiles.sql` arrive with the tables that use them (decision #21). Country
+  becomes `country_id uuid` rather than the package's `char(2)`, per ADR 0015, and
+  the package's deferred `created_by`/`approved_by` attachments are ordinary
+  inline foreign keys here because `users` already exists in our chain.
+- **`service_offerings` seeded with six rows, where the package seeds none.**
+  Reading the legacy option set corrected package D12's premise: Bubble held
+  **one** vocabulary used by both sides, not two unmapped ones — both columns
+  store the display name as text at selection time, so the mentee side is six
+  parents and the mentor side five parents plus five children and renames.
+  Seeding the parents is what makes matching work at all. Settled decision 53
+  records why the table is closed and what re-opening it would cost.
+- **`scholarship_programs` seeded with ten curated programmes**, so
+  suggest-before-create has something to match against from day one; `funding_type`
+  and `degree_levels` are left empty deliberately. Settled decisions 54 (model
+  module layout and its split threshold) and 55 (the fail-open `status` default,
+  and the obligation it puts on every write path until admin curation ships).
+- Two `failure-modes.md` rows: a text snapshot of a controlled vocabulary is a log
+  of past UI states rather than a vocabulary, and a migration rewritten under an
+  unchanged revision id leaves every already-migrated database silently diverged.
 
 ### Changed
 

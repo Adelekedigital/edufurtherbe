@@ -34,6 +34,13 @@ EXPECTED_MODELS = {
     "AdminUser",
     "LegalDocument",
     "UserLegalConsent",
+    # M2 lookups. `institutions` and `scholarship_programs` are open — users
+    # create rows and an admin curates them; `degree_levels` and
+    # `service_offerings` are closed vocabularies the product defines.
+    "Institution",
+    "DegreeLevel",
+    "ServiceOffering",
+    "ScholarshipProgram",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")

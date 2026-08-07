@@ -24,7 +24,11 @@ FUNCTION_NAMES = ("set_updated_at", "uuid_generate_v7")
 # `e25541374c03` dropped it again when normalisation moved to the boundary. The
 # chain still creates and drops it in between, which is why this asserts the
 # state at head rather than every extension the chain has ever touched.
-EXTENSION_NAMES = ("pgcrypto",)
+# `pg_trgm` is the first extension whose *operators* the schema depends on:
+# `pgcrypto` was declared for tidiness but `gen_random_uuid()` has been core
+# since PostgreSQL 13, so a missing pgcrypto would never have surfaced. A missing
+# pg_trgm fails loudly at `CREATE INDEX ... USING gin (name gin_trgm_ops)`.
+EXTENSION_NAMES = ("pg_trgm", "pgcrypto")
 
 # The exact set of tables at head, in the order `table_names` returns them.
 #
@@ -46,16 +50,27 @@ EXPECTED_TABLES = [
     "user_onboarding",
     "user_profiles",
     "users",
+    # M2 — the four lookups the profile tables reference
+    "degree_levels",
+    "institutions",
+    "scholarship_programs",
+    "service_offerings",
 ]
 
-# The five enum types M1 creates. Named here because a type outlives the table
-# that used it: `DROP TABLE` does not remove one, so a downgrade that forgets
-# leaves an orphan and the next upgrade fails with "type already exists".
+# Every enum type at head — five from M1, one from M2. Named here because a type
+# outlives the table that used it: `DROP TABLE` does not remove one, so a
+# downgrade that forgets leaves an orphan and the next upgrade fails with "type
+# already exists".
+#
+# M2 adds only `lookup_status`. The other six vocabularies in `02_profiles.sql`
+# are consumed by tables in the next pull request and ship with them, per settled
+# decision #21 — a type no table uses is a schema asserting a choice nobody took.
 ENUM_TYPE_NAMES = (
     "admin_role",
     "auth_provider",
     "language_proficiency",
     "legal_document_type",
+    "lookup_status",
     "primary_role",
 )
 
