@@ -23,9 +23,9 @@ SECOND = "https://staging.edufurther.org"
 def origins(raw: str | None, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Build Settings with only this variable set, from the environment."""
     if raw is None:
-        monkeypatch.delenv("EDUFURTHER_CORS_ORIGINS", raising=False)
+        monkeypatch.delenv("CORS_ORIGINS", raising=False)
     else:
-        monkeypatch.setenv("EDUFURTHER_CORS_ORIGINS", raw)
+        monkeypatch.setenv("CORS_ORIGINS", raw)
     return Settings(_env_file=None).cors_origins
 
 

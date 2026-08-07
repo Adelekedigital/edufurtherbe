@@ -66,7 +66,7 @@ def _normalise_query(dsn: str) -> str:
     for key, value in parse_qsl(parts.query, keep_blank_values=True):
         if key in _LIBPQ_REJECTED:
             raise ConfigurationError(
-                f"EDUFURTHER_DATABASE_URL carries '{key}', which the asyncpg "
+                f"DATABASE_URL carries '{key}', which the asyncpg "
                 f"driver cannot accept. It {_LIBPQ_REJECTED[key]}"
             )
         translated.append((_LIBPQ_RENAMES.get(key, key), value))
@@ -97,13 +97,13 @@ def resolve_async_dsn(settings: Settings) -> str:
     """Return the configured DSN with an async driver, or raise if absent."""
     if settings.database_url is None:
         raise ConfigurationError(
-            "EDUFURTHER_DATABASE_URL is not set. The application needs a "
+            "DATABASE_URL is not set. The application needs a "
             "PostgreSQL connection string; see .env.example."
         )
 
     dsn = settings.database_url.get_secret_value().strip()
     if not dsn:
-        raise ConfigurationError("EDUFURTHER_DATABASE_URL is set but empty.")
+        raise ConfigurationError("DATABASE_URL is set but empty.")
 
     return to_async_dsn(dsn)
 

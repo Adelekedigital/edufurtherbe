@@ -106,6 +106,17 @@ real time — the count is in `failure-modes.md`.
 Working alone in the repository is assumed. When another session may be active,
 use `git worktree` rather than switching the shared checkout.
 
+### How much verification
+
+Depth scales with what a mistake costs. **Every tier still gets a checklist and
+approval before implementation** — the tier decides verification, nothing else.
+
+| Tier | What | Verification |
+|---|---|---|
+| 1 | Irreversible or touching real data — ETL, migrations, auth, provisioning | Watch-fail, mutation batch, stress against real data, review agents |
+| 2 | A normal feature, endpoint, or module; anything production reads | Tests + full gate; mutations on the new guard only |
+| 3 | Mechanical — renames, moves, docs | Gate only |
+
 ## Layout
 
 ```

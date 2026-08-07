@@ -61,8 +61,8 @@ def build_client(settings: Settings, http: httpx.Client) -> SupabaseAdminClient:
     """Construct the Admin API adapter, or say exactly what is missing."""
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise ConfigurationError(
-            "provisioning needs EDUFURTHER_SUPABASE_URL and "
-            "EDUFURTHER_SUPABASE_SERVICE_ROLE_KEY. The service-role key is under "
+            "provisioning needs SUPABASE_URL and "
+            "SUPABASE_SERVICE_ROLE_KEY. The service-role key is under "
             "Dashboard -> Settings -> API; it is not the anon key."
         )
     return SupabaseAdminClient(

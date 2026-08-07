@@ -65,10 +65,18 @@ precisely because they are the code most worth testing without a database.
 
 ## Configuration
 
-All configuration flows through `src/app/core/config.py`, read from
-`EDUFURTHER_`-prefixed environment variables or a local `.env`. A misspelled
-prefixed variable fails at startup rather than silently leaving a default in
-place. Secrets are `SecretStr` and are never logged.
+All configuration flows through `src/app/core/config.py`, read from environment
+variables or a local `.env`.
+
+Only `EDUFURTHER_ENVIRONMENT` and `EDUFURTHER_DEBUG` carry a prefix — both are
+generic enough that a host may already define them. Everything else
+(`DATABASE_URL`, `SUPABASE_URL`, `CORS_ORIGINS`, …) names its own subject and
+stands alone.
+
+A leftover `EDUFURTHER_` key from before that change fails at startup and names
+its replacement. A misspelled unprefixed key cannot be detected — it looks like
+any other variable — so the setting silently keeps its default. Secrets are
+`SecretStr` and are never logged.
 
 `.env` is git-ignored. So are `data/`, `exports/`, and `*.csv`. Those cover file
 output; the Bubble extract itself now lands in a `staging` schema inside the

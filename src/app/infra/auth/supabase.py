@@ -50,7 +50,7 @@ class SupabaseTokenVerifier:
             # key cannot fail closed on a per-request basis without silently
             # rejecting everybody, and an operator needs to know at wiring time.
             raise ConfigurationError(
-                "Set EDUFURTHER_SUPABASE_JWKS_URL or EDUFURTHER_SUPABASE_JWT_SECRET. "
+                "Set SUPABASE_JWKS_URL or SUPABASE_JWT_SECRET. "
                 "Both are under Settings -> API -> JWT Keys in the Supabase dashboard."
             )
         self._secret = secret

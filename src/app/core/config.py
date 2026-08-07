@@ -2,6 +2,25 @@
 
 No module outside this one reads ``os.environ``. Secrets are ``SecretStr`` so an
 accidental log line or repr renders ``**********`` instead of the value.
+
+**Only names generic enough to collide carry the ``EDUFURTHER_`` prefix.**
+``ENVIRONMENT`` and ``DEBUG`` are words a host, a base image or another tool may
+already be using, so those two keep it. ``SUPABASE_URL`` and ``BUBBLE_API_TOKEN``
+name their own vendor and cannot plausibly mean anything else, so they do not —
+and ``DATABASE_URL`` unprefixed is a small bonus, since most managed platforms
+inject exactly that name.
+
+**What this cost.** The old blanket prefix let one validator catch *any*
+misspelling: anything starting with ``EDUFURTHER_`` that was not a field was a
+typo, provably. That is now only true for the two prefixed keys. A misspelled
+``SUPABSE_URL`` is indistinguishable from an unrelated host variable and passes
+silently, leaving the default in place — the exact failure mode the old guard
+existed to prevent, now reachable for six of the eight settings.
+
+The guard below does the one thing it still can: it catches every *old* key,
+because those are known strings. It cannot do more. Said plainly here rather
+than left for someone to discover, and a real reason to keep secrets out of
+optional fields whose absence is silent.
 """
 
 import json
@@ -14,7 +33,22 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ENV_PREFIX = "EDUFURTHER_"
 
+#: The only fields whose environment key keeps the prefix. Both are single
+#: generic words; everything else names its own subject.
+PREFIXED_FIELDS = frozenset({"environment", "debug"})
+
 Environment = Literal["local", "ci", "staging", "production"]
+
+
+def env_key(field: str) -> str:
+    """The environment variable a field is read from.
+
+    One function, so the prefix rule has a single representation — the guard and
+    the field declarations below both ask it rather than each spelling the rule
+    out.
+    """
+    prefix = ENV_PREFIX if field in PREFIXED_FIELDS else ""
+    return f"{prefix}{field}".upper()
 
 
 class Settings(BaseSettings):
@@ -23,8 +57,20 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        # The prefix stays the *default*, and the fields that do not need it opt
+        # out with an explicit alias below.
+        #
+        # Inverted deliberately. Dropping `env_prefix` entirely and aliasing the
+        # two that keep it looked tidier and was wrong: `populate_by_name` then
+        # also matches the bare field name, so a host-set `DEBUG=true` was read
+        # straight into the setting — defeating the only reason those two are
+        # prefixed. Caught by `test_the_two_collision_prone_keys_keep_their_prefix`.
         env_prefix=ENV_PREFIX,
-        extra="forbid",
+        # So `Settings(environment="ci")` still works for the fields that carry an
+        # alias. Safe here: the name-based lookup a settings source then performs
+        # is the *prefixed* one, which is a stale key, and the guard rejects it.
+        populate_by_name=True,
+        extra="ignore",
     )
 
     environment: Environment = "local"
@@ -35,7 +81,9 @@ class Settings(BaseSettings):
     # ``SettingsError: error parsing value for field "cors_origins"`` — a message
     # naming neither the value nor the expected shape, from a field that at the
     # time was wired to nothing. That took a deploy to diagnose.
-    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, validation_alias=env_key("cors_origins")
+    )
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -74,7 +122,7 @@ class Settings(BaseSettings):
     # ``SecretStr`` because a DSN carries a password: ``repr`` and any log line
     # render it as ``**********``. Read the value with ``.get_secret_value()``,
     # and only inside ``infra/``.
-    database_url: SecretStr | None = None
+    database_url: SecretStr | None = Field(default=None, validation_alias=env_key("database_url"))
 
     # The Bubble Data API, used to extract the legacy snapshot. Both optional for
     # the same reason as ``database_url``: the application imports on machines
@@ -83,8 +131,10 @@ class Settings(BaseSettings):
     # The URL carries the environment in its path — ``/version-test/`` is the dev
     # app and its absence is production — so it is configuration rather than a
     # constant. Trailing slashes are stripped by the adapter.
-    bubble_api_url: str | None = None
-    bubble_api_token: SecretStr | None = None
+    bubble_api_url: str | None = Field(default=None, validation_alias=env_key("bubble_api_url"))
+    bubble_api_token: SecretStr | None = Field(
+        default=None, validation_alias=env_key("bubble_api_token")
+    )
 
     # Supabase. Optional for the same reason as the others: importing the
     # application must not require credentials that only some code paths need,
@@ -93,38 +143,72 @@ class Settings(BaseSettings):
     # Projects differ on signing: newer ones sign asymmetrically and publish a
     # JWKS, older ones use a shared HS256 secret. Set whichever the dashboard
     # shows; the verifier prefers the JWKS when both are present.
-    supabase_url: str | None = None
-    supabase_jwks_url: str | None = None
-    supabase_jwt_secret: SecretStr | None = None
+    supabase_url: str | None = Field(default=None, validation_alias=env_key("supabase_url"))
+    supabase_jwks_url: str | None = Field(
+        default=None, validation_alias=env_key("supabase_jwks_url")
+    )
+    supabase_jwt_secret: SecretStr | None = Field(
+        default=None, validation_alias=env_key("supabase_jwt_secret")
+    )
     # Bypasses RLS and can create or delete users. Never the anon key, never sent
     # to a browser, and used only by the provisioning CLI.
-    supabase_service_role_key: SecretStr | None = None
+    supabase_service_role_key: SecretStr | None = Field(
+        default=None, validation_alias=env_key("supabase_service_role_key")
+    )
 
     # Where re-hosted profile images live. A plain name, not a secret: it appears
     # in every public image URL. The bucket is created once by an operator in the
     # dashboard, not by the migration script — see `infra/storage/supabase.py`.
-    supabase_storage_bucket: str = "profile-images"
+    supabase_storage_bucket: str = Field(
+        default="profile-images", validation_alias=env_key("supabase_storage_bucket")
+    )
 
     @model_validator(mode="after")
-    def reject_unknown_prefixed_variables(self) -> Settings:
-        """Fail startup on a misspelled ``EDUFURTHER_`` variable.
+    def reject_stale_and_unknown_prefixed_variables(self) -> Settings:
+        """Fail startup on an ``EDUFURTHER_`` variable that no longer means anything.
 
-        ``extra="forbid"`` does not cover this. pydantic-settings only collects
-        environment variables that match a declared field, so an unmatched one is
-        dropped before validation ever sees it — meaning a typo'd secret silently
-        leaves the default in place. That is the failure mode where the process
-        starts, looks healthy, and is misconfigured.
+        Two distinct failures, and the messages are different because the fixes
+        are different.
+
+        **A stale key.** ``EDUFURTHER_SUPABASE_URL`` was correct until the prefix
+        was dropped. pydantic-settings silently ignores a variable matching no
+        field, so a deployed environment still holding one would start *healthy
+        with nothing configured* — a service that runs, passes its health check,
+        and cannot reach Supabase. This is the failure this guard exists for, and
+        the message names the replacement so the operator does not have to read
+        the source to find it.
+
+        **An unknown key.** Anything else beginning with ``EDUFURTHER_`` is a
+        misspelling of one of the two prefixed fields. Narrower than before, and
+        the module docstring says why.
         """
-        known = {f"{ENV_PREFIX}{name}".upper() for name in type(self).model_fields}
-        unknown = sorted(
-            name
-            for name in os.environ
-            if name.upper().startswith(ENV_PREFIX) and name.upper() not in known
-        )
-        if unknown:
+        fields = type(self).model_fields
+        stale = {
+            f"{ENV_PREFIX}{name}".upper(): env_key(name)
+            for name in fields
+            if name not in PREFIXED_FIELDS
+        }
+        live = {env_key(name) for name in fields}
+
+        present = {name.upper() for name in os.environ}
+
+        if outdated := sorted(present & stale.keys()):
+            renames = ", ".join(f"{old} -> {stale[old]}" for old in outdated)
+            raise ValueError(
+                f"These environment variables use the old prefixed names: {renames}. "
+                "The prefix now applies only to "
+                f"{', '.join(sorted(env_key(f) for f in PREFIXED_FIELDS))}. "
+                "Rename them; leaving them set would start this process with the "
+                "affected settings unconfigured."
+            )
+
+        if unknown := sorted(
+            name for name in present if name.startswith(ENV_PREFIX) and name not in live
+        ):
             raise ValueError(
                 f"Unrecognised {ENV_PREFIX} variable(s): {', '.join(unknown)}. "
-                "Declare the field on Settings, or correct the spelling."
+                f"Only {', '.join(sorted(env_key(f) for f in PREFIXED_FIELDS))} "
+                "carry the prefix; everything else is unprefixed."
             )
         return self
 

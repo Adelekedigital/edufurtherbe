@@ -34,27 +34,91 @@ def test_settings_read_from_prefixed_environment(monkeypatch: pytest.MonkeyPatch
 
 
 def test_unknown_prefixed_variable_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``DATABSE`` is misspelled on purpose, and the misspelling is load-bearing.
+    """A misspelled ``EDUFURTHER_`` variable must stop the process.
 
-    ``EDUFURTHER_DATABASE_URL`` is now a real field, so correcting the typo would
-    turn this into a test that a *valid* variable is accepted — the opposite
-    assertion, passing for the wrong reason. Change the probe only to another
-    variable that does not exist.
+    The probe must name something that is not a field under *either* spelling —
+    a real field's old name is caught by the migration guard below instead, which
+    is a different message and a different reason.
     """
-    monkeypatch.setenv("EDUFURTHER_DATABSE_URL", "postgresql://localhost/x")
+    monkeypatch.setenv("EDUFURTHER_NOT_A_FIELD_AT_ALL", "x")
 
     with pytest.raises(PydanticValidationError):
         Settings(_env_file=None)
 
 
+# These are the OLD keys, on purpose, and a bulk rename must never touch them —
+# the whole point is that they no longer work.
+@pytest.mark.parametrize(
+    "stale",
+    ["EDUFURTHER_SUPABASE_URL", "EDUFURTHER_DATABASE_URL", "EDUFURTHER_CORS_ORIGINS"],
+)
+def test_an_old_prefixed_key_stops_the_process(stale: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """**The test this change exists for.**
+
+    These keys were correct until the prefix was dropped. A deployed environment
+    still holding one would otherwise start *healthy with nothing configured* —
+    the exact silent-misconfiguration failure the prefix guard was written to
+    prevent, reintroduced by removing the prefix.
+
+    Failing loudly is the whole design: the operator gets a message naming both
+    the old key and the new one, rather than a service that runs and cannot reach
+    Supabase.
+
+    **The assertion is the rename arrow, not the key names.** These keys begin
+    with ``EDUFURTHER_``, so the *unknown-key* branch would also reject them — and
+    with a message that says which keys carry the prefix but never says what to
+    rename this one to. Asserting the names alone passed against both branches,
+    which a mutation proved by deleting this guard entirely and leaving the suite
+    green. Worse, ``"SUPABASE_URL" in "EDUFURTHER_SUPABASE_URL"`` is true, so the
+    second assertion was satisfied by substring coincidence.
+
+    Only the arrow distinguishes the actionable message from the generic one.
+    """
+    monkeypatch.setenv(stale, "anything")
+
+    with pytest.raises(PydanticValidationError) as raised:
+        Settings(_env_file=None)
+
+    message = str(raised.value)
+    assert f"{stale} -> {stale.removeprefix('EDUFURTHER_')}" in message, message
+
+
+def test_the_two_collision_prone_keys_keep_their_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``ENVIRONMENT`` and ``DEBUG`` are generic enough to be set by something
+    else on the host, so they alone keep the prefix. The unprefixed spelling must
+    *not* be read, or the rule is decorative."""
+    monkeypatch.setenv("EDUFURTHER_ENVIRONMENT", "staging")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEBUG", "true")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.environment == "staging"
+    assert settings.debug is False
+
+
+def test_the_unprefixed_keys_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:pw@localhost:5432/db")
+    monkeypatch.setenv("CORS_ORIGINS", "https://app.example")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.supabase_url == "https://project.supabase.co"
+    assert settings.database_url is not None
+    assert settings.cors_origins == ["https://app.example"]
+
+
 def test_database_url_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("EDUFURTHER_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
 
     assert Settings(_env_file=None).database_url is None
 
 
 def test_database_url_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EDUFURTHER_DATABASE_URL", "postgresql://u:pw@localhost:5432/db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:pw@localhost:5432/db")
 
     settings = Settings(_env_file=None)
 
@@ -69,7 +133,7 @@ def test_database_url_is_masked_in_repr(monkeypatch: pytest.MonkeyPatch) -> None
     a plain ``str`` field would also render *something*, and only the absence of
     the secret distinguishes the two.
     """
-    monkeypatch.setenv("EDUFURTHER_DATABASE_URL", "postgresql://u:sup3rs3cret@localhost/db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:sup3rs3cret@localhost/db")
 
     rendered = repr(Settings(_env_file=None))
 
@@ -95,11 +159,9 @@ def test_settings_fixture_ignores_a_dotenv_file(
     and ``debug`` as init arguments, and those outrank a dotenv value whether or
     not the file is read. Only a field the fixture leaves alone can show the leak.
     """
-    (tmp_path / ".env").write_text(
-        'EDUFURTHER_CORS_ORIGINS=["https://leaked.example"]\n', encoding="utf-8"
-    )
+    (tmp_path / ".env").write_text('CORS_ORIGINS=["https://leaked.example"]\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("EDUFURTHER_CORS_ORIGINS", raising=False)
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
 
     settings: Settings = request.getfixturevalue("settings")
 

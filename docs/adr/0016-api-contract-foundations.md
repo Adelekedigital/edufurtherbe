@@ -46,7 +46,7 @@ be unit-tested without a request and reused by the ETL, which has no request.
 Two consequences worth stating because they are easy to undo:
 
 - **`ConfigurationError` maps to 500 with its detail withheld.** It names
-  settings, and "EDUFURTHER_SUPABASE_JWKS_URL is unset" tells an anonymous
+  settings, and "SUPABASE_JWKS_URL is unset" tells an anonymous
   caller what this service is wired to.
 - **A 401 carries no detail and no varying title.** Every authentication failure
   reads identically, because distinguishing "malformed" from "wrong signature"

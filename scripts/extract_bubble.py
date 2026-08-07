@@ -81,7 +81,7 @@ def open_source(args: argparse.Namespace) -> Iterator[Any]:
         # Raised here rather than making the settings required: importing the
         # application must not depend on credentials only an extract needs.
         raise BubbleSourceError(
-            "Set EDUFURTHER_BUBBLE_API_URL and EDUFURTHER_BUBBLE_API_TOKEN, or "
+            "Set BUBBLE_API_URL and BUBBLE_API_TOKEN, or "
             "pass --from-export. The URL carries the environment; /version-test/ "
             "is the dev app."
         )

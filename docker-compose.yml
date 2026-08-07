@@ -19,7 +19,7 @@ services:
     environment:
       # Local-only credentials. Nothing here is a secret, and nothing here is
       # ever used outside this compose file — the deployed database gets its DSN
-      # from EDUFURTHER_DATABASE_URL like every other setting.
+      # from DATABASE_URL like every other setting.
       POSTGRES_USER: edufurther
       POSTGRES_PASSWORD: edufurther
       POSTGRES_DB: edufurther
