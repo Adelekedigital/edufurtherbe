@@ -4,6 +4,7 @@ Exempt from the layer check: this is the one place allowed to see everything.
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import errors
 from app.api.routes import health, users
@@ -53,6 +54,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Registered before the routers so every failure below leaves in the same
     # shape — RFC 9457 Problem Details, never FastAPI's own `{"detail": ...}`.
     errors.register(application)
+
+    # Added only when origins are configured. An empty list would install a
+    # middleware that allows nothing, which is indistinguishable from no CORS at
+    # all until somebody adds an origin and cannot work out why it is ignored.
+    #
+    # Every list is explicit, and that is a requirement rather than a style: with
+    # `allow_credentials=True`, Starlette refuses `*` for origins, methods *and*
+    # headers. The frontend sends an `Authorization` header (ADR 0009), so
+    # credentials are on and the wildcards are therefore unavailable.
+    if resolved.cors_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=resolved.cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+            # `Accept`, `Accept-Language`, `Content-Language` and `Content-Type`
+            # are always allowed by the middleware; `Authorization` is not, and
+            # is the one this API cannot work without.
+            allow_headers=["Authorization", "Content-Type"],
+        )
     application.include_router(health.router)
     application.include_router(users.router)
     return application

@@ -4,12 +4,13 @@ No module outside this one reads ``os.environ``. Secrets are ``SecretStr`` so an
 accidental log line or repr renders ``**********`` instead of the value.
 """
 
+import json
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ENV_PREFIX = "EDUFURTHER_"
 
@@ -28,7 +29,40 @@ class Settings(BaseSettings):
 
     environment: Environment = "local"
     debug: bool = False
-    cors_origins: list[str] = Field(default_factory=list)
+    # ``NoDecode`` is load-bearing, not decoration. Without it pydantic-settings
+    # JSON-decodes a complex type *inside the settings source*, before any
+    # validator runs, and a bare origin typed into a cloud console fails as
+    # ``SettingsError: error parsing value for field "cors_origins"`` — a message
+    # naming neither the value nor the expected shape, from a field that at the
+    # time was wired to nothing. That took a deploy to diagnose.
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def accept_json_or_a_comma_separated_list(cls, value: object) -> object:
+        """Take either spelling, because both have a legitimate author.
+
+        JSON is what ``.env.example`` documents and what any existing
+        configuration already uses; comma-separated is what a person types into a
+        form field that gives no hint a list is wanted. Supporting one and not the
+        other breaks somebody, and the breakage is a service that will not start.
+
+        Anything that is not a string — a real list from code, as the tests and
+        ``create_app`` pass — is handed straight on to normal field validation.
+        Disabling the decoder must not also disable the type check.
+        """
+        if not isinstance(value, str):
+            return value
+
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            # Let a malformed array raise here: inside a validator it becomes a
+            # ``ValidationError`` naming the field, rather than the opaque
+            # ``SettingsError`` this whole annotation exists to avoid.
+            return json.loads(text)
+        return [part.strip() for part in text.split(",") if part.strip()]
 
     # Optional, and deliberately so. ``main.py`` builds the application at import
     # time (``app = create_app()``), so a required field would make
