@@ -26,6 +26,7 @@ from app.domain.enums import (
     AuthProvider,
     LanguageProficiency,
     LegalDocumentType,
+    LookupStatus,
     PrimaryRole,
 )
 
@@ -48,6 +49,7 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     AuthProvider: "auth_provider",
     LanguageProficiency: "language_proficiency",
     LegalDocumentType: "legal_document_type",
+    LookupStatus: "lookup_status",
 }
 
 

@@ -99,3 +99,34 @@ class LegalDocumentType(StrEnum):
     PRIVACY_POLICY = "privacy_policy"
     MENTOR_AGREEMENT = "mentor_agreement"
     COMMUNITY_GUIDELINES = "community_guidelines"
+
+
+class LookupStatus(StrEnum):
+    """Curation state of a catalogue row that users can create.
+
+    Types ``institutions.status`` and ``scholarship_programs.status`` — the two
+    M2 lookups whose rows come from users. ``degree_levels`` and
+    ``service_offerings`` have no status column because they are closed
+    vocabularies the product defines; nobody can add a row, so there is nothing
+    to curate.
+
+    ``MERGED`` is not a soft delete, and the difference is the point. The losing
+    row survives and ``merged_into_id`` points at the winner, so a client holding
+    a cached reference to "chevening scholarship" still resolves instead of
+    404ing. Without it, deduplicating "Chevening", "Chevening Award" and
+    "chevening scholarship" into one row breaks every reference taken before the
+    merge (ADR 0008; package D15, which makes the merge path mandatory rather
+    than optional).
+
+    **Six other M2 vocabularies are deliberately absent**, per settled decision
+    #21: ``approval_status``, ``listing_status``, ``unlisted_reason``,
+    ``meeting_provider``, ``verification_status`` and
+    ``scholarship_relationship`` are all consumed by tables in the *next* pull
+    request. A type no table uses is a schema asserting a choice nobody took, so
+    each arrives with the table that constrains it.
+    """
+
+    APPROVED = "approved"
+    PENDING_REVIEW = "pending_review"
+    MERGED = "merged"
+    REJECTED = "rejected"
