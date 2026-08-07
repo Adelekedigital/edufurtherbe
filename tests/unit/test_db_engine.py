@@ -13,7 +13,7 @@ from app.infra.db.engine import resolve_async_dsn, to_async_dsn
 
 
 def settings_with(dsn: str | None) -> Settings:
-    """``database_url`` is passed explicitly so an exported EDUFURTHER_DATABASE_URL
+    """``database_url`` is passed explicitly so an exported DATABASE_URL
     in the developer's shell cannot decide the outcome of these tests."""
     value = SecretStr(dsn) if dsn is not None else None
     return Settings(_env_file=None, environment="ci", database_url=value)
@@ -59,7 +59,7 @@ def test_a_missing_dsn_raises_configuration_error() -> None:
     with pytest.raises(ConfigurationError) as caught:
         resolve_async_dsn(settings_with(None))
 
-    assert "EDUFURTHER_DATABASE_URL" in str(caught.value)
+    assert "DATABASE_URL" in str(caught.value)
 
 
 def test_a_blank_dsn_raises_rather_than_producing_a_broken_url() -> None:

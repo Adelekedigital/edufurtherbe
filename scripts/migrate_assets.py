@@ -70,8 +70,8 @@ def build_storage(settings: Settings, http: httpx.Client) -> SupabaseStorage:
     """The Storage adapter, or a message naming exactly what is missing."""
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise ConfigurationError(
-            "asset migration needs EDUFURTHER_SUPABASE_URL and "
-            "EDUFURTHER_SUPABASE_SERVICE_ROLE_KEY. The service-role key is under "
+            "asset migration needs SUPABASE_URL and "
+            "SUPABASE_SERVICE_ROLE_KEY. The service-role key is under "
             "Dashboard -> Settings -> API; it is not the anon key."
         )
     return SupabaseStorage(

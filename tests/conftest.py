@@ -27,14 +27,12 @@ from app.main import create_app
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# Deliberately NOT prefixed with EDUFURTHER_.
+# Test-harness variables, not application configuration — which is why they are
+# read here with `os.environ` rather than added to `Settings`. The
+# no-inline-os.environ house rule governs application config.
 #
-# `Settings.reject_unknown_prefixed_variables` fails startup on any EDUFURTHER_
-# variable that is not a declared field, so a EDUFURTHER_TEST_DATABASE_URL would
-# break every test that constructs Settings — including the ones that have
-# nothing to do with a database. These are test-harness variables, not
-# application configuration, and the no-inline-os.environ house rule governs the
-# latter.
+# `TEST_` keeps them clear of the real settings: `DATABASE_URL` is now a live
+# unprefixed field, so a bare name here would collide with the thing under test.
 DB_URL_ENV = "TEST_DATABASE_URL"
 REQUIRE_DB_ENV = "REQUIRE_DB_TESTS"
 

@@ -60,7 +60,7 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
     """Map a deliberate domain error to its response.
 
     ``ConfigurationError`` is handled apart from the table and **its detail is
-    withheld**: it names settings, and a message like "EDUFURTHER_SUPABASE_JWKS_URL
+    withheld**: it names settings, and a message like "SUPABASE_JWKS_URL
     is unset" tells an anonymous caller what this service is wired to.
     """
     # `request` is unused but required: FastAPI calls every exception handler
