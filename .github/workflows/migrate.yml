@@ -22,10 +22,10 @@ on:
       target:
         description: Which environment's DATABASE_URL to migrate
         required: true
-        default: rehearsal
+        default: staging
         type: choice
         options:
-          - rehearsal
+          - staging
           - production
 
 permissions:
