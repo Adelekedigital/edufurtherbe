@@ -17,6 +17,12 @@ import httpx
 
 from app.infra.http.retry import send_with_backoff
 
+#: The largest body this migration will hold in memory for one image. The biggest
+#: asset in the dev export is a small fraction of this; the number exists so that
+#: an allowlisted host serving something unexpected costs a skipped image rather
+#: than the process.
+MAX_ASSET_BYTES = 16 * 1024 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class Fetched:
@@ -51,10 +57,20 @@ class AssetSource:
         A network error *is* raised — that is a condition worth retrying the run
         for, and it should not be silently recorded as "the user had no image".
         """
+        # Redirects are followed because a provider avatar legitimately 302s to a
+        # sized variant — but the *destination* is not re-checked against the
+        # allowlist, so this is bounded instead: a capped number of hops, and a
+        # capped body. `domain.assets.is_fetchable` decides whether the first
+        # request happens at all.
         response = send_with_backoff(
             lambda: self._client.get(url, follow_redirects=True), self._sleep
         )
         if response.status_code >= httpx.codes.BAD_REQUEST:
+            return None
+        if len(response.content) > MAX_ASSET_BYTES:
+            # A profile image is not this large. Refusing beats holding it in
+            # memory and publishing it, and it is reported like any other asset
+            # the run declined rather than raised on.
             return None
         if not response.content:
             # A 200 with an empty body is not an image. Treated as absent rather

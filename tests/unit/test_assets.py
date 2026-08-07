@@ -17,6 +17,8 @@ from app.domain.assets import (
     decide,
     digest,
     extension_for,
+    host_of,
+    is_fetchable,
     is_ours,
     object_path,
     sniff_content_type,
@@ -203,3 +205,106 @@ def test_failures_name_the_user_and_go_to_their_own_stream() -> None:
 
     assert "failed  1" in report.summary()
     assert report.failures() == ["FAILED ada@example.com: 404"]
+
+
+# --------------------------------------------------------------------------
+# Which addresses this migration is willing to contact
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://4f8dee3b4728dbdfcf1f333770d80d0d.cdn.bubble.io/f/x/img.png",
+        "https://app.edufurther.org/version-live/img.png",
+        "https://lh3.googleusercontent.com/a/ACg8ocK",
+        "https://media.licdn.com/dms/image/v2/abc",
+        "http://lh3.googleusercontent.com/a/ACg8ocK",
+    ],
+    ids=["bubble-cdn", "custom-domain", "google-avatar", "linkedin-avatar", "http-scheme"],
+)
+def test_a_real_source_is_fetchable(url: str) -> None:
+    """The two origins legacy images actually have: a Bubble upload, or an
+    avatar an OAuth provider handed us at sign-up."""
+    assert is_fetchable(url) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://localhost:8000/admin",
+        "http://127.0.0.1/",
+        "http://10.0.0.5/internal",
+        "https://cdn.bubble.io.attacker.test/x.png",
+        "https://notcdn.bubble.io.evil.test/x.png",
+        "file:///etc/passwd",
+        "gopher://internal/",
+        "https://attacker.test/x.png",
+        "",
+    ],
+    ids=[
+        "link-local-metadata",
+        "localhost",
+        "loopback",
+        "private-range",
+        "suffix-not-on-dot-boundary",
+        "lookalike-subdomain",
+        "file-scheme",
+        "gopher-scheme",
+        "unknown-host",
+        "empty",
+    ],
+)
+def test_everything_else_is_refused(url: str) -> None:
+    """An allowlist, so the interesting cases are the ones nobody enumerated.
+
+    The metadata address is here because it is the classic SSRF target, but it is
+    not special: it is refused for the same reason ``attacker.test`` is — it is
+    not a source we have.
+    """
+    assert is_fetchable(url) is False
+
+
+def test_credentials_in_the_authority_cannot_smuggle_a_host() -> None:
+    """``https://cdn.bubble.io@attacker.test/`` is a request to attacker.test.
+
+    Comparing ``netloc`` rather than ``hostname`` would read the user-info part
+    and allow it. This is why ``is_fetchable`` uses ``hostname``.
+    """
+    assert is_fetchable("https://4f8.cdn.bubble.io@attacker.test/x.png") is False
+
+
+def test_a_port_does_not_defeat_the_allowlist() -> None:
+    assert is_fetchable("https://lh3.googleusercontent.com:443/a/x") is True
+
+
+def test_decide_refuses_an_unrecognised_host_rather_than_copying() -> None:
+    """The whole point: an unknown source is not fetched.
+
+    Before this, `decide` returned COPY for everything that was not already ours,
+    so any address in the column became an outbound request.
+    """
+    assert decide("https://attacker.test/x.png", "project.supabase.co") is AssetAction.REFUSE
+    assert (
+        decide("https://lh3.googleusercontent.com/a/x", "project.supabase.co") is AssetAction.COPY
+    )
+    assert decide("https://project.supabase.co/o/x.png", "project.supabase.co") is AssetAction.SKIP
+
+
+def test_a_refusal_is_reported_by_host_not_by_url() -> None:
+    """A URL from an unexpected source may carry a path nobody should paste on."""
+    assert host_of("https://attacker.test/secret/path?token=abc") == "attacker.test"
+    assert host_of(None) == "<no host>"
+
+
+def test_the_report_surfaces_refused_hosts() -> None:
+    """Counted in the summary and named on the failure stream.
+
+    A refusal is not a failure — nothing broke — but both need somebody to look,
+    so they share the stream the operator already reads.
+    """
+    report = AssetReport(copied=1, refused_hosts=("attacker.test",))
+
+    assert "refused 1" in report.summary()
+    assert any("attacker.test" in line for line in report.failures())

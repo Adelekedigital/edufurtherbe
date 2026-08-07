@@ -50,6 +50,7 @@ from app.domain.assets import (
     AssetKind,
     AssetReport,
     decide,
+    host_of,
     object_path,
     sniff_content_type,
 )
@@ -123,6 +124,7 @@ async def migrate(
     print(f"{len(profiles)} profiles, {len(jobs)} image URLs")
 
     copied = skipped = absent = 0
+    refused_hosts: set[str] = set()
     failed: list[str] = []
     limit = asyncio.Semaphore(workers)
 
@@ -138,6 +140,11 @@ async def migrate(
         ]
         to_copy = [kind for kind, action in pending if action is AssetAction.COPY]
         skipped += sum(1 for _, action in pending if action is AssetAction.SKIP)
+        refused_hosts.update(
+            host_of(profile.url_for(kind))
+            for kind, action in pending
+            if action is AssetAction.REFUSE
+        )
 
         if not to_copy:
             continue
@@ -169,7 +176,13 @@ async def migrate(
                     "not take it — that object is unreferenced"
                 )
 
-    report = AssetReport(copied=copied, skipped=skipped, absent=absent, failed=tuple(failed))
+    report = AssetReport(
+        refused_hosts=tuple(sorted(refused_hosts)),
+        copied=copied,
+        skipped=skipped,
+        absent=absent,
+        failed=tuple(failed),
+    )
     print(("\ndry run — nothing fetched or written\n" if dry_run else "\n") + report.summary())
     for line in report.failures():
         print(line, file=sys.stderr)

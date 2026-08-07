@@ -44,6 +44,10 @@ class AssetAction(StrEnum):
     SKIP = "skip"
     #: Hosted elsewhere; fetch it and put it somewhere we own.
     COPY = "copy"
+    #: Hosted somewhere we do not recognise. Not fetched, and reported by host so
+    #: a legitimate source can be added deliberately rather than discovered by a
+    #: request leaving the network.
+    REFUSE = "refuse"
 
 
 # Magic bytes, in the order they must be tested. `imghdr` was removed in Python
@@ -125,11 +129,62 @@ def is_ours(url: str, storage_host: str) -> bool:
     return bool(parsed.netloc) and parsed.netloc.lower() == storage_host.lower()
 
 
+# Hosts this migration will fetch from. Exact matches, plus suffixes for the two
+# providers that vary the subdomain.
+#
+# **Every legacy image has one of two origins**, and both are closed sets: a file
+# uploaded into Bubble, or an avatar an OAuth provider gave us at sign-up. Nobody
+# could type a URL, so an address outside this list is not a source we have — it
+# is a value nobody expected, and fetching it is how a migration reaches an
+# address the person running it never chose.
+FETCHABLE_HOSTS: frozenset[str] = frozenset({"app.edufurther.org"})
+
+#: Matched on a dot boundary, so ``evil-cdn.bubble.io.attacker.test`` does not pass.
+FETCHABLE_SUFFIXES: tuple[str, ...] = (
+    ".cdn.bubble.io",  # Bubble uploads; the subdomain is a per-application hash
+    ".googleusercontent.com",  # Google avatars — lh3 through lh6
+    ".licdn.com",  # LinkedIn avatars
+)
+
+
+def is_fetchable(url: str) -> bool:
+    """May this migration make a request to this address?
+
+    Separate from ``is_ours`` on purpose: that one asks "is this already
+    migrated", and answering it does not license a network call. An allowlist is
+    the only form that works here — a denylist of internal ranges is defeated by
+    a redirect, by DNS, and by every address nobody thought of.
+    """
+    if not url:
+        return False
+    parsed = urlparse(url if "//" in url else f"https://{url}")
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = parsed.hostname  # `hostname` strips port and credentials; `netloc` does not
+    if not host:
+        return False
+    host = host.lower()
+    return host in FETCHABLE_HOSTS or host.endswith(FETCHABLE_SUFFIXES)
+
+
+def host_of(url: str | None) -> str:
+    """The host, for reporting a refusal without echoing the whole address.
+
+    A URL from an unexpected source may carry a path or query nobody should paste
+    into a terminal or a ticket. The host is the part a decision is made about.
+    """
+    if not url:
+        return "<no host>"
+    return (urlparse(url if "//" in url else f"https://{url}").hostname or "<no host>").lower()
+
+
 def decide(url: str | None, storage_host: str) -> AssetAction | None:
     """What to do about one image. ``None`` when there is no image at all."""
     if not url or not url.strip():
         return None
-    return AssetAction.SKIP if is_ours(url, storage_host) else AssetAction.COPY
+    if is_ours(url, storage_host):
+        return AssetAction.SKIP
+    return AssetAction.COPY if is_fetchable(url) else AssetAction.REFUSE
 
 
 def digest(payload: bytes) -> str:
@@ -168,6 +223,10 @@ class AssetReport:
     skipped: int = 0
     absent: int = 0
     failed: tuple[str, ...] = ()
+    #: Hosts the run declined to fetch from, deduplicated. Hosts rather than
+    #: URLs: the next action is to decide whether a *source* is legitimate,
+    #: and one line per user would bury that under repetition.
+    refused_hosts: tuple[str, ...] = ()
 
     def summary(self) -> str:
         """The counts, for stdout. Every asset lands in exactly one of these."""
@@ -177,9 +236,14 @@ class AssetReport:
                 f"skipped {self.skipped} (already ours)",
                 f"absent  {self.absent} (no image, or the source would not serve it)",
                 f"failed  {len(self.failed)}",
+                f"refused {len(self.refused_hosts)} unrecognised host(s)",
             ]
         )
 
     def failures(self) -> list[str]:
         """One line per failure, for stderr — matching the other migration CLIs."""
-        return [f"FAILED {failure}" for failure in self.failed]
+        lines = [f"FAILED {failure}" for failure in self.failed]
+        # Refusals are not failures: nothing broke, and the run is still correct.
+        # They are on the same stream because both need somebody to look.
+        lines += [f"REFUSED unrecognised host {host}" for host in self.refused_hosts]
+        return lines
