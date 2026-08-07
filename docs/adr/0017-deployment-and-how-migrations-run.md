@@ -4,7 +4,7 @@ Date: 2026-08-06
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -176,10 +176,11 @@ runs alembic".
 - **When is the Railway exit rehearsed once?** This is the real form of decision
   #13's requirement, and the only thing that converts the fallback from an
   intention into a plan. It needs an afternoon, not a file.
-- **Who may dispatch the migration workflow**, and does the production
-  environment require a second approver? GitHub environments support required
-  reviewers; whether the cutover wants that gate or would be slowed by it is a
-  judgement nobody has made.
+- **A second approver on `production` is deferred, not declined.** GitHub
+  environments support required reviewers. With one operator the gate is friction
+  today and protection during the freeze, so it is **a pre-cutover task**: set it
+  before the rehearsal, not after the first mistake. Recorded here because a
+  deferral nobody wrote down is indistinguishable from a decision not to.
 - **Where the production DSN lives**, given the tension named in Consequences.
 - **Does the deployed application need `migrations/` at all?** FastAPI Cloud
   builds from source, so the chain ships whether or not anything runs it. If

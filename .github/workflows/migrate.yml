@@ -1,0 +1,85 @@
+name: Migrate
+
+# Applies the Alembic chain to a database, on request and never otherwise.
+#
+# WHY THIS EXISTS RATHER THAN A PLATFORM RELEASE STEP (ADR 0017). FastAPI Cloud
+# has no hook between build and start, so it cannot run a migration at all. But
+# the reason this is a workflow rather than a platform feature is that it is
+# **independent of who serves traffic**: moving hosts changes nothing here, which
+# is what keeps the exit from any one platform cheap.
+#
+# The database is Supabase, reachable over the network, so this runs on a GitHub
+# runner and connects directly. It never touches the serving platform.
+#
+# NOT AUTOMATIC, DELIBERATELY. A schema change that lands without anybody
+# choosing the moment is how a lock queue meets a traffic peak. `workflow_dispatch`
+# is the only trigger; there is no `push`, and adding one would remove the single
+# property this design is built around.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which environment's DATABASE_URL to migrate
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  # Read-only. This job changes a database, never the repository.
+  contents: read
+
+concurrency:
+  # Two `upgrade head` runs against one database is the failure this prevents.
+  # Not cancelled in progress: interrupting a migration mid-transaction is worse
+  # than letting it finish.
+  group: migrate-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: alembic upgrade head (${{ inputs.target }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # A branch's migration chain is not the one production should receive. The
+      # check is here rather than only in the environment's branch rules because
+      # it is then version-controlled and reviewable — the console setting is
+      # worth adding too, but nobody can see it in a diff.
+      - name: Refuse production from a non-main ref
+        if: inputs.target == 'production' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::production may only be migrated from main; this ref is ${{ github.ref }}"
+          exit 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      # Before and after, so the run record shows which revision it moved from
+      # and which it arrived at. That pair is the audit trail — a run that says
+      # only "succeeded" cannot tell you whether it did anything.
+      - name: Revision before
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: uv run alembic current
+
+      - name: Upgrade to head
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: uv run alembic upgrade head
+
+      - name: Revision after
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: uv run alembic current
