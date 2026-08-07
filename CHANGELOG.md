@@ -115,12 +115,12 @@ released. A tag with no matching section here fails the release job.
   **one** vocabulary used by both sides, not two unmapped ones — both columns
   store the display name as text at selection time, so the mentee side is six
   parents and the mentor side five parents plus five children and renames.
-  Seeding the parents is what makes matching work at all. Settled decision 52
+  Seeding the parents is what makes matching work at all. Settled decision 53
   records why the table is closed and what re-opening it would cost.
 - **`scholarship_programs` seeded with ten curated programmes**, so
   suggest-before-create has something to match against from day one; `funding_type`
-  and `degree_levels` are left empty deliberately. Settled decisions 53 (model
-  module layout and its split threshold) and 54 (the fail-open `status` default,
+  and `degree_levels` are left empty deliberately. Settled decisions 54 (model
+  module layout and its split threshold) and 55 (the fail-open `status` default,
   and the obligation it puts on every write path until admin curation ships).
 - Two `failure-modes.md` rows: a text snapshot of a controlled vocabulary is a log
   of past UI states rather than a vocabulary, and a migration rewritten under an
