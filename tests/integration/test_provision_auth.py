@@ -373,7 +373,8 @@ async def test_verify_catches_an_auth_id_supabase_does_not_have(
     provision_script: ModuleType,
     fake_supabase: FakeSupabaseFactory,
 ) -> None:
-    """ADR 0014 names this as its weakest point. A user whose Supabase account was
+    """ADR 0014 names this as its weakest point, and ADR 0018 §3 closes the half of
+    it that points from us to the provider. A user whose Supabase account was
     deleted looks entirely normal here and cannot log in; without this the first
     report is a support ticket."""
     supabase = fake_supabase()

@@ -5,11 +5,10 @@ rows, whether to create an account, link one that already exists, or leave the
 row alone. That decision is pure, so it lives here and is tested without a
 Supabase project or a database.
 
-**Eager provisioning, decided in this unit.** ADR 0014 left it open between
-provisioning everything before cutover and linking lazily at each first login.
-Eager wins on one argument: it is the only version you can prove works *before*
-the freeze. Lazy surfaces a linking defect one user at a time, after go-live,
-which is the worst moment to discover it.
+**Provisioning is eager, and that is ADR 0018's decision, not this module's.**
+The one-line version: eager is the only variant you can prove works *before* the
+freeze. The argument, the rejected alternatives and what recovers a half-finished
+run all live in the record.
 """
 
 from __future__ import annotations

@@ -18,6 +18,9 @@ being unable to and the strongest one available.
 ``email_confirm=True`` marks the address confirmed without a round trip. These
 users verified their email in Bubble years ago; asking again would be asking
 them to re-prove something we already migrated.
+
+That silence is a product decision rather than an implementation detail — ADR
+0018 §4 records why 1,200 people are given accounts without being told.
 """
 
 from __future__ import annotations
@@ -243,6 +246,10 @@ class SupabaseAdminClient:
         This is what ``--verify`` uses to close the gap ADR 0014 names as its
         weakest point: nothing else checks that an ``auth_id`` we stored still
         refers to a real account.
+
+        ADR 0018 §3 closes that gap in **one direction only** — ours to the
+        provider. An account the provider holds that no live row references is
+        still invisible.
         """
         response = self._send(
             lambda: self._client.get(

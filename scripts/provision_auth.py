@@ -16,13 +16,13 @@
     # the bootstrap grant, and every one after it
     uv run python scripts/provision_auth.py --grant-admin --email a@b.com --role super_admin
 
-**Provisioning is eager.** ADR 0014 left it open between provisioning everything
-before cutover and linking lazily at each first login; ``domain/provisioning.py``
-records why eager won. The short version: eager is the only version you can prove
-works *before* the freeze.
+**Provisioning is eager** (ADR 0018, closing the question ADR 0014 left open).
+The short version: eager is the only variant you can prove works *before* the
+freeze — it runs end to end against a rehearsal database and reports a count.
 
-**Every mode is idempotent, and that is the recovery plan.** There is no undo for
-creating 1,200 auth accounts, so instead of a rollback, a failed run is re-run.
+**Every mode is idempotent, and that is the recovery plan** (ADR 0018 §2). There
+is no undo for creating 1,200 auth accounts, so instead of a rollback, a failed
+run is re-run.
 A user already linked costs zero API calls the second time; an account created by
 a run that died before recording it is found by address and linked. Nothing here
 retries a create by itself for the same reason — see ``_send`` in the adapter.
@@ -176,6 +176,10 @@ async def verify(store: ProvisioningStore, client: SupabaseAdminClient) -> int:
     systems still agree. A user whose Supabase account was deleted looks perfectly
     normal in our database and cannot log in, and the first report of it is a
     support ticket.
+
+    **This covers `users` -> Supabase and not the reverse** (ADR 0018 §3). An auth
+    account created by a `--create` run that died before its `INSERT` is invisible
+    here, and is recovered only by re-running `--create` for the same address.
     """
     rows = await store.linked()
     print(f"{len(rows)} linked users")

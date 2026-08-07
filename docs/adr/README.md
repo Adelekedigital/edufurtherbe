@@ -21,10 +21,11 @@ answer is a new record that supersedes the old one, not an edit.
 | [0011](0011-alembic-is-the-migration-chain.md) | Alembic is the migration chain; the package DDL is its specification | Accepted |
 | [0012](0012-google-oauth-scopes-and-client-split.md) | Google OAuth — non-sensitive scopes, and one Cloud project per purpose | Proposed |
 | [0013](0013-foreign-key-deletion-policy-for-user-owned-rows.md) | Foreign-key deletion policy for user-owned rows | Accepted |
-| [0014](0014-our-own-user-id-with-supabase-auth-as-a-column.md) | `users.id` is ours; the Supabase auth id is a column | Accepted |
+| [0014](0014-our-own-user-id-with-supabase-auth-as-a-column.md) | `users.id` is ours; the Supabase auth id is a column | Accepted — provisioning and reconciliation answered by 0018 |
 | [0015](0015-every-table-has-a-surrogate-primary-key.md) | Every table has a generated surrogate primary key | Accepted |
 | [0016](0016-api-contract-foundations.md) | API contract foundations — Problem Details, cursor pagination, normalisation at the boundary | Accepted |
 | [0017](0017-deployment-and-how-migrations-run.md) | Deployment — no Dockerfile, and migrations from a dispatched workflow | Proposed |
+| [0018](0018-eager-auth-provisioning-and-how-it-recovers.md) | Auth provisioning is eager, idempotent, and silent | Accepted |
 
 ## Conventions
 
