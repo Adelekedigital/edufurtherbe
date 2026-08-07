@@ -40,12 +40,8 @@ from app.domain.enums import AdminRole, PrimaryRole
 from app.domain.provisioning import Candidate
 from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 from app.infra.db.triggers import timestamps_from_source
-
-# The one representation of "this user still exists". An expression object, so it
-# is reused rather than retyped, and so a statement that omits it is missing a
-# name rather than missing a substring.
-LIVE = User.deleted_at.is_(None)
 
 _IDENTITY = (User.id, User.email, User.auth_id)
 
