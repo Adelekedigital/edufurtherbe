@@ -143,6 +143,15 @@ disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repository root, so `from scripts import ...` resolves.
+#
+# It resolved before only as a side effect: `alembic.ini` sets
+# `prepend_sys_path = .`, so any test that ran a migration first left the root on
+# sys.path for whatever came after. Tests importing `scripts` therefore passed in
+# a full run and failed in isolation — order dependence that `-p no:randomly`
+# hides and a single-test invocation exposes. `scripts/` stays a non-package on
+# purpose; this makes the path explicit instead of inherited.
+pythonpath = ["."]
 addopts = "-q --strict-markers --strict-config"
 # Explicit, not "auto". Auto mode collects every async def as a test, including
 # ones that were never meant to be, and the failure is a silent skip rather than

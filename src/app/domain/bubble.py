@@ -32,6 +32,40 @@ first five were found and is exactly what missed the sixth.
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, tzinfo
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
+
+#: The zone the Data-tab export renders in — **measured, not assumed**. User
+#: ``1701974206179x877854702892984200`` reads ``Dec 7, 2023 1:36 pm`` in the
+#: export and ``2023-12-07T18:36:46.179Z`` from the API.
+#:
+#: It lives here, beside ``_EXPORT_FORMAT``, because it is the same kind of fact:
+#: a property of the Bubble application rather than of any one script. It was
+#: previously written out in both ``extract_bubble.py`` and ``load_identity.py``,
+#: kept honest by a test comparing those two — and a third script would have been
+#: a copy that test did not cover. The comment justifying the duplication named
+#: the real obstacle exactly, that ``scripts/`` is not a package and a
+#: cross-script import resolves only when the repository root happens to be on
+#: ``sys.path``; the answer was to put the constant somewhere every layer can
+#: already reach.
+EXPORT_TIMEZONE = ZoneInfo("America/New_York")
+
+# The keys a canonical record carries, named once.
+#
+# Both adapters rename their own fields onto these — the export says
+# `Creation Date`, the API says `Created Date`, and the canonical name is a third
+# thing neither source uses, so a transform cannot accidentally depend on one of
+# them. That was the fix for the sixth source difference, which refused all 43
+# records on the first real dry run.
+#
+# **They are constants because the name was retyped instead.** `modified_at` was
+# hand-written as `"updated_at"` in four places in the M2 transform — matching
+# the *column* it feeds rather than the key it reads — and every one produced a
+# silent `None` that surfaced as a NOT NULL violation at load time. The literal
+# is the same shape as the column name it is not, which is precisely why the eye
+# slides over it. A wrong constant is a `NameError`; a wrong literal is a null.
+BUBBLE_ID = "bubble_id"
+CREATED_AT = "created_at"
+MODIFIED_AT = "modified_at"
 
 # Dropped before a record is written anywhere.
 #

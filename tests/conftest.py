@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import asyncpg
 import httpx
@@ -215,6 +216,35 @@ async def add_user(
         {"email": email, "slug": slug, "deleted_at": deleted_at},
     )
     return uuid.UUID(str(created.scalar_one()))
+
+
+# --------------------------------------------------------------------------
+# One canonical Bubble user record, for every suite that needs one
+#
+# Second consumer, so it moves here — the same reason `add_user` did. A private
+# copy would drift on exactly the fields a transform reads, and the divergence
+# would look like a difference in the code under test.
+# --------------------------------------------------------------------------
+
+USER_ID = "1701974206179x877854702892984200"
+PROFILE_ID = "1761272910139x746213933324959700"
+
+
+def user(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "bubble_id": USER_ID,
+        "email": "sakiratu@example.com",
+        "👥Role": "Mentor",
+        "UserTimezonID": "Africa/Lagos",
+        "created_at": "2023-12-07T18:36:46.179Z",
+        "modified_at": "2025-11-06T11:52:41.383Z",
+        "User-last-onboarding-step": "5",
+        "registration completed ": "2023-12-07T18:38:28.221Z",
+        "👤Personal Info": PROFILE_ID,
+        "Registration format": "Email",
+        "provider_identities": {},
+    }
+    return base | overrides
 
 
 # --------------------------------------------------------------------------

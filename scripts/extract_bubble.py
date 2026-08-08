@@ -28,12 +28,11 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.core.config import get_settings
-from app.domain.bubble import REDACTED_FIELDS
+from app.domain.bubble import EXPORT_TIMEZONE, REDACTED_FIELDS
 from app.infra.clients.bubble import BubbleApiSource, BubbleSourceError, JsonExportSource
 
 DEFAULT_OUTPUT = Path("data/bubble")
@@ -41,7 +40,6 @@ DEFAULT_OUTPUT = Path("data/bubble")
 # Established by measurement, not assumption: the same user reads
 # `Dec 7, 2023 1:36 pm` in the export and `2023-12-07T18:36:46.179Z` from the
 # API, and 13:36 EST is 18:36 UTC.
-EXPORT_TIMEZONE = ZoneInfo("America/New_York")
 
 
 def summarise(thing: str, records: list[dict[str, Any]]) -> None:

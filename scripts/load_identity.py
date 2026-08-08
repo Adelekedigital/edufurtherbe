@@ -20,11 +20,11 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import get_settings
+from app.domain.bubble import EXPORT_TIMEZONE
 from app.domain.resolve import COUNTRY_ALIASES, LANGUAGE_ALIASES, resolve_names
 from app.domain.transform import IdentityPlan, plan_identity
 from app.infra.clients.bubble import JsonExportSource
@@ -32,12 +32,6 @@ from app.infra.db.engine import resolve_async_dsn
 from app.infra.etl.loader import UserLoader
 from app.infra.etl.reconcile import reconcile_users
 from app.infra.etl.satellites import SatelliteLoader, reference_maps, user_id_map
-
-# Duplicated rather than imported from `scripts/extract_bubble.py`: `scripts/` is
-# not a package, so a cross-script import resolves only when the repository root
-# happens to be on sys.path — true under pytest, false under
-# `uv run python scripts/...`. A test asserts the two stay equal.
-EXPORT_TIMEZONE = ZoneInfo("America/New_York")
 
 
 def describe(plan: IdentityPlan) -> None:
