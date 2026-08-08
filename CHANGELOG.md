@@ -197,10 +197,19 @@ released. A tag with no matching section here fails the release job.
   second cost a `NOT NULL` violation on the first real load, after `modified_at`
   was hand-typed as `"updated_at"` in four places, matching the column it feeds
   rather than the key it reads.
-- Two `failure-modes.md` rows: a uniform dataset can agree unanimously with a
+- Three `failure-modes.md` rows: a uniform dataset can agree unanimously with a
   broken implementation (every dev date is midnight, which hid a UTC conversion
-  moving evening dates forward a day), and a key shared by a producer and its
-  consumers belongs in the layer that defines the contract.
+  moving evening dates forward a day); a key shared by a producer and its
+  consumers belongs in the layer that defines the contract; and every test
+  importing `scripts` passed only because `alembic.ini`'s `prepend_sys_path`
+  had left the repository root on `sys.path` — they failed run alone. Fixed with
+  an explicit `pythonpath` in the pytest config, and the suite now passes with
+  random ordering enabled rather than suppressed.
+- Tests for what `load_profiles.py` **surfaces**, not only what it computes.
+  Unattached rows, `Creator` disagreements and nulled award years were each
+  covered by a transform test, and no transform test can tell whether a value
+  ever reaches a screen — the same shape as a column that reads as operational
+  and is implemented by nothing. `scripts/` is checked by ruff alone.
 
 ### Changed
 
