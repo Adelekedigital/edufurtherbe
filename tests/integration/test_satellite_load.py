@@ -13,33 +13,15 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from app.domain import bubble
 from app.domain.resolve import COUNTRY_ALIASES, LANGUAGE_ALIASES, resolve_names
 from app.domain.transform import TransformError, plan_identity, to_admin_grant, to_identities
 from app.infra.db.engine import to_async_dsn
 from app.infra.etl.loader import UserLoader
 from app.infra.etl.satellites import SatelliteLoader, reference_maps, user_id_map
+from conftest import PROFILE_ID, user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
-
-USER_ID = "1701974206179x877854702892984200"
-PROFILE_ID = "1761272910139x746213933324959700"
-
-
-def user(**overrides: Any) -> dict[str, Any]:
-    base: dict[str, Any] = {
-        "bubble_id": USER_ID,
-        "email": "sakiratu@example.com",
-        "👥Role": "Mentor",
-        "UserTimezonID": "Africa/Lagos",
-        "created_at": "2023-12-07T18:36:46.179Z",
-        "modified_at": "2025-11-06T11:52:41.383Z",
-        "User-last-onboarding-step": "5",
-        "registration completed ": "2023-12-07T18:38:28.221Z",
-        "👤Personal Info": PROFILE_ID,
-        "Registration format": "Email",
-        "provider_identities": {},
-    }
-    return base | overrides
 
 
 def profile(**overrides: Any) -> dict[str, Any]:
@@ -323,13 +305,24 @@ async def test_a_profile_referencing_an_unknown_user_raises(db_engine: AsyncEngi
             )
 
 
-def test_the_export_timezone_constant_matches_the_extractor() -> None:
-    """Two scripts hold it because ``scripts/`` is not a package. If they drift,
-    the same export parses to two different instants depending on which script
-    read it."""
-    from scripts import extract_bubble, load_identity
+def test_every_script_uses_the_one_export_timezone() -> None:
+    """One definition, in ``domain/bubble.py``, and the scripts import it.
 
-    assert str(extract_bubble.EXPORT_TIMEZONE) == str(load_identity.EXPORT_TIMEZONE)
+    This used to compare two script-level copies, which was the best available
+    guard while both scripts defined their own — and it would not have covered a
+    third. The obstacle their comment named was real: ``scripts/`` is not a
+    package, so a cross-script import resolves only when the repository root
+    happens to be on ``sys.path``. The answer was a layer every script can
+    already reach, not a better comparison.
+
+    Asserted with ``is`` rather than by value: a script that redefined the zone
+    locally to the same string would pass an equality check while reintroducing
+    exactly the copy this removes.
+    """
+    from scripts import extract_bubble, load_identity, load_profiles
+
+    for module in (extract_bubble, load_identity, load_profiles):
+        assert module.EXPORT_TIMEZONE is bubble.EXPORT_TIMEZONE, module.__name__
 
 
 async def test_an_unresolved_name_makes_the_run_exit_two(

@@ -172,6 +172,35 @@ released. A tag with no matching section here fails the release job.
   column signature rather than by name, so the whole gate stayed green. The name
   is shortened and the guard walks `Base.metadata`. Three further names in this
   schema sit at 58 and 59 characters, so the margin was one long table name.
+- **M2's profile transform and loader** — `domain/transform/profiles.py`,
+  `infra/etl/profiles.py` and `scripts/load_profiles.py`, filling all seven
+  profile tables from a legacy snapshot and reconciling them. `domain/transform`
+  becomes a package (`identity` + `profiles`, everything re-exported so no import
+  changed), and `infra/etl/cli.py` holds what two loader scripts now share.
+  Verified against the dev export end to end: 12 mentor profiles, 21 education
+  entries, 13 goals, 10 awards, run twice with identical counts and no
+  `updated_at` touched by the importer.
+- **Settled decision 60** — a migrated row is attributed by the **user-side
+  link**, never by `Creator`; `Creator` is a cross-check whose disagreements are
+  reported, and the sole path only for `Scholarship-Awards`, which has no
+  user-side link at all. `Creator` was re-exported as a Bubble user id rather
+  than an email, which makes the comparison exact and removes the ambiguity a
+  duplicate address would cause.
+- **Settled decision 61** — institution matching is a separate, re-runnable
+  pass; `education_entries` loads with `institution_id` null. Measured against
+  real school names, a genuine typo scores **0.773** and two different Nigerian
+  federal universities score **0.750**, so no similarity threshold separates
+  them: exact matches auto-link and the rest are suggestions for a human.
+- `EXPORT_TIMEZONE` and the canonical record's key names move to
+  `domain/bubble.py`. The first was written out in two scripts and pinned by a
+  test comparing exactly those two — a third would not have been covered. The
+  second cost a `NOT NULL` violation on the first real load, after `modified_at`
+  was hand-typed as `"updated_at"` in four places, matching the column it feeds
+  rather than the key it reads.
+- Two `failure-modes.md` rows: a uniform dataset can agree unanimously with a
+  broken implementation (every dev date is midnight, which hid a UTC conversion
+  moving evening dates forward a day), and a key shared by a producer and its
+  consumers belongs in the layer that defines the contract.
 
 ### Changed
 

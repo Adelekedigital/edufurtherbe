@@ -20,11 +20,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Protocol
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.transform import UserRow
+from app.domain.transform.profiles import ProfilePlan
+from app.infra.etl.profiles import ProfileCounts
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,4 +120,169 @@ async def reconcile_users(connection: AsyncConnection, rows: Sequence[UserRow]) 
         null_email=null_email,
         null_first_name=null_first_name,
         problems=problems,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class TableCheck:
+    """One table's verdict."""
+
+    table: str
+    expected: int
+    loaded: int
+    missing: tuple[str, ...] = ()
+    wrong_timestamps: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.missing and not self.wrong_timestamps and self.expected == self.loaded
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileReconciliation:
+    """Every profile table, against what was meant to land in it.
+
+    ``empty`` is reported rather than left to be read off a zero. A dev snapshot
+    legitimately writes no ``mentee_goal_countries`` — ``Country Goal`` is blank
+    on every row — and a reconciliation that stays silent about it invites the
+    reader to treat the whole run as covered.
+    """
+
+    checks: tuple[TableCheck, ...]
+    empty: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return all(check.ok for check in self.checks)
+
+    def report(self) -> str:
+        lines = []
+        for check in self.checks:
+            verdict = "ok" if check.ok else "FAIL"
+            lines.append(
+                f"{verdict:4} {check.table:26} expected {check.expected:4}  "
+                f"loaded {check.loaded:4}  missing {len(check.missing):3}  "
+                f"stamped-by-importer {len(check.wrong_timestamps):3}"
+            )
+        if self.empty:
+            lines.append(
+                f"     wrote no rows to: {', '.join(self.empty)} (verify this is expected)"
+            )
+        return "\n".join(lines)
+
+
+#: The four tables carrying their own Bubble id, and therefore their own source
+#: timestamps, each with its query written out.
+#:
+#: Literal rather than interpolated. Four ``SELECT``s spelled in full is more
+#: text than one f-string over a tuple of names, and it is the house style for a
+#: reason: bandit flags the f-string, the honest answers are a validated
+#: allow-list or a suppression, and this needs neither. The three junctions are
+#: derived from list columns of a parent Thing (settled decision #27) — no
+#: anchor, and no source timestamp to preserve — so a count is all there is.
+STAMPED = (
+    "SELECT legacy_bubble_id, created_at, updated_at FROM {} WHERE legacy_bubble_id IS NOT NULL"
+)
+ANCHORED_QUERIES: dict[str, str] = {
+    "mentor_profiles": STAMPED.format("mentor_profiles"),
+    "mentee_goals": STAMPED.format("mentee_goals"),
+    "education_entries": STAMPED.format("education_entries"),
+    "user_awards": STAMPED.format("user_awards"),
+}
+
+JUNCTION_QUERIES: dict[str, str] = {
+    "mentor_service_offerings": "SELECT count(*) FROM mentor_service_offerings",
+    "mentee_goal_countries": "SELECT count(*) FROM mentee_goal_countries",
+    "mentee_goal_needs": "SELECT count(*) FROM mentee_goal_needs",
+}
+
+
+class Anchored(Protocol):
+    """A row that carries its own Bubble id and its own source timestamps.
+
+    Structural rather than a base class: the four row types are frozen
+    dataclasses in ``domain/``, and giving them a shared ancestor to satisfy a
+    check in ``infra/`` would point the dependency the wrong way.
+
+    Declared as read-only properties, not as attributes. A ``Protocol`` with
+    plain attributes demands they be *settable*, which no frozen dataclass is —
+    so the attribute form rejects all four of the types it was written to
+    describe.
+    """
+
+    @property
+    def legacy_bubble_id(self) -> str: ...
+
+    @property
+    def created_at(self) -> datetime | None: ...
+
+    @property
+    def updated_at(self) -> datetime | None: ...
+
+
+async def reconcile_profiles(
+    connection: AsyncConnection, plan: ProfilePlan, counts: ProfileCounts
+) -> ProfileReconciliation:
+    """Compare each profile table against the rows that were meant to land.
+
+    ``expected`` maps a table to ``{legacy_bubble_id: (created_at, updated_at)}``.
+    Timestamps are compared **to the microsecond**, for the reason
+    ``reconcile_users`` gives: a load that ran with ``trg_set_updated_at`` enabled
+    produces values within a second or two of each other and of ``now()``, so a
+    tolerant comparison passes exactly the failure this exists to catch. Every
+    row present, every count agreeing, and every timestamp quietly rewritten.
+    """
+
+    # Built here rather than by the caller. `scripts/` is a composition root and
+    # may hold no business rule, and "which rows were meant to land in which
+    # table" is exactly that.
+    def stamps(rows: Sequence[Anchored]) -> dict[str, tuple[object, object]]:
+        return {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in rows}
+
+    expected: dict[str, dict[str, tuple[object, object]]] = {
+        "mentor_profiles": stamps(plan.mentors),
+        "mentee_goals": stamps(plan.goals),
+        "education_entries": stamps(plan.education),
+        "user_awards": stamps(plan.awards),
+    }
+    junction_counts = {
+        "mentor_service_offerings": counts.mentor_services,
+        "mentee_goal_countries": counts.goal_countries,
+        "mentee_goal_needs": counts.goal_needs,
+    }
+
+    checks: list[TableCheck] = []
+
+    for table, query in ANCHORED_QUERIES.items():
+        wanted = expected.get(table, {})
+        result = await connection.execute(text(query))
+        loaded = {row.legacy_bubble_id: row for row in result}
+        missing = tuple(sorted(set(wanted) - set(loaded)))
+        wrong = tuple(
+            sorted(
+                key
+                for key, (created, updated) in wanted.items()
+                if key in loaded
+                and (loaded[key].created_at != created or loaded[key].updated_at != updated)
+            )
+        )
+        checks.append(
+            TableCheck(
+                table=table,
+                expected=len(wanted),
+                loaded=len(loaded),
+                missing=missing,
+                wrong_timestamps=wrong,
+            )
+        )
+
+    for table, query in JUNCTION_QUERIES.items():
+        result = await connection.execute(text(query))
+        checks.append(
+            TableCheck(table=table, expected=junction_counts[table], loaded=result.scalar_one())
+        )
+
+    return ProfileReconciliation(
+        checks=tuple(checks),
+        empty=tuple(check.table for check in checks if check.loaded == 0),
     )

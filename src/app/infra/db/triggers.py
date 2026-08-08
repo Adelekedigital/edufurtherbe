@@ -10,8 +10,8 @@ the writer's clock, with every row-count and null-rate check still passing.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -57,3 +57,26 @@ async def timestamps_from_source(connection: AsyncConnection, table: str) -> Asy
     # No `finally`: on failure the rollback restores the trigger, and re-enabling
     # here would raise inside the aborted transaction and mask the real error.
     await connection.execute(text(f"ALTER TABLE {table} ENABLE TRIGGER {TRIGGER}"))
+
+
+@asynccontextmanager
+async def timestamps_from_source_across(
+    connection: AsyncConnection, tables: Sequence[str]
+) -> AsyncIterator[None]:
+    """The same, for a loader that writes several tables in one transaction.
+
+    A phase that writes seven tables needs the trigger held off on all seven, and
+    the shape that gets written otherwise is a loop in the caller — which lives in
+    ``scripts/``, where no gate can see it, and which is one ``break`` away from
+    covering six. Here it is one call and the count is the argument.
+
+    ``AsyncExitStack`` rather than nesting, because the number of tables is data.
+    Every guarantee of the single-table version carries: the disable is
+    transactional, a failure rolls it back, and re-enabling happens on the
+    success path only so an aborted transaction cannot mask the real error with
+    ``InFailedSQLTransactionError``.
+    """
+    async with AsyncExitStack() as stack:
+        for table in tables:
+            await stack.enter_async_context(timestamps_from_source(connection, table))
+        yield

@@ -20,7 +20,7 @@ from datetime import datetime, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.domain.bubble import normalise_list, parse_timestamp
+from app.domain.bubble import CREATED_AT, MODIFIED_AT, normalise_list, parse_timestamp
 from app.domain.enums import AdminRole, AuthProvider, PrimaryRole
 
 # Legacy `👥Role` values. Written out rather than derived by lowercasing,
@@ -129,8 +129,8 @@ def to_user(record: dict[str, Any], *, export_timezone: tzinfo | None = None) ->
     if role_raw not in PRIMARY_ROLES:
         raise TransformError(bubble_id, f"unmapped role {role_raw!r}")
 
-    created = _timestamp(record, "created_at", assume=export_timezone, bubble_id=bubble_id)
-    modified = _timestamp(record, "modified_at", assume=export_timezone, bubble_id=bubble_id)
+    created = _timestamp(record, CREATED_AT, assume=export_timezone, bubble_id=bubble_id)
+    modified = _timestamp(record, MODIFIED_AT, assume=export_timezone, bubble_id=bubble_id)
     if created is None or modified is None:
         # Canonical names, set by the reader from whichever key the source
         # used — `Creation Date` in the export, `Created Date` in the API.
@@ -315,8 +315,8 @@ def to_profile(
     if not bubble_id:
         raise TransformError(user_bubble_id, "profile has no bubble_id")
 
-    created = _timestamp(profile, "created_at", assume=export_timezone, bubble_id=bubble_id)
-    modified = _timestamp(profile, "modified_at", assume=export_timezone, bubble_id=bubble_id)
+    created = _timestamp(profile, CREATED_AT, assume=export_timezone, bubble_id=bubble_id)
+    modified = _timestamp(profile, MODIFIED_AT, assume=export_timezone, bubble_id=bubble_id)
     if created is None or modified is None:
         raise TransformError(bubble_id, "created_at and modified_at are both required")
 

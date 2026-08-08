@@ -7,6 +7,7 @@ raises ``RuntimeError`` if a loop is already running.
 
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -241,3 +242,80 @@ def test_upgrade_downgrade_upgrade_is_clean(
 
     assert function_count(disposable_database) == len(FUNCTION_NAMES)
     assert enum_type_names(disposable_database) == sorted(ENUM_TYPE_NAMES)
+
+
+def schema_identifiers(url: str) -> list[str]:
+    """Every constraint, index and enum type name the built schema holds."""
+
+    async def _run() -> list[str]:
+        conn = await asyncpg.connect(url)
+        try:
+            rows = await conn.fetch(
+                "SELECT c.conname AS name FROM pg_constraint c "
+                "JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public' "
+                "UNION SELECT indexname FROM pg_indexes WHERE schemaname = 'public' "
+                "UNION SELECT t.typname FROM pg_type t "
+                "JOIN pg_namespace tn ON tn.oid = t.typnamespace "
+                "WHERE t.typtype = 'e' AND tn.nspname = 'public'"
+            )
+            return sorted(row["name"] for row in rows)
+        finally:
+            await conn.close()
+
+    return asyncio.run(_run())
+
+
+#: Names in the database that legitimately appear nowhere in the source tree.
+#:
+#: ``alembic_version_pkc`` is alembic's own. ``ck_admin_users_…`` is the naming
+#: convention expanding a short declared name, which is what the convention is
+#: for. Both are exceptions to state, not to discover — and the list is two
+#: entries precisely because everything else is written down somewhere.
+UNSOURCED_IDENTIFIERS = frozenset(
+    {"alembic_version_pkc", "ck_admin_users_revoker_implies_revocation"}
+)
+
+SOURCE_ROOTS = (Path("src"), Path("migrations"))
+
+
+def test_every_schema_identifier_appears_verbatim_in_source(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """Catches a **silently truncated** identifier, from any source.
+
+    PostgreSQL's limit is 63 bytes and SQLAlchemy does not reject a longer name —
+    it truncates and appends a deterministic hash, with no warning and no
+    ``NOTICE``. The database then holds an identifier that appears nowhere in the
+    repository, and the first ``op.drop_constraint`` written against the declared
+    name fails with *constraint does not exist* — handed the wrong name by the
+    very file somebody opened to look it up.
+
+    Nothing else in the gate can see it: **``alembic check`` compares foreign
+    keys by column signature, never by name**, and no other check reads
+    constraint names at all. A 65-character key shipped this way through six
+    green CI checks and a thirteen-way mutation batch, and a reviewer querying
+    ``pg_constraint`` found it.
+
+    ``test_no_declared_identifier_exceeds_the_postgresql_limit`` closes the same
+    hole at declaration time by walking ``Base.metadata``. This one is wider on
+    purpose: a name written directly into a **migration** and into no model is
+    invisible to that test, and both migrations in M2 hand-write names.
+    """
+    command.upgrade(make_alembic_config(disposable_database), "head")
+
+    source = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for root in SOURCE_ROOTS
+        for path in root.rglob("*.py")
+    )
+
+    missing = [
+        name
+        for name in schema_identifiers(disposable_database)
+        if name not in UNSOURCED_IDENTIFIERS and name not in source
+    ]
+
+    assert missing == [], (
+        "these identifiers exist in the database but appear nowhere in src/ or "
+        f"migrations/ — most likely silently truncated past 63 bytes: {missing}"
+    )
