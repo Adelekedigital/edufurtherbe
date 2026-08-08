@@ -60,6 +60,40 @@ def mapped_classes() -> list[type]:
     return [mapper.class_ for mapper in Base.registry.mappers]
 
 
+# PostgreSQL's NAMEDATALEN is 64, so an identifier may be 63 bytes.
+POSTGRES_IDENTIFIER_LIMIT = 63
+
+
+def test_no_declared_identifier_exceeds_the_postgresql_limit() -> None:
+    """A name too long is **silently** truncated and hashed, not rejected.
+
+    SQLAlchemy shortens any identifier over the dialect limit and appends a
+    deterministic hash — no warning, no ``NOTICE``. ``op.f()`` does not exempt
+    it: that marks a name as already conventioned, not as already short enough.
+
+    Nothing breaks on the day it happens. The constraint exists and is enforced,
+    and ``alembic check`` compares foreign keys by column signature rather than
+    by name, so the whole gate stays green. It breaks later, when a migration
+    calls ``op.drop_constraint`` with the name the source file shows and
+    PostgreSQL answers *constraint does not exist* — and the file somebody reads
+    to find the real name hands them one that was never created.
+
+    Caught in review on the M2 profile tables, where a foreign key declared at
+    65 characters landed as 60 with a hash. The margin is thinner than it looks:
+    several other names in this schema sit at 58 and 59.
+    """
+    too_long: list[str] = []
+    for table in Base.metadata.tables.values():
+        names = [c.name for c in table.constraints if c.name] + [i.name for i in table.indexes]
+        too_long += [str(n) for n in names if len(str(n)) > POSTGRES_IDENTIFIER_LIMIT]
+
+    assert Base.metadata.tables, "no tables registered; this test would inspect nothing"
+    assert not too_long, (
+        "these identifiers exceed PostgreSQL's 63-character limit and will be "
+        f"silently truncated and hashed: {sorted(too_long)}"
+    )
+
+
 def test_the_expected_models_are_registered() -> None:
     """A model that is never imported is invisible to metadata and to autogenerate.
 

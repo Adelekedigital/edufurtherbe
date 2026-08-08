@@ -471,7 +471,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["service_offering_id"],
             ["service_offerings.id"],
-            name=op.f("fk_mentor_service_offerings_service_offering_id_service_offerings"),
+            # Shorter than the convention would render. See the model: the
+            # convention name is 65 characters and PostgreSQL truncates at 63,
+            # silently and with a hash.
+            name=op.f("fk_mentor_service_offerings_offering"),
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_mentor_service_offerings")),

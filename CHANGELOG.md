@@ -164,6 +164,14 @@ released. A tag with no matching section here fails the release job.
 - `add_user` moves from `test_identity_schema.py` to `conftest.py`, now that a
   second schema suite needs it. A private copy that supplied its own `id` would
   keep passing after somebody removed the `uuid_generate_v7()` default.
+- **`test_no_declared_identifier_exceeds_the_postgresql_limit`**, after review
+  found a foreign key whose convention-generated name was 65 characters and
+  which PostgreSQL therefore held under a truncated, hashed name appearing
+  nowhere in the repository. SQLAlchemy shortens silently — no warning, and
+  `op.f()` does not exempt it — while `alembic check` compares foreign keys by
+  column signature rather than by name, so the whole gate stayed green. The name
+  is shortened and the guard walks `Base.metadata`. Three further names in this
+  schema sit at 58 and 59 characters, so the margin was one long table name.
 
 ### Changed
 

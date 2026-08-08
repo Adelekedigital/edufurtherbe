@@ -202,6 +202,20 @@ class MentorProfile(TimestampMixin, Base):
             "unlisted_at",
             postgresql_where=text("listing_status = 'unlisted'"),
         ),
+        # **One direction only, and that is forced rather than lax.** A custom
+        # URL requires the custom venue; the custom venue does **not** require a
+        # URL. The symmetric version —
+        # `(default_meeting_venue = 'custom') = (custom_meeting_url IS NOT NULL)`
+        # — would reject rows this migration has to write: legacy "External
+        # Video Tool" maps to `custom`, and its stored link is residue that we
+        # deliberately drop, so those mentors arrive on `custom` with a null URL.
+        #
+        # The gap that leaves is real and belongs to M3, not to a constraint: a
+        # mentor on `custom` with no URL has no link and no way to auto-create
+        # one, so booking must refuse or fall back rather than produce a session
+        # nobody can join. Recorded here so that is a decision rather than an
+        # oversight.
+        #
         # Bare name; the `ck` convention renders the `ck_mentor_profiles_` prefix.
         CheckConstraint(
             "custom_meeting_url IS NULL OR default_meeting_venue = 'custom'",
@@ -232,8 +246,22 @@ class MentorServiceOffering(TimestampMixin, Base):
     mentor_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("mentor_profiles.user_id", ondelete="CASCADE"), nullable=False
     )
+    # Named by hand, and shorter than the convention would produce. Left to the
+    # convention this renders as
+    # `fk_mentor_service_offerings_service_offering_id_service_offerings` — 65
+    # characters, over PostgreSQL's 63-byte limit, which SQLAlchemy silently
+    # truncates and hashes rather than rejecting. The database would then hold a
+    # name that appears nowhere in this repository, and the first
+    # `op.drop_constraint` written against the declared name would fail.
+    # `test_no_declared_identifier_exceeds_the_postgresql_limit` is the guard.
     service_offering_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("service_offerings.id", ondelete="RESTRICT"), nullable=False
+        Uuid,
+        ForeignKey(
+            "service_offerings.id",
+            ondelete="RESTRICT",
+            name="fk_mentor_service_offerings_offering",
+        ),
+        nullable=False,
     )
 
     __table_args__ = (
