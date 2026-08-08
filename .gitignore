@@ -28,7 +28,12 @@ data/
 exports/
 migration/out/
 *.csv
-*.json
+# Root only. A catalogue snapshot is taken as `--from-file catalogue.json`
+# here; the Bubble exports are covered by the directory rules above. Repo-wide
+# `*.json` also swallowed `.claude/settings.json` and any test fixture, and
+# `git add` refuses those without a word.
+/*.json
+!/.mcp.json
 script-data-dev/
 
 # Tooling leftovers
