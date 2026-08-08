@@ -1,0 +1,84 @@
+name: Sync institutions
+
+# Refreshes the mirrored university catalogue (ADR 0020).
+#
+# WHY A SCHEDULE AT ALL. The upstream catalogue changes roughly every two days —
+# 100 commits over 177 days, measured. A one-off snapshot is wrong within a
+# fortnight, and ADR 0008's objection to mirroring was precisely that "a mirror
+# is wrong the moment the source updates and nothing says when". Weekly bounds
+# that at ~7 days, and `institutions.last_synced_at` is what says when.
+#
+# WHY GITHUB ACTIONS AND NOT A QUEUE VENDOR. `migrate.yml` already reaches the
+# database from a runner, so the mechanism and the credential exist. Settled
+# decision #13 keeps the FastAPI Cloud → Railway exit real by using no
+# platform-native cron; Actions moves with the repository rather than the host,
+# so the exit is untouched and no vendor is added to hold a schedule.
+#
+# WHY IT IS THE SAME SCRIPT. `scripts/sync_institutions.py` is the only
+# implementation, and it is run by hand for an occasional sync. Two
+# implementations of one job drift, and the one nobody invokes by hand is the one
+# that rots unnoticed.
+#
+# SAFE TO RUN REPEATEDLY. The mirror upserts on `domain` and the link only fills
+# an `institution_id` that is still null.
+
+on:
+  schedule:
+    # Mondays, 04:00 UTC — off-peak for an African and European user base, and
+    # early enough in the week that a failure is noticed on a working day.
+    - cron: "0 4 * * 1"
+  # No inputs. There is one environment to sync during the build and migration
+  # phase, so a one-option dropdown would be decoration. `production` returns as
+  # a choice when a production environment exists — not before (decision #21).
+  workflow_dispatch:
+
+permissions:
+  # Read-only. This job changes a database, never the repository.
+  contents: read
+
+concurrency:
+  # Two syncs against one database would race on the same `ON CONFLICT` targets.
+  # Not cancelled in progress: a half-applied mirror is worse than a late one.
+  group: sync-institutions-staging
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: mirror and link (staging)
+    runs-on: ubuntu-latest
+    # Staging only, deliberately. We are still in the build and migration phase
+    # and there is no production environment to hold a `DATABASE_URL` — a
+    # schedule pointed at one that does not exist fails every week, silently
+    # enough that nobody looks.
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      # Reports what it would write and touches nothing. If the upstream shape
+      # has changed, the refusals surface here rather than mid-write.
+      - name: Dry run
+        run: uv run python scripts/sync_institutions.py --dry-run
+
+      # Exit 2 means "mirrored, but some school name matched nothing" — a
+      # condition for a human to look at, not a failed run. The step succeeds
+      # and the log carries the names.
+      - name: Mirror and link
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          uv run python scripts/sync_institutions.py || status=$?
+          if [ "${status:-0}" -eq 1 ]; then
+            echo "::error::the sync refused and wrote nothing"
+            exit 1
+          elif [ "${status:-0}" -eq 2 ]; then
+            echo "::warning::mirrored, but some school names matched nothing — see the log"
+          fi

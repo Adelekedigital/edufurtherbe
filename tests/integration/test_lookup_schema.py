@@ -152,10 +152,13 @@ async def test_seeded_scholarships_carry_no_funding_type_or_degree_levels(
 
 
 async def test_institutions_ships_empty(db_engine: AsyncEngine) -> None:
-    """Populate-on-demand (ADR 0008), so an empty table is correct here.
+    """The catalogue is loaded by a sync, never by a migration (ADR 0020).
 
-    A row lands only when somebody selects a school. Seeding the ~9,000-row
-    hipolabs catalogue is the mirror that record rejects.
+    Still correct after mirroring was adopted, and for a sharper reason than
+    when it was written: 10,257 rows in a migration would make the chain slow,
+    unreplayable and wrong within a fortnight, since the source changes every
+    ~2 days. `scripts/sync_institutions.py` fills the table, which is why a
+    fresh environment starts empty until that runs.
     """
     async with db_engine.connect() as conn:
         result = await conn.execute(text("SELECT count(*) FROM institutions"))

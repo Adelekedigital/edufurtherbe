@@ -57,9 +57,29 @@ class Institution(TimestampMixin, Base):
     # hipolabs rows can never share one. That is the whole deduplication story.
     domain: Mapped[str | None] = mapped_column(Text, unique=True)
 
-    country_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("countries.id", ondelete="RESTRICT"), nullable=False
+    # Nullable, and only for the manual path. A mirrored row always carries a
+    # country — hipolabs supplies `alpha_two_code` on every record. A row a user
+    # created by typing a name we do not hold has none, and an admin supplies it
+    # at review: asking the user for a field the review process exists to fill is
+    # friction on the person, not on the system.
+    country_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("countries.id", ondelete="RESTRICT")
     )
+
+    # When this row was last seen in the upstream catalogue.
+    #
+    # Distinct from `updated_at`, which means "this row's content changed". A
+    # sync stamps every row it saw, with `trg_set_updated_at` held off, so:
+    #
+    #   max(last_synced_at)            -> when the catalogue was last refreshed
+    #   last_synced_at < that maximum  -> upstream no longer carries this row
+    #
+    # Stamping only *changed* rows would leave the maximum frozen through a week
+    # where the source did not move, making "checked, nothing new" and "not
+    # checked in a month" identical — which is precisely the ambiguity ADR 0008
+    # raised against mirroring. Null for a `source='manual'` row, which no sync
+    # ever saw.
+    last_synced_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     # Local aliases hipolabs does not carry. ADR 0008 names this as one of three
     # mechanisms recovering from hipolabs being incomplete for African

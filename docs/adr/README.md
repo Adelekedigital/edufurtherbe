@@ -15,7 +15,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0005](0005-data-platform.md) | Use Supabase for Postgres, auth and storage — as Postgres, not as a backend | Accepted |
 | [0006](0006-messaging-build-vs-buy.md) | Build booking-scoped messaging; keep mentor–mentee conversation on-platform | Accepted |
 | [0007](0007-adopt-the-migration-package-as-the-target-data-model.md) | Adopt the migration package as the target data model | Accepted |
-| [0008](0008-institutions-hipolabs-registry.md) | Institutions — the hipolabs registry, populated on demand | Accepted |
+| [0008](0008-institutions-hipolabs-registry.md) | Institutions — the hipolabs registry, populated on demand | Accepted — storage and autocomplete superseded by 0020 |
 | [0009](0009-first-login-authentication.md) | First-login authentication — Supabase Auth, email code by default, link as a choice | Accepted — point 9 superseded by 0014 |
 | 0010 | Message thread scope — booking-scoped vs standalone | Reserved by 0007 |
 | [0011](0011-alembic-is-the-migration-chain.md) | Alembic is the migration chain; the package DDL is its specification | Accepted |
@@ -27,6 +27,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0017](0017-deployment-and-how-migrations-run.md) | Deployment — no Dockerfile, and migrations from a dispatched workflow | Accepted |
 | [0018](0018-eager-auth-provisioning-and-how-it-recovers.md) | Auth provisioning is eager, idempotent, and silent | Accepted |
 | [0019](0019-profile-images-move-to-supabase-storage.md) | Profile images move to Supabase Storage, keyed on their own content | Accepted |
+| [0020](0020-mirror-the-institution-catalogue.md) | Mirror the institution catalogue, refreshed weekly | Accepted — supersedes part of 0008 |
 
 ## Conventions
 

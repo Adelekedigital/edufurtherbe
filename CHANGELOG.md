@@ -104,8 +104,9 @@ released. A tag with no matching section here fails the release job.
   `service_offerings` and `scholarship_programs` — with the `pg_trgm` extension
   and the `lookup_status` enum. Two are open, with `status` and `merged_into_id`
   for the curation queue ADR 0008 and package D15 require; two are
-  closed vocabularies the product defines. `institutions` ships empty by design,
-  populated on demand. Only `lookup_status` is created — the other six enums in
+  closed vocabularies the product defines. `institutions` ships empty from the
+  migration and is filled by the sync below, never by a seed. Only
+  `lookup_status` is created — the other six enums in
   `02_profiles.sql` arrive with the tables that use them (decision #21). Country
   becomes `country_id uuid` rather than the package's `char(2)`, per ADR 0015, and
   the package's deferred `created_by`/`approved_by` attachments are ordinary
@@ -210,6 +211,63 @@ released. A tag with no matching section here fails the release job.
   covered by a transform test, and no transform test can tell whether a value
   ever reaches a screen — the same shape as a column that reads as operational
   and is implemented by nothing. `scripts/` is checked by ruff alone.
+- **The institution catalogue is mirrored and refreshed weekly** —
+  `domain/institutions.py`, `infra/clients/hipolabs.py`,
+  `infra/etl/institutions.py`, `scripts/sync_institutions.py` and a
+  `sync-institutions.yml` workflow on a Monday cron. The mirror upserts on
+  `domain` and the link fills `education_entries.institution_id` in a separate,
+  re-runnable pass (decision 61). Verified against the real catalogue: 10,257
+  records, 10,250 stored, and 21 of 21 education entries linked; a second sync
+  refreshed every `last_synced_at` and moved zero `updated_at`.
+- **`institutions.last_synced_at`, and `institutions.country_id` becomes
+  nullable.** `last_synced_at` is stamped on every row a sync saw, including
+  unchanged ones, so `max(last_synced_at)` answers how stale the mirror is —
+  which is the objection ADR 0008 raised against mirroring at all. `country_id`
+  goes nullable so a user-created row can be completed by an admin at review,
+  rather than the user being asked for a field the review process exists to
+  supply.
+- **ADR 0020 and settled decision 62** — the catalogue is fetched over **HTTPS**
+  from the source repository and the hipolabs **HTTP API is never called**. Its
+  API has no TLS, so a browser on an HTTPS page cannot reach it: 0008's
+  client-side autocomplete is unbuildable rather than merely deferred, while the
+  same data *is* served securely from the repository. Weekly is sized to the
+  measured upstream cadence — 100 commits over 177 days, one change every ~2
+  days. GitHub Actions holds the schedule because `migrate.yml` already reaches
+  the database from a runner, and Actions moves with the repository rather than
+  the host, so decision #13's Railway exit is untouched. **Staging only** — there
+  is no production environment during the build and migration phase, and a
+  schedule pointed at one that does not exist fails every week quietly enough
+  that nobody looks.
+- Two records that are skipped rather than guessed, both reported by count: an
+  unresolvable country code (measured at 5 of 10,257, all `XK` — Kosovo, a
+  user-assigned code outside ISO 3166-1) and a record with no domain (0 today).
+  Neither is defaulted; a wrong country propagates into "who studied in the UK"
+  and nothing would surface it. Two upstream domains carry two names each and
+  collapse to one row, counted so the total is not read as a loss.
+- **A fresh environment has an empty catalogue until the sync runs** — a
+  deployment step, recorded in ADR 0020 rather than discovered by whoever
+  provisions the next environment.
+- **A name the catalogue carries twice is a question, not a match.** Upstream
+  holds 73 exactly-duplicated names over 158 records, and they cross borders —
+  `City University` is a university in the United States, in Bangladesh and in
+  the United Kingdom. The first implementation kept whichever row a `SELECT`
+  without `ORDER BY` returned last, so the link was a coin toss that could
+  change between runs, and the country of study derives from it. Ambiguous names
+  now report separately from unmatched ones, because a miss wants the
+  institution added and an ambiguity wants somebody to say which.
+- **A sync with nothing usable exits non-zero.** Renaming one upstream key
+  refused every record, mirrored nothing, printed the refusals and exited **0** —
+  including the dry run CI runs first, so the weekly check stayed green over a
+  catalogue that had quietly stopped updating. `HipolabsCatalogue.fetch` already
+  refused an empty source; this is the same rule one layer up, where the
+  emptiness arrives from refusals instead.
+- Tests for the catalogue client itself, and a `failure-modes.md` row for what
+  they missed. The module shipped at **0% coverage** beside a 100%-covered
+  sibling, passing only because the threshold is a global 85%. Its first
+  version of *"no request ever goes over plain HTTP"* asserted that on the
+  **success** path, and a mutation reintroducing an `http://` fallback in the
+  `except` branch left every test green — a fallback that would have worked, and
+  sent users' traffic unencrypted. The assertion is now on the failure path.
 
 ### Changed
 
