@@ -245,6 +245,21 @@ class UserProfile(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_user_profiles_origin_country", "origin_country_id"),
         Index("ix_user_profiles_current_country", "current_country_id"),
+        # Full-text search over the bio, deferred from M1 and arriving with M2.
+        #
+        # Declared here even though the migration creates it with raw SQL, and
+        # that is not redundancy. Without a model declaration `alembic check`
+        # sees an index in the database that no model describes and reports
+        # drift on **every** run — a check that always fails is one people stop
+        # reading, which is worse than the blind spot it was meant to close.
+        #
+        # `coalesce` matches the package: a null bio would otherwise yield a
+        # null tsvector and drop the row out of the index entirely.
+        Index(
+            "ix_user_profiles_about_fts",
+            text("to_tsvector('english', coalesce(about_me, ''))"),
+            postgresql_using="gin",
+        ),
     )
 
 

@@ -5,24 +5,27 @@ applies to — Chevening, Fulbright, MasterCard Foundation. It exists
 independently of any user, exactly like an institution. It is not a kind of
 funding, not an amount, and not something one university invented for itself.
 
-What links a *person* to one of these rows is deliberately not here yet. The
-package specifies ``user_scholarship_experience`` with a
-``relationship ∈ awarded | applied | advised`` discriminator, and that table
-overlaps ``user_awards``: "I won Chevening" has two legal homes, one as free text
-and one as a foreign key, with nothing choosing between them. Resolving it needs
-the legacy ``Scholarship Experience`` option set, which is empty on every row of
-the dev export — so it lands in a later pull request rather than being guessed
-at. The catalogue below is unaffected either way, which is why it ships now.
+``user_awards`` is what links a *person* to one of those rows, and it is the
+only thing that does. The package pairs it with a separate
+``user_scholarship_experience`` table carrying a
+``relationship ∈ awarded | applied | advised`` discriminator; **that table does
+not ship**. The legacy field behind it has no option set, no values on any row,
+and therefore nothing to migrate — and it overlapped ``user_awards`` besides, so
+"I won Chevening" had two legal homes with nothing choosing between them.
+
+What is genuinely lost is narrower than it looks: *applied* and *advised* have
+no expression this phase. Neither has legacy data, and "I advise on Chevening"
+is a mentor capability that belongs with the service hierarchy rather than here.
 """
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.enums import LookupStatus
+from app.domain.enums import LookupStatus, VerificationStatus
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import pg_enum
 
@@ -34,8 +37,9 @@ class ScholarshipProgram(TimestampMixin, Base):
     suggest-before-create and an admin merge, "Chevening", "chevening
     scholarship" and "Chevening Award" become three live rows inside a month and
     filtering by scholarship stops working. ``merged_into_id`` plus the trigram
-    index below are what make that recoverable; ``usage_count`` is the signal
-    that tells an approval from a typo.
+    index below are what make that recoverable, and the signal that tells an
+    approval from a typo — eight users versus one user with a near-match — is
+    computed from the rows that reference a programme rather than stored.
 
     ``slug`` is **nullable here**, unlike ``degree_levels.slug`` — a row a user
     created has no stable identifier until somebody curates it, and inventing one
@@ -83,8 +87,6 @@ class ScholarshipProgram(TimestampMixin, Base):
         Uuid, ForeignKey("scholarship_programs.id", ondelete="RESTRICT")
     )
 
-    usage_count: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
-
     # Two foreign keys to the same table, so both are named explicitly: the
     # convention in `base.py` renders on `column_0_name` and cannot disambiguate
     # a second reference to `users`. Both RESTRICT, per ADR 0013's rule for
@@ -110,9 +112,90 @@ class ScholarshipProgram(TimestampMixin, Base):
             postgresql_using="gin",
             postgresql_ops={"display_name": "gin_trgm_ops"},
         ),
+        # Oldest pending first; the usage ranking is computed, for the reasons
+        # set out on `Institution`.
         Index(
             "ix_scholarship_programs_pending",
-            text("usage_count DESC"),
+            "created_at",
             postgresql_where=text("status = 'pending_review'"),
+        ),
+    )
+
+
+class UserAward(TimestampMixin, Base):
+    """Something a user won. Legacy ``Scholarship-Awards``, 17 rows.
+
+    **User-level, not mentor-level.** A mentee can hold awards from day one —
+    someone who won a scholarship and is now seeking a second degree is the
+    ordinary case, not an edge one.
+
+    ``scholarship_program_id`` is a **departure from the package**, and it is
+    what gives the catalogue a consumer. The package pairs ``user_awards`` with
+    a separate ``user_scholarship_experience`` table keyed on a
+    ``relationship`` discriminator; that table does not ship, because the legacy
+    field behind it has no option set and no values on any row. Without this
+    column nothing in the schema would reference ``scholarship_programs`` at
+    all.
+
+    The shape is deliberately the one used by ``education_entries``:
+    **``title`` is always kept and the link is optional.** "I won Chevening" and
+    "I won Best Graduating Student at Unilag" become the same row, differing
+    only in whether the catalogue happened to know the name. Display never
+    depends on the link, so an unresolved one degrades filtering rather than the
+    profile.
+
+    **Nothing renders a checkmark.** ``verification_status`` defaults to
+    ``UNVERIFIED`` and stays there this phase; the remaining columns exist so
+    that switching verification on later is a feature flag rather than a
+    migration.
+    """
+
+    __tablename__ = "user_awards"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    # Named by hand: `verified_by` is a second foreign key to `users`, and the
+    # convention renders on `column_0_name`.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE", name="fk_user_awards_user_id_users"),
+        nullable=False,
+    )
+
+    institution: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+
+    scholarship_program_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("scholarship_programs.id", ondelete="RESTRICT")
+    )
+
+    year: Mapped[int | None] = mapped_column()
+
+    verification_status: Mapped[VerificationStatus] = mapped_column(
+        pg_enum(VerificationStatus), nullable=False, server_default=text("'unverified'")
+    )
+    evidence_url: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT", name="fk_user_awards_verified_by_users"),
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
+
+    __table_args__ = (
+        Index("ix_user_awards_user", "user_id", postgresql_where=text("deleted_at IS NULL")),
+        # Serves the derived usage ranking on the curation queue, which replaced
+        # the stored `usage_count` this table would otherwise have incremented.
+        Index("ix_user_awards_program", "scholarship_program_id"),
+        # `now()` is not immutable and PostgreSQL permits it here anyway —
+        # verified, not assumed. It is safe because the bound only ever grows: a
+        # row valid when written stays valid at any later restore.
+        CheckConstraint(
+            "year IS NULL OR year BETWEEN 1950 AND EXTRACT(YEAR FROM now())::int + 1",
+            name="year_is_sane",
         ),
     )

@@ -55,6 +55,15 @@ EXPECTED_TABLES = [
     "institutions",
     "scholarship_programs",
     "service_offerings",
+    # M2 — the profile tables themselves. `user_scholarship_experience` is
+    # deliberately absent: no option set, no values, nothing to write it.
+    "education_entries",
+    "mentee_goal_countries",
+    "mentee_goal_needs",
+    "mentee_goals",
+    "mentor_profiles",
+    "mentor_service_offerings",
+    "user_awards",
 ]
 
 # Every enum type at head — five from M1, one from M2. Named here because a type
@@ -67,11 +76,16 @@ EXPECTED_TABLES = [
 # decision #21 — a type no table uses is a schema asserting a choice nobody took.
 ENUM_TYPE_NAMES = (
     "admin_role",
+    "approval_status",
     "auth_provider",
     "language_proficiency",
     "legal_document_type",
+    "listing_status",
     "lookup_status",
+    "meeting_provider",
     "primary_role",
+    "unlisted_reason",
+    "verification_status",
 )
 
 ConfigFactory = Callable[[str], Config]

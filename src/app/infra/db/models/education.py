@@ -1,9 +1,9 @@
 """Education: where someone studied, and at what level.
 
-Two lookups now; ``education_entries`` joins them in the next pull request. The
-module is named for the subject rather than the layer (settled decision #33), so
-the question "where does this table go" has one answer for all 58 remaining
-tables instead of a fresh judgement each time.
+Two lookups and the user-owned table that references both. The module is named
+for the subject rather than the layer (settled decision #33), so the question
+"where does this table go" has one answer for all remaining tables instead of a
+fresh judgement each time.
 
 ``institutions`` is a **registry, not a mirror** (ADR 0008). Autocomplete is
 served from hipolabs and that catalogue is never cached; a row lands here only
@@ -14,8 +14,9 @@ absence is one of that record's stated confirmations.
 """
 
 import uuid
+from datetime import date, datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import TIMESTAMP, CheckConstraint, Date, ForeignKey, Index, Text, Uuid, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -87,8 +88,6 @@ class Institution(TimestampMixin, Base):
         Uuid, ForeignKey("institutions.id", ondelete="RESTRICT")
     )
 
-    usage_count: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
-
     # Null for every seeded or hipolabs-sourced row; set only when a user creates
     # one. The same honest null as `admin_users.granted_by` on a bootstrap grant.
     created_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -108,13 +107,28 @@ class Institution(TimestampMixin, Base):
             postgresql_using="gin",
             postgresql_ops={"name": "gin_trgm_ops"},
         ),
-        # The admin work queue: pending rows, most-used first. A pending entry
-        # with eight users is an approval; one with a single user and a typo is a
-        # merge. ADR 0008 records that this mechanism exists and its owner does
-        # not.
+        # The admin work queue: pending rows, oldest first.
+        #
+        # The package ranks this by a stored `usage_count`, which is dropped —
+        # nothing anywhere maintained it, so it was zero on every row forever,
+        # and the index sorted a constant. It is also derivable, and a stored
+        # count that drifts from what it counts is the exact defect the package
+        # removed from `Mentor (front search)`, whose three counters are all
+        # dropped as "DERIVED at query time".
+        #
+        # The ranking the queue actually wants — eight users is an approval, one
+        # user plus a typo is a merge — is now computed:
+        #
+        #   SELECT i.id, i.name, count(e.id) AS uses
+        #   FROM institutions i
+        #   LEFT JOIN education_entries e ON e.institution_id = i.id
+        #   WHERE i.status = 'pending_review'
+        #   GROUP BY i.id, i.name ORDER BY uses DESC;
+        #
+        # ADR 0008 records that this mechanism exists and its owner does not.
         Index(
             "ix_institutions_pending",
-            text("usage_count DESC"),
+            "created_at",
             postgresql_where=text("status = 'pending_review'"),
         ),
         # Bare name; the `ck` convention renders the `ck_institutions_` prefix.
@@ -157,3 +171,95 @@ class DegreeLevel(TimestampMixin, Base):
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     sort_order: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
+
+
+class EducationEntry(TimestampMixin, Base):
+    """One degree a user holds. Legacy ``Education``, 940 rows.
+
+    **``school_name_raw`` is always kept and ``institution_id`` is nullable**,
+    and that pair is what makes an incomplete registry survivable rather than
+    lossy (ADR 0008, point 5). An entry that never matches still displays what
+    the user typed, and can be linked opportunistically the next time they edit
+    their profile.
+
+    **Country is never asked for.** It derives from ``institutions.country_id``,
+    resolved once at write. Storing the raw string instead would mean
+    re-querying hipolabs on every profile render, and "who studied in the UK"
+    would be a runtime API fan-out rather than a join.
+
+    Two package columns are deliberately absent:
+
+    - ``school_short_form`` — the package maps legacy ``shortForm`` here and
+      says it "mostly folds into ``institutions.alt_names``". The data says
+      otherwise: all 21 values are **degree** abbreviations (BSc, Ph.D, LL.B),
+      and on every row where ``studyProgram`` is also present the two are the
+      same value punctuated differently. Folding "BSc" into a university's
+      aliases would corrupt the registry. Nothing else would feed the column, so
+      it does not ship.
+    - ``field_of_interest`` — legacy ``studyFieldInsterest`` is deprecated in
+      the source application and absent from the export entirely.
+
+    ``degree_category`` **is** kept alongside ``degree_level_id``, and that is
+    not duplication: it is the same raw-plus-resolved pair as
+    ``school_name_raw`` + ``institution_id``. After cutover the raw value cannot
+    be re-fetched, and the mapping is only as good as its next revision.
+    """
+
+    __tablename__ = "education_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+    institution_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("institutions.id", ondelete="RESTRICT")
+    )
+    school_name_raw: Mapped[str] = mapped_column(Text, nullable=False)
+
+    degree_level_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("degree_levels.id", ondelete="RESTRICT")
+    )
+    degree_category: Mapped[str | None] = mapped_column(Text)
+    study_course: Mapped[str | None] = mapped_column(Text)
+    study_program: Mapped[str | None] = mapped_column(Text)
+
+    # `date`, not `timestamptz`. The export renders these as midnight local, and
+    # the transform takes the date **as rendered in America/New_York** rather
+    # than converting to UTC first — every dev value is 12:00 am, which makes the
+    # wrong version latent rather than visible.
+    date_start: Mapped[date | None] = mapped_column(Date)
+    date_end: Mapped[date | None] = mapped_column(Date)
+
+    is_most_recent: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
+
+    __table_args__ = (
+        Index(
+            "ix_education_entries_user",
+            "user_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_education_entries_institution", "institution_id"),
+        # Enforces one-most-recent-per-user in the database. `latestUniversity`
+        # on the old front-search table derives from this.
+        #
+        # The WHERE clause is the whole constraint. Without it this becomes a
+        # plain unique index on `user_id` and a user may hold exactly one degree
+        # — which is not a subtle degradation, but it would pass any test that
+        # only ever inserts one row per user.
+        Index(
+            "ix_education_entries_one_most_recent",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_most_recent AND deleted_at IS NULL"),
+        ),
+        CheckConstraint(
+            "date_end IS NULL OR date_start IS NULL OR date_end >= date_start",
+            name="dates_ordered",
+        ),
+    )

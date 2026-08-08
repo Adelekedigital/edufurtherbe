@@ -13,11 +13,18 @@ an omission here makes that test pass by looking at less.
 """
 
 from app.infra.db.models.admin import AdminUser
-from app.infra.db.models.education import DegreeLevel, Institution
+from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.legal import LegalDocument, UserLegalConsent
-from app.infra.db.models.mentoring import ServiceOffering
+from app.infra.db.models.mentoring import (
+    MenteeGoal,
+    MenteeGoalCountry,
+    MenteeGoalNeed,
+    MentorProfile,
+    MentorServiceOffering,
+    ServiceOffering,
+)
 from app.infra.db.models.reference import Country, Language
-from app.infra.db.models.scholarships import ScholarshipProgram
+from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
 from app.infra.db.models.user import (
     AuthIdentity,
     User,
@@ -31,12 +38,19 @@ __all__ = [
     "AuthIdentity",
     "Country",
     "DegreeLevel",
+    "EducationEntry",
     "Institution",
     "Language",
     "LegalDocument",
+    "MenteeGoal",
+    "MenteeGoalCountry",
+    "MenteeGoalNeed",
+    "MentorProfile",
+    "MentorServiceOffering",
     "ScholarshipProgram",
     "ServiceOffering",
     "User",
+    "UserAward",
     "UserLanguage",
     "UserLegalConsent",
     "UserOnboarding",

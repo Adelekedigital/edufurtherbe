@@ -118,15 +118,110 @@ class LookupStatus(StrEnum):
     merge (ADR 0008; package D15, which makes the merge path mandatory rather
     than optional).
 
-    **Six other M2 vocabularies are deliberately absent**, per settled decision
-    #21: ``approval_status``, ``listing_status``, ``unlisted_reason``,
-    ``meeting_provider``, ``verification_status`` and
-    ``scholarship_relationship`` are all consumed by tables in the *next* pull
-    request. A type no table uses is a schema asserting a choice nobody took, so
-    each arrives with the table that constrains it.
+    Shipped one phase ahead of the five below, per settled decision #21: it was
+    the only vocabulary M2's *lookup* tables constrained. The rest arrived with
+    the profile tables that use them.
+
+    ``scholarship_relationship`` never ships. Its only consumer was
+    ``user_scholarship_experience``, and the legacy field behind that table has
+    no option set, no values on any row, and therefore nothing to migrate.
     """
 
     APPROVED = "approved"
     PENDING_REVIEW = "pending_review"
     MERGED = "merged"
     REJECTED = "rejected"
+
+
+class ApprovalStatus(StrEnum):
+    """Whether a mentor's application has been accepted.
+
+    **Distinct from being listed, and the pair is not redundant.** Approval is a
+    judgement the platform made once; listing is whether the mentor currently
+    wants to be found. An approved mentor who paused is `approved` + `unlisted`,
+    which no single flag can express.
+
+    Legacy carried this as ``approvedText``, a text "Yes" — so the migration sees
+    only ``APPROVED`` and ``DECLINED`` has no legacy instance.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    DECLINED = "declined"
+
+
+class ListingStatus(StrEnum):
+    """Whether a mentor appears in search.
+
+    Collapsed from two booleans the package's first draft carried. ``is_available``
+    was **derivable** from availability rules, exceptions and existing sessions,
+    and storing it recreated the drift that made the legacy front-search table
+    untrustworthy.
+
+    **This is not profile-page access.** A mentee with a completed session must
+    still see that mentor's page or their history breaks and past reviews 404, so
+    access is a rule about the *viewer* — listed, or has a session with them, or
+    is an admin — rather than a column here.
+    """
+
+    LISTED = "listed"
+    UNLISTED = "unlisted"
+
+
+class UnlistedReason(StrEnum):
+    """Why a mentor is not in search. **Internal — never shown to a mentee.**
+
+    Drives admin dashboards and re-engagement. The column defaults to
+    ``NEVER_APPROVED``, which is right for a new signup and **wrong for every
+    migrated mentor**: the two unlisted mentors in the dev extract are
+    ``approvedText = Yes``, so they were approved and then turned themselves off.
+    The transform sets this explicitly rather than inheriting the default.
+    """
+
+    MENTOR_PAUSED = "mentor_paused"
+    ADMIN_REVIEW = "admin_review"
+    DORMANT = "dormant"
+    NEVER_APPROVED = "never_approved"
+
+
+class VerificationStatus(StrEnum):
+    """Whether a self-reported award has been checked. **Nothing checks one yet.**
+
+    The package's decision for this phase is deliberate: do not verify, label
+    clearly. Every award defaults to ``UNVERIFIED`` and **nothing renders a
+    checkmark**, because every verified claim is manual admin work and the queue
+    never empties.
+
+    The other three members ship unused so that switching verification on later
+    is a feature flag rather than a migration. The label belongs at the field
+    ("Awards — self-reported"), not in a footer: a checkmark beside "Chevening
+    Scholar" reads as endorsement whatever a tooltip says, which becomes a
+    liability question once money is involved.
+    """
+
+    UNVERIFIED = "unverified"
+    PENDING = "pending"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+
+
+class MeetingProvider(StrEnum):
+    """Where a session happens.
+
+    **Only ``CUSTOM`` ever stores a URL.** ``GOOGLE_MEET`` and ``DAILY`` both
+    create a per-session link at confirmation — Meet through the calendar
+    integration, Daily through its API — so a stored link would be redundant for
+    them and actively harmful: a static personal room means back-to-back sessions
+    share a room and an early joiner walks into the previous one. That is why
+    ``custom_meeting_url`` is gated by a CHECK rather than by convention.
+
+    ``ZOOM`` ships with no legacy source. Legacy offered only "Edufurther Video"
+    (Daily) and "External Video Tool" (custom), and every stored link was a
+    Google Meet URL left behind as residue — so the migration writes no
+    ``custom_meeting_url`` at all.
+    """
+
+    GOOGLE_MEET = "google_meet"
+    DAILY = "daily"
+    ZOOM = "zoom"
+    CUSTOM = "custom"

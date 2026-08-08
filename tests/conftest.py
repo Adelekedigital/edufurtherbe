@@ -6,6 +6,7 @@ import json
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -17,7 +18,8 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.core.config import Settings
 from app.infra.auth.admin import SupabaseAdminClient
@@ -173,6 +175,46 @@ async def db_engine(migrated_database: str) -> AsyncIterator[AsyncEngine]:
         yield engine
     finally:
         await engine.dispose()
+
+
+# --------------------------------------------------------------------------
+# One way to make a user, for every schema test that needs one
+#
+# Lives here rather than in a test module because a second suite now needs it,
+# which is the extract-on-the-second-occurrence case non-negotiable #8 names.
+# The hazard is specific rather than aesthetic: a private copy that supplied its
+# own `id` would keep passing after somebody removed the `uuid_generate_v7()`
+# default, and nothing would say so. One definition, one behaviour.
+# --------------------------------------------------------------------------
+
+INSERT_USER = """
+INSERT INTO users (email, slug, deleted_at)
+VALUES (:email, :slug, :deleted_at)
+RETURNING id
+"""
+
+
+async def add_user(
+    conn: AsyncConnection,
+    email: str,
+    *,
+    slug: str | None = None,
+    deleted_at: datetime | None = None,
+) -> uuid.UUID:
+    """Insert a user and return the id the database generated.
+
+    The id is **not** supplied. ADR 0014 made it ours and gave it back its
+    ``uuid_generate_v7()`` default, so letting the column fill itself is both
+    what production does and a standing check that the default is still there —
+    a test that passed its own id would keep passing after somebody removed it.
+
+    ``auth_id`` is left null, which is the state every migrated user starts in.
+    """
+    created = await conn.execute(
+        text(INSERT_USER),
+        {"email": email, "slug": slug, "deleted_at": deleted_at},
+    )
+    return uuid.UUID(str(created.scalar_one()))
 
 
 # --------------------------------------------------------------------------

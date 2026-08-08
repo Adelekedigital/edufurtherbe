@@ -33,6 +33,7 @@ script-data-dev/
 # Tooling leftovers
 *.new
 requirements-audit.txt
+promptdump.md
 
 # Local agent overrides (personal, not shared)
 .claude/settings.local.json

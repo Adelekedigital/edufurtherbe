@@ -221,6 +221,19 @@ which one does the heavy lifting.
 
 ### Open questions
 
+> **Correction, 2026-08-07.** The last bullet below says the curation queue's
+> mechanism "exists" because the package indexes it by `usage_count DESC`. That
+> remains true *of the package* and is no longer true of this schema: `usage_count`
+> was carried in M2 and then **dropped**, because nothing in the package or this
+> repository ever maintained it — no trigger, no function, no application rule —
+> so it would have been zero on every row forever and the index would have sorted
+> a constant. The queue is now ranked by a count computed from the referencing
+> table, and both `*_pending` indexes are rebuilt on `created_at`. See settled
+> decision 56, "counts and ratios are derived at query time, never stored".
+>
+> The bullet's actual question is untouched and still open: **nobody curates
+> `status = 'pending_review'`**, and now not even the ranking is prebuilt.
+
 - **The real match rate**, answerable from the export with the query the package
   supplies: `SELECT school_name_raw, count(*) FROM staging.education GROUP BY 1
   ORDER BY 2 DESC`. 200–400 distinct across the 940 rows means a near-straight
