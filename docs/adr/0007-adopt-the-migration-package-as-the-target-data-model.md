@@ -18,8 +18,10 @@ no longer follow is a supersession, and the two do not belong in one paragraph.
 
 Two of the three conflicts this record deferred are now resolved:
 
-- **Institutions** — by ADR 0008: the hipolabs registry, populated on demand,
-  with no `ror_id` column.
+- **Institutions** — by ADR 0008: the hipolabs registry, with no `ror_id`
+  column. ADR 0020 later replaced 0008's *populated on demand* with a mirror
+  refreshed weekly; the registry and the absent `ror_id` are what this deferral
+  turned on, and both stand.
 - **First-login authentication** — by ADR 0009: a 6-digit email code by default,
   with a sign-in link offered as a choice.
 - **Message thread scope** — still open, reserved for ADR 0010.

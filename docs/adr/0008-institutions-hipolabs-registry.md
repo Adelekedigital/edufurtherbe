@@ -4,7 +4,19 @@ Date: 2026-08-04
 
 ## Status
 
-Accepted
+Accepted. **Superseded in part by ADR 0020** — on the storage strategy and the
+autocomplete mechanism only.
+
+What 0020 replaces: *"populated on demand and stored once referenced"*,
+*"autocomplete is served live from hipolabs"*, and this record's rejection of
+mirroring. The catalogue is now mirrored over HTTPS and refreshed weekly, because
+the hipolabs API is `http://` only and a browser on an HTTPS page cannot call it
+— the live path is unbuildable, not merely unbuilt.
+
+What still stands: hipolabs as the source, a table rather than a string, the
+surrogate `uuid` primary key, `domain` as the natural key, no `ror_id`, and
+point 5 — `school_name_raw` is always kept, so an unmatched entry degrades
+display rather than losing data. That last one is what makes 0020 safe.
 
 ## Context
 
