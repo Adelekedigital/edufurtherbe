@@ -238,6 +238,17 @@ released. A tag with no matching section here fails the release job.
   is no production environment during the build and migration phase, and a
   schedule pointed at one that does not exist fails every week quietly enough
   that nobody looks.
+- **A domain two records share is collapsed before the write, not by
+  `ON CONFLICT` afterwards.** Absorbed by the conflict clause, the second record
+  rewrote the first on *every* sync forever — `updated_at` moving on two rows
+  whose stored content never changed, which is precisely what `last_synced_at`
+  was added to say. The test that claimed to cover this asserted it for a domain
+  appearing once, so it could not see the case that was broken.
+- **The sync workflow fails closed.** Its exit-code branch named 1 and 2 and sent
+  everything else to the implicit 0 of a false branch, so an OOM kill (137) or a
+  missing interpreter (127) rendered as a green weekly check. Only 2 is now
+  forgiven. This matters more than it looks: nothing alerts on a sync that has
+  stopped, so the weekly check is the only signal there is.
 - Two records that are skipped rather than guessed, both reported by count: an
   unresolvable country code (measured at 5 of 10,257, all `XK` — Kosovo, a
   user-assigned code outside ISO 3166-1) and a record with no domain (0 today).

@@ -23,7 +23,7 @@ are hipolabs' own strings.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -82,6 +82,35 @@ def to_catalogue_row(record: dict[str, Any]) -> CatalogueRow:
         web_page=pages[0] if pages else None,
         country_code=str(record.get(ALPHA_TWO) or "").strip().upper(),
     )
+
+
+def collapse_by_domain(
+    rows: Sequence[CatalogueRow],
+) -> tuple[list[CatalogueRow], tuple[str, ...]]:
+    """One row per domain, keeping the first, naming the domains that collided.
+
+    Two upstream records share `khio.no` and two share `jazanu.edu.sa` — a merged
+    art school, and a college inside a university. One domain is one institution,
+    so collapsing them is right.
+
+    **Collapsing here rather than letting ``ON CONFLICT`` absorb it is what stops
+    the row churning.** Written separately, the second record rewrites the first
+    on every sync, forever, while the stored content is identical every time —
+    so ``updated_at`` would come to mean "a sync ran", which is precisely what
+    ``last_synced_at`` exists to say. A conditional upsert does not help: the two
+    records genuinely differ, so the write is never a no-op.
+
+    First wins, deliberately and deterministically — the same rule
+    ``index_names`` uses, rather than whichever record the loop reached last.
+    """
+    kept: dict[str, CatalogueRow] = {}
+    collided: set[str] = set()
+    for row in rows:
+        if row.domain in kept:
+            collided.add(row.domain)
+            continue
+        kept[row.domain] = row
+    return list(kept.values()), tuple(sorted(collided))
 
 
 @dataclass(frozen=True, slots=True)

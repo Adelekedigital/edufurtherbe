@@ -11,7 +11,13 @@ from typing import Any
 
 import pytest
 
-from app.domain.institutions import CatalogueError, index_names, match, to_catalogue_row
+from app.domain.institutions import (
+    CatalogueError,
+    collapse_by_domain,
+    index_names,
+    match,
+    to_catalogue_row,
+)
 
 
 def record(**overrides: Any) -> dict[str, Any]:
@@ -77,6 +83,60 @@ def test_a_record_with_no_web_page_is_still_usable() -> None:
     """The page is display only. Refusing over it would drop a real institution
     for a missing link."""
     assert to_catalogue_row(record(web_pages=[])).web_page is None
+
+
+# --------------------------------------------------------------------------
+# Collapsing a shared domain
+# --------------------------------------------------------------------------
+
+
+def rows(*pairs: tuple[str, str]) -> list[Any]:
+    return [to_catalogue_row(record(name=name, domains=[domain])) for name, domain in pairs]
+
+
+def test_two_records_on_one_domain_become_one_row() -> None:
+    """One domain is one institution. `khio.no` really does arrive twice — a
+    merged art school — and `jazanu.edu.sa` is a college inside a university."""
+    kept, collided = collapse_by_domain(
+        rows(("National College of Art", "khio.no"), ("Oslo National Academy", "khio.no"))
+    )
+
+    assert [r.name for r in kept] == ["National College of Art"]
+    assert collided == ("khio.no",)
+
+
+def test_the_first_record_wins_and_it_is_not_the_last() -> None:
+    """**The whole point of collapsing before the write.**
+
+    Letting `ON CONFLICT` absorb the pair writes both, so the second rewrites the
+    first on every sync forever while the stored content never changes — and
+    `updated_at` comes to mean "a sync ran", which is what `last_synced_at`
+    exists to say. First-wins is also the rule `index_names` uses, rather than
+    whichever record a loop happened to reach last.
+    """
+    kept, _ = collapse_by_domain(rows(("First", "shared.edu"), ("Second", "shared.edu")))
+
+    assert [r.name for r in kept] == ["First"]
+
+
+def test_collapsing_is_stable_across_calls() -> None:
+    """Same input, same output — a sync that reordered its own rows would churn
+    `updated_at` for the same reason the collapse exists to prevent."""
+    pairs = (("A", "one.edu"), ("B", "one.edu"), ("C", "two.edu"))
+
+    first, _ = collapse_by_domain(rows(*pairs))
+    second, _ = collapse_by_domain(rows(*pairs))
+
+    assert [r.name for r in first] == [r.name for r in second] == ["A", "C"]
+
+
+def test_distinct_domains_are_all_kept() -> None:
+    """The positive case. Without it, collapsing everything to one row would
+    pass every test above."""
+    kept, collided = collapse_by_domain(rows(("A", "a.edu"), ("B", "b.edu"), ("C", "c.edu")))
+
+    assert len(kept) == 3
+    assert collided == ()
 
 
 # --------------------------------------------------------------------------

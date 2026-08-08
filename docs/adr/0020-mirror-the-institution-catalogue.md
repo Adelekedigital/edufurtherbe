@@ -146,9 +146,13 @@ deployment step. It is stated here because it will otherwise be discovered by
 whoever provisions the next environment and finds autocomplete empty.
 
 **Two upstream records share one domain** (`khio.no`, `jazanu.edu.sa` — a merged
-art school and a college inside a university). `ON CONFLICT (domain)` collapses
-each pair to one row, which is correct, and the collapse is counted and reported
-so the row count is not read as a loss.
+art school and a college inside a university). They are collapsed to one row
+**before the write**, keeping the first, and the collapse is counted so the row
+count is not read as a loss. Letting `ON CONFLICT` absorb the pair instead writes
+both, so the second rewrites the first on every sync forever while the stored
+content is identical every time — and `updated_at` would come to mean "a sync
+ran", which is exactly what `last_synced_at` exists to say. A conditional upsert
+does not help: the two records genuinely differ, so the write is never a no-op.
 
 **Staleness is now bounded and answerable rather than unbounded and invisible —
 but it is not zero, and nothing alerts on a sync that has stopped.**
@@ -166,7 +170,9 @@ the alternative asks a user to do the curation the review process exists for.
 - **Mechanical:** no request to `universities.hipolabs.com` appears anywhere in
   the codebase.
 - **Mechanical:** a second sync writes no new rows and moves no `updated_at`,
-  while `last_synced_at` does move. Both halves proved by mutation.
+  while `last_synced_at` does move — asserted for a domain that appears once
+  *and* for one that appears twice. The second case was broken and the first
+  test could not see it.
 - **Mechanical:** a near-miss does not link — proved by reintroducing a prefix
   fallback and watching the test fail.
 - **Mechanical:** an unresolvable country code is skipped and named, never

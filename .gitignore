@@ -28,6 +28,7 @@ data/
 exports/
 migration/out/
 *.csv
+*.json
 script-data-dev/
 
 # Tooling leftovers

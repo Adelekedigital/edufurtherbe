@@ -121,9 +121,10 @@ async def test_two_names_on_one_domain_collapse_and_are_counted(
 
     assert counts.collapsed_domains == ("khio.no",)
     assert rows.scalar_one() == 1
-    # 8 records, 1 skipped for its country, 1 collapsed -> 6 rows. The two
-    # `City University` rows are two institutions on two domains, not a collapse.
-    assert (counts.written, counts.stored, total.scalar_one()) == (7, 6, 6)
+    # 8 records, 1 collapsed before writing, 1 skipped for its country -> 6.
+    # The two `City University` rows are two institutions on two domains, not a
+    # collapse. `written` is now what reached the table, with nothing to subtract.
+    assert (counts.written, total.scalar_one()) == (6, 6)
 
 
 async def test_a_record_with_no_web_page_still_lands(db_engine: AsyncEngine) -> None:
@@ -167,6 +168,42 @@ async def test_a_second_sync_stamps_but_does_not_churn_updated_at(
     assert updated == first_updated, "updated_at moved on a row that did not change"
     assert synced == later, "last_synced_at did not move, so staleness is unknowable"
     assert total.scalar_one() == 6, "a re-sync duplicated rows"
+
+
+async def test_a_collapsed_domain_does_not_churn_updated_at(
+    db_engine: AsyncEngine,
+) -> None:
+    """The row two upstream records share must settle, not oscillate.
+
+    `khio.no` arrives twice under different names. Written once each, the second
+    hits `ON CONFLICT` and rewrites the row — so `updated_at` moves on every
+    sync forever, while the stored content is identical every time. For that row
+    `updated_at` would mean "a sync ran", which is exactly what `last_synced_at`
+    was added to say.
+
+    The sibling test asserts this for `unilag.edu.ng`, which appears once. That
+    is why it passed while this was broken.
+    """
+    async with db_engine.begin() as conn:
+        await run_mirror(conn)
+        first = await conn.execute(
+            text("SELECT updated_at FROM institutions WHERE domain = 'khio.no'")
+        )
+        before = first.scalar_one()
+
+    async with db_engine.begin() as conn:
+        await run_mirror(conn, at=SYNCED + timedelta(days=7))
+        second = await conn.execute(
+            text(
+                "SELECT name, updated_at, last_synced_at FROM institutions WHERE domain = 'khio.no'"
+            )
+        )
+        name, after, synced = second.one()
+
+    assert after == before, "updated_at churned on a row whose content did not change"
+    assert synced == SYNCED + timedelta(days=7), "last_synced_at must still move"
+    # Deterministic, not whichever record happened to be written last.
+    assert name == "National College of Art"
 
 
 async def test_a_changed_name_does_move_updated_at(db_engine: AsyncEngine) -> None:

@@ -71,14 +71,22 @@ jobs:
       # Exit 2 means "mirrored, but some school name matched nothing" — a
       # condition for a human to look at, not a failed run. The step succeeds
       # and the log carries the names.
+      #
+      # FAIL CLOSED. Only 2 is forgiven; everything else that is not 0 fails the
+      # step, including codes nobody anticipated — an OOM kill is 137, a missing
+      # interpreter is 127, and a naming an `if` branch per known code sends the
+      # rest to the implicit 0 of a false branch. That matters more here than
+      # elsewhere: nothing alerts on a sync that has stopped, so this weekly
+      # check is the only signal there is.
       - name: Mirror and link
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           uv run python scripts/sync_institutions.py || status=$?
-          if [ "${status:-0}" -eq 1 ]; then
-            echo "::error::the sync refused and wrote nothing"
-            exit 1
-          elif [ "${status:-0}" -eq 2 ]; then
+          status=${status:-0}
+          if [ "$status" -eq 2 ]; then
             echo "::warning::mirrored, but some school names matched nothing — see the log"
+          elif [ "$status" -ne 0 ]; then
+            echo "::error::the sync failed with exit $status"
+            exit "$status"
           fi

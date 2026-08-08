@@ -81,8 +81,8 @@ async def run_sync(rows: list[CatalogueRow]) -> int:
                 links = await link_education(connection)
 
             print(
-                f"\nmirrored {counts.stored} institutions "
-                f"({counts.written} written, {len(counts.collapsed_domains)} domains collapsed)"
+                f"\nmirrored {counts.written} institutions "
+                f"({len(counts.collapsed_domains)} domains collapsed before writing)"
             )
             if counts.collapsed_domains:
                 # Two upstream names, one domain — one institution. Correct, and

@@ -9,7 +9,6 @@ anything (ADR 0020).
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,7 +17,12 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.domain.institutions import CatalogueRow, index_names, match
+from app.domain.institutions import (
+    CatalogueRow,
+    collapse_by_domain,
+    index_names,
+    match,
+)
 
 # `updated_at` is set explicitly rather than left to the trigger, which the
 # caller holds off for this statement.
@@ -62,16 +66,11 @@ class MirrorCounts:
     #: wrong country — measured at 5 of 10,257, all `XK` (Kosovo), which is a
     #: user-assigned code rather than official ISO 3166-1.
     skipped_no_country: int = 0
-    #: Distinct domains carried by more than one upstream record. `ON CONFLICT`
-    #: collapses them to one row, correctly — two names, one institution — but
-    #: the *count* must say so, or the report claims more rows than exist.
+    #: Distinct domains carried by more than one upstream record. Collapsed to
+    #: one row before writing — two names, one institution — and named here, or
+    #: the report claims more records reached the table than did.
     collapsed_domains: tuple[str, ...] = ()
     unresolved_codes: tuple[str, ...] = ()
-
-    @property
-    def stored(self) -> int:
-        """Rows actually in the table, after collapse."""
-        return self.written - len(self.collapsed_domains)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,14 +108,15 @@ async def mirror(
     ``updated_at`` itself, precisely so an unchanged row keeps the timestamp it
     had.
     """
-    duplicated = tuple(
-        sorted(domain for domain, n in Counter(row.domain for row in rows).items() if n > 1)
-    )
+    # Collapsed *before* the write, not absorbed by `ON CONFLICT` afterwards:
+    # writing both would rewrite the row on every sync forever, moving
+    # `updated_at` on content that never changed.
+    deduplicated, duplicated = collapse_by_domain(rows)
     unresolved: set[str] = set()
 
     written = 0
     skipped = 0
-    for row in rows:
+    for row in deduplicated:
         country_id = countries.get(row.country_code)
         if country_id is None:
             # Reported by code, never defaulted. A wrong country propagates into
