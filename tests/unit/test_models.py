@@ -41,6 +41,16 @@ EXPECTED_MODELS = {
     "DegreeLevel",
     "ServiceOffering",
     "ScholarshipProgram",
+    # M2 profiles. `user_scholarship_experience` is deliberately absent — the
+    # legacy field behind it has no option set and no values, so there is
+    # nothing to migrate and nothing to write it.
+    "MentorProfile",
+    "MentorServiceOffering",
+    "EducationEntry",
+    "UserAward",
+    "MenteeGoal",
+    "MenteeGoalCountry",
+    "MenteeGoalNeed",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")

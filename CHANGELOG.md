@@ -102,8 +102,8 @@ released. A tag with no matching section here fails the release job.
   free/busy.
 - **M2's four lookup catalogues** — `institutions`, `degree_levels`,
   `service_offerings` and `scholarship_programs` — with the `pg_trgm` extension
-  and the `lookup_status` enum. Two are open, with `status`, `merged_into_id` and
-  `usage_count` for the curation queue ADR 0008 and package D15 require; two are
+  and the `lookup_status` enum. Two are open, with `status` and `merged_into_id`
+  for the curation queue ADR 0008 and package D15 require; two are
   closed vocabularies the product defines. `institutions` ships empty by design,
   populated on demand. Only `lookup_status` is created — the other six enums in
   `02_profiles.sql` arrive with the tables that use them (decision #21). Country
@@ -125,6 +125,45 @@ released. A tag with no matching section here fails the release job.
 - Two `failure-modes.md` rows: a text snapshot of a controlled vocabulary is a log
   of past UI states rather than a vocabulary, and a migration rewritten under an
   unchanged revision id leaves every already-migrated database silently diverged.
+- **M2's seven profile tables** — `mentor_profiles`, `mentor_service_offerings`,
+  `education_entries`, `user_awards`, `mentee_goals`, `mentee_goal_countries` and
+  `mentee_goal_needs` — with five enums, and the full-text index on
+  `user_profiles.about_me` that M1 deferred. Six of the seven are reshaped for
+  ADR 0015: a surrogate `id` with the invariant the package's key carried
+  re-declared as `UNIQUE`. **Mentor-only and mentee-only tables reference
+  `mentor_profiles(user_id)` and `mentee_goals(user_id)` rather than
+  `users(id)`** — the same value, but the foreign key makes it structurally
+  impossible to attach a mentor-only row to a mentee, and repointing it would be
+  a one-word edit that changes nothing visible.
+- **`user_scholarship_experience` and `scholarship_relationship` are not
+  created**, and `user_awards` gains a nullable `scholarship_program_id` instead.
+  The legacy field behind that table has no option set and no values on any row,
+  so there was nothing to migrate — and it overlapped `user_awards`, giving "I
+  won Chevening" two legal homes. Dropping it left `scholarship_programs` with no
+  consumer anywhere in the package; the link restores one, on the
+  `school_name_raw` + `institution_id` pattern where the raw text is always kept.
+  Settled decision 59.
+- **The package's `usage_count` column is not carried**, and the two curation
+  queues are ranked by `created_at` with the usage figure computed at query time.
+  It was briefly present and is removed before release, so the net effect is that
+  it never shipped. The package declares it, indexes it and documents it as the
+  queue's approve-or-merge signal while specifying **nothing that maintains it** —
+  so it would have been zero on every row forever, and the index would have
+  sorted a constant. Settled decision 56 states the rule the codebase had
+  demonstrated twice and written down neither time, with a `failure-modes.md` row
+  for how it got as far as a merge unnoticed. ADR 0008's open-questions section
+  gains a dated correction note — the record is immutable and its six decisions
+  are untouched, so the original text stays and the note says what changed, which
+  is the convention `docs/adr/README.md` sets for a premise overtaken by events.
+- Settled decisions 57 (`requires_booking_confirmation` defaults to `false`, and
+  what bounds the exposure) and 58 (legacy `meetingDuration` is an M4 input,
+  becoming the duration of each auto-created "General Mentorship" session type).
+  `education_entries` ships without `school_short_form` — legacy `shortForm`
+  holds degree abbreviations, not school ones — and without `field_of_interest`,
+  which is deprecated in the source application.
+- `add_user` moves from `test_identity_schema.py` to `conftest.py`, now that a
+  second schema suite needs it. A private copy that supplied its own `id` would
+  keep passing after somebody removed the `uuid_generate_v7()` default.
 
 ### Changed
 

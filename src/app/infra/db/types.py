@@ -23,11 +23,16 @@ from sqlalchemy.dialects.postgresql import ENUM
 
 from app.domain.enums import (
     AdminRole,
+    ApprovalStatus,
     AuthProvider,
     LanguageProficiency,
     LegalDocumentType,
+    ListingStatus,
     LookupStatus,
+    MeetingProvider,
     PrimaryRole,
+    UnlistedReason,
+    VerificationStatus,
 )
 
 # Every closed vocabulary that has a PostgreSQL type, and the name of that type.
@@ -50,6 +55,11 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     LanguageProficiency: "language_proficiency",
     LegalDocumentType: "legal_document_type",
     LookupStatus: "lookup_status",
+    ApprovalStatus: "approval_status",
+    ListingStatus: "listing_status",
+    UnlistedReason: "unlisted_reason",
+    VerificationStatus: "verification_status",
+    MeetingProvider: "meeting_provider",
 }
 
 

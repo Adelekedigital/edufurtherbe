@@ -18,37 +18,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+# `add_user` lives in conftest because a second schema suite now needs it. A
+# private copy that supplied its own `id` would keep passing after somebody
+# removed the `uuid_generate_v7()` default, and nothing would say so.
+from conftest import add_user
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
-
-INSERT_USER = """
-INSERT INTO users (email, slug, deleted_at)
-VALUES (:email, :slug, :deleted_at)
-RETURNING id
-"""
-
-
-async def add_user(
-    conn: AsyncConnection,
-    email: str,
-    *,
-    slug: str | None = None,
-    deleted_at: datetime | None = None,
-) -> uuid.UUID:
-    """Insert a user and return the id the database generated.
-
-    The id is **not** supplied. ADR 0014 made it ours and gave it back its
-    ``uuid_generate_v7()`` default, so letting the column fill itself is both
-    what production does and a standing check that the default is still there —
-    a test that passed its own id would keep passing after somebody removed it.
-
-    ``auth_id`` is left null, which is the state every migrated user starts in.
-    """
-    created = await conn.execute(
-        text(INSERT_USER),
-        {"email": email, "slug": slug, "deleted_at": deleted_at},
-    )
-    return uuid.UUID(str(created.scalar_one()))
-
 
 LONG_AGO = datetime(2020, 1, 1, tzinfo=UTC)
 
