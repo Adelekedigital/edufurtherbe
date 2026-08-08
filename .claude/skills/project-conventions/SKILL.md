@@ -263,6 +263,16 @@ State a gate's blind spots next to its coverage, every time.
   most of what makes this schema correct: the double-booking exclusion
   constraint, the soft-delete partial unique indexes, `set_updated_at`. A green
   migration check means the chain applies, not that it is complete.
+- **`alembic check` compares foreign keys by their column signature, never by
+  their name.** So a constraint whose name in the database differs from the name
+  in the source file is invisible to it, and to everything else in the gate —
+  nothing reads constraint names at all. That is how a 65-character key shipped
+  under a truncated, hashed name that appeared nowhere in the repository, with
+  six green CI checks and a thirteen-way mutation batch. `test_no_declared_
+  identifier_exceeds_the_postgresql_limit` closes the length case at declaration
+  time; **a name written directly into a migration and into no model is still
+  unguarded**, because the test walks `Base.metadata` and a migration is a
+  separate artefact.
 - **Nothing compares the Alembic chain against `docs/edufurther-migration/`.**
   ADR 0007 names this and ADR 0011 does not fix it. The package is canonical for
   what the target *should* contain, the chain for what a database *does*, and

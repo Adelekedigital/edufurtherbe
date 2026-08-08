@@ -81,13 +81,35 @@ def test_no_declared_identifier_exceeds_the_postgresql_limit() -> None:
     Caught in review on the M2 profile tables, where a foreign key declared at
     65 characters landed as 60 with a hash. The margin is thinner than it looks:
     several other names in this schema sit at 58 and 59.
+
+    Every kind of identifier is checked, not only the one that bit us. A
+    constraint name is where the convention makes long names likely, but the
+    limit applies to tables, columns and types identically, and a guard that
+    covered one of four would invite exactly the "what about the others"
+    question it exists to answer. Nothing is close today — the longest are 24,
+    29 and 20 characters — which is the cheapest possible moment to fix the
+    scope.
     """
     too_long: list[str] = []
     for table in Base.metadata.tables.values():
+        too_long += [f"table {table.name}" if len(table.name) > POSTGRES_IDENTIFIER_LIMIT else ""]
+        too_long += [
+            f"column {table.name}.{c.name}"
+            for c in table.c
+            if len(c.name) > POSTGRES_IDENTIFIER_LIMIT
+        ]
         names = [c.name for c in table.constraints if c.name] + [i.name for i in table.indexes]
         too_long += [str(n) for n in names if len(str(n)) > POSTGRES_IDENTIFIER_LIMIT]
 
+    too_long += [
+        f"enum type {name}"
+        for name in PG_ENUM_TYPES.values()
+        if len(name) > POSTGRES_IDENTIFIER_LIMIT
+    ]
+    too_long = [n for n in too_long if n]
+
     assert Base.metadata.tables, "no tables registered; this test would inspect nothing"
+    assert PG_ENUM_TYPES, "no enum types registered; this test would inspect nothing"
     assert not too_long, (
         "these identifiers exceed PostgreSQL's 63-character limit and will be "
         f"silently truncated and hashed: {sorted(too_long)}"
