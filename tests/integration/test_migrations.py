@@ -265,14 +265,26 @@ def schema_identifiers(url: str) -> list[str]:
     return asyncio.run(_run())
 
 
-#: Names in the database that legitimately appear nowhere in the source tree.
+#: Names the database holds that are never *declared* by that name in source.
 #:
-#: ``alembic_version_pkc`` is alembic's own. ``ck_admin_users_…`` is the naming
-#: convention expanding a short declared name, which is what the convention is
-#: for. Both are exceptions to state, not to discover — and the list is two
-#: entries precisely because everything else is written down somewhere.
+#: All three are the same case, which is why they belong together: a name the
+#: naming convention produced from a shorter declared one — ``email_is_lowercase``
+#: becomes ``ck_users_email_is_lowercase`` — plus alembic's own
+#: ``alembic_version_pkc``. That is what the convention is for, so these are
+#: exceptions to state rather than to discover.
+#:
+#: ``ck_users_email_is_lowercase`` was missing, and the test passed anyway. It
+#: appears in source in exactly two places, both **prose**: a comment in an
+#: unrelated migration explaining a historical double-render. A substring match
+#: over file text cannot tell a declaration from a sentence about one, so tidying
+#: that comment would have turned this red — and told the reader a 27-character
+#: name had been truncated past 63 bytes. Found in review, not by the test.
 UNSOURCED_IDENTIFIERS = frozenset(
-    {"alembic_version_pkc", "ck_admin_users_revoker_implies_revocation"}
+    {
+        "alembic_version_pkc",
+        "ck_admin_users_revoker_implies_revocation",
+        "ck_users_email_is_lowercase",
+    }
 )
 
 SOURCE_ROOTS = (Path("src"), Path("migrations"))
@@ -309,10 +321,18 @@ def test_every_schema_identifier_appears_verbatim_in_source(
         for path in root.rglob("*.py")
     )
 
+    # A **quoted** occurrence, not a bare substring. Every identifier this test
+    # is meant to protect is declared as a string literal — `Index("ix_…")`,
+    # `name=op.f("fk_…")`, an enum label in `ENUM_TYPES` — so requiring the
+    # quotes demands a declaration and rejects a passing mention.
+    #
+    # The looser version passed on a name that appears only inside a comment, and
+    # would have gone red the day somebody edited that comment. A test that
+    # depends on prose is a test that reports on the prose.
     missing = [
         name
         for name in schema_identifiers(disposable_database)
-        if name not in UNSOURCED_IDENTIFIERS and name not in source
+        if name not in UNSOURCED_IDENTIFIERS and f'"{name}"' not in source
     ]
 
     assert missing == [], (
