@@ -215,6 +215,80 @@ async def test_clearing_my_goal_does_not_clear_anybody_elses(
     assert [row[0] for row in remaining] == ["Theirs"], "another user's goal was destroyed"
 
 
+async def test_an_empty_patch_is_not_an_existence_oracle_for_education(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The one branch the earlier mutation batch never reached.**
+
+    A `PATCH` carrying no recognised field takes a different path: it answers
+    "does this row exist and is it yours" with a `SELECT` rather than an
+    `UPDATE`. That `SELECT` is scoped in the code and nothing held it — removing
+    `user_id` left all 570 tests green, while an empty body at another user's id
+    returned 200 and a random uuid returned 404.
+
+    Which is precisely the distinction the house rule forbids: not-found and
+    not-yours are the same answer, because telling them apart hands anyone with
+    a token an oracle over ids they do not own. The patch models are all
+    optional, so `{}` validates and reaches here over HTTP.
+    """
+    mine_auth = uuid4()
+    mine = await make_user(db_engine, mine_auth, "self@example.com")
+    theirs = await make_user(db_engine, uuid4(), "other@example.com")
+    async with db_engine.begin() as conn:
+        their_entry = (
+            await conn.execute(
+                text(
+                    "INSERT INTO education_entries (user_id, school_name_raw) "
+                    "VALUES (:u, 'Theirs') RETURNING id"
+                ),
+                {"u": theirs},
+            )
+        ).scalar_one()
+
+    real = await api_client.patch(
+        url(mine, f"education/{their_entry}"), json={}, headers=bearer(api_token(mine_auth))
+    )
+    absent = await api_client.patch(
+        url(mine, f"education/{uuid4()}"), json={}, headers=bearer(api_token(mine_auth))
+    )
+
+    assert real.status_code == 404, "an empty patch confirmed another user's entry exists"
+    assert real.status_code == absent.status_code
+    assert real.json() == absent.json(), "a real id and a made-up one answered differently"
+
+
+async def test_an_empty_patch_is_not_an_existence_oracle_for_awards(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The same branch on the other writer. Written out rather than
+    parametrised: two functions, two `SELECT`s, either of which could
+    individually lose its scope."""
+    mine_auth = uuid4()
+    mine = await make_user(db_engine, mine_auth, "self@example.com")
+    theirs = await make_user(db_engine, uuid4(), "other@example.com")
+    async with db_engine.begin() as conn:
+        their_award = (
+            await conn.execute(
+                text(
+                    "INSERT INTO user_awards (user_id, institution, title) "
+                    "VALUES (:u, 'A Body', 'Theirs') RETURNING id"
+                ),
+                {"u": theirs},
+            )
+        ).scalar_one()
+
+    real = await api_client.patch(
+        url(mine, f"awards/{their_award}"), json={}, headers=bearer(api_token(mine_auth))
+    )
+    absent = await api_client.patch(
+        url(mine, f"awards/{uuid4()}"), json={}, headers=bearer(api_token(mine_auth))
+    )
+
+    assert real.status_code == 404, "an empty patch confirmed another user's award exists"
+    assert real.status_code == absent.status_code
+    assert real.json() == absent.json(), "a real id and a made-up one answered differently"
+
+
 # --------------------------------------------------------------------------
 # Education, and the institution transaction
 # --------------------------------------------------------------------------
