@@ -4,7 +4,10 @@ Date: 2026-08-06
 
 ## Status
 
-Accepted
+Accepted. **Point 2 amended 2026-08-08** — the cursor is the id *for a
+time-ordered list*; a list whose display order is not insertion order keys on its
+sort column plus the id. See the amendment note under point 2. Nothing else in
+this record changes.
 
 ## Context
 
@@ -58,6 +61,22 @@ and therefore time-ordered (ADR 0015), so the id *is* the keyset cursor — no
 offset, no separate sort column, and no page drift when a row is inserted
 mid-scroll. Decided here rather than at the first list endpoint so that endpoint
 inherits it instead of choosing.
+
+> **Amendment, 2026-08-08 — scoped, not reversed.** The rule above is right for a
+> list displayed in insertion order, and that is what it was written for. It does
+> not hold for a list displayed in **some other order**: the lookup catalogues
+> are alphabetical, and `languages` is 7,078 rows, so an id cursor would page by
+> creation time while the client renders by name — which silently skips and
+> repeats rows rather than merely looking odd.
+>
+> So: **the id is the cursor when the display order is the id order. Otherwise
+> the cursor is the sort column plus the id**, the id breaking ties so two rows
+> sharing a display name cannot straddle a page boundary. The cursor stays
+> opaque either way, which is what makes this an implementation detail rather
+> than a contract change.
+>
+> The `{"data": [...], "next_cursor": ...}` envelope, the opacity of the cursor,
+> and "every list endpoint from the first one" are untouched.
 
 **3. Normalisation happens at the boundary, and the database constrains rather
 than transforms.** Every writer normalises on the way in: the API schema in

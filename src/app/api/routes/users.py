@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.api.deps import CurrentUserDep
+from app.api.deps import CurrentUserDep, OwnAttributesDep
+from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import UserProfileRead, UserRead
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
@@ -30,7 +31,13 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
     response_model=UserRead,
     summary="The signed-in user",
     description=(
-        "Returns the caller's own record, with their profile when one exists.\n\n"
+        "Returns the caller's own record, with their profile when one exists, "
+        "and their education, goals, awards and mentor profile embedded — so a "
+        "profile page renders in one call rather than five.\n\n"
+        "Each embedded collection is the **same shape** the matching "
+        "`/users/{user_id}/...` endpoint returns, built by the same query and "
+        "the same response model. `mentor_profile` is null for the great "
+        "majority of users, who are not mentors.\n\n"
         "`primary_role` decides which dashboard to land on and is **not** an "
         "authorization claim — permissions come from whether the relevant profile "
         "row exists, never from this field. `is_admin` reflects a live, unrevoked "
@@ -40,6 +47,16 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=ME_RESPONSES,
 )
-async def read_me(user: CurrentUserDep) -> UserRead:
+async def read_me(user: CurrentUserDep, attributes: OwnAttributesDep) -> UserRead:
     profile = UserProfileRead(**user) if user["has_profile"] else None
-    return UserRead(**user, profile=profile)
+    mentor_profile = attributes["mentor_profile"]
+    return UserRead(
+        **user,
+        profile=profile,
+        education=[EducationRead.from_row(row) for row in attributes["education"]],
+        goals=[GoalRead.from_row(row) for row in attributes["goals"]],
+        awards=[AwardRead.from_row(row) for row in attributes["awards"]],
+        mentor_profile=(
+            MentorProfileRead.from_row(mentor_profile) if mentor_profile is not None else None
+        ),
+    )

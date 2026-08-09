@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import errors
-from app.api.routes import health, users
+from app.api.routes import catalogue, health, user_attributes, users
 from app.core.config import Settings, get_settings
 
 # Tag metadata, so /docs explains each group rather than listing bare paths.
@@ -24,15 +24,34 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "catalog",
+        "description": (
+            "Public reference data, readable without a token: the mirrored "
+            "university catalogue (ADR 0020) and the lookup lists a profile form "
+            "is built from. Unauthenticated because school selection happens "
+            "during signup, before an account exists.\n\n"
+            "**Reading is public; adding is not.** A school the catalogue does "
+            "not hold is created on the authenticated education write, in the "
+            "same transaction, with `created_by` set to the caller.\n\n"
+            "Results exclude entries awaiting review and ones merged into "
+            "another, so an institution somebody typed yesterday is not offered "
+            "to everybody else until an admin has seen it."
+        ),
+    },
+    {
         "name": "users",
         "description": (
-            "The signed-in user's own record. Every endpoint here requires a "
+            "A user's own record and attributes — and, for a platform admin, "
+            "another user's. Every endpoint here requires a "
             "Supabase bearer token, and resolves it to a local user through "
             "`users.auth_id` — the token's subject is the vendor's identifier "
             "and is never exposed. "
             "Authorization is profile existence, not a role column: a mentor is "
             "someone with an approved mentor profile, and an admin is someone "
-            "holding a live grant. `primary_role` only picks a dashboard."
+            "holding a live grant. `primary_role` only picks a dashboard.\n\n"
+            "Reading another user's records requires a **live** admin grant; "
+            "anyone else receives 404, indistinguishable from a user that does "
+            "not exist."
         ),
     },
 ]
@@ -76,6 +95,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     application.include_router(health.router)
     application.include_router(users.router)
+    application.include_router(catalogue.router)
+    application.include_router(user_attributes.router)
     return application
 
 
