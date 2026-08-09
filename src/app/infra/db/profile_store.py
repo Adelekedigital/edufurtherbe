@@ -5,6 +5,15 @@ passes a `user_id` that `api.deps.get_target_user` has resolved — a row it cou
 not find is a caller who may not read it — so nothing in this module decides
 authorization, and nothing in this module may be called with an unchecked id.
 
+SOFT DELETES
+============
+``education_entries``, ``user_awards`` and ``mentor_profiles`` all carry
+``deleted_at``; ``mentee_goals`` does not. Every read of the first three excludes
+deleted rows, and `test_profile_store_soft_deletes` derives which tables need
+that from the metadata rather than from a list somebody maintains — because
+this rule has now been missed twice in this repository, once on `users` across
+five statements and once here on `user_awards`.
+
 THE INSTITUTION JOIN CARRIES NO STATUS FILTER, DELIBERATELY
 ===========================================================
 ``catalogue_store.VISIBLE`` excludes `pending_review` and merged rows from
@@ -149,7 +158,11 @@ async def list_awards(session: AsyncSession, user_id: UUID) -> list[dict[str, An
             ScholarshipProgram.display_name.label("programme_name"),
         )
         .outerjoin(ScholarshipProgram, ScholarshipProgram.id == UserAward.scholarship_program_id)
-        .where(UserAward.user_id == user_id)
+        # `deleted_at IS NULL` is not optional here, and it was missed once.
+        # `ix_user_awards_user` is declared `WHERE deleted_at IS NULL`, so a
+        # query without the predicate cannot use it — the index exists for this
+        # statement and this statement could not reach it.
+        .where(UserAward.user_id == user_id, UserAward.deleted_at.is_(None))
         .order_by(UserAward.year.desc().nulls_last(), UserAward.title)
     )
     return [dict(row) for row in (await session.execute(statement)).mappings()]

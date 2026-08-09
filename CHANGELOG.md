@@ -331,6 +331,16 @@ released. A tag with no matching section here fails the release job.
   untouched.
 - A `catalog` tag description, and the `users` one corrected: that group now
   serves `/users/{id}/...` for admins, not only the caller's own record.
+- **`list_awards` returned soft-deleted awards**, so a user who removed one still
+  saw it and so did an admin reading them. `ix_user_awards_user` is declared
+  `WHERE deleted_at IS NULL`, so the query could not use the index built for it —
+  a sequential scan where an index scan was intended. Found in review.
+  `test_profile_store_soft_deletes` now takes the list of tables needing the
+  predicate from `Base.metadata` rather than from anything a person maintains,
+  so a new soft-deletable table fails until it is covered or exempted out loud.
+  This is the second time this rule has been missed here — the first cost five
+  statements on `users`, and the module-walk that fixed it does not transfer,
+  because `profile_store` builds its statements inside functions.
 - **Settled decisions 63, 64 and 65** — `status` filters search but never an
   entity read; catalogue reads are unauthenticated and tagged `catalog`; a merge
   repoints `education_entries.institution_id` rather than being resolved at read
