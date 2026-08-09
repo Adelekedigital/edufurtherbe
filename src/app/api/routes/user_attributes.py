@@ -27,7 +27,9 @@ from app.api.deps import (
     EducationDep,
     GoalDep,
     MentorProfileDep,
+    PausedSelfDep,
     ReplacedLanguagesDep,
+    ResumedSelfDep,
     UpdatedAwardDep,
     UpdatedEducationDep,
     UpdatedMentorProfileDep,
@@ -350,3 +352,38 @@ async def edit_profile(_: UpsertedProfileDep) -> None:
 )
 async def set_languages(_: ReplacedLanguagesDep) -> None:
     return None
+
+
+@router.post(
+    "/mentor-profile/pause",
+    summary="Take yourself off the mentor listing",
+    description=(
+        "Removes the mentor from the directory and leaves their approval "
+        "untouched — a pause, not a withdrawal.\n\n"
+        "Recorded with the mentor as the actor and `mentor_paused` as the "
+        "reason, which is what lets them undo it."
+    ),
+    responses=WRITE_RESPONSES,
+)
+async def pause_listing(paused: PausedSelfDep) -> dict[str, bool]:
+    if not paused:
+        raise NotFoundError("this user has no mentor profile")
+    return {"paused": True}
+
+
+@router.post(
+    "/mentor-profile/resume",
+    summary="Return to the mentor listing",
+    description=(
+        "Only undoes **your own** pause. A mentor an admin unlisted cannot "
+        "relist themselves — otherwise a suspension is a button the suspended "
+        "person can press — and a mentor who was never approved has nothing to "
+        "return to.\n\n"
+        "Both refusals are 404, indistinguishable from having no profile."
+    ),
+    responses=WRITE_RESPONSES,
+)
+async def resume_listing(resumed: ResumedSelfDep) -> dict[str, bool]:
+    if not resumed:
+        raise NotFoundError("this listing is not yours to resume")
+    return {"resumed": True}

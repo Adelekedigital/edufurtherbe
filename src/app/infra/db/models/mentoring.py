@@ -14,7 +14,12 @@ from datetime import datetime
 from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.enums import ApprovalStatus, ListingStatus, MeetingProvider, UnlistedReason
+from app.domain.enums import (
+    ApprovalStatus,
+    ListingStatus,
+    MeetingProvider,
+    MentorStatusType,
+)
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import pg_enum
 
@@ -127,26 +132,11 @@ class MentorProfile(TimestampMixin, Base):
     approval_status: Mapped[ApprovalStatus] = mapped_column(
         pg_enum(ApprovalStatus), nullable=False, server_default=text("'pending'")
     )
-    approved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    approved_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid,
-        ForeignKey("users.id", ondelete="RESTRICT", name="fk_mentor_profiles_approved_by_users"),
-    )
-    decline_reason: Mapped[str | None] = mapped_column(Text)
-
-    # The other half of the decision. `approved_by` had no counterpart, so a
-    # decline recorded *that* it happened and never *who* — and unlike a count,
-    # that cannot be reconstructed afterwards. Reusing `approved_by` for both
-    # would put a decliner in a column named for approval, which is the shape
-    # `usage_count` and the old `updated_at` both failed in.
-    #
-    # A `mentor_status_events` log is the right end state and is not this: one
-    # transition needs two columns, a third one needs the table.
-    declined_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    declined_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid,
-        ForeignKey("users.id", ondelete="RESTRICT", name="fk_mentor_profiles_declined_by_users"),
-    )
+    # `approved_at`, `approved_by`, `declined_at`, `declined_by` and
+    # `decline_reason` are gone. Each described only the *most recent* decision,
+    # so a mentor declined, re-applied and approved had lost two of three — and
+    # each was a copy of the newest `mentor_status_events` row, which is the
+    # drift non-negotiable #8 names.
 
     listing_status: Mapped[ListingStatus] = mapped_column(
         pg_enum(ListingStatus), nullable=False, server_default=text("'unlisted'")
@@ -154,10 +144,8 @@ class MentorProfile(TimestampMixin, Base):
     # Defaults to `never_approved`, which is right for a new signup and wrong for
     # every migrated mentor — the unlisted ones in the extract are already
     # approved. The transform sets it explicitly rather than inheriting this.
-    unlisted_reason: Mapped[UnlistedReason | None] = mapped_column(
-        pg_enum(UnlistedReason), server_default=text("'never_approved'")
-    )
-    unlisted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # `unlisted_reason` and `unlisted_at` went the same way. The reason a
+    # listing changed is a fact about a transition, not about the row.
 
     headline: Mapped[str | None] = mapped_column(Text)
     years_of_experience: Mapped[int | None] = mapped_column()
@@ -210,12 +198,11 @@ class MentorProfile(TimestampMixin, Base):
             "primary_study_country_id",
             postgresql_where=text("deleted_at IS NULL"),
         ),
-        Index(
-            "ix_mentor_profiles_unlisted",
-            "unlisted_reason",
-            "unlisted_at",
-            postgresql_where=text("listing_status = 'unlisted'"),
-        ),
+        # `ix_mentor_profiles_unlisted` is gone rather than replaced. It indexed
+        # `(unlisted_reason, unlisted_at)` to answer "who is unlisted, why, and
+        # when" — now a query against `mentor_status_events`, served by that
+        # table's own index. `ix_mentor_profiles_searchable` already covers
+        # `listing_status` for the directory.
         # **One direction only, and that is forced rather than lax.** A custom
         # URL requires the custom venue; the custom venue does **not** require a
         # URL. The symmetric version —
@@ -382,4 +369,60 @@ class MenteeGoalNeed(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_mentee_goal_needs_pair", "user_id", "service_offering_id", unique=True),
         Index("ix_mentee_goal_needs_offering", "service_offering_id"),
+    )
+
+
+class MentorStatusEvent(Base):
+    """Every change to a mentor's approval or listing, append-only.
+
+    **The write path.** Application code inserts here and never touches
+    `mentor_profiles.approval_status` or `.listing_status`;
+    `trg_apply_mentor_status` projects each event onto the column it concerns.
+    That is structural rather than conventional on purpose — a helper everybody
+    remembers to call is what this repository has been burned by four times,
+    starting with `deleted_at IS NULL` typed into five statements and missed on
+    the fifth.
+
+    `alembic check` cannot see triggers, so the test inserts an event **directly**
+    and asserts the column moved. Nothing else distinguishes a working trigger
+    from a caller that happened to write both — and the first version of that
+    trigger did not work at all, because PostgreSQL refuses a direct cast between
+    two enum types.
+
+    ``mentor_user_id`` references ``mentor_profiles(user_id)`` rather than
+    ``users(id)``, the decision ``mentor_service_offerings`` already records:
+    same value, different guarantee, and an event cannot attach to a user with no
+    mentor profile.
+    """
+
+    __tablename__ = "mentor_status_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("mentor_profiles.user_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status_type: Mapped[MentorStatusType] = mapped_column(pg_enum(MentorStatusType), nullable=False)
+    #: Free text on a decline, and the `unlisted_reason` value on an unlisting.
+    reason: Mapped[str | None] = mapped_column(Text)
+    #: Who acted. Null only for rows the backfill wrote, where nobody did.
+    #: Named for the house convention — `created_by`, `granted_by`, `approved_by`.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT")
+    )
+
+    # **No `TimestampMixin`, and no `updated_at`.** This table is append-only: a
+    # row states what happened at a moment, and a fact that can be edited is not
+    # a log. `updated_at` on it would be a column nothing could ever move, which
+    # is the same emptiness `usage_count` was deleted for.
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        # The only read is one mentor's history, newest first.
+        Index("ix_mentor_status_events_mentor", "mentor_user_id", text("created_at DESC")),
     )

@@ -21,6 +21,7 @@ from app.infra.db.models.mentoring import (
     MenteeGoalNeed,
     MentorProfile,
     MentorServiceOffering,
+    MentorStatusEvent,
     ServiceOffering,
 )
 from app.infra.db.models.reference import Country, Language
@@ -47,6 +48,7 @@ __all__ = [
     "MenteeGoalNeed",
     "MentorProfile",
     "MentorServiceOffering",
+    "MentorStatusEvent",
     "ScholarshipProgram",
     "ServiceOffering",
     "User",

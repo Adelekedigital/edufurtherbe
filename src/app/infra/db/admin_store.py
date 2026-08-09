@@ -16,6 +16,10 @@ actually wants is computed:
     eight users on one spelling  -> approve it
     one user plus a typo         -> merge it
 
+Deciding a mentor's status lives in ``mentor_status_store`` rather than here:
+both an admin and the mentor themselves write those transitions, so a module
+named for the actor would have one importing the other's.
+
 MERGING REPOINTS; ``merged_into_id`` IS AN AUDIT TRAIL
 ======================================================
 Settled decision 65. The losing row's references move to the winner **in the
@@ -38,7 +42,7 @@ from sqlalchemy import CursorResult, and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
-from app.domain.enums import ApprovalStatus, ListingStatus, LookupStatus, UnlistedReason
+from app.domain.enums import ApprovalStatus, LookupStatus
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
@@ -154,50 +158,3 @@ async def pending_mentors(session: AsyncSession, *, limit: int) -> list[dict[str
         .limit(limit)
     )
     return [dict(row) for row in (await session.execute(statement)).mappings()]
-
-
-async def decide_mentor(
-    session: AsyncSession,
-    *,
-    user_id: UUID,
-    admin_id: UUID,
-    approved: bool,
-    reason: str | None = None,
-) -> bool:
-    """Approve or decline an application. **Both statuses move together.**
-
-    Approval and listing are one decision here: approving lists them, and
-    withdrawing approval unlists them in the same statement. Splitting them
-    would let the two drift into a mentor who is approved and invisible, or
-    listed and unapproved — and nothing would say which was intended.
-
-    One consequence, stated because it is a real one: an approved mentor appears
-    in search immediately, including one whose profile is empty. If that reads
-    badly, the fix is a completeness check *at approval*, not two statuses.
-    """
-    values: dict[str, Any] = {
-        "approval_status": ApprovalStatus.APPROVED if approved else ApprovalStatus.DECLINED,
-        "listing_status": ListingStatus.LISTED if approved else ListingStatus.UNLISTED,
-        "approved_at": func.now() if approved else None,
-        "approved_by": admin_id if approved else None,
-        # The other half. Both pairs are cleared on the opposite decision, so a
-        # re-decided application never carries the previous outcome's actor
-        # alongside the current status — two fields describing one decision, one
-        # of them stale, is the drift a status log will eventually remove.
-        "declined_at": None if approved else func.now(),
-        "declined_by": None if approved else admin_id,
-        "decline_reason": None if approved else reason,
-        "unlisted_at": None if approved else func.now(),
-        # `never_approved` rather than null: `ix_mentor_profiles_unlisted` is a
-        # partial index on (`unlisted_reason`, `unlisted_at`) where the listing
-        # is unlisted, so a null reason makes the row unfindable by the query
-        # that index exists to serve. The enum already carries the value this
-        # case means.
-        "unlisted_reason": None if approved else UnlistedReason.NEVER_APPROVED,
-    }
-    result = await session.execute(
-        update(MentorProfile)
-        .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
-        .values(**values)
-    )
-    return _rowcount(result) > 0

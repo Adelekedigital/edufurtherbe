@@ -67,3 +67,17 @@ class DeclineRequest(Normalised):
     """
 
     reason: str | None = Field(default=None, max_length=1000)
+
+
+class StatusEventRead(BaseModel):
+    """One transition in a mentor's history."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    status_type: str
+    reason: str | None = None
+    created_at: datetime
+    #: Null for rows the backfill wrote, where nobody made the decision.
+    created_by: UUID | None = None
+    created_by_email: str | None = None

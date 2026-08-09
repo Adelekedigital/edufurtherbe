@@ -350,13 +350,19 @@ async def test_an_unlisted_mentor_lands_with_an_explicit_reason(db_engine: Async
             mentors=[mentor_record(**{"✅approvedText": "Yes", "availableStatus": "no"})],
         )
         stored = await conn.execute(
+            text("SELECT approval_status::text, listing_status::text FROM mentor_profiles")
+        )
+        # The reason moved to the log: it describes a *transition*, and on the
+        # profile it could only ever describe the most recent one.
+        seeded = await conn.execute(
             text(
-                "SELECT approval_status::text, listing_status::text, unlisted_reason::text "
-                "FROM mentor_profiles"
+                "SELECT status_type::text, reason FROM mentor_status_events "
+                "WHERE status_type = 'unlisted'"
             )
         )
 
-    assert stored.one() == ("approved", "unlisted", "mentor_paused")
+    assert stored.one() == ("approved", "unlisted")
+    assert seeded.one() == ("unlisted", "mentor_paused")
 
 
 async def test_a_mentee_with_a_mentor_link_still_gets_a_profile(db_engine: AsyncEngine) -> None:
