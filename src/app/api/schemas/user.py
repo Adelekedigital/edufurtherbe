@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
+from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.domain.enums import PrimaryRole
 
 
@@ -66,3 +67,16 @@ class UserRead(NormalisedEmail):
     created_at: datetime
     profile: UserProfileRead | None = None
     is_admin: bool = False
+
+    # The attributes a profile page renders, embedded so one call is enough.
+    #
+    # **Additive only.** Every field above keeps its name and meaning; a client
+    # built against the previous shape is unaffected. These are the *same*
+    # models the `/users/{id}/…` routes return, built by the same store
+    # functions — `test_me_and_the_sub_resource_agree` fails if the two ever
+    # diverge, which is the whole reason both exist.
+    education: list[EducationRead] = []
+    goals: list[GoalRead] = []
+    awards: list[AwardRead] = []
+    #: Null for the great majority of users, who are not mentors.
+    mentor_profile: MentorProfileRead | None = None

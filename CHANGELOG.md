@@ -280,6 +280,77 @@ released. A tag with no matching section here fails the release job.
   `except` branch left every test green — a fallback that would have worked, and
   sent users' traffic unencrypted. The assertion is now on the failure path.
 
+- **M2's read surface** — `GET /institutions?q=`, `GET /catalog/{name}` for the
+  five lookup lists, `GET /users/{id}/education|goals|awards|mentor-profile`, and
+  `GET /me` extended to embed all four so a profile page renders in one call. The
+  sub-resources are addressed by user id rather than `/me/...` because a platform
+  admin needs one user's education; `/me` calls the same store functions and the
+  same response models, with a test asserting the two payloads are identical.
+- **Institution search is tiered, and that is measured rather than chosen.**
+  A single query combining the tiers with `OR` defeats the planner — `La` costs
+  36.5 ms by `ILIKE`, 9.4 ms by trigram, and **123.6 ms** combined. Run
+  separately, cheapest first, stopping as soon as the page is full: prefix,
+  then substring, then a fuzzy pass at a 0.5 similarity floor. A typical
+  keystroke costs about 6 ms and never reaches the fuzzy tier. Typo tolerance
+  works when the term resembles the whole name (`Univerity of Lagos`); it does
+  **not** rescue a short misspelled word against a long one (`Oxfrod`), which is
+  stated in the route description and pinned by a test so the claim cannot
+  quietly become false.
+- **`ix_institutions_name_prefix`** on `lower(name) text_pattern_ops`. The GIN
+  trigram index does not serve a prefix match, and prefix is autocomplete's
+  common path — one query per keystroke — at 59.3 ms without the index and
+  4.3 ms with it. `alembic check` **cannot** compare an expression index with an
+  operator class (it says so and skips), so two tests cover what the gate
+  cannot: the index is declared on the model, and present in the database.
+- **`languages` holds 7,078 rows**, so the lookup lists take `?q=` and page by
+  keyset rather than returning everything. The obvious trim — restrict to the
+  174 ISO 639-1 codes — is ruled out by the schema's own reasoning: 639-3 was
+  chosen precisely because the two-letter set omits Nigerian Pidgin. Closed
+  vocabularies keep their `sort_order` and never page, so degree levels still
+  read "Undergraduate, Diploma, Masters" rather than alphabetically.
+- **Every unhandled exception is now Problem Details too.** Only deliberate
+  `AppError`s were registered, so anything else — a database error, a bug, a
+  third-party failure — left as Starlette's `text/plain` "Internal Server
+  Error". That breaks ADR 0016's promise precisely in a client's error path,
+  where a JSON parse failure turns one fault into two. Found by pointing the
+  application at an unmigrated database. The detail is withheld (a database
+  error names tables and columns) and the traceback is logged, because a 500
+  that tells the caller nothing *and* the operator nothing is worse than the
+  plain text it replaces.
+- **`LIKE` wildcards in a search term are escaped.** The term is bound as a
+  parameter, which stops injection and does nothing about the *pattern* being
+  user-controlled: measured, `q=%` matched every institution, `q=____________`
+  matched every name of twelve characters or more, and `q=100%` matched nothing
+  where it should find "100% Academy". On a public unauthenticated endpoint that
+  is also a one-character way to make every tier match everything.
+- **ADR 0016's cursor rule is amended, scoped rather than reversed** — the id is
+  the cursor for a list displayed in insertion order; a list displayed in some
+  other order keys on its sort column plus the id. An id cursor over 7,078
+  alphabetically-rendered languages pages by creation time and silently skips
+  rows. The envelope, the cursor's opacity and "every list endpoint" are
+  untouched.
+- A `catalog` tag description, and the `users` one corrected: that group now
+  serves `/users/{id}/...` for admins, not only the caller's own record.
+- **`list_awards` returned soft-deleted awards**, so a user who removed one still
+  saw it and so did an admin reading them. `ix_user_awards_user` is declared
+  `WHERE deleted_at IS NULL`, so the query could not use the index built for it —
+  a sequential scan where an index scan was intended. Found in review.
+  `test_profile_store_soft_deletes` now takes the list of tables needing the
+  predicate from `Base.metadata` rather than from anything a person maintains,
+  so a new soft-deletable table fails until it is covered or exempted out loud.
+  This is the second time this rule has been missed here — the first cost five
+  statements on `users`, and the module-walk that fixed it does not transfer,
+  because `profile_store` builds its statements inside functions.
+- **Settled decisions 63, 64 and 65** — `status` filters search but never an
+  entity read; catalogue reads are unauthenticated and tagged `catalog`; a merge
+  repoints `education_entries.institution_id` rather than being resolved at read
+  time.
+- Two `failure-modes.md` rows, both found by mutation: four authorization tests
+  that all stopped at the dependency, leaving the store's own `user_id` filter
+  unexercised — dropping it would have returned every user's degrees to a caller
+  entitled to their own; and a mutation harness that scored "no tests ran" as a
+  kill, silently certifying untested code.
+
 ### Changed
 
 - **ADRs 0004 and 0009 carry correction notes: Google OAuth verification is not on

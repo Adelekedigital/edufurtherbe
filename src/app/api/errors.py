@@ -15,6 +15,8 @@ request at all.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
@@ -86,6 +88,41 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
     return problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
 
 
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001
+    """Anything nobody anticipated, still in the one shape.
+
+    **Without this, an unhandled exception leaves as `text/plain`
+    "Internal Server Error"** — Starlette's default — which breaks this module's
+    whole promise and, worse, breaks it precisely in a client's error path,
+    where a JSON parse failure turns one fault into two. Found by pointing the
+    application at a database that had not been migrated: the missing table
+    raised `ProgrammingError`, and the response was plain text.
+
+    **The detail is withheld, deliberately.** A database error names tables and
+    columns, a driver error can name a host, and a third-party client can name a
+    URL with a token in it. The same reasoning `ConfigurationError` already
+    follows.
+
+    **It is logged with its traceback**, because a 500 that says nothing to the
+    caller *and* nothing to the operator is worse than the plain-text one it
+    replaces. Stdlib logging rather than structlog: nothing in this application
+    configures logging yet, and standing that up is its own piece of work — this
+    line at least reaches uvicorn's handler today.
+    """
+    # `exc` is unused: it is logged through `.exception()`, which reads the active
+    # exception, and it must never reach the response body.
+    logging.getLogger(__name__).exception(
+        "unhandled error serving %s %s", request.method, request.url.path
+    )
+    return problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
+
+
 def register(application: FastAPI) -> None:
-    """Attach the handler for every deliberate error."""
+    """Attach the handlers.
+
+    Order matters: the `AppError` handler is registered first so a deliberate
+    error keeps its own status, and the catch-all only sees what nothing else
+    claimed. Starlette dispatches on the most specific registered class.
+    """
     application.add_exception_handler(AppError, handle_app_error)
+    application.add_exception_handler(Exception, handle_unexpected_error)

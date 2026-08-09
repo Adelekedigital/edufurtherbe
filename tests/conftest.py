@@ -6,13 +6,14 @@ import json
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import asyncpg
 import httpx
+import jwt
 import pytest
 import pytest_asyncio
 from alembic import command
@@ -24,7 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.core.config import Settings
 from app.infra.auth.admin import SupabaseAdminClient
-from app.infra.db.engine import create_database_engine
+from app.infra.auth.supabase import SupabaseTokenVerifier
+from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.provisioning_store import ProvisioningStore
 from app.main import create_app
 
@@ -61,6 +63,58 @@ def settings() -> Settings:
 def client(settings: Settings) -> Iterator[TestClient]:
     with TestClient(create_app(settings)) as test_client:
         yield test_client
+
+
+# --------------------------------------------------------------------------
+# The ASGI client every API test shares
+#
+# These began in `test_api_me.py`. A second API test file needed the same
+# fixture, the same signing key and the same seeded user, and copying them is
+# the case non-negotiable #8 names: a test double that exists in two places is a
+# defect, because the copies drift and the drifted one still passes.
+# --------------------------------------------------------------------------
+
+#: Local signing key, used only to mint tokens for tests. Flagged by S105 as a
+#: hardcoded credential, which is exactly what it is — a test that verified
+#: signatures against a real key would be testing the key, not the verifier.
+SECRET = "test-signing-secret"  # noqa: S105
+PROBLEM_JSON = "application/problem+json"
+
+
+def api_token(subject: str | uuid.UUID, *, secret: str = SECRET, **overrides: Any) -> str:
+    claims: dict[str, Any] = {
+        "sub": str(subject),
+        "aud": "authenticated",
+        "exp": datetime.now(UTC) + timedelta(hours=1),
+        "email": "someone@example.com",
+    }
+    return jwt.encode(claims | overrides, secret, algorithm="HS256")
+
+
+def bearer(value: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {value}"}
+
+
+@pytest_asyncio.fixture
+async def api_client(db_engine: AsyncEngine) -> AsyncIterator[httpx.AsyncClient]:
+    """An app bound to this test's disposable database and a local signing key.
+
+    Both are injected through ``app.state`` rather than the process-wide caches,
+    so nothing here mutates state another test would inherit.
+
+    ``httpx.AsyncClient`` over ASGI rather than ``TestClient``: the sync client
+    drives the app on its own event loop, while ``db_engine`` is bound to the one
+    pytest-asyncio is running. asyncpg notices, and the failure reads "attached
+    to a different loop" — which sounds like an asyncpg bug and is a test-harness
+    one.
+    """
+    app = create_app(Settings(_env_file=None))
+    app.state.session_factory = create_session_factory(db_engine)
+    app.state.token_verifier = SupabaseTokenVerifier(secret=SECRET)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+        yield async_client
 
 
 def _sync_dsn(url: str) -> str:
