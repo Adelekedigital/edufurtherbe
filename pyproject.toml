@@ -253,6 +253,12 @@ domain = [
 # name in the same change that adds the dependency. ADR 0004/0005/0006 state this
 # boundary; this list is the only thing that makes any of it mechanical.
 api = [
+    # Pillow. Deliberately absent from `domain` above — `domain/images.py` is
+    # where decoding belongs, and it is a pure library rather than a vendor or a
+    # framework. Denied here so image handling cannot drift out of the one module
+    # that caps pixels and re-encodes to strip EXIF: a route decoding bytes itself
+    # would bypass both, and no other gate reads imports.
+    "PIL",
     "composio",
     "composio_core",
     "supabase",
@@ -287,6 +293,12 @@ api = [
 # observability vendor plus stack traces carrying user emails and ids — not a
 # one-line change to `main.py`.
 core = [
+    # Pillow. Deliberately absent from `domain` above — `domain/images.py` is
+    # where decoding belongs, and it is a pure library rather than a vendor or a
+    # framework. Denied here so image handling cannot drift out of the one module
+    # that caps pixels and re-encodes to strip EXIF: a route decoding bytes itself
+    # would bypass both, and no other gate reads imports.
+    "PIL",
     "composio",
     "composio_core",
     "supabase",
