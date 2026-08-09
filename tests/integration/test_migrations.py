@@ -64,6 +64,7 @@ EXPECTED_TABLES = [
     "mentee_goals",
     "mentor_profiles",
     "mentor_service_offerings",
+    "mentor_status_events",
     "user_awards",
 ]
 
@@ -84,6 +85,7 @@ ENUM_TYPE_NAMES = (
     "listing_status",
     "lookup_status",
     "meeting_provider",
+    "mentor_status_type",
     "primary_role",
     "unlisted_reason",
     "verification_status",

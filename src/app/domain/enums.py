@@ -184,6 +184,26 @@ class UnlistedReason(StrEnum):
     NEVER_APPROVED = "never_approved"
 
 
+class MentorStatusType(StrEnum):
+    """What a `mentor_status_events` row records.
+
+    Two dimensions in one value, and unambiguously so: `approved`/`declined`
+    concern approval, `listed`/`unlisted` concern listing. **A separate
+    `dimension` column would be a second representation of something the value
+    already says**, and two representations of one fact eventually disagree.
+
+    Each row states only what changed and copies nothing forward, so two
+    transitions on different dimensions cannot combine into a state that never
+    existed. Current state lives on `mentor_profiles`, kept in step by
+    `trg_apply_mentor_status`.
+    """
+
+    APPROVED = "approved"
+    DECLINED = "declined"
+    LISTED = "listed"
+    UNLISTED = "unlisted"
+
+
 class VerificationStatus(StrEnum):
     """Whether a self-reported award has been checked. **Nothing checks one yet.**
 

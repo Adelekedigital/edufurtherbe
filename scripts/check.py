@@ -41,6 +41,22 @@ STEPS: list[Step] = [
     ("security", ["bandit", "-q", "-ll", "-c", "pyproject.toml", "-r", "src"]),
 ]
 
+#: The inner loop: everything that answers in seconds, and unit tests without
+#: coverage.
+#:
+#: **This exists because the full gate is the wrong feedback loop for a typo.**
+#: The suite is ~95% of the gate's runtime — measured at 478s of a 500s run — so
+#: every one-line lint error cost a full cycle to discover. Three separate
+#: commits were rejected for something `ruff` answers in two seconds.
+#:
+#: It is deliberately **not** a substitute for the gate. It skips the database
+#: tests, which is where every authorization defect this project has found was
+#: found, and it skips coverage, so it cannot tell you the threshold still holds.
+#: Run it while writing; run the full gate before committing.
+FAST: list[Step] = [step for step in STEPS if step[0] in {"format", "lint", "types", "layers"}] + [
+    ("tests-unit", ["pytest", "tests/unit", "-q"])
+]
+
 
 def run(step: Step) -> bool:
     name, command = step
@@ -79,6 +95,11 @@ def main(argv: list[str] | None = None) -> int:
         help="comma-separated subset to run, e.g. --only lint,types. Default: every step.",
     )
     parser.add_argument("--list", action="store_true", help="print the step names and exit")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="the inner loop: lint, types, layers and unit tests, no database, no coverage",
+    )
     args = parser.parse_args(argv)
 
     if args.list:
@@ -86,7 +107,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{name}: {' '.join(command)}")
         return 0
 
-    steps = select([name for name in args.only.split(",") if name])
+    if args.fast and args.only:
+        # Two selections would silently pick one. Refusing is the same reasoning
+        # `select` uses for an unknown name: a check that quietly ran something
+        # other than what was asked for is worse than one that refused.
+        raise SystemExit("--fast and --only cannot be combined; --fast is a preset of --only.")
+
+    steps = FAST if args.fast else select([name for name in args.only.split(",") if name])
     failed = [name for name, command in steps if not run((name, command))]
 
     print("\n" + "=" * 60)

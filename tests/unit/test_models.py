@@ -46,6 +46,7 @@ EXPECTED_MODELS = {
     # nothing to migrate and nothing to write it.
     "MentorProfile",
     "MentorServiceOffering",
+    "MentorStatusEvent",
     "EducationEntry",
     "UserAward",
     "MenteeGoal",
@@ -54,6 +55,15 @@ EXPECTED_MODELS = {
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
+
+#: Append-only tables, which carry `created_at` and no `updated_at`.
+#:
+#: **Named rather than silently absent.** A row here states what happened at a
+#: moment; a fact that can be edited is not a log, so `updated_at` would be a
+#: column nothing could ever move — the same emptiness `usage_count` was deleted
+#: for. Listing the exemption makes it a decision somebody made, and a new model
+#: that quietly drops `updated_at` still fails.
+APPEND_ONLY = frozenset({"MentorStatusEvent"})
 
 
 def mapped_classes() -> list[type]:
@@ -141,8 +151,14 @@ def test_every_model_carries_both_timestamp_columns() -> None:
 
     for mapper in mappers:
         columns = set(mapper.columns.keys())
-        missing = [name for name in TIMESTAMP_COLUMNS if name not in columns]
+        expected = ("created_at",) if mapper.class_.__name__ in APPEND_ONLY else TIMESTAMP_COLUMNS
+        missing = [name for name in expected if name not in columns]
         assert not missing, f"{mapper.class_.__name__} is missing {missing}"
+
+        if mapper.class_.__name__ in APPEND_ONLY:
+            assert "updated_at" not in columns, (
+                f"{mapper.class_.__name__} is declared append-only and carries updated_at"
+            )
 
 
 def test_timestamps_are_timezone_aware() -> None:
@@ -153,7 +169,8 @@ def test_timestamps_are_timezone_aware() -> None:
     formatting preference.
     """
     for mapper in Base.registry.mappers:
-        for name in TIMESTAMP_COLUMNS:
+        expected = ("created_at",) if mapper.class_.__name__ in APPEND_ONLY else TIMESTAMP_COLUMNS
+        for name in expected:
             column = mapper.columns[name]
 
             assert isinstance(column.type, TIMESTAMP), f"{mapper.class_.__name__}.{name}"
@@ -168,6 +185,8 @@ def test_no_model_declares_an_orm_side_onupdate() -> None:
     and the wrong one would be whichever nobody was looking at.
     """
     for mapper in Base.registry.mappers:
+        if mapper.class_.__name__ in APPEND_ONLY:
+            continue
         column = mapper.columns["updated_at"]
 
         assert column.onupdate is None, f"{mapper.class_.__name__}.updated_at has an ORM onupdate"

@@ -407,21 +407,28 @@ async def test_approving_lists_the_mentor_and_records_who_decided(
     assert response.status_code == 200
     async with db_engine.connect() as conn:
         row = await conn.execute(
+            text("SELECT approval_status, listing_status FROM mentor_profiles WHERE user_id = :u"),
+            {"u": target},
+        )
+        approval, listing = row.one()
+        # Who decided now lives in the log, not in a column on the profile.
+        events = await conn.execute(
             text(
-                "SELECT approval_status, listing_status, approved_by, declined_by "
-                "FROM mentor_profiles WHERE user_id = :u"
+                "SELECT status_type, created_by FROM mentor_status_events "
+                "WHERE mentor_user_id = :u ORDER BY status_type"
             ),
             {"u": target},
         )
-        approval, listing, approved_by, declined_by = row.one()
+        written = [(str(status), actor) for status, actor in events]
 
     # **Not `endswith`.** `"unlisted".endswith("listed")` is True, so the
     # obvious assertion accepts the exact value it exists to reject — a mutation
     # forcing `unlisted` on approval sailed through it.
     assert str(approval) == "approved"
     assert str(listing) == "listed"
-    assert approved_by == admin
-    assert declined_by is None
+    # Two events, not one: approval and listing are separate dimensions, and a
+    # row stating both would have to copy one forward.
+    assert written == [("approved", admin), ("listed", admin)]
 
 
 async def test_declining_records_who_declined(
@@ -445,22 +452,25 @@ async def test_declining_records_who_declined(
     assert response.status_code == 200
     async with db_engine.connect() as conn:
         row = await conn.execute(
+            text("SELECT approval_status, listing_status FROM mentor_profiles WHERE user_id = :u"),
+            {"u": target},
+        )
+        approval, listing = row.one()
+        events = await conn.execute(
             text(
-                "SELECT approval_status, listing_status, declined_by, decline_reason, "
-                "unlisted_reason, approved_by FROM mentor_profiles WHERE user_id = :u"
+                "SELECT status_type, reason, created_by FROM mentor_status_events "
+                "WHERE mentor_user_id = :u ORDER BY status_type"
             ),
             {"u": target},
         )
-        approval, listing, declined_by, reason, unlisted_reason, approved_by = row.one()
+        written = [(str(status), reason, actor) for status, reason, actor in events]
 
     assert str(approval) == "declined"
     assert str(listing) == "unlisted"
-    assert declined_by == admin
-    assert reason == "not enough experience"
-    # Not null: `ix_mentor_profiles_unlisted` is partial on (reason, at), so a
-    # null reason makes the row unfindable by the query that index serves.
-    assert str(unlisted_reason) == "never_approved"
-    assert approved_by is None
+    assert written == [
+        ("declined", "not enough experience", admin),
+        ("unlisted", "never_approved", admin),
+    ]
 
 
 async def test_declining_without_a_reason_is_allowed(
@@ -502,7 +512,11 @@ async def test_an_admin_may_decide_their_own_application(
     assert response.status_code == 200
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text("SELECT approved_by FROM mentor_profiles WHERE user_id = :u"), {"u": admin}
+            text(
+                "SELECT created_by FROM mentor_status_events "
+                "WHERE mentor_user_id = :u AND status_type = 'approved'"
+            ),
+            {"u": admin},
         )
     assert row.scalar_one() == admin, "self-approval left no trace of who decided"
 

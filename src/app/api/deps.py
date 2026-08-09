@@ -41,7 +41,6 @@ from app.domain.enums import AdminRole
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.db.admin_store import (
     approve_institution,
-    decide_mentor,
     merge_institution,
     pending_institutions,
     pending_mentors,
@@ -49,6 +48,14 @@ from app.infra.db.admin_store import (
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.mentor_status_store import (
+    decide,
+    history,
+    may_self_resume,
+    pause,
+    resume,
+    set_listing,
+)
 from app.infra.db.profile_store import (
     get_goal,
     get_mentor_profile,
@@ -590,11 +597,55 @@ async def decided_mentor(
     session: SessionDep,
     approve: Annotated[bool, Query(description="True to approve, false to decline.")] = True,
 ) -> bool:
-    changed = await decide_mentor(
+    changed = await decide(
         session, user_id=user_id, admin_id=admin_id, approved=approve, reason=payload.reason
     )
     await session.commit()
     return changed
+
+
+async def listed_mentor(
+    user_id: UUID,
+    payload: DeclineRequest,
+    admin_id: MentorAdminDep,
+    session: SessionDep,
+    listed: Annotated[bool, Query(description="True to list, false to unlist.")] = True,
+) -> bool:
+    """An admin moving a mentor's listing without touching their approval."""
+    changed = await set_listing(
+        session, user_id=user_id, admin_id=admin_id, listed=listed, reason=payload.reason
+    )
+    await session.commit()
+    return changed
+
+
+async def mentor_history(
+    user_id: UUID,
+    _: QueueViewerDep,
+    session: SessionDep,
+    limit: Annotated[int | None, Query(ge=1, le=200)] = None,
+) -> list[dict[str, Any]]:
+    return await history(session, user_id, limit=min(limit or 50, 200))
+
+
+async def paused_self(user_id: OwnerDep, session: SessionDep) -> bool:
+    paused = await pause(session, user_id=user_id)
+    await session.commit()
+    return paused
+
+
+async def resumed_self(user_id: OwnerDep, session: SessionDep) -> bool:
+    """Refused unless this mentor was the one who paused themselves.
+
+    Checked here rather than in the route because the answer needs the database:
+    it is the newest unlisting's reason, and an admin's unlisting must not be
+    undoable by the person it concerns.
+    """
+    if not await may_self_resume(session, user_id):
+        return False
+    resumed = await resume(session, user_id=user_id)
+    await session.commit()
+    return resumed
 
 
 PendingInstitutionsDep = Annotated[list[dict[str, Any]], Depends(pending_institution_rows)]
@@ -602,6 +653,10 @@ ApprovedInstitutionDep = Annotated[bool, Depends(approved_institution)]
 MergedInstitutionDep = Annotated[int, Depends(merged_institution)]
 PendingMentorsDep = Annotated[list[dict[str, Any]], Depends(pending_mentor_rows)]
 DecidedMentorDep = Annotated[bool, Depends(decided_mentor)]
+ListedMentorDep = Annotated[bool, Depends(listed_mentor)]
+MentorHistoryDep = Annotated[list[dict[str, Any]], Depends(mentor_history)]
+PausedSelfDep = Annotated[bool, Depends(paused_self)]
+ResumedSelfDep = Annotated[bool, Depends(resumed_self)]
 
 
 async def replaced_languages(

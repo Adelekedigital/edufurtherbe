@@ -437,6 +437,34 @@ released. A tag with no matching section here fails the release job.
   asserting `endswith("listed")`, which `"unlisted"` satisfies, and a seed
   literal typed by hand instead of pasted from its generator.
 
+- **`mentor_status_events`, and the log becomes the write path.** Every approval
+  and listing transition is recorded with who made it, when and why;
+  `trg_apply_mentor_status` projects each event onto `mentor_profiles`, so
+  application code inserts an event and never updates a status column. The two
+  columns stay because `ix_mentor_profiles_searchable` indexes exactly them.
+- **Seven columns go** — `approved_at`, `approved_by`, `declined_at`,
+  `declined_by`, `decline_reason`, `unlisted_at`, `unlisted_reason`. Each held
+  only the most recent decision, so a mentor declined, re-applied, approved and
+  then unlisted had lost three of four. `ix_mentor_profiles_unlisted` goes with
+  them and is not replaced: the query it served now runs against the log.
+- **An admin can unlist an approved mentor without declining them** —
+  `POST /admin/mentors/{id}/listing` — which is the third transition that made
+  two columns per state stop scaling. `GET /admin/mentors/{id}/history` reads it
+  back, newest first.
+- **A mentor can pause and resume their own listing**, and **only their own**:
+  resume is refused unless the newest unlisting carries `mentor_paused` and the
+  mentor is approved. Otherwise a suspension would be a button the suspended
+  person can press.
+- **`scripts/check.py --fast`** — ruff, mypy, layers and unit tests, **~20
+  seconds against 8–15 minutes** for the full gate. The suite is ~95% of the
+  gate's runtime, so a one-line lint error cost a full cycle to find; three
+  commits in the previous releases were rejected for something ruff answers in
+  two seconds. It skips the database tests and coverage deliberately, and is not
+  a substitute for the gate before committing.
+- **Settled decisions 73-75**, four `failure-modes.md` rows, and one more entry
+  on the `alembic check` blind-spot list — it cannot see triggers, and one now
+  carries a rule.
+
 ### Changed
 
 - **ADRs 0004 and 0009 carry correction notes: Google OAuth verification is not on

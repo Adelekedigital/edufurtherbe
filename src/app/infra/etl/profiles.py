@@ -35,17 +35,43 @@ from app.domain.transform.profiles import (
     MentorProfileRow,
 )
 
+# One event per migrated mentor, and only if they have none.
+#
+# **The status columns above are still written directly, and this is the one
+# place that happens.** The loader syncs current state from a re-exported
+# snapshot, so a re-run must be able to correct it; going through the log
+# instead would append a second event every time. The guard keeps the history
+# itself idempotent.
+#
+# `created_at` comes from the source decision where Bubble recorded one, and
+# from the profile otherwise — the same honesty the migration's backfill uses.
+# `created_by` is null: nobody in this system made these decisions.
+SEED_MENTOR_HISTORY = """
+INSERT INTO mentor_status_events (mentor_user_id, status_type, reason, created_at)
+VALUES (:user_id, CAST(:status_type AS mentor_status_type), :reason, :created_at)
+"""
+
+#: Whether this mentor already has a history, asked **once** before writing both
+#: events.
+#:
+#: A `WHERE NOT EXISTS` on each insert looks equivalent and is not: the first
+#: event satisfies the second one's guard, so only the approval was ever
+#: written and every migrated mentor lost their listing event. Caught by a test
+#: asserting the reason, not by reading the SQL.
+MENTOR_HAS_HISTORY = """
+SELECT 1 FROM mentor_status_events WHERE mentor_user_id = :user_id LIMIT 1
+"""
+
 UPSERT_MENTOR_PROFILE = """
 INSERT INTO mentor_profiles (
     user_id, legacy_bubble_id, created_at, updated_at,
-    approval_status, approved_at, listing_status, unlisted_reason,
+    approval_status, listing_status,
     requires_booking_confirmation, default_meeting_venue,
     primary_study_country_id, primary_study_program
 ) VALUES (
     :user_id, :legacy_bubble_id, :created_at, :updated_at,
-    CAST(:approval_status AS approval_status), :approved_at,
+    CAST(:approval_status AS approval_status),
     CAST(:listing_status AS listing_status),
-    CAST(:unlisted_reason AS unlisted_reason),
     :requires_booking_confirmation,
     CAST(:default_meeting_venue AS meeting_provider),
     :primary_study_country_id, :primary_study_program
@@ -55,9 +81,7 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     created_at                    = EXCLUDED.created_at,
     updated_at                    = EXCLUDED.updated_at,
     approval_status               = EXCLUDED.approval_status,
-    approved_at                   = EXCLUDED.approved_at,
     listing_status                = EXCLUDED.listing_status,
-    unlisted_reason               = EXCLUDED.unlisted_reason,
     requires_booking_confirmation = EXCLUDED.requires_booking_confirmation,
     default_meeting_venue         = EXCLUDED.default_meeting_venue,
     primary_study_country_id      = EXCLUDED.primary_study_country_id,
@@ -237,17 +261,36 @@ class ProfileLoader:
                     "created_at": mentor.created_at,
                     "updated_at": mentor.updated_at,
                     "approval_status": mentor.approval_status.value,
-                    "approved_at": mentor.approved_at,
                     "listing_status": mentor.listing_status.value,
-                    "unlisted_reason": (
-                        mentor.unlisted_reason.value if mentor.unlisted_reason else None
-                    ),
                     "requires_booking_confirmation": mentor.requires_booking_confirmation,
                     "default_meeting_venue": mentor.default_meeting_venue.value,
                     "primary_study_country_id": country_id,
                     "primary_study_program": mentor.primary_study_program,
                 },
             )
+            already = await self._connection.execute(text(MENTOR_HAS_HISTORY), {"user_id": owner})
+            seeded = (
+                ()
+                if already.first() is not None
+                else (
+                    (mentor.approval_status.value, None, mentor.approved_at or mentor.created_at),
+                    (
+                        mentor.listing_status.value,
+                        mentor.unlisted_reason.value if mentor.unlisted_reason else None,
+                        mentor.created_at,
+                    ),
+                )
+            )
+            for status_type, reason, when in seeded:
+                await self._connection.execute(
+                    text(SEED_MENTOR_HISTORY),
+                    {
+                        "user_id": owner,
+                        "status_type": status_type,
+                        "reason": reason,
+                        "created_at": when,
+                    },
+                )
             mentor_count += 1
 
             for slug in mentor.service_slugs:

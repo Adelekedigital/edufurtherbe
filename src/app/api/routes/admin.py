@@ -24,11 +24,17 @@ from fastapi import APIRouter, status
 from app.api.deps import (
     ApprovedInstitutionDep,
     DecidedMentorDep,
+    ListedMentorDep,
+    MentorHistoryDep,
     MergedInstitutionDep,
     PendingInstitutionsDep,
     PendingMentorsDep,
 )
-from app.api.schemas.admin import PendingInstitutionRead, PendingMentorRead
+from app.api.schemas.admin import (
+    PendingInstitutionRead,
+    PendingMentorRead,
+    StatusEventRead,
+)
 from app.api.schemas.common import Page
 from app.core.errors import NotFoundError
 
@@ -143,3 +149,39 @@ async def decide(changed: DecidedMentorDep) -> dict[str, bool]:
     if not changed:
         raise NotFoundError("no mentor application for that user")
     return {"decided": True}
+
+
+@router.post(
+    "/mentors/{user_id}/listing",
+    summary="List or unlist a mentor",
+    description=(
+        "Moves a mentor's listing **without touching their approval** — the "
+        "transition this log exists for. Unlisting an approved mentor takes them "
+        "out of the directory and leaves the approval intact; listing puts them "
+        "back.\n\n"
+        "Recorded as its own event, so who unlisted somebody is answerable even "
+        "though it no longer follows from the approval decision."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def set_mentor_listing(changed: ListedMentorDep) -> dict[str, bool]:
+    if not changed:
+        raise NotFoundError("no mentor profile for that user")
+    return {"changed": True}
+
+
+@router.get(
+    "/mentors/{user_id}/history",
+    response_model=Page[StatusEventRead],
+    summary="A mentor's status history",
+    description=(
+        "Every approval and listing transition, newest first, with who made it "
+        "and why.\n\n"
+        "`created_by` is null on rows written by the migration that introduced "
+        "this log — nobody made those decisions at that moment, and inventing an "
+        "actor would be worse than an honest null."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def mentor_status_history(rows: MentorHistoryDep) -> Page[StatusEventRead]:
+    return Page(data=[StatusEventRead(**row) for row in rows])

@@ -30,6 +30,7 @@ from app.domain.enums import (
     ListingStatus,
     LookupStatus,
     MeetingProvider,
+    MentorStatusType,
     PrimaryRole,
     UnlistedReason,
     VerificationStatus,
@@ -58,6 +59,7 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     ApprovalStatus: "approval_status",
     ListingStatus: "listing_status",
     UnlistedReason: "unlisted_reason",
+    MentorStatusType: "mentor_status_type",
     VerificationStatus: "verification_status",
     MeetingProvider: "meeting_provider",
 }

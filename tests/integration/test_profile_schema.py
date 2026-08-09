@@ -443,18 +443,17 @@ async def test_a_new_profile_is_pending_and_unlisted(db_engine: AsyncEngine) -> 
         await add_mentor_profile(conn, mentor)
 
         row = await conn.execute(
-            text(
-                "SELECT approval_status::text, listing_status::text, unlisted_reason::text "
-                "FROM mentor_profiles"
-            )
+            text("SELECT approval_status::text, listing_status::text FROM mentor_profiles")
         )
-        approval, listing, reason = row.one()
+        approval, listing = row.one()
+        # A brand-new profile has no history: nothing has decided anything yet.
+        events = await conn.execute(text("SELECT count(*) FROM mentor_status_events"))
 
     assert approval == "pending"
     assert listing == "unlisted"
+    assert events.scalar_one() == 0
     # Right for a new signup, wrong for every migrated mentor — the M2c transform
     # sets this explicitly rather than inheriting it.
-    assert reason == "never_approved"
 
 
 # --------------------------------------------------------------------------
