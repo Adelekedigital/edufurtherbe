@@ -41,7 +41,7 @@ from app.infra.db.models.mentoring import (
     MentorServiceOffering,
 )
 from app.infra.db.models.scholarships import UserAward
-from app.infra.db.models.user import User, UserProfile
+from app.infra.db.models.user import User, UserLanguage, UserProfile
 
 GOAL_COLUMNS = ("degree_goal_id", "degree_goal_raw", "target_start_term", "notes")
 AWARD_COLUMNS = ("title", "institution", "scholarship_program_id", "year", "evidence_url")
@@ -305,3 +305,42 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
         await session.execute(
             update(UserProfile).where(UserProfile.user_id == user_id).values(**values)
         )
+
+
+# --------------------------------------------------------------------------
+# Languages
+# --------------------------------------------------------------------------
+
+
+async def replace_languages(
+    session: AsyncSession, user_id: UUID, entries: list[dict[str, Any]]
+) -> None:
+    """Replace the user's languages wholesale.
+
+    **Delete then insert, in that order and in one transaction.** Two unique
+    partial indexes make anything else fail:
+    `ix_user_languages_one_primary` allows one primary per user, and
+    `ix_user_languages_user_language` allows a language once — so writing the new
+    primary before clearing the old one raises, exactly as `is_most_recent` does
+    on education. Clearing first makes both constraints a backstop rather than
+    the thing the user meets.
+
+    Replace rather than merge, because the request carries the whole list and a
+    merge could not express removal: a user unticking their last language would
+    have no way to say so.
+    """
+    await session.execute(delete(UserLanguage).where(UserLanguage.user_id == user_id))
+    if not entries:
+        return
+    await session.execute(
+        insert(UserLanguage),
+        [
+            {
+                "user_id": user_id,
+                "language_id": entry["language_id"],
+                "proficiency": entry["proficiency"],
+                "is_primary": entry["is_primary"],
+            }
+            for entry in entries
+        ],
+    )

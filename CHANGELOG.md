@@ -399,6 +399,44 @@ released. A tag with no matching section here fails the release job.
   one where a migration suppressed ruff's `S608` to build SQL by string
   formatting and was then broken by the apostrophe in "Bachelor's Degree".
 
+- **The review surface** — `/api/v1/admin`, tagged `admin`: the pending
+  institution queue ranked by how many education entries reference each row,
+  approve, merge, the pending mentor queue, and a decision endpoint. **The only
+  endpoints that show one user another's records by design**, so the control is
+  the caller's grant rather than a row scope, and every one is tested against
+  four cases: no token, no grant, a revoked grant, a live one.
+- **Grants are role-specific.** `AdminRole` already distinguished
+  `super_admin`, `mentor_approval` and `limited_access`; treating them as
+  interchangeable would have made the enum decorative. `mentor_approval` decides
+  applications and cannot curate the catalogue; `limited_access` reads and
+  changes nothing.
+- **Merging repoints, in one transaction** (settled decision 65). The losing
+  row's entries move to the winner and it is marked `merged` together, so the
+  chain collapses at merge time and no later read follows it. Merging into a
+  row that is itself merged, or into itself, is a 409.
+- **`declined_at` and `declined_by`.** `approved_by` had no counterpart, so a
+  decline recorded *that* it happened and never *who* — and unlike a count that
+  cannot be reconstructed afterwards. Reusing the approve pair would have put a
+  decliner in a column named for approval, the shape `usage_count` and the old
+  `updated_at` both failed in.
+- **`languages.is_common`** marks the 100 languages in CLDR's `modern` coverage
+  tier, with `GET /catalog/languages?common=true` serving the picker and search
+  still reaching all 7,078. Replacing the table with the common set was measured
+  and rejected: it would delete Efik, Ibibio, Tiv, Kanuri, Idoma, Urhobo, Nupe,
+  Gbagyi, Esan, Ebira and Jukun — every one a Nigerian language, on a platform
+  for African students. `pcm` is out of the default by our decision rather than
+  the standard's, and stays searchable.
+- `scripts/derive_common_languages.py` regenerates that list from CLDR, and a
+  test asserts the seed still matches it. The migration holds a literal because
+  a migration that fetches cannot be replayed.
+- **`PUT /users/{id}/languages`**, carried over from the previous release's
+  checklist. Replaces the whole list; at most one primary and no duplicates,
+  both refused at the boundary with a 422 rather than surfacing a unique-index
+  violation as a 500.
+- **Settled decisions 70-72** and four `failure-modes.md` rows — including a test
+  asserting `endswith("listed")`, which `"unlisted"` satisfies, and a seed
+  literal typed by hand instead of pasted from its generator.
+
 ### Changed
 
 - **ADRs 0004 and 0009 carry correction notes: Google OAuth verification is not on

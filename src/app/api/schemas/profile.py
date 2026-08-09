@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.schemas.catalogue import CountryRef, InstitutionRead
 from app.api.schemas.common import Normalised
+from app.domain.enums import LanguageProficiency
 
 
 class LookupRef(BaseModel):
@@ -360,3 +361,37 @@ class AwardPatch(Normalised):
     scholarship_program_id: UUID | None = None
     year: int | None = Field(default=None, ge=1900, le=2100)
     evidence_url: str | None = Field(default=None, max_length=1000)
+
+
+class UserLanguageWrite(Normalised):
+    """One language a user speaks, and how well."""
+
+    language_id: UUID
+    proficiency: LanguageProficiency = LanguageProficiency.FLUENT
+    is_primary: bool = False
+
+
+class UserLanguagesWrite(Normalised):
+    """The user's whole language list, replacing whatever is there.
+
+    **At most one may be primary**, and that is enforced by
+    `ix_user_languages_one_primary`, a unique partial index — so a second
+    primary is an `IntegrityError` rather than a silent duplicate. Refusing it
+    here gives the client a 422 naming the problem instead of a 500.
+
+    A language may appear once: `ix_user_languages_user_language` is unique on
+    the pair, and a list containing the same language twice is a client bug
+    worth naming rather than a constraint violation to decode.
+    """
+
+    languages: list[UserLanguageWrite] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _one_primary_and_no_duplicates(self) -> UserLanguagesWrite:
+        primaries = [entry for entry in self.languages if entry.is_primary]
+        if len(primaries) > 1:
+            raise ValueError("only one language may be primary")
+        ids = [entry.language_id for entry in self.languages]
+        if len(ids) != len(set(ids)):
+            raise ValueError("a language may appear only once")
+        return self

@@ -8,7 +8,7 @@ classes get bound to what the routes ask for.
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from functools import lru_cache
 from typing import Annotated, Any
 from uuid import UUID
@@ -18,6 +18,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.schemas.admin import DeclineRequest, MergeRequest
 from app.api.schemas.common import (
     LOOKUP_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -31,11 +32,20 @@ from app.api.schemas.profile import (
     EducationWrite,
     GoalWrite,
     MentorProfileWrite,
+    UserLanguagesWrite,
     UserProfileWrite,
 )
 from app.core.config import Settings, get_settings
 from app.core.errors import AuthenticationError, ConflictError, NotFoundError
+from app.domain.enums import AdminRole
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
+from app.infra.db.admin_store import (
+    approve_institution,
+    decide_mentor,
+    merge_institution,
+    pending_institutions,
+    pending_mentors,
+)
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
@@ -50,6 +60,7 @@ from app.infra.db.profile_writer import (
     create_mentor_profile,
     delete_award,
     delete_goal,
+    replace_languages,
     update_award,
     update_mentor_profile,
     upsert_goal,
@@ -129,21 +140,30 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # where one becomes the other, exactly once per request.
 #
 # `is_admin` is resolved *in the query* rather than fetched and checked after,
-# per non-negotiable #5. It is profile existence, not a column: an admin is a
-# user holding a live grant, and `revoked_at IS NULL` is what makes revocation
+# per non-negotiable #5. It is grant existence, not a column: an admin is a user
+# holding a live grant, and `revoked_at IS NULL` is what makes revocation
 # actually revoke.
+#
+# **`admin_roles` carries which grants**, because `AdminRole` distinguishes
+# `super_admin`, `mentor_approval` and `limited_access` — so "is an admin" is not
+# the question an endpoint needs answered. `array_agg` over no rows is `NULL`,
+# which is what `is_admin` is derived from: one subquery answering both, rather
+# than an `EXISTS` beside an aggregate that could disagree.
 CURRENT_USER = text("""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at,
            p.about_me, p.gender, p.avatar_url, p.banner_url,
            p.social_linkedin, p.social_twitter, p.social_youtube,
            (p.user_id IS NOT NULL) AS has_profile,
-           EXISTS (
-               SELECT 1 FROM admin_users a
-               WHERE a.user_id = u.id AND a.revoked_at IS NULL
-           ) AS is_admin
+           COALESCE(a.roles, ARRAY[]::text[]) AS admin_roles,
+           (a.roles IS NOT NULL) AS is_admin
     FROM users u
     LEFT JOIN user_profiles p ON p.user_id = u.id
+    LEFT JOIN LATERAL (
+        SELECT array_agg(g.admin_role::text) AS roles
+        FROM admin_users g
+        WHERE g.user_id = u.id AND g.revoked_at IS NULL
+    ) a ON TRUE
     WHERE u.auth_id = :auth_id AND u.deleted_at IS NULL
 """)
 
@@ -285,6 +305,7 @@ async def lookup_page(
     q: Annotated[str | None, Query(description="Filter by display name.")] = None,
     limit: Annotated[int | None, Query(ge=1, le=LOOKUP_PAGE_SIZE)] = None,
     cursor: Annotated[str | None, Query(description="From a previous `next_cursor`.")] = None,
+    common: Annotated[bool, Query(description="Only the common set — `languages` only.")] = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of a lookup catalogue, and whether another follows."""
     if catalogue not in LOOKUPS:
@@ -294,6 +315,7 @@ async def lookup_page(
         session,
         catalogue,
         q=q,
+        common=common,
         # A bigger default than the shared one: this serves select boxes, and
         # `countries` is 249 rows a client wants in a single call.
         limit=min(limit or LOOKUP_PAGE_SIZE, LOOKUP_PAGE_SIZE),
@@ -471,3 +493,122 @@ DeletedAwardDep = Annotated[bool, Depends(deleted_award)]
 CreatedMentorProfileDep = Annotated[UUID, Depends(created_mentor_profile)]
 UpdatedMentorProfileDep = Annotated[bool, Depends(updated_mentor_profile)]
 UpsertedProfileDep = Annotated[None, Depends(upserted_profile)]
+
+
+# --------------------------------------------------------------------------
+# The admin surface
+#
+# **The control here is caller privilege, not row scoping** — which inverts
+# every other guard in this module. Elsewhere the danger is one user reaching
+# another's rows; here it is a caller with no grant reaching an action that
+# changes somebody else's record. So the failure mode a test must chase is the
+# opposite one, and there are four cases per endpoint rather than two.
+#
+# **A caller without the grant gets 404, not 403.** Same reasoning as everywhere
+# else: 403 confirms the endpoint exists and that somebody may use it, which is
+# exactly what an unprivileged caller should not learn.
+# --------------------------------------------------------------------------
+
+
+def require_admin(*roles: AdminRole) -> Callable[[dict[str, Any]], uuid.UUID]:
+    """A dependency admitting only a caller holding one of ``roles``.
+
+    A factory rather than one `AdminDep`, because `AdminRole` distinguishes what
+    a grant is *for*: `mentor_approval` exists to approve mentors and says
+    nothing about curating the catalogue. Treating every grant as equivalent
+    would make the enum decorative — and this schema has removed a decorative
+    column before.
+
+    `super_admin` is admitted everywhere without being listed at each call site;
+    spelling it out on every route is the kind of repetition that eventually
+    disagrees with itself.
+    """
+    permitted = {AdminRole.SUPER_ADMIN, *roles}
+
+    def dependency(user: CurrentUserDep) -> uuid.UUID:
+        held = {str(role) for role in user["admin_roles"]}
+        if not held & {str(role) for role in permitted}:
+            raise NotFoundError("no such endpoint")
+        # The acting admin's id: `approved_by` and `granted_by` want to know who
+        # did it, and taking it from the token is the only answer a caller
+        # cannot supply.
+        return uuid.UUID(str(user["id"]))
+
+    return dependency
+
+
+#: Curating the catalogue — institutions. `limited_access` may look, not act.
+CatalogueAdminDep = Annotated[uuid.UUID, Depends(require_admin())]
+
+#: Approving mentors, which is what the `mentor_approval` grant is named for.
+MentorAdminDep = Annotated[uuid.UUID, Depends(require_admin(AdminRole.MENTOR_APPROVAL))]
+
+#: Reading either queue. Every live grant may look.
+QueueViewerDep = Annotated[
+    uuid.UUID,
+    Depends(require_admin(AdminRole.MENTOR_APPROVAL, AdminRole.LIMITED_ACCESS)),
+]
+
+
+async def pending_institution_rows(
+    _: CatalogueAdminDep,
+    session: SessionDep,
+    limit: Annotated[int | None, Query(ge=1, le=200)] = None,
+) -> list[dict[str, Any]]:
+    return await pending_institutions(session, limit=min(limit or 50, 200))
+
+
+async def approved_institution(
+    institution_id: UUID, _: CatalogueAdminDep, session: SessionDep
+) -> bool:
+    changed = await approve_institution(session, institution_id)
+    await session.commit()
+    return changed
+
+
+async def merged_institution(
+    institution_id: UUID, payload: MergeRequest, _: CatalogueAdminDep, session: SessionDep
+) -> int:
+    """The repoint and the retirement commit together, or neither does."""
+    moved = await merge_institution(
+        session, losing_id=institution_id, winning_id=payload.winning_id
+    )
+    await session.commit()
+    return moved
+
+
+async def pending_mentor_rows(
+    _: QueueViewerDep, session: SessionDep, limit: Annotated[int | None, Query(ge=1, le=200)] = None
+) -> list[dict[str, Any]]:
+    return await pending_mentors(session, limit=min(limit or 50, 200))
+
+
+async def decided_mentor(
+    user_id: UUID,
+    payload: DeclineRequest,
+    admin_id: MentorAdminDep,
+    session: SessionDep,
+    approve: Annotated[bool, Query(description="True to approve, false to decline.")] = True,
+) -> bool:
+    changed = await decide_mentor(
+        session, user_id=user_id, admin_id=admin_id, approved=approve, reason=payload.reason
+    )
+    await session.commit()
+    return changed
+
+
+PendingInstitutionsDep = Annotated[list[dict[str, Any]], Depends(pending_institution_rows)]
+ApprovedInstitutionDep = Annotated[bool, Depends(approved_institution)]
+MergedInstitutionDep = Annotated[int, Depends(merged_institution)]
+PendingMentorsDep = Annotated[list[dict[str, Any]], Depends(pending_mentor_rows)]
+DecidedMentorDep = Annotated[bool, Depends(decided_mentor)]
+
+
+async def replaced_languages(
+    payload: UserLanguagesWrite, user_id: OwnerDep, session: SessionDep
+) -> None:
+    await replace_languages(session, user_id, [entry.model_dump() for entry in payload.languages])
+    await session.commit()
+
+
+ReplacedLanguagesDep = Annotated[None, Depends(replaced_languages)]

@@ -134,6 +134,20 @@ class MentorProfile(TimestampMixin, Base):
     )
     decline_reason: Mapped[str | None] = mapped_column(Text)
 
+    # The other half of the decision. `approved_by` had no counterpart, so a
+    # decline recorded *that* it happened and never *who* — and unlike a count,
+    # that cannot be reconstructed afterwards. Reusing `approved_by` for both
+    # would put a decliner in a column named for approval, which is the shape
+    # `usage_count` and the old `updated_at` both failed in.
+    #
+    # A `mentor_status_events` log is the right end state and is not this: one
+    # transition needs two columns, a third one needs the table.
+    declined_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    declined_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT", name="fk_mentor_profiles_declined_by_users"),
+    )
+
     listing_status: Mapped[ListingStatus] = mapped_column(
         pg_enum(ListingStatus), nullable=False, server_default=text("'unlisted'")
     )
