@@ -16,8 +16,10 @@ request at all.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.errors import (
@@ -117,6 +119,36 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     return problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
 
 
+async def handle_request_validation_error(
+    request: Request,  # noqa: ARG001
+    exc: Exception,
+) -> JSONResponse:
+    """A malformed request body, in the one shape.
+
+    **FastAPI answers `RequestValidationError` itself, with `{"detail": [...]}`.**
+    That is not Problem Details, so without this every 422 from body validation
+    breaks the promise this module exists to keep — and it breaks it on the most
+    ordinary failure there is, a form with a bad field.
+
+    Nothing exposed it until writes arrived: the only 422 before this PR came
+    from our own `ValidationError`, raised for a forged cursor.
+
+    The field errors **are** returned, unlike a 500's detail. They describe the
+    caller's own request, tell them nothing about this service, and without them
+    a client cannot say which field was wrong.
+    """
+    errors: list[dict[str, Any]] = getattr(exc, "errors", lambda: [])()
+    detail = "; ".join(
+        f"{'.'.join(str(part) for part in error.get('loc', ())[1:])}: {error.get('msg', '')}"
+        for error in errors
+    )
+    return problem(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        title="Unprocessable Content",
+        detail=detail or None,
+    )
+
+
 def register(application: FastAPI) -> None:
     """Attach the handlers.
 
@@ -125,4 +157,7 @@ def register(application: FastAPI) -> None:
     claimed. Starlette dispatches on the most specific registered class.
     """
     application.add_exception_handler(AppError, handle_app_error)
+    # FastAPI installs its own handler for this one, so ours has to replace it
+    # explicitly — the catch-all below never sees it.
+    application.add_exception_handler(RequestValidationError, handle_request_validation_error)
     application.add_exception_handler(Exception, handle_unexpected_error)

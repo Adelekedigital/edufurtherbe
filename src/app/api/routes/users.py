@@ -32,7 +32,7 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
     summary="The signed-in user",
     description=(
         "Returns the caller's own record, with their profile when one exists, "
-        "and their education, goals, awards and mentor profile embedded — so a "
+        "and their education, goal, awards and mentor profile embedded — so a "
         "profile page renders in one call rather than five.\n\n"
         "Each embedded collection is the **same shape** the matching "
         "`/users/{user_id}/...` endpoint returns, built by the same query and "
@@ -54,7 +54,7 @@ async def read_me(user: CurrentUserDep, attributes: OwnAttributesDep) -> UserRea
         **user,
         profile=profile,
         education=[EducationRead.from_row(row) for row in attributes["education"]],
-        goals=[GoalRead.from_row(row) for row in attributes["goals"]],
+        goal=(GoalRead.from_row(goal) if (goal := attributes["goal"]) is not None else None),
         awards=[AwardRead.from_row(row) for row in attributes["awards"]],
         mentor_profile=(
             MentorProfileRead.from_row(mentor_profile) if mentor_profile is not None else None

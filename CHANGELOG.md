@@ -351,6 +351,54 @@ released. A tag with no matching section here fails the release job.
   entitled to their own; and a mutation harness that scored "no tests ran" as a
   kill, silently certifying untested code.
 
+- **M2's write surface** — `POST/PATCH/DELETE` for education and awards,
+  `PUT/DELETE` for the goal, `POST/PATCH` for a mentor profile, and `PATCH` for
+  the user profile. **Owner only**: a live admin reads these records and never
+  writes them, which is one clause of difference in the dependency and a test on
+  every endpoint.
+- **An unlisted school is created inside the education write's transaction**,
+  `source='manual'`, `status='pending_review'`, `created_by` from the
+  authenticated caller — so nothing anonymous reaches `institutions`, and a
+  failure leaves neither the institution nor the entry. A name the catalogue
+  carries twice is **queued, never linked**: `City University` is a real
+  university in three countries and the study country derives from the choice.
+  A new `CHECK (source <> 'manual' OR created_by IS NOT NULL)` enforces the
+  invariant the review queue depends on.
+- **Applying to be a mentor flips `primary_role`** so the applicant lands on the
+  right dashboard. It grants nothing — `primary_role` picks a dashboard and is
+  never an authorization claim; what a pending mentor may do follows from
+  `approval_status`. **Nothing approves an application yet**, so these join
+  institutions awaiting review in a queue with no owner.
+- **`degree_levels` is now ISCED-aligned** — Certificate/Diploma, Bachelor's,
+  Master's, Doctorate. The original six mixed education *levels* with a specific
+  qualification (`MBA`, which is a master's degree) and a career stage
+  (`Postdoctoral`, which is a research post — nothing is awarded), so a filter
+  could not answer "mentors with a doctorate". Rows are repointed before the
+  merged levels are deleted and `degree_category` keeps the raw legacy string,
+  so nothing is lost. Done now because the only data in flight is test data.
+- **The goal endpoints are singular.** `mentee_goals.user_id` is unique and the
+  model says "1:1 with the user", so `GET/PUT/DELETE /users/{id}/goal` replaces
+  a `Page` that could only ever hold zero or one. Found by a write test hitting
+  the constraint on a second insert.
+- **Lookup search is ranked, not alphabetical.** Twenty of the 7,078 ISO 639-3
+  names contain "English", so searching for it returned Antigua and Barbuda
+  Creole English first and the language the user meant fifth. Exact, then
+  prefix, then anywhere — the tiering institution search already uses.
+- **Every 422 is Problem Details.** FastAPI answers `RequestValidationError`
+  itself with `{"detail": [...]}`, so the promise broke on the most ordinary
+  failure there is: a form with a bad field. Nothing had exposed it, because the
+  only 422 before writes came from our own error type.
+- `PATCH` takes its own partial models. Reusing the create model made
+  `school_name_raw` required on every edit, so a one-field change silently
+  changed nothing.
+- Inserts write **only the keys the client sent**. `payload.get(column)` over a
+  column list wrote explicit `NULL`s, which override server defaults — applying
+  to be a mentor without sending `requires_booking_confirmation` raised a
+  not-null violation.
+- **Settled decisions 66-69** and three `failure-modes.md` rows, including the
+  one where a migration suppressed ruff's `S608` to build SQL by string
+  formatting and was then broken by the apostrophe in "Bachelor's Degree".
+
 ### Changed
 
 - **ADRs 0004 and 0009 carry correction notes: Google OAuth verification is not on

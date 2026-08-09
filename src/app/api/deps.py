@@ -11,6 +11,7 @@ import uuid
 from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import Depends, Path, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -23,16 +24,36 @@ from app.api.schemas.common import (
     clamp_limit,
     decode_cursor,
 )
+from app.api.schemas.profile import (
+    AwardPatch,
+    AwardWrite,
+    EducationPatch,
+    EducationWrite,
+    GoalWrite,
+    MentorProfileWrite,
+    UserProfileWrite,
+)
 from app.core.config import Settings, get_settings
-from app.core.errors import AuthenticationError, NotFoundError
+from app.core.errors import AuthenticationError, ConflictError, NotFoundError
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
+from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.profile_store import (
+    get_goal,
     get_mentor_profile,
     list_awards,
     list_education,
-    list_goals,
+)
+from app.infra.db.profile_writer import (
+    create_award,
+    create_mentor_profile,
+    delete_award,
+    delete_goal,
+    update_award,
+    update_mentor_profile,
+    upsert_goal,
+    upsert_profile,
 )
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -159,17 +180,24 @@ CurrentUserDep = Annotated[dict[str, Any], Depends(get_current_user)]
 # `deleted_at IS NULL` is in the same statement for the same reason. A
 # soft-deleted user is invisible, and this project has already shipped that rule
 # hand-typed into five places with the fifth missed.
+#
+# **One statement, two audiences.** Reads permit a live admin; writes do not —
+# an admin curates the catalogue, not somebody's education history, and opening
+# that later is additive where closing it would not be. Expressing the
+# difference as a parameter rather than a second `text()` keeps
+# `deleted_at IS NULL` in one place; the alternative is two statements that
+# agree until one of them is edited.
 TARGET_USER = text("""
     SELECT u.id
     FROM users u
     WHERE u.id = :target
       AND u.deleted_at IS NULL
-      AND (u.id = :caller OR :caller_is_admin)
+      AND (u.id = :caller OR (:admin_may AND :caller_is_admin))
 """)
 
 
-async def get_target_user(
-    user_id: uuid.UUID, user: CurrentUserDep, session: SessionDep
+async def _resolve_target(
+    user_id: uuid.UUID, user: dict[str, Any], session: AsyncSession, *, admin_may: bool
 ) -> uuid.UUID:
     """The user whose records the caller is asking for, if they may have them.
 
@@ -186,7 +214,12 @@ async def get_target_user(
     """
     result = await session.execute(
         TARGET_USER,
-        {"target": user_id, "caller": user["id"], "caller_is_admin": user["is_admin"]},
+        {
+            "target": user_id,
+            "caller": user["id"],
+            "caller_is_admin": user["is_admin"],
+            "admin_may": admin_may,
+        },
     )
     row = result.first()
     if row is None:
@@ -194,7 +227,27 @@ async def get_target_user(
     return user_id
 
 
+async def get_target_user(
+    user_id: uuid.UUID, user: CurrentUserDep, session: SessionDep
+) -> uuid.UUID:
+    """For reads: the owner, or a live admin."""
+    return await _resolve_target(user_id, user, session, admin_may=True)
+
+
+async def get_owner(user_id: uuid.UUID, user: CurrentUserDep, session: SessionDep) -> uuid.UUID:
+    """For writes: the owner, and nobody else.
+
+    **Named differently from `get_target_user` on purpose.** The two differ by
+    one clause, and a reader comparing a read route to a write route beside it
+    should see the difference in the dependency's name rather than have to open
+    this module. An admin reading somebody's education is a review; an admin
+    silently editing it is an audit trail nobody has designed.
+    """
+    return await _resolve_target(user_id, user, session, admin_may=False)
+
+
 TargetUserDep = Annotated[uuid.UUID, Depends(get_target_user)]
+OwnerDep = Annotated[uuid.UUID, Depends(get_owner)]
 
 
 # --------------------------------------------------------------------------
@@ -255,8 +308,8 @@ async def target_education(user_id: TargetUserDep, session: SessionDep) -> list[
     return await list_education(session, user_id)
 
 
-async def target_goals(user_id: TargetUserDep, session: SessionDep) -> list[dict[str, Any]]:
-    return await list_goals(session, user_id)
+async def target_goal(user_id: TargetUserDep, session: SessionDep) -> dict[str, Any] | None:
+    return await get_goal(session, user_id)
 
 
 async def target_awards(user_id: TargetUserDep, session: SessionDep) -> list[dict[str, Any]]:
@@ -270,7 +323,7 @@ async def target_mentor_profile(
 
 
 EducationDep = Annotated[list[dict[str, Any]], Depends(target_education)]
-GoalsDep = Annotated[list[dict[str, Any]], Depends(target_goals)]
+GoalDep = Annotated[dict[str, Any] | None, Depends(target_goal)]
 AwardsDep = Annotated[list[dict[str, Any]], Depends(target_awards)]
 MentorProfileDep = Annotated[dict[str, Any] | None, Depends(target_mentor_profile)]
 
@@ -289,10 +342,132 @@ async def own_attributes(user: CurrentUserDep, session: SessionDep) -> dict[str,
     user_id = user["id"]
     return {
         "education": await list_education(session, user_id),
-        "goals": await list_goals(session, user_id),
+        "goal": await get_goal(session, user_id),
         "awards": await list_awards(session, user_id),
         "mentor_profile": await get_mentor_profile(session, user_id),
     }
 
 
 OwnAttributesDep = Annotated[dict[str, Any], Depends(own_attributes)]
+
+
+# The write side, bound here for the same reason the reads are: `api/` may not
+# import `infra/`. Each dependency declares its own request body, so the payload
+# still appears in the OpenAPI schema exactly as if the route named it, and a
+# route module never learns that a writer exists.
+#
+# **Each one commits.** A route that forgot would answer 201 and persist
+# nothing. Putting the commit beside the write leaves no second place to forget
+# it — and for education, the institution and the entry are both written before
+# that commit, which is what makes them one transaction.
+
+
+async def created_education(
+    payload: EducationWrite, user_id: OwnerDep, session: SessionDep
+) -> tuple[UUID, bool]:
+    result = await create_education(session, user_id, payload.model_dump())
+    await session.commit()
+    return result
+
+
+async def updated_education(
+    entry_id: UUID, payload: EducationPatch, user_id: OwnerDep, session: SessionDep
+) -> bool:
+    # `exclude_unset` is what makes this a PATCH: a field the client did not
+    # send is absent, not null. Without it every omitted field would be written
+    # as its default and a one-field edit would blank the rest.
+    changed = await update_education(
+        session, user_id, entry_id, payload.model_dump(exclude_unset=True)
+    )
+    await session.commit()
+    return changed
+
+
+async def deleted_education(entry_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
+    removed = await delete_education(session, user_id, entry_id)
+    await session.commit()
+    return removed
+
+
+async def upserted_goal(payload: GoalWrite, user_id: OwnerDep, session: SessionDep) -> UUID:
+    """One goal per user, so this replaces rather than appends."""
+    goal_id: UUID = await upsert_goal(session, user_id, payload.model_dump(exclude_unset=True))
+    await session.commit()
+    return goal_id
+
+
+async def deleted_goal(user_id: OwnerDep, session: SessionDep) -> bool:
+    removed = await delete_goal(session, user_id)
+    await session.commit()
+    return removed
+
+
+async def created_award(payload: AwardWrite, user_id: OwnerDep, session: SessionDep) -> UUID:
+    award_id = await create_award(session, user_id, payload.model_dump())
+    await session.commit()
+    return award_id
+
+
+async def updated_award(
+    award_id: UUID, payload: AwardPatch, user_id: OwnerDep, session: SessionDep
+) -> bool:
+    changed = await update_award(session, user_id, award_id, payload.model_dump(exclude_unset=True))
+    await session.commit()
+    return changed
+
+
+async def deleted_award(award_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
+    removed = await delete_award(session, user_id, award_id)
+    await session.commit()
+    return removed
+
+
+async def created_mentor_profile(
+    payload: MentorProfileWrite, user_id: OwnerDep, session: SessionDep
+) -> UUID:
+    """A second application is a 409, not a second row.
+
+    `uq_mentor_profiles_user_id` is what actually prevents the duplicate; this
+    checks first so the caller gets a considered answer rather than a constraint
+    violation surfacing as a 500.
+    """
+    existing = await session.execute(
+        text("SELECT 1 FROM mentor_profiles WHERE user_id = :u AND deleted_at IS NULL"),
+        {"u": user_id},
+    )
+    if existing.first() is not None:
+        raise ConflictError("this user already has a mentor profile")
+
+    profile_id = await create_mentor_profile(
+        session, user_id, payload.model_dump(exclude_unset=True)
+    )
+    await session.commit()
+    return profile_id
+
+
+async def updated_mentor_profile(
+    payload: MentorProfileWrite, user_id: OwnerDep, session: SessionDep
+) -> bool:
+    changed = await update_mentor_profile(session, user_id, payload.model_dump(exclude_unset=True))
+    await session.commit()
+    return changed
+
+
+async def upserted_profile(
+    payload: UserProfileWrite, user_id: OwnerDep, session: SessionDep
+) -> None:
+    await upsert_profile(session, user_id, payload.model_dump(exclude_unset=True))
+    await session.commit()
+
+
+CreatedEducationDep = Annotated[tuple[UUID, bool], Depends(created_education)]
+UpdatedEducationDep = Annotated[bool, Depends(updated_education)]
+DeletedEducationDep = Annotated[bool, Depends(deleted_education)]
+UpsertedGoalDep = Annotated[UUID, Depends(upserted_goal)]
+DeletedGoalDep = Annotated[bool, Depends(deleted_goal)]
+CreatedAwardDep = Annotated[UUID, Depends(created_award)]
+UpdatedAwardDep = Annotated[bool, Depends(updated_award)]
+DeletedAwardDep = Annotated[bool, Depends(deleted_award)]
+CreatedMentorProfileDep = Annotated[UUID, Depends(created_mentor_profile)]
+UpdatedMentorProfileDep = Annotated[bool, Depends(updated_mentor_profile)]
+UpsertedProfileDep = Annotated[None, Depends(upserted_profile)]

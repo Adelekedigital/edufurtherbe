@@ -173,6 +173,18 @@ class Institution(TimestampMixin, Base):
             "source IN ('hipolabs', 'manual', 'ror')",
             name="source_is_known",
         ),
+        # A user-created row always names who asked for it; a mirrored one never
+        # does, because the sync made it. This is the invariant that says an
+        # anonymous caller never reached this table — search is public and only
+        # reads, and the education write sets `created_by` from the
+        # authenticated caller, never from the body.
+        #
+        # The review queue depends on it: a pending institution with no creator
+        # is unanswerable rather than merely untidy.
+        CheckConstraint(
+            "source <> 'manual' OR created_by IS NOT NULL",
+            name="manual_names_its_creator",
+        ),
     )
 
 

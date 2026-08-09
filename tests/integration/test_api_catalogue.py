@@ -174,7 +174,19 @@ async def test_a_manual_institution_with_no_country_still_serialises(
     response model has to survive that, not 500 on it."""
     async with db_engine.begin() as conn:
         await conn.execute(
-            text("INSERT INTO institutions (name, source) VALUES ('Countryless College', 'manual')")
+            text(
+                "INSERT INTO users (email, primary_role, timezone) "
+                "VALUES ('creator@example.com', 'mentee', 'UTC')"
+            )
+        )
+        # `created_by` is required for a `manual` row — `ck_institutions_manual_names_its_creator`,
+        # added with the write endpoints. A user-created institution always names
+        # who asked for it; a mirrored one never does.
+        await conn.execute(
+            text(
+                "INSERT INTO institutions (name, source, created_by) "
+                "SELECT 'Countryless College', 'manual', id FROM users LIMIT 1"
+            )
         )
 
     row = (await api_client.get(SEARCH, params={"q": "Countryless"})).json()["data"][0]
@@ -219,15 +231,16 @@ async def test_no_curation_state_leaks(
 
 
 async def test_degree_levels_keep_their_intended_order(api_client: httpx.AsyncClient) -> None:
-    """`sort_order`, not alphabetical. A person chose "Undergraduate, Diploma,
-    Masters…"; sorting by name renders it "Diploma, MBA, Masters…", which reads
-    as a bug to every user who sees it."""
+    """`sort_order`, not alphabetical — and the order is ISCED ascending, so the
+    dropdown reads as a progression. Sorting by name would render it
+    "Bachelor's, Certificate, Doctorate, Master's", which reads as a bug to
+    every user who sees it."""
     found = [
         row["display_name"]
         for row in (await api_client.get(f"{CATALOG}/degree-levels")).json()["data"]
     ]
 
-    assert found[0] == "Undergraduate"
+    assert found[0] == "Certificate / Diploma"
     assert found != sorted(found)
 
 
@@ -277,6 +290,32 @@ async def test_languages_can_be_searched(api_client: httpx.AsyncClient) -> None:
     body = (await api_client.get(f"{CATALOG}/languages", params={"q": "Nigerian Pidgin"})).json()
 
     assert [row["display_name"] for row in body["data"]] == ["Nigerian Pidgin"]
+
+
+async def test_a_language_search_ranks_the_exact_match_first(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """**The bug a real search exposed.**
+
+    Twenty of the 7,078 ISO 639-3 names contain "English" — Antigua and Barbuda
+    Creole English, Bahamas Creole English, and so on. Ordered alphabetically,
+    the language the user meant came fifth. Ranking exact, then prefix, then
+    anywhere puts it first, with no curation of the underlying list.
+    """
+    body = (await api_client.get(f"{CATALOG}/languages", params={"q": "english"})).json()
+
+    assert body["data"][0]["display_name"] == "English"
+
+
+async def test_a_lookup_search_does_not_claim_another_page(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """A search narrows by typing rather than paging — a cursor would have to
+    order by the ranking instead of the keyset columns, which is how a keyset
+    silently skips rows."""
+    body = (await api_client.get(f"{CATALOG}/languages", params={"q": "english"})).json()
+
+    assert body["next_cursor"] is None
 
 
 async def test_a_pending_scholarship_programme_is_not_listed(

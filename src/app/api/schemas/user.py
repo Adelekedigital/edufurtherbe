@@ -76,7 +76,8 @@ class UserRead(NormalisedEmail):
     # functions — `test_me_and_the_sub_resource_agree` fails if the two ever
     # diverge, which is the whole reason both exist.
     education: list[EducationRead] = []
-    goals: list[GoalRead] = []
+    #: At most one — `mentee_goals` is 1:1 with the user.
+    goal: GoalRead | None = None
     awards: list[AwardRead] = []
     #: Null for the great majority of users, who are not mentors.
     mentor_profile: MentorProfileRead | None = None

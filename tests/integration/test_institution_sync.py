@@ -339,12 +339,18 @@ async def test_a_manual_institution_needs_no_country(db_engine: AsyncEngine) -> 
     user instead.
     """
     async with db_engine.begin() as conn:
+        creator = await add_user(conn, "creator@example.com")
         await conn.execute(
             text(
-                "INSERT INTO institutions (name, source, status) "
+                # `created_by` is required for a `manual` row —
+                # `ck_institutions_manual_names_its_creator`, added with the
+                # write endpoints. A user-created institution always names who
+                # asked for it; a mirrored one never does.
+                "INSERT INTO institutions (name, source, status, created_by) "
                 "VALUES ('Some Unlisted Polytechnic', 'manual', "
-                "CAST('pending_review' AS lookup_status))"
-            )
+                "CAST('pending_review' AS lookup_status), :b)"
+            ),
+            {"b": creator},
         )
         row = await conn.execute(
             text(
@@ -365,10 +371,13 @@ async def test_several_manual_institutions_coexist_without_a_country(
     distinct, so pending duplicates from five people at one university coexist
     until an admin merges them."""
     async with db_engine.begin() as conn:
+        creator = await add_user(conn, "creator@example.com")
         for name in ("Polytechnic A", "Polytechnic B", "Polytechnic C"):
             await conn.execute(
-                text("INSERT INTO institutions (name, source) VALUES (:n, 'manual')"),
-                {"n": name},
+                text(
+                    "INSERT INTO institutions (name, source, created_by) VALUES (:n, 'manual', :b)"
+                ),
+                {"n": name, "b": creator},
             )
         count = await conn.execute(
             text("SELECT count(*) FROM institutions WHERE country_id IS NULL")
