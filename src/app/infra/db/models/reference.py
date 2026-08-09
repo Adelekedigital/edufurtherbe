@@ -35,7 +35,7 @@ an anchor.
 
 import uuid
 
-from sqlalchemy import CHAR, Text, Uuid, text
+from sqlalchemy import CHAR, Index, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infra.db.base import Base, TimestampMixin
@@ -80,3 +80,18 @@ class Language(TimestampMixin, Base):
     # rows with no two-letter code are unaffected.
     code_639_1: Mapped[str | None] = mapped_column(CHAR(2), nullable=True, unique=True)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Whether a picker shows this by default. True for the ~100 languages in
+    # CLDR's `modern` coverage tier; the other 6,977 stay reachable by search.
+    # ISO 639-3 is a completeness registry, not a picker — searching "english"
+    # returned twenty creoles before this.
+    is_common: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+
+    __table_args__ = (
+        # Partial: the picker only ever asks for the true rows, so an index over
+        # 100 of 7,078 costs a fraction of one over all of them.
+        Index(
+            "ix_languages_common",
+            "display_name",
+            postgresql_where=text("is_common"),
+        ),
+    )

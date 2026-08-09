@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import errors
-from app.api.routes import catalogue, health, user_attributes, users
+from app.api.routes import admin, catalogue, health, user_attributes, users
 from app.core.config import Settings, get_settings
 
 # Tag metadata, so /docs explains each group rather than listing bare paths.
@@ -21,6 +21,19 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "fails when the database is slow causes a restart of a process that "
             "was fine. Readiness is a separate concern, added when there is a "
             "dependency worth reporting on."
+        ),
+    },
+    {
+        "name": "admin",
+        "description": (
+            "The review surface. **The only endpoints that show one user another "
+            "user's records by design** — the control is the caller's grant "
+            "rather than a row scope.\n\n"
+            "A caller without a grant receives 404, never 403: a 403 would "
+            "confirm the endpoint exists and that somebody may use it.\n\n"
+            "Grants are role-specific. `mentor_approval` decides applications "
+            "and does not curate the catalogue; `limited_access` may read both "
+            "queues and change nothing; `super_admin` may do everything."
         ),
     },
     {
@@ -97,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(users.router)
     application.include_router(catalogue.router)
     application.include_router(user_attributes.router)
+    application.include_router(admin.router)
     return application
 
 

@@ -420,6 +420,25 @@ def provision_script() -> ModuleType:
     return module
 
 
+@pytest.fixture
+def common_languages_migration() -> ModuleType:
+    """The migration holding the `is_common` seed.
+
+    Loaded by path for the reason `provision_script` is: a revision filename
+    starts with a date and is not an importable module name. The point is to
+    compare the literal that shipped against what actually landed in the table —
+    the first version of that literal was six codes wrong, because it was
+    written out by hand rather than pasted from the derivation script.
+    """
+    path = next((PROJECT_ROOT / "migrations" / "versions").glob("*_common_lang_*.py"))
+    spec = importlib.util.spec_from_file_location("common_languages_migration", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest_asyncio.fixture
 async def store(db_engine: AsyncEngine) -> ProvisioningStore:
     """The provisioning store, bound to this test's disposable database."""

@@ -54,6 +54,7 @@ from uuid import UUID
 from sqlalchemy import Select, and_, case, func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ValidationError
 from app.domain.enums import LookupStatus
 from app.infra.db.models.education import DegreeLevel, Institution
 from app.infra.db.models.mentoring import ServiceOffering
@@ -264,6 +265,7 @@ async def list_lookup(
     name: str,
     *,
     q: str | None = None,
+    common: bool = False,
     limit: int,
     cursor: tuple[str, UUID] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -296,6 +298,13 @@ async def list_lookup(
                 model.merged_into_id.is_(None),
             )
         )
+    if common:
+        # Only `languages` carries the flag; asking for it on a catalogue that
+        # does not is a client mistake worth naming, not a filter to ignore.
+        if not hasattr(model, "is_common"):
+            raise ValidationError(f"{name} has no common set")
+        statement = statement.where(model.is_common.is_(True))
+
     if q and q.strip():
         # **Ranked, not alphabetical.** Plain `ILIKE '%q%'` ordered by name puts
         # "Antigua and Barbuda Creole English" above "English" — 7,078 ISO 639-3

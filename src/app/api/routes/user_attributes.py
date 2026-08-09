@@ -27,6 +27,7 @@ from app.api.deps import (
     EducationDep,
     GoalDep,
     MentorProfileDep,
+    ReplacedLanguagesDep,
     UpdatedAwardDep,
     UpdatedEducationDep,
     UpdatedMentorProfileDep,
@@ -329,4 +330,23 @@ async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> dict[str, boo
     responses=WRITE_RESPONSES,
 )
 async def edit_profile(_: UpsertedProfileDep) -> None:
+    return None
+
+
+@router.put(
+    "/languages",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Set the languages a user speaks",
+    description=(
+        "Replaces the whole list — send every language the user speaks, not "
+        "just the new one. Omitting a language removes it, which is the only "
+        "way a client can express removal.\n\n"
+        "**At most one may be primary.** Two would violate a unique index, so "
+        "sending two is a 422 naming the problem rather than a 500 to decode. "
+        "The same goes for listing one language twice.\n\n"
+        "`proficiency` defaults to `fluent` when omitted."
+    ),
+    responses=WRITE_RESPONSES,
+)
+async def set_languages(_: ReplacedLanguagesDep) -> None:
     return None

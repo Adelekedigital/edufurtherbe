@@ -762,3 +762,176 @@ async def test_an_emptied_string_becomes_null(
             text("SELECT about_me FROM user_profiles WHERE user_id = :u"), {"u": user_id}
         )
     assert about.scalar_one() is None
+
+
+# --------------------------------------------------------------------------
+# Languages — the item carried over from the previous PR
+# --------------------------------------------------------------------------
+
+
+async def language_ids(engine: AsyncEngine, *names: str) -> list[UUID]:
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT id, display_name FROM languages WHERE display_name = ANY(:n)"),
+            {"n": list(names)},
+        )
+        by_name = {row.display_name: row.id for row in rows}
+    return [by_name[name] for name in names]
+
+
+async def test_languages_replace_rather_than_merge(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The request carries the whole list, so a merge could not express removal
+    — a user unticking their last language would have no way to say so."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "self@example.com")
+    headers = bearer(api_token(auth_id))
+    english, yoruba = await language_ids(db_engine, "English", "Yoruba")
+
+    await api_client.put(
+        url(user_id, "languages"),
+        json={"languages": [{"language_id": str(english)}, {"language_id": str(yoruba)}]},
+        headers=headers,
+    )
+    await api_client.put(
+        url(user_id, "languages"),
+        json={"languages": [{"language_id": str(yoruba)}]},
+        headers=headers,
+    )
+
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT l.display_name FROM user_languages ul "
+                "JOIN languages l ON l.id = ul.language_id WHERE ul.user_id = :u"
+            ),
+            {"u": user_id},
+        )
+    assert [row[0] for row in rows] == ["Yoruba"]
+
+
+async def test_two_primary_languages_are_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`ix_user_languages_one_primary` is a unique partial index, so a second
+    primary is an `IntegrityError`. Refusing it at the boundary gives a 422
+    naming the problem instead of a 500 to decode."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "self@example.com")
+    english, yoruba = await language_ids(db_engine, "English", "Yoruba")
+
+    response = await api_client.put(
+        url(user_id, "languages"),
+        json={
+            "languages": [
+                {"language_id": str(english), "is_primary": True},
+                {"language_id": str(yoruba), "is_primary": True},
+            ]
+        },
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_one_primary_is_accepted_and_replacing_it_works(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The positive case, and the clear-then-set ordering: writing a new primary
+    before removing the old one violates the same index."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "self@example.com")
+    headers = bearer(api_token(auth_id))
+    english, yoruba = await language_ids(db_engine, "English", "Yoruba")
+
+    first = await api_client.put(
+        url(user_id, "languages"),
+        json={"languages": [{"language_id": str(english), "is_primary": True}]},
+        headers=headers,
+    )
+    second = await api_client.put(
+        url(user_id, "languages"),
+        json={"languages": [{"language_id": str(yoruba), "is_primary": True}]},
+        headers=headers,
+    )
+
+    assert (first.status_code, second.status_code) == (204, 204)
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT l.display_name FROM user_languages ul "
+                "JOIN languages l ON l.id = ul.language_id "
+                "WHERE ul.user_id = :u AND ul.is_primary"
+            ),
+            {"u": user_id},
+        )
+    assert [row[0] for row in rows] == ["Yoruba"]
+
+
+async def test_the_same_language_twice_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`ix_user_languages_user_language` is unique on the pair. A duplicate is a
+    client bug worth naming rather than a constraint violation to decode."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "self@example.com")
+    (english,) = await language_ids(db_engine, "English")
+
+    response = await api_client.put(
+        url(user_id, "languages"),
+        json={"languages": [{"language_id": str(english)}, {"language_id": str(english)}]},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert response.status_code == 422
+
+
+async def test_proficiency_defaults_to_fluent(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "self@example.com")
+    (english,) = await language_ids(db_engine, "English")
+
+    await api_client.put(
+        url(user_id, "languages"),
+        json={"languages": [{"language_id": str(english)}]},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT proficiency FROM user_languages WHERE user_id = :u"), {"u": user_id}
+        )
+    assert str(rows.scalar_one()).endswith("fluent")
+
+
+async def test_setting_my_languages_leaves_anybody_elses_alone(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The write deletes before it inserts, and the delete is scoped by
+    `user_id` alone — so that clause is the only thing between one user and
+    every row in the table."""
+    auth_id = uuid4()
+    mine = await make_user(db_engine, auth_id, "self@example.com")
+    theirs = await make_user(db_engine, uuid4(), "other@example.com")
+    english, yoruba = await language_ids(db_engine, "English", "Yoruba")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO user_languages (user_id, language_id) VALUES (:u, :l)"),
+            {"u": theirs, "l": yoruba},
+        )
+
+    await api_client.put(
+        url(mine, "languages"),
+        json={"languages": [{"language_id": str(english)}]},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT count(*) FROM user_languages WHERE user_id = :u"), {"u": theirs}
+        )
+    assert rows.scalar_one() == 1, "another user's languages were deleted"

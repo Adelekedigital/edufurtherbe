@@ -12,6 +12,7 @@ duplicates it exists to prevent.
 
 from __future__ import annotations
 
+from types import ModuleType
 from uuid import UUID
 
 import httpx
@@ -316,6 +317,85 @@ async def test_a_lookup_search_does_not_claim_another_page(
     body = (await api_client.get(f"{CATALOG}/languages", params={"q": "english"})).json()
 
     assert body["next_cursor"] is None
+
+
+async def test_the_common_set_is_the_default_picker(api_client: httpx.AsyncClient) -> None:
+    """100 languages rather than 7,078. ISO 639-3 is a completeness registry and
+    not a picker — searching "english" returned twenty creoles before ranking,
+    and scrolling 7,078 rows was never going to work at all."""
+    body = (await api_client.get(f"{CATALOG}/languages", params={"common": "true"})).json()
+
+    names = {row["display_name"] for row in body["data"]}
+    assert len(body["data"]) == 100
+    assert {"English", "Yoruba", "Igbo", "Hausa", "Amharic", "Zulu", "Afrikaans"} <= names
+
+
+async def test_the_long_tail_is_absent_from_the_picker_and_present_in_search(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """**Why the table was not simply replaced by the common set.**
+
+    These are Nigerian languages on a platform for African students. Deleting
+    them to shrink the picker would have been a coverage gap pointed at our own
+    users, and would reverse the reasoning that put this table on 639-3 rather
+    than 639-1.
+    """
+    common = (await api_client.get(f"{CATALOG}/languages", params={"common": "true"})).json()
+    listed = {row["display_name"] for row in common["data"]}
+
+    for name in ("Efik", "Ibibio", "Tiv", "Kanuri", "Idoma", "Urhobo"):
+        assert name not in listed, f"{name} is in the default picker"
+        found = (await api_client.get(f"{CATALOG}/languages", params={"q": name})).json()
+        assert name in {row["display_name"] for row in found["data"]}, f"{name} is unsearchable"
+
+
+async def test_nigerian_pidgin_is_excluded_from_the_default_and_still_selectable(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """Excluded **by decision, not by the standard** — CLDR includes `pcm` at
+    modern tier. The 639-3 choice that put it in the table still stands: it has
+    to be selectable, which it is."""
+    common = (await api_client.get(f"{CATALOG}/languages", params={"common": "true"})).json()
+    searched = (
+        await api_client.get(f"{CATALOG}/languages", params={"q": "Nigerian Pidgin"})
+    ).json()
+
+    assert "Nigerian Pidgin" not in {row["display_name"] for row in common["data"]}
+    assert [row["display_name"] for row in searched["data"]] == ["Nigerian Pidgin"]
+
+
+async def test_asking_for_the_common_set_of_a_catalogue_without_one_is_refused(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """Named rather than ignored: a filter silently doing nothing is how a
+    client ships believing it filtered."""
+    response = await api_client.get(f"{CATALOG}/countries", params={"common": "true"})
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_the_seeded_common_set_matches_the_migrations_literal(
+    db_engine: AsyncEngine, common_languages_migration: ModuleType
+) -> None:
+    """**The test that keeps the seed honest.**
+
+    The migration holds a literal, because a migration must never fetch. The
+    first version of that literal was six codes wrong — three invented, three
+    dropped — because it was written out by hand instead of pasted from the
+    script. This compares the two without touching the network: the script's
+    module-level constant against what actually landed in the table.
+    """
+    expected = set(common_languages_migration.COMMON_LANGUAGES)
+
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(text("SELECT code_639_3 FROM languages WHERE is_common"))
+        seeded = {row[0].strip() for row in rows}
+
+    assert seeded == expected, (
+        f"only in the table: {sorted(seeded - expected)}; "
+        f"only in the literal: {sorted(expected - seeded)}"
+    )
 
 
 async def test_a_pending_scholarship_programme_is_not_listed(
