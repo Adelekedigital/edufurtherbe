@@ -36,6 +36,21 @@ dependencies = [
     "tzdata>=2025.1",
     "pyjwt>=2.13.0",
     "cryptography>=50.0.0",
+    # Decoding, downscaling and re-encoding uploaded images. **The only
+    # dependency here that parses untrusted binary**, which is the whole risk of
+    # the upload endpoint: an image decoder is a C surface reached by whatever
+    # bytes a caller sends. `domain/images.py` caps the decoded pixel count
+    # before any bitmap is allocated, because Pillow's own default *warns* and
+    # continues.
+    #
+    # Re-encoding is also what strips EXIF — the GPS coordinates a phone puts in
+    # a photo — which ADR 0019 left open and which had to be settled before
+    # profiles became public.
+    # The floor is the version this was verified against, not the oldest that
+    # might work. The migration decodes AVIF, which needs a build carrying the
+    # codec — `features.check_module("avif")` was confirmed true here — and a
+    # floor guessed from a changelog is a claim nobody checked.
+    "pillow>=12.3",
 ]
 
 [dependency-groups]

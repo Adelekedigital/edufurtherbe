@@ -157,9 +157,35 @@ the ETL and provisioning already use.
 
 - **Whether the source images should be deleted from Bubble afterwards.** Not
   while Bubble is still the live system. Belongs to decommissioning, not here.
-- **Whether a rendition pipeline is wanted** — thumbnails, WebP conversion,
-  stripping EXIF. The originals include phone photos with EXIF intact, which
-  carries location data on some devices. Out of scope for a re-host, and worth
-  deciding before profiles become public in M2.
-- **What happens to an image a user replaces after this runs.** Nothing here
-  handles ongoing uploads; that is the application's job and does not exist yet.
+- ~~**Whether a rendition pipeline is wanted** — thumbnails, WebP conversion,
+  stripping EXIF.~~ **Closed by the upload endpoint.** See below.
+- ~~**What happens to an image a user replaces after this runs.**~~ **Closed by
+  the upload endpoint.** See below.
+
+### Closed by the upload endpoint
+
+Both open questions above were answered together, because one construction
+answers both: **every image entering storage is decoded and re-encoded**, from
+the upload endpoint and from `scripts/migrate_assets.py` alike.
+
+- **EXIF, including GPS, is gone — by construction rather than by measurement.**
+  Re-encoding writes only what it is given, and nothing gives it the metadata.
+  There is no strip step to forget and no population of stripped and unstripped
+  images to reason about later. The original plan here was to *measure* how many
+  migrated images carried coordinates; that measurement was dropped as useless —
+  nothing had been migrated yet, so it would have scanned an empty set, and the
+  answer would not have changed what was built.
+- **Renditions: one, not a pipeline.** A single stored size per kind — 512px for
+  an avatar, 1500px for a banner, longest edge, never enlarged. Larger images are
+  resized rather than refused, which is what every comparable product does;
+  refusing a photo for having too many pixels is a limit no user should meet.
+- **A replaced image is deleted**, after the profile points at the new one and
+  never fatally. Object paths are keyed on the user *and* the content, so no two
+  profiles can share an object and deleting one cannot affect another. Uploading
+  the same image twice lands on the same path and deletes nothing.
+
+**Why the API and not a presigned URL.** A presigned PUT puts the client in
+direct contact with the bucket, which means nothing can strip metadata, nothing
+can resize, and the object name cannot be derived from the content — the three
+things this endpoint exists to do. The cost is that the bytes pass through the
+API; at 5 MB with the work on a worker thread, that is the right trade.

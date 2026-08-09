@@ -116,3 +116,37 @@ class SupabaseStorage:
 
     def public_url(self, path: str) -> str:
         return f"{self._base_url}{PUBLIC_OBJECT}/{self._bucket}/{path}"
+
+    def path_of(self, url: str) -> str | None:
+        """The object path inside this bucket, or ``None`` if the URL is not ours.
+
+        Used to remove an image somebody replaced. It refuses anything it did not
+        build — a stored URL predating this scheme, or a value from somewhere
+        else — because deriving a delete target from an unrecognised string is
+        how a delete reaches the wrong object.
+        """
+        prefix = f"{self._base_url}{PUBLIC_OBJECT}/{self._bucket}/"
+        return url[len(prefix) :] if url.startswith(prefix) else None
+
+    def delete(self, path: str) -> bool:
+        """Remove an object. ``False`` if it was not there.
+
+        **Best effort by contract.** The caller removes a *replaced* image after
+        the profile already points at the new one, so a failure here leaves an
+        orphan and nothing broken — where raising would fail an upload that has
+        already succeeded. A missing object is not an error for the same reason:
+        two replacements racing both try to remove the same predecessor.
+        """
+        response = send_with_backoff(
+            lambda: self._client.delete(
+                f"{self._base_url}{OBJECT}/{self._bucket}/{path}", headers=self._headers
+            ),
+            self._sleep,
+        )
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return False
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            # Status only: the body can echo a request that carried the
+            # service-role key.
+            raise StorageError(f"delete of {path} failed with {response.status_code}")
+        return True
