@@ -51,7 +51,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, func, literal, select, tuple_
+from sqlalchemy import Select, and_, case, func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import LookupStatus
@@ -297,9 +297,31 @@ async def list_lookup(
             )
         )
     if q and q.strip():
-        statement = statement.where(
-            model.display_name.ilike("%" + escape_like(q.strip()) + "%", escape=LIKE_ESCAPE)
+        # **Ranked, not alphabetical.** Plain `ILIKE '%q%'` ordered by name puts
+        # "Antigua and Barbuda Creole English" above "English" — 7,078 ISO 639-3
+        # rows include twenty languages whose names contain "English", and the
+        # one the user meant sorted fifth. Same three tiers institution search
+        # uses: exact, then prefix, then anywhere.
+        #
+        # A search does not page. It narrows by typing, like the institution
+        # autocomplete, and a cursor would have to order by the ranking rather
+        # than by the keyset columns.
+        term = q.strip()
+        pattern = escape_like(term)
+        lowered = func.lower(term)
+        statement = (
+            statement.where(model.display_name.ilike("%" + pattern + "%", escape=LIKE_ESCAPE))
+            .order_by(
+                case(
+                    (func.lower(model.display_name) == lowered, 0),
+                    (func.lower(model.display_name).like(lowered + "%", escape=LIKE_ESCAPE), 1),
+                    else_=2,
+                ),
+                model.display_name,
+            )
+            .limit(limit)
         )
+        return [dict(r) for r in (await session.execute(statement)).mappings()], False
 
     if not spec["paged"]:
         # A closed vocabulary: six rows, ordered by `sort_order` because

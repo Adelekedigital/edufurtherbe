@@ -112,38 +112,46 @@ SERVICE_OFFERINGS: dict[str, str] = {
 }
 
 #: Legacy ``degreeCategory`` to a ``degree_levels`` slug.
+#:
+#: The slugs are ISCED-aligned: `diploma` (4-5), `bachelors` (6), `masters` (7),
+#: `doctorate` (8). `mba` and `postdoc` no longer exist — an MBA *is* a master's
+#: degree, and a postdoc is a research post rather than a qualification.
 DEGREE_CATEGORIES: dict[str, str] = {
-    "bachelors": "undergraduate",
+    "bachelors": "bachelors",
     "masters": "masters",
-    "doctorates": "phd",
+    "doctorates": "doctorate",
     "diploma": "diploma",
 }
 
 #: The "Program Interest" option set to a ``degree_levels`` slug.
 #:
-#: Serves ``mentee_goals.degree_goal_id``. A *goal* of an undergraduate degree is
+#: Serves ``mentee_goals.degree_goal_id``. A *goal* of a bachelor's degree is
 #: meaningless on a graduate-education platform, but the same list also records
-#: what somebody already holds, so the undergraduate rows stay: the filter
-#: belongs in the interface, not in this mapping.
+#: what somebody already holds, so the bachelor's rows stay: the filter belongs
+#: in the interface, not in this mapping.
+#:
+#: `mba (...)` maps to `masters` and every doctorate to `doctorate`, because the
+#: level is the filterable dimension — "mentors with a doctorate" cannot be
+#: answered if EdD and PhD sit on different rows.
 PROGRAM_DEGREE_LEVELS: dict[str, str] = {
-    "bsc (bachelor of science)": "undergraduate",
-    "ba (bachelor of art)": "undergraduate",
-    "llb (bachelor of law)": "undergraduate",
-    "beng (bachelor of engineering)": "undergraduate",
-    "bed (bachelor of education)": "undergraduate",
-    "mbbs (bachelor of medicine and bachelor of surgery)": "undergraduate",
+    "bsc (bachelor of science)": "bachelors",
+    "ba (bachelor of art)": "bachelors",
+    "llb (bachelor of law)": "bachelors",
+    "beng (bachelor of engineering)": "bachelors",
+    "bed (bachelor of education)": "bachelors",
+    "mbbs (bachelor of medicine and bachelor of surgery)": "bachelors",
     "msc (master of science)": "masters",
     "llm (master of laws)": "masters",
     "meng (master of engineering)": "masters",
     "ma (master of arts)": "masters",
     "med (master of education)": "masters",
-    "mba (master of business administration)": "mba",
-    "phd (doctor of philosophy)": "phd",
-    "edd (doctor of education)": "phd",
-    "dba (doctor of business administration)": "phd",
-    "dnurs (doctor of nursing)": "phd",
-    "lld (doctor of laws)": "phd",
-    "dsc (doctor of science)": "phd",
+    "mba (master of business administration)": "masters",
+    "phd (doctor of philosophy)": "doctorate",
+    "edd (doctor of education)": "doctorate",
+    "dba (doctor of business administration)": "doctorate",
+    "dnurs (doctor of nursing)": "doctorate",
+    "lld (doctor of laws)": "doctorate",
+    "dsc (doctor of science)": "doctorate",
 }
 
 #: Legacy venue selection to ``meeting_provider``.

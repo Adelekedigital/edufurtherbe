@@ -89,8 +89,13 @@ async def list_education(session: AsyncSession, user_id: UUID) -> list[dict[str,
     return [dict(row) for row in (await session.execute(_education_statement(user_id))).mappings()]
 
 
-async def list_goals(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]]:
-    """One user's study goals, each with its target countries and its needs.
+async def get_goal(session: AsyncSession, user_id: UUID) -> dict[str, Any] | None:
+    """The user's goal, or ``None``. There is at most one.
+
+    ``mentee_goals.user_id`` is ``unique=True`` and the model states "1:1 with
+    the user". This returned a list until a write test hit the constraint —
+    a list that could only ever hold zero or one, telling every client that
+    goals are a collection.
 
     Countries and needs are fetched per goal rather than as one join, because a
     goal with three countries and four needs would otherwise come back as twelve
@@ -142,7 +147,10 @@ async def list_goals(session: AsyncSession, user_id: UUID) -> list[dict[str, Any
     # would claim a per-goal relationship the data does not carry.
     shared_countries = [dict(row) for row in countries]
     shared_needs = [dict(row) for row in needs]
-    return [dict(goal) | {"countries": shared_countries, "needs": shared_needs} for goal in goals]
+    first = next(iter(goals), None)
+    if first is None:
+        return None
+    return dict(first) | {"countries": shared_countries, "needs": shared_needs}
 
 
 async def list_awards(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]]:

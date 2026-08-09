@@ -258,7 +258,7 @@ def test_education_keeps_the_raw_school_name_and_leaves_the_link_null() -> None:
         export_timezone=NY,
     )
     assert row.school_name_raw == "Univerity of Lagos"
-    assert row.degree_level_slug == "undergraduate"
+    assert row.degree_level_slug == "bachelors"
     assert row.degree_category == "Bachelors"
 
 

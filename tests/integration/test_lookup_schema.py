@@ -34,13 +34,14 @@ SERVICE_OFFERING_SLUGS = (
     "interview-preparation",
 )
 
+#: In `sort_order`, which is ISCED ascending — a progression rather than an
+#: alphabet. `mba` and `postdoc` were merged away: an MBA *is* a master's degree,
+#: and a postdoc is a research post rather than a qualification anyone holds.
 DEGREE_LEVEL_SLUGS = (
-    "undergraduate",
     "diploma",
+    "bachelors",
     "masters",
-    "mba",
-    "phd",
-    "postdoc",
+    "doctorate",
 )
 
 SCHOLARSHIP_COUNT = 10
@@ -63,12 +64,33 @@ async def add_institution(
     source: str = "hipolabs",
     country: uuid.UUID | None = None,
 ) -> uuid.UUID:
+    # A `manual` row must name its creator — `ck_institutions_manual_names_its_creator`,
+    # the invariant that says an anonymous caller never reached this table. A
+    # mirrored row has no creator, because the sync made it.
+    creator = None
+    if source == "manual":
+        creator = (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (email, primary_role, timezone) "
+                    "VALUES (:e, 'mentee', 'UTC') RETURNING id"
+                ),
+                {"e": f"creator-{uuid.uuid4()}@example.com"},
+            )
+        ).scalar_one()
+
     result = await conn.execute(
         text(
-            "INSERT INTO institutions (name, domain, country_id, source) "
-            "VALUES (:n, :d, :c, :s) RETURNING id"
+            "INSERT INTO institutions (name, domain, country_id, source, created_by) "
+            "VALUES (:n, :d, :c, :s, :b) RETURNING id"
         ),
-        {"n": name, "d": domain, "c": country or await country_id(conn), "s": source},
+        {
+            "n": name,
+            "d": domain,
+            "c": country or await country_id(conn),
+            "s": source,
+            "b": creator,
+        },
     )
     return result.scalar_one()
 

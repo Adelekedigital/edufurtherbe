@@ -13,9 +13,10 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.schemas.catalogue import CountryRef, InstitutionRead
+from app.api.schemas.common import Normalised
 
 
 class LookupRef(BaseModel):
@@ -210,3 +211,152 @@ class MentorProfileRead(BaseModel):
                 for o in row.get("offerings", [])
             ],
         )
+
+
+# --------------------------------------------------------------------------
+# Writes
+#
+# Each write model sits beside the read it mirrors, so a field added to one and
+# forgotten on the other is visible in a single file rather than across two.
+#
+# **`user_id` and `created_by` appear on none of them.** Whose row this is comes
+# from the dependency that resolved the URL; a body field would be a second
+# answer to a question that already has one, and the wrong one would be the
+# caller's to choose.
+# --------------------------------------------------------------------------
+
+
+class EducationWrite(Normalised):
+    """A degree, as submitted.
+
+    ``school_name_raw`` is required and ``institution_id`` is not: a user typing
+    a school we do not hold must still be able to save, which is the whole point
+    of keeping the raw name (ADR 0008 point 5). When no id is given the server
+    matches, and creates a `pending_review` institution if nothing matches
+    unambiguously.
+    """
+
+    school_name_raw: str = Field(min_length=1, max_length=300)
+    institution_id: UUID | None = None
+    degree_level_id: UUID | None = None
+    degree_category: str | None = Field(default=None, max_length=100)
+    study_course: str | None = Field(default=None, max_length=300)
+    study_program: str | None = Field(default=None, max_length=300)
+    date_start: date | None = None
+    date_end: date | None = None
+    is_most_recent: bool = False
+
+    @model_validator(mode="after")
+    def _dates_ordered(self) -> EducationWrite:
+        """The `dates_ordered` CHECK already refuses this in the database.
+
+        Both, deliberately: the boundary gives a 422 naming the field, and the
+        constraint is what fails loudly if a future writer forgets — ADR 0016
+        point 3's "the database constrains rather than transforms".
+        """
+        if self.date_start and self.date_end and self.date_end < self.date_start:
+            raise ValueError("date_end is before date_start")
+        return self
+
+
+class GoalWrite(Normalised):
+    """A study goal, with the countries and needs that go with it.
+
+    Both lists key on the **user** rather than this goal, so submitting them
+    replaces what the user has — see the route description, because that is not
+    what "editing this goal" implies.
+    """
+
+    degree_goal_id: UUID | None = None
+    degree_goal_raw: str | None = Field(default=None, max_length=100)
+    target_start_term: str | None = Field(default=None, max_length=50)
+    notes: str | None = Field(default=None, max_length=2000)
+    country_ids: list[UUID] | None = None
+    need_ids: list[UUID] | None = None
+
+
+class AwardWrite(Normalised):
+    """A scholarship or award. Self-reported — nothing verifies one yet."""
+
+    title: str = Field(min_length=1, max_length=300)
+    institution: str = Field(min_length=1, max_length=300)
+    scholarship_program_id: UUID | None = None
+    year: int | None = Field(default=None, ge=1900, le=2100)
+    evidence_url: str | None = Field(default=None, max_length=1000)
+
+
+class MentorProfileWrite(Normalised):
+    """A mentor profile, on create or update.
+
+    `approval_status`, `listing_status` and every audit field are absent: they
+    are the review's to set, not the applicant's. A mentor who could approve
+    themselves is not a review.
+    """
+
+    headline: str | None = Field(default=None, max_length=300)
+    years_of_experience: int | None = Field(default=None, ge=0, le=80)
+    requires_booking_confirmation: bool | None = None
+    primary_study_country_id: UUID | None = None
+    primary_study_program: str | None = Field(default=None, max_length=300)
+    offering_ids: list[UUID] | None = None
+
+
+class UserProfileWrite(Normalised):
+    """The profile fields a user may set about themselves.
+
+    **`avatar_url` and `banner_url` are absent, deliberately.** Images are
+    content-addressed in Supabase Storage (ADR 0019); accepting a URL here would
+    let a profile point at any host and would bypass that scheme entirely.
+    Upload is its own build.
+
+    `email_provider_contact_id` and `legacy_bubble_id` are absent because another
+    system owns them.
+    """
+
+    about_me: str | None = Field(default=None, max_length=5000)
+    gender: str | None = Field(default=None, max_length=50)
+    origin_country_id: UUID | None = None
+    current_country_id: UUID | None = None
+    social_linkedin: str | None = Field(default=None, max_length=500)
+    social_twitter: str | None = Field(default=None, max_length=500)
+    social_youtube: str | None = Field(default=None, max_length=500)
+
+
+class EducationPatch(Normalised):
+    """A partial education edit.
+
+    **Separate from `EducationWrite` because `PATCH` and `POST` disagree about
+    what is required.** Reusing the create model makes `school_name_raw`
+    mandatory on every edit, so changing one field means resending fields the
+    client may not hold — the first version of this shipped exactly that, and a
+    test where a one-field patch silently changed nothing is what found it.
+
+    Every field optional; `exclude_unset` on the way out is what separates "not
+    sent" from "set to null".
+    """
+
+    school_name_raw: str | None = Field(default=None, min_length=1, max_length=300)
+    institution_id: UUID | None = None
+    degree_level_id: UUID | None = None
+    degree_category: str | None = Field(default=None, max_length=100)
+    study_course: str | None = Field(default=None, max_length=300)
+    study_program: str | None = Field(default=None, max_length=300)
+    date_start: date | None = None
+    date_end: date | None = None
+    is_most_recent: bool | None = None
+
+    @model_validator(mode="after")
+    def _patch_dates_ordered(self) -> EducationPatch:
+        if self.date_start and self.date_end and self.date_end < self.date_start:
+            raise ValueError("date_end is before date_start")
+        return self
+
+
+class AwardPatch(Normalised):
+    """A partial award edit, for the same reason."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    institution: str | None = Field(default=None, min_length=1, max_length=300)
+    scholarship_program_id: UUID | None = None
+    year: int | None = Field(default=None, ge=1900, le=2100)
+    evidence_url: str | None = Field(default=None, max_length=1000)

@@ -25,7 +25,7 @@ from conftest import api_token, bearer
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 #: Every scoped endpoint, so a new one added without a refusal test is visible.
-SCOPED = ("education", "goals", "awards", "mentor-profile")
+SCOPED = ("education", "goal", "awards", "mentor-profile")
 
 
 async def make_user(
@@ -94,7 +94,7 @@ async def test_another_users_goals_are_not_readable(
     await make_user(db_engine, caller_auth, "caller@example.com")
 
     response = await api_client.get(
-        f"/api/v1/users/{owner}/goals", headers=bearer(api_token(caller_auth))
+        f"/api/v1/users/{owner}/goal", headers=bearer(api_token(caller_auth))
     )
 
     assert response.status_code == 404
@@ -289,7 +289,7 @@ async def test_a_non_mentor_does_not_inherit_somebody_elses_mentor_profile(
     assert "Not yours" not in response.text
 
 
-async def test_a_user_sees_only_their_own_goals(
+async def test_a_user_sees_only_their_own_goal(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """Same shape as the education case. Written because a mutation batch that
@@ -305,10 +305,12 @@ async def test_a_user_sees_only_their_own_goals(
         )
 
     body = (
-        await api_client.get(f"/api/v1/users/{mine}/goals", headers=bearer(api_token(auth_id)))
+        await api_client.get(f"/api/v1/users/{mine}/goal", headers=bearer(api_token(auth_id)))
     ).json()
 
-    assert [g["notes"] for g in body["data"]] == ["Mine"]
+    # Singular: `mentee_goals` is 1:1 with the user, so this is the goal itself
+    # rather than a collection that could only ever hold one.
+    assert body["notes"] == "Mine"
 
 
 async def test_goal_satellites_are_scoped_to_their_own_user(
@@ -353,8 +355,8 @@ async def test_goal_satellites_are_scoped_to_their_own_user(
         )
 
     goal = (
-        await api_client.get(f"/api/v1/users/{mine}/goals", headers=bearer(api_token(auth_id)))
-    ).json()["data"][0]
+        await api_client.get(f"/api/v1/users/{mine}/goal", headers=bearer(api_token(auth_id)))
+    ).json()
 
     assert [c["code"] for c in goal["countries"]] == ["NG"]
     # The other user's need must not appear on this user's goal.

@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.errors import ValidationError
 
@@ -89,3 +90,32 @@ def clamp_limit(limit: int | None) -> int:
     if limit is None:
         return DEFAULT_PAGE_SIZE
     return max(1, min(limit, MAX_PAGE_SIZE))
+
+
+class Normalised(BaseModel):
+    """Trims every string, and turns an emptied one into ``None``.
+
+    **Declarative, so a new field cannot omit it by nobody thinking about it** —
+    the same reasoning `NormalisedEmail` follows for lowercasing, and what ADR
+    0016 point 3 means by normalising at the boundary. A form posts `""` for a
+    field the user cleared; storing that gives a column holding two different
+    spellings of "absent", and every later query has to remember both.
+
+    Runs before validation, so `str | None` fields accept `""` and arrive as
+    `None` rather than failing a length check on a value the user did not type.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        normalised: dict[str, Any] = {}
+        for key, value in data.items():
+            if isinstance(value, str):
+                stripped = value.strip()
+                normalised[key] = stripped or None
+            else:
+                normalised[key] = value
+        return normalised
