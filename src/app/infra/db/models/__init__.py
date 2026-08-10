@@ -13,6 +13,7 @@ an omission here makes that test pass by looking at less.
 """
 
 from app.infra.db.models.admin import AdminUser
+from app.infra.db.models.availability import AvailabilityException, AvailabilityRule
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.legal import LegalDocument, UserLegalConsent
 from app.infra.db.models.mentoring import (
@@ -37,6 +38,8 @@ from app.infra.db.models.user import (
 __all__ = [
     "AdminUser",
     "AuthIdentity",
+    "AvailabilityException",
+    "AvailabilityRule",
     "Country",
     "DegreeLevel",
     "EducationEntry",

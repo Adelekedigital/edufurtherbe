@@ -25,6 +25,7 @@ from app.domain.enums import (
     AdminRole,
     ApprovalStatus,
     AuthProvider,
+    AvailabilityExceptionType,
     LanguageProficiency,
     LegalDocumentType,
     ListingStatus,
@@ -62,6 +63,7 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     MentorStatusType: "mentor_status_type",
     VerificationStatus: "verification_status",
     MeetingProvider: "meeting_provider",
+    AvailabilityExceptionType: "availability_exception_type",
 }
 
 
