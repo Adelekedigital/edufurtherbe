@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import errors
 from app.api.limits import BodyLimitMiddleware
-from app.api.routes import admin, catalogue, health, user_attributes, users
+from app.api.routes import admin, availability, catalogue, health, user_attributes, users
 from app.core.config import Settings, get_settings
 
 # Tag metadata, so /docs explains each group rather than listing bare paths.
@@ -121,6 +121,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(users.router)
     application.include_router(catalogue.router)
     application.include_router(user_attributes.router)
+    application.include_router(availability.router)
     application.include_router(admin.router)
     return application
 
