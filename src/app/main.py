@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import errors
-from app.api.limits import limit_request_body
+from app.api.limits import BodyLimitMiddleware
 from app.api.routes import admin, catalogue, health, user_attributes, users
 from app.core.config import Settings, get_settings
 
@@ -88,15 +88,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # shape — RFC 9457 Problem Details, never FastAPI's own `{"detail": ...}`.
     errors.register(application)
 
-    # A ceiling on the request body, refused from its declared length before
-    # anything reads it. It has to be middleware: FastAPI parses the multipart
+    # A ceiling on the request body, by declared length and then by counting the
+    # bytes that arrive. It has to be middleware: FastAPI parses the multipart
     # form to resolve an `UploadFile`, spooling the whole body to disk, and only
     # then runs the endpoint — so a check written there limits nothing.
     #
     # Registered before CORS, which puts CORS *outside* it (Starlette wraps in
     # reverse). That is the order we want: a 413 still leaves with its CORS
     # headers, so a browser sees the refusal instead of an opaque network error.
-    application.middleware("http")(limit_request_body)
+    application.add_middleware(BodyLimitMiddleware)
 
     # Added only when origins are configured. An empty list would install a
     # middleware that allows nothing, which is indistinguishable from no CORS at

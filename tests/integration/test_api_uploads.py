@@ -492,14 +492,43 @@ async def test_the_request_ceiling_applies_to_every_route_not_just_uploads(
     assert response.status_code == 413, response.text
 
 
-async def test_a_body_with_no_declared_length_is_not_refused(
+async def test_a_body_with_no_declared_length_is_still_bounded(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """A chunked request carries no `Content-Length`. The middleware has nothing
-    to read and must let it through rather than refuse everything it cannot
-    measure — the bytes are still counted where the image is decoded."""
+    """A chunked request carries no `Content-Length`, so the declared check has
+    nothing to compare — and the first version of this let it through in full.
+
+    **The failure it left open is worse here than on an upload.** This is JSON,
+    and `request.body()` accumulates JSON in memory, so an unbounded chunked
+    `PATCH` costs the worker's RAM rather than its disk.
+    """
     auth_id = uuid4()
     user_id = await make_user(db_engine, auth_id, "chunked@example.com")
+
+    async def chunks():
+        yield b'{"about_me": "'
+        for _ in range((MAX_BODY_BYTES // (64 * 1024)) + 1):
+            yield b"a" * (64 * 1024)
+        yield b'"}'
+
+    response = await api_client.patch(
+        f"/api/v1/users/{user_id}/profile",
+        content=chunks(),
+        headers={**bearer(api_token(auth_id)), "content-type": "application/json"},
+    )
+
+    assert "content-length" not in response.request.headers, "httpx declared a length"
+    assert response.status_code == 413, response.text
+
+
+async def test_a_small_streamed_body_still_works(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Streamed bodies are **limited, not banned**. Requiring a length on every
+    route was the easy fix and would refuse every chunked client — so this is
+    the test that stops the limit from being tightened into a ban."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "small-stream@example.com")
 
     async def chunks():
         yield b'{"about_me": "streamed"}'
@@ -512,3 +541,44 @@ async def test_a_body_with_no_declared_length_is_not_refused(
 
     assert "content-length" not in response.request.headers
     assert response.status_code in {200, 204}, response.text
+    async with db_engine.connect() as conn:
+        about = await conn.execute(
+            text("SELECT about_me FROM user_profiles WHERE user_id = :u"), {"u": user_id}
+        )
+    assert about.scalar_one() == "streamed", "the streamed body was refused or truncated"
+
+
+async def test_a_chunked_upload_over_the_ceiling_stores_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """The upload half of the same hole: no declared length, so nothing compared,
+    and the multipart parser would spool every byte to disk before the endpoint
+    got a say."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "chunked-upload@example.com")
+    boundary = b"----probe"
+    head = (
+        b"--" + boundary + b"\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="big.jpg"\r\n'
+        b"Content-Type: image/jpeg\r\n\r\n"
+    )
+
+    async def chunks():
+        yield head
+        for _ in range((MAX_BODY_BYTES // (64 * 1024)) + 1):
+            yield b"\x00" * (64 * 1024)
+        yield b"\r\n--" + boundary + b"--\r\n"
+
+    response = await api_client.post(
+        url(user_id, "avatar"),
+        content=chunks(),
+        headers={
+            **bearer(api_token(auth_id)),
+            "content-type": f"multipart/form-data; boundary={boundary.decode()}",
+        },
+    )
+
+    assert "content-length" not in response.request.headers
+    assert response.status_code == 413, response.text
+    assert fake_storage.uploads == []
+    assert (await stored_urls(db_engine, user_id))[0] is None

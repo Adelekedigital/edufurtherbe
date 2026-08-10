@@ -29,15 +29,29 @@ released. A tag with no matching section here fails the release job.
   nothing else can be pointing at it — and uploading the same image twice lands
   on the same path and deletes nothing.
 - **`api/limits.py`** — a 6 MB ceiling on the request body for every route,
-  refused with 413 from the declared length before anything reads it. It has to
-  be middleware: FastAPI parses the multipart form and spools it to disk before
-  the endpoint runs, so the same check written there limits nothing. Found by a
-  mutation batch and confirmed by measuring the order with an 8 MB body.
+  refused with 413. It has to be middleware: FastAPI parses the multipart form
+  and spools it to disk before the endpoint runs, so the same check written
+  there limits nothing. Found by a mutation batch and confirmed by measuring the
+  order with an 8 MB body.
+  **The ceiling counts the bytes that arrive**, and does not simply read
+  `Content-Length`. A chunked request carries no length, so a header-only check
+  compared nothing and let 7 MB through — verified against a real uvicorn
+  server. The declared length is still checked first, because it is the only one
+  of the two that can refuse before a byte is read. On a JSON route the
+  unbounded case was memory rather than disk, which is why this is not scoped to
+  the upload endpoints.
 - **Pillow**, the only dependency in the project that parses untrusted binary.
   A 50-megapixel ceiling is applied from the header, before any bitmap is
   allocated; Pillow's own limit only warns and decodes anyway.
-- **Settled decisions 76-79** and five `failure-modes.md` rows, four of them
-  found by the mutation batch rather than by the suite.
+- **Settled decisions 76-79** and eight `failure-modes.md` rows, four of them
+  found by the mutation batch rather than by the suite and three by a review that
+  probed a real server instead of the in-process transport.
+
+### Fixed
+
+- **`HTTP_413_REQUEST_ENTITY_TOO_LARGE`** replaced with
+  `HTTP_413_CONTENT_TOO_LARGE`; the old spelling is deprecated in Starlette and
+  emitted a warning on every refusal.
 
 - ADR 0002 (Bubble export strategy) and ADR 0003 (read-only freeze cutover).
 - `project-conventions` filled in with the project's settled decisions, domain

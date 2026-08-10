@@ -410,8 +410,12 @@ IMAGE_DESCRIPTION = (
 #: photo nothing about which of the four reasons applied.
 UPLOAD_RESPONSES: dict[int | str, dict[str, str]] = {
     **WRITE_RESPONSES,
-    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: {
-        "description": "The request body exceeds 6 MB. Refused before it is read."
+    status.HTTP_413_CONTENT_TOO_LARGE: {
+        "description": (
+            "The request body exceeds 6 MB. Refused from `Content-Length` before "
+            "anything is read when one is sent, and counted as it arrives when "
+            "one is not — a chunked upload is bounded either way."
+        )
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": (
