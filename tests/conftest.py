@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+import io
 import json
 import os
 import uuid
@@ -19,6 +20,7 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from PIL import Image
 from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -28,6 +30,7 @@ from app.infra.auth.admin import SupabaseAdminClient
 from app.infra.auth.supabase import SupabaseTokenVerifier
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.provisioning_store import ProvisioningStore
+from app.infra.storage.supabase import SupabaseStorage
 from app.main import create_app
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -95,8 +98,21 @@ def bearer(value: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {value}"}
 
 
+@pytest.fixture
+def api_storage() -> SupabaseStorage | None:
+    """No bucket by default; overridden by the tests that upload.
+
+    A default of `None` rather than a working fake keeps `app.state.storage`
+    unset everywhere else — so a route that reaches storage without meaning to
+    fails loudly instead of quietly writing into a test double.
+    """
+    return None
+
+
 @pytest_asyncio.fixture
-async def api_client(db_engine: AsyncEngine) -> AsyncIterator[httpx.AsyncClient]:
+async def api_client(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> AsyncIterator[httpx.AsyncClient]:
     """An app bound to this test's disposable database and a local signing key.
 
     Both are injected through ``app.state`` rather than the process-wide caches,
@@ -111,6 +127,8 @@ async def api_client(db_engine: AsyncEngine) -> AsyncIterator[httpx.AsyncClient]
     app = create_app(Settings(_env_file=None))
     app.state.session_factory = create_session_factory(db_engine)
     app.state.token_verifier = SupabaseTokenVerifier(secret=SECRET)
+    if api_storage is not None:
+        app.state.storage = api_storage
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
@@ -443,3 +461,83 @@ def common_languages_migration() -> ModuleType:
 async def store(db_engine: AsyncEngine) -> ProvisioningStore:
     """The provisioning store, bound to this test's disposable database."""
     return ProvisioningStore(db_engine)
+
+
+# ---------------------------------------------------------------------------
+# images and storage
+# ---------------------------------------------------------------------------
+#
+# **Real encoded images, not header bytes.** The migration and the upload
+# endpoint both decode what they are given now, so a JFIF magic number followed
+# by zeroes is refused rather than stored — which is correct behaviour and was
+# how the first version of this suite reported a bug in the code that was in the
+# fixture. `Image.new` costs microseconds at these sizes.
+
+SUPABASE_URL = "https://project.supabase.co"
+STORAGE_BUCKET = "profile-images"
+
+#: A GPS position, in the EXIF rational form a phone actually writes. Nairobi.
+_GPS = {
+    1: "S",
+    2: (1.0, 17.0, 0.0),
+    3: "E",
+    4: (36.0, 49.0, 0.0),
+}
+
+
+def image_bytes(fmt: str = "JPEG", size: tuple[int, int] = (40, 30), *, gps: bool = False) -> bytes:
+    """One real image, encoded. ``gps`` writes the coordinates a camera would."""
+    buffer = io.BytesIO()
+    image = Image.new("RGB", size, (10, 120, 200))
+    if gps:
+        exif = Image.Exif()
+        exif[0x8825] = _GPS
+        image.save(buffer, format=fmt, exif=exif)
+    else:
+        image.save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
+class FakeStorage:
+    """Enough of Supabase Storage to be re-run against.
+
+    Method-aware, because delete is now part of the contract: an upload that
+    counted a `DELETE` as an upload would report every replacement as two
+    objects and hide a cleanup that never ran.
+    """
+
+    def __init__(self, *, bucket_exists: bool = True, upload_fails: bool = False) -> None:
+        self.objects: dict[str, tuple[bytes, str]] = {}
+        self.uploads: list[str] = []
+        self.deletes: list[str] = []
+        self.bucket_exists = bucket_exists
+        self.upload_fails = upload_fails
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/storage/v1/bucket/"):
+            return httpx.Response(200 if self.bucket_exists else 404, json={})
+        path = request.url.path.split(f"/storage/v1/object/{STORAGE_BUCKET}/", 1)[-1]
+        if request.method == "DELETE":
+            self.deletes.append(path)
+            if path not in self.objects:
+                return httpx.Response(404, json={})
+            del self.objects[path]
+            return httpx.Response(200, json={})
+        if self.upload_fails:
+            return httpx.Response(500, json={"message": "storage is down"})
+        self.uploads.append(path)
+        self.objects[path] = (request.content, request.headers.get("Content-Type", ""))
+        return httpx.Response(200, json={"Key": path})
+
+
+def storage_for(fake: FakeStorage) -> SupabaseStorage:
+    """The **real** adapter over a fake transport. A hand-written stand-in would
+    test the stand-in, and the retry and status handling are the parts that
+    have been wrong before."""
+    return SupabaseStorage(
+        base_url=SUPABASE_URL,
+        service_role_key="test-key",
+        bucket=STORAGE_BUCKET,
+        client=httpx.Client(transport=httpx.MockTransport(fake.handle)),
+        sleep=lambda _: None,
+    )

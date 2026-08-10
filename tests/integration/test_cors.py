@@ -88,3 +88,56 @@ def test_a_preflight_from_a_stranger_is_not_answered_with_permission() -> None:
     )
 
     assert response.headers.get(ALLOW_ORIGIN) is None
+
+
+def test_a_refused_body_still_carries_its_cors_header() -> None:
+    """A 413 from the body-limit middleware, seen by a browser.
+
+    The limit is registered *before* CORS, which puts CORS outside it — Starlette
+    wraps in reverse. Get that order wrong and the refusal leaves without an
+    `Access-Control-Allow-Origin`, so the browser reports an opaque network
+    failure and the user is told nothing about a file being too large.
+
+    Asserted through a response for the same reason as every other test here: a
+    middleware present but ordered wrongly satisfies an object check.
+    """
+    from app.api.limits import MAX_BODY_BYTES
+
+    response = client(ALLOWED).post(
+        "/api/v1/users/00000000-0000-0000-0000-000000000000/avatar",
+        content=b"\x00" * (MAX_BODY_BYTES + 1),
+        headers={"Origin": ALLOWED, "Content-Type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 413, response.text
+    assert response.headers.get(ALLOW_ORIGIN) == ALLOWED
+    assert response.headers.get(ALLOW_CREDENTIALS) == "true"
+
+
+def test_the_refusal_is_problem_json_like_every_other_error() -> None:
+    """One error shape, including the one written by hand in the middleware.
+
+    `limits.py` cannot use `errors.problem()` — it answers below the application,
+    where no exception handler runs — so this is the only thing keeping the two
+    spellings of a Problem Details body in step.
+    """
+    import json
+
+    from app.api.errors import CONTENT_TYPE, problem
+    from app.api.limits import MAX_BODY_BYTES
+
+    refused = client(ALLOWED).post(
+        "/api/v1/users/00000000-0000-0000-0000-000000000000/avatar",
+        content=b"\x00" * (MAX_BODY_BYTES + 1),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    # Compared against `problem()` itself rather than against another endpoint:
+    # a 401 omits `detail` deliberately, so any endpoint chosen as the reference
+    # brings its own omissions and the comparison stops being about the shape.
+    generated = json.loads(problem(status_code=413, title="Content Too Large", detail="x").body)
+
+    assert refused.headers["content-type"].startswith(CONTENT_TYPE)
+    assert set(refused.json()) == set(generated), (
+        "the hand-written problem body has different keys from the generated one"
+    )
+    assert refused.json()["status"] == 413

@@ -13,8 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import bindparam, select, update
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import bindparam, insert, select, update
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.domain.assets import AssetKind
 from app.infra.db.models.user import User
@@ -93,3 +93,38 @@ class AssetStore:
             async with timestamps_from_source(connection, "user_profiles"):
                 result = await connection.execute(statement, {"target_user": user_id, "url": url})
             return result.rowcount > 0
+
+
+async def replace_url(
+    session: AsyncSession, user_id: UUID, kind: AssetKind, url: str
+) -> str | None:
+    """Point the column at a newly uploaded object; return what it held before.
+
+    **The trigger is not held off here, and that is the difference from
+    `AssetStore.record`.** Re-hosting a file is not a modification of the user's
+    data, so the migration preserves Bubble's timestamp. A user changing their
+    own photo *is* one, and `updated_at` should say so.
+
+    The previous URL is read rather than returned by the `UPDATE`: PostgreSQL's
+    `RETURNING` yields the new row, not the old one. The caller uses it to remove
+    the image that was replaced — which is safe because object paths are keyed on
+    the user as well as the content, so no two profiles share an object.
+
+    **Upsert, for the same reason `upsert_profile` is one**: the profile row is
+    created on first write, and `/me` reports `has_profile: false` until then. A
+    plain `UPDATE` writes nothing for a user uploading a photo before they have
+    ever saved a bio, and answers 200 having stored an object nothing points at.
+    The two are pinned together by `test_first_write_creates_the_profile_row`,
+    which drives both entry points against a user who has neither.
+    """
+    column = Profile.avatar_url if kind is AssetKind.AVATAR else Profile.banner_url
+    found = await session.execute(select(column).where(Profile.user_id == user_id))
+    row = found.first()
+    if row is None:
+        await session.execute(insert(Profile).values(user_id=user_id, **{column.key: url}))
+        return None
+
+    statement = SET_AVATAR if kind is AssetKind.AVATAR else SET_BANNER
+    await session.execute(statement, {"target_user": user_id, "url": url})
+    previous: str | None = row[0]
+    return previous

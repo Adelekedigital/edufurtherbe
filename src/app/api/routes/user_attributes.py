@@ -33,6 +33,8 @@ from app.api.deps import (
     UpdatedAwardDep,
     UpdatedEducationDep,
     UpdatedMentorProfileDep,
+    UploadedAvatarDep,
+    UploadedBannerDep,
     UpsertedGoalDep,
     UpsertedProfileDep,
 )
@@ -387,3 +389,58 @@ async def resume_listing(resumed: ResumedSelfDep) -> dict[str, bool]:
     if not resumed:
         raise NotFoundError("this listing is not yours to resume")
     return {"resumed": True}
+
+
+IMAGE_DESCRIPTION = (
+    "Send the image as `multipart/form-data` under the field name `file`. JPEG, "
+    "PNG or WebP, up to 5 MB — **decided from the bytes**, so the `Content-Type` "
+    "the client declares is not consulted.\n\n"
+    "The image is **re-encoded**, which is what removes camera metadata: a phone "
+    "photo carries the GPS coordinates it was taken at, and a profile is public.\n\n"
+    "Larger images are **resized, not refused** — an avatar is stored at 512px on "
+    "its longest edge and a banner at 1500px. A smaller image is left alone "
+    "rather than enlarged.\n\n"
+    "The previous image is deleted once the new one is in place. Paths are keyed "
+    "on the user and on the content, so nothing another profile relies on is "
+    "touched, and re-uploading the same image deletes nothing."
+)
+
+#: The write refusals plus the two an upload adds. The 422 wording is replaced
+#: rather than inherited: "the body failed validation" tells somebody sending a
+#: photo nothing about which of the four reasons applied.
+UPLOAD_RESPONSES: dict[int | str, dict[str, str]] = {
+    **WRITE_RESPONSES,
+    status.HTTP_413_CONTENT_TOO_LARGE: {
+        "description": (
+            "The request body exceeds 6 MB. Refused from `Content-Length` before "
+            "anything is read when one is sent, and counted as it arrives when "
+            "one is not — a chunked upload is bounded either way."
+        )
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": (
+            "The file is empty, is not a JPEG, PNG or WebP, is larger than 5 MB, "
+            "or declares more pixels than we will decode."
+        )
+    },
+}
+
+
+@router.post(
+    "/avatar",
+    summary="Upload a profile picture",
+    description=IMAGE_DESCRIPTION,
+    responses=UPLOAD_RESPONSES,
+)
+async def upload_avatar(url: UploadedAvatarDep) -> dict[str, str]:
+    return {"avatar_url": url}
+
+
+@router.post(
+    "/banner",
+    summary="Upload a profile banner",
+    description=IMAGE_DESCRIPTION,
+    responses=UPLOAD_RESPONSES,
+)
+async def upload_banner(url: UploadedBannerDep) -> dict[str, str]:
+    return {"banner_url": url}

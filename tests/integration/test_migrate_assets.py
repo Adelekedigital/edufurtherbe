@@ -11,6 +11,7 @@ The Storage and source adapters are the real ones, driven over
 """
 
 import importlib.util
+import io
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
@@ -18,22 +19,26 @@ from uuid import UUID
 
 import httpx
 import pytest
+from PIL import Image
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.infra.db.asset_store import AssetStore
 from app.infra.storage.source import AssetSource
-from app.infra.storage.supabase import SupabaseStorage
+from conftest import STORAGE_BUCKET as BUCKET
+from conftest import SUPABASE_URL as SUPABASE
+from conftest import FakeStorage, image_bytes, storage_for
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SUPABASE = "https://project.supabase.co"
-BUCKET = "profile-images"
 BUBBLE = "https://app.edufurther.org/version-test/fileupload"
 
-JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 64
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+# Real encoded images. `rehost` decodes and re-encodes every asset now — the same
+# `process` the upload endpoint uses — so header bytes followed by zeroes are
+# refused, which is the point rather than an obstacle.
+JPEG = image_bytes("JPEG")
+PNG = image_bytes("PNG")
 
 
 @pytest.fixture
@@ -68,33 +73,6 @@ class FakeBubble:
         if name not in self.files:
             return httpx.Response(404)
         return httpx.Response(200, content=self.files[name])
-
-
-class FakeStorage:
-    """Enough of Supabase Storage to be re-run against."""
-
-    def __init__(self, *, bucket_exists: bool = True) -> None:
-        self.objects: dict[str, tuple[bytes, str]] = {}
-        self.uploads: list[str] = []
-        self.bucket_exists = bucket_exists
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        if request.url.path.startswith("/storage/v1/bucket/"):
-            return httpx.Response(200 if self.bucket_exists else 404, json={})
-        path = request.url.path.split(f"/storage/v1/object/{BUCKET}/", 1)[-1]
-        self.uploads.append(path)
-        self.objects[path] = (request.content, request.headers.get("Content-Type", ""))
-        return httpx.Response(200, json={"Key": path})
-
-
-def storage_for(fake: FakeStorage) -> SupabaseStorage:
-    return SupabaseStorage(
-        base_url=SUPABASE,
-        service_role_key="test-key",
-        bucket=BUCKET,
-        client=httpx.Client(transport=httpx.MockTransport(fake.handle)),
-        sleep=lambda _: None,
-    )
 
 
 def source_for(fake: FakeBubble) -> AssetSource:
@@ -401,3 +379,51 @@ def test_the_storage_host_is_derived_not_restated() -> None:
     """``is_ours`` compares against this, so writing the host down a second time
     would be a second representation of one fact."""
     assert storage_for(FakeStorage()).host == "project.supabase.co"
+
+
+async def test_a_migrated_photo_reaches_storage_without_its_gps(
+    db_engine: AsyncEngine, script: ModuleType
+) -> None:
+    """**One rule, both entry points.** ADR 0019 left camera metadata open, and
+    the migration is the path that carries most of it — a legacy avatar is a
+    phone photo somebody uploaded to Bubble years ago, coordinates included.
+
+    Asserted on the bytes that reached the bucket, and paired with a check that
+    the fixture had coordinates to lose: without that half, this passes against
+    an image that never carried any.
+    """
+    source = image_bytes("JPEG", gps=True)
+    with Image.open(io.BytesIO(source)) as before:
+        assert before.getexif().get_ifd(0x8825), "the fixture carries no GPS to strip"
+
+    bubble = FakeBubble({"holiday.jpeg": source})
+    storage = FakeStorage()
+    await seed(db_engine, "ada@example.com", avatar=f"{BUBBLE}/f1/holiday.jpeg")
+
+    await script.migrate(
+        AssetStore(db_engine), source_for(bubble), storage_for(storage), workers=1, dry_run=False
+    )
+
+    payload, _ = storage.objects[storage.uploads[0]]
+    with Image.open(io.BytesIO(payload)) as after:
+        assert not after.getexif().get_ifd(0x8825), "GPS survived the migration"
+        assert dict(after.getexif()) == {}
+
+
+async def test_an_asset_the_decoder_will_not_read_is_reported_not_counted(
+    db_engine: AsyncEngine, script: ModuleType
+) -> None:
+    """A refusal must not land in `absent`, which means "there was no image".
+    Somebody has to look at these, and a count that hides them is why."""
+    bubble = FakeBubble({"broken.jpeg": b"\xff\xd8\xff" + b"\x00" * 64})
+    storage = FakeStorage()
+    await seed(db_engine, "ada@example.com", avatar=f"{BUBBLE}/f1/broken.jpeg")
+
+    report = await script.migrate(
+        AssetStore(db_engine), source_for(bubble), storage_for(storage), workers=1, dry_run=False
+    )
+
+    assert report.copied == 0
+    assert report.absent == 0, "an unreadable image was counted as having none"
+    assert len(report.failed) == 1
+    assert storage.uploads == []

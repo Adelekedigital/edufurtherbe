@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from functools import lru_cache
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, Path, Query, Request
+import httpx
+from fastapi import Depends, File, Path, Query, Request, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.concurrency import run_in_threadpool
 
 from app.api.schemas.admin import DeclineRequest, MergeRequest
 from app.api.schemas.common import (
@@ -36,8 +39,16 @@ from app.api.schemas.profile import (
     UserProfileWrite,
 )
 from app.core.config import Settings, get_settings
-from app.core.errors import AuthenticationError, ConflictError, NotFoundError
+from app.core.errors import (
+    AuthenticationError,
+    ConfigurationError,
+    ConflictError,
+    NotFoundError,
+    ValidationError,
+)
+from app.domain.assets import AssetKind, object_path
 from app.domain.enums import AdminRole
+from app.domain.images import MAX_UPLOAD_BYTES, process
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.db.admin_store import (
     approve_institution,
@@ -45,6 +56,7 @@ from app.infra.db.admin_store import (
     pending_institutions,
     pending_mentors,
 )
+from app.infra.db.asset_store import replace_url
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
@@ -73,6 +85,14 @@ from app.infra.db.profile_writer import (
     upsert_goal,
     upsert_profile,
 )
+from app.infra.storage.supabase import StorageError, SupabaseStorage
+
+#: How long a storage call may take before the request gives up.
+#:
+#: Longer than a database call and much shorter than a browser's patience: the
+#: object is at most 5 MB and Supabase is a network hop, so a call still running
+#: after this is a call that has failed and not yet said so.
+UPLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -667,3 +687,86 @@ async def replaced_languages(
 
 
 ReplacedLanguagesDep = Annotated[None, Depends(replaced_languages)]
+
+
+@lru_cache(maxsize=1)
+def get_storage() -> SupabaseStorage:
+    """One storage client per process, like the engine and the verifier.
+
+    A client per request would open a connection pool per request — the same
+    reason `get_session_factory` is cached.
+    """
+    settings = get_settings()
+    if settings.supabase_url is None or settings.supabase_service_role_key is None:
+        raise ConfigurationError("Supabase storage is not configured")
+    return SupabaseStorage(
+        base_url=str(settings.supabase_url).rstrip("/"),
+        service_role_key=settings.supabase_service_role_key.get_secret_value(),
+        bucket=settings.supabase_storage_bucket,
+        client=httpx.Client(timeout=UPLOAD_TIMEOUT),
+    )
+
+
+async def _store_image(
+    kind: AssetKind, upload: UploadFile, user_id: UUID, session: SessionDep, request: Request
+) -> str:
+    """Validate, re-encode, store, point the profile at it, drop the old one.
+
+    **The body was already read before this ran** — FastAPI parses the multipart
+    form to resolve `UploadFile`, spooling it to disk first. So the limit that
+    saves the transfer lives in `api/limits.py`, and the one here is the limit on
+    the *image*: read one byte past the cap and refuse if it arrives, which needs
+    no trust in a header.
+    """
+    payload = await upload.read(MAX_UPLOAD_BYTES + 1)
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise ValidationError("that file is larger than 5 MB")
+
+    # **Both of these block, so both go to a worker thread.** Decoding and
+    # resizing is CPU-bound and the storage client is synchronous `httpx` —
+    # awaiting either inline stalls *every other request* on this worker for the
+    # duration of a 5 MB round trip. This is what FastAPI does with a `def`
+    # endpoint; the storage client stays synchronous because the asset migration
+    # script uses the same class outside any event loop.
+    image = await run_in_threadpool(process, payload, kind)
+    path = object_path(user_id, kind, image.payload, image.content_type)
+
+    storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
+    url = await run_in_threadpool(storage.upload, path, image.payload, image.content_type)
+
+    previous = await replace_url(session, user_id, kind, url)
+    await session.commit()
+
+    # **After the commit, and never fatal.** The profile already points at the
+    # new object, so a failure here leaves an orphan rather than a broken
+    # profile — and an upload that already succeeded must not report failure
+    # because a cleanup did not.
+    if previous and previous != url:
+        old_path = storage.path_of(previous)
+        if old_path is not None:
+            with suppress(StorageError):
+                await run_in_threadpool(storage.delete, old_path)
+
+    return url
+
+
+async def uploaded_avatar(
+    request: Request,
+    user_id: OwnerDep,
+    session: SessionDep,
+    file: Annotated[UploadFile, File(description="JPEG, PNG or WebP, up to 5 MB.")],
+) -> str:
+    return await _store_image(AssetKind.AVATAR, file, user_id, session, request)
+
+
+async def uploaded_banner(
+    request: Request,
+    user_id: OwnerDep,
+    session: SessionDep,
+    file: Annotated[UploadFile, File(description="JPEG, PNG or WebP, up to 5 MB.")],
+) -> str:
+    return await _store_image(AssetKind.BANNER, file, user_id, session, request)
+
+
+UploadedAvatarDep = Annotated[str, Depends(uploaded_avatar)]
+UploadedBannerDep = Annotated[str, Depends(uploaded_banner)]

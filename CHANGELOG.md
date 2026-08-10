@@ -12,6 +12,47 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`POST /api/v1/users/{id}/avatar` and `/banner`** — a user uploads their own
+  profile picture or banner. JPEG, PNG or WebP, up to 5 MB. Owner only: an admin
+  may read these profiles and may not write them.
+- **Every image is decoded and re-encoded**, which is what removes camera
+  metadata — a phone photo carries the GPS coordinates it was taken at, and a
+  profile is public. ADR 0019 left that open and it is now closed by
+  construction: there is no strip step to forget, because nothing hands the
+  metadata to the encoder. `scripts/migrate_assets.py` goes through the same
+  function, so there is one population of images rather than two.
+- **Stored at one size per kind** — 512px for an avatar, 1500px for a banner,
+  longest edge. Larger images are resized rather than refused; a smaller one is
+  left alone rather than enlarged.
+- **The image a user replaces is deleted**, after the profile points at the new
+  one and never fatally. Paths are keyed on the user and a content hash, so
+  nothing else can be pointing at it — and uploading the same image twice lands
+  on the same path and deletes nothing.
+- **`api/limits.py`** — a 6 MB ceiling on the request body for every route,
+  refused with 413. It has to be middleware: FastAPI parses the multipart form
+  and spools it to disk before the endpoint runs, so the same check written
+  there limits nothing. Found by a mutation batch and confirmed by measuring the
+  order with an 8 MB body.
+  **The ceiling counts the bytes that arrive**, and does not simply read
+  `Content-Length`. A chunked request carries no length, so a header-only check
+  compared nothing and let 7 MB through — verified against a real uvicorn
+  server. The declared length is still checked first, because it is the only one
+  of the two that can refuse before a byte is read. On a JSON route the
+  unbounded case was memory rather than disk, which is why this is not scoped to
+  the upload endpoints.
+- **Pillow**, the only dependency in the project that parses untrusted binary.
+  A 50-megapixel ceiling is applied from the header, before any bitmap is
+  allocated; Pillow's own limit only warns and decodes anyway.
+- **Settled decisions 76-79** and eight `failure-modes.md` rows, four of them
+  found by the mutation batch rather than by the suite and three by a review that
+  probed a real server instead of the in-process transport.
+
+### Fixed
+
+- **`HTTP_413_REQUEST_ENTITY_TOO_LARGE`** replaced with
+  `HTTP_413_CONTENT_TOO_LARGE`; the old spelling is deprecated in Starlette and
+  emitted a warning on every refusal.
+
 - ADR 0002 (Bubble export strategy) and ADR 0003 (read-only freeze cutover).
 - `project-conventions` filled in with the project's settled decisions, domain
   vocabulary, guardrails, and the current enforcement blind spots.

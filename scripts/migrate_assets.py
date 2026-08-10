@@ -52,8 +52,8 @@ from app.domain.assets import (
     decide,
     host_of,
     object_path,
-    sniff_content_type,
 )
+from app.domain.images import MIGRATION_ACCEPTED, process
 from app.infra.db.asset_store import AssetStore, ProfileAssets
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.storage.source import AssetSource
@@ -92,6 +92,16 @@ def rehost(
 
     Blocking, and called through a thread so several can be in flight. It touches
     no database and no shared state, which is what makes that safe.
+
+    **Legacy images go through the same `process` as an upload**, so there is no
+    population of stripped and unstripped images to reason about later. A phone
+    photo that reached Bubble still carries the GPS coordinates it was taken at,
+    and these profiles are about to become public — ADR 0019 left that open, and
+    routing both entry points through one function is what closes it.
+
+    A refusal raises, which `migrate` already reports per image: nothing here has
+    to catch it, and an image the decoder will not read must not be silently
+    counted as absent.
     """
     url = profile.url_for(kind)
     if url is None:
@@ -100,9 +110,12 @@ def rehost(
     if fetched is None:
         return None
 
-    content_type = sniff_content_type(fetched.payload)
-    path = object_path(profile.user_id, kind, fetched.payload, content_type)
-    return storage.upload(path, fetched.payload, content_type)
+    image = process(fetched.payload, kind, accepted=MIGRATION_ACCEPTED)
+    # Hashed on what is **stored**, not on what was fetched. Re-running re-fetches
+    # the original, re-encodes it to the same bytes and lands on the same path —
+    # so a second pass overwrites one object rather than creating a second.
+    path = object_path(profile.user_id, kind, image.payload, image.content_type)
+    return storage.upload(path, image.payload, image.content_type)
 
 
 async def migrate(
