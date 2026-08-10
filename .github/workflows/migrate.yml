@@ -46,7 +46,7 @@ jobs:
     environment: ${{ inputs.target }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # A branch's migration chain is not the one production should receive. The
       # check is here rather than only in the environment's branch rules because
