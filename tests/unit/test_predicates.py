@@ -12,15 +12,20 @@ predicate inside SQL is not a symbol that ruff or mypy can bind.
 """
 
 import inspect
+from pathlib import Path
 from types import ModuleType
 
 import pytest
 from sqlalchemy import Delete, Select, Update
 from sqlalchemy.dialects import postgresql
 
+from app.domain.enums import ApprovalStatus, MentorStatusType
 from app.infra.db import asset_store, provisioning_store
 
 PREDICATE = "deleted_at IS NULL"
+
+#: Repo root, for the cross-artefact check at the end of this file.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 #: Every store, and the statements it declares as touching existing user rows.
 STORES: list[tuple[ModuleType, str]] = [
@@ -80,3 +85,70 @@ def test_both_stores_share_one_predicate_object() -> None:
 
     assert provisioning_store.LIVE is LIVE
     assert asset_store.LIVE is LIVE
+
+
+# --------------------------------------------------------------------------
+# Which mentors get a status event — one rule, two writers
+# --------------------------------------------------------------------------
+
+#: Approval states that record no event at all. The migration backfill spells
+#: this out twice as ``WHERE approval_status <> 'pending'``; the ETL skips the
+#: same mentors. Two writers of one table, and nothing in the type system links
+#: them — which is the whole reason this section exists.
+NO_HISTORY = frozenset({ApprovalStatus.PENDING})
+
+
+def test_every_other_approval_status_is_a_real_status_type() -> None:
+    """**The crossing that broke the loader, generalised.**
+
+    ``ApprovalStatus.value`` is handed to a ``mentor_status_type`` parameter as a
+    string, through raw SQL. mypy cannot see that the two enums are different, so
+    ``pending`` reached the database and took a single-transaction load down with
+    it — for the *default* state, which most of the export is in.
+
+    Asserted over the whole enum rather than the one value that bit us: a status
+    added later crosses the same gap, and fails here rather than at a cutover.
+    """
+    labels = {member.value for member in MentorStatusType}
+    assert labels, "no status labels; this test would assert nothing"
+
+    unmapped = sorted(
+        status.value
+        for status in ApprovalStatus
+        if status not in NO_HISTORY and status.value not in labels
+    )
+
+    assert not unmapped, (
+        f"{unmapped} would be written into `mentor_status_type`, which holds "
+        f"{sorted(labels)}. Either map it, or add it to NO_HISTORY."
+    )
+
+
+def test_the_migration_excludes_the_same_mentors_the_etl_does() -> None:
+    """The two writers of ``mentor_status_events`` must agree on who has none.
+
+    A per-event filter — seeding only values the enum happens to accept — looks
+    equivalent and diverges here: a pending mentor's ``listing_status`` is
+    ``unlisted``, which *is* a member, so that version seeds a listing event the
+    backfill does not, and a mentor's history depends on whether they arrived by
+    migration or by ETL.
+
+    Matched on the migration that **writes** the table, not one that merely names
+    it: an earlier revision mentions it in prose, and matching the mention picked
+    that file and failed for the wrong reason.
+    """
+    backfills = [
+        text
+        for text in (
+            path.read_text(encoding="utf-8")
+            for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py")
+        )
+        if "INSERT INTO mentor_status_events" in text
+    ]
+    assert backfills, "no migration seeds this table; this test would assert nothing"
+
+    backfill = "\n".join(backfills)
+    for status in NO_HISTORY:
+        assert f"approval_status <> '{status.value}'" in backfill, (
+            f"the ETL skips {status.value} mentors and the backfill does not"
+        )

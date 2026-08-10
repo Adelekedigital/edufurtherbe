@@ -27,6 +27,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.domain.enums import ApprovalStatus
 from app.domain.resolve import Resolution
 from app.domain.transform.profiles import (
     AwardRow,
@@ -269,9 +270,29 @@ class ProfileLoader:
                 },
             )
             already = await self._connection.execute(text(MENTOR_HAS_HISTORY), {"user_id": owner})
+            # **A pending mentor gets no events, and that is not an enum detail.**
+            # `mentor_status_type` has no `pending` member, so seeding one raised
+            # `InvalidTextRepresentationError` and took the whole single-transaction
+            # load down with it — for the *default* state, which most of the export
+            # is in. But the enum is downstream of the rule: the migration's
+            # backfill already excludes these mentors, twice, with
+            # `WHERE approval_status <> 'pending'`, because a decision row for a
+            # mentor nobody has decided on fabricates a decision nobody made.
+            #
+            # Skipped on the **mentor**, not per event. Filtering to values the
+            # enum happens to accept looks equivalent and is not: a pending
+            # mentor's `listing_status` is `unlisted`, which *is* a member, so
+            # that version would seed a listing event the backfill does not — and
+            # the two writers of this table would disagree depending on whether a
+            # mentor arrived by migration or by ETL, with nothing reporting it.
+            #
+            # The pending condition sits beside the has-history one rather than
+            # replacing it: a mentor decided in a later export must gain the
+            # history this run correctly withheld.
+            undecided = mentor.approval_status is ApprovalStatus.PENDING
             seeded = (
                 ()
-                if already.first() is not None
+                if already.first() is not None or undecided
                 else (
                     (mentor.approval_status.value, None, mentor.approved_at or mentor.created_at),
                     (
