@@ -26,7 +26,16 @@ connection reset. The count still covers it, at no extra cost.
 
 Both checks stay. The declared one refuses before a byte is read, which counting
 cannot do; the count holds when the header is absent, which the declared one
-cannot. Each is asserted in `tests/unit/test_limits.py` where only it can fire.
+cannot. Each is asserted in `tests/unit/test_limits.py` where only it can fire,
+and again in `tests/e2e/` over a real server, which is the only place a chunked
+request exists at all.
+
+**The two halves reach different requests, and that is worth knowing.** The
+declared check runs before the application, so it answers anything. The count
+only fires once something *reads* the body — so on a real route, an untokened
+request is refused by authorization first and the answer is 401 with nothing
+read. Measured, not assumed. That is the better outcome and not a gap: the
+request cost less than a refusal would have.
 
 An edge limit (``client_max_body_size``, a CDN rule) is the other half of this
 rather than a replacement — it belongs to whoever runs the deployment, and this

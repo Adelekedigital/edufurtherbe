@@ -316,7 +316,9 @@ async def test_an_overflow_after_the_response_started_is_not_answered_twice() ->
     400, so an `Exception` subclass would never have reached the middleware."""
     app = Recorder(respond_before_reading=True)
 
-    with pytest.raises(BaseException, match="") as raised:
+    # No `match`: an empty pattern always passes, which pytest warns about and
+    # which would assert nothing. The type below is the assertion.
+    with pytest.raises(BaseException) as raised:
         await drive(app, http_scope(), body_messages(MAX_BODY_BYTES + 1))
 
     assert type(raised.value).__name__ == "_BodyTooLarge"

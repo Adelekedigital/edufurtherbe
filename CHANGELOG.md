@@ -12,6 +12,17 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`tests/e2e/` — a real uvicorn server**, and the first occupant of a directory
+  that had held only a `.gitkeep`. Ten tests covering what an in-process
+  transport cannot express: a chunked body over the ceiling, an honest
+  `Content-Length` over it, a lying one, a client that disappears mid-body, and a
+  real multipart upload. Requests are written as raw bytes, because an HTTP
+  client normalises the very things under test.
+- **A test pinning uvicorn's framing**, labelled as pinning a dependency rather
+  than our code: `limits.py` argues in prose that a lying `Content-Length` is not
+  a hole *because the server delivers only what was declared*, and nothing
+  checked that until now.
+
 - **`POST /api/v1/users/{id}/avatar` and `/banner`** — a user uploads their own
   profile picture or banner. JPEG, PNG or WebP, up to 5 MB. Owner only: an admin
   may read these profiles and may not write them.
