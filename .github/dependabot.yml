@@ -1,0 +1,31 @@
+# Dependabot — GitHub Actions only.
+#
+# This exists because of how the Node-20 deprecation reached us: as a warning
+# banner somebody happened to notice, months after the runners started saying so.
+# The `github-actions` ecosystem moves a few times a year, so a monthly check is
+# near-silent and would have surfaced that as a pull request instead.
+#
+# **No `pip`/`uv` ecosystem, deliberately.** `uv.lock` is the source of truth for
+# every runtime and dev dependency, and a bot editing it is a different decision
+# from a bot editing a version pin in a workflow — it changes what the
+# application runs, not what builds it. `pip-audit` already runs weekly against
+# `uv export` and reports vulnerabilities without opening anything.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+    # One pull request, containing every action update in the batch.
+    #
+    # Not cosmetic: this repository merges one pull request at a time, branched
+    # from and back to `main`, and every stack it has attempted needed rebase
+    # surgery. A month in which five actions release a major would otherwise open
+    # five pull requests competing for that single lane. Grouped, it is one
+    # review of one diff — which is also how a human would have done it.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 1

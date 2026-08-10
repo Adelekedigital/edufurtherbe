@@ -1,8 +1,17 @@
 """Turning whatever a user uploaded into what we are willing to store.
 
-**This is the only module in the project that parses untrusted binary.** Every
-other input is text a schema validates; here a caller's bytes reach an image
-decoder written in C. So the order of operations matters more than usual:
+**This is the only module in the project that decodes an untrusted file
+format**, which is a narrower claim than it first sounds and is the one that
+holds. Hostile bytes reach compiled code all over this service already: uvicorn
+parses every HTTP request with httptools in C, pydantic-core parses every JSON
+body in Rust, and cryptography verifies every token signature through OpenSSL.
+
+The difference is what they are parsing. A protocol parser handles a grammar we
+constrain, and is exercised by essentially every deployment on earth. A **media
+decoder** handles dozens of container and codec formats built from length
+fields, offsets and compression — historically the richest memory-safety surface
+in any dependency set, and the reason the order of operations here matters more
+than usual:
 
     sniff the format  ->  read the header  ->  refuse or allocate
 

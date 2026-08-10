@@ -40,19 +40,18 @@ released. A tag with no matching section here fails the release job.
   of the two that can refuse before a byte is read. On a JSON route the
   unbounded case was memory rather than disk, which is why this is not scoped to
   the upload endpoints.
-- **Pillow**, the only dependency in the project that parses untrusted binary.
-  A 50-megapixel ceiling is applied from the header, before any bitmap is
-  allocated; Pillow's own limit only warns and decodes anyway.
+- **Pillow**, the only dependency in the project that decodes an untrusted
+  *file format*. A 50-megapixel ceiling is applied from the header, before any
+  bitmap is allocated; Pillow's own limit only warns and decodes anyway.
+- **`.github/dependabot.yml`** — `github-actions` only, monthly, **grouped into
+  one pull request** with `open-pull-requests-limit: 1`. This repository merges
+  one pull request at a time; a month with five action releases would otherwise
+  open five competing for that lane. No `pip`/`uv` ecosystem: `uv.lock` is the
+  source of truth and a bot editing it changes what the application runs, not
+  what builds it.
 - **Settled decisions 76-79** and eight `failure-modes.md` rows, four of them
   found by the mutation batch rather than by the suite and three by a review that
   probed a real server instead of the in-process transport.
-
-### Fixed
-
-- **`HTTP_413_REQUEST_ENTITY_TOO_LARGE`** replaced with
-  `HTTP_413_CONTENT_TOO_LARGE`; the old spelling is deprecated in Starlette and
-  emitted a warning on every refusal.
-
 - ADR 0002 (Bubble export strategy) and ADR 0003 (read-only freeze cutover).
 - `project-conventions` filled in with the project's settled decisions, domain
   vocabulary, guardrails, and the current enforcement blind spots.
@@ -508,6 +507,13 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **Every GitHub Action bumped off Node 20**, which is past end-of-life on the
+  runners — 21 pins across 5 workflow files. `actions/checkout` v4 → v5,
+  `astral-sh/setup-uv` v5 → **v7** (v6 is still Node 20), `actions/upload-artifact`
+  v4 → v7, `softprops/action-gh-release` v2 → v3, `gitleaks/gitleaks-action`
+  v2 → v3. Each target's `runs.using` was read from its own manifest, and every
+  input this repository passes was confirmed to still exist in the new major.
+
 - **ADRs 0004 and 0009 carry correction notes: Google OAuth verification is not on
   the critical path, and never was.** Both records treated sensitive-scope review
   as unavoidable — 0004 stating that "Google Calendar scopes are in the *sensitive*
@@ -561,6 +567,9 @@ released. A tag with no matching section here fails the release job.
 
 ### Fixed
 
+- **`HTTP_413_REQUEST_ENTITY_TOO_LARGE`** replaced with
+  `HTTP_413_CONTENT_TOO_LARGE`; the old spelling is deprecated in Starlette and
+  emitted a warning on every refusal.
 - The shared `settings` test fixture no longer reads the developer's `.env`;
   any field it did not pin explicitly was taking that file's value.
 - Settled decisions 12–19, and two rows in `references/failure-modes.md`, were
