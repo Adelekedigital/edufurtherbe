@@ -365,6 +365,82 @@ async def test_an_unlisted_mentor_lands_with_an_explicit_reason(db_engine: Async
     assert seeded.one() == ("unlisted", "mentor_paused")
 
 
+async def test_a_pending_mentor_is_loaded_and_gets_no_history(db_engine: AsyncEngine) -> None:
+    """**The state every fixture skipped, and the loader could not survive.**
+
+    ``approvedText`` blank maps to `pending`, which is the default and the
+    common case in the export. The loader seeded a status event straight from
+    `approval_status`, but `mentor_status_type` has no `pending` member — so the
+    whole load raised `InvalidTextRepresentationError` and, being one
+    transaction, wrote nothing at all. Every existing fixture passes ``"Yes"``,
+    so the defect lived exactly where no test looked.
+
+    No event rather than a `pending` one is not merely what the enum permits: it
+    is what the migration's backfill already does, twice, with
+    ``WHERE approval_status <> 'pending'`` — because writing a decision row for
+    a mentor nobody has decided on fabricates a decision nobody made.
+    """
+    async with db_engine.begin() as conn:
+        await load_everything(
+            conn,
+            [linked_user()],
+            mentors=[mentor_record(**{"✅approvedText": ""})],
+        )
+        stored = await conn.execute(text("SELECT approval_status::text FROM mentor_profiles"))
+        events = await conn.execute(text("SELECT count(*) FROM mentor_status_events"))
+
+    assert stored.one() == ("pending",), "the profile itself must still load"
+    assert events.scalar_one() == 0, "a pending mentor has no decision to record"
+
+
+async def test_an_approved_mentor_still_gets_both_events(db_engine: AsyncEngine) -> None:
+    """The other half of the guard, so it cannot be satisfied by seeding nothing.
+
+    A guard that skipped every mentor would pass the test above and destroy the
+    history for the mentors who have one.
+    """
+    async with db_engine.begin() as conn:
+        await load_everything(
+            conn,
+            [linked_user()],
+            mentors=[mentor_record(**{"✅approvedText": "Yes"})],
+        )
+        events = await conn.execute(
+            text("SELECT status_type::text FROM mentor_status_events ORDER BY status_type")
+        )
+
+    assert [row[0] for row in events] == ["approved", "listed"]
+
+
+async def test_history_appears_when_a_later_export_decides_a_pending_mentor(
+    db_engine: AsyncEngine,
+) -> None:
+    """The guard must not outlive the condition that justified it.
+
+    "Already has history" and "is pending" are two different reasons to skip, and
+    a re-run after the mentor is approved has to seed the history the first run
+    correctly withheld. Ordering the conditions the other way would leave that
+    mentor permanently without a log.
+    """
+    async with db_engine.begin() as conn:
+        await load_everything(
+            conn, [linked_user()], mentors=[mentor_record(**{"✅approvedText": ""})]
+        )
+        first = await conn.execute(text("SELECT count(*) FROM mentor_status_events"))
+        assert first.scalar_one() == 0
+
+        await load_everything(
+            conn, [linked_user()], mentors=[mentor_record(**{"✅approvedText": "Yes"})]
+        )
+        after = await conn.execute(
+            text("SELECT status_type::text FROM mentor_status_events ORDER BY status_type")
+        )
+
+    assert [row[0] for row in after] == ["approved", "listed"], (
+        "a mentor decided after the first load must gain their history on the next one"
+    )
+
+
 async def test_a_mentee_with_a_mentor_link_still_gets_a_profile(db_engine: AsyncEngine) -> None:
     """Legacy disagrees with itself and D2 settles it.
 
