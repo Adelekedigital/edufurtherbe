@@ -12,6 +12,23 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`availability_rules` and `availability_exceptions`** — the M3 schema. A
+  mentor's recurring weekly windows are stored as wall-clock time plus an IANA
+  zone, never as a pre-formatted local string: legacy `CalendarSettings` kept
+  four such columns and in the dev export they disagree with the stored time by
+  five hours on half the rows. Several rows per mentor per weekday, because
+  split availability is real in the data and the legacy one-row-per-day shape
+  could not hold it.
+- **`btree_gist`**, so `ix_availability_exceptions_range` can be a GiST index
+  over `(mentor_user_id, date_range)` — uuid has no GiST operator class without
+  it. Confirmed present on the local container, the CI image and Supabase before
+  the index depended on it.
+- **A soft-delete exemption that expires by itself.** The two new tables carry
+  `deleted_at` and nothing reads them until the availability endpoints ship, so
+  they are exempt from the soft-delete sweep — and a test fails the moment any
+  `infra/db` module names one of them, which turns "somebody will remember" into
+  a red build.
+
 - **`tests/e2e/` — a real uvicorn server**, and the first occupant of a directory
   that had held only a `.gitkeep`. Ten tests covering what an in-process
   transport cannot express: a chunked body over the ceiling, an honest
@@ -518,6 +535,10 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **`calendar_connections` moves to M4**, against the M1 migration's statement
+  that it ships with M3. Nothing in M3 reads or writes it, and ADR 0012 — which
+  decides the OAuth arrangement its columns encode — is still Proposed with two
+  behaviours it names as untested. Settled decision #80.
 - **Every GitHub Action bumped off Node 20**, which is past end-of-life on the
   runners — 21 pins across 5 workflow files. `actions/checkout` v4 → v5,
   `astral-sh/setup-uv` v5 → **v7** (v6 is still Node 20), `actions/upload-artifact`

@@ -245,3 +245,25 @@ class MeetingProvider(StrEnum):
     DAILY = "daily"
     ZOOM = "zoom"
     CUSTOM = "custom"
+
+
+class AvailabilityExceptionType(StrEnum):
+    """What an exception does to a mentor's recurring availability.
+
+    The two are not opposites of one flag. ``BLOCK`` subtracts from the weekly
+    rules — a holiday, an exam period — and ``OVERRIDE`` adds a window that no
+    rule describes, which is how a mentor offers a one-off slot without editing
+    the schedule they keep every other week. A single boolean could express
+    either one but not both, because they compose in one direction only: a block
+    removes time a rule granted, and an override grants time no rule mentions.
+
+    **Every migrated row is a ``BLOCK``.** Legacy ``CalendarExtra`` carries only
+    ``block-Date(s)`` and has no field that could mean anything else, so
+    ``OVERRIDE`` ships with no source data and is first written by the product.
+    That is the same position ``ZOOM`` holds in :class:`MeetingProvider`, and it
+    is recorded for the same reason: a member with no legacy rows is a member the
+    ETL must never invent, and a reconciliation that finds one has found a bug.
+    """
+
+    BLOCK = "block"
+    OVERRIDE = "override"

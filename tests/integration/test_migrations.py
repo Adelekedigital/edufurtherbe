@@ -29,7 +29,13 @@ FUNCTION_NAMES = ("set_updated_at", "uuid_generate_v7")
 # `pgcrypto` was declared for tidiness but `gen_random_uuid()` has been core
 # since PostgreSQL 13, so a missing pgcrypto would never have surfaced. A missing
 # pg_trgm fails loudly at `CREATE INDEX ... USING gin (name gin_trgm_ops)`.
-EXTENSION_NAMES = ("pg_trgm", "pgcrypto")
+#
+# `btree_gist` joins them in M3 and is load-bearing in the same way: uuid has no
+# GiST operator class without it, so `ix_availability_exceptions_range` cannot be
+# built at all. It is the one extension the chain creates with `IF NOT EXISTS`,
+# because Supabase already has it installed while the local and CI containers do
+# not — and unlike the others it is never dropped on downgrade.
+EXTENSION_NAMES = ("btree_gist", "pg_trgm", "pgcrypto")
 
 # The exact set of tables at head, in the order `table_names` returns them.
 #
@@ -66,6 +72,11 @@ EXPECTED_TABLES = [
     "mentor_service_offerings",
     "mentor_status_events",
     "user_awards",
+    # M3 — availability. `calendar_connections` is deliberately absent: nothing
+    # in M3 reads or writes it, and settled decision #21 ships it with the phase
+    # that first needs it. See the M3 migration's docstring.
+    "availability_exceptions",
+    "availability_rules",
 ]
 
 # Every enum type at head — five from M1, one from M2. Named here because a type
@@ -80,6 +91,7 @@ ENUM_TYPE_NAMES = (
     "admin_role",
     "approval_status",
     "auth_provider",
+    "availability_exception_type",
     "language_proficiency",
     "legal_document_type",
     "listing_status",

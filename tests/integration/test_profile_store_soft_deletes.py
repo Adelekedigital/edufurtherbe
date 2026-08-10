@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.infra.db.base import Base
 from app.infra.db.profile_store import get_mentor_profile, list_awards, list_education
+from conftest import PROJECT_ROOT
 
 # `asyncio` is applied per test rather than to the module: the coverage check
 # below is synchronous, and a module-level mark makes pytest warn about it.
@@ -42,6 +43,17 @@ SOFT_DELETABLE = {table.name for table in Base.metadata.tables.values() if "dele
 #: `test_a_soft_deleted_user_is_invisible_even_to_an_admin` asserts it. Named
 #: rather than silently absent, so the exemption is a decision and not a gap.
 EXEMPT = {"users"}
+
+#: Exempt only because **nothing reads them yet**. M3 PR 1 ships the availability
+#: schema and no read path at all; the endpoints arrive in PR 4, and that is when
+#: a case belongs here.
+#:
+#: This is the dangerous kind of exemption — the kind that silently becomes a
+#: gap the moment somebody adds the reader it was waiting for. So it is not taken
+#: on trust: `test_the_unread_exemption_expires_when_a_reader_appears` fails as
+#: soon as any store module names one of these tables, which forces the choice
+#: back into the open instead of leaving it to whoever remembers this comment.
+EXEMPT_UNTIL_READ = {"availability_rules", "availability_exceptions"}
 
 
 async def seed_education(conn: Any, user_id: UUID) -> None:
@@ -113,11 +125,38 @@ def test_every_soft_deletable_table_is_covered() -> None:
     fails here rather than shipping a read that ignores it.
     """
     covered = {name for name, _, _, _ in CASES}
+    exempt = EXEMPT | EXEMPT_UNTIL_READ
 
     assert SOFT_DELETABLE, "the metadata walk found nothing — it is not looking where it thinks"
-    assert covered == SOFT_DELETABLE - EXEMPT, (
-        f"soft-deletable but unchecked: {sorted(SOFT_DELETABLE - EXEMPT - covered)}; "
+    assert covered == SOFT_DELETABLE - exempt, (
+        f"soft-deletable but unchecked: {sorted(SOFT_DELETABLE - exempt - covered)}; "
         f"checked but no longer soft-deletable: {sorted(covered - SOFT_DELETABLE)}"
+    )
+
+
+def test_the_unread_exemption_expires_when_a_reader_appears() -> None:
+    """`EXEMPT_UNTIL_READ` is only honest while the premise holds.
+
+    The premise is "nothing reads these tables", and it stops being true in a
+    pull request that has no reason to look at this file. Rather than trusting
+    that, the premise is asserted: a store module naming one of these tables
+    fails here, and the fix is to add a case above and shrink the set.
+
+    Scoped to the store modules — `models/` names every table by definition, and
+    a migration is a write path rather than a read.
+    """
+    store_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (PROJECT_ROOT / "src" / "app" / "infra" / "db").glob("*.py")
+    )
+
+    assert store_source, "no store modules read; this assertion would pass on an empty string"
+
+    leaked = {table for table in EXEMPT_UNTIL_READ if table in store_source}
+    assert not leaked, (
+        f"{sorted(leaked)} now has a reader in infra/db, so the "
+        f"'nothing reads it yet' exemption no longer holds. Add a case to CASES "
+        f"and remove it from EXEMPT_UNTIL_READ."
     )
 
 
