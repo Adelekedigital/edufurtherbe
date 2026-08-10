@@ -27,6 +27,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.base import Base
 from app.infra.db.profile_store import get_mentor_profile, list_awards, list_education
 from conftest import PROJECT_ROOT
@@ -44,16 +45,12 @@ SOFT_DELETABLE = {table.name for table in Base.metadata.tables.values() if "dele
 #: rather than silently absent, so the exemption is a decision and not a gap.
 EXEMPT = {"users"}
 
-#: Exempt only because **nothing reads them yet**. M3 PR 1 ships the availability
-#: schema and no read path at all; the endpoints arrive in PR 4, and that is when
-#: a case belongs here.
-#:
-#: This is the dangerous kind of exemption — the kind that silently becomes a
-#: gap the moment somebody adds the reader it was waiting for. So it is not taken
-#: on trust: `test_the_unread_exemption_expires_when_a_reader_appears` fails as
-#: soon as any store module names one of these tables, which forces the choice
-#: back into the open instead of leaving it to whoever remembers this comment.
-EXEMPT_UNTIL_READ = {"availability_rules", "availability_exceptions"}
+#: Emptied in the pull request that added the availability endpoints, which
+#: is what `test_the_unread_exemption_expires_when_a_reader_appears` exists
+#: to force. The exemption was never a decision that those tables did not
+#: need checking — only that nothing read them yet — so the honest response
+#: to a reader appearing is a case below, not a wider set here.
+EXEMPT_UNTIL_READ: set[str] = set()
 
 
 async def seed_education(conn: Any, user_id: UUID) -> None:
@@ -102,6 +99,61 @@ async def read_mentor_profile(session: AsyncSession, user_id: UUID) -> list[str]
     return [] if row is None else [str(row["headline"])]
 
 
+async def seed_availability_rules(conn: Any, user_id: UUID) -> None:
+    """One live window and one deleted, on different weekdays.
+
+    Different days deliberately: the exclusion constraint is partial on
+    `deleted_at`, so two overlapping windows would be legal here — and a fixture
+    that happens to be legal for a reason unrelated to what it tests is how a
+    test ends up passing for the wrong reason.
+    """
+    await conn.execute(
+        text(
+            "INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'M') "
+            "ON CONFLICT (user_id) DO NOTHING"
+        ),
+        {"u": user_id},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO availability_rules "
+            "(mentor_user_id, day_of_week, start_time, end_time, timezone, deleted_at) VALUES "
+            "(:u, 1, '09:00', '12:00', 'Africa/Lagos', NULL), "
+            "(:u, 2, '09:00', '12:00', 'Africa/Lagos', now())"
+        ),
+        {"u": user_id},
+    )
+
+
+async def seed_availability_exceptions(conn: Any, user_id: UUID) -> None:
+    await conn.execute(
+        text(
+            "INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'M') "
+            "ON CONFLICT (user_id) DO NOTHING"
+        ),
+        {"u": user_id},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO availability_exceptions "
+            "(mentor_user_id, type, date_range, timezone, deleted_at) VALUES "
+            "(:u, 'block', daterange(DATE '2026-03-01', DATE '2026-03-02', '[)'), "
+            "'Africa/Lagos', NULL), "
+            "(:u, 'block', daterange(DATE '2026-06-01', DATE '2026-06-02', '[)'), "
+            "'Africa/Lagos', now())"
+        ),
+        {"u": user_id},
+    )
+
+
+async def read_availability_rules(session: AsyncSession, user_id: UUID) -> list[str]:
+    return [str(row["day_of_week"]) for row in await list_rules(session, user_id)]
+
+
+async def read_availability_exceptions(session: AsyncSession, user_id: UUID) -> list[str]:
+    return [str(row["start_date"]) for row in await list_exceptions(session, user_id)]
+
+
 Case = tuple[
     str,
     Callable[[Any, UUID], Awaitable[None]],
@@ -113,6 +165,13 @@ CASES: list[Case] = [
     ("education_entries", seed_education, read_education, ["LIVE"]),
     ("user_awards", seed_awards, read_awards, ["LIVE"]),
     ("mentor_profiles", seed_mentor_profile, read_mentor_profile, []),
+    ("availability_rules", seed_availability_rules, read_availability_rules, ["1"]),
+    (
+        "availability_exceptions",
+        seed_availability_exceptions,
+        read_availability_exceptions,
+        ["2026-03-01"],
+    ),
 ]
 
 

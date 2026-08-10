@@ -12,6 +12,27 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor's availability endpoints** — list, add, change and remove recurring
+  weekly windows and dated exceptions, under
+  `/api/v1/users/{user_id}/availability`. Rules go out as **wall clock plus an
+  IANA zone, never an instant**: a recurring rule has not named a date, and
+  converting it would bake in one date's UTC offset — the bug that breaks twice
+  a year.
+- **Overlapping windows are a 409, not a 500.** The exclusion constraint reaches
+  the API as an `IntegrityError`; unmapped, an ordinary mentor mistake — dragging
+  a window across a neighbour — would have been a server error.
+- **Reads are owner-and-admin only, deliberately narrower than D20.** That rule
+  renders a profile if the mentor is listed, *or* the viewer has a session with
+  them, *or* the viewer is an admin — and the middle clause has no table until
+  M4. Shipping the two that exist would drop precisely the one protecting a
+  mentee whose mentor has since paused, which is the case D20 was written for.
+  Widening later is additive; narrowing after a client has built against it is
+  not.
+- **`normalise_timezone` is now shared** between the API boundary and the ETL.
+  The columns are `text` with no CHECK — `pg_timezone_names` is not immutable, so
+  PostgreSQL will not accept it in one — which makes this the only thing standing
+  between a request and a value that raises inside the projection later.
+
 - **The availability ETL** — `domain/transform/availability.py`,
   `infra/etl/availability.py` and `scripts/load_availability.py`. Against the
   dev export: 24 legacy rules become **11 loaded, 11 quarantined and 2 dropped**,

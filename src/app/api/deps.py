@@ -22,6 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
 from app.api.schemas.admin import DeclineRequest, MergeRequest
+from app.api.schemas.availability import (
+    AvailabilityExceptionWrite,
+    AvailabilityRulePatch,
+    AvailabilityRuleWrite,
+)
 from app.api.schemas.common import (
     LOOKUP_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -57,6 +62,14 @@ from app.infra.db.admin_store import (
     pending_mentors,
 )
 from app.infra.db.asset_store import replace_url
+from app.infra.db.availability_store import list_exceptions, list_rules
+from app.infra.db.availability_writer import (
+    create_exception,
+    create_rule,
+    delete_exception,
+    delete_rule,
+    update_rule,
+)
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
@@ -770,3 +783,79 @@ async def uploaded_banner(
 
 UploadedAvatarDep = Annotated[str, Depends(uploaded_avatar)]
 UploadedBannerDep = Annotated[str, Depends(uploaded_banner)]
+
+
+# --------------------------------------------------------------------------
+# Availability
+# --------------------------------------------------------------------------
+#
+# Reads take `TargetUserDep` and writes take `OwnerDep`, which is the one clause
+# that separates "an admin reviewing a mentor's schedule" from "an admin
+# silently editing it". The pair differ only by their name at the call site, so
+# a reader comparing the two routes sees it without opening this module.
+#
+# **Projected windows are owner-and-admin only, for now.** D20's access rule —
+# render if listed, *or* the viewer has a session with this mentor, *or* the
+# viewer is an admin — cannot be implemented yet: `sessions` is M4 and does not
+# exist. Shipping the two clauses that do exist would drop exactly the one that
+# protects a mentee whose mentor has since paused, which is the case D20 was
+# written for. Narrow now, widened in M4 when the rule can be built whole.
+
+
+async def target_availability_rules(
+    user_id: TargetUserDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    return await list_rules(session, user_id)
+
+
+async def target_availability_exceptions(
+    user_id: TargetUserDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    return await list_exceptions(session, user_id)
+
+
+async def created_availability_rule(
+    payload: AvailabilityRuleWrite, user_id: OwnerDep, session: SessionDep
+) -> UUID:
+    rule_id = await create_rule(session, user_id, payload.model_dump())
+    await session.commit()
+    return rule_id
+
+
+async def updated_availability_rule(
+    rule_id: UUID, payload: AvailabilityRulePatch, user_id: OwnerDep, session: SessionDep
+) -> bool:
+    changed = await update_rule(session, user_id, rule_id, payload.model_dump(exclude_unset=True))
+    await session.commit()
+    return changed
+
+
+async def deleted_availability_rule(rule_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
+    removed = await delete_rule(session, user_id, rule_id)
+    await session.commit()
+    return removed
+
+
+async def created_availability_exception(
+    payload: AvailabilityExceptionWrite, user_id: OwnerDep, session: SessionDep
+) -> UUID:
+    exception_id = await create_exception(session, user_id, payload.model_dump())
+    await session.commit()
+    return exception_id
+
+
+async def deleted_availability_exception(
+    exception_id: UUID, user_id: OwnerDep, session: SessionDep
+) -> bool:
+    removed = await delete_exception(session, user_id, exception_id)
+    await session.commit()
+    return removed
+
+
+AvailabilityRulesDep = Annotated[list[dict[str, Any]], Depends(target_availability_rules)]
+AvailabilityExceptionsDep = Annotated[list[dict[str, Any]], Depends(target_availability_exceptions)]
+CreatedAvailabilityRuleDep = Annotated[UUID, Depends(created_availability_rule)]
+UpdatedAvailabilityRuleDep = Annotated[bool, Depends(updated_availability_rule)]
+DeletedAvailabilityRuleDep = Annotated[bool, Depends(deleted_availability_rule)]
+CreatedAvailabilityExceptionDep = Annotated[UUID, Depends(created_availability_exception)]
+DeletedAvailabilityExceptionDep = Annotated[bool, Depends(deleted_availability_exception)]

@@ -38,11 +38,49 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.domain.enums import AvailabilityExceptionType
 
-__all__ = ["DatedException", "UtcInterval", "WeeklyWindow", "project"]
+__all__ = [
+    "DatedException",
+    "UnknownTimezoneError",
+    "UtcInterval",
+    "WeeklyWindow",
+    "normalise_timezone",
+    "project",
+]
+
+
+class UnknownTimezoneError(ValueError):
+    """A timezone that is not in the tz database.
+
+    A ``ValueError`` subclass on purpose: Pydantic turns one into a 422 without
+    the API layer knowing anything about this module, and the ETL's
+    ``_resolve_timezone`` wraps it with the Bubble id it has and the API does
+    not.
+    """
+
+
+def normalise_timezone(name: str) -> str:
+    """A trimmed IANA name, or a refusal.
+
+    **The single check in the project.** ``availability_rules.timezone`` and
+    ``availability_exceptions.timezone`` are `text` with no CHECK, because
+    `pg_timezone_names` is not immutable and PostgreSQL will not accept it in
+    one — so there is nothing behind this. An unrecognised value passes NOT NULL
+    and then raises inside ``project`` when somebody's availability is rendered,
+    which is a long way from whoever typed it.
+
+    Trimmed as well as validated: ``" America/New_York "`` is a name `ZoneInfo`
+    rejects, and storing it unstripped would defer the same failure.
+    """
+    trimmed = name.strip()
+    try:
+        ZoneInfo(trimmed)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise UnknownTimezoneError(f"{name!r} is not an IANA timezone") from exc
+    return trimmed
 
 
 @dataclass(frozen=True, slots=True, order=True)

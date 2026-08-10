@@ -18,8 +18,8 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.domain.availability import UnknownTimezoneError, normalise_timezone
 from app.domain.bubble import CREATED_AT, MODIFIED_AT, normalise_list, parse_timestamp
 from app.domain.enums import AdminRole, AuthProvider, PrimaryRole
 
@@ -99,10 +99,13 @@ def _resolve_timezone(raw: Any, bubble_id: str) -> str:
         return DEFAULT_TIMEZONE
     name = str(raw).strip()
     try:
-        ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError) as exc:
+        # Delegated rather than repeated. The API validates the same thing on
+        # the way in from a request, and two spellings of "is this a real zone"
+        # is the duplication non-negotiable #8 names — this one adds the Bubble
+        # id, which is the only part that differs.
+        return normalise_timezone(name)
+    except UnknownTimezoneError as exc:
         raise TransformError(bubble_id, f"UserTimezonID {name!r} is not an IANA zone") from exc
-    return name
 
 
 def to_user(record: dict[str, Any], *, export_timezone: tzinfo | None = None) -> UserRow:
