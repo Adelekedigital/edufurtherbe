@@ -31,7 +31,7 @@ import datetime
 import uuid
 
 from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Time, Uuid, text
-from sqlalchemy.dialects.postgresql import DATERANGE, Range
+from sqlalchemy.dialects.postgresql import DATERANGE, ExcludeConstraint, Range
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import AvailabilityExceptionType
@@ -111,6 +111,22 @@ class AvailabilityRule(TimestampMixin, Base):
         # export contains none — checked, not assumed — and the ETL reports any
         # it finds rather than splitting them silently.
         CheckConstraint("end_time > start_time", name="availability_window_ordered"),
+        # Two windows overlapping on one weekday say the same thing twice, so
+        # the pair is a mistake rather than a state. Declared here as well as in
+        # the migration because the model is the source of truth for shape —
+        # though `alembic check` is blind to exclusion constraints, so the six
+        # tests are what actually hold it.
+        #
+        # `'[)'` is load-bearing: it lets 09:00-12:00 and 12:00-14:00 touch
+        # without colliding, which is how the legacy rows are shaped.
+        ExcludeConstraint(
+            ("mentor_user_id", "="),
+            ("day_of_week", "="),
+            (text("timerange(start_time, end_time, '[)')"), "&&"),
+            name="availability_rules_no_overlap",
+            using="gist",
+            where=text("is_active AND deleted_at IS NULL"),
+        ),
         # The only read: this mentor's windows for a weekday. Partial, because
         # inactive and soft-deleted rules are never part of an answer — and
         # `alembic check` cannot compare the predicate, so a test asserts it.
