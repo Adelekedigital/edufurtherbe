@@ -12,6 +12,28 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`reconcile_availability`** — M3 was the only phase loading without one. It
+  runs **inside** the transaction and raises, because reconciling after a commit
+  reports a problem it is no longer able to undo.
+- **Row counts deliberately do not reconcile one-to-one.** Every prior phase
+  compared source rows to loaded rows; availability breaks that three ways at
+  once — exceptions fan out 1:N, Gen A rules are quarantined on purpose, and
+  overlapping windows merge so one anchor never reaches the table. Asserting
+  `source == loaded` would fail every run, and the fix somebody would reach for
+  is a loosened comparison that checks nothing. What is asserted instead is that
+  every source rule was **accounted for**: loaded, quarantined, dropped, refused
+  or absorbed. A row in none of those vanished with nobody deciding it should —
+  the one failure no row count can show, because the loaded total is *meant* to
+  be smaller here.
+- **The plan's accounting is data, not prose.** `dropped` and `merged_overlaps`
+  were formatted strings; reconciling against them meant parsing a Bubble id out
+  of a sentence, and improving the wording would have silently stopped the
+  accounting while the totals still balanced. They now carry anchors as fields,
+  with the rendering in `report()` where it belongs.
+- **`AvailabilityCounts` removed.** It reported the number of rows handed *in* —
+  an assertion about the database made without asking it. What landed is read
+  back by the reconciliation.
+
 - **A mentor's availability endpoints** — list, add, change and remove recurring
   weekly windows and dated exceptions, under
   `/api/v1/users/{user_id}/availability`. Rules go out as **wall clock plus an

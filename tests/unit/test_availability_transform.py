@@ -137,7 +137,7 @@ def test_a_row_with_no_creator_is_dropped() -> None:
     result = plan([rule_record(Creator=None)])
 
     assert result.rules == () and result.quarantined == ()
-    assert "no Creator" in result.dropped[0]
+    assert "no Creator" in result.dropped[0].reason
 
 
 def test_a_row_whose_owner_has_no_mentor_profile_is_dropped() -> None:
@@ -148,14 +148,14 @@ def test_a_row_whose_owner_has_no_mentor_profile_is_dropped() -> None:
     result = plan([rule_record(Creator=NOT_A_MENTOR)])
 
     assert result.rules == ()
-    assert "has no mentor profile" in result.dropped[0]
+    assert "has no mentor profile" in result.dropped[0].reason
 
 
 def test_a_row_with_no_times_is_dropped() -> None:
     result = plan([rule_record(startTime=None, endTime=None, **{"availableDay-Bool": "no"})])
 
     assert result.rules == ()
-    assert "no start or end time" in result.dropped[0]
+    assert "no start or end time" in result.dropped[0].reason
 
 
 def test_a_midnight_crossing_window_is_reported_not_split() -> None:
@@ -165,7 +165,7 @@ def test_a_midnight_crossing_window_is_reported_not_split() -> None:
     result = plan([rule_record(startTime="Dec 15, 2025 10:00 pm", endTime="Dec 15, 2025 2:00 am")])
 
     assert result.rules == ()
-    assert "does not move forward" in result.midnight_crossing[0]
+    assert "does not move forward" in result.midnight_crossing[0].reason
 
 
 def test_a_zero_length_window_is_refused() -> None:
@@ -180,7 +180,7 @@ def test_a_zero_length_window_is_refused() -> None:
     result = plan([rule_record(startTime="Dec 15, 2025 9:00 am", endTime="Dec 15, 2025 9:00 am")])
 
     assert result.rules == ()
-    assert "does not move forward" in result.midnight_crossing[0]
+    assert "does not move forward" in result.midnight_crossing[0].reason
 
 
 def test_a_gen_a_evening_window_still_reaches_the_quarantine() -> None:
@@ -220,7 +220,7 @@ def test_an_unreadable_block_date_value_is_reported_not_ignored() -> None:
     )
 
     assert result.exceptions == ()
-    assert "yielded no dates" in result.dropped[0]
+    assert "yielded no dates" in result.dropped[0].reason
 
 
 def test_an_unrecognised_timezone_is_refused_rather_than_stored() -> None:
@@ -232,7 +232,7 @@ def test_an_unrecognised_timezone_is_refused_rather_than_stored() -> None:
     result = plan([rule_record(timeZone="Eastern Standard Time")])
 
     assert result.rules == ()
-    assert "is not an IANA zone" in result.dropped[0]
+    assert "is not an IANA zone" in result.dropped[0].reason
 
 
 def test_a_daily_cap_of_zero_is_not_carried() -> None:
@@ -290,12 +290,14 @@ def test_overlapping_windows_merge_into_their_union() -> None:
     assert len(result.rules) == 1
     assert (result.rules[0].start_time, result.rules[0].end_time) == (time(9, 0), time(13, 0))
     note = result.merged_overlaps[0]
-    assert "09:00-12:00 (a) + 10:00-13:00 (b)" in note
-    assert "-> 09:00-13:00" in note
-    # The absorbed row's anchor is named, so an operator can tell which legacy
-    # id left the load. Without it the note says two times vanished and nothing
-    # about which row is no longer represented in the table.
-    assert "b is not loaded" in note
+    # Anchors as **fields**, not phrases inside a sentence. Reconciliation
+    # adds `absorbed` to the accounting, and a test matching prose would
+    # break on a wording change and pass on a logic one.
+    assert (note.kept, note.absorbed) == ("a", "b")
+    assert note.day_of_week == 1
+    assert "09:00-12:00 (a) + 10:00-13:00 (b) -> 09:00-13:00" in note.detail
+    # The rendering still reads for a human.
+    assert "b is not loaded" in str(note)
 
 
 def test_an_inactive_window_is_never_merged_into_an_active_one() -> None:
@@ -336,7 +338,7 @@ def test_an_unreadable_weekday_is_dropped_not_defaulted_to_sunday() -> None:
         result = plan([rule_record(**{"dayOfWeekIn#️⃣": bad})])
 
         assert result.rules == ()
-        assert "is not a weekday 0-6" in result.dropped[0]
+        assert "is not a weekday 0-6" in result.dropped[0].reason
 
 
 def test_block_dates_reads_either_case_of_am_and_pm() -> None:
