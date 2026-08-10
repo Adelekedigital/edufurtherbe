@@ -278,6 +278,18 @@ State a gate's blind spots next to its coverage, every time.
 - **`gitleaks` finds credentials, not PII.** It will not stop a member export.
 - **The layer check reads imports, not behaviour.** It cannot see a domain rule
   implemented in `api/`.
+- **The suite tests the application over ASGI; `tests/e2e/` tests the protocol,
+  and only for the request body.** `httpx.ASGITransport` speaks ASGI directly and
+  never implements HTTP — no chunked encoding, no `Content-Length` framing, no
+  connection to drop. That gap cost this project both directions inside one pull
+  request: it reported a lying `Content-Length` as a hole that does not exist,
+  and it hid a chunked request that bypassed the body ceiling entirely.
+
+  `tests/e2e/` now closes **the body-ceiling half** with a real uvicorn server —
+  chunked, declared, lying, disconnected. Everything else about HTTP is still
+  untested: keep-alive, pipelining, header limits, TLS, timeouts, and the
+  behaviour of any route under a real client. Saying which half is closed matters
+  more than saying the gap is gone.
 - **`alembic check` cannot see triggers, and one now carries a rule.**
   `trg_apply_mentor_status` is what keeps `mentor_profiles.approval_status` and
   `.listing_status` in step with `mentor_status_events`; nothing in the gate

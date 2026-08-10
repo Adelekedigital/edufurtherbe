@@ -5,8 +5,11 @@ import importlib.util
 import io
 import json
 import os
+import socket
+import threading
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -17,6 +20,7 @@ import httpx
 import jwt
 import pytest
 import pytest_asyncio
+import uvicorn
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
@@ -24,7 +28,9 @@ from PIL import Image
 from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from starlette.types import ASGIApp
 
+from app.api.limits import BodyLimitMiddleware
 from app.core.config import Settings
 from app.infra.auth.admin import SupabaseAdminClient
 from app.infra.auth.supabase import SupabaseTokenVerifier
@@ -541,3 +547,162 @@ def storage_for(fake: FakeStorage) -> SupabaseStorage:
         client=httpx.Client(transport=httpx.MockTransport(fake.handle)),
         sleep=lambda _: None,
     )
+
+
+# ---------------------------------------------------------------------------
+# a real HTTP server, for `tests/e2e/`
+# ---------------------------------------------------------------------------
+#
+# **These live here rather than in `tests/e2e/conftest.py`, and that is not a
+# style choice.** `tests/` has no `__init__.py`, so pytest prepends each
+# conftest's directory to `sys.path` — and a second `conftest.py` anywhere under
+# `tests/` shadows this one for every `from conftest import ...` in the suite.
+# Adding one broke collection of **thirteen** integration modules, none of which
+# were running when the new tests were run on their own.
+#
+# The rest of this file already follows the same rule for the same reason.
+
+#: How long to wait for a server to come up before calling it a failure.
+#:
+#: Bounded on purpose. Polling ``server.started`` without a deadline turns a
+#: startup error into a hung suite, which is far harder to diagnose than a
+#: failed assertion — and on a loaded CI runner "slow" and "broken" look
+#: identical until one of them is given a limit.
+STARTUP_TIMEOUT = 20.0
+SHUTDOWN_TIMEOUT = 10.0
+
+
+@dataclass(frozen=True, slots=True)
+class LiveServer:
+    """Where a running server can be reached."""
+
+    host: str
+    port: int
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
+
+    def connect(self, timeout: float = 20.0) -> socket.socket:
+        """A raw socket, because these tests write the request bytes themselves.
+
+        An HTTP client would normalise exactly what is under test: it adds a
+        `Content-Length`, it refuses to send a body that contradicts one, and it
+        decides on its own whether to chunk.
+        """
+        return socket.create_connection((self.host, self.port), timeout=timeout)
+
+
+def serve(app: ASGIApp) -> Iterator[LiveServer]:
+    """Run ``app`` on an ephemeral port until the caller is done with it.
+
+    **Port 0, then read back what was assigned.** Choosing a number is the
+    classic CI flake: a runner has other things on it, and a collision fails a
+    test for a reason that has nothing to do with the code.
+    """
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=0,
+        log_level="error",
+        lifespan="on",
+        # **Without this the session never ends.** A graceful shutdown waits for
+        # open connections, and these tests deliberately leave some in that
+        # state: the middleware refuses mid-body and stops reading, so the
+        # client's half of the connection is still there when the fixture tears
+        # down. Measured — the first version hung until the join timed out and
+        # then raised "the test server did not shut down".
+        timeout_graceful_shutdown=1,
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True, name="e2e-uvicorn")
+    thread.start()
+
+    deadline = threading.Event()
+    waited = 0.0
+    while not server.started:
+        if not thread.is_alive():
+            raise RuntimeError("the test server thread exited before it started serving")
+        if waited >= STARTUP_TIMEOUT:
+            raise RuntimeError(f"the test server did not start within {STARTUP_TIMEOUT}s")
+        deadline.wait(0.05)
+        waited += 0.05
+
+    # `started` is set once the sockets are bound, so the assigned port is
+    # readable from here and not before.
+    sockets = [bound for server_instance in server.servers for bound in server_instance.sockets]
+    if not sockets:
+        raise RuntimeError("the test server started with no bound socket")
+    host, port = sockets[0].getsockname()[:2]
+
+    try:
+        yield LiveServer(host=host, port=int(port))
+    finally:
+        # Explicit, and joined. A leaked server thread does not fail this run —
+        # it fails whichever run comes next, which is the worst way to find out.
+        server.should_exit = True
+        thread.join(timeout=SHUTDOWN_TIMEOUT)
+        if thread.is_alive():
+            # Graceful did not finish. Take the connections down and give it one
+            # more chance before failing, so a slow shutdown is not reported as
+            # the same problem as a stuck one.
+            server.force_exit = True
+            thread.join(timeout=SHUTDOWN_TIMEOUT)
+        if thread.is_alive():
+            raise RuntimeError("the test server did not shut down")
+
+
+@pytest.fixture(scope="session")
+def live_server() -> Iterator[LiveServer]:
+    """The real application, over real HTTP. Started once for the session.
+
+    Session-scoped because startup is the only expensive part; the probes
+    themselves are milliseconds. Nothing here mutates state another test could
+    inherit — no database is wired in, and the body ceiling holds no state.
+    """
+    yield from serve(create_app(Settings(_env_file=None)))
+
+
+async def _drain(scope: dict, receive, send) -> None:
+    """Read the whole body, then answer. Nothing else."""
+    if scope["type"] != "http":
+        return
+    read = 0
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            return
+        read += len(message.get("body", b""))
+        if not message.get("more_body", False):
+            break
+    body = str(read).encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", b"text/plain"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+@pytest.fixture(scope="session")
+def live_probe_server() -> Iterator[LiveServer]:
+    """`BodyLimitMiddleware` over real HTTP, with a downstream that reads.
+
+    **Why this is not the real application.** Measured, and it corrected the plan
+    for this file: an untokened request to a real route is refused by
+    authorization *before anything reads the body*, so the counted half of the
+    ceiling never fires and the answer is 401. That is the better outcome — the
+    request is rejected earlier and more cheaply — but it means the real
+    application cannot exercise the count without a token, and a token needs a
+    database, which this tier deliberately does not have.
+
+    So the subject here is the middleware in its real ASGI position, over a real
+    server, with the smallest possible thing behind it. The count on the real
+    application, with a token, is covered in `tests/integration/`.
+    """
+    yield from serve(BodyLimitMiddleware(_drain))
