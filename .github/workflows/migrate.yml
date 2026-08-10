@@ -46,7 +46,7 @@ jobs:
     environment: ${{ inputs.target }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # A branch's migration chain is not the one production should receive. The
       # check is here rather than only in the environment's branch rules because
@@ -59,7 +59,7 @@ jobs:
           exit 1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 

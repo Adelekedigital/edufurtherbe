@@ -37,11 +37,11 @@ dependencies = [
     "pyjwt>=2.13.0",
     "cryptography>=50.0.0",
     # Decoding, downscaling and re-encoding uploaded images. **The only
-    # dependency here that parses untrusted binary**, which is the whole risk of
-    # the upload endpoint: an image decoder is a C surface reached by whatever
-    # bytes a caller sends. `domain/images.py` caps the decoded pixel count
-    # before any bitmap is allocated, because Pillow's own default *warns* and
-    # continues.
+    # dependency here that decodes an untrusted *file format*** — not the only
+    # one reached by hostile bytes, which would be false: httptools parses every
+    # HTTP request in C and pydantic-core parses every JSON body in Rust. The
+    # distinction is in `domain/images.py`, and it is why that module caps the
+    # decoded pixel count before any bitmap is allocated.
     #
     # Re-encoding is also what strips EXIF — the GPS coordinates a phone puts in
     # a photo — which ADR 0019 left open and which had to be settled before
