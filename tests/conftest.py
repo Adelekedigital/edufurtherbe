@@ -228,16 +228,111 @@ def make_alembic_config() -> Callable[[str], Config]:
     return _alembic_config
 
 
-@pytest.fixture
-def migrated_database(disposable_database: str) -> Iterator[str]:
-    """A disposable database with the full migration chain applied.
+async def _terminate_connections(admin_url: str, name: str) -> None:
+    """Close every other backend on ``name``.
 
-    Synchronous on purpose: ``env.py`` calls ``asyncio.run``, which raises if a
-    loop is already running. Keeping every alembic invocation in sync fixtures
-    and sync tests is what makes that safe.
+    ``CREATE DATABASE ... TEMPLATE`` refuses while anything is connected to the
+    template, and ``DROP DATABASE`` refuses the same way. One helper rather than
+    the statement twice.
     """
-    command.upgrade(_alembic_config(disposable_database), "head")
-    yield disposable_database
+    conn = await asyncpg.connect(admin_url)
+    try:
+        await conn.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = $1 AND pid <> pg_backend_pid()",
+            name,
+        )
+    finally:
+        await conn.close()
+
+
+@pytest.fixture(scope="session")
+def migrated_template(admin_database_url: str) -> Iterator[str]:
+    """One database with the chain applied, built once and copied per test.
+
+    **Why this exists.** Every database-backed test used to run the whole chain
+    itself. Measured on this machine at thirteen revisions: 2.47s per test, and
+    323 of 588 test functions pay it — an integration tier of roughly sixteen
+    minutes. Worse than the number, the cost is ``chain length x test count``,
+    so every migration added made every one of those tests slower, forever.
+
+    ``CREATE DATABASE ... TEMPLATE`` copies at file level, which is flat in the
+    length of the chain. The schema is still exactly what the migrations
+    produce — triggers, CHECKs, partial and GiST indexes, enum types, extensions
+    and all — because it *is* what they produced, copied. That is the property
+    ``Base.metadata.create_all`` would have thrown away, and it is why this is a
+    copy rather than a rebuild.
+
+    Session-scoped, and nothing hands out this URL: a test connecting to the
+    template would block the copy for whatever ran next.
+    """
+    name = f"tmpl_{uuid.uuid4().hex[:16]}"
+    base, _, _ = admin_database_url.rpartition("/")
+    url = f"{base}/{name}"
+
+    async def _create() -> None:
+        conn = await asyncpg.connect(admin_database_url)
+        try:
+            await conn.execute(f'CREATE DATABASE "{name}"')
+        finally:
+            await conn.close()
+
+    async def _drop() -> None:
+        await _terminate_connections(admin_database_url, name)
+        conn = await asyncpg.connect(admin_database_url)
+        try:
+            await conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+        finally:
+            await conn.close()
+
+    asyncio.run(_create())
+    try:
+        command.upgrade(_alembic_config(url), "head")
+        # `env.py` opens its own connection and closes it, but the copy fails
+        # outright if even one survives, so this is asserted rather than assumed.
+        asyncio.run(_terminate_connections(admin_database_url, name))
+        yield name
+    finally:
+        asyncio.run(_drop())
+
+
+@pytest.fixture
+def migrated_database(admin_database_url: str, migrated_template: str) -> Iterator[str]:
+    """A database of its own, copied from the migrated template.
+
+    Still one database per test, and still dropped afterwards — the isolation
+    ``disposable_database`` documents is unchanged, and the reason for it
+    (``pytest-randomly`` reordering a downgrade into another test's path) is
+    unchanged too. Only the way the schema arrives is different.
+
+    ``disposable_database`` is deliberately *not* used here: it yields an empty
+    database, and this one is born with the schema already in it. That fixture
+    stays exactly as it was for ``test_migrations.py``, which tests the chain
+    itself and must keep running it from nothing.
+    """
+    name = f"test_{uuid.uuid4().hex[:16]}"
+    base, _, _ = admin_database_url.rpartition("/")
+
+    async def _create() -> None:
+        conn = await asyncpg.connect(admin_database_url)
+        try:
+            await conn.execute(f'CREATE DATABASE "{name}" TEMPLATE "{migrated_template}"')
+        finally:
+            await conn.close()
+
+    async def _drop() -> None:
+        await _terminate_connections(admin_database_url, name)
+        conn = await asyncpg.connect(admin_database_url)
+        try:
+            await conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+        finally:
+            await conn.close()
+
+    asyncio.run(_create())
+    try:
+        yield f"{base}/{name}"
+    finally:
+        asyncio.run(_drop())
 
 
 @pytest_asyncio.fixture
