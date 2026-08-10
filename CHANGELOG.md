@@ -12,6 +12,18 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor's availability windows may not overlap on one weekday** — a partial
+  `EXCLUDE USING gist` over a `timerange` type PostgreSQL does not ship. Two
+  overlapping windows carry no information their union does not, so the pair is
+  a data-entry mistake rather than a state; and the mentor who later edits one
+  copy changes their availability in a way the other silently undoes. In the
+  schema rather than the write path because it is an invariant about data, true
+  on every path — otherwise it gets written in the endpoint, again in the ETL,
+  and again in the next bulk editor. Half-open, so 09:00–12:00 and 12:00–14:00
+  still touch without colliding, and partial, so a switched-off or soft-deleted
+  window stops blocking the slot it used to occupy. The repository's first
+  exclusion constraint; M4's double-booking guardrail follows the same shape.
+
 - **`availability_rules` and `availability_exceptions`** — the M3 schema. A
   mentor's recurring weekly windows are stored as wall-clock time plus an IANA
   zone, never as a pre-formatted local string: legacy `CalendarSettings` kept

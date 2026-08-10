@@ -18,7 +18,7 @@ that refuses everything.
 """
 
 from collections.abc import AsyncIterator
-from datetime import date, time
+from datetime import UTC, date, datetime, time
 
 import pytest
 import pytest_asyncio
@@ -53,6 +53,28 @@ def clock(value: str | None) -> time | None:
     return time.fromisoformat(value) if value is not None else None
 
 
+async def make_mentor(conn: AsyncConnection, email: str) -> str:
+    """One approved mentor, returned by id.
+
+    A function rather than a second fixture, because the cross-mentor exclusion
+    test needs two of them and a fixture cannot be asked for twice.
+    """
+    user_id = (
+        await conn.execute(
+            text(
+                "INSERT INTO users (email, primary_role, timezone) "
+                "VALUES (:email, 'mentor', :tz) RETURNING id"
+            ),
+            {"email": email, "tz": LAGOS},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'Test mentor')"),
+        {"u": user_id},
+    )
+    return str(user_id)
+
+
 @pytest_asyncio.fixture
 async def mentor(db_engine: AsyncEngine) -> AsyncIterator[tuple[AsyncConnection, str]]:
     """One approved mentor, and the connection its rows live on.
@@ -64,33 +86,33 @@ async def mentor(db_engine: AsyncEngine) -> AsyncIterator[tuple[AsyncConnection,
     should be able to represent.
     """
     async with db_engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES ('mentor@example.test', 'mentor', :tz) RETURNING id"
-                ),
-                {"tz": LAGOS},
-            )
-        ).scalar_one()
-        await conn.execute(
-            text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'Test mentor')"),
-            {"u": user_id},
-        )
-        yield conn, user_id
+        yield conn, await make_mentor(conn, "mentor@example.test")
 
 
 async def insert_rule(
-    conn: AsyncConnection, mentor_id: str, *, dow: int = 1, start: str = "09:00", end: str = "12:00"
+    conn: AsyncConnection,
+    mentor_id: str,
+    *,
+    dow: int = 1,
+    start: str = "09:00",
+    end: str = "12:00",
+    is_active: bool = True,
+    deleted: bool = False,
 ) -> None:
     await conn.execute(
-        text(INSERT_RULE),
+        text(
+            "INSERT INTO availability_rules "
+            "(mentor_user_id, day_of_week, start_time, end_time, timezone, is_active, deleted_at) "
+            "VALUES (:mentor, :dow, :start, :end, :tz, :active, :deleted)"
+        ),
         {
             "mentor": mentor_id,
             "dow": dow,
             "start": clock(start),
             "end": clock(end),
             "tz": LAGOS,
+            "active": is_active,
+            "deleted": datetime(2026, 1, 1, tzinfo=UTC) if deleted else None,
         },
     )
 
@@ -204,6 +226,113 @@ async def test_a_mentor_may_hold_several_windows_on_one_day(
         text("SELECT count(*) FROM availability_rules WHERE day_of_week = 1")
     )
     assert count.scalar_one() == 2
+
+
+# --------------------------------------------------------------------------
+# The overlap exclusion constraint
+#
+# Two windows overlapping on one weekday carry no information their union does
+# not, so the pair is always a mistake rather than a shape worth storing. The
+# constraint is a partial `EXCLUDE USING gist` over
+# `timerange(start_time, end_time, '[)')`, which needs `btree_gist` for the uuid
+# and int columns and a `timerange` type PostgreSQL does not ship.
+#
+# `test_a_mentor_may_hold_several_windows_on_one_day` above is the accepting
+# case for split availability and is deliberately not repeated here.
+# --------------------------------------------------------------------------
+
+
+async def test_two_windows_that_only_touch_are_accepted(
+    mentor: tuple[AsyncConnection, str],
+) -> None:
+    """09:00-12:00 and 12:00-14:00 share an endpoint and do not overlap.
+
+    This is the test that proves the range is half-open. With `[]` the two
+    would collide on the shared minute and a mentor could not describe a
+    continuous morning as two blocks — which is how the legacy data is shaped.
+    """
+    conn, mentor_id = mentor
+
+    await insert_rule(conn, mentor_id, start="09:00", end="12:00")
+    await insert_rule(conn, mentor_id, start="12:00", end="14:00")
+
+    count = await conn.execute(text("SELECT count(*) FROM availability_rules"))
+    assert count.scalar_one() == 2
+
+
+async def test_two_overlapping_windows_on_one_day_are_refused(
+    mentor: tuple[AsyncConnection, str],
+) -> None:
+    conn, mentor_id = mentor
+    await insert_rule(conn, mentor_id, start="09:00", end="12:00")
+
+    with pytest.raises(IntegrityError, match="availability_rules_no_overlap"):
+        await insert_rule(conn, mentor_id, start="10:00", end="13:00")
+
+
+async def test_the_same_window_on_another_weekday_is_accepted(
+    mentor: tuple[AsyncConnection, str],
+) -> None:
+    """The constraint is scoped by weekday; without `day_of_week WITH =` a
+    mentor could hold one 9-to-5 window in their entire week."""
+    conn, mentor_id = mentor
+
+    await insert_rule(conn, mentor_id, dow=1, start="09:00", end="12:00")
+    await insert_rule(conn, mentor_id, dow=2, start="09:00", end="12:00")
+
+    count = await conn.execute(text("SELECT count(*) FROM availability_rules"))
+    assert count.scalar_one() == 2
+
+
+async def test_the_same_window_for_another_mentor_is_accepted(
+    mentor: tuple[AsyncConnection, str],
+) -> None:
+    """Scoped by mentor. Without `mentor_user_id WITH =` the first mentor to
+    claim Monday morning would lock out all 43 others."""
+    conn, mentor_id = mentor
+    other_id = await make_mentor(conn, "other@example.test")
+
+    await insert_rule(conn, mentor_id, start="09:00", end="12:00")
+    await insert_rule(conn, other_id, start="09:00", end="12:00")
+
+    count = await conn.execute(text("SELECT count(*) FROM availability_rules"))
+    assert count.scalar_one() == 2
+
+
+async def test_an_overlap_against_a_soft_deleted_window_is_accepted(
+    mentor: tuple[AsyncConnection, str],
+) -> None:
+    """Without the `WHERE` predicate, deleting a window would keep blocking the
+    slot it used to occupy — invisibly, because the row no longer renders.
+
+    **The fixture holds exactly one other row, and it is the deleted one.** An
+    earlier version of this test also carried a live adjacent window, so the
+    insert was refused by *that* row and the assertion proved nothing about the
+    predicate. A test for a guard has to reach the guard.
+    """
+    conn, mentor_id = mentor
+    await insert_rule(conn, mentor_id, start="09:00", end="12:00", deleted=True)
+
+    await insert_rule(conn, mentor_id, start="10:00", end="13:00")
+
+    live = await conn.execute(
+        text("SELECT count(*) FROM availability_rules WHERE deleted_at IS NULL")
+    )
+    assert live.scalar_one() == 1
+
+
+async def test_an_overlap_against_an_inactive_window_is_accepted(
+    mentor: tuple[AsyncConnection, str],
+) -> None:
+    """Same predicate, the other half of it. A mentor who switches a day off and
+    re-enters different hours must not be blocked by the row they turned off."""
+    conn, mentor_id = mentor
+    await insert_rule(conn, mentor_id, start="09:00", end="12:00", is_active=False)
+
+    await insert_rule(conn, mentor_id, start="10:00", end="13:00")
+
+    active = await conn.execute(text("SELECT count(*) FROM availability_rules WHERE is_active"))
+    assert active.scalar_one() == 1
 
 
 # --------------------------------------------------------------------------
