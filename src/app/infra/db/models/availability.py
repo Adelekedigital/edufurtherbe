@@ -49,11 +49,13 @@ class AvailabilityRule(TimestampMixin, Base):
     There is therefore **no unique constraint on** ``(mentor_user_id,
     day_of_week)``, and adding one would reject real migrated rows.
 
-    There is also no exclusion constraint against overlapping windows on one
-    day. Two overlapping windows union harmlessly — the projection takes their
-    union — and the dev data was checked before the omission was relied on: 6
-    multi-row days, **0 overlapping pairs**. A constraint would be inventing a
-    rule the product has not stated, and the ETL reports overlaps instead.
+    Overlapping windows on one weekday **are** forbidden, by the partial
+    ``EXCLUDE`` below. An earlier version of this docstring said the opposite —
+    that there was no such constraint and the ETL merely reported overlaps —
+    which was true when it was written and stopped being true sixty lines later
+    in the same file. The ETL now *merges* overlapping legacy windows into their
+    union before insert, because an unmerged pair does not land badly: it aborts
+    the load.
 
     ``timezone`` is per row rather than per mentor, which is what the legacy
     ``timeZone`` column was. A mentor whose rows disagree is possible and is
