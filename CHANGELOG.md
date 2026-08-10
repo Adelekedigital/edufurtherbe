@@ -12,6 +12,32 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **The availability ETL** — `domain/transform/availability.py`,
+  `infra/etl/availability.py` and `scripts/load_availability.py`. Against the
+  dev export: 24 legacy rules become **11 loaded, 11 quarantined and 2 dropped**,
+  and 2 exception rows fan out to **6**.
+- **Legacy `CalendarSettings` has two generations, and they mean different
+  things.** Rows carrying a `timeZone` treat the exported time as the declared
+  wall clock; rows without one were displayed to the mentor in UTC, five hours
+  away. The discriminator is the presence of that column, and applying either
+  rule to both halves is a five-hour error on half the table — in both
+  directions, one line apart.
+- **Generation A is quarantined, never loaded.** No mentor in the dev export
+  owns both an old rule and a booking, so nothing here can settle which reading
+  is real; the 1,073 production bookings can. The report prints **both candidate
+  readings side by side** so that decision is a comparison rather than a
+  re-derivation, and it names the **4 mentors** who arrive at cutover with no
+  availability and must re-declare it.
+- **One `CalendarExtra` row becomes one exception per blocked date**, anchored
+  `{bubble_id}:{iso_date}`. The dates are a comma-joined list in which each date
+  itself contains a comma, so the project's own `normalise_list` would have
+  split `Jan 13, 2025 12:00 am` into two fragments and produced dates nobody
+  entered.
+- **Overlapping windows are merged into their union before insert.** Not
+  tidiness: the exclusion constraint means an unmerged pair aborts the load
+  rather than landing badly. Dev has none across 6 multi-row weekdays; production
+  is 192 rules against 24.
+
 - **`domain/availability.py` — recurring availability projected onto real
   instants.** One pure function turns weekly wall-clock windows plus dated
   exceptions into UTC intervals over a date range. No I/O, no framework, no
