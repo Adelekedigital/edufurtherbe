@@ -12,6 +12,27 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`domain/availability.py` — recurring availability projected onto real
+  instants.** One pure function turns weekly wall-clock windows plus dated
+  exceptions into UTC intervals over a date range. No I/O, no framework, no
+  database row: `api` and `infra` map onto its value objects.
+  **RFC 5545 §3.3.5 is the specification**, because it is what every calendar
+  the mentor already uses implements — a local time occurring twice resolves to
+  the first occurrence, one that never occurs is read with the offset before the
+  gap. Python's `fold=0` is exactly that, and it is now normalised rather than
+  inherited, because `datetime.combine` takes `fold` from the `time` it is given
+  and a caller could otherwise bypass the spec silently.
+  Both endpoints resolve independently, so a 09:00–17:00 window is seven real
+  hours the day the clocks go forward and nine the day they go back. That is
+  correct: the mentor's day genuinely is shorter. A window declared inside the
+  spring-forward gap resolves to zero length and is dropped — the database
+  `CHECK` runs on wall clock and cannot see it.
+  Blocks are applied after overrides and therefore win, which is the settled
+  precedence. Exceptions resolve in **their own** timezone, not the rule's, and
+  are no longer clipped by calendar date: a whole-day New York block really does
+  overlap a Kolkata window on the following date, and clipping made the answer
+  depend on the caller's query window rather than on the data.
+
 - **A mentor's availability windows may not overlap on one weekday** — a partial
   `EXCLUDE USING gist` over a `timerange` type PostgreSQL does not ship. Two
   overlapping windows carry no information their union does not, so the pair is
