@@ -19,14 +19,17 @@ proves a constraint refuses garbage cannot tell a working constraint from one
 that refuses everything.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+
+from app.infra.db.models.sessions import LIVE_STATUSES
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -585,3 +588,272 @@ async def test_the_session_type_index_excludes_inactive_and_deleted_rows(
     assert "WHERE" in sql
     assert "is_active" in sql
     assert "deleted_at IS NULL" in sql
+
+
+# --------------------------------------------------------------------------
+# no_mentor_double_booking — the constraint this table exists for
+#
+# Legacy *did* prevent double-booking, and mostly from the frontend (settled
+# decision #84). Frontend logic cannot see two people clicking in the same
+# second and is skipped by any path avoiding that screen. This moves the control
+# to the database, where it can be neither raced nor bypassed.
+#
+# Every rejecting case has an accepting one beside it. A constraint that refuses
+# everything passes a suite that only proves it refuses.
+# --------------------------------------------------------------------------
+
+CONSTRAINT = "sessions_no_mentor_double_booking"
+
+
+async def test_a_mentor_cannot_hold_two_overlapping_live_sessions(
+    booking: tuple[AsyncConnection, str, str],
+) -> None:
+    conn, mentor_id, mentee_id = booking
+    other = await make_user(conn, "second-mentee@example.test")
+    await insert_session(conn, mentor_id, mentee_id, duration=60)
+
+    with pytest.raises(IntegrityError, match=CONSTRAINT):
+        await insert_session(
+            conn, mentor_id, other, starts_at=STARTS_AT + timedelta(minutes=30), duration=60
+        )
+
+
+async def test_two_sessions_that_only_touch_are_accepted(
+    booking: tuple[AsyncConnection, str, str],
+) -> None:
+    """`[)` is load-bearing, exactly as it is for availability rules.
+
+    14:00-15:00 and 15:00-16:00 are adjacent, not overlapping. This is the case
+    a reader assumes "overlap" already excludes, and it does not unless the
+    range is half-open — so the accepting test is the one that proves the bound.
+    """
+    conn, mentor_id, mentee_id = booking
+    other = await make_user(conn, "second-mentee@example.test")
+
+    await insert_session(conn, mentor_id, mentee_id, duration=60)
+    await insert_session(
+        conn, mentor_id, other, starts_at=STARTS_AT + timedelta(minutes=60), duration=60
+    )
+
+    count = await conn.execute(text("SELECT count(*) FROM sessions"))
+    assert count.scalar_one() == 2
+
+
+async def test_the_same_window_is_free_for_another_mentor(
+    booking: tuple[AsyncConnection, str, str],
+) -> None:
+    conn, mentor_id, mentee_id = booking
+    other_mentor = await make_mentor(conn, "second-mentor@example.test")
+
+    await insert_session(conn, mentor_id, mentee_id, duration=60)
+    await insert_session(conn, other_mentor, mentee_id, duration=60)
+
+    count = await conn.execute(text("SELECT count(*) FROM sessions"))
+    assert count.scalar_one() == 2
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("cancelled", "cancelled"), ("cancelled", "confirmed"), ("no_show", "completed")],
+)
+async def test_overlaps_outside_the_live_statuses_are_accepted(
+    booking: tuple[AsyncConnection, str, str], first: str, second: str
+) -> None:
+    """The partial WHERE is what lets legacy history load at all.
+
+    92 of 105 dev bookings are cancelled, and 19 mentor-and-start pairs are
+    booked more than once — one of them 26 times. Without the predicate the
+    migration could not import its own source data.
+    """
+    conn, mentor_id, mentee_id = booking
+    other = await make_user(conn, "second-mentee@example.test")
+
+    a = await insert_session(conn, mentor_id, mentee_id, duration=60)
+    await conn.execute(
+        text("UPDATE sessions SET status = CAST(:s AS session_status) WHERE id = :i"),
+        {"s": first, "i": a},
+    )
+    b = await insert_session(
+        conn, mentor_id, other, starts_at=STARTS_AT + timedelta(minutes=30), duration=60
+    )
+    await conn.execute(
+        text("UPDATE sessions SET status = CAST(:s AS session_status) WHERE id = :i"),
+        {"s": second, "i": b},
+    )
+
+    count = await conn.execute(text("SELECT count(*) FROM sessions"))
+    assert count.scalar_one() == 2
+
+
+async def test_moving_a_session_onto_an_occupied_window_is_refused(
+    booking: tuple[AsyncConnection, str, str],
+) -> None:
+    """The constraint guards UPDATE, not only INSERT.
+
+    Easy to omit, because an exclusion constraint reads like an insert-time
+    check — and a reschedule is an UPDATE.
+    """
+    conn, mentor_id, mentee_id = booking
+    other = await make_user(conn, "second-mentee@example.test")
+    await insert_session(conn, mentor_id, mentee_id, duration=60)
+    later = await insert_session(
+        conn, mentor_id, other, starts_at=STARTS_AT + timedelta(days=1), duration=60
+    )
+
+    with pytest.raises(IntegrityError, match=CONSTRAINT):
+        await conn.execute(
+            text("UPDATE sessions SET starts_at = :t WHERE id = :i"),
+            {"t": STARTS_AT + timedelta(minutes=30), "i": later},
+        )
+
+
+async def test_a_cancelled_session_frees_its_slot(
+    booking: tuple[AsyncConnection, str, str],
+) -> None:
+    """The accepting half of the UPDATE case, and the real booking flow.
+
+    A mentee cancels, another books the same slot. If leaving the guarded set
+    did not free the window, every cancelled slot would be lost forever.
+    """
+    conn, mentor_id, mentee_id = booking
+    other = await make_user(conn, "second-mentee@example.test")
+    first = await insert_session(conn, mentor_id, mentee_id, duration=60)
+
+    await conn.execute(text("UPDATE sessions SET status = 'cancelled' WHERE id = :i"), {"i": first})
+    await insert_session(conn, mentor_id, other, duration=60)
+
+    live = await conn.execute(
+        text(f"SELECT count(*) FROM sessions WHERE {LIVE_STATUSES}")  # noqa: S608
+    )
+    assert live.scalar_one() == 1
+
+
+async def test_the_constraint_holds_under_a_non_utc_session_timezone(
+    booking: tuple[AsyncConnection, str, str],
+) -> None:
+    """The index is built on `session_window`, which is declared IMMUTABLE.
+
+    Asserting `provolatile = 'i'` proves only what was *declared*. This proves
+    the behaviour the declaration promises: the same overlap is refused when the
+    session's `TimeZone` is not the one the rows were written under. If the
+    function ever gained an hour or day component the label would become a lie,
+    and a lie here corrupts the index rather than raising.
+    """
+    conn, mentor_id, mentee_id = booking
+    other = await make_user(conn, "second-mentee@example.test")
+    await conn.execute(text("SET TimeZone = 'Pacific/Kiritimati'"))
+    await insert_session(conn, mentor_id, mentee_id, duration=60)
+
+    with pytest.raises(IntegrityError, match=CONSTRAINT):
+        await insert_session(
+            conn, mentor_id, other, starts_at=STARTS_AT + timedelta(minutes=30), duration=60
+        )
+
+
+async def test_two_transactions_racing_for_one_slot_leave_exactly_one_winner(
+    db_engine: AsyncEngine,
+) -> None:
+    """The whole thesis of this migration, asserted rather than argued.
+
+    Legacy *did* check for double-booking (settled decision #84) — and mostly
+    from the frontend, which cannot see a second person clicking in the same
+    second. This is that exact scenario: two mentees claim one mentor's slot in
+    two transactions that are open at the same time.
+
+    Every application-level check-then-insert loses this race, because the read
+    and the write are not atomic. The constraint does not check first; it makes
+    the second state unrepresentable, so PostgreSQL serialises the pair on the
+    index and exactly one commits.
+
+    No sleeps and no polling: the database guarantees a single winner, so
+    gathering both and counting the failures is deterministic.
+    """
+    async with db_engine.begin() as setup:
+        mentor = await make_mentor(setup, "race-mentor@example.test")
+        first = await make_user(setup, "race-one@example.test")
+        second = await make_user(setup, "race-two@example.test")
+
+    async def claim(mentee: str) -> None:
+        async with db_engine.begin() as conn:
+            await insert_session(conn, mentor, mentee, duration=60)
+
+    outcomes = await asyncio.gather(claim(first), claim(second), return_exceptions=True)
+    refused = [o for o in outcomes if isinstance(o, BaseException)]
+
+    assert len(refused) == 1, f"expected exactly one loser, got {outcomes}"
+    assert CONSTRAINT in str(refused[0])
+
+    async with db_engine.connect() as conn:
+        count = await conn.execute(text("SELECT count(*) FROM sessions"))
+    assert count.scalar_one() == 1, "the losing transaction left a row behind"
+
+
+async def test_session_window_is_declared_immutable(db_engine: AsyncEngine) -> None:
+    """`i` is what lets the constraint be built at all; STABLE is refused."""
+    async with db_engine.connect() as conn:
+        row = await conn.execute(
+            text(
+                "SELECT provolatile::text, proisstrict FROM pg_proc "
+                "WHERE proname = 'session_window'"
+            )
+        )
+        volatile, strict = row.one()
+
+    # Cast in SQL rather than decoded here: `provolatile` is PostgreSQL's
+    # internal `"char"` type, which asyncpg returns as a one-byte `bytes`, so a
+    # bare comparison against `"i"` is False for a correctly-declared function.
+    assert volatile == "i"
+    assert strict is True
+
+
+async def test_session_window_is_the_same_range_in_every_timezone(
+    db_engine: AsyncEngine,
+) -> None:
+    """Measured across a DST boundary, because that is where it would break.
+
+    2025-11-02 06:00Z is the US fall-back. A minutes-only interval is a fixed
+    duration and cannot move with it; a day or month component can, which is why
+    PostgreSQL marks the generic `timestamptz + interval` STABLE and why this
+    wrapper has to be minutes-only to earn its label.
+
+    **The bounds are compared as instants, never as text.** `tstzrange::text`
+    renders in the session's `TimeZone`, so the first version of this test
+    reported four different strings — `05:30+00`, `06:30+01`, `01:30-04`,
+    `19:30+14` — which are one instant written four ways. It failed, and it was
+    the test that was wrong: rendering *should* follow the session zone. Aware
+    datetimes compare by instant, so this asserts the thing IMMUTABLE actually
+    promises.
+    """
+    boundary = datetime(2025, 11, 2, 5, 30, tzinfo=UTC)
+    seen = set()
+    async with db_engine.connect() as conn:
+        for zone in ("UTC", "America/New_York", "Africa/Lagos", "Pacific/Kiritimati"):
+            await conn.execute(text(f"SET TimeZone = '{zone}'"))
+            result = await conn.execute(
+                text(
+                    "SELECT lower(session_window(:t, 45)) AS lo, "
+                    "upper(session_window(:t, 45)) AS hi"
+                ),
+                {"t": boundary},
+            )
+            seen.add(tuple(result.one()))
+
+    assert len(seen) == 1, f"session_window is not timezone-independent: {seen}"
+
+
+async def test_the_constraint_carries_its_live_status_predicate(
+    db_engine: AsyncEngine,
+) -> None:
+    """`alembic check` is blind to exclusion constraints entirely."""
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = :n"),
+            {"n": CONSTRAINT},
+        )
+        definition = result.scalar_one()
+
+    assert "EXCLUDE USING gist" in definition
+    assert "session_window" in definition
+    assert "WHERE" in definition
+    assert "pending_mentor_approval" in definition
+    assert "confirmed" in definition

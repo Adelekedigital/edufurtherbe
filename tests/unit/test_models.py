@@ -10,6 +10,7 @@ actually attached, so ``updated_at`` moves — needs a database and lives in
 trigger are different facts, and only one of them is visible from the model.
 """
 
+import ast
 from enum import StrEnum
 
 from sqlalchemy import TIMESTAMP
@@ -17,7 +18,9 @@ from sqlalchemy import TIMESTAMP
 from app.domain import enums
 from app.infra.db import models
 from app.infra.db.base import Base
+from app.infra.db.models.sessions import LIVE_STATUSES
 from app.infra.db.types import PG_ENUM_TYPES
+from conftest import PROJECT_ROOT
 
 # Every model the project is expected to define. Update deliberately, in the same
 # change that adds a model — this is what turns "somebody forgot to import it"
@@ -288,3 +291,51 @@ def test_postgresql_type_names_are_unique() -> None:
     names = list(PG_ENUM_TYPES.values())
 
     assert len(names) == len(set(names)), f"duplicate type names in PG_ENUM_TYPES: {names}"
+
+
+def migration_constants(name: str) -> dict[str, str]:
+    """Every migration defining a module-level string constant ``name``.
+
+    Read with ``ast`` rather than imported. A migration is not a package, and
+    importing one executes its module body and pulls in alembic's ``op`` — a
+    parse is enough to read a literal and cannot have side effects.
+    """
+    found: dict[str, str] = {}
+    for path in sorted((PROJECT_ROOT / "migrations" / "versions").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if name in targets and isinstance(node.value, ast.Constant):
+                found[path.name] = str(node.value.value)
+    return found
+
+
+def test_the_live_status_predicate_has_one_meaning() -> None:
+    """``LIVE_STATUSES`` is written in three places and must say one thing.
+
+    **The copies cannot be removed, and that is not laziness.** No migration in
+    this chain imports from ``app``, deliberately: a migration is a historical
+    artefact, and importing a live constant would let a later edit silently
+    change what an old revision does. So decision #43's other remedy applies —
+    pin the copies with a test that fails when they diverge, exactly as
+    ``EXPORT_TIMEZONE`` is pinned.
+
+    This matters more than a tidy-up. The predicate decides which sessions the
+    double-booking constraint guards. If the model and the migration ever
+    disagree, the partial indexes cover one set of rows and the constraint
+    another — and nothing else in the gate compares them, because a predicate
+    inside a ``text()`` string is not a symbol any linter can bind.
+
+    Found by **searching** the migrations rather than listing them, so a fourth
+    copy is covered the day it is written.
+    """
+    copies = migration_constants("LIVE_STATUSES")
+
+    assert copies, (
+        "no migration defines LIVE_STATUSES; this test would otherwise pass by "
+        "comparing nothing, which is the failure it exists to prevent"
+    )
+    divergent = {path: value for path, value in copies.items() if value != LIVE_STATUSES}
+    assert not divergent, f"LIVE_STATUSES disagrees with the model's {LIVE_STATUSES!r}: {divergent}"
