@@ -57,7 +57,7 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import (
@@ -269,6 +269,33 @@ class Session(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("mentor_id <> mentee_id", name="no_self_booking"),
         CheckConstraint("duration_minutes BETWEEN 5 AND 480", name="duration_minutes_valid"),
+        # **The constraint this table exists for.**
+        #
+        # Legacy did prevent double-booking, and mostly from the frontend
+        # (settled decision #84) — which cannot see two people clicking in the
+        # same second and is skipped by any path avoiding that screen. This moves
+        # the control to the database, where it can be neither raced nor
+        # bypassed. Checking first and inserting after would reintroduce exactly
+        # the race the guardrail forbids.
+        #
+        # **`session_window` is a function this project owns**, and it exists
+        # because the package's expression cannot be built at all:
+        # `timestamptz + interval` is STABLE — a day or month component depends
+        # on the session's `TimeZone` — and an index expression must be
+        # IMMUTABLE. A `GENERATED ALWAYS` column fails identically. Minutes-only
+        # arithmetic *is* timezone-independent, which is what earns the label,
+        # and two tests hold it: one on `provolatile`, one on the behaviour.
+        #
+        # Named for the table, following `availability_rules_no_overlap`. The
+        # naming convention has no `ex` key, so an exclusion constraint carries a
+        # literal name or none at all.
+        ExcludeConstraint(
+            ("mentor_id", "="),
+            (text("session_window(starts_at, duration_minutes)"), "&&"),
+            name="sessions_no_mentor_double_booking",
+            using="gist",
+            where=text(LIVE_STATUSES),
+        ),
         # The three reads that matter, all partial. `alembic check` cannot
         # compare a predicate, so each is asserted against `pg_indexes`.
         Index(
