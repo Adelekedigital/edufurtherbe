@@ -206,6 +206,13 @@ def test_the_natural_keys_survive_as_unique_constraints(migrated_database: str) 
         ("user_onboarding", "(user_id)"),
         ("user_languages", "(user_id, language_id)"),
         ("users", "(auth_id)"),
+        # M4. Both were primary keys in the package — a composite one on
+        # participants, and `session_type_id` itself on the booking config — and
+        # ADR 0015 demoted both. Without these, two attendance rows for one
+        # person on one session, and two booking configs for one session type,
+        # both become legal and nothing surfaces it.
+        ("session_participants", "(session_id, user_id)"),
+        ("session_type_booking_configs", "(session_type_id)"),
     }
 
     for table, columns in required:
@@ -238,7 +245,19 @@ def test_the_models_package_is_what_this_file_inspects() -> None:
 # that keeps the check meaningful. M2 brings `user_awards`; M4 brings `sessions`,
 # `session_events` and `reviews`; M5 brings `credit_transactions`, whose
 # retention is a legal obligation rather than audit hygiene.
-RETAINED_ON_USER_DELETE = frozenset({"admin_users", "user_legal_consents"})
+#
+# M4 adds the first two of its three. `reviews` is not in this phase, so it joins
+# the set with the migration that creates it rather than being named here ahead
+# of a table that does not exist — the assertion above rejects a name with no
+# matching table precisely so this list cannot drift into fiction.
+#
+# `session_participants` is deliberately *not* retained. It cascades from
+# `sessions`, which is — so nothing reaches it that does not first have to get
+# through a retained table. Attendance is part of the session record rather than
+# an independent claim about a person.
+RETAINED_ON_USER_DELETE = frozenset(
+    {"admin_users", "user_legal_consents", "sessions", "session_events"}
+)
 
 CASCADE_EDGES = """
 SELECT con.conrelid::regclass::text AS child,

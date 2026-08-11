@@ -58,6 +58,16 @@ EXPECTED_MODELS = {
     # first needs it.
     "AvailabilityRule",
     "AvailabilityException",
+    # M4 sessions. Five of the package's nine tables in `04_sessions.sql`:
+    # `SessionTypeQuestion`, `SessionTypeQuestionOption`, `IntakeSubmission`,
+    # `IntakeAnswer` and `SessionNote` are deliberately absent. None has a legacy
+    # source or a read surface, and settled decision #21 ships a table with the
+    # phase that first needs it — the intake stack is a unit and arrives whole.
+    "SessionType",
+    "SessionTypeBookingConfig",
+    "Session",
+    "SessionParticipant",
+    "SessionEvent",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
@@ -69,7 +79,7 @@ TIMESTAMP_COLUMNS = ("created_at", "updated_at")
 #: column nothing could ever move — the same emptiness `usage_count` was deleted
 #: for. Listing the exemption makes it a decision somebody made, and a new model
 #: that quietly drops `updated_at` still fails.
-APPEND_ONLY = frozenset({"MentorStatusEvent"})
+APPEND_ONLY = frozenset({"MentorStatusEvent", "SessionEvent"})
 
 
 def mapped_classes() -> list[type]:
