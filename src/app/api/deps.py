@@ -796,10 +796,12 @@ UploadedBannerDep = Annotated[str, Depends(uploaded_banner)]
 #
 # **Projected windows are owner-and-admin only, for now.** D20's access rule —
 # render if listed, *or* the viewer has a session with this mentor, *or* the
-# viewer is an admin — cannot be implemented yet: `sessions` is M4 and does not
-# exist. Shipping the two clauses that do exist would drop exactly the one that
-# protects a mentee whose mentor has since paused, which is the case D20 was
-# written for. Narrow now, widened in M4 when the rule can be built whole.
+# viewer is an admin — is still not implemented here. `sessions` now exists, so
+# the blocking reason has changed: the table landed with M4's schema revision and
+# nothing reads it yet, so the clause has no query to be scoped in. Shipping the
+# two clauses that do exist would drop exactly the one that protects a mentee
+# whose mentor has since paused, which is the case D20 was written for. Narrow
+# now, widened by the pull request that gives `sessions` its first reader.
 
 
 async def target_availability_rules(

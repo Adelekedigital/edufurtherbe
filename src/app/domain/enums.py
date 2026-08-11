@@ -267,3 +267,127 @@ class AvailabilityExceptionType(StrEnum):
 
     BLOCK = "block"
     OVERRIDE = "override"
+
+
+class SessionStatus(StrEnum):
+    """Where a session sits in its lifecycle. **Never derived from attendance.**
+
+    Status exists *before* anyone attends: a session is ``PENDING_MENTOR_APPROVAL``
+    at creation and ``CANCELLED`` if called off, and neither has attendance data to
+    derive from (package D5). The relationship runs one way only — attendance
+    *informs* ``CONFIRMED -> COMPLETED | NO_SHOW`` and defines none of the rest.
+
+    **``NO_SHOW`` here is not the same fact as
+    :class:`AttendanceStatus.NO_SHOW`.** This one says the session did not happen;
+    that one says one named person did not arrive. A session where the mentee
+    attends and the mentor does not has one participant ``ATTENDED`` and one
+    ``NO_SHOW``, and exactly one session-level outcome.
+
+    **The legacy vocabulary is measured on the dev extract only**, which holds five
+    values — ``Canceled``, ``Missed``, ``Declined``, ``Completed`` and ``Pending``.
+    Dev is test data and 105 rows against production's 1,073, so it is evidence of
+    which values *occur*, not proof of which *exist*. The transform re-derives the
+    vocabulary from the production extract and raises on a value it has not seen,
+    rather than defaulting.
+    """
+
+    PENDING_MENTOR_APPROVAL = "pending_mentor_approval"
+    CONFIRMED = "confirmed"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    DECLINED = "declined"
+    EXPIRED = "expired"
+    NO_SHOW = "no_show"
+
+
+class SessionRole(StrEnum):
+    """What a person is to a session, on their ``session_participants`` row.
+
+    ``MENTOR`` and ``MENTEE`` duplicate ``sessions.mentor_id`` and
+    ``sessions.mentee_id`` deliberately: the columns carry the 1:1 domain
+    invariant and the exclusion constraint that depends on it (package D4), while
+    the participant rows carry attendance. A partial unique index on
+    ``(session_id) WHERE role = 'mentor'`` is what stops the two representations
+    drifting.
+
+    **``OBSERVER`` ships with no legacy source and no product feature yet**, for
+    the reason :class:`MeetingProvider.ZOOM` and
+    :class:`AvailabilityExceptionType.OVERRIDE` already carry: a label costs
+    nothing to add and cannot be removed — ``ALTER TYPE ... DROP VALUE`` is
+    unimplemented in every PostgreSQL version (settled decision #31). It is here
+    because group sessions are a named future capability, and a member with no
+    legacy rows is one the ETL must never invent.
+    """
+
+    MENTOR = "mentor"
+    MENTEE = "mentee"
+    OBSERVER = "observer"
+
+
+class AttendanceStatus(StrEnum):
+    """Whether one participant turned up. Per person, never per session.
+
+    ``PENDING`` is the state before the session runs, which is why it is the
+    default rather than a nullable column: "we do not know yet" is a real answer
+    and distinguishable from ``NO_SHOW``.
+
+    **Legacy carries exactly two of these four.** ``TrackStatus(mentee)`` and
+    ``TrackStatus(Mentor)`` are ``yes``/``no``, and they agree with the presence
+    of ``Last Joined`` on all 267 dev tracker rows — so the mapping is
+    unambiguous and needs no tie-break. ``LEFT_EARLY`` has no legacy field at all:
+    nothing in Bubble records a departure, so ``session_participants.left_at`` is
+    null on every migrated row and this member is first written by the product.
+    """
+
+    PENDING = "pending"
+    ATTENDED = "attended"
+    NO_SHOW = "no_show"
+    LEFT_EARLY = "left_early"
+
+
+class SessionReasonCode(StrEnum):
+    """Why a session changed state, as a value you can ``GROUP BY``.
+
+    **This is not ``reason_text`` and does not replace it** (package D6). The text
+    is what a human wrote — *"Sorry, conference clash"* — and the code is what
+    policy runs on: ``MENTOR_UNAVAILABLE`` refunds, ``MENTEE_NO_LONGER_NEEDED``
+    within 24 hours of the start does not. "What share of mentor-side
+    cancellations are scheduling conflicts" decides whether reschedule flows get
+    built, and free text cannot answer it without somebody reading 200 rows.
+
+    **Legacy supplies none of these.** ``Session Cancel/Decline Message`` is free
+    text and becomes ``reason_text``; there is no coded field behind it anywhere
+    in ``SessionBooking`` or ``SessionTracker``. Migrated cancellation events
+    therefore carry a null ``reason_code``, which is why the column is nullable
+    and why the index over it is partial.
+    """
+
+    MENTOR_UNAVAILABLE = "mentor_unavailable"
+    MENTEE_NO_LONGER_NEEDED = "mentee_no_longer_needed"
+    SCHEDULING_CONFLICT = "scheduling_conflict"
+    TECHNICAL_ISSUE = "technical_issue"
+    MENTOR_NO_SHOW = "mentor_no_show"
+    MENTEE_NO_SHOW = "mentee_no_show"
+    EXPIRED_NO_RESPONSE = "expired_no_response"
+    RESCHEDULED = "rescheduled"
+    ADMIN_ACTION = "admin_action"
+
+
+class ActorType(StrEnum):
+    """What kind of thing caused a session event.
+
+    It pairs with a **nullable** ``actor_id``: null means no person acted, which
+    is the honest record for an expiry job and is better than inventing a system
+    user (package D6). The same reasoning already put a null ``granted_by`` on
+    every migrated ``admin_users`` row.
+
+    The type is not redundant against ``actor_id IS NULL``. ``SYSTEM`` and ``API``
+    are both actor-less, and an admin acting through the console is a different
+    fact from the same human acting as themselves — which is exactly the
+    distinction an audit trail exists to keep.
+    """
+
+    USER = "user"
+    ADMIN = "admin"
+    SYSTEM = "system"
+    API = "api"

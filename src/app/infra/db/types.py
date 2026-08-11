@@ -22,8 +22,10 @@ from enum import StrEnum
 from sqlalchemy.dialects.postgresql import ENUM
 
 from app.domain.enums import (
+    ActorType,
     AdminRole,
     ApprovalStatus,
+    AttendanceStatus,
     AuthProvider,
     AvailabilityExceptionType,
     LanguageProficiency,
@@ -33,6 +35,9 @@ from app.domain.enums import (
     MeetingProvider,
     MentorStatusType,
     PrimaryRole,
+    SessionReasonCode,
+    SessionRole,
+    SessionStatus,
     UnlistedReason,
     VerificationStatus,
 )
@@ -64,6 +69,11 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     VerificationStatus: "verification_status",
     MeetingProvider: "meeting_provider",
     AvailabilityExceptionType: "availability_exception_type",
+    SessionStatus: "session_status",
+    SessionRole: "session_role",
+    AttendanceStatus: "attendance_status",
+    SessionReasonCode: "session_reason_code",
+    ActorType: "actor_type",
 }
 
 

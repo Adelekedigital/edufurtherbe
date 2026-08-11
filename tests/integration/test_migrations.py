@@ -77,6 +77,20 @@ EXPECTED_TABLES = [
     # that first needs it. See the M3 migration's docstring.
     "availability_exceptions",
     "availability_rules",
+    # M4 — sessions. Five of the package's nine tables in `04_sessions.sql`:
+    # `session_type_questions`, `session_type_question_options`,
+    # `intake_submissions`, `intake_answers` and `session_notes` are deliberately
+    # absent. None has a legacy source or a read surface in this phase, and
+    # settled decision #21 ships a table with the phase that first needs it.
+    # `calendar_connections` is still absent for the reason M3 recorded, now
+    # joined by a second: the calendar integration goes direct to the Google API
+    # rather than through Composio, so the columns encoding a Composio reference
+    # are the wrong shape. See the M4 migration's docstring.
+    "session_events",
+    "session_participants",
+    "session_type_booking_configs",
+    "session_types",
+    "sessions",
 ]
 
 # Every enum type at head — five from M1, one from M2. Named here because a type
@@ -88,8 +102,10 @@ EXPECTED_TABLES = [
 # are consumed by tables in the next pull request and ship with them, per settled
 # decision #21 — a type no table uses is a schema asserting a choice nobody took.
 ENUM_TYPE_NAMES = (
+    "actor_type",
     "admin_role",
     "approval_status",
+    "attendance_status",
     "auth_provider",
     "availability_exception_type",
     "language_proficiency",
@@ -99,6 +115,9 @@ ENUM_TYPE_NAMES = (
     "meeting_provider",
     "mentor_status_type",
     "primary_role",
+    "session_reason_code",
+    "session_role",
+    "session_status",
     "unlisted_reason",
     "verification_status",
 )

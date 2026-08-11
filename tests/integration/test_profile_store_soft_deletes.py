@@ -45,12 +45,17 @@ SOFT_DELETABLE = {table.name for table in Base.metadata.tables.values() if "dele
 #: rather than silently absent, so the exemption is a decision and not a gap.
 EXEMPT = {"users"}
 
-#: Emptied in the pull request that added the availability endpoints, which
-#: is what `test_the_unread_exemption_expires_when_a_reader_appears` exists
-#: to force. The exemption was never a decision that those tables did not
-#: need checking — only that nothing read them yet — so the honest response
-#: to a reader appearing is a case below, not a wider set here.
-EXEMPT_UNTIL_READ: set[str] = set()
+#: Emptied once already, in the pull request that added the availability
+#: endpoints — which is what `test_the_unread_exemption_expires_when_a_reader_
+#: appears` exists to force. The exemption was never a decision that those tables
+#: did not need checking, only that nothing read them yet, so the honest response
+#: to a reader appearing is a case below rather than a wider set here.
+#:
+#: `session_types` re-populates it. M4's first pull request is schema only: there
+#: is no session store, no endpoint, and nothing anywhere that reads the table.
+#: It leaves this set in the pull request that gives it a reader, and the test
+#: below fails the moment one appears in `infra/db`.
+EXEMPT_UNTIL_READ: set[str] = {"session_types"}
 
 
 async def seed_education(conn: Any, user_id: UUID) -> None:
