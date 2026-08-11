@@ -31,6 +31,9 @@ from app.domain.transform.availability import (
     AvailabilityExceptionRow,
     AvailabilityPlan,
     AvailabilityRuleRow,
+    DroppedRow,
+    MergedWindow,
+    QuarantinedRule,
 )
 from app.infra.etl.availability import AvailabilityLoader
 from app.infra.etl.reconcile import reconcile_availability
@@ -163,30 +166,84 @@ async def test_a_timestamp_rewritten_by_the_importer_is_a_failure(
     assert "cs-1" in result.report()
 
 
-async def test_quarantined_rules_are_absent_and_that_is_not_a_failure(
-    mentor: tuple[AsyncConnection, dict[str, UUID]],
-) -> None:
-    """Gen A rules are deliberately not loaded. A reconciliation that treated
-    absence as a defect would fail every run against real data, and the fix
-    somebody would reach for is a loosened comparison."""
-    from app.domain.transform.availability import QuarantinedRule
+#: One anchor per outcome, each accounted for by that outcome **alone**. The
+#: parametrisation is the point: `accounted_for()` is a union of five terms, and
+#: a test exercising only one of them lets the other four be deleted with the
+#: whole suite green.
+ACCOUNTING_OUTCOMES = ("rules", "quarantined", "dropped", "midnight_crossing", "merged_overlaps")
 
+
+def plan_accounting_for(outcome: str, anchor: str = "cs-only") -> AvailabilityPlan:
+    """A plan whose single source anchor is settled by exactly one outcome.
+
+    Every plan here carries `source_rule_ids`, and that is the whole fix. The
+    test this replaces built one without it, so `_unaccounted` iterated an empty
+    source list and returned nothing whatever `accounted_for()` held — and
+    `assert result.ok` passed no matter which terms were deleted.
+
+    That is the shape this pull request describes fixing for the general case:
+    *"every test passed, because none of them gave the plan a source list to be
+    missing from."* Fixed once, and rebuilt twenty lines away.
+    """
+    common: dict[str, object] = {"rules": (), "exceptions": (), "source_rule_ids": (anchor,)}
+    extra: dict[str, object]
+
+    if outcome == "rules":
+        extra = {"rules": (rule(anchor),)}
+    elif outcome == "quarantined":
+        extra = {
+            "quarantined": (
+                QuarantinedRule(
+                    legacy_bubble_id=anchor,
+                    mentor_bubble_id=MENTOR_BUBBLE_ID,
+                    day_of_week=1,
+                    as_printed=dt.time(2, 0),
+                    as_displayed=dt.time(7, 0),
+                    end_as_printed=dt.time(2, 15),
+                    end_as_displayed=dt.time(7, 15),
+                ),
+            )
+        }
+    elif outcome == "dropped":
+        extra = {"dropped": (DroppedRow(anchor, "no Creator"),)}
+    elif outcome == "midnight_crossing":
+        extra = {"midnight_crossing": (DroppedRow(anchor, "22:00-02:00 does not move forward"),)}
+    else:
+        extra = {
+            "merged_overlaps": (
+                MergedWindow(kept="cs-kept", absorbed=anchor, day_of_week=1, detail="merged"),
+            )
+        }
+
+    return AvailabilityPlan(**{**common, **extra})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("outcome", ACCOUNTING_OUTCOMES)
+async def test_every_outcome_counts_toward_the_accounting_identity(
+    mentor: tuple[AsyncConnection, dict[str, UUID]], outcome: str
+) -> None:
+    """A source row settled by any one of the five outcomes reconciles.
+
+    Found by review, and worse than reported: **all five** terms could be
+    deleted with the entire suite green, not four. The `rules` term looked
+    pinned by `test_a_source_row_the_transform_decided_nothing_about_is_a_failure`
+    — but that test asserts `not result.ok`, and removing a term makes *more*
+    rows unaccounted, so it passes either way.
+
+    The direction of failure is fail-safe: a missing term makes the load raise
+    rather than write badly. What matters is *when*. Three of these outcomes
+    have rows in the dev export, so a regression fails on the next local run.
+    **`midnight_crossing` has none** — a regression there passes every test,
+    passes every dev load, and first fails at the production cutover, inside the
+    freeze window, on the first row of a kind this data does not contain. It is
+    also the term that was forgotten once already when this work was planned.
+
+    Parametrised rather than five tests so a sixth outcome cannot arrive without
+    a case, and so the empty-`source_rule_ids` shape cannot return: a plan
+    without it fails every one of these immediately.
+    """
     conn, users = mentor
-    plan = AvailabilityPlan(
-        rules=(rule(),),
-        exceptions=(),
-        quarantined=(
-            QuarantinedRule(
-                legacy_bubble_id="cs-genA",
-                mentor_bubble_id=MENTOR_BUBBLE_ID,
-                day_of_week=1,
-                as_printed=dt.time(2, 0),
-                as_displayed=dt.time(7, 0),
-                end_as_printed=dt.time(2, 15),
-                end_as_displayed=dt.time(7, 15),
-            ),
-        ),
-    )
+    plan = plan_accounting_for(outcome)
 
     result = await load_and_reconcile(conn, users, plan)
 
