@@ -7,6 +7,7 @@ than silently leave a default in place.
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 from pydantic import ValidationError as PydanticValidationError
 
 from app.core.config import Settings, get_settings
@@ -167,3 +168,115 @@ def test_settings_fixture_ignores_a_dotenv_file(
 
     assert settings.cors_origins == []
     assert settings.environment == "ci"
+
+
+# --------------------------------------------------------------------------
+# The Supabase values name one project, or the process refuses to start
+# --------------------------------------------------------------------------
+
+POOLER = (
+    "postgresql://postgres.abcdefghijklmnop:pw@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+)
+OTHER_POOLER = (
+    "postgresql://postgres.zyxwvutsrqponmlk:pw@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+)
+LOCAL = "postgresql://edufurther:edufurther@localhost:55432/edufurther"
+
+
+def test_supabase_values_naming_one_project_are_accepted() -> None:
+    """The accepting case, beside the refusing one below.
+
+    A guard that refused everything would satisfy the mismatch test on its own,
+    so this is what stops the fix being "raise unconditionally".
+    """
+    settings = Settings(
+        _env_file=None,
+        database_url=SecretStr(POOLER),
+        supabase_url="https://abcdefghijklmnop.supabase.co",
+    )
+
+    assert settings.database_url is not None
+
+
+def test_a_database_and_a_supabase_url_naming_different_projects_are_refused() -> None:
+    """**The failure this exists for, and it has no undo.**
+
+    Five values name a Supabase project and nothing tied them together. Point the
+    DSN at staging while `SUPABASE_URL` still names production and
+    `provision_auth.py --link-migrated` reads users out of one project's database
+    and creates real auth accounts in another's — reporting success, because from
+    the loader's view nothing went wrong.
+
+    Recorded in `failure-modes.md` while the credentials to do it existed
+    nowhere. They exist now.
+    """
+    with pytest.raises(PydanticValidationError) as raised:
+        Settings(
+            _env_file=None,
+            database_url=SecretStr(POOLER),
+            supabase_url="https://zyxwvutsrqponmlk.supabase.co",
+        )
+
+    message = str(raised.value)
+    assert "abcdefghijklmnop" in message and "zyxwvutsrqponmlk" in message, message
+    assert "pw@" not in message, "the refusal must not carry the password"
+
+
+def test_a_local_database_beside_a_supabase_url_is_left_alone() -> None:
+    """**The normal development state, and the reason the guard is narrow.**
+
+    A `localhost` DSN next to a real `SUPABASE_URL` is what every developer here
+    runs: the database is Docker, auth is the shared project. It names no Supabase
+    project, so there is nothing to disagree with.
+
+    Widening the guard to refuse this would have made the suite fail and invited
+    the fix that loosens it until green — a guard that guards nothing.
+    """
+    settings = Settings(
+        _env_file=None,
+        database_url=SecretStr(LOCAL),
+        supabase_url="https://abcdefghijklmnop.supabase.co",
+    )
+
+    assert settings.database_url is not None
+
+
+def test_a_direct_connection_host_is_read_for_its_project_too() -> None:
+    """Both DSN shapes carry the ref, in different places — `postgres.<ref>` on
+    the pooler and `db.<ref>.supabase.co` on the direct connection. Reading only
+    one would leave the other unguarded, and the direct form is what a developer
+    copies from the dashboard first."""
+    with pytest.raises(PydanticValidationError):
+        Settings(
+            _env_file=None,
+            database_url=SecretStr(
+                "postgresql://postgres:pw@db.abcdefghijklmnop.supabase.co:5432/postgres"
+            ),
+            supabase_url="https://zyxwvutsrqponmlk.supabase.co",
+        )
+
+
+def test_values_that_are_absent_cannot_disagree() -> None:
+    """Nothing to compare is not a mismatch. Most processes here set only the
+    DSN, and refusing them would make the guard unusable."""
+    assert Settings(_env_file=None, database_url=SecretStr(POOLER)).database_url is not None
+    assert Settings(_env_file=None, supabase_url="https://abcdefghijklmnop.supabase.co") is not None
+
+
+def test_the_env_file_is_selectable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``ENV_FILE`` chooses which dotenv is read, so switching environment is one
+    file rather than five variables edited by hand — which is the shape the
+    mismatch above actually takes.
+
+    Read at import, which pairs with ``get_settings`` being cached: one process,
+    one file, no switching mid-run.
+    """
+    (tmp_path / ".env.staging").write_text(
+        "CORS_ORIGINS=https://staging.example\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+
+    settings = Settings(_env_file=".env.staging")
+
+    assert settings.cors_origins == ["https://staging.example"]

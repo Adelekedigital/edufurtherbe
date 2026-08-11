@@ -25,6 +25,7 @@ optional fields whose absence is silent.
 
 import json
 import os
+import re
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -32,6 +33,36 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ENV_PREFIX = "EDUFURTHER_"
+
+#: Which dotenv file to read. ``ENV_FILE=.env.staging`` selects a whole
+#: environment rather than five variables edited by hand — and editing four of
+#: five is the mistake the validator at the bottom of this class refuses.
+#:
+#: Read here, at import, which is the one place in this project permitted to
+#: consult the environment directly. That pairs with ``get_settings`` being
+#: cached: one process reads one file, and nothing switches mid-run.
+ENV_FILE = os.environ.get("ENV_FILE", ".env")
+
+#: A Supabase project ref as it appears in each value that carries one: the
+#: pooler puts it in the username (``postgres.<ref>``), the direct connection in
+#: the host (``db.<ref>.supabase.co``), and both URLs in the subdomain.
+#:
+#: Anything else yields ``None`` and takes no part in the comparison — a
+#: ``localhost`` DSN names no project, so it cannot contradict one.
+_PROJECT_REF_PATTERNS = (
+    re.compile(r"://postgres\.([a-z0-9]{16,})[:@]"),
+    re.compile(r"@db\.([a-z0-9]{16,})\.supabase\.co"),
+    re.compile(r"https://([a-z0-9]{16,})\.supabase\.co"),
+)
+
+
+def supabase_project_ref(value: str) -> str | None:
+    """The Supabase project a value names, or ``None`` if it names none."""
+    for pattern in _PROJECT_REF_PATTERNS:
+        if match := pattern.search(value):
+            return match.group(1)
+    return None
+
 
 #: The only fields whose environment key keeps the prefix. Both are single
 #: generic words; everything else names its own subject.
@@ -55,7 +86,7 @@ class Settings(BaseSettings):
     """Process configuration, read from the environment and an optional ``.env``."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         # The prefix stays the *default*, and the fields that do not need it opt
         # out with an explicit alias below.
@@ -209,6 +240,50 @@ class Settings(BaseSettings):
                 f"Unrecognised {ENV_PREFIX} variable(s): {', '.join(unknown)}. "
                 f"Only {', '.join(sorted(env_key(f) for f in PREFIXED_FIELDS))} "
                 "carry the prefix; everything else is unprefixed."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def refuse_a_mixed_set_of_supabase_credentials(self) -> Settings:
+        """Every Supabase value must name the same project.
+
+        **The failure this prevents has no undo.** These are separate strings
+        describing two halves of one environment — which database rows go to, and
+        which project's auth accounts get created. Switching environment means
+        editing all of them, and editing all but one is not an error anything
+        reports: ``provision_auth.py --link-migrated`` reads users out of one
+        project's database and creates real accounts in another's, then prints
+        ``created 43 … failed 0``, because from the loader's view nothing failed.
+
+        **Deliberately narrow.** A value takes part only if a project ref can be
+        read out of it, so anything not Supabase-shaped is ignored rather than
+        guessed at. A ``localhost`` DSN beside a real ``SUPABASE_URL`` is the
+        ordinary development state here — Docker for the database, the shared
+        project for auth — and refusing it would fail this repository's own suite,
+        which is the pressure that turns a guard into a formality.
+
+        **Not complete cover, and not to be read as it.** A variable that is
+        absent cannot disagree with anything: leave one exported from a previous
+        environment and omit it from the next file, and the stale value wins
+        silently. Replacing an env file whole is what prevents that; this catches
+        the case where both are present and disagree.
+        """
+        found: dict[str, str] = {}
+        for name, raw in (
+            ("DATABASE_URL", self.database_url),
+            ("SUPABASE_URL", self.supabase_url),
+            ("SUPABASE_JWKS_URL", self.supabase_jwks_url),
+        ):
+            value = raw.get_secret_value() if isinstance(raw, SecretStr) else raw
+            if value and (ref := supabase_project_ref(value)):
+                found[name] = ref
+
+        if len(set(found.values())) > 1:
+            named = ", ".join(f"{name} names {ref}" for name, ref in sorted(found.items()))
+            raise ValueError(
+                f"These settings name different Supabase projects: {named}. "
+                "They are one environment and must be set together — replace the "
+                "whole env file rather than a variable at a time."
             )
         return self
 

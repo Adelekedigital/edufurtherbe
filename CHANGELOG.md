@@ -12,6 +12,8 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Settings refuse to start on a mixed set of Supabase credentials.** `DATABASE_URL`, `SUPABASE_URL` and `SUPABASE_JWKS_URL` each name a project, and nothing tied them together: point the DSN at staging while the Supabase values still name production and `provision_auth` reads users out of one project's database and creates real auth accounts in another's, reporting `created 43 … failed 0`. There is no bulk undo. Narrow deliberately — a value takes part only if a project ref can be read out of it, so a `localhost` DSN beside a real `SUPABASE_URL` stays legal, which is how everyone here develops.
+- **`ENV_FILE` selects the dotenv to read**, so switching environment is one file rather than five variables edited by hand — which is the shape the mistake above actually takes. Works in PowerShell, where the `set -a; . file` idiom does not and `$env:VAR = ...` persists for the rest of the session.
 - **`reconcile_availability`** — M3 was the only phase loading without one. It
   runs **inside** the transaction and raises, because reconciling after a commit
   reports a problem it is no longer able to undo.

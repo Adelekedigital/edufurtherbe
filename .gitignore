@@ -50,3 +50,8 @@ promptdump.md
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Per-environment files. Replaced whole, never edited a variable at a time —
+# a half-updated set is the failure `config.py` now refuses to start on.
+.env.staging
+.env.production
