@@ -27,6 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.transform import UserRow
+from app.domain.transform.availability import AvailabilityPlan
 from app.domain.transform.profiles import ProfilePlan
 from app.infra.etl.profiles import ProfileCounts
 
@@ -286,3 +287,134 @@ async def reconcile_profiles(
         checks=tuple(checks),
         empty=tuple(check.table for check in checks if check.loaded == 0),
     )
+
+
+# --------------------------------------------------------------------------
+# Availability
+# --------------------------------------------------------------------------
+
+AVAILABILITY_QUERIES: dict[str, str] = {
+    "availability_rules": STAMPED.format("availability_rules"),
+    "availability_exceptions": STAMPED.format("availability_exceptions"),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class AvailabilityReconciliation:
+    """Both availability tables, plus the two checks unique to this phase.
+
+    **Row counts do not reconcile one-to-one, and that is correct.** Every prior
+    phase compared source rows to loaded rows; availability breaks that three
+    ways at once — exceptions fan out 1:N, Gen A rules are quarantined on
+    purpose, and overlapping windows merge so one anchor never reaches the
+    table. Asserting `source == loaded` would fail every run, and the fix
+    somebody would reach for is a loosened comparison that checks nothing.
+
+    So the identity checked is that every source rule was **accounted for**, and
+    the fan-out is checked **per source row** rather than in total.
+    """
+
+    checks: tuple[TableCheck, ...]
+    #: Source rules in no outcome at all — neither loaded, quarantined, dropped,
+    #: refused nor absorbed. A row here vanished without anybody deciding it
+    #: should, which is the failure no row count would show.
+    unaccounted: tuple[str, ...] = ()
+    #: **There is deliberately no per-source fan-out check.** One was written
+    #: and removed: a mutation batch showed it survived every test, because an
+    #: exception anchor that fails to land is already absent from ``actual`` and
+    #: is caught by ``missing`` — and one that lands unplanned makes ``expected``
+    #: and ``loaded`` disagree. Grouping on the anchor prefix re-checked
+    #: membership two other assertions already covered, which is decoration
+    #: rather than depth.
+
+    @property
+    def ok(self) -> bool:
+        return all(check.ok for check in self.checks) and not self.unaccounted
+
+    def report(self) -> str:
+        lines = [
+            f"{'ok' if check.ok else 'FAIL':4} {check.table:26} "
+            f"expected {check.expected:4}  loaded {check.loaded:4}  "
+            f"missing {len(check.missing):3}  stamped-by-importer "
+            f"{len(check.wrong_timestamps):3}"
+            for check in self.checks
+        ]
+        for check in self.checks:
+            lines.extend(f"     missing from {check.table}: {anchor}" for anchor in check.missing)
+            lines.extend(
+                f"     timestamp rewritten in {check.table}: {anchor}"
+                for anchor in check.wrong_timestamps
+            )
+        lines.extend(f"FAIL unaccounted source rule: {anchor}" for anchor in self.unaccounted)
+        return "\n".join(lines)
+
+
+async def reconcile_availability(
+    connection: AsyncConnection, plan: AvailabilityPlan
+) -> AvailabilityReconciliation:
+    """Compare both availability tables against the plan that produced them.
+
+    Expected comes from the plan; actual comes from the database. Neither
+    re-derives the other — a check whose two sides come from the same place
+    agrees with itself and proves nothing.
+
+    Timestamps are compared **to the microsecond**, for the reason
+    ``reconcile_users`` gives: a load that ran with ``trg_set_updated_at``
+    enabled produces values within a second or two of each other and of
+    ``now()``, so a tolerant comparison passes exactly the failure this exists
+    to catch.
+    """
+    expected: dict[str, dict[str, tuple[datetime | None, datetime | None]]] = {
+        "availability_rules": {
+            row.legacy_bubble_id: (row.created_at, row.updated_at) for row in plan.rules
+        },
+        "availability_exceptions": {
+            row.legacy_bubble_id: (row.created_at, row.updated_at) for row in plan.exceptions
+        },
+    }
+
+    checks: list[TableCheck] = []
+    for table, query in AVAILABILITY_QUERIES.items():
+        result = await connection.execute(text(query))
+        actual = {
+            row.legacy_bubble_id: (row.created_at, row.updated_at) for row in result.mappings()
+        }
+        wanted = expected[table]
+        checks.append(
+            TableCheck(
+                table=table,
+                expected=len(wanted),
+                loaded=len(actual),
+                missing=tuple(sorted(set(wanted) - set(actual))),
+                wrong_timestamps=tuple(
+                    sorted(
+                        anchor
+                        for anchor, stamps in wanted.items()
+                        if anchor in actual and actual[anchor] != stamps
+                    )
+                ),
+            )
+        )
+
+    return AvailabilityReconciliation(
+        checks=tuple(checks),
+        unaccounted=_unaccounted(plan),
+    )
+
+
+def _unaccounted(plan: AvailabilityPlan) -> tuple[str, ...]:
+    """Source rules the plan reached no decision about.
+
+    Every anchor the transform was handed must appear in one of five outcomes —
+    loaded, quarantined, dropped, refused for not moving forward, or absorbed
+    into a neighbour. A row in none of them vanished without anybody deciding it
+    should, which is silent data loss that no row count would show: the loaded
+    total is *meant* to be smaller than the source total here, so a smaller one
+    looks correct.
+
+    An earlier version of this function returned duplicated anchors instead and
+    claimed in its docstring to do this. Every test passed, because none of them
+    gave the plan a source list to be missing from.
+    """
+    accounted = set(plan.accounted_for())
+    return tuple(sorted(anchor for anchor in plan.source_rule_ids if anchor not in accounted))

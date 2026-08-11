@@ -40,6 +40,7 @@ from app.infra.etl.cli import (
     configure_streams,
     open_export,
 )
+from app.infra.etl.reconcile import reconcile_availability
 from app.infra.etl.satellites import user_id_map
 
 
@@ -57,6 +58,10 @@ def build_plan(directory: Path) -> AvailabilityPlan:
     )
 
 
+class ReconciliationError(RuntimeError):
+    """Raised inside the transaction so the context manager rolls it back."""
+
+
 async def load(plan: AvailabilityPlan) -> None:
     engine = create_async_engine(resolve_async_dsn(get_settings()))
     try:
@@ -66,12 +71,22 @@ async def load(plan: AvailabilityPlan) -> None:
             # defects at once: SQL inside `scripts/`, where only ruff can see it
             # (#44), and a second representation of a statement that already
             # existed in `satellites.py` (#43).
-            counts = await AvailabilityLoader(connection).load(
+            await AvailabilityLoader(connection).load(
                 users=await user_id_map(connection),
                 rules=plan.rules,
                 exceptions=plan.exceptions,
             )
-        print(f"\nloaded {counts.rules} rules and {counts.exceptions} exceptions")
+            # **Inside the transaction, and it raises.** Reconciling after a
+            # commit reports a problem it is no longer able to undo — the same
+            # reason `load_profiles.py` does it here rather than after.
+            #
+            # The loader returns nothing: what landed is read back from the
+            # table by this call, not counted from what was handed in.
+            result = await reconcile_availability(connection, plan)
+            print()
+            print(result.report())
+            if not result.ok:
+                raise ReconciliationError("reconciliation failed; the load has been rolled back")
     finally:
         await engine.dispose()
 
@@ -97,7 +112,12 @@ def main() -> int:
     if args.dry_run:
         return EXIT_UNRESOLVED if unresolved else EXIT_OK
 
-    asyncio.run(load(plan))
+    try:
+        asyncio.run(load(plan))
+    except ReconciliationError as exc:
+        print(f"\n{exc}")
+        return EXIT_REFUSED
+
     return EXIT_UNRESOLVED if unresolved else EXIT_OK
 
 

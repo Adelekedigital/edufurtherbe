@@ -19,7 +19,6 @@ second load is the normal path.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import text
@@ -28,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.domain.transform.availability import AvailabilityExceptionRow, AvailabilityRuleRow
 from app.infra.db.triggers import timestamps_from_source_across
 
-__all__ = ["AvailabilityCounts", "AvailabilityLoader"]
+__all__ = ["AvailabilityLoader"]
 
 #: Both tables held off together: the pair is one logical write, and disabling
 #: them separately leaves a window where half the load stamps the import clock.
@@ -72,14 +71,15 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
 """
 
 
-@dataclass(frozen=True, slots=True)
-class AvailabilityCounts:
-    rules: int
-    exceptions: int
-
-
 class AvailabilityLoader:
-    """Both availability tables, rules before exceptions."""
+    """Both availability tables, rules before exceptions.
+
+    **Returns nothing on purpose.** An earlier version returned a count of
+    the rows it was *given*, which the script printed as "loaded N rules" —
+    an assertion about the database made without asking it. What actually
+    landed is `reconcile_availability`'s answer, read back from the table,
+    and two sources for that number is one too many.
+    """
 
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
@@ -90,7 +90,7 @@ class AvailabilityLoader:
         users: dict[str, UUID],
         rules: Sequence[AvailabilityRuleRow],
         exceptions: Sequence[AvailabilityExceptionRow],
-    ) -> AvailabilityCounts:
+    ) -> None:
         def mentor_id(bubble_id: str, what: str) -> UUID:
             resolved = users.get(bubble_id)
             if resolved is None:
@@ -135,5 +135,3 @@ class AvailabilityLoader:
                         "legacy_bubble_id": exception.legacy_bubble_id,
                     },
                 )
-
-        return AvailabilityCounts(rules=len(rules), exceptions=len(exceptions))

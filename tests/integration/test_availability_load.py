@@ -95,11 +95,19 @@ async def test_rules_and_exceptions_load(
 ) -> None:
     conn, users = mentor
 
-    counts = await AvailabilityLoader(conn).load(
-        users=users, rules=[rule()], exceptions=[exception_row()]
-    )
+    await AvailabilityLoader(conn).load(users=users, rules=[rule()], exceptions=[exception_row()])
 
-    assert (counts.rules, counts.exceptions) == (1, 1)
+    # Asserted against the database, not against a count the loader returned.
+    # It used to return `len(rules)` — the number of rows handed *in*, which is
+    # an assertion about the table made without asking it. `reconcile_availability`
+    # is what reads back what actually landed.
+    totals = await conn.execute(
+        text(
+            "SELECT (SELECT count(*) FROM availability_rules), "
+            "(SELECT count(*) FROM availability_exceptions)"
+        )
+    )
+    assert totals.one() == (1, 1)
     stored = await conn.execute(
         text("SELECT start_time, end_time, timezone, is_active FROM availability_rules")
     )

@@ -139,6 +139,42 @@ class AvailabilityExceptionRow:
 
 
 @dataclass(frozen=True, slots=True)
+class DroppedRow:
+    """A source row that did not become one, and why.
+
+    **The anchor is a field, not a phrase inside the reason.** These used to be
+    formatted strings, which read well in a terminal and are useless to
+    reconciliation: accounting for them meant parsing a Bubble id out of a
+    sentence, and improving the wording would have silently stopped the
+    accounting while the totals still balanced.
+    """
+
+    legacy_bubble_id: str
+    reason: str
+
+    def __str__(self) -> str:
+        return f"{self.legacy_bubble_id}: {self.reason}"
+
+
+@dataclass(frozen=True, slots=True)
+class MergedWindow:
+    """Two overlapping windows folded into one, and which anchor survived.
+
+    ``absorbed`` never reaches the database, so reconciliation has to be told
+    about it or the row count will not add up — and the operator has to be told
+    which legacy id is no longer represented.
+    """
+
+    kept: str
+    absorbed: str
+    day_of_week: int
+    detail: str
+
+    def __str__(self) -> str:
+        return f"day {self.day_of_week}: {self.detail}; {self.absorbed} is not loaded"
+
+
+@dataclass(frozen=True, slots=True)
 class QuarantinedRule:
     """A Gen A row, with both readings, awaiting the production decision."""
 
@@ -160,24 +196,52 @@ class AvailabilityPlan:
 
     #: Gen A. Reported, never loaded.
     quarantined: tuple[QuarantinedRule, ...] = ()
-    #: ``"<bubble id>: <reason>"`` for every row that cannot become one.
-    dropped: tuple[str, ...] = ()
+    #: Every source row that did not become one. **Accounting, not a
+    #: diagnostic**: reconciliation adds these to the loaded and quarantined
+    #: counts and expects the source total.
+    dropped: tuple[DroppedRow, ...] = ()
     #: Windows merged into their union before insert, so the exclusion
     #: constraint cannot abort the load. ``"<mentor>: 09:00-12:00 + 10:00-13:00
     #: -> 09:00-13:00"``.
-    merged_overlaps: tuple[str, ...] = ()
+    merged_overlaps: tuple[MergedWindow, ...] = ()
     #: Owners whose zone is the `UTC` default, meaning nobody ever set one.
     zone_defaults: tuple[str, ...] = ()
     #: `dayOfWeekIn` disagreeing with `daysOfWeek-O/S`. The number wins.
     day_mismatches: tuple[str, ...] = ()
-    #: Windows crossing midnight. The column CHECK forbids them, so they are
-    #: reported rather than split on a guess.
-    midnight_crossing: tuple[str, ...] = ()
+    #: Windows crossing midnight, or resolving to zero length. The column
+    #: CHECK forbids both, so they are reported rather than split on a guess
+    #: — and they are **accounting**, because these rows do not load either.
+    midnight_crossing: tuple[DroppedRow, ...] = ()
+    #: Every source rule anchor the transform was handed. Carried so
+    #: reconciliation can assert the identity rather than assume it: without
+    #: it, "was every source row decided about" is unanswerable, because the
+    #: plan only knows what it produced.
+    source_rule_ids: tuple[str, ...] = ()
     errors: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def ok(self) -> bool:
         return not self.errors
+
+    def accounted_for(self) -> tuple[str, ...]:
+        """Every source rule anchor this run reached a decision about.
+
+        The identity reconciliation checks. A source row must be **loaded, or
+        quarantined, or dropped, or refused for not moving forward, or absorbed
+        into a neighbour** — five outcomes, and a row in none of them vanished
+        without anybody deciding it should.
+
+        ``midnight_crossing`` belongs here and is easy to miss: those rows are
+        reported rather than loaded, so leaving them out makes the identity fail
+        on exactly the data that has one.
+        """
+        return (
+            tuple(row.legacy_bubble_id for row in self.rules)
+            + tuple(row.legacy_bubble_id for row in self.quarantined)
+            + tuple(row.legacy_bubble_id for row in self.dropped)
+            + tuple(row.legacy_bubble_id for row in self.midnight_crossing)
+            + tuple(note.absorbed for note in self.merged_overlaps)
+        )
 
     def mentors_needing_redeclaration(self) -> tuple[str, ...]:
         """Mentors whose availability does not survive the migration.
@@ -333,7 +397,7 @@ def _int_or_none(value: Any) -> int | None:
 
 def _merge_windows(
     rows: Sequence[AvailabilityRuleRow],
-) -> tuple[tuple[AvailabilityRuleRow, ...], tuple[str, ...]]:
+) -> tuple[tuple[AvailabilityRuleRow, ...], tuple[MergedWindow, ...]]:
     """Fold overlapping windows on one mentor-weekday into their union.
 
     Required, not tidiness. ``availability_rules`` carries a partial ``EXCLUDE``
@@ -343,7 +407,7 @@ def _merge_windows(
     re-run lands on the same target.
     """
     merged: list[AvailabilityRuleRow] = []
-    notes: list[str] = []
+    notes: list[MergedWindow] = []
     # **Partitioned by `is_active`, and that is load-bearing.** The constraint
     # this merge exists to satisfy is partial — `WHERE is_active AND deleted_at
     # IS NULL` — so an inactive window never collides with anything and never
@@ -376,12 +440,18 @@ def _merge_windows(
         if same_group and previous is not None and row.start_time < previous.end_time:
             merged[-1] = replace(previous, end_time=max(previous.end_time, row.end_time))
             notes.append(
-                f"{row.mentor_bubble_id} day {row.day_of_week}: "
-                f"{previous.start_time:%H:%M}-{previous.end_time:%H:%M} "
-                f"({previous.legacy_bubble_id}) + "
-                f"{row.start_time:%H:%M}-{row.end_time:%H:%M} ({row.legacy_bubble_id}) "
-                f"-> {merged[-1].start_time:%H:%M}-{merged[-1].end_time:%H:%M}; "
-                f"{row.legacy_bubble_id} is not loaded"
+                MergedWindow(
+                    kept=previous.legacy_bubble_id,
+                    absorbed=row.legacy_bubble_id,
+                    day_of_week=row.day_of_week,
+                    detail=(
+                        f"{previous.start_time:%H:%M}-{previous.end_time:%H:%M} "
+                        f"({previous.legacy_bubble_id}) + "
+                        f"{row.start_time:%H:%M}-{row.end_time:%H:%M} "
+                        f"({row.legacy_bubble_id}) -> "
+                        f"{merged[-1].start_time:%H:%M}-{merged[-1].end_time:%H:%M}"
+                    ),
+                )
             )
         else:
             merged.append(row)
@@ -443,9 +513,9 @@ def plan_availability(
     mentor_bubble_ids = mentor_owners(user_records)
     rules: list[AvailabilityRuleRow] = []
     quarantined: list[QuarantinedRule] = []
-    dropped: list[str] = []
+    dropped: list[DroppedRow] = []
     day_mismatches: list[str] = []
-    midnight: list[str] = []
+    midnight: list[DroppedRow] = []
     zone_defaults: list[str] = []
     errors: list[str] = []
 
@@ -453,10 +523,10 @@ def plan_availability(
         bubble_id = _bubble_id(record)
         owner = record.get(CREATOR_FIELD)
         if not owner:
-            dropped.append(f"{bubble_id}: no Creator, so nobody can be said to own it")
+            dropped.append(DroppedRow(bubble_id, "no Creator, so nobody can be said to own it"))
             continue
         if str(owner) not in mentor_bubble_ids:
-            dropped.append(f"{bubble_id}: owner {owner} has no mentor profile")
+            dropped.append(DroppedRow(bubble_id, f"owner {owner} has no mentor profile"))
             continue
 
         day_raw = str(record.get(DAY_NUMBER_FIELD) or "")
@@ -470,13 +540,13 @@ def plan_availability(
         # value outside 0-6 reaches `day_of_week BETWEEN 0 AND 6` and aborts the
         # whole load at insert, three layers from its cause.
         if day_raw not in DAY_NAMES:
-            dropped.append(f"{bubble_id}: dayOfWeekIn {day_raw!r} is not a weekday 0-6")
+            dropped.append(DroppedRow(bubble_id, f"dayOfWeekIn {day_raw!r} is not a weekday 0-6"))
             continue
         day_of_week = int(day_raw)
 
         start_raw, end_raw = record.get(START_FIELD), record.get(END_FIELD)
         if not start_raw or not end_raw:
-            dropped.append(f"{bubble_id}: no start or end time")
+            dropped.append(DroppedRow(bubble_id, "no start or end time"))
             continue
 
         generation = _generation(record)
@@ -529,7 +599,9 @@ def plan_availability(
 
         # Applied only to the reading that will actually be loaded.
         if end <= start:
-            midnight.append(f"{bubble_id}: {start:%H:%M}-{end:%H:%M} does not move forward")
+            midnight.append(
+                DroppedRow(bubble_id, f"{start:%H:%M}-{end:%H:%M} does not move forward")
+            )
             continue
 
         # Validated, and stored stripped. `availability_rules.timezone` is `text`
@@ -543,7 +615,7 @@ def plan_availability(
         try:
             rule_zone = _resolve_timezone(record.get(ZONE_FIELD), bubble_id)
         except TransformError as exc:
-            dropped.append(f"{bubble_id}: {exc}")
+            dropped.append(DroppedRow(bubble_id, str(exc)))
             continue
 
         rules.append(
@@ -565,7 +637,7 @@ def plan_availability(
         bubble_id = _bubble_id(record)
         owner = record.get(CREATOR_FIELD)
         if not owner or str(owner) not in mentor_bubble_ids:
-            dropped.append(f"{bubble_id}: exception has no attributable mentor")
+            dropped.append(DroppedRow(bubble_id, "exception has no attributable mentor"))
             continue
 
         zone = owner_zones.get(str(owner), default_zone)
@@ -579,7 +651,7 @@ def plan_availability(
         # export's rendering, but the transform is not supposed to know which
         # source a record came from, and the Data API returns a different shape.
         if raw_dates and not days:
-            dropped.append(f"{bubble_id}: block-Date(s) {raw_dates!r} yielded no dates")
+            dropped.append(DroppedRow(bubble_id, f"block-Date(s) {raw_dates!r} yielded no dates"))
             continue
 
         for day in days:
@@ -599,6 +671,7 @@ def plan_availability(
 
     merged_rules, merge_notes = _merge_windows(rules)
     return AvailabilityPlan(
+        source_rule_ids=tuple(_bubble_id(record) for record in calendar_settings),
         rules=merged_rules,
         exceptions=tuple(exceptions),
         quarantined=tuple(quarantined),
