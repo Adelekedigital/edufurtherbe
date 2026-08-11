@@ -113,6 +113,7 @@ database by roughly 3x on mentors.
 | 81 | **`CalendarSettings` has two generations and only one of them can be read at face value.** A row carrying `timeZone` means the exported time IS the declared wall clock; a row without one was displayed to the mentor in **UTC**, five hours away. Generation A is **quarantined, never loaded** — reported with both candidate readings, decided once at the production extract. Availability is also the **second** exception to attribution-by-user-side-link after `Scholarship-Awards` (#60): `Creator` is the only path | The split is 12/12 in the dev export with no date overlap and a six-month gap — a rewrite, not a coincidence — and on every Gen A row the legacy `12hr-…-TXT` display column equals the UTC rendering of `startTime`. `parse_timestamp` returns aware UTC, so `.time()` on it is right for Gen A and wrong for Gen B, and the naive parse is the reverse: **one line, five hours, half the table, in either direction**. Quarantine rather than a guess because no dev mentor owns both an old rule and a booking, so nothing here can adjudicate it — and a wrong value written into a row a mentor may then edit can no longer be corrected by a re-run. `CalendarSettings` carries no owner column, `User` has no link to it, and `calendarSettingList` is empty on every row, which is what forces `Creator` | The production extract, where 1,073 bookings can test both readings and the tables are still empty. If bookings cannot separate them either, the quarantine stands and those mentors re-declare at cutover |
 | 82 | **M4 creates exactly five tables**: `sessions`, `session_participants`, `session_events`, `session_types` and `session_type_booking_configs`. Deferred out of `04_sessions.sql`: `session_type_questions`, `session_type_question_options`, `intake_submissions`, `intake_answers` and `session_notes`. **`calendar_connections` is deferred again**, past #80's forecast that M4 would carry it. Five departures, each deliberate: `session_participants` and `session_type_booking_configs` take surrogate `id`s where the package uses a composite and an FK-as-primary-key; `session_events` carries **no `updated_at` and no trigger**; index names take `ix_` not `idx_`; and `sessions.session_type_id` ships nullable, with `NOT NULL` as a later contract migration | The intake stack is one unit — a submissions parent, its answers, the questions they answer and the options those offer — and half of it is worse than none. None of the five has a legacy source or a read surface in this phase, so #21 governs exactly as it did for `password_hash`. The two surrogate keys are ADR 0015, which admits no exception and is now asserted against the live schema because prose lost twice. The `updated_at` departure resolves a contradiction rather than taking a position: the package gives `session_events` the column while calling the table "APPEND-ONLY. Revoke UPDATE/DELETE" fifteen lines above, and `mentor_status_events` already settled the shape. **`calendar_connections` is deferred for a new reason, not the old one**: the calendar integration goes direct to the Google API rather than through Composio, so `composio_auth_id` and the `calendar_provider` enum are the wrong columns to ship — see the ADR that amends 0012 | The intake tables ship with the booking write path that specifies them. `calendar_connections` ships with the direct Google adapter |
 | 83 | **The package's field mapping is wrong on four points about `SessionBooking`/`SessionTracker`, each measured rather than argued.** (a) `Meeting venue` and `meetinglink` hold a **URL**, not a provider — so they feed `meeting_url` and `meeting_provider` is derived from the host. (b) `expiration` is `session time + 15 minutes`, a join-window cutoff, **not** a booking-request expiry, so it must not become an `expired` event. (c) `SessionDateTime-UTC` carries **no UTC shift** despite its name — `parse_timestamp(..., assume=EXPORT_TIMEZONE)` is correct, as for every other export field. (d) `Creator` is `'(App admin)'` on 105 of 105 bookings, so `created_by` is null on every migrated session | The package is canonical for the **target schema** (ADR 0007), never for what the legacy data contains — and on these four, following it produces wrong code with every gate green. (c) is the one that would have cost most and was nearly quarantined on the M4 handoff's advice: `Last Joined` is a *system clock*, so it cannot be shifted by application logic, and it sits within minutes of `session time` on 52/52 and 51/51 dev rows with **zero** in the 4–5 hour band. That comparison is between two fields of the same export, so the mentors all being in `America/New_York` does not weaken it. The merge itself is safe: across 103 linked pairs the two rows agree on mentor, duration, cancel flag, room and venue **103 times out of 103** | Re-run the `Last Joined` versus `session time` comparison at the production extract. If the two ever separate by roughly the export offset, (c) is wrong and every migrated `starts_at` moves |
+| 84 | **Legacy *did* prevent double-booking, and mostly from the frontend.** A day's bookings were compared against the sessions table before a slot could be taken — described by the person who built it as rough, brain-racking manipulation forced by Bubble's constraints. So the absence of a database constraint was **not** the absence of a control, and `04_sessions.sql`'s heading "THE CONSTRAINT BUBBLE COULD NEVER ENFORCE" is a claim about the *database*, not about the product | This changes what the M4 pre-flight's result **means**, which is the only reason it needs recording. Frontend-side logic is advisory by construction: it cannot see a second person clicking in the same second, and it is skipped entirely by any path that does not go through that screen. So the honest expectation for overlapping live bookings in the production extract is **"probably none, but genuinely uncertain"** — not "none because it was enforced", and not "many because nothing checked". A non-zero result is a race or a bypass rather than dirty data, and is worth understanding rather than merely cleaning. It is also the sharpest available statement of what this migration buys: the control moves from the browser to the database, where it cannot be raced, bypassed or forgotten | Never — this is a fact about the legacy system, and the legacy system is going away. It stops mattering once the extract has run and the pre-flight has reported |
 
 Anything conflicting with a row here is an **ADR**, not an implementation detail.
 
@@ -140,8 +141,19 @@ Anything conflicting with a row here is an **ADR**, not an implementation detail
 **Session shape.** Sessions may be 1:1 **or group**. Group is a new capability
 that does not exist in the legacy app — **every legacy record is 1:1**, so the
 migration never encounters a group session and the importer does not need to
-handle one. When group is built, the booking invariant is **capacity, not
-exclusivity**, so it cannot be a plain uniqueness constraint on the slot.
+handle one.
+
+**1:1 is the product and comes first.** Group is a later feature, and building
+for it now would shape the core around a case that does not exist yet. When it
+arrives, the mentor supplies the number of participants they want; capacity is a
+value a user chooses, not one the platform derives.
+
+**Group adds an invariant rather than replacing one.** A mentor still cannot be
+in two sessions at once, and a group session is still one row, one mentor, one
+window — so the `EXCLUDE` on `(mentor_id, window)` stays correct and unchanged.
+What is added is a count of `session_participants` against that capacity. The two
+read as one rule today only because, while every session is 1:1, "the mentor is
+busy" and "the slot is taken" are the same sentence.
 
 **Still open — do not guess:**
 
@@ -216,9 +228,21 @@ section of each Definition of Done.
       key instead, because it has no Bubble id of its own and a column null on
       every row anchors nothing
 - [ ] Overbooking is prevented by a **database constraint**, not an
-      application-level check-then-insert. While every session is 1:1 a uniqueness
-      constraint suffices; group sessions make the invariant capacity rather than
-      exclusivity, and the constraint has to change with it
+      application-level check-then-insert. Legacy did the check-then-insert, and
+      **mostly in the frontend** — so it could be bypassed by any path that did
+      not go through that screen, and could not see a second person clicking at
+      the same moment. The constraint moves the control from the browser to the
+      database, which is as far as it can move.
+      **Two invariants, not one, and only the first exists today:**
+      *a mentor cannot be in two sessions at once* — an `EXCLUDE` on
+      `(mentor_id, window)`, which **group sessions do not change**, because a
+      group session is still one row, one mentor, one window; and *a session
+      cannot hold more attendees than it offers* — a count of
+      `session_participants` against a mentor-supplied capacity, which does not
+      exist yet and ships with group sessions. Earlier wording said group made
+      the invariant "capacity rather than exclusivity"; it makes it capacity **as
+      well as** exclusivity, and reading it the other way would retire a
+      constraint that stays correct
 - [ ] Times stored UTC, with the mentor's IANA zone as a separate column
 - [ ] *(once payments exist)* Money is integer minor units with a currency; no
       float touches an amount
