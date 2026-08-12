@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.domain.transform import UserRow
 from app.domain.transform.availability import AvailabilityPlan
 from app.domain.transform.profiles import ProfilePlan
+from app.domain.transform.sessions import SessionPlan
 from app.infra.etl.profiles import ProfileCounts
 
 
@@ -418,3 +419,157 @@ def _unaccounted(plan: AvailabilityPlan) -> tuple[str, ...]:
     """
     accounted = set(plan.accounted_for())
     return tuple(sorted(anchor for anchor in plan.source_rule_ids if anchor not in accounted))
+
+
+# --------------------------------------------------------------------------
+# Sessions
+# --------------------------------------------------------------------------
+
+#: The four derived tables. None carries `legacy_bubble_id`: participants and
+#: events are derived from columns of their parent Thing, and the two type
+#: tables have no legacy source at all — they are created by the migration.
+#: So a count is all there is, exactly as it is for M2's three junctions.
+SESSION_COUNTS: dict[str, str] = {
+    "session_types": "SELECT count(*) FROM session_types",
+    "session_type_booking_configs": "SELECT count(*) FROM session_type_booking_configs",
+    "session_participants": "SELECT count(*) FROM session_participants",
+    "session_events": "SELECT count(*) FROM session_events",
+}
+
+#: Migrated sessions with no session type. **Zero is the precondition for making
+#: `sessions.session_type_id` NOT NULL** in a later revision, and nothing else in
+#: the gate would notice it failing — the column is nullable today, so a null
+#: lands looking entirely valid.
+SESSIONS_WITHOUT_TYPE = (
+    "SELECT legacy_bubble_id FROM sessions "
+    "WHERE legacy_bubble_id IS NOT NULL AND session_type_id IS NULL "
+    "ORDER BY legacy_bubble_id"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionReconciliation:
+    """Five tables, and the checks unique to a phase that merges two Things.
+
+    **Two identities, not one.** Every prior phase had a single source
+    collection. Sessions has two, and they do not collapse: a tracker merged
+    into its booking is *absorbed* rather than loaded, so one identity per
+    source is the only shape that can tell "this row was accounted for" from
+    "this row was counted twice".
+    """
+
+    checks: tuple[TableCheck, ...]
+    #: Source bookings in no outcome at all. A booking is loaded or dropped;
+    #: a row in neither vanished without anybody deciding it should.
+    unaccounted_bookings: tuple[str, ...] = ()
+    #: Source trackers in no outcome at all — absorbed, loaded, quarantined or
+    #: dropped.
+    unaccounted_trackers: tuple[str, ...] = ()
+    #: Migrated sessions carrying no `session_type_id`.
+    sessions_without_type: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return (
+            all(check.ok for check in self.checks)
+            and not self.unaccounted_bookings
+            and not self.unaccounted_trackers
+            and not self.sessions_without_type
+        )
+
+    def report(self) -> str:
+        lines = [
+            f"{'ok' if check.ok else 'FAIL':4} {check.table:30} "
+            f"expected {check.expected:5}  loaded {check.loaded:5}  "
+            f"missing {len(check.missing):3}  stamped-by-importer "
+            f"{len(check.wrong_timestamps):3}"
+            for check in self.checks
+        ]
+        for check in self.checks:
+            lines.extend(f"     missing from {check.table}: {anchor}" for anchor in check.missing)
+            lines.extend(
+                f"     timestamp rewritten in {check.table}: {anchor}"
+                for anchor in check.wrong_timestamps
+            )
+        lines.extend(
+            f"FAIL unaccounted source booking: {anchor}" for anchor in self.unaccounted_bookings
+        )
+        lines.extend(
+            f"FAIL unaccounted source tracker: {anchor}" for anchor in self.unaccounted_trackers
+        )
+        lines.extend(
+            f"FAIL session has no session type: {anchor}" for anchor in self.sessions_without_type
+        )
+        return "\n".join(lines)
+
+
+async def reconcile_sessions(
+    connection: AsyncConnection, plan: SessionPlan
+) -> SessionReconciliation:
+    """Compare all five session tables against the plan that produced them.
+
+    Expected comes from the plan; actual comes from the database. Neither
+    re-derives the other — a check whose two sides come from the same place
+    agrees with itself and proves nothing. That is also why the loader returns
+    no counts: what landed is read back here.
+
+    Only ``sessions`` is checked by anchor and timestamp. The other four are
+    derived and carry neither, so a count is the whole of what can be asserted.
+    """
+    expected = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in plan.sessions}
+    result = await connection.execute(text(STAMPED.format("sessions")))
+    actual = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in result.mappings()}
+
+    checks: list[TableCheck] = [
+        TableCheck(
+            table="sessions",
+            expected=len(expected),
+            loaded=len(actual),
+            missing=tuple(sorted(set(expected) - set(actual))),
+            wrong_timestamps=tuple(
+                sorted(
+                    anchor
+                    for anchor, stamps in expected.items()
+                    if anchor in actual and actual[anchor] != stamps
+                )
+            ),
+        )
+    ]
+
+    wanted_counts = {
+        "session_types": len(plan.session_types),
+        "session_type_booking_configs": len(plan.session_types),
+        "session_participants": len(plan.participants),
+        "session_events": len(plan.events),
+    }
+    for table, query in SESSION_COUNTS.items():
+        count = await connection.execute(text(query))
+        checks.append(
+            TableCheck(table=table, expected=wanted_counts[table], loaded=count.scalar_one())
+        )
+
+    without_type = await connection.execute(text(SESSIONS_WITHOUT_TYPE))
+
+    return SessionReconciliation(
+        checks=tuple(checks),
+        unaccounted_bookings=_unaccounted_of(
+            plan.source_booking_ids, plan.accounted_for_bookings()
+        ),
+        unaccounted_trackers=_unaccounted_of(
+            plan.source_tracker_ids, plan.accounted_for_trackers()
+        ),
+        sessions_without_type=tuple(row.legacy_bubble_id for row in without_type),
+    )
+
+
+def _unaccounted_of(source: Sequence[str], accounted: Sequence[str]) -> tuple[str, ...]:
+    """Source anchors the plan reached no decision about.
+
+    One function for both identities rather than two nearly-identical ones —
+    ``_unaccounted`` for availability was written twice in an earlier draft and
+    the second copy returned duplicated anchors while claiming in its docstring
+    to do this. Every test passed, because none of them gave the plan a source
+    list to be missing from.
+    """
+    decided = set(accounted)
+    return tuple(sorted(anchor for anchor in source if anchor not in decided))

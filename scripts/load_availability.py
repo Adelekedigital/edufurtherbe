@@ -37,6 +37,7 @@ from app.infra.etl.cli import (
     EXIT_OK,
     EXIT_REFUSED,
     EXIT_UNRESOLVED,
+    ReconciliationError,
     configure_streams,
     open_export,
 )
@@ -56,10 +57,6 @@ def build_plan(directory: Path) -> AvailabilityPlan:
     return plan_availability(
         users, settings_records, extra_records, export_timezone=EXPORT_TIMEZONE
     )
-
-
-class ReconciliationError(RuntimeError):
-    """Raised inside the transaction so the context manager rolls it back."""
 
 
 async def load(plan: AvailabilityPlan) -> None:
