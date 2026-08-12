@@ -685,3 +685,14 @@ async def test_a_soft_deleted_mentor_profile_has_no_public_slots(
         )
 
     assert (await api_client.get(slots_url(mentor, session_type))).status_code == 404
+
+
+async def test_a_soft_deleted_user_has_no_public_slots(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The same second soft delete, on the other public endpoint."""
+    mentor, session_type = await make_mentor(db_engine, "deleted-user")
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+
+    assert (await api_client.get(slots_url(mentor, session_type))).status_code == 404

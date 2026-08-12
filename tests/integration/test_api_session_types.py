@@ -316,3 +316,21 @@ async def test_an_offering_with_no_booking_config_is_absent(
     names = [o["name"] for o in (await api_client.get(url(mentor))).json()["data"]]
 
     assert names == ["Configured"]
+
+
+async def test_a_soft_deleted_user_is_not_public(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The **second** soft delete, on the table beside the one already checked.
+
+    A mentor is a `users` row and a `mentor_profiles` row, each with its own
+    `deleted_at`, and nothing ties them together: deleting the user leaves the
+    profile approved, listed and undeleted. The predicate checked the profile's
+    and published the offerings of a user who no longer exists.
+    """
+    mentor = await make_public_mentor(db_engine, "deleted-user")
+    await add_session_type(db_engine, mentor)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+
+    assert (await api_client.get(url(mentor))).status_code == 404

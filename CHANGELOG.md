@@ -43,6 +43,13 @@ released. A tag with no matching section here fails the release job.
   did — on the full gate, naming both halves of the fix. The set is now empty
   rather than removed, because the next table to arrive before its reader
   belongs in it.
+- **Two soft deletes guard a public mentor, not one.** A mentor is a `users`
+  row and a `mentor_profiles` row, each with its own `deleted_at`, and nothing
+  ties them — deleting either leaves the other approved, listed and undeleted.
+  Both public endpoints published mentors who had been removed. The user's
+  half is an `EXISTS` rather than a join comparison, so it is correct wherever
+  the predicate is spread and cannot be defeated by a caller who forgot to
+  join `users`.
 - **The public visibility rule now lives in exactly one place.**
   `infra/db/public_visibility.py` holds the predicates both public endpoints
   scope by, and the mutation batch proves it: dropping either half of
