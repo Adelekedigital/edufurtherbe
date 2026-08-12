@@ -31,9 +31,9 @@ from datetime import date, datetime, tzinfo
 from typing import Any
 
 from app.domain.bubble import (
-    BUBBLE_ID,
     CREATED_AT,
     MODIFIED_AT,
+    legacy_anchor,
     normalise_list,
     parse_timestamp,
 )
@@ -190,10 +190,6 @@ def _lookup[T](table: dict[str, T], raw: Any, *, field: str, bubble_id: str) -> 
     return table[key]
 
 
-def _bubble_id(record: dict[str, Any]) -> str:
-    return str(record.get(BUBBLE_ID) or record.get("unique id") or "")
-
-
 def _text(record: dict[str, Any], field: str) -> str | None:
     value = str(record.get(field) or "").strip()
     return value or None
@@ -331,7 +327,7 @@ def to_education(
     read through, and there is no correct answer without it — so the type says
     so, and mypy refuses the call that would have shipped the bug.
     """
-    bubble_id = _bubble_id(record)
+    bubble_id = legacy_anchor(record)
     school = _text(record, SCHOOL_FIELD)
     if not school:
         raise TransformError(bubble_id, f"{SCHOOL_FIELD}: required, and always kept")
@@ -370,7 +366,7 @@ def to_mentee_goal(
     unmapped goal is preserved rather than refused; an unmapped *service* still
     raises, because there is no raw column to catch it.
     """
-    bubble_id = _bubble_id(record)
+    bubble_id = legacy_anchor(record)
     raw_goal = _text(record, GOAL_DEGREE_FIELD)
     slug = PROGRAM_DEGREE_LEVELS.get((raw_goal or "").strip().casefold())
 
@@ -402,7 +398,7 @@ def to_mentor_profile(
     approved, so they paused themselves. PR 42's migration records this as an
     obligation on the transform precisely because the column cannot express it.
     """
-    bubble_id = _bubble_id(record)
+    bubble_id = legacy_anchor(record)
     approval = _lookup(
         APPROVALS, record.get(APPROVED_FIELD), field=APPROVED_FIELD, bubble_id=bubble_id
     )
@@ -474,7 +470,7 @@ def to_award(
     block a cutover. The same shape as loading a profile without an unresolved
     country rather than dropping the profile.
     """
-    bubble_id = _bubble_id(record)
+    bubble_id = legacy_anchor(record)
     institution = _text(record, AWARD_INSTITUTION_FIELD)
     title = _text(record, AWARD_TITLE_FIELD)
     if not institution or not title:
@@ -564,7 +560,7 @@ def _links(user_records: list[dict[str, Any]], field: str) -> dict[str, str]:
     """
     owner: dict[str, str] = {}
     for record in user_records:
-        user_id = str(record.get(BUBBLE_ID) or record.get("unique id") or "")
+        user_id = legacy_anchor(record)
         for thing_id in normalise_list(record.get(field)):
             owner[thing_id] = user_id
     return owner
@@ -604,7 +600,7 @@ def plan_profiles(
 
     def owner_of(record: dict[str, Any], linked: dict[str, str]) -> str | None:
         """The user-side link, with ``Creator`` checked against it."""
-        thing_id = _bubble_id(record)
+        thing_id = legacy_anchor(record)
         creator = str(record.get(CREATOR_FIELD) or "").strip()
         user_id = linked.get(thing_id)
         if user_id is None:
@@ -624,7 +620,7 @@ def plan_profiles(
         for record in records:
             user_id = owner_of(record, linked)
             if user_id is None:
-                orphans.append(_bubble_id(record))
+                orphans.append(legacy_anchor(record))
                 continue
             try:
                 rows.append(build(record, user_id))
@@ -658,13 +654,13 @@ def plan_profiles(
     for record in service_records:
         user_id = owner_of(record, service_owner)
         if user_id is None:
-            service_orphans.append(_bubble_id(record))
+            service_orphans.append(legacy_anchor(record))
             continue
         try:
             offered[user_id] = service_slugs(
                 record.get(MENTOR_SERVICES_FIELD),
                 field=MENTOR_SERVICES_FIELD,
-                bubble_id=_bubble_id(record),
+                bubble_id=legacy_anchor(record),
             )
         except TransformError as exc:
             errors.append(str(exc))
@@ -689,7 +685,7 @@ def plan_profiles(
     for record in award_records:
         creator = str(record.get(CREATOR_FIELD) or "").strip()
         if creator not in known:
-            award_orphans.append(_bubble_id(record))
+            award_orphans.append(legacy_anchor(record))
             continue
         try:
             awards.append(

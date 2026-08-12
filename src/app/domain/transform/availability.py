@@ -48,7 +48,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from app.domain.bubble import parse_timestamp
+from app.domain.bubble import legacy_anchor, parse_timestamp
 from app.domain.enums import AvailabilityExceptionType
 from app.domain.transform.identity import (
     DEFAULT_TIMEZONE,
@@ -474,7 +474,7 @@ def owner_timezones(user_records: list[dict[str, Any]]) -> tuple[dict[str, str],
     zones: dict[str, str] = {}
     errors: list[str] = []
     for record in user_records:
-        bubble_id = _bubble_id(record)
+        bubble_id = legacy_anchor(record)
         try:
             zones[bubble_id] = _resolve_timezone(record.get(USER_TIMEZONE_FIELD), bubble_id)
         except TransformError as exc:
@@ -485,7 +485,7 @@ def owner_timezones(user_records: list[dict[str, Any]]) -> tuple[dict[str, str],
 def mentor_owners(user_records: list[dict[str, Any]]) -> set[str]:
     """Users carrying a ``Mentor`` link, which is what a mentor profile is made
     from — so it is exactly the set whose rows can satisfy the foreign key."""
-    return {_bubble_id(record) for record in user_records if record.get(MENTOR_LINK_FIELD)}
+    return {legacy_anchor(record) for record in user_records if record.get(MENTOR_LINK_FIELD)}
 
 
 def plan_availability(
@@ -520,7 +520,7 @@ def plan_availability(
     errors: list[str] = []
 
     for record in calendar_settings:
-        bubble_id = _bubble_id(record)
+        bubble_id = legacy_anchor(record)
         owner = record.get(CREATOR_FIELD)
         if not owner:
             dropped.append(DroppedRow(bubble_id, "no Creator, so nobody can be said to own it"))
@@ -634,7 +634,7 @@ def plan_availability(
 
     exceptions: list[AvailabilityExceptionRow] = []
     for record in calendar_extra:
-        bubble_id = _bubble_id(record)
+        bubble_id = legacy_anchor(record)
         owner = record.get(CREATOR_FIELD)
         if not owner or str(owner) not in mentor_bubble_ids:
             dropped.append(DroppedRow(bubble_id, "exception has no attributable mentor"))
@@ -671,7 +671,7 @@ def plan_availability(
 
     merged_rules, merge_notes = _merge_windows(rules)
     return AvailabilityPlan(
-        source_rule_ids=tuple(_bubble_id(record) for record in calendar_settings),
+        source_rule_ids=tuple(legacy_anchor(record) for record in calendar_settings),
         rules=merged_rules,
         exceptions=tuple(exceptions),
         quarantined=tuple(quarantined),
@@ -682,7 +682,3 @@ def plan_availability(
         midnight_crossing=tuple(midnight),
         errors=tuple(errors) + errors_from_zones,
     )
-
-
-def _bubble_id(record: dict[str, Any]) -> str:
-    return str(record.get("bubble_id") or record.get("unique id") or "")

@@ -67,6 +67,33 @@ BUBBLE_ID = "bubble_id"
 CREATED_AT = "created_at"
 MODIFIED_AT = "modified_at"
 
+#: The export's own id key, before an adapter renames it to :data:`BUBBLE_ID`.
+#: Named for the same reason the three above are.
+EXPORT_ID = "unique id"
+
+
+def legacy_anchor(record: Mapping[str, Any]) -> str:
+    """The anchor a record carries, from a canonical record or a raw one.
+
+    **Lives here because it was defined twice**, once in
+    ``transform/availability.py`` and once in ``transform/profiles.py``, and a
+    third copy was about to be written for sessions. The two were behaviourally
+    identical and textually different — one used :data:`BUBBLE_ID`, the other
+    retyped ``"bubble_id"`` as a literal, which is exactly the hazard the comment
+    above this describes. It happened to be right; the next one need not be.
+
+    The ``unique id`` fallback is what lets a transform take **raw** records, as
+    ``plan_availability`` and ``plan_sessions`` do: a canonical record has been
+    through an adapter and carries ``bubble_id``, a record read straight from the
+    export has not.
+
+    Returns ``""`` rather than raising, because a record with no anchor is a
+    thing the caller must decide about — dropping it with a reason is a mapping
+    decision, not a parse failure.
+    """
+    return str(record.get(BUBBLE_ID) or record.get(EXPORT_ID) or "")
+
+
 # Dropped before a record is written anywhere.
 #
 # These are **expired Cal.com managed-user tokens**, not live Google credentials
