@@ -666,3 +666,22 @@ async def test_the_default_start_resolves_in_the_mentors_zone_at_a_fixed_clock(
     assert first == dt.datetime(2026, 8, 20, 2, 0, tzinfo=dt.UTC), (
         "the default started on UTC's today and skipped the mentor's current evening"
     )
+
+
+async def test_a_soft_deleted_mentor_profile_has_no_public_slots(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The same gap, on the other public endpoint.
+
+    Both read through `mentor_is_public()`, so a missing `deleted_at` clause
+    published a removed mentor's calendar as well as their offerings. One
+    predicate, one fix, and a test on each endpoint so neither can drift back.
+    """
+    mentor, session_type = await make_mentor(db_engine, "soft-deleted")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE mentor_profiles SET deleted_at = now() WHERE user_id = :u"),
+            {"u": mentor},
+        )
+
+    assert (await api_client.get(slots_url(mentor, session_type))).status_code == 404

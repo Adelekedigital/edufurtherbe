@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.base import Base
 from app.infra.db.profile_store import get_mentor_profile, list_awards, list_education
+from app.infra.db.session_type_store import list_session_types
 from conftest import PROJECT_ROOT
 
 # `asyncio` is applied per test rather than to the module: the coverage check
@@ -51,11 +52,12 @@ EXEMPT = {"users"}
 #: did not need checking, only that nothing read them yet, so the honest response
 #: to a reader appearing is a case below rather than a wider set here.
 #:
-#: `session_types` re-populates it. M4's first pull request is schema only: there
-#: is no session store, no endpoint, and nothing anywhere that reads the table.
-#: It leaves this set in the pull request that gives it a reader, and the test
-#: below fails the moment one appears in `infra/db`.
-EXEMPT_UNTIL_READ: set[str] = {"session_types"}
+#: `session_types` re-populated it while M4 was schema only. It left this set the
+#: moment `session_type_store` appeared, exactly as the test below promised — the
+#: guard fired on the full gate and named the fix. The set is empty rather than
+#: deleted: the next table to arrive before its reader belongs here, and the
+#: mechanism only works if it stays.
+EXEMPT_UNTIL_READ: set[str] = set()
 
 
 async def seed_education(conn: Any, user_id: UUID) -> None:
@@ -89,6 +91,43 @@ async def seed_mentor_profile(conn: Any, user_id: UUID) -> None:
         ),
         {"u": user_id},
     )
+
+
+async def seed_session_types(conn: Any, user_id: UUID) -> None:
+    """One live offering and one deleted, both with a config and a public mentor.
+
+    The mentor has to be approved **and** listed or the read refuses for a reason
+    that has nothing to do with soft deletion — a fixture failing for the wrong
+    reason is how this test would pass while the predicate was missing.
+    """
+    await conn.execute(
+        text(
+            "INSERT INTO mentor_profiles (user_id, headline, approval_status, listing_status) "
+            "VALUES (:u, 'M', 'approved', 'listed') "
+            "ON CONFLICT (user_id) DO UPDATE SET approval_status = 'approved', "
+            "listing_status = 'listed'"
+        ),
+        {"u": user_id},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO session_types (mentor_user_id, name, deleted_at) VALUES "
+            "(:u, 'LIVE', NULL), (:u, 'DELETED', now())"
+        ),
+        {"u": user_id},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO session_type_booking_configs (session_type_id, duration_minutes) "
+            "SELECT id, 45 FROM session_types WHERE mentor_user_id = :u"
+        ),
+        {"u": user_id},
+    )
+
+
+async def read_session_types_for(session: AsyncSession, user_id: UUID) -> list[str]:
+    rows = await list_session_types(session, user_id)
+    return [] if rows is None else [str(row["name"]) for row in rows]
 
 
 async def read_education(session: AsyncSession, user_id: UUID) -> list[str]:
@@ -177,6 +216,7 @@ CASES: list[Case] = [
         read_availability_exceptions,
         ["2026-03-01"],
     ),
+    ("session_types", seed_session_types, read_session_types_for, ["LIVE"]),
 ]
 
 

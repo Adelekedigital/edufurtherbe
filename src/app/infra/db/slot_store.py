@@ -44,11 +44,12 @@ from app.domain.availability import (
     WeeklyWindow,
     bookable,
 )
-from app.domain.enums import ApprovalStatus, AvailabilityExceptionType, ListingStatus
+from app.domain.enums import AvailabilityExceptionType
 from app.infra.db.models.availability import AvailabilityException, AvailabilityRule
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session, SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
+from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 
 __all__ = ["list_slots"]
 
@@ -85,11 +86,8 @@ def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
         .join(User, User.id == SessionType.mentor_user_id)
         .where(
             SessionType.id == session_type_id,
-            SessionType.mentor_user_id == user_id,
-            SessionType.is_active.is_(True),
-            SessionType.deleted_at.is_(None),
-            MentorProfile.approval_status == ApprovalStatus.APPROVED,
-            MentorProfile.listing_status == ListingStatus.LISTED,
+            *session_type_is_live(user_id),
+            *mentor_is_public(),
         )
     )
 
