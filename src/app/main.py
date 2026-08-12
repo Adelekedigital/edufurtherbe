@@ -14,6 +14,7 @@ from app.api.routes import (
     catalogue,
     health,
     sessions,
+    slots,
     user_attributes,
     users,
 )
@@ -130,6 +131,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(catalogue.router)
     application.include_router(user_attributes.router)
     application.include_router(availability.router)
+    application.include_router(slots.router)
     application.include_router(sessions.router)
     application.include_router(admin.router)
     return application

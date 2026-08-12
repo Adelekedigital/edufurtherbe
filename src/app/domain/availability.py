@@ -43,13 +43,28 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.domain.enums import AvailabilityExceptionType
 
 __all__ = [
+    "DEFAULT_PROJECTION_DAYS",
+    "MAX_PROJECTION_DAYS",
     "DatedException",
     "UnknownTimezoneError",
     "UtcInterval",
     "WeeklyWindow",
+    "bookable",
     "normalise_timezone",
     "project",
 ]
+
+
+#: The widest span one projection may cover. Every day in the range is resolved,
+#: subtracted and sliced on demand, and the endpoint that does it is public — so
+#: without a bound a single request can ask the server to compute a decade.
+#: Measured at this bound: 1,792 slots and 4ms for the worst realistic shape.
+MAX_PROJECTION_DAYS = 56
+
+#: How far ahead a caller who does not say wants to look. A week is the booking
+#: horizon most people actually use, and it keeps the default answer small; a
+#: client planning further out asks for further out.
+DEFAULT_PROJECTION_DAYS = 7
 
 
 class UnknownTimezoneError(ValueError):
@@ -164,6 +179,95 @@ def project(
     ]
     blocked = _from_exceptions(exceptions, AvailabilityExceptionType.BLOCK, start, end)
     return tuple(_subtract(_merge(available), _merge(blocked)))
+
+
+def bookable(
+    *,
+    rules: Sequence[WeeklyWindow],
+    exceptions: Sequence[DatedException],
+    busy: Sequence[UtcInterval],
+    duration_minutes: int,
+    min_notice_minutes: int,
+    now: dt.datetime,
+    start: dt.date,
+    end: dt.date,
+) -> tuple[UtcInterval, ...]:
+    """Slots someone could actually book, over ``[start, end)``.
+
+    Declared availability minus what is already taken, minus anything too soon
+    to book, sliced into spans of ``duration_minutes``.
+
+    **``busy`` is intervals, not sessions.** This module knows nothing about a
+    session row, and the next thing to subtract is Google free/busy, which
+    arrives as intervals and nothing else. One parameter serves both, and the
+    caller is the only place that knows a session's window is
+    ``starts_at`` plus its *stored* duration rather than its session type's
+    current one.
+
+    **The mentor's window defines the grid, and a booking never moves it.**
+    Slots start at the window's start and step by the duration, so a 09:00-12:00
+    window at 45 minutes offers 09:00, 09:45, 10:30 and 11:15 — and never 09:15.
+    A session ending at 09:20 does **not** open a slot at 09:20: it removes the
+    slots it overlaps and leaves the rest where they were. Re-anchoring to each
+    free run instead would mean booking one session silently changes the start
+    times offered for every other, which is confusing to a mentor reading their
+    own day and unstable for a client rendering it. A slot must also fit
+    *whole*: the tail of a window too short for one more session yields nothing
+    rather than a slot running past the time the mentor declared.
+
+    **A block is not a booking, and it does re-grid.** Exceptions are handled by
+    `project`, which returns *declared availability* — a mentor blocking
+    10:00-10:30 has redefined their day, and the window that comes back is the
+    one they now declare. Consuming a slot and redefining the window are
+    different acts, and only the second changes what the grid is anchored to.
+
+    **Notice moves the floor, not the grid.** A slot is dropped when it starts
+    before ``now + min_notice_minutes``; it is not re-aligned to that moment.
+    Aligning to the cutoff would make the offered times drift minute by minute
+    as the clock moves, so two clients asking seconds apart would see different
+    slots for the same free window.
+
+    That cutoff is also what keeps the past out. With zero notice it is ``now``,
+    so a window that has already begun offers only the slots still ahead of it —
+    which is why a *missed* session needs no special handling anywhere: its time
+    has passed, and passed time is never offered.
+
+    Stepping happens in UTC, on the instants ``project`` returned. A step in
+    local time would gain or lose an hour twice a year, silently and only for
+    the mentors whose zone observes it.
+    """
+    # A non-positive duration would step forever. It is `NOT NULL` in the
+    # database and this is still checked, because `scripts/` constructs domain
+    # types directly and no gate sees it — the same reason `WeeklyWindow`
+    # states its precondition rather than assuming it.
+    if duration_minutes <= 0:
+        return ()
+
+    taken = _merge(busy)
+    step = dt.timedelta(minutes=duration_minutes)
+    cutoff = now + dt.timedelta(minutes=min_notice_minutes)
+
+    slots: list[UtcInterval] = []
+    for window in project(rules=rules, exceptions=exceptions, start=start, end=end):
+        cursor = window.start
+        while cursor + step <= window.end:
+            slot = UtcInterval(cursor, cursor + step)
+            if cursor >= cutoff and not _overlaps(slot, taken):
+                slots.append(slot)
+            cursor += step
+    return tuple(slots)
+
+
+def _overlaps(slot: UtcInterval, taken: Sequence[UtcInterval]) -> bool:
+    """Whether anything already booked runs across this slot.
+
+    Half-open on both sides, so a session ending at 09:45 and a slot starting at
+    09:45 do not overlap — the same `[)` the exclusion constraint, the weekly
+    windows and the exception `daterange` all use. Getting this boundary wrong
+    either loses a bookable slot or offers one that is taken, and the two look
+    equally plausible from outside.
+    """
+    return any(booked.start < slot.end and slot.start < booked.end for booked in taken)
 
 
 # --------------------------------------------------------------------------

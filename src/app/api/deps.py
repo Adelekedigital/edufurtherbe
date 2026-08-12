@@ -7,6 +7,7 @@ classes get bound to what the routes ask for.
 
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
@@ -52,6 +53,7 @@ from app.core.errors import (
     ValidationError,
 )
 from app.domain.assets import AssetKind, object_path
+from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
 from app.domain.enums import AdminRole
 from app.domain.images import MAX_UPLOAD_BYTES, process
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
@@ -111,6 +113,7 @@ from app.infra.db.session_store import (
     list_session_events,
     list_sessions,
 )
+from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
 #: How long a storage call may take before the request gives up.
@@ -931,6 +934,69 @@ async def viewer_session_events(
         raise NotFoundError("no such session")
     return rows
 
+
+# --------------------------------------------------------------------------
+# Bookable slots
+# --------------------------------------------------------------------------
+#
+# **The one dependency in this module with no viewer.** Every other read here
+# resolves a caller and scopes to them; this one is public, and what stands in
+# place of a viewer is the mentor's own state — approved *and* listed, checked
+# inside the query. The absence of `CurrentUserDep` below is the whole
+# authorization decision, so it is stated rather than left to be noticed.
+
+
+async def mentor_slots(
+    user_id: UUID,
+    session: SessionDep,
+    session_type_id: Annotated[UUID, Query(description="Which offering to price the slots for.")],
+    start: Annotated[
+        dt.date | None,
+        Query(description="First day, in the mentor's timezone. Defaults to their today."),
+    ] = None,
+    end: Annotated[
+        dt.date | None,
+        Query(
+            description=(
+                "Day after the last, exclusive. Defaults to "
+                f"{DEFAULT_PROJECTION_DAYS} days after `start`."
+            )
+        ),
+    ] = None,
+) -> list[UtcInterval]:
+    """Slots someone could book, or a 404 that says nothing about why.
+
+    **`now` is read here and passed down**, rather than inside the store. The
+    notice window makes this answer depend on the clock, and a function reading
+    its own clock cannot be tested against a DST boundary without moving the
+    machine's timezone.
+
+    **The dates are not defaulted or validated here**, though this is the edge
+    and that is where validation usually belongs. An omitted `start` means the
+    mentor's today, which needs the mentor's timezone — so the default is only
+    knowable after the query that finds them, and a range's legality depends on
+    the default. Splitting the two would put half a rule in each layer.
+
+    `session_type_id` stays **required**. A slot's length and notice window come
+    from the offering, so "when is this mentor free" has no answer without one.
+    Falling back to "their only offering" would break every caller that omitted
+    it on the day a mentor adds a second — someone else's edit breaking an
+    integration that did not change.
+    """
+    slots = await list_slots(
+        session,
+        user_id,
+        session_type_id,
+        start=start,
+        end=end,
+        now=dt.datetime.now(dt.UTC),
+    )
+    if slots is None:
+        raise NotFoundError("no such bookable session type")
+    return slots
+
+
+SlotsDep = Annotated[list[UtcInterval], Depends(mentor_slots)]
 
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
