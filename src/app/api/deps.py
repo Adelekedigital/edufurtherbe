@@ -98,6 +98,19 @@ from app.infra.db.profile_writer import (
     upsert_goal,
     upsert_profile,
 )
+
+# `get_session` is aliased: this module already has one, and it is the **database
+# session** dependency at line 142. Two callables with that name in one file is a
+# collision a reader resolves by scrolling, and the wrong one is a plausible
+# mistake rather than an obvious error — `bubble_id` shadowed a local the same
+# way in the M4 transform and raised `UnboundLocalError` far from the edit.
+from app.infra.db.session_store import (
+    get_session as get_session_row,
+)
+from app.infra.db.session_store import (
+    list_session_events,
+    list_sessions,
+)
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
 #: How long a storage call may take before the request gives up.
@@ -861,3 +874,64 @@ UpdatedAvailabilityRuleDep = Annotated[bool, Depends(updated_availability_rule)]
 DeletedAvailabilityRuleDep = Annotated[bool, Depends(deleted_availability_rule)]
 CreatedAvailabilityExceptionDep = Annotated[UUID, Depends(created_availability_exception)]
 DeletedAvailabilityExceptionDep = Annotated[bool, Depends(deleted_availability_exception)]
+
+
+# --------------------------------------------------------------------------
+# Sessions
+# --------------------------------------------------------------------------
+#
+# **Two different scopes, and the difference is the URL.**
+#
+# The list is addressed by user — `/users/{id}/sessions` — so it takes
+# `TargetUserDep`, and an admin reviewing somebody's sessions is the same
+# implementation as that person reading their own.
+#
+# The single session and its events are addressed by session id, with no user in
+# the path. There is no target user to resolve, so the scope is the **caller**:
+# the query asks for a session this caller is a party to, and a session they are
+# not party to is indistinguishable from one that does not exist. An admin is
+# **not** admitted here — `/sessions/{id}` carries no user whose records an admin
+# could be said to be reviewing, and widening it later is additive where
+# narrowing would be breaking.
+
+
+async def target_sessions(
+    user_id: TargetUserDep,
+    session: SessionDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """One page of the sessions a user is a party to."""
+    return await list_sessions(
+        session, user_id, limit=clamp_limit(limit), cursor=decode_cursor(cursor)
+    )
+
+
+async def viewer_session(
+    session_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
+    """One session, or a 404 that does not say which kind of 404 it is."""
+    row = await get_session_row(session, session_id, user["id"])
+    if row is None:
+        raise NotFoundError("no such session")
+    return row
+
+
+async def viewer_session_events(
+    session_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    """One session's history, scoped through the session itself.
+
+    ``None`` from the store means the session is not the caller's, which is a
+    404. An **empty list** means it is theirs and has no history — a different
+    claim, and one that must not be used to answer the first case.
+    """
+    rows = await list_session_events(session, session_id, user["id"])
+    if rows is None:
+        raise NotFoundError("no such session")
+    return rows
+
+
+SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
+SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
+SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events)]
