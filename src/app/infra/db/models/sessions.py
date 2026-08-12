@@ -130,6 +130,32 @@ class SessionType(TimestampMixin, Base):
             "mentor_user_id",
             postgresql_where=text("is_active AND deleted_at IS NULL"),
         ),
+        # **One live session type per mentor per name.**
+        #
+        # A product invariant first: a mentor holding two live types both called
+        # "Document Review" is not a state worth being able to represent, and a
+        # mentee choosing between them could not tell them apart.
+        #
+        # It is also the ETL's idempotency key, and that is why it lands now
+        # rather than later. `session_types` is the only migrated table with no
+        # `legacy_bubble_id` and no natural key, so a re-run — which is the
+        # recovery plan, not the exception — would create a second type per
+        # mentor. Delete-then-insert is not available either: `sessions.
+        # session_type_id` references it with `RESTRICT`, so on the second run
+        # the delete fails.
+        #
+        # Partial on `deleted_at IS NULL` so a retired type never blocks a new
+        # one with the same name. **`ON CONFLICT` must repeat that predicate
+        # verbatim** — omitting it raises `InvalidColumnReferenceError` rather
+        # than silently choosing another index, which is measured in
+        # `test_the_upsert_requires_the_index_predicate`.
+        Index(
+            "ix_session_types_mentor_name",
+            "mentor_user_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
 

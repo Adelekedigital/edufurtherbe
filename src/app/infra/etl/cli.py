@@ -37,6 +37,21 @@ EXIT_REFUSED = 1
 EXIT_UNRESOLVED = 2
 
 
+class ReconciliationError(RuntimeError):
+    """Raised inside the load transaction so the context manager rolls it back.
+
+    **Here rather than in each loader script.** It began in
+    ``load_availability.py`` and the sessions loader needed the same class, which
+    is the moment a second copy gets written — two exception types with one name
+    and one meaning, where ``except ReconciliationError`` in a future runner
+    would catch one and miss the other. Settled decision #43, caught before the
+    copy existed rather than after.
+
+    It lives beside the exit codes because it is the same kind of thing: part of
+    the contract between a loader script and whoever reads its result.
+    """
+
+
 def configure_streams() -> None:
     """Make the console survive the data.
 
