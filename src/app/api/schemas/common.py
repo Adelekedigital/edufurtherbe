@@ -53,14 +53,22 @@ class Page[T](BaseModel):
     )
 
 
-def encode_cursor(display_name: str, row_id: UUID) -> str:
+def encode_cursor(sort_key: str, row_id: UUID) -> str:
     """The keyset position, as one opaque token.
 
     Base64 of the two ordering columns. Opaque is not security — anyone can
     decode it — it is a contract: a client that cannot read the cursor cannot
     build one, so the encoding stays ours to change.
+
+    **``sort_key`` rather than ``display_name``.** ADR 0016's amendment makes
+    this general: the id alone is the cursor when display order *is* id order,
+    and otherwise the cursor is the sort column plus the id. The catalogues sort
+    by name and sessions sort by ``starts_at``, so the parameter is whatever
+    column the list is ordered on — rendered as a string, because the token is
+    text either way. Naming it for the first caller would have made the second
+    one pass a timestamp to something called a display name.
     """
-    raw = f"{display_name}\x00{row_id}".encode()
+    raw = f"{sort_key}\x00{row_id}".encode()
     return base64.urlsafe_b64encode(raw).decode()
 
 
@@ -74,8 +82,8 @@ def decode_cursor(cursor: str | None) -> tuple[str, UUID] | None:
     if cursor is None:
         return None
     try:
-        name, _, row_id = base64.urlsafe_b64decode(cursor.encode()).decode().partition("\x00")
-        return name, UUID(row_id)
+        sort_key, _, row_id = base64.urlsafe_b64decode(cursor.encode()).decode().partition("\x00")
+        return sort_key, UUID(row_id)
     except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise ValidationError("cursor is not a cursor this endpoint issued") from exc
 

@@ -12,6 +12,44 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Reading sessions — three endpoints, all scoped by the people in the session.**
+  `GET /users/{id}/sessions` pages a user's sessions newest first,
+  `GET /sessions/{id}` reads one, and `GET /sessions/{id}/events` reads its
+  history. "My sessions" means **either side**: a user may be a mentor and a
+  mentee, so the list is `mentor_id = :viewer OR mentee_id = :viewer` rather than
+  a required `?role=`. That parameter was nearly mandatory, on the belief the
+  either-party predicate could not use an index; measured at 20,000 rows it uses
+  `ix_sessions_starts_at` in 0.107 ms with no sequential scan, so the constraint
+  did not exist. An admin may list a user's sessions — the same grant that reads
+  their profile — but `GET /sessions/{id}` admits **parties only**, and a session
+  you are not in is a `404` indistinguishable from one that does not exist.
+  `session_events` carries no party column of its own, so it is reachable only
+  through an ownership check on its session, which returns `None` rather than an
+  empty list: `[]` would say "this session exists and has nothing in it", which
+  leaks the session.
+- **The M4 session tables** — `sessions`, `session_participants`,
+  `session_events`, `session_types`, `session_reschedules`. A Bubble booking and
+  its tracker are **one** `sessions` row, not two: the tracker records the same
+  meeting from the mentor's side, and loading both would double every mentor's
+  history. `session_events` is append-only and carries no `updated_at`, because a
+  fact that can be edited is not a log.
+- **A mentor cannot hold two overlapping live sessions** — `EXCLUDE USING gist`
+  on `(mentor_id, session_window(starts_at, duration_minutes))`, partial on the
+  live statuses. Legacy prevented double-booking with a check-then-insert, and
+  **mostly in the frontend**, so it could be bypassed by any path that skipped
+  that screen and could not see a second person clicking at the same moment. The
+  package's expression could not be built — `timestamptz + interval` is `STABLE`
+  and an index expression may not use one — so `session_window()` is a
+  project-owned `IMMUTABLE` function, earned by measurement across five zones and
+  three DST boundaries rather than asserted.
+- **The M4 transform** — bookings and trackers merged, participants derived, and
+  a `session_events` history reconstructed from `Modified Date`, which the export
+  shows is the last state transition rather than an edit clock. Two events per
+  session, never three. Trackers with no booking are quarantined rather than
+  guessed at.
+- **`load_sessions`** — the M4 loader, reconciling **inside** the transaction like
+  M3's. 177 sessions, 350 participants, 246 events and 5 session types from the
+  dev export, stable across a re-run.
 - **Settings refuse to start on a mixed set of Supabase credentials.** `DATABASE_URL`, `SUPABASE_URL` and `SUPABASE_JWKS_URL` each name a project, and nothing tied them together: point the DSN at staging while the Supabase values still name production and `provision_auth` reads users out of one project's database and creates real auth accounts in another's, reporting `created 43 … failed 0`. There is no bulk undo. Narrow deliberately — a value takes part only if a project ref can be read out of it, so a `localhost` DSN beside a real `SUPABASE_URL` stays legal, which is how everyone here develops.
 - **`ENV_FILE` selects the dotenv to read**, so switching environment is one file rather than five variables edited by hand — which is the shape the mistake above actually takes. Works in PowerShell, where the `set -a; . file` idiom does not and `$env:VAR = ...` persists for the rest of the session.
 - **`reconcile_availability`** — M3 was the only phase loading without one. It
