@@ -540,9 +540,25 @@ def test_both_accounting_identities_hold() -> None:
 
     Counting it as loaded balances the totals while a row has quietly vanished,
     which is the one failure a row count cannot show.
+
+    **Every term of both identities must be reached by this fixture.** The
+    bookings identity has two — loaded and dropped — and the dropped one was
+    unreachable here until `sb-2` was added: the fixture's only booking loaded,
+    so deleting that term left the *full* suite green. Dev cannot supply the
+    gap either, because all 105 bookings load and the two out-of-range durations
+    are trackers. A regression there would have passed every test, passed every
+    dev run, and first failed at the production extract, inside the freeze.
+
+    The direction is fail-safe — a missing term makes rows look *unaccounted*,
+    so the transform refuses rather than losing data quietly — but "it fails
+    loudly at the worst possible moment" is not a reason to leave it untested.
     """
     result = plan(
-        [booking(bubble_id="sb-1", SessionTracker="st-1")],
+        [
+            booking(bubble_id="sb-1", SessionTracker="st-1"),
+            # Dropped, not loaded: `ck_sessions_no_self_booking` would refuse it.
+            booking(bubble_id="sb-2", **{"Session Initiator": MENTOR}),
+        ],
         [
             tracker(bubble_id="st-1", SessionID="sb-1"),
             tracker(bubble_id="st-2"),
@@ -553,6 +569,11 @@ def test_both_accounting_identities_hold() -> None:
 
     assert set(result.accounted_for_bookings()) == set(result.source_booking_ids)
     assert set(result.accounted_for_trackers()) == set(result.source_tracker_ids)
+
+    # Counts, not only sets. A term that returns nothing still satisfies set
+    # equality when no fixture row reaches it — which is exactly how the dropped
+    # term stayed unpinned.
+    assert len(result.accounted_for_bookings()) == 2
     assert len(result.accounted_for_trackers()) == 4
 
     # **The session count is part of the identity, not a separate concern.**
