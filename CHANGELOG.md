@@ -12,6 +12,57 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Bookable slots — the first public endpoint, and the first read with no
+  viewer.** `GET /users/{id}/availability/slots?session_type_id=…&start=…&end=…`
+  returns when a mentor could actually take a session of that type: declared
+  availability, minus everything already booked, minus anything inside the
+  offering's notice window, sliced into spans of its duration. No token is
+  required — a mentee compares mentors before signing up.
+
+  **`start` and `end` are optional**, so a browse page asks
+  `?session_type_id=…` and nothing else. `start` defaults to **the mentor's**
+  today and `end` to a week after it. It cannot default to the caller's today:
+  there is no token, so no profile and no timezone, and IP or `Accept-Language`
+  guess wrong for anyone travelling. Resolving in UTC instead would look
+  equivalent and silently lose slots — a New York mentor at 02:00 UTC is at
+  21:00 the previous day, and their evening is still ahead of them.
+
+  `session_type_id` stays **required**. A slot's length and notice window come
+  from the offering, so a slot without one is undefined; and falling back to
+  "the mentor's only offering" would break every caller that omitted it on the
+  day a mentor adds a second.
+
+  What stands in place of a viewer is the mentor's own state, and it is **both**
+  halves: `approval_status = 'approved' AND listing_status = 'listed'`.
+  `apply_mentor_status` writes one or the other and never both, deliberately, and
+  no CHECK ties them — so a `pending` mentor who is `listed` is a legal row, and
+  gating on listing alone would have published an unvetted mentor's calendar.
+
+  **Every session is subtracted, whatever its status.** A cancelled session keeps
+  its slot: the mentor cancelled because they were busy, and handing the time
+  straight back would rebook them into it. Releasing it will be a deliberate flag
+  on the session, not an inference from the status. A `no_show` needs no handling
+  at all — its start has passed, and nothing before `now` is ever offered.
+
+  **The mentor's window defines the grid and a booking never moves it.** A
+  09:00-12:00 window at 45 minutes offers 09:00, 09:45, 10:30 and 11:15; a
+  session ending at 09:20 removes what it covers and leaves the rest where they
+  were, rather than opening a slot at 09:20. A *block* does re-grid, because a
+  mentor blocking part of their day has redefined it — consuming a slot and
+  redefining the window are different acts.
+
+  A slot is not a reservation. Two people can see the same one, and the second
+  booking is refused by `sessions_no_mentor_double_booking`. One integration test
+  books every slot the endpoint offered and requires all of them to commit, which
+  proves the endpoint never offers time the database would refuse without either
+  side asserting the other's arithmetic.
+- **`ix_sessions_mentor_window`** — a non-partial gist index on `(mentor_id,
+  session_window(starts_at, duration_minutes))`. The three existing per-party
+  indexes are partial on the live statuses and on `completed` between them, so
+  `cancelled`, `declined`, `expired` and `no_show` sat in none of them, and the
+  slots read matched nothing: a sequential scan at 13.2ms against 20,000
+  sessions, and 1.3ms with this. Built `CONCURRENTLY`, unlike the M1 indexes,
+  because `sessions` already holds rows.
 - **Reading sessions — three endpoints, all scoped by the people in the session.**
   `GET /users/{id}/sessions` pages a user's sessions newest first,
   `GET /sessions/{id}` reads one, and `GET /sessions/{id}/events` reads its

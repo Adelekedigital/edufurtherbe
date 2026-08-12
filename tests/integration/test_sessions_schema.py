@@ -554,6 +554,32 @@ async def test_the_upcoming_indexes_only_carry_live_sessions(
     assert "confirmed" in sql
 
 
+async def test_the_mentor_window_index_is_gist_and_carries_every_status(
+    db_engine: AsyncEngine,
+) -> None:
+    """The one index here that must **not** be partial.
+
+    The public slots read subtracts a mentor's sessions whatever their status,
+    because a cancelled session keeps its slot until somebody releases it. The
+    three indexes above cover the live statuses and `completed` between them, so
+    `cancelled`, `declined`, `expired` and `no_show` sit in none of them — which
+    made that read a sequential scan at 13.2ms against 20,000 rows, and 1.3ms
+    with this.
+
+    A `WHERE` added here would silently reopen that gap: the index would still be
+    used, still be fast for the statuses it kept, and quietly stop serving the
+    read it exists for. Nothing else would fail.
+    """
+    sql = await index_definition(db_engine, "ix_sessions_mentor_window")
+
+    assert "WHERE" not in sql, "a predicate here reopens the gap this index closes"
+    assert "USING gist" in sql, "`&&` against a tstzrange is not a btree question"
+    assert "mentor_id" in sql
+    assert "session_window(starts_at, duration_minutes)" in sql, (
+        "the same definition the exclusion constraint uses, not a second copy"
+    )
+
+
 async def test_the_completed_index_carries_only_completed_sessions(
     db_engine: AsyncEngine,
 ) -> None:

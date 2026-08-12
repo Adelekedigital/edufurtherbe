@@ -1,10 +1,12 @@
 """A mentor's own availability: recurring rules, and dated exceptions.
 
 **This is what a mentor declares, not what a mentee can book.** A bookable slot
-is this, minus confirmed sessions, minus the mentor's external calendar, sliced
-into a session type's duration and filtered by notice — and every one of those
-needs M4. Publishing a `/slots` endpoint now would mean publishing a contract
-that breaks when it lands.
+is this, minus everything already booked, sliced into a session type's duration
+and filtered by notice — which is `routes/slots.py`, added once M4 gave it
+sessions to subtract. The external calendar is still to come and subtracts from
+the same intervals, so it changes that endpoint and not these.
+
+These routes stay **owner-and-admin**; only `/slots` is public.
 
 Addressed by user id rather than `/me/…`, following the other attribute routes:
 one implementation serves a mentor editing their own schedule and an admin

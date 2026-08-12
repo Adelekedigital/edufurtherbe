@@ -36,6 +36,7 @@ from app.domain.availability import (
     DatedException,
     UtcInterval,
     WeeklyWindow,
+    bookable,
     project,
 )
 from app.domain.enums import AvailabilityExceptionType
@@ -575,3 +576,249 @@ def test_the_caller_filters_inactive_rules_not_the_projection(field: str) -> Non
     here as well and creates a second place the rule lives.
     """
     assert not hasattr(WeeklyWindow, field)
+
+
+# --------------------------------------------------------------------------
+# Bookable slots — availability minus what is taken, sliced into sessions
+#
+# These reuse the helpers above deliberately. A second copy of `window()` or
+# `utc()` in its own file is the duplication non-negotiable #8 names, and a test
+# double that drifts is worse than one that is merely repeated: both files stay
+# green while they disagree about what a Monday window means.
+# --------------------------------------------------------------------------
+
+#: Far enough before every window below that notice never interferes unless a
+#: test is about notice.
+LONG_AGO = utc("2026-01-01T00:00")
+
+
+def test_slots_step_by_the_duration_and_start_at_the_window() -> None:
+    """09:00-12:00 at 45 minutes is four slots, and the grid is the mentor's."""
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="12:00", tz=LAGOS)],
+        exceptions=[],
+        busy=[],
+        duration_minutes=45,
+        min_notice_minutes=0,
+        now=LONG_AGO,
+        **one_day(date(2026, 3, 2)),  # a Monday
+    )
+
+    # Lagos is UTC+1, so 09:00 local is 08:00Z.
+    assert [slot.start for slot in result] == [
+        utc("2026-03-02T08:00"),
+        utc("2026-03-02T08:45"),
+        utc("2026-03-02T09:30"),
+        utc("2026-03-02T10:15"),
+    ]
+    assert result[-1].end == utc("2026-03-02T11:00")
+
+
+def test_a_tail_too_short_for_one_more_session_yields_nothing() -> None:
+    """The fitting rule. 09:00-10:00 at 45 minutes is one slot, not two.
+
+    The naive loop emits 09:45 as well, which runs fifteen minutes past the time
+    the mentor declared they were available.
+    """
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="10:00", tz=LAGOS)],
+        exceptions=[],
+        busy=[],
+        duration_minutes=45,
+        min_notice_minutes=0,
+        now=LONG_AGO,
+        **one_day(date(2026, 3, 2)),
+    )
+
+    assert len(result) == 1
+    assert result[0].end == utc("2026-03-02T08:45")
+
+
+def test_a_booked_session_removes_exactly_its_own_slot() -> None:
+    """And the slot immediately after it survives, because both ends are `[)`.
+
+    A session ending at 09:45 frees 09:45 exactly. An off-by-one here either
+    loses a bookable slot or offers one that is taken, and both look plausible.
+    """
+    taken = UtcInterval(utc("2026-03-02T08:45"), utc("2026-03-02T09:30"))
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="12:00", tz=LAGOS)],
+        exceptions=[],
+        busy=[taken],
+        duration_minutes=45,
+        min_notice_minutes=0,
+        now=LONG_AGO,
+        **one_day(date(2026, 3, 2)),
+    )
+
+    assert [slot.start for slot in result] == [
+        utc("2026-03-02T08:00"),
+        utc("2026-03-02T09:30"),
+        utc("2026-03-02T10:15"),
+    ]
+
+
+def test_a_session_removes_slots_without_moving_the_ones_that_remain() -> None:
+    """A booking consumes the grid; it does not re-anchor it.
+
+    The session runs 09:20-10:00 local and lines up with no slot boundary. It
+    removes the two slots it runs across — 09:00 and 09:45 — and the survivors
+    stay on the mentor's own times, 10:30 and 11:15. It does **not** open a slot
+    at 10:00.
+
+    An earlier version re-gridded each free run, so this returned 10:00 and
+    10:45. The integration test caught it by disagreeing with the docstring
+    directly above the function, which said the window defines the grid. Both
+    readings step correctly by the duration, which is why nothing else noticed:
+    the difference is only visible once something is booked, and then every
+    other offered time silently moves.
+    """
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="12:00", tz=LAGOS)],
+        exceptions=[],
+        busy=[UtcInterval(utc("2026-03-02T08:20"), utc("2026-03-02T09:00"))],
+        duration_minutes=45,
+        min_notice_minutes=0,
+        now=LONG_AGO,
+        **one_day(date(2026, 3, 2)),
+    )
+
+    assert [slot.start for slot in result] == [
+        utc("2026-03-02T09:30"),
+        utc("2026-03-02T10:15"),
+    ]
+
+
+def test_a_block_does_re_grid_because_it_redefines_the_window() -> None:
+    """The other half of the rule, and the distinction that makes it coherent.
+
+    A mentor blocking 09:00-09:20 has changed what they declare, so `project`
+    returns a 09:20-12:00 window and the grid starts there. A *booking* over the
+    same minutes would have left the 09:00 grid alone and simply removed what it
+    covered. Consuming a slot and redefining the window are different acts.
+    """
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="12:00", tz=LAGOS)],
+        exceptions=[block(start_date=date(2026, 3, 2), start="09:00", end="09:20")],
+        busy=[],
+        duration_minutes=45,
+        min_notice_minutes=0,
+        now=LONG_AGO,
+        **one_day(date(2026, 3, 2)),
+    )
+
+    assert result[0].start == utc("2026-03-02T08:20")  # 09:20 Lagos
+
+
+def test_overlapping_busy_intervals_are_merged_before_subtraction() -> None:
+    """Two sessions can overlap: the double-booking constraint is partial on the
+    live statuses, so a cancelled session may sit across a confirmed one."""
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="12:00", tz=LAGOS)],
+        exceptions=[],
+        busy=[
+            UtcInterval(utc("2026-03-02T08:00"), utc("2026-03-02T09:00")),
+            UtcInterval(utc("2026-03-02T08:30"), utc("2026-03-02T09:30")),
+        ],
+        duration_minutes=45,
+        min_notice_minutes=0,
+        now=LONG_AGO,
+        **one_day(date(2026, 3, 2)),
+    )
+
+    assert [slot.start for slot in result] == [
+        utc("2026-03-02T09:30"),
+        utc("2026-03-02T10:15"),
+    ]
+
+
+def test_notice_drops_slots_without_moving_the_grid() -> None:
+    """The cutoff is a floor, not a new origin.
+
+    Re-aligning to `now + notice` would make the offered times drift as the
+    clock moves, so two clients asking a minute apart would see different slots
+    for the same unchanged window.
+    """
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="12:00", tz=LAGOS)],
+        exceptions=[],
+        busy=[],
+        duration_minutes=45,
+        min_notice_minutes=120,
+        now=utc("2026-03-02T06:50"),  # cutoff 08:50Z, inside the first slot
+        **one_day(date(2026, 3, 2)),
+    )
+
+    assert [slot.start for slot in result] == [
+        utc("2026-03-02T09:30"),
+        utc("2026-03-02T10:15"),
+    ]
+
+
+def test_a_window_already_underway_offers_only_what_is_still_ahead() -> None:
+    """Zero notice still excludes the past, which is why a missed session needs
+    no handling anywhere: its time has gone, and gone time is never offered."""
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="12:00", tz=LAGOS)],
+        exceptions=[],
+        busy=[],
+        duration_minutes=45,
+        min_notice_minutes=0,
+        now=utc("2026-03-02T09:40"),
+        **one_day(date(2026, 3, 2)),
+    )
+
+    assert [slot.start for slot in result] == [utc("2026-03-02T10:15")]
+
+
+def test_a_block_removes_slots_the_same_way_a_session_does() -> None:
+    result = bookable(
+        rules=[window(day=MONDAY, start="09:00", end="12:00", tz=LAGOS)],
+        exceptions=[block(start_date=date(2026, 3, 2))],
+        busy=[],
+        duration_minutes=45,
+        min_notice_minutes=0,
+        now=LONG_AGO,
+        **one_day(date(2026, 3, 2)),
+    )
+
+    assert result == ()
+
+
+def test_slots_step_in_utc_across_a_spring_forward() -> None:
+    """New York loses 02:00-02:59 on this date.
+
+    A 01:00-05:00 declared window is three real hours, not four, so a 60-minute
+    session fits three times. Stepping in local time would offer four and the
+    fourth would not exist.
+    """
+    result = bookable(
+        rules=[window(day=SUNDAY, start="01:00", end="05:00", tz=NEW_YORK)],
+        exceptions=[],
+        busy=[],
+        duration_minutes=60,
+        min_notice_minutes=0,
+        now=LONG_AGO,
+        **one_day(SPRING_FORWARD),
+    )
+
+    assert len(result) == 3
+    assert result[0].start == utc("2026-03-08T06:00")  # 01:00 EST
+    assert result[-1].end == utc("2026-03-08T09:00")  # 05:00 EDT
+
+
+def test_a_non_positive_duration_returns_nothing_rather_than_looping() -> None:
+    """`NOT NULL` in the database, and still checked: `scripts/` constructs
+    domain types directly and no gate sees it."""
+    assert (
+        bookable(
+            rules=[window(day=MONDAY, tz=LAGOS)],
+            exceptions=[],
+            busy=[],
+            duration_minutes=0,
+            min_notice_minutes=0,
+            now=LONG_AGO,
+            **one_day(date(2026, 3, 2)),
+        )
+        == ()
+    )
