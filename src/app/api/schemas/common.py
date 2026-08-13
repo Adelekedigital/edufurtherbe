@@ -88,6 +88,37 @@ def decode_cursor(cursor: str | None) -> tuple[str, UUID] | None:
         raise ValidationError("cursor is not a cursor this endpoint issued") from exc
 
 
+def encode_id_cursor(row_id: UUID) -> str:
+    """The keyset position when the id **is** the sort order.
+
+    ADR 0016's base case, unimplemented until now: *"the id is the cursor when
+    the display order is the id order. Otherwise the cursor is the sort column
+    plus the id."* Both existing list endpoints sort by something else — a
+    display name, a start time — so only the amended two-part form had ever been
+    written.
+
+    Kept separate rather than passing the id twice to `encode_cursor`. That works
+    and reads as a mistake forever, and the first person to tidy it would change
+    the sort key rather than delete the duplication.
+    """
+    return base64.urlsafe_b64encode(str(row_id).encode()).decode()
+
+
+def decode_id_cursor(cursor: str | None) -> UUID | None:
+    """An id cursor back into a position, or a refusal.
+
+    A malformed cursor is a **client** error and not something to silently treat
+    as "start from the beginning" — that answers a paging bug with page one
+    forever, which looks like working software and loses rows.
+    """
+    if cursor is None:
+        return None
+    try:
+        return UUID(base64.urlsafe_b64decode(cursor.encode()).decode())
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+
+
 def clamp_limit(limit: int | None) -> int:
     """The requested page size, bounded.
 

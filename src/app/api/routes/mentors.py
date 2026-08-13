@@ -21,8 +21,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.api.deps import PublicMentorDep
-from app.api.schemas.mentors import MentorPublicRead
+from app.api.deps import MentorPageDep, PublicMentorDep
+from app.api.schemas.common import Page, encode_id_cursor
+from app.api.schemas.mentors import MentorPublicRead, MentorSummaryRead
 
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
 
@@ -36,6 +37,46 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         )
     },
 }
+
+
+@router.get(
+    "",
+    response_model=Page[MentorSummaryRead],
+    summary="Find a mentor",
+    description=(
+        "Every mentor a mentee could actually book, newest first.\n\n"
+        "**Public.** No token — this is the page somebody lands on before they "
+        "have an account.\n\n"
+        "**Bookable, not available.** A mentor appears while they are approved, "
+        "listed, and set up: at least one active offering with a duration, and "
+        "at least one weekly availability window. It says nothing about *when* "
+        "they are free — a mentor booked solid for a month still appears, "
+        "because they exist and they take this kind of work. Ask "
+        "`/users/{id}/availability/slots` for the calendar.\n\n"
+        "A mentor who has not finished setting up does not appear here at all, "
+        "though their profile still resolves by direct link.\n\n"
+        "**No filters yet.** Service, school, degree and country are all coming; "
+        "they arrive as query parameters, which is why they can arrive later "
+        "without changing this response or the cursor.\n\n"
+        "`offerings` is what kind of help each mentor gives — the platform "
+        "taxonomy, and what matching runs on. What can be *booked* is on the "
+        "profile."
+    ),
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "The `cursor` was not one this endpoint issued."
+        }
+    },
+)
+async def find_mentors(page: MentorPageDep) -> Page[MentorSummaryRead]:
+    rows, has_more = page
+    return Page(
+        data=[MentorSummaryRead.from_row(row) for row in rows],
+        # The cursor is `mentor_profiles.id`, which is **not** the `id` in the
+        # row — that one is the user. Two different values, and reaching for the
+        # visible one would page through a different sequence entirely.
+        next_cursor=encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None,
+    )
 
 
 @router.get(

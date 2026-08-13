@@ -17,12 +17,15 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.domain.enums import ApprovalStatus, ListingStatus
+from app.infra.db.models.availability import AvailabilityRule
 from app.infra.db.models.mentoring import MentorProfile
-from app.infra.db.models.sessions import SessionType
+from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
 
-__all__ = ["mentor_is_public", "session_type_is_live"]
+__all__ = ["mentor_is_bookable", "mentor_is_public", "session_type_is_live"]
 
 
 def mentor_is_public() -> list[Any]:
@@ -66,6 +69,63 @@ def mentor_is_public() -> list[Any]:
         MentorProfile.listing_status == ListingStatus.LISTED,
         User.deleted_at.is_(None),
     ]
+
+
+def mentor_is_bookable() -> list[Any]:
+    """The mentor is **set up** to be booked — never that they are free.
+
+    Two `EXISTS` clauses: at least one live session type that has a booking
+    config, and at least one live availability rule. Both are about setup, and
+    the distinction from *availability* is the whole point of this predicate.
+
+    **They fail differently, which is why both are here.** Without a config
+    `/slots` returns **404** — there is no duration, so there is no slot, and a
+    search result linking to a 404 is worse than no result. Without an
+    availability rule `/slots` returns **200 with an empty page**, which is a
+    valid state — but rules are *recurring weekly*, so having none does not mean
+    "nothing free this week", it means no slot will ever be generated until the
+    mentor acts.
+
+    **Service offerings are deliberately not required.** A mentor who has claimed
+    none is genuinely bookable; they simply match no service filter and show an
+    empty taxonomy on their card. Hiding a working mentor over a missing tag
+    would be the wrong trade.
+
+    **`EXISTS`, not joins.** A mentor with three session types and two rules would
+    otherwise appear six times — and on a keyset-paged list a duplicate does not
+    merely repeat a card, it consumes the page limit and shifts the cursor, so
+    rows are lost at the boundary rather than seen twice.
+
+    Written as two clauses rather than one so the exclusions stay separable: D20
+    describes a dashboard stat counting the searches a mentor was filtered out
+    of, and "you have no hours" and "you have no offering" are different things
+    to tell them.
+    """
+    live_type = (
+        select(SessionType.id)
+        .join(
+            SessionTypeBookingConfig,
+            SessionTypeBookingConfig.session_type_id == SessionType.id,
+        )
+        .where(
+            SessionType.mentor_user_id == MentorProfile.user_id,
+            SessionType.is_active.is_(True),
+            SessionType.deleted_at.is_(None),
+        )
+        .correlate(MentorProfile)
+        .exists()
+    )
+    live_hours = (
+        select(AvailabilityRule.id)
+        .where(
+            AvailabilityRule.mentor_user_id == MentorProfile.user_id,
+            AvailabilityRule.is_active.is_(True),
+            AvailabilityRule.deleted_at.is_(None),
+        )
+        .correlate(MentorProfile)
+        .exists()
+    )
+    return [live_type, live_hours]
 
 
 def session_type_is_live(user_id: UUID) -> list[Any]:

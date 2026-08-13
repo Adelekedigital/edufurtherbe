@@ -33,6 +33,7 @@ from app.api.schemas.common import (
     MAX_PAGE_SIZE,
     clamp_limit,
     decode_cursor,
+    decode_id_cursor,
 )
 from app.api.schemas.profile import (
     AwardPatch,
@@ -76,6 +77,7 @@ from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutio
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.mentor_public_store import get_public_mentor
+from app.infra.db.mentor_search_store import search_mentors
 from app.infra.db.mentor_status_store import (
     decide,
     history,
@@ -84,7 +86,7 @@ from app.infra.db.mentor_status_store import (
     resume,
     set_listing,
 )
-from app.infra.db.offerings import list_service_offerings
+from app.infra.db.offerings import offerings_for
 from app.infra.db.profile_store import (
     get_goal,
     get_mentor_profile,
@@ -1025,10 +1027,25 @@ async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
     user_id = row["user_id"]
     return {
         "row": row,
-        "offerings": await list_service_offerings(session, user_id),
+        "offerings": (await offerings_for(session, [user_id])).get(user_id, []),
         "session_types": await list_session_types(session, user_id) or [],
     }
 
+
+async def mentor_page(
+    session: SessionDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """One page of bookable mentors.
+
+    No viewer and no filters. The cursor is an id and nothing else — ADR 0016's
+    base case, which this is the first list to sort by.
+    """
+    return await search_mentors(session, limit=clamp_limit(limit), after=decode_id_cursor(cursor))
+
+
+MentorPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(mentor_page)]
 
 PublicMentorDep = Annotated[dict[str, Any], Depends(public_mentor)]
 

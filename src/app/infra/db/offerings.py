@@ -17,6 +17,7 @@ has now paid for four times, twice in a visibility predicate.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -25,31 +26,57 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.mentoring import MentorServiceOffering, ServiceOffering
 
-__all__ = ["list_service_offerings"]
+__all__ = ["offerings_for"]
 
 
-async def list_service_offerings(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]]:
-    """The offerings this mentor has claimed, in the order the platform ranks them.
+async def offerings_for(
+    session: AsyncSession, user_ids: Sequence[UUID]
+) -> dict[UUID, list[dict[str, Any]]]:
+    """Offerings for several mentors at once, keyed by mentor.
 
-    **`is_active` is filtered, which the inline version did not do.** No row is
-    inactive today — all six ship active from the M2 lookups migration and #53
-    closes the list to users — so this changes nothing observable now. It matters
-    the day the platform retires one: a retired offering should stop appearing on
-    a mentor's public profile *and* on their own, and having the filter in one
-    place means it cannot be added to half of them.
+    **Plural because the list endpoint made it N+1.** A profile reads one
+    mentor's offerings; discovery reads twenty. Written per-mentor it was twenty
+    round trips per page, and the obvious fix — a second batched function beside
+    the single one — is two queries of one rule, which is how the `is_active`
+    filter ends up on one of them. So there is one query, and the profile passes
+    a list of one.
 
-    `sort_order` rather than name: the platform decides the order these read in,
-    and alphabetical would put "Document Review" above "Test Preparation" for no
+    Mentors with no offerings are **absent from the mapping** rather than present
+    with an empty list. The caller supplies the default, which keeps this function
+    from deciding what a missing row means.
+
+    **`is_active` is filtered, which the inline version this replaced did not
+    do.** No row is inactive today — all six ship active from the M2 lookups
+    migration and #53 closes the list to users — so it changes nothing
+    observable now. It matters the day the platform retires one: a retired
+    offering should stop appearing on a mentor's public profile *and* on their
+    own, and one query means it cannot be filtered in half the places.
+
+    `sort_order` rather than name: the platform decides how these read, and
+    alphabetical would put "Document Review" above "Test Preparation" for no
     reason anybody chose.
     """
+    if not user_ids:
+        return {}
+
     result = await session.execute(
-        select(ServiceOffering.slug, ServiceOffering.display_name)
+        select(
+            MentorServiceOffering.mentor_user_id,
+            ServiceOffering.slug,
+            ServiceOffering.display_name,
+        )
         .select_from(MentorServiceOffering)
         .join(ServiceOffering, ServiceOffering.id == MentorServiceOffering.service_offering_id)
         .where(
-            MentorServiceOffering.mentor_user_id == user_id,
+            MentorServiceOffering.mentor_user_id.in_(user_ids),
             ServiceOffering.is_active.is_(True),
         )
         .order_by(ServiceOffering.sort_order)
     )
-    return [dict(row) for row in result.mappings()]
+
+    grouped: dict[UUID, list[dict[str, Any]]] = {}
+    for row in result.mappings():
+        grouped.setdefault(row["mentor_user_id"], []).append(
+            {"slug": row["slug"], "display_name": row["display_name"]}
+        )
+    return grouped

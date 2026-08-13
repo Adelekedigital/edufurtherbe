@@ -12,6 +12,38 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Mentor discovery — the endpoint that hands out the ids the others need.**
+  `GET /mentors` pages every mentor a mentee could actually book, newest first,
+  with no token. Three public reads existed before it and every one required an
+  id or a slug you already had.
+
+  **Bookable, never available.** A mentor appears while they are approved,
+  listed, undeleted on both tables, and *set up*: an active offering that has a
+  duration, and an active weekly availability window. It says nothing about
+  *when* — availability is a computation over projected windows minus bookings
+  and cannot be a `WHERE` clause, so filtering on it would mean computing slots
+  for every candidate before paging and the cursor would stop being a keyset.
+  Caching it in a column is the drift D20 rejected. A mentor booked solid for a
+  month still appears, because they exist and take this kind of work.
+
+  Ordered by `mentor_profiles.id`, not `users.id` — both are UUIDv7 and both are
+  time-ordered, but they order different events, and a mentee of two years who
+  starts mentoring this week is a new mentor.
+
+  **No filters.** Service, school, degree and country are all reachable from
+  existing tables and four of the indexes they want already exist; they arrive
+  as query parameters, which is additive, where the sort order and row shape are
+  not.
+- **ADR 0016's base-case cursor exists at last.** The record says *"the id is
+  the cursor when the display order is the id order"* — and only the amended
+  two-part form had ever been written, because both earlier lists sort by a
+  display name or a start time. `encode_id_cursor`/`decode_id_cursor` implement
+  it rather than passing the id twice to the pair form, which works and reads as
+  a mistake forever.
+- **`offerings_for` replaces `list_service_offerings`**, taking several mentors
+  at once. Per-mentor it was twenty round trips a page; a second batched function
+  beside the single one would have been two queries of one rule, which is how the
+  `is_active` filter ends up on only one of them.
 - **A mentor's public profile, reachable by id or by legacy slug.**
   `GET /mentors/{handle}` returns who a mentor is, what kind of help they give,
   and what can actually be booked — with the session types **inlined** from the

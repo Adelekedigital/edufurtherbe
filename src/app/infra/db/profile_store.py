@@ -44,7 +44,7 @@ from app.infra.db.models.mentoring import (
 )
 from app.infra.db.models.reference import Country
 from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
-from app.infra.db.offerings import list_service_offerings
+from app.infra.db.offerings import offerings_for
 
 #: The institution columns an embedded reference carries, matching what
 #: `catalogue_store` projects — so `InstitutionRead.from_row` builds the same
@@ -210,4 +210,7 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
 
     # Shared with the public profile rather than repeated there. See
     # `infra/db/offerings.py` for why the filter lives inside it.
-    return dict(row) | {"offerings": await list_service_offerings(session, user_id)}
+    # One id, because the shared query is batched for discovery. Absent from
+    # the mapping means "this mentor claimed none", which is an empty list here.
+    grouped = await offerings_for(session, [user_id])
+    return dict(row) | {"offerings": grouped.get(user_id, [])}
