@@ -169,7 +169,7 @@ is a decision with no code behind it yet.
 | Transactional email | Emailit | Behind a port, like every vendor — this one has already been swapped twice |
 | Video sessions | Daily | |
 | Product analytics | PostHog | |
-| Google Calendar | Composio | Our own OAuth client; write events, read free/busy on demand ([ADR 0004](docs/adr/0004-calendar-integration.md)) |
+| Google Calendar | Direct, behind a `CalendarPort` | Our own OAuth client; write events, read free/busy on demand ([ADR 0004](docs/adr/0004-calendar-integration.md)). The scopes we need are non-sensitive, so there is no review to survive and no platform to pay for it ([ADR 0012](docs/adr/0012-google-oauth-scopes-and-client-split.md)) |
 | HTML to PDF and image | MarkupGo | |
 | Institution data | hipolabs | Autocomplete served live; a row is stored only once someone selects it, so reads never depend on it ([ADR 0008](docs/adr/0008-institutions-hipolabs-registry.md)) |
 | Push notifications | Native Web Push | VAPID and a service worker, no vendor. iOS delivers only to installed PWAs |
