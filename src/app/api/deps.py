@@ -75,6 +75,7 @@ from app.infra.db.availability_writer import (
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.mentor_public_store import get_public_mentor
 from app.infra.db.mentor_status_store import (
     decide,
     history,
@@ -83,6 +84,7 @@ from app.infra.db.mentor_status_store import (
     resume,
     set_listing,
 )
+from app.infra.db.offerings import list_service_offerings
 from app.infra.db.profile_store import (
     get_goal,
     get_mentor_profile,
@@ -811,14 +813,14 @@ UploadedBannerDep = Annotated[str, Depends(uploaded_banner)]
 # silently editing it". The pair differ only by their name at the call site, so
 # a reader comparing the two routes sees it without opening this module.
 #
-# **Projected windows are owner-and-admin only, for now.** D20's access rule —
-# render if listed, *or* the viewer has a session with this mentor, *or* the
-# viewer is an admin — is still not implemented here. `sessions` now exists, so
-# the blocking reason has changed: the table landed with M4's schema revision and
-# nothing reads it yet, so the clause has no query to be scoped in. Shipping the
-# two clauses that do exist would drop exactly the one that protects a mentee
-# whose mentor has since paused, which is the case D20 was written for. Narrow
-# now, widened by the pull request that gives `sessions` its first reader.
+# **These stay owner-and-admin, and are no longer waiting for anything.** They
+# were narrowed pending D20's middle clause — render if the viewer has a session
+# with this mentor — which needed a `sessions` table to scope against. That table
+# arrived, and settled decision #94 then **dropped the clause**: a mentee with a
+# session sees *that session*, which carries the mentor's name since #93, so
+# nothing breaks when a mentor pauses. What a stranger may see about a mentor is
+# `GET /mentors/{handle}`; these routes answer a different question — what has
+# this mentor *declared* — and that was only ever theirs and an admin's.
 
 
 async def target_availability_rules(
@@ -996,6 +998,39 @@ async def mentor_slots(
         raise NotFoundError("no such bookable session type")
     return slots
 
+
+# --------------------------------------------------------------------------
+# The public mentor profile
+# --------------------------------------------------------------------------
+
+
+async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
+    """One mentor, as a stranger sees them, or a 404 that says nothing about why.
+
+    **Composed rather than re-queried.** The session types come from
+    `list_session_types()` — the same function serving `/session-types` — so the
+    inlined list and the standalone endpoint cannot drift. It re-checks the
+    mentor's visibility, which is a second cheap statement rather than a
+    "skip the check" variant, because a guard with a bypass parameter is a guard
+    with a bypass.
+
+    `handle` is an id or a slug and the store resolves either. It is not a `UUID`
+    in the signature for that reason: FastAPI would refuse a slug at the door with
+    a 422, which would tell a caller that the id they guessed was well-formed.
+    """
+    row = await get_public_mentor(session, handle)
+    if row is None:
+        raise NotFoundError("no such mentor")
+
+    user_id = row["user_id"]
+    return {
+        "row": row,
+        "offerings": await list_service_offerings(session, user_id),
+        "session_types": await list_session_types(session, user_id) or [],
+    }
+
+
+PublicMentorDep = Annotated[dict[str, Any], Depends(public_mentor)]
 
 SlotsDep = Annotated[list[UtcInterval], Depends(mentor_slots)]
 
