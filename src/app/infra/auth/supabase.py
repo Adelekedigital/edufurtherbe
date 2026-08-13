@@ -26,6 +26,11 @@ from app.core.errors import AuthenticationError, ConfigurationError
 # token for a different system.
 AUDIENCE = "authenticated"
 
+# The symmetric algorithm, named once. `dev_tokens.mint_dev_token` signs with it
+# and `_decode` accepts it, and the two have to be the same string or every
+# locally minted token fails verification for a reason neither side reports.
+SYMMETRIC_ALGORITHM = "HS256"
+
 
 @dataclass(frozen=True, slots=True)
 class TokenClaims:
@@ -91,4 +96,6 @@ class SupabaseTokenVerifier:
             return dict(jwt.decode(token, key, algorithms=["RS256", "ES256"], audience=AUDIENCE))
 
         assert self._secret is not None  # noqa: S101 — guaranteed by __init__
-        return dict(jwt.decode(token, self._secret, algorithms=["HS256"], audience=AUDIENCE))
+        return dict(
+            jwt.decode(token, self._secret, algorithms=[SYMMETRIC_ALGORITHM], audience=AUDIENCE)
+        )
