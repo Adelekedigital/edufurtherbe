@@ -155,11 +155,16 @@ check would stay green.
 The pre-cutover set — what the initial build targets. This table is a record of
 decisions, not of code, and it grows as each piece lands.
 
-**Only the database is integrated so far**, and only as PostgreSQL: `src/`
-holds configuration, the error taxonomy, a health endpoint, and the engine and
-session factory in `infra/db/`. Supabase's auth and storage are decided
-([ADR 0005](docs/adr/0005-data-platform.md)) and unbuilt. Every other row below
-is a decision with no code behind it yet.
+**Three of the rows below are built; the rest are decisions with no code behind
+them yet.** PostgreSQL through SQLAlchemy and asyncpg, Supabase Auth as a token
+verifier (`infra/auth/`), and Supabase Storage for profile images
+(`infra/storage/`) — all three per [ADR 0005](docs/adr/0005-data-platform.md).
+On top of them sit the migration ETL for milestones 1–4 and the read API:
+profiles, catalogues, availability, sessions, and a public surface a mentee can
+browse without an account.
+
+Everything else in the table — calendar, video, analytics, PDF, push, LLM — is
+recorded and unwritten.
 
 | Concern | Choice | Notes |
 |---|---|---|

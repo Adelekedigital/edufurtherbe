@@ -398,3 +398,24 @@ async def test_paging_follows_when_a_mentor_became_one_after_someone_else(
     assert url is None, "paging never terminated"
     assert len(seen) == len(set(seen)), "a mentor appeared on two pages"
     assert set(seen) == {str(u) for u in users}
+
+
+async def test_no_bookable_mentors_is_an_empty_page_not_an_error(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The state a brand-new deployment is in, and the only path that reaches
+    `offerings_for([])`.
+
+    That function returns early on an empty sequence, and every other test in
+    this file creates a mentor — so the guard was unreached, which is the shape
+    this repository has recorded as indistinguishable from its own absence.
+
+    An empty collection is a `200`. A `404` would say the endpoint does not
+    exist, which is a different and wrong claim.
+    """
+    await make_public_mentor(db_engine, "not-set-up")  # listed, but nothing to book
+
+    response = await api_client.get(URL)
+
+    assert response.status_code == 200
+    assert response.json() == {"data": [], "next_cursor": None}
