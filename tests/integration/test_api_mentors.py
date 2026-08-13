@@ -231,6 +231,26 @@ async def test_offerings_are_the_taxonomy_in_platform_order(
     ]
 
 
+async def test_offerings_are_scoped_to_the_mentor_asked_for(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A second mentor, so `mentor_user_id` can fail.
+
+    With one mentor in the database the scope predicate is unfalsifiable — every
+    row belongs to them, so dropping it returns the same list. This is the shape
+    non-negotiable #5 names: object-level authorization scoped in the query, and
+    a scope nothing can fail is not pinned.
+    """
+    asked_for = await make_public_mentor(db_engine, "scoped-a", slug="scoped-a")
+    somebody_else = await make_public_mentor(db_engine, "scoped-b", slug="scoped-b")
+    await give_offering(db_engine, asked_for, "test-preparation")
+    await give_offering(db_engine, somebody_else, "interview-preparation")
+
+    body = (await api_client.get(url(asked_for))).json()
+
+    assert [o["slug"] for o in body["offerings"]] == ["test-preparation"]
+
+
 async def test_countries_are_names_not_identifiers(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
