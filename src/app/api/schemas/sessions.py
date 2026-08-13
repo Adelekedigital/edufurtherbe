@@ -35,6 +35,31 @@ from app.domain.enums import (
 )
 
 
+class PartyRead(BaseModel):
+    """One of the two people in a session, as the other one sees them.
+
+    **Every name here is nullable, and that is the data rather than caution.**
+    `users.first_name` and `last_name` are both nullable columns, and the M2
+    transform maps them straight from optional Bubble fields — `record.get("First
+    Name")` — so a migrated user who never filled one in has `NULL`. A party with
+    no name at all is a real state, and the nulls go out as nulls: substituting
+    "Unknown" here would be a display decision made in the wrong layer, in one
+    language, that no client could change.
+
+    `avatar_url` is null for two independent reasons — the column is nullable,
+    and the whole `user_profiles` row may not exist. Both arrive as the same
+    null, which is why the join is outer.
+
+    **No email, no slug, no `last_active_at`.** The parties are meeting; that
+    does not make the rest of each other's account their business.
+    """
+
+    id: str
+    first_name: str | None = None
+    last_name: str | None = None
+    avatar_url: str | None = None
+
+
 class SessionRead(BaseModel):
     """One session, as either party sees it."""
 
@@ -45,6 +70,11 @@ class SessionRead(BaseModel):
     #: dual roles are free by design.
     mentor_id: str
     mentee_id: str
+    #: The same two people again, named. The bare ids stay because removing them
+    #: would break every client reading them today, and because a client that
+    #: only needs "which side was I on" should not have to reach into an object.
+    mentor: PartyRead
+    mentee: PartyRead
     session_type_id: str | None = Field(
         default=None,
         description=(
@@ -85,6 +115,8 @@ class SessionRead(BaseModel):
             id=str(row["id"]),
             mentor_id=str(row["mentor_id"]),
             mentee_id=str(row["mentee_id"]),
+            mentor=_party(row, "mentor"),
+            mentee=_party(row, "mentee"),
             session_type_id=str(row["session_type_id"]) if row["session_type_id"] else None,
             status=SessionStatus(str(row["status"])),
             starts_at=row["starts_at"],  # type: ignore[arg-type]
@@ -97,6 +129,25 @@ class SessionRead(BaseModel):
             meeting_url=str(row["meeting_url"]) if row["meeting_url"] else None,
             created_at=row["created_at"],  # type: ignore[arg-type]
         )
+
+
+def _party(row: dict[str, object], side: str) -> PartyRead:
+    """Assemble one side from the flat row the store returns.
+
+    One function rather than the same four lines twice: a mentor and a mentee
+    differ only by prefix, and two copies is where the mentee quietly stops
+    getting the avatar somebody added to the mentor.
+    """
+    return PartyRead(
+        id=str(row[f"{side}_id"]),
+        first_name=_text(row.get(f"{side}_first_name")),
+        last_name=_text(row.get(f"{side}_last_name")),
+        avatar_url=_text(row.get(f"{side}_avatar_url")),
+    )
+
+
+def _text(value: object) -> str | None:
+    return str(value) if value is not None else None
 
 
 class SessionEventRead(BaseModel):
