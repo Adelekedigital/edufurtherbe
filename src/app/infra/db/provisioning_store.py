@@ -51,6 +51,11 @@ LINKED = select(*_IDENTITY).where(User.auth_id.is_not(None), LIVE).order_by(User
 
 BY_EMAIL = select(*_IDENTITY).where(User.email == bindparam("email"), LIVE)
 
+# `LIVE` for the same reason `BY_EMAIL` carries it: a soft-deleted user still
+# holds their `auth_id`, so a lookup without it would answer for somebody the
+# rest of the system treats as gone.
+BY_AUTH_ID = select(*_IDENTITY).where(User.auth_id == bindparam("auth_id"), LIVE)
+
 # `auth_id IS NULL` makes a second concurrent run a no-op on rows the first
 # already linked, rather than overwriting one Supabase identifier with another —
 # which would orphan an account nothing can reach.
@@ -96,7 +101,7 @@ GRANT = (
 #: Every statement above that reads or writes ``users``. The parity test walks
 #: this tuple rather than the module namespace, so adding a statement and
 #: forgetting to list it shows up in a diff instead of silently going unchecked.
-USER_STATEMENTS = (CANDIDATES, LINKED, BY_EMAIL, LINK)
+USER_STATEMENTS = (CANDIDATES, LINKED, BY_EMAIL, BY_AUTH_ID, LINK)
 
 
 class ProvisioningStore:
@@ -126,6 +131,14 @@ class ProvisioningStore:
         """One live user by address, or ``None``."""
         async with self._engine.connect() as connection:
             row = (await connection.execute(BY_EMAIL, {"email": email})).first()
+        if row is None:
+            return None
+        return Candidate(user_id=row[0], email=row[1], auth_id=row[2])
+
+    async def by_auth_id(self, auth_id: UUID) -> Candidate | None:
+        """One live user by Supabase identifier, or ``None``."""
+        async with self._engine.connect() as connection:
+            row = (await connection.execute(BY_AUTH_ID, {"auth_id": auth_id})).first()
         if row is None:
             return None
         return Candidate(user_id=row[0], email=row[1], auth_id=row[2])
