@@ -12,6 +12,31 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Sessions name the people in them.** `SessionRead` carried `mentor_id` and
+  `mentee_id` as bare UUIDs, so a mentee's own session list could not say who the
+  session was with — for **any** mentor, listed or paused. Each session now
+  carries a `mentor` and a `mentee` object with `first_name`, `last_name` and
+  `avatar_url` beside the ids, which stay: removing them would be the breaking
+  change this avoids.
+
+  **No soft-delete predicate on the party lookup, deliberately**, and the
+  opposite of every public endpoint. There the mentor's lifecycle *is* the
+  control; here the authorization is the session itself — a mentee had a real
+  session with a real person, and their own history must not decay into a UUID
+  because that person later left. A mutation adds the predicate and a test goes
+  red, so a future sweep cannot quietly rewrite people's records.
+
+  **`users` is joined inner and `user_profiles` outer.** `sessions.mentor_id` is
+  `NOT NULL` with a foreign key, so the user row is guaranteed and an outer join
+  there would be a guard nothing can reach. Nothing guarantees a profile row: a
+  user who never filled one in has none, and an inner join would drop their
+  sessions from **both** parties' lists.
+
+  Every name is nullable because the columns are — the M2 transform maps them
+  from optional Bubble fields — so a party with no name returns nulls rather than
+  a server-invented placeholder no client could change. Measured: the four joins
+  leave the keyset page still ordered by `ix_sessions_starts_at`, 0.14ms to
+  0.55ms at 20,000 sessions.
 - **A mentor's session types, publicly — the endpoint that makes slots usable.**
   `GET /users/{id}/session-types` returns everything a mentor currently offers,
   with the duration and notice that govern each. Take an `id` from it and pass

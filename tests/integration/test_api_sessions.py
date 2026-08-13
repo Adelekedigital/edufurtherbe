@@ -432,3 +432,202 @@ async def test_a_cursor_whose_sort_key_is_not_a_timestamp_is_a_client_error(
     )
 
     assert response.status_code == 422
+
+
+# --------------------------------------------------------------------------
+# Who the other party is
+#
+# `mentor_id` and `mentee_id` shipped as bare UUIDs, so a mentee's own session
+# list could not say who the session was with — for any mentor, listed or not.
+# Nothing caught it because no client existed to be disappointed.
+# --------------------------------------------------------------------------
+
+
+async def give_profile(engine: AsyncEngine, user_id: UUID, avatar: str | None) -> None:
+    """A `user_profiles` row, with or without an avatar.
+
+    `make_user` creates none, so a user without this call exercises the *missing
+    row* cause of a null avatar, and a user with `avatar=None` exercises the
+    *null column* cause. Two different joins fail two different ways and the
+    client sees one null, which is why both need their own test.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO user_profiles (user_id, avatar_url) VALUES (:u, :a)"),
+            {"u": user_id, "a": avatar},
+        )
+
+
+@pytest.mark.parametrize("who", ["mentor", "mentee"])
+async def test_both_parties_are_named_on_the_detail(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, who: str
+) -> None:
+    mentor, mentor_auth, mentee, mentee_auth = await pair(db_engine, f"named-{who}")
+    await give_profile(db_engine, mentor, "https://cdn.test/m.png")
+    session_id = await make_session(db_engine, mentor, mentee)
+    auth = mentor_auth if who == "mentor" else mentee_auth
+
+    body = (
+        await api_client.get(f"/api/v1/sessions/{session_id}", headers=bearer(api_token(auth)))
+    ).json()
+
+    assert body["mentor"]["id"] == str(mentor)
+    assert body["mentor"]["first_name"] == "Ada"
+    assert body["mentor"]["avatar_url"] == "https://cdn.test/m.png"
+    assert body["mentee"]["id"] == str(mentee)
+    # The bare ids are still there — removing them would be the breaking change.
+    assert body["mentor_id"] == str(mentor)
+
+
+async def test_the_list_names_both_parties_too(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """One shared column tuple, so the list and the detail cannot disagree."""
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "named-list")
+    await make_session(db_engine, mentor, mentee)
+
+    rows = (
+        await api_client.get(sessions_url(mentee), headers=bearer(api_token(mentee_auth)))
+    ).json()["data"]
+
+    assert rows[0]["mentor"]["first_name"] == "Ada"
+    assert rows[0]["mentee"]["id"] == str(mentee)
+
+
+async def test_a_party_with_no_profile_row_still_returns_the_session(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The join is outer, and this is why.
+
+    `user_profiles` is where `avatar_url` lives, and a user who never filled in
+    a profile has no row at all. An inner join would drop the session from
+    **both** parties' lists — data loss wearing a display bug's clothes.
+    """
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "no-profile")
+    session_id = await make_session(db_engine, mentor, mentee)
+
+    body = (
+        await api_client.get(
+            f"/api/v1/sessions/{session_id}", headers=bearer(api_token(mentee_auth))
+        )
+    ).json()
+
+    assert body["id"] == str(session_id)
+    assert body["mentor"]["avatar_url"] is None
+    assert body["mentor"]["first_name"] == "Ada"
+
+
+async def test_a_party_with_a_profile_but_no_avatar_is_the_other_null(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Same null, different cause.
+
+    The test above loses the whole row; this one loses only the column. An inner
+    join would pass this one while failing that, which is how one of the two
+    causes ends up untested.
+    """
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "null-avatar")
+    await give_profile(db_engine, mentor, None)
+    session_id = await make_session(db_engine, mentor, mentee)
+
+    body = (
+        await api_client.get(
+            f"/api/v1/sessions/{session_id}", headers=bearer(api_token(mentee_auth))
+        )
+    ).json()
+
+    assert body["mentor"]["avatar_url"] is None
+    assert body["id"] == str(session_id)
+
+
+async def test_a_party_with_no_name_returns_nulls_rather_than_failing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`users.first_name` is nullable and the M2 transform maps it from an
+    optional Bubble field, so a nameless party is real data rather than an edge
+    case somebody invented."""
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "nameless")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET first_name = NULL, last_name = NULL WHERE id = :u"),
+            {"u": mentor},
+        )
+    session_id = await make_session(db_engine, mentor, mentee)
+
+    body = (
+        await api_client.get(
+            f"/api/v1/sessions/{session_id}", headers=bearer(api_token(mentee_auth))
+        )
+    ).json()
+
+    assert body["mentor"]["first_name"] is None
+    assert body["mentor"]["last_name"] is None
+    assert body["mentor"]["id"] == str(mentor)
+
+
+async def test_a_soft_deleted_party_is_still_named_in_their_history(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The **absence** of a `deleted_at` predicate, asserted so it is visible.
+
+    This is the opposite of the public endpoints, where a deleted mentor
+    disappears. Here the authorization is the session itself: the mentee had a
+    real session with a real person, and their own record must not decay into a
+    UUID because that person later left the platform.
+
+    Without this test, a future "tidy up: add the soft-delete predicate
+    everywhere" sweep would silently break history and look like an improvement.
+    """
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "gone")
+    session_id = await make_session(db_engine, mentor, mentee)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+
+    body = (
+        await api_client.get(
+            f"/api/v1/sessions/{session_id}", headers=bearer(api_token(mentee_auth))
+        )
+    ).json()
+
+    assert body["mentor"]["first_name"] == "Ada"
+
+
+async def test_the_joins_do_not_multiply_rows(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Four joins on a keyset-paged query is where a duplicate row appears.
+
+    Every join is many-to-one — a primary key or a unique `user_id` — so none
+    can multiply. Asserted rather than reasoned, because a duplicate would not
+    merely repeat a name: it would consume the page limit and shift the cursor,
+    losing rows silently at the boundary.
+    """
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "nodup")
+    await give_profile(db_engine, mentor, "https://cdn.test/m.png")
+    await give_profile(db_engine, mentee, "https://cdn.test/e.png")
+    for offset in range(3):
+        await make_session(db_engine, mentor, mentee, starts_at=STARTS_AT + timedelta(days=offset))
+
+    rows = (
+        await api_client.get(sessions_url(mentee), headers=bearer(api_token(mentee_auth)))
+    ).json()["data"]
+
+    assert len(rows) == 3
+    assert len({row["id"] for row in rows}) == 3
+
+
+async def test_no_party_email_reaches_the_response(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`users` carries email, `email_verified_at`, `slug` and `last_active_at`.
+
+    The parties are meeting; that does not make the rest of each other's account
+    their business.
+    """
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "no-email")
+    await make_session(db_engine, mentor, mentee)
+
+    raw = (await api_client.get(sessions_url(mentee), headers=bearer(api_token(mentee_auth)))).text
+
+    assert "mentor-no-email@example.test" not in raw
+    assert "email" not in raw

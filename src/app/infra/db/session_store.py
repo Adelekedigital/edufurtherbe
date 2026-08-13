@@ -23,11 +23,13 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import literal, or_, select, tuple_
+from sqlalchemy import Select, literal, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.errors import ValidationError
 from app.infra.db.models.sessions import Session, SessionEvent
+from app.infra.db.models.user import User, UserProfile
 
 __all__ = ["get_session", "list_session_events", "list_sessions"]
 
@@ -48,6 +50,55 @@ _SESSION_COLUMNS = (
     Session.meeting_url,
     Session.created_at,
 )
+
+#: The two people, aliased per side so one statement can join `users` twice.
+#:
+#: **`users` is joined INNER and `user_profiles` OUTER, and the asymmetry is the
+#: point.** `sessions.mentor_id` is `NOT NULL` with a foreign key, so the user row
+#: is guaranteed to exist and an outer join there would be a guard nothing can
+#: reach — the shape this repository has already recorded as untestable. Nothing
+#: guarantees a `user_profiles` row: a user who never filled in a profile has
+#: none, and an inner join would make their sessions vanish from *both* parties'
+#: lists, which is a data-loss-shaped bug wearing a display bug's clothes.
+#:
+#: **No `deleted_at` predicate, deliberately.** The authorization here is the
+#: session itself: a mentee is a party to it, and their own history should not
+#: decay into a UUID because the mentor later left. That is the opposite of the
+#: public endpoints, where the mentor's lifecycle *is* the control, and it is a
+#: mutation in the batch so a future "add the predicate everywhere" sweep goes red
+#: rather than silently rewriting people's history.
+_MENTOR = aliased(User, name="mentor_user")
+_MENTEE = aliased(User, name="mentee_user")
+_MENTOR_PROFILE = aliased(UserProfile, name="mentor_profile")
+_MENTEE_PROFILE = aliased(UserProfile, name="mentee_profile")
+
+_PARTY_COLUMNS = (
+    _MENTOR.first_name.label("mentor_first_name"),
+    _MENTOR.last_name.label("mentor_last_name"),
+    _MENTOR_PROFILE.avatar_url.label("mentor_avatar_url"),
+    _MENTEE.first_name.label("mentee_first_name"),
+    _MENTEE.last_name.label("mentee_last_name"),
+    _MENTEE_PROFILE.avatar_url.label("mentee_avatar_url"),
+)
+
+
+def _with_parties(statement: Select[Any]) -> Select[Any]:
+    """Attach both people to a session query.
+
+    Written once and applied by both readers, so a client cannot get a named
+    mentor from the list and a bare id from the detail. Every join is many-to-one
+    on a primary key or a unique `user_id`, so no statement gains a row — which
+    matters because the list is keyset-paged and a duplicate would corrupt the
+    page rather than merely repeat a name.
+    """
+    return (
+        statement.select_from(Session)
+        .join(_MENTOR, _MENTOR.id == Session.mentor_id)
+        .join(_MENTEE, _MENTEE.id == Session.mentee_id)
+        .outerjoin(_MENTOR_PROFILE, _MENTOR_PROFILE.user_id == Session.mentor_id)
+        .outerjoin(_MENTEE_PROFILE, _MENTEE_PROFILE.user_id == Session.mentee_id)
+    )
+
 
 _EVENT_COLUMNS = (
     SessionEvent.id,
@@ -117,7 +168,7 @@ async def list_sessions(
     status filter is additive later and does not change the contract.
     """
     statement = (
-        select(*_SESSION_COLUMNS)
+        _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS))
         .where(_is_a_party(user_id))
         .order_by(Session.starts_at.desc(), Session.id.desc())
     )
@@ -142,7 +193,9 @@ async def get_session(
     can enumerate ids which sessions exist.
     """
     result = await session.execute(
-        select(*_SESSION_COLUMNS).where(Session.id == session_id, _is_a_party(viewer_id))
+        _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS)).where(
+            Session.id == session_id, _is_a_party(viewer_id)
+        )
     )
     row = result.mappings().one_or_none()
     return dict(row) if row else None
