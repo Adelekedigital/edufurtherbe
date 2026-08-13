@@ -12,6 +12,50 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor's session types, publicly — the endpoint that makes slots usable.**
+  `GET /users/{id}/session-types` returns everything a mentor currently offers,
+  with the duration and notice that govern each. Take an `id` from it and pass
+  it to `/availability/slots`. Until this shipped, slots required a
+  `session_type_id` that **nothing handed out**, so the endpoint was correct and
+  unreachable from a browse page.
+
+  **Session type, not "offering" and not "service".** `service_offerings` is the
+  closed six-row taxonomy already public at `/catalog/service-offerings`, and it
+  is the axis matching joins on; a session type is one mentor's own bookable
+  product. Using either word here would put two meanings of one term in the same
+  API, which is the conflation settled decision #53 exists to prevent. Both are
+  now pinned in the domain vocabulary.
+
+  **`meeting_venue` is resolved, not returned raw.** Null on a config means
+  *inherit from the mentor* (D21), so handing the null out would make every
+  client implement the cascade and a client that got it wrong would show "no
+  venue" for a mentor who has one.
+
+  The response is an allowlist. `category` and `application_stage` are free text
+  with no constraint, no vocabulary and no value in any row today, so publishing
+  them would commit a public contract to a shape nobody has designed.
+  `custom_meeting_url` is a **static room link** — a bearer credential anyone
+  holding it can walk into — and a test asserts it appears nowhere in the body.
+- **`session_types` leaves `EXEMPT_UNTIL_READ` and gets a real soft-delete case.**
+  M4's schema pull request added the table with no reader anywhere, so its
+  `deleted_at IS NULL` predicate had nothing to guard and the exemption said so
+  in writing: *"the test below fails the moment one appears in `infra/db`."* It
+  did — on the full gate, naming both halves of the fix. The set is now empty
+  rather than removed, because the next table to arrive before its reader
+  belongs in it.
+- **Two soft deletes guard a public mentor, not one.** A mentor is a `users`
+  row and a `mentor_profiles` row, each with its own `deleted_at`, and nothing
+  ties them — deleting either leaves the other approved, listed and undeleted.
+  Both public endpoints published mentors who had been removed. The user's
+  half is an `EXISTS` rather than a join comparison, so it is correct wherever
+  the predicate is spread and cannot be defeated by a caller who forgot to
+  join `users`.
+- **The public visibility rule now lives in exactly one place.**
+  `infra/db/public_visibility.py` holds the predicates both public endpoints
+  scope by, and the mutation batch proves it: dropping either half of
+  `approved AND listed` turns **both** suites red. Two copies of one control is
+  the shape this repository has already shipped once, in `list_session_events`,
+  where each copy made the other untestable.
 - **Bookable slots — the first public endpoint, and the first read with no
   viewer.** `GET /users/{id}/availability/slots?session_type_id=…&start=…&end=…`
   returns when a mentor could actually take a session of that type: declared

@@ -113,6 +113,7 @@ from app.infra.db.session_store import (
     list_session_events,
     list_sessions,
 )
+from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
@@ -997,6 +998,25 @@ async def mentor_slots(
 
 
 SlotsDep = Annotated[list[UtcInterval], Depends(mentor_slots)]
+
+
+async def mentor_session_types(user_id: UUID, session: SessionDep) -> list[dict[str, Any]]:
+    """What a mentor offers, or a 404 that does not say which kind of 404 it is.
+
+    No `CurrentUserDep`, and that absence is the whole authorization decision —
+    the mentor's own state stands in for a viewer, checked inside the query.
+
+    `None` from the store means the mentor is not publicly visible. An **empty
+    list** means they are, and are offering nothing bookable — a different claim,
+    and one that must not be used to answer the first.
+    """
+    rows = await list_session_types(session, user_id)
+    if rows is None:
+        raise NotFoundError("no such mentor")
+    return rows
+
+
+SessionTypesDep = Annotated[list[dict[str, Any]], Depends(mentor_session_types)]
 
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]

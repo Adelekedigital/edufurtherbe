@@ -541,9 +541,19 @@ async def test_the_default_start_is_the_mentors_today_not_utcs(
     default has to be resolved in *their* zone, and this is the direction that
     fails silently rather than loudly.
 
-    Asserted through the API's own answer rather than by stubbing a clock: the
-    window sits late enough in New York that it belongs to a different UTC date
-    for part of every day, so a UTC-based default would drop it for those hours.
+    Asserted through the API's own answer rather than by stubbing a clock, so
+    this is an end-to-end check that the defaulted path works at all for a mentor
+    west of UTC. The *zone* claim is pinned by the test below it, at a fixed
+    clock, because a count cannot make it.
+
+    **No exact count here, deliberately.** This is the one test in the file whose
+    range starts at the mentor's *today*, so the current day is partly spent: from
+    19:00 in New York the evening slots start falling behind `now` and the total
+    drops 28, 27, 26, 25, 24, recovering at midnight. An `== 28` therefore failed
+    for about five hours in every twenty-four — on unrelated pull requests, and
+    reading as a slots defect rather than a clock. The bound below holds at every
+    hour: six whole days are always ahead, and today contributes between none and
+    four.
     """
     async with db_engine.begin() as conn:
         mentor = (
@@ -593,8 +603,9 @@ async def test_the_default_start_is_the_mentors_today_not_utcs(
     )
 
     assert offered, "an evening-only New York mentor must still offer evenings"
-    # Seven mentor-local days of four one-hour evening slots.
-    assert len(offered) == 28
+    # Six whole days of four one-hour evening slots are always ahead; today adds
+    # between none and four depending on the hour this runs.
+    assert 24 <= len(offered) <= 28
 
 
 async def test_the_default_start_resolves_in_the_mentors_zone_at_a_fixed_clock(
@@ -666,3 +677,33 @@ async def test_the_default_start_resolves_in_the_mentors_zone_at_a_fixed_clock(
     assert first == dt.datetime(2026, 8, 20, 2, 0, tzinfo=dt.UTC), (
         "the default started on UTC's today and skipped the mentor's current evening"
     )
+
+
+async def test_a_soft_deleted_mentor_profile_has_no_public_slots(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The same gap, on the other public endpoint.
+
+    Both read through `mentor_is_public()`, so a missing `deleted_at` clause
+    published a removed mentor's calendar as well as their offerings. One
+    predicate, one fix, and a test on each endpoint so neither can drift back.
+    """
+    mentor, session_type = await make_mentor(db_engine, "soft-deleted")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE mentor_profiles SET deleted_at = now() WHERE user_id = :u"),
+            {"u": mentor},
+        )
+
+    assert (await api_client.get(slots_url(mentor, session_type))).status_code == 404
+
+
+async def test_a_soft_deleted_user_has_no_public_slots(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The same second soft delete, on the other public endpoint."""
+    mentor, session_type = await make_mentor(db_engine, "deleted-user")
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+
+    assert (await api_client.get(slots_url(mentor, session_type))).status_code == 404
