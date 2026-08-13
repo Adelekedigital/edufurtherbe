@@ -34,6 +34,9 @@ from app.api.schemas.common import (
     clamp_limit,
     decode_cursor,
     decode_id_cursor,
+    decode_offset_cursor,
+    encode_id_cursor,
+    encode_offset_cursor,
 )
 from app.api.schemas.profile import (
     AwardPatch,
@@ -1034,18 +1037,43 @@ async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
 
 async def mentor_page(
     session: SessionDep,
+    q: Annotated[
+        str | None,
+        Query(description="Search mentors by name, school, programme or country."),
+    ] = None,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
-) -> tuple[list[dict[str, Any]], bool]:
-    """One page of bookable mentors.
+) -> tuple[list[dict[str, Any]], bool, str | None]:
+    """One page of bookable mentors, browsing or searching.
 
-    No viewer and no filters. The cursor is an id and nothing else — ADR 0016's
-    base case, which this is the first list to sort by.
+    **The mode decides how the token is read**, which is why decoding happens
+    here rather than in the store: a browse cursor and a search cursor are both
+    opaque base64 and are not interchangeable, so each decoder refuses the
+    other's tag and a mixed request is a 422 rather than a confidently wrong
+    page.
+
+    The third element of the return is the mode, so the route knows which kind of
+    token to mint without re-deriving it from `q` and risking the two disagreeing.
     """
-    return await search_mentors(session, limit=clamp_limit(limit), after=decode_id_cursor(cursor))
+    # Normalised **here and only here**. The store used to strip and test `q`
+    # again, so a broken decision in this function was masked by the store's
+    # copy quietly doing the right thing — one rule in two places, invisible
+    # precisely because the two agreed. Now this decides and the store trusts.
+    term = (q or "").strip() or None
+    if term is not None:
+        offset = decode_offset_cursor(cursor)
+        rows, has_more = await search_mentors(
+            session, limit=clamp_limit(limit), q=term, offset=offset
+        )
+        return rows, has_more, encode_offset_cursor(offset + len(rows)) if has_more else None
+
+    rows, has_more = await search_mentors(
+        session, limit=clamp_limit(limit), after=decode_id_cursor(cursor)
+    )
+    return rows, has_more, encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None
 
 
-MentorPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(mentor_page)]
+MentorPageDep = Annotated[tuple[list[dict[str, Any]], bool, str | None], Depends(mentor_page)]
 
 PublicMentorDep = Annotated[dict[str, Any], Depends(public_mentor)]
 

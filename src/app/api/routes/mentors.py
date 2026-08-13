@@ -22,7 +22,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import MentorPageDep, PublicMentorDep
-from app.api.schemas.common import Page, encode_id_cursor
+from app.api.schemas.common import Page
 from app.api.schemas.mentors import MentorPublicRead, MentorSummaryRead
 
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
@@ -69,14 +69,11 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
     },
 )
 async def find_mentors(page: MentorPageDep) -> Page[MentorSummaryRead]:
-    rows, has_more = page
-    return Page(
-        data=[MentorSummaryRead.from_row(row) for row in rows],
-        # The cursor is `mentor_profiles.id`, which is **not** the `id` in the
-        # row — that one is the user. Two different values, and reaching for the
-        # visible one would page through a different sequence entirely.
-        next_cursor=encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None,
-    )
+    # The token is minted in the dependency, which is the only place that knows
+    # which mode ran. Deriving it again here from `q` would be one rule in two
+    # places, and the copy that drifted would mint the wrong kind.
+    rows, _, next_cursor = page
+    return Page(data=[MentorSummaryRead.from_row(row) for row in rows], next_cursor=next_cursor)
 
 
 @router.get(

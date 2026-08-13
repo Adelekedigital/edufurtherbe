@@ -26,6 +26,8 @@ from tests.integration.factories import (
     make_public_mentor,
 )
 
+from app.api.schemas.common import MAX_SEARCH_OFFSET
+
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 URL = "/api/v1/mentors"
@@ -419,3 +421,347 @@ async def test_no_bookable_mentors_is_an_empty_page_not_an_error(
 
     assert response.status_code == 200
     assert response.json() == {"data": [], "next_cursor": None}
+
+
+# --------------------------------------------------------------------------
+# Search
+#
+# **One test per field, and that is not padding.** The document concatenates
+# seven sources; omitting one does not fail, it just means nobody ever finds a
+# mentor that way. There is no other signal — no error, no empty result for the
+# common case, nothing a gate could see.
+# --------------------------------------------------------------------------
+
+
+async def set_bio(engine: AsyncEngine, mentor: UUID, about: str) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO user_profiles (user_id, about_me) VALUES (:u, :a)"),
+            {"u": mentor, "a": about},
+        )
+
+
+async def set_origin_country(engine: AsyncEngine, mentor: UUID, code: str) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, origin_country_id) "
+                "VALUES (:u, (SELECT id FROM countries WHERE code = :c))"
+            ),
+            {"u": mentor, "c": code},
+        )
+
+
+async def set_study(
+    engine: AsyncEngine, mentor: UUID, *, code: str = "", program: str = ""
+) -> None:
+    async with engine.begin() as conn:
+        if code:
+            await conn.execute(
+                text(
+                    "UPDATE mentor_profiles SET primary_study_country_id = "
+                    "(SELECT id FROM countries WHERE code = :c) WHERE user_id = :u"
+                ),
+                {"u": mentor, "c": code},
+            )
+        if program:
+            await conn.execute(
+                text("UPDATE mentor_profiles SET primary_study_program = :p WHERE user_id = :u"),
+                {"u": mentor, "p": program},
+            )
+
+
+async def set_headline(engine: AsyncEngine, mentor: UUID, headline: str) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE mentor_profiles SET headline = :h WHERE user_id = :u"),
+            {"u": mentor, "h": headline},
+        )
+
+
+async def add_education(
+    engine: AsyncEngine,
+    mentor: UUID,
+    *,
+    school: str = "Somewhere",
+    program: str | None = None,
+    deleted: bool = False,
+) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO education_entries "
+                "(user_id, school_name_raw, study_program, deleted_at) "
+                "VALUES (:u, :s, :p, CASE WHEN :d THEN now() END)"
+            ),
+            {"u": mentor, "s": school, "p": program, "d": deleted},
+        )
+
+
+async def test_search_finds_a_mentor_by_first_name(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "q-first")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=Ada")
+
+
+async def test_search_finds_a_mentor_by_last_name(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "q-last")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=Lovelace")
+
+
+async def test_search_finds_a_mentor_by_headline(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "q-headline")
+    await set_headline(db_engine, mentor, "Astrophysics admissions")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=astrophysics")
+
+
+async def test_search_finds_a_mentor_by_primary_study_program(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "q-program")
+    await set_study(db_engine, mentor, program="Naval Architecture")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=naval")
+
+
+async def test_search_finds_a_mentor_by_school(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Through `education_entries`, which is one-to-many — the field that forces
+    the document to exist rather than being a plain column comparison."""
+    mentor = await make_bookable_mentor(db_engine, "q-school")
+    await add_education(db_engine, mentor, school="Obafemi Awolowo University")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=Awolowo")
+
+
+async def test_search_finds_a_mentor_by_study_country(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "q-study-country")
+    await set_study(db_engine, mentor, code="GB")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=United Kingdom")
+
+
+async def test_search_finds_a_mentor_by_origin_country(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "q-origin")
+    await set_origin_country(db_engine, mentor, "NG")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=Nigeria")
+
+
+async def test_search_finds_a_mentor_by_bio(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The seventh field, and the one the schema anticipated: M2 built
+    `ix_user_profiles_about_fts` for a bio search that never shipped."""
+    mentor = await make_bookable_mentor(db_engine, "q-bio")
+    await set_bio(db_engine, mentor, "I coach on scholarship essays.")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=scholarship")
+
+
+# --------------------------------------------------------------------------
+# What the configuration split buys, in both directions
+# --------------------------------------------------------------------------
+
+
+async def test_a_name_is_not_stemmed(api_client: httpx.AsyncClient, db_engine: AsyncEngine) -> None:
+    """`simple` on the name fields, pinned by the reason for choosing it.
+
+    `english` reduces "Harding" to the lexeme `hard`, so a search for **hard**
+    would return a mentor with that surname. Four of the seven fields are proper
+    nouns, which is why they are not stemmed.
+    """
+    mentor = await make_bookable_mentor(db_engine, "q-harding")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET last_name = 'Harding' WHERE id = :u"), {"u": mentor}
+        )
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=Harding")
+    assert str(mentor) not in await ids(api_client, f"{URL}?q=hard")
+
+
+async def test_prose_is_stemmed(api_client: httpx.AsyncClient, db_engine: AsyncEngine) -> None:
+    """The other half: `english` on the prose fields.
+
+    Without it "studying" and "study" are different tokens and a mentee typing
+    one misses the other. Both halves need pinning or the split is only half
+    guarded — a single config would pass one of these two tests.
+    """
+    mentor = await make_bookable_mentor(db_engine, "q-stem")
+    await set_bio(db_engine, mentor, "I enjoy studying admissions essays.")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=study")
+
+
+async def test_a_name_match_outranks_a_country_match(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Weights, asserted by the ordering they exist to produce.
+
+    Without `setweight` a country match scores identically to a name match, and
+    somebody searching a surname gets everyone who studied in a country of that
+    name first.
+    """
+    # **The name match is created first, deliberately.** Ties break on
+    # `mentor_profiles.id DESC`, so creating it second would let it win on the
+    # tiebreak whether or not weights exist — and a mutation stripping
+    # `setweight` survived on exactly that. Created first, it can only come out
+    # on top if it genuinely outranks.
+    by_name = await make_bookable_mentor(db_engine, "q-rank-name")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET last_name = 'Nigeria' WHERE id = :u"), {"u": by_name}
+        )
+    by_country = await make_bookable_mentor(db_engine, "q-rank-country")
+    await set_study(db_engine, by_country, code="NG")
+
+    found = await ids(api_client, f"{URL}?q=Nigeria")
+
+    assert found.index(str(by_name)) < found.index(str(by_country))
+
+
+# --------------------------------------------------------------------------
+# What search must not do
+# --------------------------------------------------------------------------
+
+
+async def test_deleted_education_does_not_make_a_mentor_findable(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The sixth soft delete of this milestone, and the only one in a subquery."""
+    mentor = await make_bookable_mentor(db_engine, "q-deleted-school")
+    await add_education(db_engine, mentor, school="Deleted Polytechnic", deleted=True)
+
+    assert str(mentor) not in await ids(api_client, f"{URL}?q=Polytechnic")
+
+
+@pytest.mark.parametrize(
+    ("reason", "knob"),
+    [("unlisted", {"listed": False}), ("unapproved", {"approved": False})],
+)
+async def test_search_applies_the_same_visibility_as_browse(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, reason: str, knob: dict
+) -> None:
+    """A search path that forgot the predicates would be a leak with a text box
+    in front of it."""
+    mentor = await make_bookable_mentor(db_engine, f"q-hidden-{reason}", **knob)
+
+    assert str(mentor) not in await ids(api_client, f"{URL}?q=Ada")
+
+
+async def test_search_applies_the_same_bookable_rule_as_browse(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_public_mentor(db_engine, "q-unbookable")
+    await add_availability(db_engine, mentor)  # hours, but nothing to book
+
+    assert str(mentor) not in await ids(api_client, f"{URL}?q=Ada")
+
+
+async def test_a_blank_q_browses_rather_than_searching(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """An empty box is the resting state of a search field. Answering it with
+    nothing would make the page look broken before anybody typed."""
+    mentor = await make_bookable_mentor(db_engine, "q-blank")
+
+    for url in (URL, f"{URL}?q=", f"{URL}?q=%20%20"):
+        assert str(mentor) in await ids(api_client, url), url
+
+
+async def test_a_q_that_parses_to_nothing_returns_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Different from blank, and the distinction matters.
+
+    `websearch_to_tsquery` yields an empty query for input that is all stop words
+    or punctuation. That legitimately matches nobody — but treating it as *blank*
+    would return the entire directory to somebody who searched for "the".
+    """
+    await make_bookable_mentor(db_engine, "q-stopword")
+
+    assert await ids(api_client, f"{URL}?q=the") == []
+
+
+async def test_search_paging_returns_each_mentor_once(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    expected = {str(await make_bookable_mentor(db_engine, f"q-page-{n}")) for n in range(3)}
+
+    seen: list[str] = []
+    url: str | None = f"{URL}?q=Lovelace&limit=1"
+    for _ in range(5):
+        assert url is not None
+        body = (await api_client.get(url)).json()
+        seen.extend(row["id"] for row in body["data"])
+        if body["next_cursor"] is None:
+            url = None
+            break
+        url = f"{URL}?q=Lovelace&limit=1&cursor={body['next_cursor']}"
+
+    assert url is None, "paging never terminated"
+    assert len(seen) == len(set(seen)), "a mentor appeared on two pages"
+    assert set(seen) == expected
+
+
+async def test_a_browse_cursor_is_refused_by_a_search(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The two tokens look identical and mean different things.
+
+    Untagged, a browse cursor replayed against a search would decode to a
+    plausible offset and return a confidently wrong page — the worst kind of bug,
+    because it looks like bad relevance rather than a mistake.
+    """
+    for _ in range(2):
+        await make_bookable_mentor(db_engine, f"q-mix-{_}")
+
+    browse = (await api_client.get(f"{URL}?limit=1")).json()["next_cursor"]
+    assert browse
+
+    response = await api_client.get(f"{URL}?q=Lovelace&limit=1&cursor={browse}")
+
+    assert response.status_code == 422
+
+
+async def test_a_search_cursor_is_refused_by_a_browse(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    for _ in range(2):
+        await make_bookable_mentor(db_engine, f"q-mix-back-{_}")
+
+    search = (await api_client.get(f"{URL}?q=Lovelace&limit=1")).json()["next_cursor"]
+    assert search
+
+    response = await api_client.get(f"{URL}?limit=1&cursor={search}")
+
+    assert response.status_code == 422
+
+
+async def test_a_search_cannot_be_paged_past_the_depth_cap(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Elasticsearch refuses past 10,000 by default and Google stops near 1,000:
+    capping is what the category does, not a limitation this build invented."""
+    await make_bookable_mentor(db_engine, "q-deep")
+    from app.api.schemas.common import encode_offset_cursor
+
+    too_deep = encode_offset_cursor(MAX_SEARCH_OFFSET + 1)
+
+    response = await api_client.get(f"{URL}?q=Lovelace&cursor={too_deep}")
+
+    assert response.status_code == 422

@@ -119,6 +119,51 @@ def decode_id_cursor(cursor: str | None) -> UUID | None:
         raise ValidationError("cursor is not a cursor this endpoint issued") from exc
 
 
+#: How deep a search may be paged. Elasticsearch refuses past 10,000 results by
+#: default and Google stops near 1,000: the systems built for search cap depth
+#: rather than solve it, because relevance is unstable and nobody reads page 40.
+#: Here it also stops a public endpoint being asked to count past a million rows.
+MAX_SEARCH_OFFSET = 500
+
+
+def encode_offset_cursor(offset: int) -> str:
+    """The position in a ranked result set.
+
+    **A browse cursor replayed here is already refused**, and it needed no kind
+    tag to do it: this decodes to an integer and an id cursor holds a UUID, so
+    `int()` rejects it. A tag was written first on the belief that it was what
+    produced the 422 — a mutation removing it survived, which is how the claim was
+    found to be false. Removed rather than kept untestable, following the
+    redundant guard deleted from `list_session_events` for the same reason. The
+    two tests asserting cross-kind refusal stay: they assert the behaviour, which
+    is what matters, and would hold under either mechanism.
+
+    Offset rather than a keyset because a rank is not in the row and is not
+    stable — "best match" grows to include quality signals that do not exist yet,
+    and a token encoding today's ranking is invalidated the day the formula
+    changes. An offset is indifferent to what the ordering is.
+    """
+    return base64.urlsafe_b64encode(str(offset).encode()).decode()
+
+
+def decode_offset_cursor(cursor: str | None) -> int:
+    """A search cursor back into a position, or a refusal.
+
+    Refuses an id cursor, a malformed token, a negative offset, and anything past
+    `MAX_SEARCH_OFFSET`. All four are client errors and all four are better as a
+    422 than as a page that looks right.
+    """
+    if cursor is None:
+        return 0
+    try:
+        offset = int(base64.urlsafe_b64decode(cursor.encode()).decode())
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+    if offset < 0 or offset > MAX_SEARCH_OFFSET:
+        raise ValidationError(f"a search may not be paged past {MAX_SEARCH_OFFSET} results")
+    return offset
+
+
 def clamp_limit(limit: int | None) -> int:
     """The requested page size, bounded.
 

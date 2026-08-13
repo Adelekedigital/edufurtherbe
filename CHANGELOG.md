@@ -12,6 +12,34 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`GET /mentors?q=` searches by name, school, programme, country and bio.**
+  Postgres full-text search over a weighted document assembled from seven
+  sources — `setweight` A for the name, B for headline and programme, C for
+  schools and both countries, D for the bio — ranked with `ts_rank_cd`.
+
+  **Two text search configurations, chosen per field.** `english` stems, which
+  is right for prose and wrong for proper nouns: it reduces *Harding* to `hard`,
+  so a search for "hard" would return that mentor. Four of the seven fields are
+  names and take `simple`; the three prose fields take `english`, which is the
+  choice this codebase already made for `about_me`. The query is parsed both ways
+  and OR'd, since one parse would only ever reach half the document.
+
+  **Browse keeps its keyset; search uses an offset**, both behind the one opaque
+  token ADR 0016 made changeable for exactly this. A rank is neither in the row
+  nor stable — "best match" grows to include quality signals that do not exist
+  yet, and a token encoding today's ranking is invalidated the day the formula
+  changes. Capped at 500 deep, because the systems built for search cap depth
+  rather than solve it.
+
+  Computed inline, so it is a sequential scan by construction — 27.7ms at 500
+  mentors, 329ms at 5,000, 3.6s at 50,000. That crosses D19's 200ms line at
+  roughly 3,000 mentors, and the escalation is the same expression moved into a
+  stored GIN-indexed column, returning the same rows in the same order.
+
+  `ix_user_profiles_about_fts` — a GIN index built in M2 "deferred from M1" for a
+  bio search that never shipped — stays unused. An expression index only serves a
+  query whose expression matches it exactly, and a concatenated document does not.
+  The stored column supersedes it, and that is the moment to drop it.
 - **Mentor discovery — the endpoint that hands out the ids the others need.**
   `GET /mentors` pages every mentor a mentee could actually book, newest first,
   with no token. Three public reads existed before it and every one required an
