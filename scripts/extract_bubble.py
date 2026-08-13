@@ -13,6 +13,20 @@ Writes ``data/bubble/<thing>.json``. ``data/`` is gitignored — these files hol
 1,200 members' names, emails and profile text, and `gitleaks` finds credentials
 rather than people, so nothing in the gate would object to them being committed.
 
+**What it writes is an archive, not loader input.** These records are already
+canonicalised — keyed on ``bubble_id`` — while ``load_*.py --from-export`` reads a
+*raw* Bubble export and looks for ``unique id``. Feeding one to the other fails
+with ``record has no 'unique id'``. Nothing converts between the two and nothing
+needs to: the loaders run from the export, which is complete for every field they
+read.
+
+The reason to run this at all is what the export does **not** contain. Linked
+OAuth providers live only in the API's ``authentication`` object — 6 of the 43 dev
+users, all Google — and ``to_identities`` is the transform already waiting for
+them. That data disappears when Bubble is switched off, so the snapshot is taken
+before cutover even though ``auth_identities`` has no reader yet. Capturing it is
+one command; reconstructing it afterwards is impossible.
+
 Credentials are dropped by the reader before a record reaches this script, so
 there is no redaction step here to forget. The control sits in the shared
 canonicalisation both sources go through, not at each call site — which is also
