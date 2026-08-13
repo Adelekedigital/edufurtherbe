@@ -34,6 +34,9 @@ async def make_public_mentor(
     approved: bool = True,
     listed: bool = True,
     timezone: str = LAGOS,
+    #: The legacy public profile handle. Nullable in the schema and on 4 of 43
+    #: migrated users, so a mentor without one must stay reachable by id.
+    slug: str | None = None,
     #: `mentor_profiles.default_meeting_venue` is NOT NULL with a server
     #: default, so "no default" is not a state a mentor can be in.
     default_venue: str = "google_meet",
@@ -48,10 +51,11 @@ async def make_public_mentor(
         mentor = (
             await conn.execute(
                 text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentor', :z) RETURNING id"
+                    "INSERT INTO users "
+                    "(email, auth_id, first_name, last_name, slug, primary_role, timezone) "
+                    "VALUES (:e, :a, 'Ada', 'Lovelace', :s, 'mentor', :z) RETURNING id"
                 ),
-                {"e": f"mentor-{tag}@example.test", "a": uuid4(), "z": timezone},
+                {"e": f"mentor-{tag}@example.test", "a": uuid4(), "s": slug, "z": timezone},
             )
         ).scalar_one()
         await conn.execute(

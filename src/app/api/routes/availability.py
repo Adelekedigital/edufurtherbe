@@ -13,12 +13,13 @@ one implementation serves a mentor editing their own schedule and an admin
 reviewing it, and the only difference is which dependency the handler asks for.
 `TargetUserDep` admits an admin; `OwnerDep` does not.
 
-**Reads are owner-and-admin only, deliberately narrower than the eventual rule.**
-D20 says a profile renders if the mentor is listed, *or* the viewer has a session
-with them, *or* the viewer is an admin — and the middle clause has no table until
-M4. Shipping the two that exist would drop precisely the one protecting a mentee
-whose mentor has since paused, which is the case D20 exists for. Widening later
-is additive; narrowing after a client has built against it is not.
+**Reads are owner-and-admin only, and that is now the settled rule rather than a
+holding position.** They were narrowed pending D20's "or the viewer has a session
+with them" clause; settled decision #94 dropped it, because a mentee with a
+session sees *that session* — which names the mentor — and never needed the
+mentor's declared schedule to read their own history. The public question is
+answered by `/mentors/{handle}` and `/users/{id}/availability/slots`; these
+routes say what a mentor has declared, which is theirs and an admin's.
 """
 
 from __future__ import annotations

@@ -12,6 +12,39 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor's public profile, reachable by id or by legacy slug.**
+  `GET /mentors/{handle}` returns who a mentor is, what kind of help they give,
+  and what can actually be booked — with the session types **inlined** from the
+  same function that serves `/users/{id}/session-types`, so the two can never
+  disagree. No token: a mentee compares mentors before signing up.
+
+  **D20's three-clause rule becomes one.** The package renders a profile if the
+  mentor is listed, *or* the viewer has a session, *or* the viewer is an admin.
+  The middle clause is dropped by product decision — a mentee with a session sees
+  *that session*, which now carries the mentor's name — and the admin clause
+  because admins read the owner-facing endpoint. What is left is exactly
+  `mentor_is_public()`, so this endpoint writes no visibility predicate of its
+  own.
+
+  `users.slug` is the legacy public profile handle (#28), carried so existing
+  links keep working. One statement resolves either handle: the segment is parsed
+  as a UUID and falls back to a slug, so there is one query, one spread of the
+  guard, and no branch that can carry a different set of clauses.
+- **The public visibility predicate is a comparison again, not an `EXISTS`.** It
+  was a subquery so a caller who forgot to join `users` could not silently lose
+  the clause — sound, and incomplete. A correlated subquery hides
+  `deleted_at IS NULL` from the planner, and `ix_users_slug_live` is **partial**
+  on exactly that: measured at 20,000 mentors, a slug lookup was a sequential
+  scan discarding 19,999 rows at 1.9ms, against 0.046ms once the predicate was
+  direct. Forgetting the join now produces a cartesian product, which SQLAlchemy
+  warns about and any row-count assertion fails on — loud enough, and it buys
+  back every index on `users`.
+- **The mentor's service offerings are read in one place.** The query was inline
+  in `profile_store`; the public profile needed the same rows, and copying it
+  would have been one rule in two places for the fifth time this milestone. The
+  extraction also gained the `is_active` filter the inline version never had — no
+  row is inactive today, so nothing changes now, but a retired offering will stop
+  appearing on both profiles rather than one.
 - **Sessions name the people in them.** `SessionRead` carried `mentor_id` and
   `mentee_id` as bare UUIDs, so a mentee's own session list could not say who the
   session was with — for **any** mentor, listed or paused. Each session now

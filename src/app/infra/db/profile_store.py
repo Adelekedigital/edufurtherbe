@@ -40,11 +40,11 @@ from app.infra.db.models.mentoring import (
     MenteeGoalCountry,
     MenteeGoalNeed,
     MentorProfile,
-    MentorServiceOffering,
     ServiceOffering,
 )
 from app.infra.db.models.reference import Country
 from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
+from app.infra.db.offerings import list_service_offerings
 
 #: The institution columns an embedded reference carries, matching what
 #: `catalogue_store` projects — so `InstitutionRead.from_row` builds the same
@@ -208,16 +208,6 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
     if row is None:
         return None
 
-    offerings = (
-        await session.execute(
-            select(ServiceOffering.slug, ServiceOffering.display_name)
-            .select_from(MentorServiceOffering)
-            .join(
-                ServiceOffering,
-                ServiceOffering.id == MentorServiceOffering.service_offering_id,
-            )
-            .where(MentorServiceOffering.mentor_user_id == user_id)
-            .order_by(ServiceOffering.sort_order)
-        )
-    ).mappings()
-    return dict(row) | {"offerings": [dict(o) for o in offerings]}
+    # Shared with the public profile rather than repeated there. See
+    # `infra/db/offerings.py` for why the filter lives inside it.
+    return dict(row) | {"offerings": await list_service_offerings(session, user_id)}

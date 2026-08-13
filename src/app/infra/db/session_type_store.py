@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
+from app.infra.db.models.user import User
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 
 __all__ = ["list_session_types"]
@@ -41,7 +42,15 @@ def _public_mentor(user_id: UUID) -> Select[Any]:
     whether they exist publicly, and selecting columns nobody reads invites
     somebody to start reading them.
     """
-    return select(literal(1)).where(MentorProfile.user_id == user_id, *mentor_is_public())
+    return (
+        select(literal(1))
+        .select_from(MentorProfile)
+        # `mentor_is_public()` names `users.deleted_at`, so the join is part of
+        # the contract rather than an optimisation. See that function for why it
+        # is a comparison and not a subquery.
+        .join(User, User.id == MentorProfile.user_id)
+        .where(MentorProfile.user_id == user_id, *mentor_is_public())
+    )
 
 
 def _live_session_types(user_id: UUID) -> Select[Any]:
@@ -76,6 +85,7 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             SessionTypeBookingConfig.session_type_id == SessionType.id,
         )
         .join(MentorProfile, MentorProfile.user_id == SessionType.mentor_user_id)
+        .join(User, User.id == SessionType.mentor_user_id)
         .where(*session_type_is_live(user_id), *mentor_is_public())
         .order_by(SessionType.name)
     )

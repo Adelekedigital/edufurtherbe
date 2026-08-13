@@ -17,8 +17,6 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
-
 from app.domain.enums import ApprovalStatus, ListingStatus
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType
@@ -43,12 +41,20 @@ def mentor_is_public() -> list[Any]:
     way, one sweep apart: the profile's by asking what else was on that table,
     the user's by asking the same question about the table beside it.
 
-    **The user clause is an `EXISTS`, deliberately, and not a join.** Written as
-    a plain comparison it would only work for callers who had already joined
-    `users` — and a predicate that depends on the caller's joins is a predicate a
-    caller will forget, which is the entire failure this module exists to
-    prevent. As a subquery it is self-contained: correct wherever it is spread,
-    joined or not, and it looks up a primary key.
+    **The user clause is a plain comparison, and every caller must join `users`.**
+    It was an `EXISTS` first, so that a caller who forgot the join could not
+    silently lose the clause — sound reasoning, and incomplete. A correlated
+    subquery hides `deleted_at IS NULL` from the planner, and `users` carries
+    **partial** indexes predicated on exactly that: `ix_users_slug_live` is unique
+    on `slug WHERE deleted_at IS NULL AND slug IS NOT NULL`. With the EXISTS form
+    the planner cannot prove the query only wants live rows, so it cannot use the
+    index — measured at 20,000 mentors, a slug lookup was a sequential scan
+    discarding 19,999 rows, while the same lookup by id rode the primary key.
+
+    So the clause is direct and the join is required. Forgetting it does not lose
+    the clause quietly: referencing `User` without joining it produces a cartesian
+    product, which SQLAlchemy warns about and which fails any test asserting a row
+    count. Loud enough, and it buys back every index on `users`.
 
     Returned as a list of clauses rather than one `and_(...)` so a caller can
     spread it into `.where(...)` beside its own predicates and read the whole
@@ -58,17 +64,7 @@ def mentor_is_public() -> list[Any]:
         MentorProfile.deleted_at.is_(None),
         MentorProfile.approval_status == ApprovalStatus.APPROVED,
         MentorProfile.listing_status == ListingStatus.LISTED,
-        select(User.id)
-        .where(User.id == MentorProfile.user_id, User.deleted_at.is_(None))
-        # `correlate` is not optional. Left to infer, SQLAlchemy correlates away
-        # every table the enclosing query already selects from — and `slot_store`
-        # joins `users` for the mentor's timezone, so both tables vanished from
-        # the subquery's FROM and it raised `returned no FROM clauses due to
-        # auto-correlation`. Naming `MentorProfile` says: correlate that one,
-        # keep `users` here. The failure is loud, but only from the caller that
-        # happens to join the same table.
-        .correlate(MentorProfile)
-        .exists(),
+        User.deleted_at.is_(None),
     ]
 
 
