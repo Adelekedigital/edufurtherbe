@@ -19,6 +19,7 @@ those care.
 
 from __future__ import annotations
 
+import datetime as dt
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -129,3 +130,56 @@ async def add_session_type(
                 {"t": session_type},
             )
     return session_type
+
+
+async def add_availability(
+    engine: AsyncEngine,
+    mentor: UUID,
+    *,
+    day_of_week: int = 1,
+    start: str = "09:00",
+    end: str = "12:00",
+    timezone: str = LAGOS,
+    active: bool = True,
+    deleted: bool = False,
+) -> None:
+    """One weekly window, with each way of not counting as a knob.
+
+    Shared because discovery made this the fourth place the same insert was
+    written. The other three are inline in the slots and session-type suites and
+    predate this file; they are candidates for the same treatment whenever
+    somebody is in there anyway.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO availability_rules "
+                "(mentor_user_id, day_of_week, start_time, end_time, timezone, "
+                " is_active, deleted_at) "
+                "VALUES (:u, :d, :s, :e, :z, :a, CASE WHEN :x THEN now() END)"
+            ),
+            {
+                "u": mentor,
+                "d": day_of_week,
+                # asyncpg binds a `time` column from a `time` object, not a
+                # string — the other suites inline the literal in SQL and so
+                # never meet this.
+                "s": dt.time.fromisoformat(start),
+                "e": dt.time.fromisoformat(end),
+                "z": timezone,
+                "a": active,
+                "x": deleted,
+            },
+        )
+
+
+async def make_bookable_mentor(engine: AsyncEngine, tag: str, **knobs: object) -> UUID:
+    """A mentor who actually appears in discovery: public, offering, and free hours.
+
+    Three things have to be true at once, and each is a separate reason to be
+    missing — so the refusal tests build this and remove exactly one.
+    """
+    mentor = await make_public_mentor(engine, tag, **knobs)  # type: ignore[arg-type]
+    await add_session_type(engine, mentor)
+    await add_availability(engine, mentor)
+    return mentor

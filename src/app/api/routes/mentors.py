@@ -21,8 +21,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.api.deps import PublicMentorDep
-from app.api.schemas.mentors import MentorPublicRead
+from app.api.deps import MentorPageDep, PublicMentorDep
+from app.api.schemas.common import Page
+from app.api.schemas.mentors import MentorPublicRead, MentorSummaryRead
 
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
 
@@ -36,6 +37,43 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         )
     },
 }
+
+
+@router.get(
+    "",
+    response_model=Page[MentorSummaryRead],
+    summary="Find a mentor",
+    description=(
+        "Every mentor a mentee could actually book, newest first.\n\n"
+        "**Public.** No token — this is the page somebody lands on before they "
+        "have an account.\n\n"
+        "**Bookable, not available.** A mentor appears while they are approved, "
+        "listed, and set up: at least one active offering with a duration, and "
+        "at least one weekly availability window. It says nothing about *when* "
+        "they are free — a mentor booked solid for a month still appears, "
+        "because they exist and they take this kind of work. Ask "
+        "`/users/{id}/availability/slots` for the calendar.\n\n"
+        "A mentor who has not finished setting up does not appear here at all, "
+        "though their profile still resolves by direct link.\n\n"
+        "**No filters yet.** Service, school, degree and country are all coming; "
+        "they arrive as query parameters, which is why they can arrive later "
+        "without changing this response or the cursor.\n\n"
+        "`offerings` is what kind of help each mentor gives — the platform "
+        "taxonomy, and what matching runs on. What can be *booked* is on the "
+        "profile."
+    ),
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "The `cursor` was not one this endpoint issued."
+        }
+    },
+)
+async def find_mentors(page: MentorPageDep) -> Page[MentorSummaryRead]:
+    # The token is minted in the dependency, which is the only place that knows
+    # which mode ran. Deriving it again here from `q` would be one rule in two
+    # places, and the copy that drifted would mint the wrong kind.
+    rows, _, next_cursor = page
+    return Page(data=[MentorSummaryRead.from_row(row) for row in rows], next_cursor=next_cursor)
 
 
 @router.get(

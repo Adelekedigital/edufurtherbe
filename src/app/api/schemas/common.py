@@ -19,7 +19,7 @@ import binascii
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from app.core.errors import ValidationError
 
@@ -88,6 +88,111 @@ def decode_cursor(cursor: str | None) -> tuple[str, UUID] | None:
         raise ValidationError("cursor is not a cursor this endpoint issued") from exc
 
 
+def encode_id_cursor(row_id: UUID) -> str:
+    """The keyset position when the id **is** the sort order.
+
+    ADR 0016's base case, unimplemented until now: *"the id is the cursor when
+    the display order is the id order. Otherwise the cursor is the sort column
+    plus the id."* Both existing list endpoints sort by something else — a
+    display name, a start time — so only the amended two-part form had ever been
+    written.
+
+    Kept separate rather than passing the id twice to `encode_cursor`. That works
+    and reads as a mistake forever, and the first person to tidy it would change
+    the sort key rather than delete the duplication.
+    """
+    return base64.urlsafe_b64encode(str(row_id).encode()).decode()
+
+
+def decode_id_cursor(cursor: str | None) -> UUID | None:
+    """An id cursor back into a position, or a refusal.
+
+    A malformed cursor is a **client** error and not something to silently treat
+    as "start from the beginning" — that answers a paging bug with page one
+    forever, which looks like working software and loses rows.
+    """
+    if cursor is None:
+        return None
+    try:
+        return UUID(base64.urlsafe_b64decode(cursor.encode()).decode())
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+
+
+#: How deep a search may be paged. Elasticsearch refuses past 10,000 results by
+#: default and Google stops near 1,000: the systems built for search cap depth
+#: rather than solve it, because relevance is unstable and nobody reads page 40.
+#: Here it also stops a public endpoint being asked to count past a million rows.
+MAX_SEARCH_OFFSET = 500
+
+
+def encode_offset_cursor(offset: int) -> str:
+    """The position in a ranked result set.
+
+    **A browse cursor replayed here is already refused**, and it needed no kind
+    tag to do it: this decodes to an integer and an id cursor holds a UUID, so
+    `int()` rejects it. A tag was written first on the belief that it was what
+    produced the 422 — a mutation removing it survived, which is how the claim was
+    found to be false. Removed rather than kept untestable, following the
+    redundant guard deleted from `list_session_events` for the same reason. The
+    two tests asserting cross-kind refusal stay: they assert the behaviour, which
+    is what matters, and would hold under either mechanism.
+
+    Offset rather than a keyset because a rank is not in the row and is not
+    stable — "best match" grows to include quality signals that do not exist yet,
+    and a token encoding today's ranking is invalidated the day the formula
+    changes. An offset is indifferent to what the ordering is.
+    """
+    return base64.urlsafe_b64encode(str(offset).encode()).decode()
+
+
+def _within_cap(offset: int) -> bool:
+    """Whether a position is one this endpoint will serve.
+
+    **One predicate, because both directions ask the same question.** The decoder
+    refused past the cap from the first commit and the minting side did not ask at
+    all, so the last page of a deep search handed out a token the very next
+    request rejected — a client following `next_cursor` exactly as the envelope
+    documents ended on a 422. Two comparisons against one constant is how that
+    happens; the constant being shared is not enough (#8).
+
+    Inclusive at the top: `MAX_SEARCH_OFFSET` is a position that *is* served, not
+    the first one refused. `<` here silently drops the last page and looks like
+    the fix.
+    """
+    return 0 <= offset <= MAX_SEARCH_OFFSET
+
+
+def next_offset_cursor(offset: int) -> str | None:
+    """The token for the next page of a search, or `None` because the cap ends it.
+
+    `None` is not an error here — past the cap there genuinely is no next page, so
+    the envelope says so in the one field clients already check. Kept apart from
+    `encode_offset_cursor`, which stays a pure codec: a test fabricating an
+    out-of-range token must not be able to get one from the function the endpoint
+    uses, or it proves the decoder against input the encoder can no longer produce.
+    """
+    return encode_offset_cursor(offset) if _within_cap(offset) else None
+
+
+def decode_offset_cursor(cursor: str | None) -> int:
+    """A search cursor back into a position, or a refusal.
+
+    Refuses an id cursor, a malformed token, a negative offset, and anything past
+    `MAX_SEARCH_OFFSET`. All four are client errors and all four are better as a
+    422 than as a page that looks right.
+    """
+    if cursor is None:
+        return 0
+    try:
+        offset = int(base64.urlsafe_b64decode(cursor.encode()).decode())
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+    if not _within_cap(offset):
+        raise ValidationError(f"a search may not be paged past {MAX_SEARCH_OFFSET} results")
+    return offset
+
+
 def clamp_limit(limit: int | None) -> int:
     """The requested page size, bounded.
 
@@ -98,6 +203,51 @@ def clamp_limit(limit: int | None) -> int:
     if limit is None:
         return DEFAULT_PAGE_SIZE
     return max(1, min(limit, MAX_PAGE_SIZE))
+
+
+def storable(value: str) -> str:
+    """The same text, minus what this database cannot be given.
+
+    **Two causes, and they fail in different places** — which is why the first
+    version of this function was wrong and shipped saying so. A ``str`` Python
+    accepts is not the same set as a ``text`` PostgreSQL accepts, and the gap has
+    two halves:
+
+    - **``U+0000``** encodes to UTF-8 perfectly well and PostgreSQL then refuses
+      the value: ``CharacterNotInRepertoireError``, raised by the server.
+    - **An unpaired surrogate** (``U+D800`` to ``U+DFFF``) never reaches the server
+      at all. UTF-8 has no encoding for one, so asyncpg raises
+      ``UnicodeEncodeError`` while building the message. JSON can carry one —
+      ``"\\ud800"`` is well-formed — so a request body is a live route to it.
+
+    Both are **a 500 with a stack trace, on endpoints that take no token at all**,
+    and nothing in the gate sees either: the annotation is ``str``, the value is
+    bound rather than interpolated, the SQL is correct, and both are legal Python.
+    Found by probe, and the second only because the first version of this
+    docstring asserted it did not exist — the claim was tested rather than
+    believed, and it was false.
+
+    So the rule is not a list of characters. It is **whatever cannot be stored**,
+    which the encoder itself defines: encode with the database's own encoding and
+    drop what it cannot represent, then drop the one thing it can represent and
+    the server still rejects. Every other control character survives, including
+    the C0 range, non-characters and astral-plane emoji — all probed, all stored.
+
+    Removed rather than refused, which is this file's existing answer. `Normalised`
+    already rewrites what it is given — trims, and turns ``""`` into ``None`` —
+    and a base class that quietly repairs whitespace while hard-failing a control
+    byte would be two rules wearing one name. No client that means anything sends
+    either of these: they come from a scanner, or from something already broken
+    upstream.
+    """
+    return value.encode("utf-8", "ignore").decode("utf-8").replace("\x00", "")
+
+
+#: The same rule for a query parameter, which reaches no model to be normalised
+#: by. Declared as a type rather than called in each dependency, so a fourth text
+#: parameter inherits it instead of remembering it — the three that exist were
+#: each reachable, and the fourth is the one that would ship.
+StorableText = AfterValidator(storable)
 
 
 class Normalised(BaseModel):
@@ -122,7 +272,10 @@ class Normalised(BaseModel):
         normalised: dict[str, Any] = {}
         for key, value in data.items():
             if isinstance(value, str):
-                stripped = value.strip()
+                # Before the trim, not after: a value that is *only* a NUL must
+                # end up `None` like any other emptied field, rather than a
+                # one-character string that passes every length check.
+                stripped = storable(value).strip()
                 normalised[key] = stripped or None
             else:
                 normalised[key] = value

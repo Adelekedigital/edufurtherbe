@@ -21,6 +21,8 @@ offer.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from app.api.schemas.session_types import SessionTypeRead
@@ -37,6 +39,51 @@ class ServiceOfferingRead(BaseModel):
 
     slug: str
     display_name: str
+
+
+class MentorSummaryRead(BaseModel):
+    """One mentor as a search result — a card, not a profile.
+
+    **Deliberately smaller than `MentorPublicRead`.** Twenty of these render a
+    results page; twenty full profiles with their inlined session types would be
+    payload for cards nobody has clicked. What is missing here is on
+    `/mentors/{handle}`, one click away.
+
+    `offerings` stays because it is the matching axis — the thing a mentee scans
+    a card for — and because when the service filter arrives, a row that cannot
+    say *why* it matched is a bad card. It is at most six short rows.
+
+    Names are nullable for the same reason they are everywhere else: the columns
+    are, and the M2 transform maps them from optional Bubble fields.
+    """
+
+    id: str
+    slug: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    headline: str | None = None
+    avatar_url: str | None = None
+    years_of_experience: int | None = None
+    primary_study_country: str | None = None
+    offerings: list[ServiceOfferingRead] = Field(default_factory=list)
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> MentorSummaryRead:
+        return cls(
+            id=str(row["user_id"]),
+            slug=_text(row["slug"]),
+            first_name=_text(row["first_name"]),
+            last_name=_text(row["last_name"]),
+            headline=_text(row["headline"]),
+            avatar_url=_text(row["avatar_url"]),
+            years_of_experience=(
+                int(str(row["years_of_experience"]))
+                if row["years_of_experience"] is not None
+                else None
+            ),
+            primary_study_country=_text(row["primary_study_country"]),
+            offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
+        )
 
 
 class MentorPublicRead(BaseModel):

@@ -79,11 +79,38 @@ and calendar live in separate Cloud projects.**
    mentor's Google account. This is the mechanism `calendar.app.created` provides
    and the reason it is non-sensitive.
 4. **Two Cloud projects.** Sign-in is consumed by Supabase Auth (ADR 0009);
-   calendar is consumed by Composio as its custom auth config (ADR 0004). Separate
-   projects, separate consent screens, consistent branding across both so a mentor
-   sees two prompts that obviously come from the same product.
+   calendar is consumed by **our own adapter, calling the Google Calendar API
+   directly** — see point 6. Separate projects, separate consent screens,
+   consistent branding across both so a mentor sees two prompts that obviously
+   come from the same product.
 5. **The split happens before the migration**, not after. It is nearly free now
    and costs a re-consent from every user later.
+6. **Calendar talks to Google directly, behind a `CalendarPort`.** No integration
+   platform. This **supersedes ADR 0004's** *"configure it in Composio as a
+   custom auth config"*; the rest of that record — owning the client, calendar as
+   a write target and an on-demand free/busy read, never polled and never
+   mirrored — is untouched and still governs.
+
+   The reason is in the two records themselves rather than in a new preference.
+   ADR 0004 was written believing calendar needed the **sensitive** tier, so
+   verification was unavoidable and managed auth looked like help. The scope
+   table above shows it does not: `calendar.freebusy` and `calendar.app.created`
+   are both non-sensitive, so there is **no review to survive**. And ADR 0004
+   already established that verification attaches to the OAuth client rather than
+   the middleware — *"whether orchestrated by Composio, by Nango, or by our own
+   code, the client is ours to register and ours to get verified. No integration
+   platform removes this step, so it cannot be a reason to choose between them."*
+
+   Take away the review and the managed auth and what remains is a per-tool-call
+   bill for HTTP requests we can make ourselves, plus a vendor between us and a
+   consent screen we own — which is exactly the failure ADR 0004 opens with,
+   where every connected account broke because the shared OAuth application's
+   publishing status was not ours to see.
+
+   The port is the hedge. `domain/ports.py` owns the interface, `infra/` holds
+   the Google adapter, and a later move to Nango or a second provider changes the
+   adapter rather than the calling code (see the **Port** entry in the domain
+   vocabulary).
 6. **Staying inside the non-sensitive tier is a boundary we are choosing**, not an
    accident of what was available. Crossing it is a decision with its own record —
    see the closing note below.
@@ -152,13 +179,32 @@ removed rather than reduced.
 calendar. Mentees see one. This is the visible cost of the project split and is
 worth the isolation it buys.
 
-**ADR 0004's Decision is superseded in part.** It says "We submit it for
-sensitive-scope verification"; that clause is replaced by this record. Its status
-should gain `point superseded by ADR 0012` **on acceptance**, following the
-sequencing ADRs 0008 and 0009 used — a status naming a supersession by a record
-still `Proposed` would assert a decision nobody has taken. Everything else in ADR
-0004 stands, including owning the client, the write-and-read-on-demand shape, and
-the Composio-versus-Nango reasoning.
+**ADR 0004's Decision is superseded in two places.** It says "We submit it for
+sensitive-scope verification" — replaced by the scope table above — and it says
+"We stay on Composio", with calendar configured there as a custom auth config,
+which point 6 replaces. Its status should gain `points superseded by ADR 0012`
+**on acceptance**, following the sequencing ADRs 0008 and 0009 used — a status
+naming a supersession by a record still `Proposed` would assert a decision nobody
+has taken. Everything else in ADR 0004 stands: owning the client, the
+write-and-read-on-demand shape, availability remaining mentor-declared, and only
+mentors connecting.
+
+**We are leaving Composio for a reason ADR 0004 did not list, and that is worth
+saying plainly.** That record permits departure "if and only if" one of three
+things becomes true — the action catalogue falls short, token custody becomes a
+requirement, or we adopt polling. None has. What changed is upstream of all
+three: the verification this record retires was a large part of what the platform
+was being paid to absorb, and once there is no review to survive, an on-demand
+free/busy call and a secondary-calendar write are two ordinary HTTPS requests.
+The exit criteria were written to catch Composio becoming *insufficient*; this is
+Composio becoming *unnecessary*, which is a better problem and needs recording as
+a different one rather than filed under the nearest existing clause.
+
+The token-custody point is worth noting as a benefit rather than a motive. ADR
+0004 records that Composio holds our users' OAuth tokens and we cannot inspect
+that, and names it the strongest argument for leaving. Going direct resolves it
+as a side effect — but it did not drive the decision, and dressing it up as
+condition 2 would rewrite history to make the exit look pre-authorised.
 
 **Settled decision #15 is unchanged.** Calendar is still "a write target and an
 on-demand free/busy read"; this record decides *where* the write lands, which is
@@ -199,6 +245,8 @@ its own record and its own accounting of the review cost — not a door closed h
   one their teaching sits on, which they have access to but do not own? If not,
   availability has a gap exactly where an academic's real commitments live, and
   `calendar.events.freebusy` may be the better of the two after all.
-- **Does Composio support a custom auth config pointing at a second Cloud
-  project** cleanly? ADR 0004 puts calendar behind Composio, so an awkward answer
-  here is an integration cost this record has not priced.
+- ~~**Does Composio support a custom auth config pointing at a second Cloud
+  project** cleanly?~~ **Moot — see point 6.** Calendar calls Google directly, so
+  there is no integration to price. This question is what prompted the
+  re-examination: an open cost against a vendor whose only remaining contribution
+  was billing for requests we can make ourselves.

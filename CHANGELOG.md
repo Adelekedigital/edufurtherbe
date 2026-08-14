@@ -12,6 +12,67 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`GET /mentors?q=` searches by name, school, programme, country and bio.**
+  Postgres full-text search over a weighted document assembled from seven
+  sources — `setweight` A for the name, B for headline and programme, C for
+  schools and both countries, D for the bio — ranked with `ts_rank_cd`.
+
+  **Two text search configurations, chosen per field.** `english` stems, which
+  is right for prose and wrong for proper nouns: it reduces *Harding* to `hard`,
+  so a search for "hard" would return that mentor. Four of the seven fields are
+  names and take `simple`; the three prose fields take `english`, which is the
+  choice this codebase already made for `about_me`. The query is parsed both ways
+  and OR'd, since one parse would only ever reach half the document.
+
+  **Browse keeps its keyset; search uses an offset**, both behind the one opaque
+  token ADR 0016 made changeable for exactly this. A rank is neither in the row
+  nor stable — "best match" grows to include quality signals that do not exist
+  yet, and a token encoding today's ranking is invalidated the day the formula
+  changes. Capped at 500 deep, because the systems built for search cap depth
+  rather than solve it.
+
+  Computed inline, so it is a sequential scan by construction — 27.7ms at 500
+  mentors, 329ms at 5,000, 3.6s at 50,000. That crosses D19's 200ms line at
+  roughly 3,000 mentors, and the escalation is the same expression moved into a
+  stored GIN-indexed column, returning the same rows in the same order.
+
+  `ix_user_profiles_about_fts` — a GIN index built in M2 "deferred from M1" for a
+  bio search that never shipped — stays unused. An expression index only serves a
+  query whose expression matches it exactly, and a concatenated document does not.
+  The stored column supersedes it, and that is the moment to drop it.
+- **Mentor discovery — the endpoint that hands out the ids the others need.**
+  `GET /mentors` pages every mentor a mentee could actually book, newest first,
+  with no token. Three public reads existed before it and every one required an
+  id or a slug you already had.
+
+  **Bookable, never available.** A mentor appears while they are approved,
+  listed, undeleted on both tables, and *set up*: an active offering that has a
+  duration, and an active weekly availability window. It says nothing about
+  *when* — availability is a computation over projected windows minus bookings
+  and cannot be a `WHERE` clause, so filtering on it would mean computing slots
+  for every candidate before paging and the cursor would stop being a keyset.
+  Caching it in a column is the drift D20 rejected. A mentor booked solid for a
+  month still appears, because they exist and take this kind of work.
+
+  Ordered by `mentor_profiles.id`, not `users.id` — both are UUIDv7 and both are
+  time-ordered, but they order different events, and a mentee of two years who
+  starts mentoring this week is a new mentor.
+
+  **No filters.** Service, school, degree and country are all reachable from
+  existing tables and four of the indexes they want already exist; they arrive
+  as query parameters, which is additive, where the sort order and row shape are
+  not.
+- **ADR 0016's base-case cursor exists at last.** The record says *"the id is
+  the cursor when the display order is the id order"* — and only the amended
+  two-part form had ever been written, because both earlier lists sort by a
+  display name or a start time. `encode_id_cursor`/`decode_id_cursor` implement
+  it rather than passing the id twice to the pair form, which works and reads as
+  a mistake forever.
+- **`offerings_for` replaces `list_service_offerings`**, taking several mentors
+  at once. Per-mentor it was twenty round trips a page; a second batched function
+  beside the single one would have been two queries of one rule, which is how the
+  `is_active` filter ends up on only one of them.
+
 - **A token for calling the local API by hand.** `scripts/dev_token.py --email
   ada@example.com` prints an access token the running application accepts, so an
   authenticated endpoint can be exercised without a Supabase round trip.
@@ -912,6 +973,54 @@ released. A tag with no matching section here fails the release job.
   vendor is unguarded until its package name is added alongside the dependency.
 
 ### Fixed
+
+- **Client text the database cannot store was an unauthenticated 500.** Two
+  causes, failing in two different layers:
+
+  `U+0000` encodes to UTF-8 perfectly well and PostgreSQL then refuses the
+  value — `CharacterNotInRepertoireError`. A single anonymous
+  `GET /institutions?q=%00` produced a stack trace, and so did
+  `GET /catalog/{catalogue}` and every free-text write body.
+
+  An **unpaired surrogate** never reaches PostgreSQL at all: UTF-8 has no
+  encoding for one, so asyncpg raises `UnicodeEncodeError` while building the
+  message. JSON carries it as a plain-ASCII escape, so a request body is a live
+  route. Reachable through exactly one field —
+  `AvailabilityExceptionWrite.reason`, the only free-text field in the API with
+  no `max_length`. A length constraint makes pydantic-core parse the value as
+  unicode and refuse it with a 422 first, which is why every other field was
+  already safe, by a mechanism nobody here chose. A test now pins that
+  behaviour, because if it changes every field becomes a route.
+
+  Removed rather than refused, which is what `Normalised` already does to the
+  text it is given: it trims, and turns `""` into `None`. A base class that
+  quietly repairs whitespace while hard-failing a control byte would be two rules
+  wearing one name.
+
+  One rule, two adapters — `storable()` in `schemas/common.py`, reached by
+  `Normalised` for bodies and by the `StorableText` annotation for query
+  parameters, so a fourth text parameter inherits it rather than remembering it.
+  It is defined as *what cannot be stored* — encode with the database's encoding
+  and drop what it cannot represent, then drop the one thing it can represent and
+  the server still rejects — rather than as a list of characters, because the
+  first version of it was a list and the list was wrong. Every other control
+  character survives, including the C0 range, non-characters and astral-plane
+  emoji.
+
+  `AvailabilityExceptionWrite.reason` was also the only free-text field outside
+  the shared base and had never been trimmed; its mixin now inherits `Normalised`
+  like everything else. One field being the odd one out twice, for two unrelated
+  reasons, is the argument for the rule living in a base class.
+
+  No OpenAPI change — the generated schema is byte-identical before and after.
+- **A search handed out a `next_cursor` its own decoder refused.** At the depth
+  cap the endpoint minted a token for the next offset without checking it,
+  and the following request answered 422 — so a client that followed the
+  envelope exactly ended a deep search on an error instead of `null`. The cap was
+  compared in the decoder and nowhere else; both directions now ask one
+  predicate. The lower bound was untested and is now covered: a fabricated
+  negative offset is refused rather than reaching Postgres, which rejects a
+  negative `OFFSET` outright.
 
 - **`HTTP_413_REQUEST_ENTITY_TOO_LARGE`** replaced with
   `HTTP_413_CONTENT_TOO_LARGE`; the old spelling is deprecated in Starlette and

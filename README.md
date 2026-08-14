@@ -155,11 +155,16 @@ check would stay green.
 The pre-cutover set — what the initial build targets. This table is a record of
 decisions, not of code, and it grows as each piece lands.
 
-**Only the database is integrated so far**, and only as PostgreSQL: `src/`
-holds configuration, the error taxonomy, a health endpoint, and the engine and
-session factory in `infra/db/`. Supabase's auth and storage are decided
-([ADR 0005](docs/adr/0005-data-platform.md)) and unbuilt. Every other row below
-is a decision with no code behind it yet.
+**Three of the rows below are built; the rest are decisions with no code behind
+them yet.** PostgreSQL through SQLAlchemy and asyncpg, Supabase Auth as a token
+verifier (`infra/auth/`), and Supabase Storage for profile images
+(`infra/storage/`) — all three per [ADR 0005](docs/adr/0005-data-platform.md).
+On top of them sit the migration ETL for milestones 1–4 and the read API:
+profiles, catalogues, availability, sessions, and a public surface a mentee can
+browse without an account.
+
+Everything else in the table — calendar, video, analytics, PDF, push, LLM — is
+recorded and unwritten.
 
 | Concern | Choice | Notes |
 |---|---|---|
@@ -169,7 +174,7 @@ is a decision with no code behind it yet.
 | Transactional email | Emailit | Behind a port, like every vendor — this one has already been swapped twice |
 | Video sessions | Daily | |
 | Product analytics | PostHog | |
-| Google Calendar | Composio | Our own OAuth client; write events, read free/busy on demand ([ADR 0004](docs/adr/0004-calendar-integration.md)) |
+| Google Calendar | Direct, behind a `CalendarPort` | Our own OAuth client; write events, read free/busy on demand ([ADR 0004](docs/adr/0004-calendar-integration.md)). The scopes we need are non-sensitive, so there is no review to survive and no platform to pay for it ([ADR 0012](docs/adr/0012-google-oauth-scopes-and-client-split.md)) |
 | HTML to PDF and image | MarkupGo | |
 | Institution data | hipolabs | Autocomplete served live; a row is stored only once someone selects it, so reads never depend on it ([ADR 0008](docs/adr/0008-institutions-hipolabs-registry.md)) |
 | Push notifications | Native Web Push | VAPID and a service worker, no vendor. iOS delivers only to installed PWAs |
