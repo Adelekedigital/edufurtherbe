@@ -31,12 +31,13 @@ from app.api.schemas.availability import (
 from app.api.schemas.common import (
     LOOKUP_PAGE_SIZE,
     MAX_PAGE_SIZE,
+    StorableText,
     clamp_limit,
     decode_cursor,
     decode_id_cursor,
     decode_offset_cursor,
     encode_id_cursor,
-    encode_offset_cursor,
+    next_offset_cursor,
 )
 from app.api.schemas.profile import (
     AwardPatch,
@@ -352,7 +353,7 @@ OwnerDep = Annotated[uuid.UUID, Depends(get_owner)]
 
 async def institution_results(
     session: SessionDep,
-    q: Annotated[str, Query(description="What the user has typed so far.")] = "",
+    q: Annotated[str, Query(description="What the user has typed so far."), StorableText] = "",
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
 ) -> list[dict[str, Any]]:
     """Institutions matching ``q``. Declares its own query parameters, so they
@@ -366,7 +367,7 @@ InstitutionResultsDep = Annotated[list[dict[str, Any]], Depends(institution_resu
 async def lookup_page(
     session: SessionDep,
     catalogue: Annotated[str, Path(description="Which catalogue to list.")],
-    q: Annotated[str | None, Query(description="Filter by display name.")] = None,
+    q: Annotated[str | None, Query(description="Filter by display name."), StorableText] = None,
     limit: Annotated[int | None, Query(ge=1, le=LOOKUP_PAGE_SIZE)] = None,
     cursor: Annotated[str | None, Query(description="From a previous `next_cursor`.")] = None,
     common: Annotated[bool, Query(description="Only the common set — `languages` only.")] = False,
@@ -1040,6 +1041,7 @@ async def mentor_page(
     q: Annotated[
         str | None,
         Query(description="Search mentors by name, school, programme or country."),
+        StorableText,
     ] = None,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
@@ -1065,7 +1067,10 @@ async def mentor_page(
         rows, has_more = await search_mentors(
             session, limit=clamp_limit(limit), q=term, offset=offset
         )
-        return rows, has_more, encode_offset_cursor(offset + len(rows)) if has_more else None
+        # `next_offset_cursor`, not `encode_offset_cursor`: past the depth cap
+        # there is no next page, and minting one the decoder then refuses ends a
+        # deep search on a 422 for a client that followed the envelope exactly.
+        return rows, has_more, next_offset_cursor(offset + len(rows)) if has_more else None
 
     rows, has_more = await search_mentors(
         session, limit=clamp_limit(limit), after=decode_id_cursor(cursor)

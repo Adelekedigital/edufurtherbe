@@ -954,6 +954,54 @@ released. A tag with no matching section here fails the release job.
 
 ### Fixed
 
+- **Client text the database cannot store was an unauthenticated 500.** Two
+  causes, failing in two different layers:
+
+  `U+0000` encodes to UTF-8 perfectly well and PostgreSQL then refuses the
+  value — `CharacterNotInRepertoireError`. A single anonymous
+  `GET /institutions?q=%00` produced a stack trace, and so did
+  `GET /catalog/{catalogue}` and every free-text write body.
+
+  An **unpaired surrogate** never reaches PostgreSQL at all: UTF-8 has no
+  encoding for one, so asyncpg raises `UnicodeEncodeError` while building the
+  message. JSON carries it as a plain-ASCII escape, so a request body is a live
+  route. Reachable through exactly one field —
+  `AvailabilityExceptionWrite.reason`, the only free-text field in the API with
+  no `max_length`. A length constraint makes pydantic-core parse the value as
+  unicode and refuse it with a 422 first, which is why every other field was
+  already safe, by a mechanism nobody here chose. A test now pins that
+  behaviour, because if it changes every field becomes a route.
+
+  Removed rather than refused, which is what `Normalised` already does to the
+  text it is given: it trims, and turns `""` into `None`. A base class that
+  quietly repairs whitespace while hard-failing a control byte would be two rules
+  wearing one name.
+
+  One rule, two adapters — `storable()` in `schemas/common.py`, reached by
+  `Normalised` for bodies and by the `StorableText` annotation for query
+  parameters, so a fourth text parameter inherits it rather than remembering it.
+  It is defined as *what cannot be stored* — encode with the database's encoding
+  and drop what it cannot represent, then drop the one thing it can represent and
+  the server still rejects — rather than as a list of characters, because the
+  first version of it was a list and the list was wrong. Every other control
+  character survives, including the C0 range, non-characters and astral-plane
+  emoji.
+
+  `AvailabilityExceptionWrite.reason` was also the only free-text field outside
+  the shared base and had never been trimmed; its mixin now inherits `Normalised`
+  like everything else. One field being the odd one out twice, for two unrelated
+  reasons, is the argument for the rule living in a base class.
+
+  No OpenAPI change — the generated schema is byte-identical before and after.
+- **A search handed out a `next_cursor` its own decoder refused.** At the depth
+  cap the endpoint minted a token for the next offset without checking it,
+  and the following request answered 422 — so a client that followed the
+  envelope exactly ended a deep search on an error instead of `null`. The cap was
+  compared in the decoder and nowhere else; both directions now ask one
+  predicate. The lower bound was untested and is now covered: a fabricated
+  negative offset is refused rather than reaching Postgres, which rejects a
+  negative `OFFSET` outright.
+
 - **`HTTP_413_REQUEST_ENTITY_TOO_LARGE`** replaced with
   `HTTP_413_CONTENT_TOO_LARGE`; the old spelling is deprecated in Starlette and
   emitted a warning on every refusal.

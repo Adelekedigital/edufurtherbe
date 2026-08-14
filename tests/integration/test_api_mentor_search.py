@@ -13,6 +13,7 @@ different sequence and look almost right.
 
 from __future__ import annotations
 
+import base64
 from uuid import UUID
 
 import httpx
@@ -26,6 +27,7 @@ from tests.integration.factories import (
     make_public_mentor,
 )
 
+from app.api.schemas import common
 from app.api.schemas.common import MAX_SEARCH_OFFSET
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -763,5 +765,71 @@ async def test_a_search_cannot_be_paged_past_the_depth_cap(
     too_deep = encode_offset_cursor(MAX_SEARCH_OFFSET + 1)
 
     response = await api_client.get(f"{URL}?q=Lovelace&cursor={too_deep}")
+
+    assert response.status_code == 422
+
+
+async def test_the_last_page_of_a_search_ends_rather_than_offering_a_dead_cursor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Follow `next_cursor` to the end and it must run out, not 422.
+
+    The endpoint refused a token past the cap from the first commit, and minted
+    one anyway on the last page — so a client that did exactly what the envelope
+    told it to ended a deep search on an error. The refusal was tested and the
+    minting was not, which is why nothing caught it: `next_cursor` was only ever
+    *read*, never *followed*.
+
+    The cap is lowered rather than seeding 501 mentors. What is under test is the
+    arithmetic between what the endpoint issues and what it accepts, and that is
+    the same at 4 as at 500.
+    """
+    monkeypatch.setattr(common, "MAX_SEARCH_OFFSET", 4)
+    for i in range(9):
+        await make_bookable_mentor(db_engine, f"walk{i}")
+
+    cursor, hops = None, 0
+    while hops < 10:
+        query = f"{URL}?q=Lovelace&limit=2" + (f"&cursor={cursor}" if cursor else "")
+        response = await api_client.get(query)
+        assert response.status_code == 200, f"hop {hops}: {response.text}"
+        cursor = response.json()["next_cursor"]
+        hops += 1
+        if cursor is None:
+            break
+
+    assert cursor is None, "followed ten cursors and the endpoint still offered another"
+
+
+async def test_the_cursor_at_exactly_the_cap_is_still_a_real_page(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`<=`, not `<`. The off-by-one drops the last page and looks like the fix."""
+    monkeypatch.setattr(common, "MAX_SEARCH_OFFSET", 4)
+    for i in range(7):
+        await make_bookable_mentor(db_engine, f"edge{i}")
+
+    at_cap = common.next_offset_cursor(4)
+
+    assert at_cap is not None, "the cap itself is a page, not past the end"
+    response = await api_client.get(f"{URL}?q=Lovelace&limit=2&cursor={at_cap}")
+    assert response.status_code == 200, response.text
+    assert response.json()["data"], "offset 4 of 7 matches must return rows"
+
+
+async def test_a_fabricated_negative_offset_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`int("-1")` parses, so only the range check stops it.
+
+    Found while planning the mutation batch rather than while writing the guard:
+    the cap's lower bound had no test, and the upper bound's tests would not have
+    noticed it going. Postgres refuses a negative `OFFSET` outright, so without
+    this the fabricated token is a 500 rather than a wrong page.
+    """
+    await make_bookable_mentor(db_engine, "q-negative")
+    backwards = base64.urlsafe_b64encode(b"-1").decode()
+
+    response = await api_client.get(f"{URL}?q=Lovelace&cursor={backwards}")
 
     assert response.status_code == 422

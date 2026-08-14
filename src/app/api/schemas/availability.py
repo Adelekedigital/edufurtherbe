@@ -19,6 +19,7 @@ from typing import Annotated, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.api.schemas.common import Normalised
 from app.domain.availability import UnknownTimezoneError, normalise_timezone
 from app.domain.enums import AvailabilityExceptionType
 
@@ -43,7 +44,7 @@ def _validated_zone(value: str) -> str:
         raise ValueError(str(exc)) from exc
 
 
-class _ZoneMixin(BaseModel):
+class _ZoneMixin(Normalised):
     timezone: str = Field(
         description="IANA name, e.g. `Africa/Lagos`. Not an offset — an offset "
         "goes stale twice a year, which is the bug this whole surface exists to "
