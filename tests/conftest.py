@@ -10,14 +10,13 @@ import threading
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import asyncpg
 import httpx
-import jwt
 import pytest
 import pytest_asyncio
 import uvicorn
@@ -33,6 +32,7 @@ from starlette.types import ASGIApp
 from app.api.limits import BodyLimitMiddleware
 from app.core.config import Settings
 from app.infra.auth.admin import SupabaseAdminClient
+from app.infra.auth.dev_tokens import mint_dev_token
 from app.infra.auth.supabase import SupabaseTokenVerifier
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.provisioning_store import ProvisioningStore
@@ -91,13 +91,15 @@ PROBLEM_JSON = "application/problem+json"
 
 
 def api_token(subject: str | uuid.UUID, *, secret: str = SECRET, **overrides: Any) -> str:
-    claims: dict[str, Any] = {
-        "sub": str(subject),
-        "aud": "authenticated",
-        "exp": datetime.now(UTC) + timedelta(hours=1),
-        "email": "someone@example.com",
-    }
-    return jwt.encode(claims | overrides, secret, algorithm="HS256")
+    """A token for ``subject``, signed with the local test key.
+
+    The claim set lives in ``app.infra.auth.dev_tokens`` rather than here,
+    because ``scripts/dev_token.py`` mints the same shape for a developer calling
+    the API by hand. Two copies would be non-negotiable #8 in exactly the form
+    this file warns about above — and the copy that drifts is the one that keeps
+    passing, because it is the one the suite exercises.
+    """
+    return mint_dev_token(subject, secret=secret, **overrides)
 
 
 def bearer(value: str) -> dict[str, str]:
@@ -531,6 +533,19 @@ def provision_script() -> ModuleType:
     """``scripts/provision_auth.py``, which is a script rather than a module."""
     spec = importlib.util.spec_from_file_location(
         "provision_auth", PROJECT_ROOT / "scripts" / "provision_auth.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def dev_token_script() -> ModuleType:
+    """``scripts/dev_token.py``, loaded by path for the reason above."""
+    spec = importlib.util.spec_from_file_location(
+        "dev_token", PROJECT_ROOT / "scripts" / "dev_token.py"
     )
     assert spec is not None
     assert spec.loader is not None

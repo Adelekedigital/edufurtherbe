@@ -72,6 +72,26 @@ released. A tag with no matching section here fails the release job.
   at once. Per-mentor it was twenty round trips a page; a second batched function
   beside the single one would have been two queries of one rule, which is how the
   `is_active` filter ends up on only one of them.
+
+- **A token for calling the local API by hand.** `scripts/dev_token.py --email
+  ada@example.com` prints an access token the running application accepts, so an
+  authenticated endpoint can be exercised without a Supabase round trip.
+  `--header` prints a whole `Authorization` header; the token goes to stdout on
+  its own, so it substitutes straight into a `curl`.
+
+  **It runs against whatever `DATABASE_URL` is set and names the host it used.**
+  There is no local-only restriction, because the binding constraint is the
+  signing scheme rather than the database: an environment publishing a JWKS
+  rejects this token whatever it was minted against. That is the one refusal —
+  along with a missing secret, where nothing can be signed at all — and each
+  replaces a bare 401 debugged in the application instead of the environment. A
+  user who is unknown, soft-deleted or not yet provisioned is named, rather than
+  handed a token that 404s at the route.
+
+  The claim set moved to `app.infra.auth.dev_tokens`, which `tests/conftest.py`
+  now calls as well, so the suite and the script cannot drift (#43). Settled
+  decision #96 records why a minter shipping in `src/` is not a forgery tool.
+
 - **A mentor's public profile, reachable by id or by legacy slug.**
   `GET /mentors/{handle}` returns who a mentor is, what kind of help they give,
   and what can actually be booked — with the session types **inlined** from the
