@@ -65,6 +65,24 @@ class MentorSummaryRead(BaseModel):
     avatar_url: str | None = None
     years_of_experience: int | None = None
     primary_study_country: str | None = None
+
+    #: The academic line: "Ph.D, Mathematics, Washington University". Three
+    #: nullable fields rather than one rendered string, because a card lays them
+    #: out and a server-side join would fix the punctuation and the order for
+    #: every client forever.
+    #:
+    #: `degree` is the user's own abbreviation where they have one and the
+    #: level's generic name where they do not — never a guessed specific form,
+    #: which would render "B.Sc" for a law graduate.
+    degree: str | None = None
+    study_course: str | None = None
+    institution: str | None = None
+
+    #: Sessions delivered. **Never null** — zero is a real answer, and a nullable
+    #: count makes every client write the same coalesce while leaving "no data"
+    #: and "none yet" indistinguishable on the card.
+    completed_sessions: int = 0
+
     offerings: list[ServiceOfferingRead] = Field(default_factory=list)
 
     @classmethod
@@ -82,6 +100,10 @@ class MentorSummaryRead(BaseModel):
                 else None
             ),
             primary_study_country=_text(row["primary_study_country"]),
+            degree=_text(row["degree"]),
+            study_course=_text(row["study_course"]),
+            institution=_text(row["institution"]),
+            completed_sessions=int(str(row["completed_sessions"] or 0)),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
         )
 

@@ -12,6 +12,57 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **The mentor card carries what a card actually renders**: the academic line —
+  `Ph.D, Mathematics, Washington University` — and a completed-session count, on
+  both browse and search. Four fields on `MentorSummaryRead`: `degree`,
+  `study_course`, `institution`, `completed_sessions`.
+
+  **Two of the three columns it reads were not the obvious ones**, and the dev
+  export is what said so rather than the schema. `is_most_recent` looks like the
+  way to pick which degree to show and is **blank on all 21 export rows**, so a
+  card keyed on it renders nothing for anybody — legacy owned that flag, had
+  write paths for it, and still never set it, which is what a value derived from
+  *other rows* does. The entry is chosen at query time instead: highest degree
+  level, then latest `date_end`, then id. Level outranks recency because a mentor
+  taking a second bachelor's after a doctorate is still a doctor.
+
+  And the field a mentee reads as "Mathematics" is `study_course` (21/21
+  populated), not `study_program` (8/21, and holding degree *names* like
+  `BSc (Bachelor of Science)`).
+
+  A mentor with no education degrades to nulls and stays listed — excluding on a
+  *display* field is a different thing from excluding on bookability.
+
+  `completed_sessions` counts `status = 'completed'` only. `no_show` is its own
+  status and stays out: a session the mentee never arrived at held the mentor's
+  time and delivered nothing. Derived, never stored (**#56**) — the migration
+  package lists `countCompletedSession` on *Mentor (front search)*, this exact
+  card, and drops it as "DERIVED at query time". It is served by
+  `ix_sessions_mentor_completed`, a partial index that had existed since the M4
+  schema with no reader, and it runs *after* the page limit — 21 loops, not one
+  per mentor.
+- **`Education.shortForm` is migrated, one release before it would have been
+  lost.** Populated on 21 of 21 export rows and read by nothing until now;
+  after cutover the Bubble data is gone and the value cannot be re-derived. It
+  lands on `education_entries.degree_abbreviation`, where null means *inherit*.
+
+  Normalised on a strip-punctuation-and-casefold key, because the export spells
+  one bachelor's degree as both `BSc` (11 rows) and `B.sc` (2), and one master's
+  as both `M.Sc` (2) and `MSc` (1) — differences of dots *and* case, which a
+  case-insensitive match alone would not fold. An abbreviation nobody listed is
+  kept verbatim rather than folded to the nearest known value, because inventing
+  a credential is worse than carrying an unusual one.
+- **`degree_levels` gains `short_name` and `short_forms`**, both served by
+  `GET /catalog/degree-levels` so a client picking an abbreviation gets the menu
+  in the call it already makes.
+
+  `short_name` is the generic fallback — `Ph.D`, `Master's`, `Bachelor's`,
+  `Diploma` — and is **deliberately not a member** of `short_forms` for the two
+  levels whose abbreviations vary by field. Guessing a specific form renders
+  `B.Sc, Law` for a law graduate, which is precisely what the ISCED migration
+  reshaped this table to prevent: *a Nigerian BSc, a UK BA and a US Bachelor's
+  are the same level and three different words.* `short_forms` is advisory
+  rather than a foreign key, since a user may hold something nobody listed.
 - **`GET /mentors?q=` searches by name, school, programme, country and bio.**
   Postgres full-text search over a weighted document assembled from seven
   sources — `setweight` A for the name, B for headline and programme, C for
@@ -31,10 +82,12 @@ released. A tag with no matching section here fails the release job.
   changes. Capped at 500 deep, because the systems built for search cap depth
   rather than solve it.
 
-  Computed inline, so it is a sequential scan by construction — 27.7ms at 500
-  mentors, 329ms at 5,000, 3.6s at 50,000. That crosses D19's 200ms line at
-  roughly 3,000 mentors, and the escalation is the same expression moved into a
-  stored GIN-indexed column, returning the same rows in the same order.
+  Computed inline, so it is a sequential scan by construction — ~275ms at 500
+  mentors and ~3.9s at 5,000, crossing D19's 200ms line somewhere between 500 and
+  2,000. A range rather than a figure: the same unchanged statement measures 50ms
+  or 285ms at 500 depending on machine load, so only back-to-back A/B deltas are
+  comparable. The escalation is the same expression moved into a stored
+  GIN-indexed column, returning the same rows in the same order.
 
   `ix_user_profiles_about_fts` — a GIN index built in M2 "deferred from M1" for a
   bio search that never shipped — stays unused. An expression index only serves a
@@ -973,6 +1026,37 @@ released. A tag with no matching section here fails the release job.
   vendor is unguarded until its package name is added alongside the dependency.
 
 ### Fixed
+
+- **Search could not find a mentor by the subject printed on their card.** The
+  document indexed `study_program`, which holds degree *names* like `BSc
+  (Bachelor of Science)` and is populated on 8 of 21 dev-export rows. The card
+  displays `study_course` — `Mathematics`, `Physics` — populated on 21 of 21.
+  Searching the word every card shows returned nobody, and no existing test
+  noticed because each of them searched by name, school or country.
+
+  `study_course` is now in the document **beside** `study_program`, not instead
+  of it: "Bachelor of Engineering" is a real query and 8 rows carry one. Measured
+  A/B in a single process, it costs ~16% at 5,000 mentors and nothing measurable
+  at 500.
+
+  The two columns had a second copy of the same confusion in the tests: two
+  `add_education` helpers with the same name in one suite, one writing
+  `study_program` and the other `study_course`. Consolidated into the shared
+  factory with both named apart, since a helper that wrote whichever column its
+  author had in mind is how the fields got conflated to begin with.
+
+- **The institution mirror stamped `updated_at` from two different clocks.** The
+  insert omitted the column and took the `now()` default; the update set
+  `:synced_at`. Which one a row got depended on which branch of the upsert it
+  hit. In production the two are the same instant so nothing showed, and against
+  a fixed historical `synced_at` a row was stamped with the wall clock instead.
+
+  Found because `test_a_changed_name_does_move_updated_at` compared the two and
+  so asserted `SYNCED + 7 days > now()` — true for exactly seven days after it
+  was written, false from 04:00 UTC on 2026-08-15 and every day after. The test
+  was the messenger; the two clocks were the defect. Both paths now stamp
+  `:synced_at`, and a test asserts each path directly rather than through an
+  ordering, because the ordering is what hid it.
 
 - **Client text the database cannot store was an unauthenticated 500.** Two
   causes, failing in two different layers:

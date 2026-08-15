@@ -22,6 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import (
     add_availability,
+    add_education,
     add_session_type,
     make_bookable_mentor,
     make_public_mentor,
@@ -481,25 +482,6 @@ async def set_headline(engine: AsyncEngine, mentor: UUID, headline: str) -> None
         )
 
 
-async def add_education(
-    engine: AsyncEngine,
-    mentor: UUID,
-    *,
-    school: str = "Somewhere",
-    program: str | None = None,
-    deleted: bool = False,
-) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO education_entries "
-                "(user_id, school_name_raw, study_program, deleted_at) "
-                "VALUES (:u, :s, :p, CASE WHEN :d THEN now() END)"
-            ),
-            {"u": mentor, "s": school, "p": program, "d": deleted},
-        )
-
-
 async def test_search_finds_a_mentor_by_first_name(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -543,6 +525,41 @@ async def test_search_finds_a_mentor_by_school(
     await add_education(db_engine, mentor, school="Obafemi Awolowo University")
 
     assert str(mentor) in await ids(api_client, f"{URL}?q=Awolowo")
+
+
+async def test_search_finds_a_mentor_by_the_course_the_card_shows(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The subject printed on the card must be the subject that finds it.
+
+    `study_course` holds what a mentee means by a subject — `Mathematics`,
+    `Physics` — and is populated on 21 of 21 dev-export rows. `study_program`
+    holds degree *names* like `BSc (Bachelor of Science)` on 8. The document
+    indexed only the latter, so searching the word displayed on every card
+    returned nothing, and no test noticed because each of them searched by name,
+    school or country instead.
+
+    Found while adding `study_course` to the card, from the same field confusion:
+    the two columns look interchangeable and are not.
+    """
+    mentor = await make_bookable_mentor(db_engine, "q-course")
+    await add_education(db_engine, mentor, course="Astrophysics")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=Astrophysics")
+
+
+async def test_search_still_finds_a_mentor_by_the_degree_name(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`study_program` is **added to**, not replaced by, `study_course`.
+
+    "Bachelor of Science" is a plausible query, and 8 export rows carry one.
+    Dropping the field to fix the other would trade one silent miss for another.
+    """
+    mentor = await make_bookable_mentor(db_engine, "q-program")
+    await add_education(db_engine, mentor, course=None, program="BEng (Bachelor of Engineering)")
+
+    assert str(mentor) in await ids(api_client, f"{URL}?q=Engineering")
 
 
 async def test_search_finds_a_mentor_by_study_country(

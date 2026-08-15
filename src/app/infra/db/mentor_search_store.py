@@ -32,12 +32,14 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, literal, literal_column, select
+from sqlalchemy import Select, func, literal, literal_column, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infra.db.models.education import EducationEntry, Institution
+from app.domain.enums import SessionStatus
+from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
+from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.offerings import offerings_for
 from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
@@ -50,6 +52,10 @@ SIMPLE = "simple"
 ENGLISH = "english"
 
 _STUDY_COUNTRY = Country.__table__.alias("study_country")
+
+#: Aliased so the lateral can name its columns without colliding with any
+#: future join to the same catalogue in the outer query.
+_DEGREE_LEVEL = DegreeLevel.__table__.alias("degree_level")
 
 
 #: The mentor's origin country, aliased separately from where they studied.
@@ -94,21 +100,51 @@ def _document() -> Any:
     over the same text. The escalation is therefore a pure performance change with
     no contract in it, which is why starting here is not a shortcut.
 
-    **Measured, so the escalation has a number rather than a feeling:**
+    **Measured — and the measurement's own reliability is the first finding.**
+    On the development machine this statement's absolute timing varies about
+    fivefold with load: the *same unchanged* query measured 50ms at 500 mentors
+    in one session and 285ms an hour later, and at 50,000 it returned 6.4s, 11.0s,
+    13.0s, 23.8s and 6.2s across runs. **Figures taken in different sessions are
+    not comparable**, which is exactly the mistake the earlier version of this
+    docstring made — it reported a "before" and an "after" measured an hour apart
+    and attributed the difference to the code.
 
-        500 mentors      27.7 ms
-        5,000 mentors     329 ms
-        50,000 mentors  3,596 ms
+    So the numbers worth keeping are *deltas measured back to back*, and one
+    internally-consistent curve for shape:
 
-    Linear, as a per-row build must be. D19 sets the escalation line at a p95 of
-    ~200ms, which this crosses at roughly **3,000 mentors** — considerably nearer
-    than the ~10,000 D19 predicts for a well-indexed join, so search is the first
-    thing here that will need it. At today's 44 it is about 2ms.
+        500 mentors      ~275 ms
+        5,000 mentors  ~3,900 ms
+
+    Linear, as a per-row build must be. D19's escalation line is a p95 of ~200ms,
+    which this crosses somewhere between **500 and 2,000 mentors** on this box —
+    the range rather than a point, because a fivefold machine swing is wider than
+    the interval a single figure would imply, and production hardware is not this
+    laptop. Either way it is far nearer than the ~10,000 D19 predicts for a
+    well-indexed join, so search is the first thing here that will need it. At
+    today's 44 it is milliseconds.
+
+    **What each addition actually cost, A/B in one process:** `study_course`
+    adds ~16% at 5,000 mentors and nothing measurable at 500. The card's
+    completed-session count costs nothing per row at all — it runs *after* the
+    page limit, `loops=21` in the plan, on a partial index. The per-row work is
+    this document and the qualification lateral, and only the document is what a
+    stored column removes.
     """
     education = (
         select(
             func.string_agg(
                 func.coalesce(Institution.name, EducationEntry.school_name_raw, "")
+                + " "
+                # **Both course and programme, and they are not the same field.**
+                # `study_course` is what a mentee means by a subject —
+                # "Mathematics", "Physics" — and it is what the card prints;
+                # `study_program` holds degree *names* like "BSc (Bachelor of
+                # Science)". The document indexed only the latter, so the word
+                # displayed on every card found nobody, and every existing search
+                # test missed it by searching a name, a school or a country.
+                # Added rather than swapped: 8 export rows carry a programme and
+                # "Bachelor of Engineering" is a real query.
+                + func.coalesce(EducationEntry.study_course, "")
                 + " "
                 + func.coalesce(EducationEntry.study_program, ""),
                 " ",
@@ -168,6 +204,82 @@ def _matches(term: str) -> Any:
     )
 
 
+def _top_qualification() -> Any:
+    """The one education entry a card shows, as a lateral.
+
+    **Highest level first, then the later end date, then the id.** Not
+    `is_most_recent`, which the schema offers and the data does not: the column
+    is blank on all 21 rows of the dev export, so `BOOLEANS[""]` makes it `False`
+    everywhere and a card keyed on it renders nothing for anybody. Legacy owned
+    that flag, had write paths for it, and still never set it — which is what a
+    stored value derived from *other rows* does. It is a property of the set, not
+    of the row, so anything that adds, edits or deletes a sibling invalidates it
+    (D56: derived at query time, never stored).
+
+    **Level outranks recency** because the card is a credibility signal. A mentor
+    who takes a second bachelor's after a doctorate is still a doctor, and
+    ordering by date alone would quietly demote them.
+
+    A lateral rather than a join with a `DISTINCT ON`: this returns exactly one
+    row by construction, so it cannot multiply the page however many entries a
+    user has, and the limit is visible at the point it applies.
+    """
+    return (
+        select(
+            func.coalesce(EducationEntry.degree_abbreviation, _DEGREE_LEVEL.c.short_name).label(
+                "degree"
+            ),
+            EducationEntry.study_course.label("study_course"),
+            # ADR 0008 point 5: the registry is allowed to be incomplete, so what
+            # the user typed is always kept and the link is opportunistic.
+            func.coalesce(Institution.name, EducationEntry.school_name_raw).label("institution"),
+        )
+        .select_from(EducationEntry)
+        .outerjoin(Institution, Institution.id == EducationEntry.institution_id)
+        .outerjoin(_DEGREE_LEVEL, _DEGREE_LEVEL.c.id == EducationEntry.degree_level_id)
+        .where(
+            EducationEntry.user_id == MentorProfile.user_id,
+            EducationEntry.deleted_at.is_(None),
+        )
+        .order_by(
+            _DEGREE_LEVEL.c.sort_order.desc().nullslast(),
+            EducationEntry.date_end.desc().nullslast(),
+            EducationEntry.id.desc(),
+        )
+        .limit(1)
+        .lateral("top_qualification")
+    )
+
+
+def _completed_sessions() -> Any:
+    """How many sessions this mentor has delivered.
+
+    Derived, never stored — D56, and the migration package agrees: it lists
+    `countCompletedSession` and `percentageOfCompletedSession` on *Mentor (front
+    search)*, this exact card, and drops both as "DERIVED at query time".
+
+    **`completed` only.** `no_show` is its own status and stays out: a session
+    the mentee never arrived at held the mentor's time and delivered nothing.
+    That nuance is not lost, it is somewhere better — per-party attendance on
+    `session_participants`, which is what a profile's attendance figure reads.
+
+    Scoped to `mentor_id`, because a mentor is also somebody's mentee and
+    sessions they *received* are not sessions they gave. Served by
+    `ix_sessions_mentor_completed`, a partial index that has existed since the M4
+    schema and until now had no reader.
+    """
+    return (
+        select(func.count())
+        .select_from(Session)
+        .where(
+            Session.mentor_id == MentorProfile.user_id,
+            Session.status == SessionStatus.COMPLETED,
+        )
+        .correlate(MentorProfile)
+        .scalar_subquery()
+    )
+
+
 def _base() -> Select[Any]:
     """The columns and the scope, shared by both modes.
 
@@ -176,6 +288,7 @@ def _base() -> Select[Any]:
     a clause added to one would silently not apply to the other — and the one
     with a text box in front of it is the worse half to forget.
     """
+    qualification = _top_qualification()
     return (
         select(
             User.id.label("user_id"),
@@ -187,6 +300,10 @@ def _base() -> Select[Any]:
             MentorProfile.years_of_experience,
             UserProfile.avatar_url,
             _STUDY_COUNTRY.c.display_name.label("primary_study_country"),
+            qualification.c.degree,
+            qualification.c.study_course,
+            qualification.c.institution,
+            _completed_sessions().label("completed_sessions"),
         )
         .select_from(MentorProfile)
         .join(User, User.id == MentorProfile.user_id)
@@ -195,6 +312,10 @@ def _base() -> Select[Any]:
         # works perfectly — invisible in the one place a mentee looks.
         .outerjoin(UserProfile, UserProfile.user_id == MentorProfile.user_id)
         .outerjoin(_STUDY_COUNTRY, _STUDY_COUNTRY.c.id == MentorProfile.primary_study_country_id)
+        # Outer for the same reason: an academic line is something a card
+        # *displays*, and a mentor without one is a worse card, not a hidden
+        # mentor. Bookability is what decides who appears, and it is above.
+        .outerjoin(qualification, true())
         .where(*mentor_is_public(), *mentor_is_bookable())
     )
 

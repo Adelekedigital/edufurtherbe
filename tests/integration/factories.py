@@ -183,3 +183,111 @@ async def make_bookable_mentor(engine: AsyncEngine, tag: str, **knobs: object) -
     await add_session_type(engine, mentor)
     await add_availability(engine, mentor)
     return mentor
+
+
+async def add_education(
+    engine: AsyncEngine,
+    user: UUID,
+    *,
+    #: `None` leaves `degree_level_id` null, which the column permits and the
+    #: API write path allows — a user may record a school without saying what
+    #: level it was.
+    level: str | None = "doctorate",
+    #: What the card shows and what a mentee thinks of as the subject.
+    course: str | None = "Mathematics",
+    #: A *different* column holding degree names — `BSc (Bachelor of Science)`.
+    #: Both are searchable and only `course` is displayed; naming them apart
+    #: here is the point, because one helper that wrote whichever of the two
+    #: its author had in mind is how they were confused in the first place.
+    program: str | None = None,
+    school: str = "Washington University",
+    abbreviation: str | None = None,
+    institution: bool = True,
+    date_end: str = "2026-01-01",
+    deleted: bool = False,
+) -> UUID:
+    """One education entry, with every axis the card reads as a knob.
+
+    `institution=False` leaves `institution_id` null so the card must fall back
+    to `school_name_raw` — the pair ADR 0008 point 5 exists for, where an
+    unmatched school still displays what the user typed.
+    """
+    async with engine.begin() as conn:
+        institution_id = None
+        if institution:
+            institution_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO institutions (name, domain, source) "
+                        "VALUES (:n, :d, 'hipolabs') RETURNING id"
+                    ),
+                    {"n": school, "d": f"{uuid4().hex[:8]}.example"},
+                )
+            ).scalar_one()
+        return (
+            await conn.execute(
+                text(
+                    "INSERT INTO education_entries "
+                    "(user_id, school_name_raw, institution_id, degree_level_id, "
+                    " degree_abbreviation, study_course, study_program, date_end, deleted_at) "
+                    "SELECT :u, :raw, :inst, "
+                    "       (SELECT id FROM degree_levels WHERE slug = :level), "
+                    "       :abbrev, :course, :program, :ends, "
+                    "       CASE WHEN :deleted THEN now() END RETURNING id"
+                ),
+                {
+                    "u": user,
+                    "raw": school,
+                    "inst": institution_id,
+                    "abbrev": abbreviation,
+                    "course": course,
+                    "program": program,
+                    "ends": dt.date.fromisoformat(date_end),
+                    "level": level,
+                    "deleted": deleted,
+                },
+            )
+        ).scalar_one()
+
+
+async def add_completed_sessions(
+    engine: AsyncEngine, mentor: UUID, count: int, *, status: str = "completed"
+) -> None:
+    """Sessions in a terminal state, spaced so the overlap constraint stays happy.
+
+    `sessions_no_mentor_double_booking` only covers live statuses, so completed
+    rows could overlap — they are spaced anyway, because a fixture that relies on
+    a constraint not applying breaks the day the constraint widens.
+    """
+    async with engine.begin() as conn:
+        mentee = (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (email, first_name, primary_role, timezone) "
+                    "VALUES (:e, 'Mentee', 'mentee', 'Africa/Lagos') RETURNING id"
+                ),
+                {"e": f"mentee-{uuid4()}@example.test"},
+            )
+        ).scalar_one()
+        session_type = (
+            await conn.execute(
+                text("SELECT id FROM session_types WHERE mentor_user_id = :m LIMIT 1"),
+                {"m": mentor},
+            )
+        ).scalar_one_or_none()
+        for index in range(count):
+            await conn.execute(
+                text(
+                    "INSERT INTO sessions "
+                    "(mentor_id, mentee_id, session_type_id, starts_at, duration_minutes, status) "
+                    "VALUES (:m, :e, :t, :starts, 45, "
+                    "        CAST(:status AS session_status))"
+                ),
+                {
+                    "m": mentor,
+                    "e": mentee,
+                    "t": session_type,
+                    "starts": dt.datetime.now(dt.UTC) - dt.timedelta(days=index + 1),
+                    "status": status,
+                },
+            )

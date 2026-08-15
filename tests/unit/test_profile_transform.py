@@ -354,3 +354,70 @@ def test_an_award_whose_creator_is_unknown_is_reported_not_loaded() -> None:
     )
     assert plan.awards == ()
     assert plan.unattached["user_awards"] == (THING_ID,)
+
+
+# --------------------------------------------------------------------------
+# The abbreviation a user actually holds
+# --------------------------------------------------------------------------
+
+#: Every distinct `shortForm` in the dev export, with what it must become.
+#: Written out rather than expressed as a rule, because the two folds this has to
+#: make are not the same fold: `BSc` -> `B.Sc` inserts punctuation, and
+#: `B.sc` -> `B.Sc` fixes case. A regex that does both is a regex nobody can
+#: predict, and the values are a closed set of nine.
+EXPORT_SHORT_FORMS = {
+    "BSc": "B.Sc",
+    "B.sc": "B.Sc",
+    "B.Eng": "B.Eng",
+    "LL.B": "LL.B",
+    "M.Sc": "M.Sc",
+    "MSc": "M.Sc",
+    "M.Eng": "M.Eng",
+    "Ph.D": "Ph.D",
+    "HND": "HND",
+}
+
+
+@pytest.mark.parametrize(("raw", "expected"), sorted(EXPORT_SHORT_FORMS.items()))
+def test_the_short_form_a_user_holds_is_carried_and_normalised(raw: str, expected: str) -> None:
+    """Legacy ``shortForm`` is populated on 21 of 21 rows and was read by nothing.
+
+    It had to land before cutover: afterwards the Bubble data is gone and the
+    value cannot be re-derived. The folds are real — the export spells one
+    bachelor's degree as both ``BSc`` and ``B.sc``, and one master's as both
+    ``M.Sc`` and ``MSc``.
+    """
+    row = to_education(
+        record(schoolName="Somewhere", degreeCategory="Bachelors", shortForm=raw),
+        USER_ID,
+        export_timezone=NY,
+    )
+
+    assert row.degree_abbreviation == expected
+
+
+def test_an_unlisted_short_form_is_kept_verbatim_rather_than_dropped() -> None:
+    """The menu is advisory, so an abbreviation nobody listed is still the user's.
+
+    Folding it to the nearest known value would be inventing a credential;
+    dropping it would lose one. The same lenient branch ``degree_goal_raw``
+    already takes, for the same reason.
+    """
+    row = to_education(
+        record(schoolName="Somewhere", degreeCategory="Masters", shortForm="M.Litt"),
+        USER_ID,
+        export_timezone=NY,
+    )
+
+    assert row.degree_abbreviation == "M.Litt"
+
+
+def test_no_short_form_inherits_rather_than_guessing() -> None:
+    """Null means *inherit* the level's generic name, which is D21's rule."""
+    row = to_education(
+        record(schoolName="Somewhere", degreeCategory="Masters", shortForm=""),
+        USER_ID,
+        export_timezone=NY,
+    )
+
+    assert row.degree_abbreviation is None

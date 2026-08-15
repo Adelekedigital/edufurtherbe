@@ -209,7 +209,16 @@ async def search_institutions(session: AsyncSession, *, q: str, limit: int) -> l
 LOOKUPS: dict[str, dict[str, Any]] = {
     "degree-levels": {
         "model": DegreeLevel,
-        "columns": (DegreeLevel.id, DegreeLevel.slug, DegreeLevel.display_name),
+        # `short_name` and `short_forms` ride along because a client picking an
+        # abbreviation needs the menu for the level it has already fetched — a
+        # second call it would have to join client-side.
+        "columns": (
+            DegreeLevel.id,
+            DegreeLevel.slug,
+            DegreeLevel.display_name,
+            DegreeLevel.short_name,
+            DegreeLevel.short_forms,
+        ),
         "order": (DegreeLevel.sort_order, DegreeLevel.display_name),
         "active_only": True,
         "approved_only": False,

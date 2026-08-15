@@ -384,3 +384,43 @@ async def test_several_manual_institutions_coexist_without_a_country(
         )
 
     assert count.scalar_one() == 3
+
+
+async def test_both_upsert_paths_stamp_updated_at_from_the_same_clock(
+    db_engine: AsyncEngine,
+) -> None:
+    """The insert and the update must agree on which clock `updated_at` means.
+
+    They did not. The insert omitted the column and took the `now()` default
+    while the update set `:synced_at`, so a row's `updated_at` depended on which
+    branch of the upsert it happened to hit. Invisible in production, where a
+    sync's `synced_at` *is* roughly now — and the reason
+    `test_a_changed_name_does_move_updated_at` compared a constant against the
+    wall clock and started failing exactly seven days after it was written.
+
+    Asserted directly rather than through an ordering, because an ordering is
+    what hid it: `04:00 > 19:14` is a statement about today, not about the code.
+    """
+    async with db_engine.begin() as conn:
+        await run_mirror(conn)
+        inserted = (
+            await conn.execute(
+                text("SELECT updated_at FROM institutions WHERE domain = 'unilag.edu.ng'")
+            )
+        ).scalar_one()
+
+    assert inserted == SYNCED, "the insert path stamped a different clock"
+
+    renamed = [
+        r | {"name": "Unilag"} if r["domains"] == ["unilag.edu.ng"] else r for r in catalogue()
+    ]
+    later = SYNCED + timedelta(days=7)
+    async with db_engine.begin() as conn:
+        await run_mirror(conn, at=later, records=renamed)
+        changed = (
+            await conn.execute(
+                text("SELECT updated_at FROM institutions WHERE domain = 'unilag.edu.ng'")
+            )
+        ).scalar_one()
+
+    assert changed == later, "the update path stamped a different clock"

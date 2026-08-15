@@ -35,9 +35,18 @@ from app.domain.institutions import (
 # `updated_at` is a different question and must still mean "this row's content
 # changed", so it moves only when something actually differs. Both facts, one
 # statement, one pass.
+#
+# **`updated_at` is stamped on the insert too, and that was a real defect.** The
+# insert used to omit it, so it fell to the column default `now()` while the
+# update path set `:synced_at` — two clocks in one column, decided by which
+# branch of the upsert a row happened to take. In production the two are the same
+# instant, so nothing showed; against a fixed historical `synced_at` a row
+# inserted "in 2026-08-08" was stamped with the wall clock instead, and comparing
+# the two timestamps then depended on what day it was. Found by a test that
+# failed 7 days after it was written and passed for reasons nobody had checked.
 UPSERT_INSTITUTION = """
-INSERT INTO institutions (name, domain, country_id, web_page, source, last_synced_at)
-VALUES (:name, :domain, :country_id, :web_page, 'hipolabs', :synced_at)
+INSERT INTO institutions (name, domain, country_id, web_page, source, last_synced_at, updated_at)
+VALUES (:name, :domain, :country_id, :web_page, 'hipolabs', :synced_at, :synced_at)
 ON CONFLICT (domain) DO UPDATE SET
     name           = EXCLUDED.name,
     country_id     = EXCLUDED.country_id,
