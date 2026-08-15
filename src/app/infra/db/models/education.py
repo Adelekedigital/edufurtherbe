@@ -218,6 +218,24 @@ class DegreeLevel(TimestampMixin, Base):
     # on. The demoted natural key keeps its own UNIQUE (non-negotiable #10).
     slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: The generic fallback a card renders when the user chose no abbreviation:
+    #: "Ph.D", "Master's", "Bachelor's", "Diploma". **Deliberately not a member
+    #: of ``short_forms``** — "nothing chosen" must render something that is
+    #: always true, and any *specific* abbreviation is wrong for every user
+    #: outside one field. That is this table's founding argument: a Nigerian BSc,
+    #: a UK BA and a US Bachelor's are one level and three words.
+    short_name: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: The menu a client offers for this level. Advisory, not a constraint — a
+    #: user may hold something nobody listed, and enforcing membership would mean
+    #: a foreign key, which would mean carrying an id *and* a text column for one
+    #: fact. Shaped after ``institutions.alt_names``: alternative strings on a
+    #: catalogue row.
+    short_forms: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
+
     sort_order: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
@@ -272,6 +290,19 @@ class EducationEntry(TimestampMixin, Base):
         Uuid, ForeignKey("degree_levels.id", ondelete="RESTRICT")
     )
     degree_category: Mapped[str | None] = mapped_column(Text)
+
+    #: The abbreviation this user actually holds — ``LL.B``, ``M.Eng``, ``Ph.D``.
+    #: **Null means inherit** ``degree_levels.short_name``, the same
+    #: null-means-inherit rule as ``session_type_booking_configs.meeting_venue``
+    #: (D21), and the reason it is nullable rather than defaulted.
+    #:
+    #: Migrated from legacy ``Education.shortForm``, which is populated on 21 of
+    #: 21 dev-export rows and was read by nothing until now. It had to land
+    #: before cutover: afterwards the Bubble data is gone and the value cannot be
+    #: re-derived — the same argument ``degree_category`` above records for
+    #: itself.
+    degree_abbreviation: Mapped[str | None] = mapped_column(Text)
+
     study_course: Mapped[str | None] = mapped_column(Text)
     study_program: Mapped[str | None] = mapped_column(Text)
 

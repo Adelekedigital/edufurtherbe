@@ -62,6 +62,7 @@ STUDY_PROGRAM_FIELD = "studyProgram-O/S "
 DATE_START_FIELD = "dateStart"
 DATE_END_FIELD = "dateEnd"
 MOST_RECENT_FIELD = "mostRecentDegree"
+SHORT_FORM_FIELD = "shortForm"
 
 GOAL_DEGREE_FIELD = "degreeGoal(text)"
 GOAL_COUNTRIES_FIELD = "Country Goal"
@@ -263,6 +264,7 @@ class EducationRow:
     school_name_raw: str
     degree_category: str | None
     degree_level_slug: str | None
+    degree_abbreviation: str | None
     study_course: str | None
     study_program: str | None
     date_start: date | None
@@ -317,6 +319,63 @@ class AwardRow:
 # --------------------------------------------------------------------------
 
 
+#: Canonical spelling for every abbreviation the dev export holds, keyed on the
+#: value with punctuation removed and case folded.
+#:
+#: **Both folds are real and they are not the same fold.** The export spells one
+#: bachelor's degree as ``BSc`` (11 rows) and ``B.sc`` (2), and one master's as
+#: ``M.Sc`` (2) and ``MSc`` (1) — so the key has to ignore dots *and* case, which
+#: a case-insensitive match alone would not. Dotted is canonical because that is
+#: what the product renders and what the legacy card showed.
+#:
+#: A closed table rather than a rule: nine values, and a regex that inserts a dot
+#: in the right place for ``BSc`` but not for ``HND`` or ``MBBS`` is a regex
+#: nobody can predict from reading it.
+SHORT_FORMS: dict[str, str] = {
+    "bsc": "B.Sc",
+    "ba": "B.A",
+    "beng": "B.Eng",
+    "llb": "LL.B",
+    "bcom": "B.Com",
+    "bed": "B.Ed",
+    "mbbs": "MBBS",
+    "msc": "M.Sc",
+    "ma": "M.A",
+    "meng": "M.Eng",
+    "med": "M.Ed",
+    "mphil": "M.Phil",
+    "mba": "MBA",
+    "llm": "LL.M",
+    "phd": "Ph.D",
+    "md": "M.D",
+    "jd": "J.D",
+    "edd": "Ed.D",
+    "dphil": "D.Phil",
+    "hnd": "HND",
+    "diploma": "Diploma",
+    "certificate": "Certificate",
+}
+
+
+def _short_form(record: dict[str, Any]) -> str | None:
+    """The abbreviation this user holds, spelled the one way we spell it.
+
+    **Unlisted values are kept verbatim, not folded or dropped.** The menu on
+    ``degree_levels.short_forms`` is advisory, so an abbreviation nobody
+    anticipated is still the user's own credential: folding ``M.Litt`` to the
+    nearest known value invents one, and dropping it loses one. That is the same
+    lenient branch ``degree_goal_raw`` already takes, and for the same reason.
+
+    Blank returns ``None``, which means *inherit the level's ``short_name``* —
+    the null-means-inherit rule from D21.
+    """
+    raw = _text(record, SHORT_FORM_FIELD)
+    if raw is None:
+        return None
+    key = "".join(character for character in raw if character.isalnum()).casefold()
+    return SHORT_FORMS.get(key, raw)
+
+
 def to_education(
     record: dict[str, Any], user_bubble_id: str, *, export_timezone: tzinfo
 ) -> EducationRow:
@@ -345,6 +404,7 @@ def to_education(
             if category
             else None
         ),
+        degree_abbreviation=_short_form(record),
         study_course=_text(record, STUDY_COURSE_FIELD),
         study_program=_text(record, STUDY_PROGRAM_FIELD),
         date_start=export_date(record, DATE_START_FIELD, zone=export_timezone, bubble_id=bubble_id),

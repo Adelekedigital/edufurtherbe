@@ -106,11 +106,11 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
 UPSERT_EDUCATION = """
 INSERT INTO education_entries (
     user_id, legacy_bubble_id, created_at, updated_at, school_name_raw,
-    degree_category, degree_level_id, study_course, study_program,
+    degree_category, degree_level_id, degree_abbreviation, study_course, study_program,
     date_start, date_end, is_most_recent
 ) VALUES (
     :user_id, :legacy_bubble_id, :created_at, :updated_at, :school_name_raw,
-    :degree_category, :degree_level_id, :study_course, :study_program,
+    :degree_category, :degree_level_id, :degree_abbreviation, :study_course, :study_program,
     :date_start, :date_end, :is_most_recent
 )
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET
@@ -120,6 +120,7 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     school_name_raw = EXCLUDED.school_name_raw,
     degree_category = EXCLUDED.degree_category,
     degree_level_id = EXCLUDED.degree_level_id,
+    degree_abbreviation = EXCLUDED.degree_abbreviation,
     study_course    = EXCLUDED.study_course,
     study_program   = EXCLUDED.study_program,
     date_start      = EXCLUDED.date_start,
@@ -368,6 +369,7 @@ class ProfileLoader:
                     "school_name_raw": entry.school_name_raw,
                     "degree_category": entry.degree_category,
                     "degree_level_id": degrees.get(entry.degree_level_slug or ""),
+                    "degree_abbreviation": entry.degree_abbreviation,
                     "study_course": entry.study_course,
                     "study_program": entry.study_program,
                     "date_start": entry.date_start,

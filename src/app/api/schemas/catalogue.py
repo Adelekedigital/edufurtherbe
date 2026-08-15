@@ -10,9 +10,11 @@ endpoint.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CountryRef(BaseModel):
@@ -85,6 +87,16 @@ class LookupRead(BaseModel):
     #: Present for `scholarship-programs` only.
     official_url: str | None = None
 
+    #: `degree-levels` only. The generic label a card falls back to when a user
+    #: chose no abbreviation — "Bachelor's", never "B.Sc", which would be wrong
+    #: for every field but one.
+    short_name: str | None = None
+    #: `degree-levels` only. The menu a client offers for this level. Advisory
+    #: rather than a constraint: a user may hold something nobody listed, so the
+    #: value they pick is stored as text and not as a foreign key. Empty
+    #: elsewhere rather than null, so a client can iterate it unconditionally.
+    short_forms: list[str] = Field(default_factory=list)
+
     @classmethod
     def from_row(cls, row: dict[str, object]) -> LookupRead:
         """Map whichever identifier column this catalogue uses onto `code`."""
@@ -95,4 +107,10 @@ class LookupRead(BaseModel):
             code=str(code) if code is not None else None,
             category=row.get("category"),  # type: ignore[arg-type]
             official_url=row.get("official_url"),  # type: ignore[arg-type]
+            short_name=row.get("short_name"),  # type: ignore[arg-type]
+            # The row is `dict[str, object]`, so the array arrives untyped and
+            # `list()` cannot narrow it. Cast rather than widen the row type:
+            # every other field here takes the same treatment, and loosening the
+            # signature would remove the checking from all of them.
+            short_forms=list(cast("Sequence[str]", row.get("short_forms") or ())),
         )

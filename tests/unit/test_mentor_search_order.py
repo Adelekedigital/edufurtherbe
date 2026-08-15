@@ -36,11 +36,38 @@ UNIQUE_KEY = "mentor_profiles.id"
 
 
 def order_by(statement: object) -> str:
-    """The `ORDER BY` clause of a compiled statement, whitespace collapsed."""
+    """The **outer** `ORDER BY` of a compiled statement, whitespace collapsed.
+
+    **Depth, not position.** The first version took the first `ORDER BY` in the
+    text, which was the only one until the card's qualification lateral arrived
+    with its own — `sort_order, date_end, id`, picking one education entry — and
+    that one renders *before* the outer clause. The test then read a clause it
+    was never about.
+
+    It failed loudly, but only by luck: the lateral orders by
+    `education_entries.id`, and had it ordered by `mentor_profiles.id` instead,
+    `test_the_order_is_total` would have gone green while inspecting the wrong
+    statement entirely. A helper that assumes one of anything is a helper waiting
+    for the second one.
+
+    Depth-zero is the property that actually distinguishes them: a subquery's
+    clause is inside parentheses and the statement's own is not, whatever order
+    they appear in and however many subqueries a future rank expression grows.
+    """
     compiled = str(statement.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
-    match = re.search(r"ORDER BY(.*?)(?:\s+LIMIT|\s+OFFSET|$)", compiled, re.S)
-    assert match is not None, f"no ORDER BY at all in: {compiled[:200]}"
-    return " ".join(match.group(1).split())
+
+    depth = 0
+    for index, character in enumerate(compiled):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif depth == 0 and compiled.startswith("ORDER BY", index):
+            tail = compiled[index + len("ORDER BY") :]
+            clause = re.split(r"\s+LIMIT|\s+OFFSET", tail, maxsplit=1)[0]
+            return " ".join(clause.split())
+
+    raise AssertionError(f"no top-level ORDER BY in: {compiled[:200]}")
 
 
 @pytest.mark.parametrize(
