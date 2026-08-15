@@ -12,6 +12,41 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **The public mentor profile carries education, scholarships and languages.**
+  `GET /mentors/{handle}` gains three lists, read by the **same** store functions
+  that serve the owner-facing endpoints — narrowed at the schema, never
+  re-queried, so the two cannot drift (#94).
+
+  **The narrowing is the point.** `list_awards` returns `evidence_url`, a link to
+  the holder's proof document, because the owner needs it; this endpoint takes no
+  token. It also returns `verification_status`, which is `unverified` on every
+  row since nothing verifies an award — publishing that would say something
+  untrue about the holder rather than something true about the platform. Both are
+  excluded, along with `degree_category`, `study_program`, `degree_level_slug`
+  and `is_most_recent`, and a test asserts the exact key set of each list rather
+  than searching the body for names. The first version did search, and reported
+  `study_program` as leaked when it had matched inside `primary_study_program`.
+
+  Education renders the degree exactly as the discovery card does —
+  `COALESCE(degree_abbreviation, short_name)` — because a page showing "Ph.D" on
+  the card and "Doctorate (PhD)" in the list below is one product with two
+  spellings of one fact. A test pins the two to the same string.
+
+  Six statements per profile, stated as a decision: three separate tables with
+  three scopes cannot be one join without a fan-out to unpick in Python, and a
+  profile is read once per page rather than once per row.
+- **`list_education` stops ordering by `is_most_recent`.** The column is blank on
+  every migrated row (D98), so the sort key decided nothing and read as though it
+  did — and would have silently reordered every list the day anybody set it.
+  Ordering is now `date_end`, then `date_start`, then `id`, nulls last, which is
+  total.
+- **`list_languages` is new**, and returns no `proficiency`. The column is
+  `NOT NULL` with a `'fluent'` default that the ETL never overrides, so every
+  migrated row claims a fluency nobody was asked about. Ordering is alphabetical
+  rather than "primary first": `is_primary` is `false` on every migrated row for
+  the same reason, and that is the third uniformly-valued flag in this schema
+  whose ordering would have been a no-op.
+
 - **The mentor card carries what a card actually renders**: the academic line —
   `Ph.D, Mathematics, Washington University` — and a completed-session count, on
   both browse and search. Four fields on `MentorSummaryRead`: `degree`,

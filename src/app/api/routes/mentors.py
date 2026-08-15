@@ -101,4 +101,11 @@ async def find_mentors(page: MentorPageDep) -> Page[MentorSummaryRead]:
     responses=PUBLIC_RESPONSES,
 )
 async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
-    return MentorPublicRead.from_row(mentor["row"], mentor["offerings"], mentor["session_types"])
+    return MentorPublicRead.from_row(
+        mentor["row"],
+        mentor["offerings"],
+        mentor["session_types"],
+        mentor["education"],
+        mentor["scholarships"],
+        mentor["languages"],
+    )

@@ -96,6 +96,7 @@ from app.infra.db.profile_store import (
     get_mentor_profile,
     list_awards,
     list_education,
+    list_languages,
 )
 from app.infra.db.profile_writer import (
     create_award,
@@ -1029,10 +1030,19 @@ async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
         raise NotFoundError("no such mentor")
 
     user_id = row["user_id"]
+    # Six statements for one profile, and that is a decision rather than an
+    # accident. Each list is a different table with a different scope, so they
+    # cannot be one join without a fan-out to unpick in Python; and a profile is
+    # a single-resource read a client makes once per page, not per row of a list.
+    # The alternative — six round trips from the browser — is worse for the same
+    # work. `mentor_page` is where a count like this would be a defect.
     return {
         "row": row,
         "offerings": (await offerings_for(session, [user_id])).get(user_id, []),
         "session_types": await list_session_types(session, user_id) or [],
+        "education": await list_education(session, user_id),
+        "scholarships": await list_awards(session, user_id),
+        "languages": await list_languages(session, user_id),
     }
 
 

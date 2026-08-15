@@ -21,6 +21,7 @@ offer.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -108,6 +109,100 @@ class MentorSummaryRead(BaseModel):
         )
 
 
+class EducationRead(BaseModel):
+    """One degree, as a public profile shows it.
+
+    **An allowlist, and four of the columns the owner-facing query returns are
+    deliberately absent.** `is_most_recent` is blank on every migrated row and
+    means nothing (D98); `degree_category` is the raw legacy value the field
+    mapping marks *migrate, then deprecate*; `study_program` holds degree names
+    rather than subjects and is 8-of-21 populated; `degree_level_slug` is a code
+    for filtering, not for rendering.
+
+    `degree` resolves the same way the discovery card resolves it — the user's own
+    abbreviation, else the level's generic name — because a profile page showing
+    "Doctorate (PhD)" beside a card showing "Ph.D" is one product with two
+    spellings of one fact.
+    """
+
+    id: str
+    degree: str | None = None
+    study_course: str | None = None
+    institution: str | None = None
+    #: Both nullable, and both rendered as a range. An entry with neither is
+    #: still an entry — the design omits the dates rather than the row.
+    date_start: date | None = None
+    date_end: date | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, object]) -> EducationRead:
+        return cls(
+            id=str(row["id"]),
+            degree=_text(row["degree_abbreviation"]) or _text(row["degree_level_short_name"]),
+            study_course=_text(row["study_course"]),
+            institution=_text(row["institution_name"]) or _text(row["school_name_raw"]),
+            date_start=row["date_start"],  # type: ignore[arg-type]
+            date_end=row["date_end"],  # type: ignore[arg-type]
+        )
+
+
+class AwardRead(BaseModel):
+    """One scholarship or award.
+
+    **`evidence_url` and `verification_status` are excluded, and the first is the
+    one that matters.** `evidence_url` is a link to the holder's proof document —
+    a private artefact on an endpoint that takes no token. The owner-facing list
+    returns both and must keep doing so; this is a narrower view of the same
+    query, not a second query.
+
+    `verification_status` is `unverified` on every row because nothing verifies
+    an award yet. Publishing it would put "unverified" against every credential
+    on the platform, which says something untrue about the holder rather than
+    something true about the system.
+    """
+
+    id: str
+    title: str
+    institution: str
+    year: int | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, object]) -> AwardRead:
+        return cls(
+            id=str(row["id"]),
+            # The catalogue name when the award is linked to one, else what the
+            # holder typed. `scholarship_program_id` is absent from the export, so
+            # `programme_name` is null on all ten migrated rows today and the
+            # fallback is the whole behaviour — the same raw-plus-resolved pair as
+            # `institution_name`/`school_name_raw` above.
+            title=str(_text(row.get("programme_name")) or row["title"]),
+            institution=str(row["institution"]),
+            year=int(str(row["year"])) if row["year"] is not None else None,
+        )
+
+
+class LanguageRead(BaseModel):
+    """One language a user speaks.
+
+    No `proficiency`: the column is `NOT NULL` with a `'fluent'` default that the
+    ETL never overrides, so every migrated row claims a fluency nobody asked
+    about. It becomes returnable when a write path collects it.
+    """
+
+    id: str
+    display_name: str
+    code: str
+
+    @classmethod
+    def from_row(cls, row: dict[str, object]) -> LanguageRead:
+        return cls(
+            id=str(row["id"]),
+            display_name=str(row["display_name"]),
+            # `char(3)`, so it arrives space-padded from PostgreSQL.
+            code=str(row["code"]).strip(),
+        )
+
+
 class MentorPublicRead(BaseModel):
     """Everything the public may read about one mentor."""
 
@@ -154,6 +249,19 @@ class MentorPublicRead(BaseModel):
             "endpoints cannot disagree."
         ),
     )
+    education: list[EducationRead] = Field(
+        default_factory=list, description="Degrees, most recent first."
+    )
+    scholarships: list[AwardRead] = Field(
+        default_factory=list, description="Scholarships and awards, newest first."
+    )
+    languages: list[LanguageRead] = Field(
+        default_factory=list,
+        description=(
+            "Languages spoken, alphabetically. Empty for most migrated users — "
+            "the legacy export carries one for 3 profiles in 19."
+        ),
+    )
 
     @classmethod
     def from_row(
@@ -161,6 +269,9 @@ class MentorPublicRead(BaseModel):
         row: dict[str, object],
         offerings: list[dict[str, object]],
         session_types: list[dict[str, object]],
+        education: list[dict[str, object]],
+        scholarships: list[dict[str, object]],
+        languages: list[dict[str, object]],
     ) -> MentorPublicRead:
         return cls(
             id=str(row["user_id"]),
@@ -186,6 +297,9 @@ class MentorPublicRead(BaseModel):
             social_youtube=_text(row["social_youtube"]),
             offerings=[ServiceOfferingRead(**o) for o in offerings],  # type: ignore[arg-type]
             session_types=[SessionTypeRead.from_row(s) for s in session_types],
+            education=[EducationRead.from_row(e) for e in education],
+            scholarships=[AwardRead.from_row(a) for a in scholarships],
+            languages=[LanguageRead.from_row(x) for x in languages],
         )
 
 
