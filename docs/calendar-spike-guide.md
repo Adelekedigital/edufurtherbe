@@ -97,29 +97,47 @@ exists for 44 mentors.
 ## 3. Create the OAuth client
 
 **APIs & Services → Credentials → Create credentials → OAuth client ID →
-Desktop app.** Download the JSON and save it beside the script as
-`client_secret.json`.
+Desktop app.** Download the JSON into either `script-data-dev/` or `scripts/`.
+The script globs for `client_secret*.json*` in that order, so the name does not
+matter — including the doubled `.json` Windows produces for a file whose
+extension it is already hiding. Both locations are gitignored.
 
 Desktop app rather than Web: it allows a `localhost` redirect, so the script can
 complete the flow without any redirect URI configuration.
 
 ## 4. Run it
 
-```bash
-cd <the scratchpad directory holding calendar_spike.py>
+From the repository root:
 
+```bash
 uv run --with google-auth-oauthlib --with google-api-python-client \
-    python calendar_spike.py --attendee the-second-address@example.com
+    python scripts/calendar_spike.py \
+        --attendee mentor@example.com --attendee mentee@example.com
 ```
 
-A browser opens once. Consent as the **mentor** address. Expect an "unverified
-app" warning — that is Testing mode working, not a problem.
+A browser opens once.
 
-## 5. Answer the one question the script cannot
+**Consent as the platform account — not as either attendee.** This is the
+arrangement ADR 0012 now decides: EduFurther's own account creates the calendar
+and both participants are guests. It is also the trap that cost this spike three
+runs. Google never emails somebody their own event, so authenticating as an
+address you then invite produces a silent non-delivery that looks exactly like a
+platform limitation. The script prints `creator` and warns if the two collide.
 
-The script prints `?` for whether the invitation actually arrived. Only a human
-can answer that: **check the second address's inbox**. An API returning `200`
-does not mean an email was sent.
+Expect an "unverified app" warning — that is Testing mode working, not a problem.
+
+## 5. Answer the questions the script cannot
+
+The script prints `?` where only a human can answer. **Check both inboxes**, and
+note who the invitation appears to be from — an API returning `200` does not mean
+an email was sent, and the sender is the *creator* rather than the calendar named
+in the `organizer` field.
+
+Then **open the Meet link as each invited guest**, signed in as that account,
+with the creating account absent. Joining without knocking is the answer; being
+asked to wait means the calendar-invite bypass does not apply and a session would
+need a host. The event starts five minutes out precisely so this is testable
+while you are still at the keyboard.
 
 ## 6. Clean up
 
@@ -135,14 +153,17 @@ token for your account — delete it too when you are finished.
 
 ## What each result means
 
-| Result | Consequence |
-|---|---|
-| **Q1 invitation arrives** | ADR 0004's requirement holds and `calendar.app.created` is sufficient for the write side |
-| **Q1 no invitation** | Mentees get nothing. Either send our own ICS — an alternative ADR 0012 rejected — or move to `calendar.events`, which is sensitive |
-| **Q2a busy on primary** | Contradicts the documented behaviour below; excellent news, and worth re-reading the docs against |
-| **Q2a not busy on primary** | EduFurther sessions are invisible to everyone else. Our own double-booking prevention is unaffected — that is the database constraint — but the mentor can be booked over from outside |
-| **Q2b busy on the new calendar** | We can read our own writes back, so our availability computation can use it |
-| **Q3 acl.list refused** | Confirms we cannot share the calendar's free/busy without `calendar.acls`, which is sensitive |
+Written before the run, and kept because the reasoning is what a re-run needs.
+**The observed column records what actually happened on 2026-08-16.**
+
+| Result | Consequence | Observed |
+|---|---|---|
+| **Q1 invitation arrives** | ADR 0004's requirement holds and `calendar.app.created` is sufficient for the write side | **this one** |
+| **Q1 no invitation** | Mentees get nothing. Either send our own ICS — an alternative ADR 0012 rejected — or move to `calendar.events`, which is sensitive | — |
+| **Q2a busy on primary** | Contradicts the documented behaviour below; excellent news, and worth re-reading the docs against | **this one**, after a delay |
+| **Q2a not busy on primary** | EduFurther sessions are invisible to everyone else. Our own double-booking prevention is unaffected — that is the database constraint — but the mentor can be booked over from outside | — but this is what an immediate query returns |
+| **Q2b busy on the new calendar** | We can read our own writes back, so our availability computation can use it | **this one** |
+| **Q3 acl.list refused** | Confirms we cannot share the calendar's free/busy without `calendar.acls`, which is sensitive | **this one** |
 
 ## The scope-tier question
 
@@ -160,6 +181,11 @@ verification. Step 2.5 above is the tiebreak, and it takes a minute.
 If it is sensitive, the ADR's central claim — *"there is no review to survive"* —
 is wrong, and the decision goes back to whether verification is acceptable.
 
+**The 2026-08-16 run did not answer this**, and nothing above should be read as
+though it did. The spike ran in Testing mode with listed test users, which
+consents successfully whatever the tier is — the "unverified app" warning appears
+either way. This remains a console reading, not a measurement.
+
 ## Final state — what the spike settled
 
 Measured end to end on 2026-08-16, consumer Gmail accounts throughout.
@@ -176,12 +202,21 @@ Verified, not reasoned:
 * The invitation arrives from the **platform** address. The sender is the account
   whose token made the call — the API's `organizer` field names the calendar and
   is *not* what the recipient sees, which is what led this astray once.
-* Both guests joined the Meet room **with the creating account signed out and
-  absent**. The calendar-invite bypass applies on consumer accounts, so a session
-  needs no host and the platform account never appears.
+* Both guests joined the Meet room, each signed in as their invited account,
+  **with the creating account absent from the call**. The calendar-invite bypass
+  applies on consumer accounts, so a session needs no host and the platform
+  account never appears. The bypass is keyed to the address on the invitation,
+  not to holding the link — a guest signed into a different Google account is a
+  stranger and must knock, with nobody present to admit them.
 * The Meet link is minted on the same event the invitation carries, on the same
   two scopes. `conferenceDataVersion=1` is required or it is silently dropped.
 * Neither participant's mailbox is used as the sender.
+
+**Not measured, and worth measuring:** nobody accepted an invitation. Every
+attendee stayed at `needsAction`, so *"the session lands on the mentor's primary
+calendar when they accept"* is ordinary Google behaviour rather than something
+observed here — and it is the claim the placement argument rests on. Accept one
+from a second account and look at that account's calendar.
 
 **The mentor's Google connection becomes an enhancement rather than a
 prerequisite.** Booking works without it — the platform account owns the event.
