@@ -188,8 +188,10 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
 
     duration_minutes: Mapped[int] = mapped_column(nullable=False)
     min_notice_minutes: Mapped[int] = mapped_column(nullable=False, server_default=text("120"))
-    #: Where this offering is held. Never a URL: only `MeetingProvider.CUSTOM`
-    #: stores one, and it lives on `mentor_profiles.custom_meeting_url`.
+    #: Where this offering is held. Never a URL, and there is nowhere for one to
+    #: live: `mentor_profiles.custom_meeting_url` was **dropped** by D88's
+    #: contract step rather than moved here, because nothing read it. A
+    #: `MeetingProvider.CUSTOM` venue names a provider and stores no address.
     #:
     #: **Not an inherit**, though D21 describes it as one. A null here would have
     #: meant *fall back to the primary offering*, and the guard that protects a

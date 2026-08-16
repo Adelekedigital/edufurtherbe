@@ -356,33 +356,29 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
     assert "postgrad" not in response.text
 
 
-async def test_a_static_meeting_room_never_reaches_the_response(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """`custom_meeting_url` is a bearer credential — anyone holding it can walk in.
+def test_a_static_meeting_room_has_nowhere_left_to_leak_from() -> None:
+    """`custom_meeting_url` is gone, so the leak it guarded is structural now.
 
-    It is the mentor's *own* room and they are the caller, so the argument for
-    withholding it is weaker here than on the public endpoint. It stays out
-    anyway: this response lists offerings, the room belongs to the profile, and a
-    field nothing asked for is a field that ends up in a log.
+    This was a live test on this branch: it seeded a mentor with a custom room
+    and asserted the URL never reached the response. **D88's contract step
+    deleted the column** — it was never moved onto the offering, because nothing
+    read it — so the fixture can no longer create the case, and no query can
+    return what no table stores.
+
+    Kept as a schema assertion rather than deleted outright. The original guarded
+    a bearer credential, and a column reintroduced later under the same name
+    would restore the exposure with the behavioural test long since removed. This
+    fails the moment one comes back, and points at the decision it has to clear.
     """
-    mentor, token = await as_mentor(
-        db_engine,
-        "own-room",
-        default_venue="custom",
-        custom_meeting_url="https://meet.google.com/abc-defg-hij",
-    )
-    await add_session_type(db_engine, mentor, name="Room")
+    from app.infra.db.models.mentoring import MentorProfile
+    from app.infra.db.models.sessions import SessionTypeBookingConfig
 
-    response = await api_client.get(URL, headers=bearer(token))
-
-    # The offering is destructured before the `not in` so this test cannot pass
-    # by never reaching the endpoint. A `not in` against a refusal body is true
-    # for the wrong reason, and it was — this assertion was green before the
-    # route existed.
-    (offering,) = response.json()["data"]
-    assert offering["name"] == "Room"
-    assert "abc-defg-hij" not in response.text
+    for model in (MentorProfile, SessionTypeBookingConfig):
+        assert "custom_meeting_url" not in model.__table__.columns, (
+            f"{model.__tablename__} has custom_meeting_url again — it is a bearer "
+            "credential, and the endpoint tests that kept it out of responses were "
+            "removed when D88's contract step dropped it"
+        )
 
 
 # --------------------------------------------------------------------------
