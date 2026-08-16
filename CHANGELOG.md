@@ -12,6 +12,24 @@ released. A tag with no matching section here fails the release job.
 
 ### Fixed
 
+- **Two settled decisions contradicted #100, and the education list's order was
+  asserted nowhere.**
+
+  #100 replaced native PostgreSQL enums with `text` + `CHECK`, but #31 still
+  mandated the enums and #30 still called `pg_enum` *the only way* a model
+  declares a vocabulary. A reader hitting either was told to do the thing #100
+  exists to stop, at the one moment it costs most — adding a new vocabulary,
+  when the label becomes permanent. #31 is struck and points at #100; #30 is
+  narrowed rather than struck, because its `StrEnum`-in-`domain` half is
+  unaffected and `pg_enum` is still how the 17 existing types are declared.
+  #31's own `Reopen if` had named this exact trigger, and `LEFT_EARLY` fired it.
+
+  `tests/unit/test_mentor_search_order.py` becomes `test_statement_ordering.py`
+  and gains the education list. Dropping its `id` tiebreak, or sorting by
+  `date_start` before `date_end`, previously left the whole suite green — the
+  third ordering in this milestone introduced deliberately, described in prose,
+  and pinned by nothing. Both now fail.
+
 - **`PATCH /mentor-profile` with an explicit `"requires_booking_confirmation":
   null` was an authenticated 500.** The field was typed `bool | None`, which
   never made it optional — every route dumps with `exclude_unset=True`, so
