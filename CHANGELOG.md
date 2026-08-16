@@ -158,6 +158,37 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`GET /api/v1/me/session-types` — a mentor's own offerings, including the
+  ones they have switched off.** The SESSIONS management screen had no data
+  source: `GET /users/{user_id}/session-types` looks like it serves it and
+  cannot. That route takes no token and filters through `session_type_is_live()`
+  plus `mentor_is_public()`, so it returns only *active* offerings of an
+  *approved and listed* mentor — a mentor cannot see their own paused offering
+  through it, and while unlisted or awaiting review it answers `404` to them as
+  well as to everybody else. The new endpoint consults neither, and adds
+  `is_active`, `category` and `application_stage`. The public contract gains
+  nothing; a test asserts both key sets.
+
+  **`session_type_is_live()` was recomposed rather than given an
+  `include_inactive` flag.** That predicate decides what is *bookable* and is
+  spread by `slot_store` and `profile_writer` as well, so a mis-defaulted flag
+  reaching either would make a deactivated offering bookable again — silently,
+  one keyword away, against #90's rule that switched-off means invisible **and**
+  unbookable. The ownership and soft-delete pair is now `session_type_of()`, and
+  `session_type_is_live()` is that plus the active check. Behaviour is unchanged
+  for all four existing callers, and a predicate taking no flag cannot carry the
+  mistake. Read-only: no migration and no schema change.
+
+  **The ordering was correct by accident and is now correct by construction.** A
+  mutation deleting `ORDER BY name` from the new query left the whole suite
+  green: the partial unique index `(mentor_user_id, name) WHERE deleted_at IS
+  NULL` covers this query's `WHERE` exactly, so an index scan returns rows in
+  name order for free. That is a property of the *plan*, and a plan changes with
+  row counts — at a few hundred offerings the free ordering disappears and the
+  screen starts shuffling between refreshes. A test now disables index scans and
+  asserts the order survives, which is what makes the clause load-bearing rather
+  than decorative.
+
 - **A mentor has a primary offering (D88), expand step only.**
   `mentor_profiles.primary_session_type_id` names the offering a mentee lands on
   and that unconfigured offerings fall back to; `session_type_booking_configs`

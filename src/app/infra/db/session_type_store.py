@@ -1,8 +1,15 @@
-"""What a mentor offers, to anyone who asks.
+"""What a mentor offers — to anyone who asks, and to the mentor themselves.
 
-The endpoint that makes `/slots` reachable. Slots require a `session_type_id`
-and, until this shipped, nothing handed one out — so the slots endpoint was
-correct and unusable from a browse page.
+**Two readers with deliberately different answers, in one module because they
+read one table.** `list_session_types` is the public one; `list_own_session_types`
+is the mentor's own management list, and it drops both the mentor-visibility
+predicate and the `is_active` check. Keeping them side by side is the point: the
+difference between them *is* the contract, and a reader comparing the two
+functions sees it without opening two files.
+
+The public endpoint is also the one that makes `/slots` reachable. Slots require a
+`session_type_id` and, until this shipped, nothing handed one out — so the slots
+endpoint was correct and unusable from a browse page.
 
 **Two statements, deliberately.** A single query filtered by both the mentor's
 visibility and the session types' liveness returns zero rows for two different
@@ -11,12 +18,13 @@ now. Those are different answers — 404 and an empty page — and collapsing th
 would tell a caller that a mentor who has switched everything off does not
 exist. The same shape as `list_session_events`, and for the same reason.
 
-**`meeting_venue` is resolved here, not returned raw.** Null on a config means
-*inherit from the mentor* (package D21), so handing the null to a client makes
-them implement the cascade — and a client that gets it wrong shows "no venue"
-for a mentor who has one. Settled decision #88 will move that column onto the
-config and change where the fallback comes from; until that ships, this endpoint
-speaks the schema that exists.
+**`meeting_venue` is read straight off the offering.** This once resolved a
+cascade — null on a config meant *inherit from the mentor* (package D21) — and
+D88's contract step removed it: the column is `NOT NULL` with a server default,
+and the mentor-level column the chain used to end at is dropped. Settled
+decision #102 records why the venue left the fallback while
+`requires_booking_confirmation` kept it, and `models/sessions.py` states the
+same fact at the column. There is nothing here to resolve.
 """
 
 from __future__ import annotations
@@ -30,9 +38,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
-from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
+from app.infra.db.public_visibility import (
+    mentor_is_public,
+    session_type_is_live,
+    session_type_of,
+)
 
-__all__ = ["list_session_types"]
+__all__ = ["list_own_session_types", "list_session_types"]
 
 
 def _public_mentor(user_id: UUID) -> Select[Any]:
@@ -87,6 +99,82 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
         .where(*session_type_is_live(user_id), *mentor_is_public())
         .order_by(SessionType.name)
     )
+
+
+def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
+    """This mentor's session types, as **they** see them.
+
+    **No `mentor_is_public()`, and that absence is the whole point.** The public
+    query above answers *what may a stranger book*; this one answers *what have I
+    got*. A mentor who is unlisted, still pending review, or paused is exactly the
+    mentor most likely to be looking at their own list, and gating this on the
+    same predicate would hand them an empty screen at the moment they most need it.
+
+    **No `is_active` either**, which is the other half. `session_type_of()`
+    carries ownership and soft deletion only, so a switched-off offering is
+    returned and flagged rather than hidden — a management list that silently
+    omits what you switched off gives you no way to switch it back on.
+
+    **`category` and `application_stage` are returned here and withheld publicly.**
+    That is not a contradiction of the note above: the public reasoning is that
+    publishing free text with no vocabulary would commit a *public* contract to an
+    undesigned shape, and removing a field later is breaking. Neither applies to
+    the mentor who typed the value — they are being shown their own row.
+
+    Ordered by name for the same reason the public query is, and the guarantee
+    survives the wider row set: the unique index is
+    `(mentor_user_id, name) WHERE deleted_at IS NULL`, whose predicate is soft
+    deletion rather than `is_active`, so an inactive row is still covered and the
+    order is still total.
+
+    **The join to the config stays inner**, matching the public query. Duration,
+    notice and venue all come from that row and there is nothing to read without
+    it. Nothing in `api/` can create an offering without a config today, so this
+    excludes no row the product can reach — and a `LEFT JOIN` would make three
+    required response fields nullable, which is a contract change and belongs to
+    the pull request that can actually produce such a row.
+    """
+    return (
+        select(
+            SessionType.id,
+            SessionType.name,
+            SessionType.description,
+            SessionType.category,
+            SessionType.application_stage,
+            SessionType.is_active,
+            SessionTypeBookingConfig.duration_minutes,
+            SessionTypeBookingConfig.min_notice_minutes,
+            SessionTypeBookingConfig.meeting_venue,
+        )
+        .select_from(SessionType)
+        .join(
+            SessionTypeBookingConfig,
+            SessionTypeBookingConfig.session_type_id == SessionType.id,
+        )
+        .where(*session_type_of(mentor_user_id))
+        .order_by(SessionType.name)
+    )
+
+
+async def list_own_session_types(
+    session: AsyncSession, mentor_user_id: UUID
+) -> list[dict[str, Any]]:
+    """Everything this mentor has, switched on or off.
+
+    **A list rather than ``list | None``, because there is no 404 to express.**
+    The public reader returns `None` for a mentor a stranger may not see; here the
+    caller *is* the mentor, so the only two answers are their offerings and an
+    empty list. A user who is not a mentor at all gets the empty list rather than
+    a refusal: `session_types.mentor_user_id` references `mentor_profiles`, so
+    they cannot own a row, and "you have none" is a true statement about them.
+
+    **The ownership scope is in the query, never checked after the fetch** —
+    non-negotiable #5. There is no row to forget to filter: a caller who is not
+    this mentor never sees the row at all, and the reason is the same statement
+    that found it.
+    """
+    result = await session.execute(_own_session_types(mentor_user_id))
+    return [dict(row) for row in result.mappings()]
 
 
 async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]] | None:

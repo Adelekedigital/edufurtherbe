@@ -157,8 +157,14 @@ class MentorProfile(TimestampMixin, Base):
     # approved AND listed, both of which they opted into, and in M3 a mentor with
     # no availability has no bookable slots regardless.
     #
-    # This is the mentor's *general* setting. Per-session-type configs override
-    # it in M4, resolving as COALESCE(session_type.x, mentor.x).
+    # This was the mentor's *general* setting, and D88 moved the authority onto
+    # `session_type_booking_configs`. **There is no COALESCE**, though this
+    # comment described one: the config column is NOT NULL, so there is no null
+    # to fall back from, and `get_mentor_profile` reads the *primary offering's*
+    # value directly — null when a mentor has no primary, rather than this
+    # column. The write path still sets both (`profile_writer` updates this row
+    # and fans the value out to every live offering), so the column is
+    # maintained and no longer read.
     requires_booking_confirmation: Mapped[bool] = mapped_column(
         nullable=False, server_default=text("false")
     )

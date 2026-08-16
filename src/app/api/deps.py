@@ -123,7 +123,7 @@ from app.infra.db.session_store import (
     list_session_events,
     list_sessions,
 )
-from app.infra.db.session_type_store import list_session_types
+from app.infra.db.session_type_store import list_own_session_types, list_session_types
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
@@ -1114,6 +1114,27 @@ async def mentor_session_types(user_id: UUID, session: SessionDep) -> list[dict[
 
 
 SessionTypesDep = Annotated[list[dict[str, Any]], Depends(mentor_session_types)]
+
+
+async def own_session_types(user: CurrentUserDep, session: SessionDep) -> list[dict[str, Any]]:
+    """The caller's own offerings, including the ones they have switched off.
+
+    **No authorization argument, and no `TargetUserDep`.** `CurrentUserDep` *is*
+    the caller, so there is no target to resolve and nothing to admit an admin
+    through — the same shape as `own_attributes` above. The scope is the caller's
+    id spread into the store's `WHERE`, which is the only guard on this read.
+
+    `user["id"]` rather than an attribute: `get_current_user` returns a plain
+    `dict[str, Any]` built from a `text()` row, so nothing here is a typed model
+    and a wrong key would be a `KeyError` at runtime rather than a validation
+    error. The key is `SELECT`ed unconditionally by `CURRENT_USER`, so it is
+    present whenever this runs — the same assumption every other dependency in
+    this module already makes.
+    """
+    return await list_own_session_types(session, user["id"])
+
+
+OwnSessionTypesDep = Annotated[list[dict[str, Any]], Depends(own_session_types)]
 
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
