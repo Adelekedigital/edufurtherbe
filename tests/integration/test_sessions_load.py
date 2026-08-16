@@ -332,9 +332,22 @@ async def test_the_upsert_requires_the_index_predicate(
 async def test_a_retired_type_does_not_block_a_new_one(
     seeded: tuple[AsyncConnection, dict[str, UUID]],
 ) -> None:
-    """The index is partial on `deleted_at IS NULL` for exactly this."""
+    """The index is partial on `deleted_at IS NULL` for exactly this.
+
+    **The pointer is released first, and that line is new.** Since D88 the loader
+    names a primary offering, and `trg_refuse_retiring_a_primary_offering` refuses
+    to let one be retired while it is still pointed at — so this test began
+    failing with a `RestrictViolationError` rather than a wrong count.
+
+    That is the guard working, not a test that needed loosening: retiring the
+    offering mentees land on is a decision the mentor has to make explicitly,
+    because everything else falls back to it. The alternative — a trigger that
+    silently nulled the pointer — would leave a mentor with live offerings and no
+    fallback source, which is the drift the guard exists to prevent.
+    """
     conn, users = seeded
     await SessionLoader(conn).load(users=users, plan=plan_of())
+    await conn.execute(text("UPDATE mentor_profiles SET primary_session_type_id = NULL"))
     await conn.execute(text("UPDATE session_types SET deleted_at = now()"))
 
     await conn.execute(
@@ -360,3 +373,107 @@ async def test_two_live_types_with_one_name_are_refused(
             ),
             {"m": users[MENTOR]},
         )
+
+
+# --------------------------------------------------------------------------
+# D88's expand step: the config carries what the mentor chose
+# --------------------------------------------------------------------------
+
+
+async def test_the_config_takes_the_mentors_venue_and_confirmation(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """The dual-write, and the reason it cannot be left to the migration.
+
+    The migration's backfill runs **once**. A database built fresh — migrate,
+    then load — would otherwise get the column defaults instead of the mentor's
+    real choice, leaving `meeting_venue` null on every config. That matters
+    because null means *inherit*, and once readers move to the new location the
+    thing they inherit from is the primary config: a chain with no bottom.
+
+    Loaded from the real export this is not hypothetical — the twelve mentors
+    split `google_meet` 5, `daily` 5, `custom` 2.
+    """
+    conn, users = seeded
+    await conn.execute(
+        text(
+            "UPDATE mentor_profiles SET default_meeting_venue = 'daily', "
+            "requires_booking_confirmation = true WHERE user_id = :u"
+        ),
+        {"u": users[MENTOR]},
+    )
+
+    await SessionLoader(conn).load(users=users, plan=plan_of())
+
+    row = (
+        await conn.execute(
+            text(
+                "SELECT c.meeting_venue, c.requires_booking_confirmation "
+                "FROM session_type_booking_configs c"
+            )
+        )
+    ).one()
+    assert row.meeting_venue == "daily"
+    assert row.requires_booking_confirmation is True
+
+
+async def test_the_load_names_a_primary_offering(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """`primary_session_type_id` cannot be written with the profile.
+
+    `mentor_profiles` and `session_types` reference each other, so the order is
+    profile, offering, pointer — and a mentor whose profile exists before any
+    offering does is the ordinary case, not an edge: 7 of 12 migrated mentors
+    have no session type at all and keep a null pointer forever.
+    """
+    conn, users = seeded
+    await SessionLoader(conn).load(users=users, plan=plan_of())
+
+    pointer = (
+        await conn.execute(
+            text("SELECT primary_session_type_id FROM mentor_profiles WHERE user_id = :u"),
+            {"u": users[MENTOR]},
+        )
+    ).scalar_one()
+    session_type = (await conn.execute(text("SELECT id FROM session_types"))).scalar_one()
+    assert pointer == session_type
+
+
+async def test_a_re_run_does_not_move_a_primary_somebody_chose(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """Re-running the loader is the recovery plan (D40), not a reset.
+
+    Once a mentor has picked which offering mentees land on, a second load must
+    leave that decision alone — which is what the `IS NULL` in the statement is
+    for. Without it the loader would quietly reassign it on every re-run, and the
+    count-based idempotency tests above would all still pass.
+    """
+    conn, users = seeded
+    loader = SessionLoader(conn)
+    await loader.load(users=users, plan=plan_of())
+
+    chosen = (
+        await conn.execute(
+            text(
+                "INSERT INTO session_types (mentor_user_id, name) "
+                "VALUES (:u, 'Chosen') RETURNING id"
+            ),
+            {"u": users[MENTOR]},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text("UPDATE mentor_profiles SET primary_session_type_id = :s WHERE user_id = :u"),
+        {"s": chosen, "u": users[MENTOR]},
+    )
+
+    await loader.load(users=users, plan=plan_of())
+
+    pointer = (
+        await conn.execute(
+            text("SELECT primary_session_type_id FROM mentor_profiles WHERE user_id = :u"),
+            {"u": users[MENTOR]},
+        )
+    ).scalar_one()
+    assert pointer == chosen

@@ -61,6 +61,69 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor has a primary offering (D88), expand step only.**
+  `mentor_profiles.primary_session_type_id` names the offering a mentee lands on
+  and that unconfigured offerings fall back to; `session_type_booking_configs`
+  gains `requires_booking_confirmation` beside the `meeting_venue` it already had.
+
+  **Nothing is dropped and no reader moves in this release.** A column move is
+  expand/contract, so this is one of three: add and backfill and dual-write here,
+  switch readers next, drop the old columns last. Doing it in one would leave a
+  rolling deploy with old code reading columns the migration had already emptied.
+
+  **The backfill is not optional, and that was measured rather than assumed.**
+  All five configs in the real export have `meeting_venue = NULL`, meaning
+  *inherit* — so after the move they would inherit from the primary config, which
+  is one of those same nulls, and the chain would have no bottom.
+  `SessionTypeRead.meeting_venue` is a **required** field precisely because
+  today's terminus cannot be null (D92), so an unbackfilled move would break a
+  shipped response for every mentor. The ETL writes both locations for the same
+  reason: the migration's backfill runs once, and a fresh migrate-then-load would
+  otherwise get column defaults instead of the mentor's choice. Both facts are
+  structural rather than counts off the dev export — that data is junk-filled, so
+  its shape survives and its values do not, and the shape here is that the ETL
+  writes a config with a duration and nothing else.
+
+  `primary_session_type_id` is nullable because `mentor_profiles` and
+  `session_types` reference each other: the row order is profile, offering,
+  pointer, and a `NOT NULL` column could never be inserted. Null is also the
+  ordinary state, structurally: a profile is created by the M2 load and offerings
+  arrive with M4, so a mentor the sessions ETL never sees keeps a null pointer
+  permanently.
+
+  The backfill picks a mentor's earliest live offering by `id`. `uuid_generate_v7`
+  is time-ordered only to the resolution of its timestamp and counter — rows
+  written in one statement land in the same tick and the rest is random, measured
+  rather than assumed — so the choice is *deterministic* on re-run and arbitrary
+  among same-tick siblings. Acceptable because any live offering is a valid
+  default and the mentor replaces it deliberately; it would not be if the choice
+  carried meaning.
+
+  `custom_meeting_url` is deliberately **not** moved. Nothing writes it and
+  nothing reads it, so it belongs in the contract step as a removal rather than
+  being relocated. Noted while in view: its CHECK runs one way only —
+  `custom_meeting_url IS NULL OR default_meeting_venue = 'custom'` — so it permits
+  a custom venue with **no** URL, leaving a mentor bookable with nowhere to hold
+  the session. A fact about the constraint rather than about anyone's data.
+- **`trg_refuse_retiring_a_primary_offering`** — the first business-rule trigger
+  in this schema, and the mechanism D90 names.
+
+  `ON DELETE RESTRICT` cannot do this job: nothing hard-deletes a session type,
+  because retirement is `deleted_at` or `is_active = false` and both are UPDATEs,
+  which no foreign key sees. The trigger refuses either while a mentor's pointer
+  is on that offering, and permits both once the pointer moves.
+
+  Retiring the offering mentees land on is now an explicit two-step: release the
+  pointer, then retire. A trigger that silently nulled the pointer instead would
+  leave a mentor with live offerings and no fallback source, which is the drift
+  the guard exists to prevent. One existing test changed for this reason and says
+  so.
+
+  It is **not** `trg_set_updated_at` and must never join the list
+  `timestamps_from_source` disables during a load — that helper names its trigger
+  specifically, so this is safe today and would stop being safe if anybody
+  generalised it.
+
 - **The discovery card says where a mentor is from.** `origin_country` on
   `GET /mentors`, populated on 16 of 19 migrated profiles. The search document
   has always indexed it, so a mentee could *find* a mentor by their origin and

@@ -75,11 +75,37 @@ DO UPDATE SET name = EXCLUDED.name
 RETURNING id
 """
 
+# `meeting_venue` and `requires_booking_confirmation` are read from the mentor
+# rather than passed in, and that is the dual-write half of D88's expand step.
+#
+# **The migration's backfill only runs once.** A database built fresh — migrate,
+# then load — would otherwise get the column defaults instead of the mentor's
+# real choice, so `meeting_venue` would be null on every config and the fallback
+# chain would have no bottom the moment readers move to it. Selecting the values
+# here keeps one rule in one place: the mentor's columns are still authoritative
+# in this release, and both locations are written from them.
 UPSERT_BOOKING_CONFIG = """
-INSERT INTO session_type_booking_configs (session_type_id, duration_minutes)
-VALUES (:session_type_id, :duration_minutes)
+INSERT INTO session_type_booking_configs
+    (session_type_id, duration_minutes, meeting_venue, requires_booking_confirmation)
+SELECT :session_type_id, :duration_minutes,
+       mp.default_meeting_venue, mp.requires_booking_confirmation
+FROM session_types st
+JOIN mentor_profiles mp ON mp.user_id = st.mentor_user_id
+WHERE st.id = :session_type_id
 ON CONFLICT (session_type_id) DO UPDATE SET
-    duration_minutes = EXCLUDED.duration_minutes
+    duration_minutes              = EXCLUDED.duration_minutes,
+    meeting_venue                 = EXCLUDED.meeting_venue,
+    requires_booking_confirmation = EXCLUDED.requires_booking_confirmation
+"""
+
+# The pointer D88 introduces, set once the offering exists. It cannot be written
+# with the profile — `mentor_profiles` and `session_types` reference each other,
+# so the row order is profile, offering, pointer.
+SET_PRIMARY_OFFERING = """
+UPDATE mentor_profiles mp
+   SET primary_session_type_id = :session_type_id
+ WHERE mp.user_id = :mentor_user_id
+   AND mp.primary_session_type_id IS NULL
 """
 
 # Every enum cast is spelled out: the ETL writes raw SQL, so nothing in Pydantic
@@ -188,6 +214,16 @@ class SessionLoader:
             await self._connection.execute(
                 text(UPSERT_BOOKING_CONFIG),
                 {"session_type_id": type_id, "duration_minutes": row.duration_minutes},
+            )
+            # `IS NULL` in the statement rather than a check here: a re-run must
+            # not move a primary somebody has since chosen deliberately, and the
+            # loader is re-run as the recovery plan (D40).
+            await self._connection.execute(
+                text(SET_PRIMARY_OFFERING),
+                {
+                    "session_type_id": type_id,
+                    "mentor_user_id": user_id(row.mentor_bubble_id, "session type"),
+                },
             )
         return type_ids
 
