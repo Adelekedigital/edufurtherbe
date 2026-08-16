@@ -166,10 +166,9 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     carried it in two other places — ``CalendarSettings.meetingDuration-TxT`` and
     a mentor-level field — and both are dropped.
 
-    ``meeting_venue`` is nullable and null **means inherit** from
-    ``mentor_profiles.default_meeting_venue`` (package D21). The override earns
-    its place: a mentor runs everything on Google Meet but records mock
-    interviews on Zoom.
+    ``meeting_venue`` is where the offering is held, and it is per-offering
+    rather than inherited: a mentor runs everything on Google Meet but records
+    mock interviews on Zoom. Package D21 called it an inherit; see the column.
 
     **Surrogate ``id``, where the package makes ``session_type_id`` the primary
     key.** ADR 0015 admits no exception, and the invariant that key carried is
@@ -189,9 +188,18 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
 
     duration_minutes: Mapped[int] = mapped_column(nullable=False)
     min_notice_minutes: Mapped[int] = mapped_column(nullable=False, server_default=text("120"))
-    #: Null = inherit from the mentor. Never a URL: only `MeetingProvider.CUSTOM`
+    #: Where this offering is held. Never a URL: only `MeetingProvider.CUSTOM`
     #: stores one, and it lives on `mentor_profiles.custom_meeting_url`.
-    meeting_venue: Mapped[MeetingProvider | None] = mapped_column(pg_enum(MeetingProvider))
+    #:
+    #: **Not an inherit**, though D21 describes it as one. A null here would have
+    #: meant *fall back to the primary offering*, and the guard that protects a
+    #: primary offering makes "live offerings, no primary" a state mentors pass
+    #: through by design — so the chain had a reachable and empty bottom, while
+    #: `SessionTypeRead.meeting_venue` is required (D92). Every offering carries
+    #: its own instead.
+    meeting_venue: Mapped[MeetingProvider] = mapped_column(
+        pg_enum(MeetingProvider), nullable=False, server_default=text("'google_meet'")
+    )
 
     #: Whether a booking against this offering waits for the mentor.
     #:

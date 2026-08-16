@@ -12,6 +12,61 @@ released. A tag with no matching section here fails the release job.
 
 ### Fixed
 
+- **`PATCH /mentor-profile` with an explicit `"requires_booking_confirmation":
+  null` was an authenticated 500.** The field was typed `bool | None`, which
+  never made it optional — every route dumps with `exclude_unset=True`, so
+  omitting it already worked — and only bought the right to send a `null` that
+  was forwarded to a `NOT NULL` column. It is now `bool`, and a null is a 422.
+
+  Pre-existing, and fixed here because it is the field this release moves and
+  the new fan-out would otherwise have needed a dead `None` branch to guard a
+  case the boundary should never have admitted.
+
+- **A mentor's booking-confirmation toggle wrote where nothing was about to
+  read.** `PATCH /mentor-profile` set `requires_booking_confirmation` on
+  `mentor_profiles` only. The expand step for D88 added the column to
+  `session_type_booking_configs` and dual-wrote it from the loader — and not from
+  `profile_writer`, which serves the endpoint that is a mentor's only control
+  over the setting.
+
+  Harmless while `mentor_profiles` was still authoritative, and silent data loss
+  the moment the readers moved below: a 200 that changes nothing anybody reads.
+  The write now reaches **every one of that mentor's live offerings**, which
+  reproduces the previous behaviour exactly — one setting for one mentor, stored
+  per offering. Per-offering control needs an offering-management endpoint, and
+  this fan-out is what it replaces.
+
+### Changed
+
+- **A mentor's booking settings are read from their primary offering (D88),
+  reader step.** `GET /users/{id}/session-types` takes each offering's
+  `meeting_venue` from the offering itself, and the owner's mentor profile takes
+  both `default_meeting_venue` and `requires_booking_confirmation` from the
+  primary offering.
+
+  **`default_meeting_venue` and `requires_booking_confirmation` on the mentor
+  profile response are now nullable**, and are null for a mentor with no primary
+  offering. That is not a degraded read: after the move these settings exist only
+  on an offering, so a mentor who has claimed none has no value rather than a
+  default one. The public `meeting_venue` stays required and is unaffected.
+
+- **`session_type_booking_configs.meeting_venue` is `NOT NULL` with a server
+  default, ending the venue fallback rather than re-pointing it (D102).**
+
+  D88's fallback — *an offering without its own X uses the primary offering's X*
+  — and the shipped contract that makes `meeting_venue` a **required** response
+  field could not both survive the contract step. The chain's terminus was
+  `mentor_profiles.default_meeting_venue`, which that step drops, and
+  `trg_refuse_retiring_a_primary_offering` makes *release the pointer, then
+  retire* the sanctioned two-step — so **live offerings with no primary is a
+  state the guard creates by design**, and resolving through it produced a null
+  the response model forbids.
+
+  Every offering carries its own venue instead. The expand step's backfill had
+  already written a real one onto every row, so this changes no resolved value;
+  the migration's own backfill is defensive. `requires_booking_confirmation`
+  keeps the fallback D88 describes.
+
 - **Two fields left the public payloads because nothing renders them.**
   `years_of_experience` is gone from the discovery card and the public profile,
   and `current_country` from the public profile.
