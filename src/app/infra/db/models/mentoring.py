@@ -172,6 +172,26 @@ class MentorProfile(TimestampMixin, Base):
     # being carried forward as a static personal room.
     custom_meeting_url: Mapped[str | None] = mapped_column(Text)
 
+    #: The offering a mentee lands on, and what an unconfigured offering falls
+    #: back to (D88).
+    #:
+    #: **Nullable, and the cycle is why.** This references ``session_types``,
+    #: whose ``mentor_user_id`` references this table — a cycle between the
+    #: tables though never between two rows: the profile is written with a null
+    #: pointer, the offering is written, then the pointer is set. A ``NOT NULL``
+    #: column could never be inserted at all.
+    #:
+    #: Null is also the ordinary state rather than an edge — 7 of 12 migrated
+    #: mentors have no session type, and the 5 who do have exactly one, so
+    #: *primary* is currently unambiguous by construction rather than by choice.
+    #:
+    #: ``RESTRICT`` cannot protect it: retirement is a soft delete or a cleared
+    #: ``is_active``, both UPDATEs, which no foreign key sees. That is what
+    #: ``trg_refuse_retiring_a_primary_offering`` is for (D90).
+    primary_session_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("session_types.id", ondelete="RESTRICT")
+    )
+
     # Display and filter convenience only. The full history is on
     # `education_entries` — a mentor with degrees from Nigeria, then the UK, then
     # Canada was previously flattened to one value, which is exactly what "who

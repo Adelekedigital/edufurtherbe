@@ -193,6 +193,21 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     #: stores one, and it lives on `mentor_profiles.custom_meeting_url`.
     meeting_venue: Mapped[MeetingProvider | None] = mapped_column(pg_enum(MeetingProvider))
 
+    #: Whether a booking against this offering waits for the mentor.
+    #:
+    #: Moving here from ``mentor_profiles`` under D88, so one offering can
+    #: auto-confirm while another waits — a mentor may want a free intro
+    #: booked instantly and a paid review reviewed first. **Not nullable and
+    #: not an inherit**, unlike ``meeting_venue`` above: a boolean has no room
+    #: for a third state, so null would mean *inherit* and be indistinguishable
+    #: from *false* to every reader that forgot the cascade exists.
+    #:
+    #: ``mentor_profiles.requires_booking_confirmation`` is still authoritative
+    #: in this release; both are written until the readers move.
+    requires_booking_confirmation: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("false")
+    )
+
     __table_args__ = (
         UniqueConstraint("session_type_id"),
         CheckConstraint("duration_minutes BETWEEN 5 AND 480", name="duration_minutes_valid"),
