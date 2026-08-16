@@ -117,12 +117,17 @@ def plan(
     trackers: list[dict[str, Any]] | None = None,
     calendar: list[dict[str, Any]] | None = None,
     users: list[dict[str, Any]] | None = None,
+    mentors: list[dict[str, Any]] | None = None,
 ) -> SessionPlan:
+    """``mentors`` defaults to empty, so every existing test exercises the
+    fallback rather than the mapping — the venue and confirmation arrived with
+    D88's contract step and none of these tests is about them."""
     return plan_sessions(
         USERS if users is None else users,
         bookings or [],
         trackers or [],
         [calendar_row()] if calendar is None else calendar,
+        mentors or [],
         export_timezone=EXPORT_TIMEZONE,
     )
 
@@ -504,6 +509,63 @@ def test_every_mentor_holding_a_session_gets_one_type() -> None:
 
     assert len(result.session_types) == 1
     assert result.session_types[0].duration_minutes == 45
+
+
+def test_the_offering_carries_its_mentors_venue_and_confirmation() -> None:
+    """**The contract step's whole point.**
+
+    These two values used to reach `session_type_booking_configs` by being
+    written to `mentor_profiles` by the *profile* load and selected back out by
+    the *session* load — two processes coupled through columns that no longer
+    exist. Both are non-default here, so a transform that dropped them on the
+    floor would answer `google_meet`/`False` and be caught.
+    """
+    result = plan(
+        [booking()],
+        mentors=[
+            {
+                "bubble_id": "m-1",
+                "meetingVenueSelection": "External Video Tool",
+                "confirmationRequired": "yes",
+            }
+        ],
+    )
+
+    (offering,) = result.session_types
+    assert offering.meeting_venue is MeetingProvider.CUSTOM
+    assert offering.requires_booking_confirmation is True
+
+
+def test_an_offering_whose_mentor_has_no_record_takes_the_column_defaults() -> None:
+    """A mentor holding sessions always has a mentor record, so this is the
+    export being junk-filled test data rather than a state worth modelling. It
+    must not raise: the loop builds every mentor's offering, and one missing key
+    would drop the rest."""
+    result = plan([booking()], mentors=[])
+
+    (offering,) = result.session_types
+    assert offering.meeting_venue is MeetingProvider.GOOGLE_MEET
+    assert offering.requires_booking_confirmation is False
+    # **And it is reported.** Falling back silently is what made reading the
+    # wrong Bubble Thing invisible: it parsed, matched no anchor, and produced a
+    # load where every count reconciled and every mentor was on `google_meet`.
+    assert result.booking_defaulted == (MENTOR,)
+
+
+def test_a_mentor_record_nobody_points_at_is_skipped_rather_than_raising() -> None:
+    """The profile load already reports unattached mentor records. Reporting the
+    same orphan from a second phase would double-count it, and raising here would
+    fail the whole session load over a row that phase already handled."""
+    result = plan(
+        [booking()],
+        mentors=[
+            {"bubble_id": "m-1", "meetingVenueSelection": "External Video Tool"},
+            {"bubble_id": "orphan", "meetingVenueSelection": "External Video Tool"},
+        ],
+    )
+
+    (offering,) = result.session_types
+    assert offering.meeting_venue is MeetingProvider.CUSTOM
 
 
 def test_disagreeing_calendar_rows_take_the_modal_duration() -> None:
