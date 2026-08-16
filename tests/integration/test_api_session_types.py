@@ -123,7 +123,7 @@ async def test_an_offering_that_is_off_or_deleted_is_absent(
 async def test_a_venue_of_its_own_is_returned_as_is(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "own-venue", default_venue="google_meet")
+    mentor = await make_public_mentor(db_engine, "own-venue")
     await add_session_type(db_engine, mentor, venue="zoom")
 
     (offering,) = (await api_client.get(url(mentor))).json()["data"]
@@ -131,34 +131,14 @@ async def test_a_venue_of_its_own_is_returned_as_is(
     assert offering["meeting_venue"] == "zoom"
 
 
-async def test_the_offerings_venue_does_not_follow_the_mentors(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """**This inherited until D88's reader step, and deliberately no longer does.**
-
-    The cascade was removed rather than re-pointed: its terminus was reachable
-    and empty. `trg_refuse_retiring_a_primary_offering` makes releasing the
-    primary pointer a legitimate intermediate state, so "live offerings, no
-    primary" is a state mentors pass through — and resolving through it would
-    have produced the null that `meeting_venue` being required forbids.
-
-    Changing the mentor's default after the fact is the assertion, because it
-    fails against a cascade and passes against a stored value. The loader and
-    the backfill both *seed* the config from the mentor, so a test that only
-    created a mentor and an offering would agree either way.
-    """
-    mentor = await make_public_mentor(db_engine, "no-inherit", default_venue="google_meet")
-    await add_session_type(db_engine, mentor, venue="zoom")
-
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE mentor_profiles SET default_meeting_venue = 'daily' WHERE user_id = :u"),
-            {"u": mentor},
-        )
-
-    (offering,) = (await api_client.get(url(mentor))).json()["data"]
-
-    assert offering["meeting_venue"] == "zoom", "the offering followed the mentor's default"
+# `test_the_offerings_venue_does_not_follow_the_mentors` was deleted by D88's
+# contract step. It proved there was no cascade by changing the mentor's
+# `default_meeting_venue` after the fact and asserting the offering did not
+# follow — and that column no longer exists, so the test could only pass.
+#
+# The guarantee did not weaken; it moved from a test to the schema. There is
+# nothing left to inherit from, and `test_a_venue_of_its_own_is_returned_as_is`
+# above still asserts an offering's own venue is what the endpoint returns.
 
 
 async def test_the_venue_is_never_null(
@@ -207,20 +187,18 @@ async def test_the_response_carries_nothing_it_should_not(
 ) -> None:
     """An allowlist, asserted as one.
 
-    `custom_meeting_url` is a **static room link** — a bearer credential anyone
-    holding it can walk into, which is why per-session links exist at all. It
-    must never reach a public response. `category` and `application_stage` are
-    free text with no vocabulary, and publishing them would commit this contract
-    to a shape nobody has designed.
+    `category` and `application_stage` are free text with no vocabulary, and
+    publishing them would commit this contract to a shape nobody has designed.
+
+    **This test used to guard a third thing and no longer can.**
+    `custom_meeting_url` was a static room link — a bearer credential anyone
+    holding it can walk into — and the assertion that it never reached a public
+    response went with the column in D88's contract step. There is nothing left
+    to leak. The allowlist above is what still earns its place, and it is also
+    what would catch a custom URL reappearing in this payload: a field added to
+    the response fails the set comparison whatever it is called.
     """
-    mentor = await make_public_mentor(
-        db_engine,
-        "leak",
-        # A custom URL requires the custom venue: there is a CHECK, and it
-        # runs one way only — the venue does not require a URL.
-        default_venue="custom",
-        custom_meeting_url="https://meet.google.com/abc-defg-hij",
-    )
+    mentor = await make_public_mentor(db_engine, "leak")
     await add_session_type(
         db_engine, mentor, category="internal-classification", application_stage="postgrad"
     )
@@ -237,7 +215,6 @@ async def test_the_response_carries_nothing_it_should_not(
         "min_notice_minutes",
         "meeting_venue",
     }
-    assert "abc-defg-hij" not in body, "a static meeting room reached a public response"
     assert "internal-classification" not in body
     assert "postgrad" not in body
 

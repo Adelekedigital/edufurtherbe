@@ -110,26 +110,19 @@ async def read_profile(
 async def test_the_owner_profile_reads_its_settings_from_the_primary_offering(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The positive case, with the two locations deliberately disagreeing.
+    """The positive case.
 
-    `mentor_profiles` still carries both columns until the contract step, so a
-    reader that never moved would pass against matching values. These are set to
-    opposites so only the new source can produce this answer.
+    Written when `mentor_profiles` still carried both columns, so it set the two
+    locations to *opposite* values and only the new source could produce this
+    answer. The contract step removed the old location entirely, which is a
+    stronger guarantee than the fixture was: there is no second place a reader
+    could be looking. Non-default values are kept anyway, so a reader returning
+    column defaults still fails.
     """
-    mentor, auth_id = await as_mentor(db_engine, "reads-primary", default_venue="google_meet")
+    mentor, auth_id = await as_mentor(db_engine, "reads-primary")
     session_type = await add_session_type(db_engine, mentor, name="Mock interview", venue="zoom")
     await make_primary(db_engine, mentor, session_type)
     await set_confirmation(db_engine, session_type, True)
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "UPDATE mentor_profiles "
-                "   SET default_meeting_venue = 'google_meet', "
-                "       requires_booking_confirmation = false "
-                " WHERE user_id = :u"
-            ),
-            {"u": mentor},
-        )
 
     profile = await read_profile(api_client, mentor, auth_id)
 

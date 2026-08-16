@@ -24,6 +24,7 @@ from app.domain.enums import ApprovalStatus, ListingStatus, MeetingProvider, Unl
 from app.domain.transform import TransformError
 from app.domain.transform.profiles import (
     SERVICE_OFFERINGS,
+    booking_defaults,
     export_date,
     plan_profiles,
     service_slugs,
@@ -195,15 +196,22 @@ def test_a_listed_mentor_has_no_unlisted_reason() -> None:
     ],
 )
 def test_the_venue_mapping(legacy: str, venue: MeetingProvider) -> None:
-    row = to_mentor_profile(record(meetingVenueSelection=legacy), USER_ID, export_timezone=NY)
-    assert row.default_meeting_venue is venue
+    """**Asserted against `booking_defaults`, not against a mentor row.**
+
+    These two values left `MentorProfileRow` in D88's contract step — nothing
+    writes them to `mentor_profiles` any more, so computing them there would be
+    dead. The *session* transform reads them now, through this same function, so
+    this is the mapping's one home and its one test.
+    """
+    mapped, _ = booking_defaults(record(meetingVenueSelection=legacy), bubble_id=USER_ID)
+    assert mapped is venue
 
 
 def test_a_blank_confirmation_is_false() -> None:
     """Blank meant "never turned it on" — settled decision 57. Ten of fifteen
     mentors in the extract are blank, so this is the majority path."""
-    row = to_mentor_profile(record(confirmationRequired=""), USER_ID, export_timezone=NY)
-    assert row.requires_booking_confirmation is False
+    _, confirmation = booking_defaults(record(confirmationRequired=""), bubble_id=USER_ID)
+    assert confirmation is False
 
 
 # --------------------------------------------------------------------------

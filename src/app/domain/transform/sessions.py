@@ -96,7 +96,11 @@ from app.domain.enums import (
 )
 from app.domain.transform.availability import CREATOR_FIELD, DroppedRow
 from app.domain.transform.identity import TransformError
-from app.domain.transform.profiles import MENTOR_LINK_FIELD
+from app.domain.transform.profiles import (
+    MENTOR_LINK_FIELD,
+    booking_defaults,
+    mentor_owner_map,
+)
 
 # --------------------------------------------------------------------------
 # Legacy field names
@@ -271,9 +275,21 @@ class SessionEventRow:
 
 @dataclass(frozen=True, slots=True)
 class SessionTypeRow:
+    """A mentor's offering, and the booking config that ships with it.
+
+    ``meeting_venue`` and ``requires_booking_confirmation`` are **per offering**
+    (D88) and travel here rather than being read back off ``mentor_profiles``.
+    The loader used to select them from that table, which worked only because the
+    profile load happens first and left them there; the contract step drops those
+    columns, so a value that crossed two ETL processes through the database now
+    crosses one transform instead.
+    """
+
     mentor_bubble_id: str
     name: str
     duration_minutes: int
+    meeting_venue: MeetingProvider
+    requires_booking_confirmation: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +363,15 @@ class SessionPlan:
     duration_disagreements: tuple[Disagreement, ...] = ()
     #: Mentors with no `CalendarSettings` at all, given the legacy mode.
     duration_defaulted: tuple[str, ...] = ()
+    #: Mentors holding sessions for whom no mentor record was found, whose
+    #: offerings therefore take the column defaults rather than their venue
+    #: and confirmation setting.
+    #:
+    #: **This exists because the failure it reports was silent.** Reading the
+    #: wrong Bubble Thing — `allmentors` rather than `mentorsearch` — parses
+    #: cleanly, matches no anchor, and produces a database where every count
+    #: reconciles and every mentor is on `google_meet`. Nothing else notices.
+    booking_defaulted: tuple[str, ...] = ()
     #: Sessions carrying a previously chosen slot — evidence of a reschedule
     #: that cannot be linked, because legacy edited the row in place.
     reschedule_evidence: tuple[Disagreement, ...] = ()
@@ -436,6 +461,7 @@ class SessionPlan:
             ("junk room names", self.junk_room_names),
             ("duration disagreements (modal wins)", self.duration_disagreements),
             ("duration defaulted to the legacy mode", self.duration_defaulted),
+            ("venue and confirmation defaulted (no mentor record)", self.booking_defaulted),
             ("reschedule evidence, unlinkable", self.reschedule_evidence),
             ("session mentors with no mentor link", self.mentors_without_link),
             ("confirmations that cannot be placed in time", self.unplaceable_confirmations),
@@ -685,6 +711,7 @@ def plan_sessions(
     bookings: list[dict[str, Any]],
     trackers: list[dict[str, Any]],
     calendar_settings: list[dict[str, Any]],
+    mentor_records: list[dict[str, Any]],
     *,
     export_timezone: dt.tzinfo,
 ) -> SessionPlan:
@@ -695,11 +722,30 @@ def plan_sessions(
     and what a mentor's duration is are mapping decisions, and doing them in
     ``scripts/`` would put business rules in the one directory the gate cannot
     see (settled decision #44).
+
+    ``mentor_records`` arrived with D88's contract step. Each offering carries its
+    own venue and confirmation setting, and until that step they reached the
+    config by being written to ``mentor_profiles`` by the *profile* load and
+    selected back out by the *session* load — two processes, coupled through
+    columns that no longer exist. The mapping is `profiles.booking_defaults`, so
+    both transforms read the legacy fields exactly one way.
     """
     known_users = {legacy_anchor(record) for record in user_records}
     mentor_linked = {
         legacy_anchor(record) for record in user_records if record.get(MENTOR_LINK_FIELD)
     }
+    # Keyed on the mentor's *user* anchor, because that is what a session names.
+    booking_by_mentor: dict[str, tuple[MeetingProvider, bool]] = {}
+    # A mentor record nobody points at is skipped rather than raising: the profile
+    # load already reports those as unattached, and reporting the same orphan from
+    # a second phase would double-count it.
+    mentor_owner = mentor_owner_map(user_records)
+    for record in mentor_records:
+        anchor = legacy_anchor(record)
+        user_anchor = mentor_owner.get(anchor)
+        if user_anchor is None:
+            continue
+        booking_by_mentor[user_anchor] = booking_defaults(record, bubble_id=anchor)
     durations, duration_disagreements = durations_by_mentor(calendar_settings)
     trackers_by_anchor = {legacy_anchor(record): record for record in trackers}
 
@@ -961,15 +1007,29 @@ def plan_sessions(
 
     # ----------------------------------------------------------- session types
     defaulted: list[str] = []
+    booking_missing: list[str] = []
     session_types: list[SessionTypeRow] = []
     for mentor in sorted({row.mentor_bubble_id for row in sessions}):
         minutes = durations.get(mentor)
         if minutes is None:
             defaulted.append(mentor)
             minutes = DEFAULT_DURATION_MINUTES
+        # A mentor with sessions but no mentor record cannot happen — sessions
+        # are keyed on a mentor-linked user — but the export is junk-filled test
+        # data and this loop must not raise on a missing key. Falling back to the
+        # column defaults is what the database would have done anyway.
+        booking = booking_by_mentor.get(mentor)
+        if booking is None:
+            booking_missing.append(mentor)
+            booking = (MeetingProvider.GOOGLE_MEET, False)
+        venue, confirmation = booking
         session_types.append(
             SessionTypeRow(
-                mentor_bubble_id=mentor, name=GENERAL_MENTORSHIP, duration_minutes=minutes
+                mentor_bubble_id=mentor,
+                name=GENERAL_MENTORSHIP,
+                duration_minutes=minutes,
+                meeting_venue=venue,
+                requires_booking_confirmation=confirmation,
             )
         )
 
@@ -989,6 +1049,7 @@ def plan_sessions(
         junk_room_names=tuple(junk_rooms),
         duration_disagreements=tuple(duration_disagreements),
         duration_defaulted=tuple(defaulted),
+        booking_defaulted=tuple(booking_missing),
         reschedule_evidence=tuple(reschedules),
         mentors_without_link=tuple(sorted(set(mentors_without_link))),
         overlapping_live_windows=tuple(overlapping_windows(sessions)),

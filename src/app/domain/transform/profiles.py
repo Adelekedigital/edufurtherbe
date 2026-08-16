@@ -191,6 +191,28 @@ def _lookup[T](table: dict[str, T], raw: Any, *, field: str, bubble_id: str) -> 
     return table[key]
 
 
+def booking_defaults(record: dict[str, Any], *, bubble_id: str) -> tuple[MeetingProvider, bool]:
+    """A mentor's venue and confirmation setting, read from their legacy record.
+
+    **Public, and shared with the session transform**, because D88 moved both onto
+    `session_type_booking_configs` and the contract step removed the mentor
+    columns they used to travel through. The session loader previously read them
+    back off `mentor_profiles`, which worked only because the profile load ran
+    first and left them there; with the columns gone, sessions derives them from
+    the same record profiles does.
+
+    One function rather than two copies of the same two `_lookup` calls: this
+    mapping decides what an unmapped legacy value does, and a second copy would
+    be a second place to forget `MEETING_VENUES` gained an entry.
+    """
+    return (
+        _lookup(MEETING_VENUES, record.get(VENUE_FIELD), field=VENUE_FIELD, bubble_id=bubble_id),
+        _lookup(
+            BOOLEANS, record.get(CONFIRMATION_FIELD), field=CONFIRMATION_FIELD, bubble_id=bubble_id
+        ),
+    )
+
+
 def _text(record: dict[str, Any], field: str) -> str | None:
     value = str(record.get(field) or "").strip()
     return value or None
@@ -294,8 +316,6 @@ class MentorProfileRow:
     approved_at: datetime | None
     listing_status: ListingStatus
     unlisted_reason: UnlistedReason | None
-    requires_booking_confirmation: bool
-    default_meeting_venue: MeetingProvider
     primary_study_country_name: str | None
     primary_study_program: str | None
     service_slugs: tuple[str, ...]
@@ -485,12 +505,6 @@ def to_mentor_profile(
         ),
         listing_status=listing,
         unlisted_reason=unlisted_reason,
-        requires_booking_confirmation=_lookup(
-            BOOLEANS, record.get(CONFIRMATION_FIELD), field=CONFIRMATION_FIELD, bubble_id=bubble_id
-        ),
-        default_meeting_venue=_lookup(
-            MEETING_VENUES, record.get(VENUE_FIELD), field=VENUE_FIELD, bubble_id=bubble_id
-        ),
         primary_study_country_name=_text(record, MENTOR_STUDY_COUNTRY_FIELD),
         primary_study_program=_text(record, MENTOR_STUDY_PROGRAM_FIELD),
         service_slugs=tuple(
@@ -609,6 +623,17 @@ class ProfilePlan:
     def degree_slugs(self) -> set[str]:
         slugs = {row.degree_level_slug for row in self.education if row.degree_level_slug}
         return slugs | {goal.degree_goal_slug for goal in self.goals if goal.degree_goal_slug}
+
+
+def mentor_owner_map(user_records: list[dict[str, Any]]) -> dict[str, str]:
+    """Mentor record bubble id to the bubble id of the user who owns it.
+
+    Public because the session transform needs the same join since D88's contract
+    step: a session names a *user*, a mentor record carries the booking settings,
+    and only the user record knows which is which. Inverting `Mentor` a second
+    time in another module would be the same rule in two places.
+    """
+    return _links(user_records, MENTOR_LINK_FIELD)
 
 
 def _links(user_records: list[dict[str, Any]], field: str) -> dict[str, str]:

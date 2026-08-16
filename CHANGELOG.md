@@ -56,6 +56,45 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **D88 is complete: `mentor_profiles` loses `default_meeting_venue`,
+  `requires_booking_confirmation` and `custom_meeting_url`.** The contract step,
+  and the third of three releases — add and backfill, switch readers, drop.
+
+  Every reader moved in the previous release, so **this changes no response**. A
+  fresh migrate-then-load reproduces every resolved venue and confirmation
+  exactly, which is the check that matters: the values are what moved, not the
+  shape.
+
+  **The real work was in the ETL, not the drop.** The two settings used to reach
+  a booking config by being written to `mentor_profiles` by `load_profiles.py`
+  and selected back out by `load_sessions.py` — two processes coupled through
+  columns that no longer exist. They now travel on `SessionTypeRow` through one
+  transform, with `transform/profiles.booking_defaults` the single place the
+  legacy fields are read.
+
+  `custom_meeting_url` was **removed rather than moved**: nothing in `src/` had
+  ever written it and it was null on every migrated row. `MeetingProvider.CUSTOM`
+  therefore has nowhere to keep a URL, and one migrated offering is on it —
+  booking has to decide whether a custom venue needs a link. The value cannot be
+  dropped from the enum until the `text` + `CHECK` conversion, because PostgreSQL
+  has no `ALTER TYPE ... DROP VALUE`.
+
+  **D88's fallback now has no members.** Every column on
+  `session_type_booking_configs` is `NOT NULL`, so nothing inherits from a
+  primary offering. `primary_session_type_id` is not redundant — it still names
+  the offering a mentee lands on and drives display order — but it is no longer a
+  source of values. Four settled decisions said otherwise and are corrected.
+
+- **The session loader reports a mentor whose record it could not find.**
+  `SessionPlan.booking_defaulted` lists mentors whose offerings took column
+  defaults instead of their real venue and confirmation, and a non-empty list
+  makes the run exit unresolved.
+
+  Added because the failure it names was silent. Reading the wrong Bubble Thing
+  parses cleanly, matches no anchor, and produces a load where every count
+  reconciles and every mentor is on `google_meet` — reconciliation counts rows,
+  not values.
+
 - **Session calendars move to EduFurther's own Google account (ADR 0012, still
   `Proposed`).** That record named two behaviours as load-bearing and untested
   and asked for them measured before calendar work began. `scripts/calendar_spike.py`

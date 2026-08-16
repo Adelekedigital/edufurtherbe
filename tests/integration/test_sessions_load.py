@@ -112,7 +112,9 @@ def plan_of(**overrides: object) -> SessionPlan:
                 BUBBLE_MODIFIED,
             ),
         ),
-        "session_types": (SessionTypeRow(MENTOR, "General Mentorship", 45),),
+        "session_types": (
+            SessionTypeRow(MENTOR, "General Mentorship", 45, MeetingProvider.DAILY, True),
+        ),
         "source_booking_ids": ("sb-1",),
     }
     values.update(overrides)
@@ -380,28 +382,25 @@ async def test_two_live_types_with_one_name_are_refused(
 # --------------------------------------------------------------------------
 
 
-async def test_the_config_takes_the_mentors_venue_and_confirmation(
+async def test_the_config_takes_the_venue_and_confirmation_from_the_plan(
     seeded: tuple[AsyncConnection, dict[str, UUID]],
 ) -> None:
-    """The dual-write, and the reason it cannot be left to the migration.
+    """**These arrive on `SessionTypeRow` now, and that is the contract step.**
 
-    The migration's backfill runs **once**. A database built fresh — migrate,
-    then load — would otherwise get the column defaults instead of the mentor's
-    real choice, leaving `meeting_venue` null on every config. That matters
-    because null means *inherit*, and once readers move to the new location the
-    thing they inherit from is the primary config: a chain with no bottom.
+    They used to be selected off `mentor_profiles`, which worked only because the
+    profile load runs first and left them there — two ETL processes coupled
+    through columns. Those columns are gone, so a value that crossed the database
+    now crosses the plan.
 
-    Loaded from the real export this is not hypothetical — the twelve mentors
+    The migration's backfill runs **once**, so a database built fresh — migrate,
+    then load — is exactly the path that would otherwise take column defaults
+    instead of the mentor's real choice. Both values here are non-default, so a
+    loader that dropped them answers `google_meet`/`False` and fails.
+
+    Loaded from the real export this is not hypothetical: the twelve mentors
     split `google_meet` 5, `daily` 5, `custom` 2.
     """
     conn, users = seeded
-    await conn.execute(
-        text(
-            "UPDATE mentor_profiles SET default_meeting_venue = 'daily', "
-            "requires_booking_confirmation = true WHERE user_id = :u"
-        ),
-        {"u": users[MENTOR]},
-    )
 
     await SessionLoader(conn).load(users=users, plan=plan_of())
 

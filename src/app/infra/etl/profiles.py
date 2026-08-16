@@ -67,14 +67,11 @@ UPSERT_MENTOR_PROFILE = """
 INSERT INTO mentor_profiles (
     user_id, legacy_bubble_id, created_at, updated_at,
     approval_status, listing_status,
-    requires_booking_confirmation, default_meeting_venue,
     primary_study_country_id, primary_study_program
 ) VALUES (
     :user_id, :legacy_bubble_id, :created_at, :updated_at,
     CAST(:approval_status AS approval_status),
     CAST(:listing_status AS listing_status),
-    :requires_booking_confirmation,
-    CAST(:default_meeting_venue AS meeting_provider),
     :primary_study_country_id, :primary_study_program
 )
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET
@@ -83,8 +80,6 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     updated_at                    = EXCLUDED.updated_at,
     approval_status               = EXCLUDED.approval_status,
     listing_status                = EXCLUDED.listing_status,
-    requires_booking_confirmation = EXCLUDED.requires_booking_confirmation,
-    default_meeting_venue         = EXCLUDED.default_meeting_venue,
     primary_study_country_id      = EXCLUDED.primary_study_country_id,
     primary_study_program         = EXCLUDED.primary_study_program
 """
@@ -264,8 +259,10 @@ class ProfileLoader:
                     "updated_at": mentor.updated_at,
                     "approval_status": mentor.approval_status.value,
                     "listing_status": mentor.listing_status.value,
-                    "requires_booking_confirmation": mentor.requires_booking_confirmation,
-                    "default_meeting_venue": mentor.default_meeting_venue.value,
+                    # `requires_booking_confirmation` and `default_meeting_venue`
+                    # are absent: D88's contract step removed both columns, and
+                    # the session loader now takes those values off `SessionTypeRow`
+                    # rather than reading them back out of this table.
                     "primary_study_country_id": country_id,
                     "primary_study_program": mentor.primary_study_program,
                 },

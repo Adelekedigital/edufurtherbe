@@ -75,28 +75,24 @@ DO UPDATE SET name = EXCLUDED.name
 RETURNING id
 """
 
-# `meeting_venue` and `requires_booking_confirmation` are read from the mentor
-# rather than passed in. That began as D88's dual-write; since the reader step it
-# is a **seed** rather than a mirror. The config is what every reader reads, and
-# `mentor_profiles` is now only where the legacy value happens to have landed —
-# so this carries a mentor's real choice onto their offerings instead of letting
-# a fresh migrate-then-load take column defaults.
+# `meeting_venue` and `requires_booking_confirmation` are **passed in** now.
 #
-# The join is inner, so a session type whose mentor never completed a profile
-# gets no config row at all rather than one with a null venue — which the column
-# has refused since the reader step.
+# They used to be selected off `mentor_profiles`, which worked only because the
+# profile load runs first and left them there — two ETL processes coupled through
+# columns rather than through a plan. The contract step drops those columns, so
+# `SessionTypeRow` carries the values and `transform/profiles.booking_defaults`
+# is the single place the legacy fields are read.
 #
-# **This query is what the contract step has to rewrite.** It reads two columns
-# that step drops, and by then the mentor-level values must come from the
-# transform rather than from a table that no longer has them.
+# The join to `mentor_profiles` stays, and is still inner: `session_types`
+# references that table, so an offering whose mentor has no profile row cannot
+# exist, and the join asserts it rather than assuming it.
 UPSERT_BOOKING_CONFIG = """
 INSERT INTO session_type_booking_configs
     (session_type_id, duration_minutes, meeting_venue, requires_booking_confirmation)
-SELECT :session_type_id, :duration_minutes,
-       mp.default_meeting_venue, mp.requires_booking_confirmation
-FROM session_types st
-JOIN mentor_profiles mp ON mp.user_id = st.mentor_user_id
-WHERE st.id = :session_type_id
+VALUES (
+    :session_type_id, :duration_minutes,
+    CAST(:meeting_venue AS meeting_provider), :requires_booking_confirmation
+)
 ON CONFLICT (session_type_id) DO UPDATE SET
     duration_minutes              = EXCLUDED.duration_minutes,
     meeting_venue                 = EXCLUDED.meeting_venue,
@@ -218,7 +214,12 @@ class SessionLoader:
             type_ids[row.mentor_bubble_id] = type_id
             await self._connection.execute(
                 text(UPSERT_BOOKING_CONFIG),
-                {"session_type_id": type_id, "duration_minutes": row.duration_minutes},
+                {
+                    "session_type_id": type_id,
+                    "duration_minutes": row.duration_minutes,
+                    "meeting_venue": row.meeting_venue.value,
+                    "requires_booking_confirmation": row.requires_booking_confirmation,
+                },
             )
             # `IS NULL` in the statement rather than a check here: a re-run must
             # not move a primary somebody has since chosen deliberately, and the

@@ -2,14 +2,18 @@
 
 **An allowlist, not the owner's shape minus a few fields.** `MentorProfileRead`
 exists for the mentor themselves and answers *why am I not showing up* —
-`approval_status`, `listing_status`, `requires_booking_confirmation`. None of
-that is a stranger's business, and building this by subtraction is how one of
-them survives a refactor.
+`approval_status`, `listing_status`, and the booking settings it reads off their
+primary offering. None of that is a stranger's business, and building this by
+subtraction is how one of them survives a refactor.
+
+`custom_meeting_url` used to be named here as the sharpest exclusion — a static
+room link is a bearer credential anyone holding it can walk into. D88's contract
+step deleted that column rather than moving it, so the exclusion is now
+structural. If booking gives `MeetingProvider.CUSTOM` a URL somewhere, it belongs
+back on this list.
 
 Never here, from `users`: `email`, `email_verified_at`, `auth_id`,
-`last_active_at`, `legacy_bubble_id`. From `mentor_profiles`:
-`custom_meeting_url`, which is a **static room link** — a bearer credential
-anyone holding it can walk into, not a description. From `user_profiles`:
+`last_active_at`, `legacy_bubble_id`. From `user_profiles`:
 `gender`, which is sensitive and has no stated product need; adding it later is
 additive, removing it would not be.
 

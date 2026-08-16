@@ -18,13 +18,18 @@ now. Those are different answers — 404 and an empty page — and collapsing th
 would tell a caller that a mentor who has switched everything off does not
 exist. The same shape as `list_session_events`, and for the same reason.
 
-**`meeting_venue` is read straight off the offering.** This once resolved a
-cascade — null on a config meant *inherit from the mentor* (package D21) — and
-D88's contract step removed it: the column is `NOT NULL` with a server default,
-and the mentor-level column the chain used to end at is dropped. Settled
-decision #102 records why the venue left the fallback while
-`requires_booking_confirmation` kept it, and `models/sessions.py` states the
-same fact at the column. There is nothing here to resolve.
+**`meeting_venue` is read straight off the offering, and there is nothing to
+resolve.** This used to `COALESCE` onto `mentor_profiles.default_meeting_venue`,
+because null on a config meant *inherit from the mentor* (package D21). D88 moved
+the column here and then removed the inherit entirely: the cascade's terminus was
+a state a mentor can legitimately be in — live offerings, no primary — so the
+column became `NOT NULL` with a server default and every offering carries its
+own. The contract step then dropped the mentor-level column, so there is no
+second place a venue could come from.
+
+Settled decision #102 records why the venue left the fallback while
+`requires_booking_confirmation` kept it, and `models/sessions.py` states the same
+fact at the column.
 """
 
 from __future__ import annotations
