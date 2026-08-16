@@ -76,14 +76,19 @@ RETURNING id
 """
 
 # `meeting_venue` and `requires_booking_confirmation` are read from the mentor
-# rather than passed in, and that is the dual-write half of D88's expand step.
+# rather than passed in. That began as D88's dual-write; since the reader step it
+# is a **seed** rather than a mirror. The config is what every reader reads, and
+# `mentor_profiles` is now only where the legacy value happens to have landed —
+# so this carries a mentor's real choice onto their offerings instead of letting
+# a fresh migrate-then-load take column defaults.
 #
-# **The migration's backfill only runs once.** A database built fresh — migrate,
-# then load — would otherwise get the column defaults instead of the mentor's
-# real choice, so `meeting_venue` would be null on every config and the fallback
-# chain would have no bottom the moment readers move to it. Selecting the values
-# here keeps one rule in one place: the mentor's columns are still authoritative
-# in this release, and both locations are written from them.
+# The join is inner, so a session type whose mentor never completed a profile
+# gets no config row at all rather than one with a null venue — which the column
+# has refused since the reader step.
+#
+# **This query is what the contract step has to rewrite.** It reads two columns
+# that step drops, and by then the mentor-level values must come from the
+# transform rather than from a table that no longer has them.
 UPSERT_BOOKING_CONFIG = """
 INSERT INTO session_type_booking_configs
     (session_type_id, duration_minutes, meeting_venue, requires_booking_confirmation)

@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, literal, select
+from sqlalchemy import Select, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.mentoring import MentorProfile
@@ -72,12 +72,10 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             SessionType.description,
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
-            # Null on the config means inherit (D21). Resolved here so a client
-            # never has to know the cascade exists.
-            func.coalesce(
-                SessionTypeBookingConfig.meeting_venue,
-                MentorProfile.default_meeting_venue,
-            ).label("meeting_venue"),
+            # Read straight off the offering (D88). There is no cascade to
+            # resolve: the column is `NOT NULL`, because the fallback source it
+            # used to reach is one a mentor can legally be without.
+            SessionTypeBookingConfig.meeting_venue,
         )
         .select_from(SessionType)
         .join(

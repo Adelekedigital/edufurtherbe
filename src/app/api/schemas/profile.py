@@ -183,8 +183,13 @@ class MentorProfileRead(BaseModel):
     years_of_experience: int | None = None
     approval_status: str
     listing_status: str
-    requires_booking_confirmation: bool
-    default_meeting_venue: str
+    # Both live on the primary offering now (D88), so both are absent for a
+    # mentor who has no primary — a new applicant, or one mid-way through the
+    # two-step that swaps which offering is primary. `None` says "no booking
+    # policy yet"; a default would say "bookable on Google Meet, no confirmation
+    # needed", which is a claim about someone who has nothing to book.
+    requires_booking_confirmation: bool | None = None
+    default_meeting_venue: str | None = None
     primary_study_program: str | None = None
     primary_study_country: CountryRef | None = None
     offerings: list[LookupRef] = []
@@ -203,8 +208,16 @@ class MentorProfileRead(BaseModel):
             years_of_experience=row.get("years_of_experience"),
             approval_status=str(row["approval_status"]),
             listing_status=str(row["listing_status"]),
-            requires_booking_confirmation=bool(row["requires_booking_confirmation"]),
-            default_meeting_venue=str(row["default_meeting_venue"]),
+            requires_booking_confirmation=(
+                None
+                if row.get("requires_booking_confirmation") is None
+                else bool(row["requires_booking_confirmation"])
+            ),
+            default_meeting_venue=(
+                None
+                if row.get("default_meeting_venue") is None
+                else str(row["default_meeting_venue"])
+            ),
             primary_study_program=row.get("primary_study_program"),
             primary_study_country=country,
             offerings=[
@@ -296,7 +309,13 @@ class MentorProfileWrite(Normalised):
 
     headline: str | None = Field(default=None, max_length=300)
     years_of_experience: int | None = Field(default=None, ge=0, le=80)
-    requires_booking_confirmation: bool | None = None
+    #: **`bool`, not `bool | None`** — the one field here whose column is
+    #: `NOT NULL`. Every route dumps with `exclude_unset=True`, so a field the
+    #: client omits never reaches the writer and the default below is never
+    #: read; what `| None` bought was not optionality but the right to send an
+    #: explicit `null`, which `_sent` forwarded to a `NOT NULL` column as a 500.
+    #: A 422 is the correct answer to a value the column cannot hold.
+    requires_booking_confirmation: bool = False
     primary_study_country_id: UUID | None = None
     primary_study_program: str | None = Field(default=None, max_length=300)
     offering_ids: list[UUID] | None = None

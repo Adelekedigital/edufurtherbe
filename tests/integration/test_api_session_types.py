@@ -13,6 +13,7 @@ from __future__ import annotations
 import httpx
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session_type, make_public_mentor
 
@@ -130,32 +131,45 @@ async def test_a_venue_of_its_own_is_returned_as_is(
     assert offering["meeting_venue"] == "zoom"
 
 
-async def test_a_null_venue_inherits_the_mentors_default(
+async def test_the_offerings_venue_does_not_follow_the_mentors(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Null on the config means *inherit* (D21), not "unset".
+    """**This inherited until D88's reader step, and deliberately no longer does.**
 
-    Returning the raw null would make every client implement the cascade, and a
-    client that gets it wrong shows "no venue" for a mentor who has one.
+    The cascade was removed rather than re-pointed: its terminus was reachable
+    and empty. `trg_refuse_retiring_a_primary_offering` makes releasing the
+    primary pointer a legitimate intermediate state, so "live offerings, no
+    primary" is a state mentors pass through — and resolving through it would
+    have produced the null that `meeting_venue` being required forbids.
+
+    Changing the mentor's default after the fact is the assertion, because it
+    fails against a cascade and passes against a stored value. The loader and
+    the backfill both *seed* the config from the mentor, so a test that only
+    created a mentor and an offering would agree either way.
     """
-    mentor = await make_public_mentor(db_engine, "inherit", default_venue="google_meet")
-    await add_session_type(db_engine, mentor, venue=None)
+    mentor = await make_public_mentor(db_engine, "no-inherit", default_venue="google_meet")
+    await add_session_type(db_engine, mentor, venue="zoom")
+
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE mentor_profiles SET default_meeting_venue = 'daily' WHERE user_id = :u"),
+            {"u": mentor},
+        )
 
     (offering,) = (await api_client.get(url(mentor))).json()["data"]
 
-    assert offering["meeting_venue"] == "google_meet"
+    assert offering["meeting_venue"] == "zoom", "the offering followed the mentor's default"
 
 
-async def test_the_resolved_venue_is_never_null(
+async def test_the_venue_is_never_null(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """There is no "neither set" state, which is why the field is required.
+    """There is no "unset" state, which is why the field is required.
 
-    `session_type_booking_configs.meeting_venue` is nullable, so the first draft
-    of the response model made this optional by looking only at that column. The
-    fallback is `mentor_profiles.default_meeting_venue`, which is **NOT NULL with
-    a server default of `google_meet`** — so the COALESCE cannot produce null and
-    an optional field would have promised a case that cannot arise.
+    It used to be guaranteed by a COALESCE onto a NOT NULL mentor column. That
+    column is dropped in the contract step, so the guarantee moved into the
+    config's own `NOT NULL DEFAULT 'google_meet'` — an offering created without
+    a venue takes one rather than inheriting one.
     """
     mentor = await make_public_mentor(db_engine, "always-venue")
     await add_session_type(db_engine, mentor, venue=None)
@@ -163,6 +177,29 @@ async def test_the_resolved_venue_is_never_null(
     (offering,) = (await api_client.get(url(mentor))).json()["data"]
 
     assert offering["meeting_venue"] == "google_meet"
+
+
+async def test_a_config_cannot_be_written_without_a_venue(db_engine: AsyncEngine) -> None:
+    """The database half, because the API cannot create an offering at all.
+
+    Nothing in `api/` inserts a `session_type`, so every guarantee about this
+    column rests on the schema rather than on validation. An explicit NULL is
+    the interesting case: it is what a writer naming the column unconditionally
+    sends, and it overrides the server default rather than falling back to it.
+    """
+    mentor = await make_public_mentor(db_engine, "null-venue")
+    session_type = await add_session_type(db_engine, mentor, config=False)
+
+    with pytest.raises(IntegrityError, match="meeting_venue"):
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO session_type_booking_configs "
+                    "(session_type_id, duration_minutes, meeting_venue) "
+                    "VALUES (:t, 45, NULL)"
+                ),
+                {"t": session_type},
+            )
 
 
 async def test_the_response_carries_nothing_it_should_not(

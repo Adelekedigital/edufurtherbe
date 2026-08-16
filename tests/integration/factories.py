@@ -113,13 +113,21 @@ async def add_session_type(
             )
         ).scalar_one()
         if config:
+            # `meeting_venue` omitted rather than passed as NULL when the caller
+            # said nothing. It is NOT NULL with a server default since D88's
+            # reader step, and an explicit NULL overrides a server default — so
+            # naming the column unconditionally would fail every offering that
+            # does not care which venue it is on.
+            columns = "(session_type_id, duration_minutes, min_notice_minutes"
+            values = "(:t, :d, :n"
+            params: dict[str, object] = {"t": session_type, "d": duration, "n": notice}
+            if venue is not None:
+                columns += ", meeting_venue"
+                values += ", CAST(:v AS meeting_provider)"
+                params["v"] = venue
             await conn.execute(
-                text(
-                    "INSERT INTO session_type_booking_configs "
-                    "(session_type_id, duration_minutes, min_notice_minutes, meeting_venue) "
-                    "VALUES (:t, :d, :n, CAST(:v AS meeting_provider))"
-                ),
-                {"t": session_type, "d": duration, "n": notice, "v": venue},
+                text(f"INSERT INTO session_type_booking_configs {columns}) VALUES {values})"),  # noqa: S608
+                params,
             )
         if deleted:
             # After the config exists, which is the order a real deletion takes:
