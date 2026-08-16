@@ -188,8 +188,10 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
 
     duration_minutes: Mapped[int] = mapped_column(nullable=False)
     min_notice_minutes: Mapped[int] = mapped_column(nullable=False, server_default=text("120"))
-    #: Where this offering is held. Never a URL: only `MeetingProvider.CUSTOM`
-    #: stores one, and it lives on `mentor_profiles.custom_meeting_url`.
+    #: Where this offering is held. Never a URL, and there is nowhere for one to
+    #: live: `mentor_profiles.custom_meeting_url` was **dropped** by D88's
+    #: contract step rather than moved here, because nothing read it. A
+    #: `MeetingProvider.CUSTOM` venue names a provider and stores no address.
     #:
     #: **Not an inherit**, though D21 describes it as one. A null here would have
     #: meant *fall back to the primary offering*, and the guard that protects a
@@ -206,12 +208,22 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     #: Moving here from ``mentor_profiles`` under D88, so one offering can
     #: auto-confirm while another waits — a mentor may want a free intro
     #: booked instantly and a paid review reviewed first. **Not nullable and
-    #: not an inherit**, unlike ``meeting_venue`` above: a boolean has no room
-    #: for a third state, so null would mean *inherit* and be indistinguishable
-    #: from *false* to every reader that forgot the cascade exists.
+    #: not an inherit**: a boolean has no room for a third state, so null would
+    #: mean *inherit* and be indistinguishable from *false* to every reader that
+    #: forgot the cascade exists.
     #:
-    #: ``mentor_profiles.requires_booking_confirmation`` is still authoritative
-    #: in this release; both are written until the readers move.
+    #: This once read "unlike ``meeting_venue`` above", which stopped being true
+    #: when D88's contract step made that column ``NOT NULL`` too (settled
+    #: decision #102). Neither column is a null-means-inherit today; what still
+    #: differs is that #102 keeps *this* one in D88's primary-offering fallback
+    #: and takes ``meeting_venue`` out of it.
+    #:
+    #: **This column is the one that is read.** That reverses what this note
+    #: said while D88 was mid-flight — "``mentor_profiles`` is still
+    #: authoritative; both are written until the readers move" — because the
+    #: readers moved in the D88 reader step: ``get_mentor_profile`` selects the
+    #: *primary offering's* value and never consults ``mentor_profiles``. Both
+    #: locations are still written, so the older column is maintained and unread.
     requires_booking_confirmation: Mapped[bool] = mapped_column(
         nullable=False, server_default=text("false")
     )
