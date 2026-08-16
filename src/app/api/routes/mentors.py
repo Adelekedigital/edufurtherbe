@@ -108,4 +108,5 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
         mentor["education"],
         mentor["scholarships"],
         mentor["languages"],
+        mentor["stats"],
     )

@@ -12,6 +12,32 @@ released. A tag with no matching section here fails the release job.
 
 ### Fixed
 
+- **Two fields left the public payloads because nothing renders them.**
+  `years_of_experience` is gone from the discovery card and the public profile,
+  and `current_country` from the public profile.
+
+  Neither has a legacy source — neither appears in the M2 transform or loader, so
+  both are null on every migrated row — and neither is drawn on the card or the
+  profile design.
+
+  **They part company after that, and only one of them was merely unrendered.**
+  `years_of_experience` is genuinely consumed: the **admin review queue** reads it
+  when deciding on a pending mentor, and so does the mentor's own profile. It
+  stays writable and stays on both of those reads; this removes it only from the
+  two public shapes that never showed it.
+
+  `current_country_id` had no reader at all — not the owner's profile, not the
+  admin queue, not the public profile, and the ETL never populates it. It was a
+  field a user could `PUT` and never `GET` back, which is worse than an absent one
+  because it looks like it was recorded. **It leaves `UserProfileWrite` as well.**
+  The column survives and is a candidate for removal alongside the enum
+  conversion.
+
+  Breaking, and done now deliberately: nothing consumes these payloads yet, so
+  this is the cheapest moment the removal will ever be. Tests assert their
+  absence, because a field nobody asserts the absence of is a field somebody
+  re-adds.
+
 - **`dev_token.py` accepted a blank signing secret and gave wrong advice about a
   deployed one.** Two guards, both found by using the script rather than by any
   gate.
@@ -34,6 +60,45 @@ released. A tag with no matching section here fails the release job.
   Supabase sign-in as the way to get one.
 
 ### Added
+
+- **The discovery card says where a mentor is from.** `origin_country` on
+  `GET /mentors`, populated on 16 of 19 migrated profiles. The search document
+  has always indexed it, so a mentee could *find* a mentor by their origin and
+  then be shown a card that could not say it — a field good enough to match on
+  and not to display.
+
+- **The mentor profile reports what a mentor has actually done** — sessions
+  completed, mentoring minutes, distinct mentees, and their own attendance rate.
+  Derived every request (D56); the migration package drops the same two figures
+  from *Mentor (front search)* as "DERIVED at query time".
+
+  **One definition of "delivered", two readers.** The discovery card already
+  showed a completed count and the profile shows the same number, so the
+  predicate moved to `session_stats.delivered()` and both import it. A test pins
+  the two to the same value.
+
+  `attendance_rate` is the mentor's own — attended over expected — and is
+  **`null`, never `0`**, when nothing is known: zero says "never shows up", null
+  says "no data yet", and a new mentor must not be branded the first. Two states
+  mean *unknown* and enter neither half: `pending` attendance, whose own
+  docstring calls it "a real answer distinguishable from `NO_SHOW`", and a
+  session with no mentor participant row at all — the state of two of the 105 dev
+  bookings, which have no tracker. The denominator is terminal sessions only:
+  a cancelled session is not a missed one, and a confirmed one next week has not
+  happened.
+
+  `mentoring_minutes` is **scheduled** duration. Daily's REST API exposes
+  per-participant `join_time` and `duration`, so measured time is reachable
+  there; Google Meet's conference records need domain-wide delegation on the
+  organiser's Workspace, which a platform never holds for individual mentors, and
+  ADR 0012 requests no scope that would reach them. One number meaning measured
+  minutes on one venue and scheduled minutes on another would be worse than one
+  honest definition.
+
+  Measured rather than assumed: the completed aggregates use
+  `ix_sessions_mentor_completed`, and the attendance query — whose
+  `IN (completed, no_show)` predicate that partial index cannot serve — still
+  reaches `ix_sessions_mentor_window` for the mentor scope. **No new index.**
 
 - **The public mentor profile carries education, scholarships and languages.**
   `GET /mentors/{handle}` gains three lists, read by the **same** store functions

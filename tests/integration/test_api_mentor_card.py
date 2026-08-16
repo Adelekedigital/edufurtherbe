@@ -395,3 +395,49 @@ async def test_a_levelled_entry_outranks_an_unlevelled_one(
 
     assert row["degree"] == "Ph.D"
     assert row["study_course"] == "Real"
+
+
+# --------------------------------------------------------------------------
+# What the payload carries, and what it deliberately stopped carrying
+# --------------------------------------------------------------------------
+
+
+async def test_the_card_says_where_a_mentor_is_from(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The search document has always indexed origin country.
+
+    So a mentee could *find* a mentor by where they are from and then be shown a
+    card that could not say it — a field good enough to match on and not to
+    display. It is populated on 16 of 19 migrated profiles.
+    """
+    await make_bookable_mentor(db_engine, "card-origin")
+    mentor = await _only_mentor(db_engine)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, origin_country_id) "
+                "SELECT :u, id FROM countries WHERE display_name = 'Nigeria' "
+                "ON CONFLICT (user_id) DO UPDATE SET origin_country_id = EXCLUDED.origin_country_id"
+            ),
+            {"u": mentor},
+        )
+
+    assert (await card(api_client))["origin_country"] == "Nigeria"
+
+
+@pytest.mark.parametrize("gone", ["years_of_experience"])
+async def test_the_card_no_longer_carries_unrendered_fields(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, gone: str
+) -> None:
+    """`years_of_experience` is self-reported, has no legacy source, and is
+    rendered by neither the card nor the profile design.
+
+    It stays on the **owner-facing** read and on `MentorProfileWrite`, where a
+    mentor can still set it — this removes it only from the public payloads that
+    never showed it. Asserted because a field nobody asserts the absence of is a
+    field somebody re-adds.
+    """
+    await make_bookable_mentor(db_engine, f"card-gone-{gone}")
+
+    assert gone not in await card(api_client)

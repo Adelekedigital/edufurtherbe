@@ -33,7 +33,6 @@ __all__ = ["get_public_mentor"]
 
 _STUDY_COUNTRY = Country.__table__.alias("study_country")
 _ORIGIN_COUNTRY = Country.__table__.alias("origin_country")
-_CURRENT_COUNTRY = Country.__table__.alias("current_country")
 
 
 def _by_handle(handle: str) -> Any:
@@ -80,7 +79,6 @@ def _public_profile(handle: str) -> Select[Any]:
             User.last_name,
             User.timezone,
             MentorProfile.headline,
-            MentorProfile.years_of_experience,
             MentorProfile.primary_study_program,
             UserProfile.about_me,
             UserProfile.avatar_url,
@@ -90,14 +88,12 @@ def _public_profile(handle: str) -> Select[Any]:
             UserProfile.social_youtube,
             _STUDY_COUNTRY.c.display_name.label("primary_study_country"),
             _ORIGIN_COUNTRY.c.display_name.label("origin_country"),
-            _CURRENT_COUNTRY.c.display_name.label("current_country"),
         )
         .select_from(User)
         .join(MentorProfile, MentorProfile.user_id == User.id)
         .outerjoin(UserProfile, UserProfile.user_id == User.id)
         .outerjoin(_STUDY_COUNTRY, _STUDY_COUNTRY.c.id == MentorProfile.primary_study_country_id)
         .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
-        .outerjoin(_CURRENT_COUNTRY, _CURRENT_COUNTRY.c.id == UserProfile.current_country_id)
         .where(_by_handle(handle), *mentor_is_public())
     )
 
