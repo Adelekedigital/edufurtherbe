@@ -386,7 +386,17 @@ class MentorStatusEvent(Base):
         nullable=False,
     )
     status_type: Mapped[MentorStatusType] = mapped_column(pg_enum(MentorStatusType), nullable=False)
-    #: Free text on a decline, and the `unlisted_reason` value on an unlisting.
+    #: Free text on a decline, and on an unlisting **either** an `UnlistedReason`
+    #: value or free text — `pause` writes `mentor_paused` and `decide` writes
+    #: `never_approved`, while an admin unlisting through `set_listing` writes
+    #: whatever `DeclineRequest.reason` carried.
+    #:
+    #: **So this column is not a closed set and takes no CHECK**, which is why
+    #: `UnlistedReason` sits in `UNCONSTRAINED_ENUMS` rather than converting under
+    #: settled decision #100. Constraining it means splitting `reason_code` from
+    #: `reason_text`, the shape `SessionReasonCode` already documents. Readers
+    #: compare by equality (`may_self_resume`), so a free-text reason simply does
+    #: not match a sentinel — which is the intended behaviour, not a near miss.
     reason: Mapped[str | None] = mapped_column(Text)
     #: Who acted. Null only for rows the backfill wrote, where nobody did.
     #: Named for the house convention — `created_by`, `granted_by`, `approved_by`.

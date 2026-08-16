@@ -132,6 +132,14 @@ EXPECTED_TABLES = [
 # M2 adds only `lookup_status`. The other six vocabularies in `02_profiles.sql`
 # are consumed by tables in the next pull request and ship with them, per settled
 # decision #21 — a type no table uses is a schema asserting a choice nobody took.
+#
+# `unlisted_reason` is **absent, and by that same rule.** It reached head attached
+# to no column at all: `mentor_status_events.reason` is plain `text`, so the type
+# asserted a choice nothing enforced. Settled decision #100 drops it as the first
+# step of the `text` + `CHECK` conversion — the one step that moves no data, and
+# therefore the one that proves the harness. The vocabulary is unaffected;
+# `UnlistedReason` is still written and read as a sentinel, and now lives in
+# `UNCONSTRAINED_ENUMS` with the reason no `CHECK` can guard it.
 ENUM_TYPE_NAMES = (
     "actor_type",
     "admin_role",
@@ -149,7 +157,6 @@ ENUM_TYPE_NAMES = (
     "session_reason_code",
     "session_role",
     "session_status",
-    "unlisted_reason",
     "verification_status",
 )
 

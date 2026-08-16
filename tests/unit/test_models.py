@@ -19,7 +19,7 @@ from app.domain import enums
 from app.infra.db import models
 from app.infra.db.base import Base
 from app.infra.db.models.sessions import LIVE_STATUSES
-from app.infra.db.types import PG_ENUM_TYPES
+from app.infra.db.types import PG_ENUM_TYPES, TEXT_CHECK_ENUMS, UNCONSTRAINED_ENUMS
 from conftest import PROJECT_ROOT
 
 # Every model the project is expected to define. Update deliberately, in the same
@@ -133,6 +133,14 @@ def test_no_declared_identifier_exceeds_the_postgresql_limit() -> None:
     too_long += [
         f"enum type {name}"
         for name in PG_ENUM_TYPES.values()
+        if len(name) > POSTGRES_IDENTIFIER_LIMIT
+    ]
+    # The CHECK that replaces a dropped type is an identifier under the same
+    # limit, and `ck_<table>_<rule>` is where this schema's longest names live.
+    # `UNCONSTRAINED_ENUMS` is not checked: its values are reasons, not names.
+    too_long += [
+        f"check constraint {name}"
+        for name in TEXT_CHECK_ENUMS.values()
         if len(name) > POSTGRES_IDENTIFIER_LIMIT
     ]
     too_long = [n for n in too_long if n]
@@ -264,7 +272,7 @@ def test_the_supabase_auth_id_is_a_column_not_the_key() -> None:
     assert not auth_id.primary_key, "auth_id is a vendor identifier and must never be the key"
 
 
-def test_every_domain_enum_has_a_postgresql_type() -> None:
+def test_every_domain_enum_is_registered_exactly_once() -> None:
     """``PG_ENUM_TYPES`` is what the label-parity test iterates.
 
     An enum missing from it is not checked against the database at all, and the
@@ -272,25 +280,61 @@ def test_every_domain_enum_has_a_postgresql_type() -> None:
     still reports green. That is the "check that scans zero things" shape this
     repository keeps meeting, so the registry's completeness is asserted rather
     than assumed.
+
+    **Three registries now, and the partition is the assertion.** Settled
+    decision #100 moves each vocabulary from a PostgreSQL type to ``text`` +
+    ``CHECK``, one migration at a time, so for most of that work the enums are
+    split across two states with a third — ``UNCONSTRAINED_ENUMS`` — for the ones
+    no single column can hold. Asserting only "every enum is somewhere" would let
+    a half-finished conversion sit in both ``PG_ENUM_TYPES`` and
+    ``TEXT_CHECK_ENUMS`` and report green, which is exactly the window where the
+    database and the model disagree. Disjointness is therefore asserted as
+    loudly as completeness.
     """
     declared = {
         obj
         for obj in vars(enums).values()
         if isinstance(obj, type) and issubclass(obj, StrEnum) and obj is not StrEnum
     }
+    registries = {
+        "PG_ENUM_TYPES": set(PG_ENUM_TYPES),
+        "TEXT_CHECK_ENUMS": set(TEXT_CHECK_ENUMS),
+        "UNCONSTRAINED_ENUMS": set(UNCONSTRAINED_ENUMS),
+    }
 
     assert declared, "no enums found; this test would otherwise pass by inspecting nothing"
-    assert declared == set(PG_ENUM_TYPES), (
-        f"not registered in PG_ENUM_TYPES: {declared - set(PG_ENUM_TYPES)}"
+
+    registered = set().union(*registries.values())
+    assert declared == registered, (
+        f"registered in none of {sorted(registries)}: {declared - registered}; "
+        f"registered but not declared in domain.enums: {registered - declared}"
+    )
+
+    duplicated = {
+        enum_cls.__name__: sorted(
+            name for name, members in registries.items() if enum_cls in members
+        )
+        for enum_cls in declared
+        if sum(enum_cls in members for members in registries.values()) > 1
+    }
+    assert not duplicated, (
+        f"registered in more than one registry, so the conversion is half applied: {duplicated}"
     )
 
 
 def test_postgresql_type_names_are_unique() -> None:
     """Two classes mapped to one type name would make the parity test compare
-    one of them against the other's labels and pass for the wrong reason."""
-    names = list(PG_ENUM_TYPES.values())
+    one of them against the other's labels and pass for the wrong reason.
 
-    assert len(names) == len(set(names)), f"duplicate type names in PG_ENUM_TYPES: {names}"
+    ``TEXT_CHECK_ENUMS`` is included because it has the same hazard one layer
+    over: two vocabularies naming one ``CHECK`` would have the constraint-parity
+    test assert the same constraint twice and never notice the missing one.
+    ``UNCONSTRAINED_ENUMS`` is excluded deliberately — its values are prose
+    reasons, not identifiers, and nothing looks them up.
+    """
+    names = list(PG_ENUM_TYPES.values()) + list(TEXT_CHECK_ENUMS.values())
+
+    assert len(names) == len(set(names)), f"duplicate schema identifiers registered: {names}"
 
 
 def migration_constants(name: str) -> dict[str, str]:
@@ -339,3 +383,29 @@ def test_the_live_status_predicate_has_one_meaning() -> None:
     )
     divergent = {path: value for path, value in copies.items() if value != LIVE_STATUSES}
     assert not divergent, f"LIVE_STATUSES disagrees with the model's {LIVE_STATUSES!r}: {divergent}"
+
+
+def test_the_unlisted_reason_labels_have_one_meaning() -> None:
+    """The same pinning, for a copy that only a ``downgrade`` ever executes.
+
+    ``c9d4e2a71f68`` drops the orphaned ``unlisted_reason`` type and its
+    ``downgrade`` recreates it from a transcribed label list. That path runs on
+    almost no day, which is exactly why it drifts: ``UnlistedReason`` can gain or
+    lose a member and every gate stays green, because after the drop no
+    PostgreSQL type mirrors the class and the label-parity test has nothing to
+    compare.
+
+    **Order is asserted, not just membership.** PostgreSQL sorts an enum by
+    declaration order, so a rebuild from an alphabetised list produces a type
+    that compares differently from the one that was dropped — and comparison is
+    silent, not an error.
+    """
+    expected = ", ".join(f"'{member.value}'" for member in enums.UnlistedReason)
+    copies = migration_constants("UNLISTED_REASON_LABELS")
+
+    assert copies, (
+        "no migration defines UNLISTED_REASON_LABELS; this test would otherwise "
+        "pass by comparing nothing, which is the failure it exists to prevent"
+    )
+    divergent = {path: value for path, value in copies.items() if value != expected}
+    assert not divergent, f"UnlistedReason declares {expected!r}: {divergent}"

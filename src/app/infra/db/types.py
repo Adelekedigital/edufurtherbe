@@ -52,9 +52,11 @@ from app.domain.enums import (
 # the layer check, `alembic check` and the whole suite, then fails at runtime
 # with `invalid input value for enum` on the first insert that uses it.
 #
-# `test_every_enum_type_matches_its_python_class` walks this mapping, and a
-# second test asserts the mapping covers every StrEnum in `domain.enums`, so a
-# new vocabulary cannot be omitted from the check by being forgotten here.
+# `test_every_enum_type_matches_its_python_class` walks this mapping, and
+# `test_every_domain_enum_is_registered_exactly_once` asserts the three registries
+# below partition every StrEnum in `domain.enums`, so a new vocabulary cannot be
+# omitted from the check by being forgotten here — nor can a converted one be
+# left in two places while the conversion is half done.
 PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     PrimaryRole: "primary_role",
     AdminRole: "admin_role",
@@ -64,7 +66,6 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     LookupStatus: "lookup_status",
     ApprovalStatus: "approval_status",
     ListingStatus: "listing_status",
-    UnlistedReason: "unlisted_reason",
     MentorStatusType: "mentor_status_type",
     VerificationStatus: "verification_status",
     MeetingProvider: "meeting_provider",
@@ -74,6 +75,39 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     AttendanceStatus: "attendance_status",
     SessionReasonCode: "session_reason_code",
     ActorType: "actor_type",
+}
+
+# Vocabularies already converted per settled decision #100 — a `text` column and
+# a `CHECK` — mapped to the name of the constraint that guards them.
+#
+# Empty until the first column converts, and deliberately so: this ships with the
+# `unlisted_reason` step, whose whole job is to prove the harness before any data
+# moves. The parity test that walks this mapping arrives with the first entry,
+# because a test iterating an empty registry inspects nothing and reports green —
+# the failure shape `test_schema_parity.py` exists to prevent.
+TEXT_CHECK_ENUMS: dict[type[StrEnum], str] = {}
+
+# Vocabularies with no single database column to constrain, and why.
+#
+# **Not a waiting room.** A member here is a decision that the database cannot
+# hold this vocabulary, recorded so nobody re-derives it — the same reason
+# `APPEND_ONLY` and `RETAINED_ON_USER_DELETE` are written down rather than
+# inferred.
+UNCONSTRAINED_ENUMS: dict[type[StrEnum], str] = {
+    # `mentor_status_events.reason` is not a closed set. It carries free text on
+    # a decline, an `UnlistedReason` value on a self-pause, and free admin text
+    # on an unlisting — `DeclineRequest.reason` reaches it through
+    # `set_listing`, up to 1000 characters of whatever an admin typed. A `CHECK`
+    # naming these four values would reject the admin path, and one conditioned
+    # on `status_type = 'unlisted'` would reject it too, because that is the very
+    # event the free text lands on.
+    #
+    # So the enum is a set of **sentinels** the application writes and reads back
+    # by equality (`may_self_resume` compares against `MENTOR_PAUSED`), not a
+    # vocabulary the column is restricted to. Constraining it needs the
+    # `reason_code` / `reason_text` split `SessionReasonCode` already documents,
+    # which is a schema change and a separate decision.
+    UnlistedReason: "mentor_status_events.reason is free text carrying a sentinel",
 }
 
 
