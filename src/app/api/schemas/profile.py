@@ -312,12 +312,18 @@ class UserProfileWrite(Normalised):
 
     `email_provider_contact_id` and `legacy_bubble_id` are absent because another
     system owns them.
+
+    **`current_country_id` is absent too, and that one was a defect.** The column
+    was writable here and read by *nothing* — not the owner's own profile, not the
+    admin queue, not the public profile, not the ETL, which never populates it. A
+    field a user can PUT and never GET back is worse than an absent one: it looks
+    like it was recorded. The column itself survives this change and is a
+    candidate for removal alongside the enum conversion.
     """
 
     about_me: str | None = Field(default=None, max_length=5000)
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None
-    current_country_id: UUID | None = None
     social_linkedin: str | None = Field(default=None, max_length=500)
     social_twitter: str | None = Field(default=None, max_length=500)
     social_youtube: str | None = Field(default=None, max_length=500)

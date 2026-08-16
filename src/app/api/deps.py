@@ -109,6 +109,7 @@ from app.infra.db.profile_writer import (
     upsert_goal,
     upsert_profile,
 )
+from app.infra.db.session_stats import mentor_stats
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -1043,6 +1044,7 @@ async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
         "education": await list_education(session, user_id),
         "scholarships": await list_awards(session, user_id),
         "languages": await list_languages(session, user_id),
+        "stats": await mentor_stats(session, user_id),
     }
 
 

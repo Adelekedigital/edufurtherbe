@@ -56,7 +56,6 @@ PROFILE_COLUMNS = (
     "about_me",
     "gender",
     "origin_country_id",
-    "current_country_id",
     "social_linkedin",
     "social_twitter",
     "social_youtube",

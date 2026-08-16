@@ -64,8 +64,10 @@ class MentorSummaryRead(BaseModel):
     last_name: str | None = None
     headline: str | None = None
     avatar_url: str | None = None
-    years_of_experience: int | None = None
     primary_study_country: str | None = None
+    #: Where the mentor is *from*. The search document has always indexed it,
+    #: so a mentee could find a mentor by a fact the card could not show them.
+    origin_country: str | None = None
 
     #: The academic line: "Ph.D, Mathematics, Washington University". Three
     #: nullable fields rather than one rendered string, because a card lays them
@@ -95,12 +97,8 @@ class MentorSummaryRead(BaseModel):
             last_name=_text(row["last_name"]),
             headline=_text(row["headline"]),
             avatar_url=_text(row["avatar_url"]),
-            years_of_experience=(
-                int(str(row["years_of_experience"]))
-                if row["years_of_experience"] is not None
-                else None
-            ),
             primary_study_country=_text(row["primary_study_country"]),
+            origin_country=_text(row["origin_country"]),
             degree=_text(row["degree"]),
             study_course=_text(row["study_course"]),
             institution=_text(row["institution"]),
@@ -223,7 +221,6 @@ class MentorPublicRead(BaseModel):
         )
     )
     headline: str | None = None
-    years_of_experience: int | None = None
     about_me: str | None = None
     avatar_url: str | None = None
     banner_url: str | None = None
@@ -232,7 +229,6 @@ class MentorPublicRead(BaseModel):
         default=None, description="Where they studied, resolved to a name."
     )
     origin_country: str | None = None
-    current_country: str | None = None
     social_linkedin: str | None = None
     social_twitter: str | None = None
     social_youtube: str | None = None
@@ -255,6 +251,20 @@ class MentorPublicRead(BaseModel):
     scholarships: list[AwardRead] = Field(
         default_factory=list, description="Scholarships and awards, newest first."
     )
+    #: What this mentor has actually done. Derived every request (D56) — no
+    #: stored totals, no counters. `completed_sessions` is the **same number** the
+    #: discovery card shows, from the same predicate, because two definitions of
+    #: "delivered" is the defect #8 describes.
+    completed_sessions: int = 0
+    #: Scheduled duration summed over completed sessions, not measured time:
+    #: Daily could supply real minutes and Google Meet cannot, and one number
+    #: with two definitions by venue is worse than one honest definition.
+    mentoring_minutes: int = 0
+    mentees_mentored: int = 0
+    #: Whole-number percentage, or **null when nothing is known** — zero would
+    #: say "never shows up" where null says "no data yet".
+    attendance_rate: int | None = None
+
     languages: list[LanguageRead] = Field(
         default_factory=list,
         description=(
@@ -272,6 +282,7 @@ class MentorPublicRead(BaseModel):
         education: list[dict[str, object]],
         scholarships: list[dict[str, object]],
         languages: list[dict[str, object]],
+        stats: dict[str, object],
     ) -> MentorPublicRead:
         return cls(
             id=str(row["user_id"]),
@@ -280,18 +291,12 @@ class MentorPublicRead(BaseModel):
             last_name=_text(row["last_name"]),
             timezone=str(row["timezone"]),
             headline=_text(row["headline"]),
-            years_of_experience=(
-                int(str(row["years_of_experience"]))
-                if row["years_of_experience"] is not None
-                else None
-            ),
             about_me=_text(row["about_me"]),
             avatar_url=_text(row["avatar_url"]),
             banner_url=_text(row["banner_url"]),
             primary_study_program=_text(row["primary_study_program"]),
             primary_study_country=_text(row["primary_study_country"]),
             origin_country=_text(row["origin_country"]),
-            current_country=_text(row["current_country"]),
             social_linkedin=_text(row["social_linkedin"]),
             social_twitter=_text(row["social_twitter"]),
             social_youtube=_text(row["social_youtube"]),
@@ -300,6 +305,12 @@ class MentorPublicRead(BaseModel):
             education=[EducationRead.from_row(e) for e in education],
             scholarships=[AwardRead.from_row(a) for a in scholarships],
             languages=[LanguageRead.from_row(x) for x in languages],
+            completed_sessions=int(str(stats["completed_sessions"])),
+            mentoring_minutes=int(str(stats["mentoring_minutes"])),
+            mentees_mentored=int(str(stats["mentees_mentored"])),
+            attendance_rate=(
+                int(str(stats["attendance_rate"])) if stats["attendance_rate"] is not None else None
+            ),
         )
 
 

@@ -35,7 +35,6 @@ from uuid import UUID
 from sqlalchemy import Select, func, literal, literal_column, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.enums import SessionStatus
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
@@ -43,6 +42,7 @@ from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.offerings import offerings_for
 from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
+from app.infra.db.session_stats import delivered
 
 __all__ = ["search_mentors"]
 
@@ -271,10 +271,10 @@ def _completed_sessions() -> Any:
     return (
         select(func.count())
         .select_from(Session)
-        .where(
-            Session.mentor_id == MentorProfile.user_id,
-            Session.status == SessionStatus.COMPLETED,
-        )
+        # `delivered()` rather than the predicate inline: the profile shows this
+        # same number, and two copies of "what counts as delivered" is the defect
+        # #8 describes rather than a style question.
+        .where(delivered(MentorProfile.user_id))
         .correlate(MentorProfile)
         .scalar_subquery()
     )
@@ -297,9 +297,9 @@ def _base() -> Select[Any]:
             User.first_name,
             User.last_name,
             MentorProfile.headline,
-            MentorProfile.years_of_experience,
             UserProfile.avatar_url,
             _STUDY_COUNTRY.c.display_name.label("primary_study_country"),
+            _ORIGIN_COUNTRY.c.display_name.label("origin_country"),
             qualification.c.degree,
             qualification.c.study_course,
             qualification.c.institution,
@@ -312,6 +312,11 @@ def _base() -> Select[Any]:
         # works perfectly — invisible in the one place a mentee looks.
         .outerjoin(UserProfile, UserProfile.user_id == MentorProfile.user_id)
         .outerjoin(_STUDY_COUNTRY, _STUDY_COUNTRY.c.id == MentorProfile.primary_study_country_id)
+        # Moved here from `_ranked`, where a comment used to say browse never
+        # reads it. Browse does now: where a mentor is *from* is on the card,
+        # and it was the one field the search document indexed while the
+        # payload withheld it — findable by a fact a client could not display.
+        .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
         # Outer for the same reason: an academic line is something a card
         # *displays*, and a mentor without one is a worse card, not a hidden
         # mentor. Bookability is what decides who appears, and it is above.
@@ -354,8 +359,6 @@ def _ranked(term: str, offset: int, limit: int) -> Select[Any]:
     rank = func.ts_rank_cd(_document(), _matches(term))
     return (
         _base()
-        # Joined only here: the document reads it, and browse never does.
-        .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
         .add_columns(rank.label("rank"))
         .where(_document().op("@@")(_matches(term)))
         .order_by(rank.desc(), MentorProfile.id.desc())
