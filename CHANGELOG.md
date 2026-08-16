@@ -10,6 +10,29 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`dev_token.py` accepted a blank signing secret and gave wrong advice about a
+  deployed one.** Two guards, both found by using the script rather than by any
+  gate.
+
+  The emptiness check asked `is None`, and `SUPABASE_JWT_SECRET=` parses to
+  `SecretStr('')` — not None — so the script would mint a token signed with an
+  empty key while the application refused to start at all. It now validates on
+  the stripped value and **returns the raw one**: the application resolves the
+  same setting through its own code and does not trim, so trimming here would
+  sign with `abc` against a verifier holding `" abc "` and fail every token with
+  a bare 401. `engine.py` already treated a set-but-empty `DATABASE_URL` this
+  way; this was the only place in the codebase using identity rather than
+  truthiness on a `SecretStr`.
+
+  The JWKS refusal ended *"Unset it for local work"*, which is wrong in the case
+  it is most often read: through `railway run` or any wrapper injecting a
+  deployed environment, where it reads as an instruction to disable asymmetric
+  verification in staging. It now says no locally signed token can be accepted
+  while a JWKS URL is configured — the signing scheme, not a setting — and names
+  Supabase sign-in as the way to get one.
+
 ### Added
 
 - **The public mentor profile carries education, scholarships and languages.**

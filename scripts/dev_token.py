@@ -26,8 +26,15 @@ legitimate lookup while guarding nothing the refusal below does not already.
 
 **Two refusals, and each replaces an unreadable failure.** A configured JWKS URL
 means the application verifies asymmetrically and would answer a bare 401; a
-missing secret means nothing can be signed at all. Both are better said here than
-discovered in the application.
+secret that is missing or blank means nothing can be signed at all. Both are
+better said here than discovered in the application.
+
+**The JWKS refusal does not tell anybody to unset it.** An earlier version did,
+and that advice is wrong in the case it is most likely to be read: running this
+through `railway run` or any other wrapper that injects a deployed environment.
+There the token cannot be accepted whatever is configured — asymmetric
+verification is the point — and unsetting a deployed `SUPABASE_JWKS_URL` would be
+the worst thing the reader could do with the suggestion.
 
 The user is looked up rather than trusted: a token whose subject matches no live
 `users.auth_id` is answered by `get_current_user` with a 404, which reads as a
@@ -75,18 +82,34 @@ def development_secret(settings: Settings) -> str:
     A configured JWKS URL is refused rather than ignored: the verifier would
     prefer it, so a token signed here would be rejected by the very application
     this script exists to call.
+
+    **Validated on the stripped value, returned raw.** Whitespace at either end
+    is almost certainly a paste accident, and a secret that is only whitespace
+    can sign nothing anybody meant. But the *returned* value has to be the bytes
+    the application reads, because it resolves the same setting through its own
+    code: trimming here and not there signs with `abc` while the verifier holds
+    `" abc "`, and every token fails with a bare 401 — the exact failure these
+    refusals exist to remove.
     """
     if settings.supabase_jwks_url:
         raise ConfigurationError(
-            "SUPABASE_JWKS_URL is set, so the application verifies asymmetrically "
-            "and would reject a locally signed token. Unset it for local work."
+            "SUPABASE_JWKS_URL is set, so the application verifies asymmetrically. "
+            "No locally signed token can be accepted while it is — that is the "
+            "signing scheme, not a setting.\n"
+            "  Working locally? Unset it in your own .env and restart the app.\n"
+            "  Pointed at a deployed environment (railway run, or similar)? Then "
+            "this script does not apply: get a token by signing in through "
+            "Supabase. Do not unset a deployed SUPABASE_JWKS_URL."
         )
-    if settings.supabase_jwt_secret is None:
+
+    raw = settings.supabase_jwt_secret.get_secret_value() if settings.supabase_jwt_secret else ""
+    if not raw.strip():
         raise ConfigurationError(
-            "SUPABASE_JWT_SECRET is not set. Set any local value — it signs the "
-            "token here and verifies it there, and both sides read the same one."
+            "SUPABASE_JWT_SECRET is not set, or is blank. Set any local value — it "
+            "signs the token here and verifies it there, and both sides read the "
+            "same one."
         )
-    return str(settings.supabase_jwt_secret.get_secret_value())
+    return raw
 
 
 async def find(store: ProvisioningStore, args: argparse.Namespace) -> Candidate:

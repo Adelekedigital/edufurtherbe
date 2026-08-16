@@ -30,12 +30,15 @@ REMOTE_DSN = "postgresql+asyncpg://postgres.abcdefghijklmnop:pw@aws-0-eu-west-2.
 
 
 def settings_for(dsn: str, **overrides: object) -> Settings:
-    """Settings as a developer's machine would hold them."""
+    """Settings as a developer's machine would hold them.
+
+    ``supabase_jwt_secret`` is a default rather than a fixed value, so a test
+    about the signing key can supply its own without colliding with this one.
+    """
     return Settings(
         _env_file=None,
         database_url=dsn,
-        supabase_jwt_secret=SECRET,
-        **overrides,  # type: ignore[arg-type]
+        **{"supabase_jwt_secret": SECRET, **overrides},  # type: ignore[arg-type]
     )
 
 
@@ -198,6 +201,32 @@ async def test_a_configured_jwks_url_is_refused(
     assert "verifies asymmetrically" in capsys.readouterr().err
 
 
+async def test_the_jwks_refusal_does_not_advise_unsetting_a_deployed_setting(
+    dev_token_script: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The message is read most often in the case where its old advice was wrong.
+
+    An earlier version ended "Unset it for local work." Run through `railway run`
+    — which injects a deployed environment into a local process — that reads as
+    an instruction to disable asymmetric verification in staging. The refusal has
+    to name the other situation and the real alternative instead.
+    """
+    monkeypatch.setattr(
+        dev_token_script,
+        "get_settings",
+        lambda: settings_for(REMOTE_DSN, supabase_jwks_url="https://x.supabase.co/keys"),
+    )
+
+    await dev_token_script.run(args_for(dev_token_script, "--email", "a@b.test"))
+
+    message = capsys.readouterr().err
+    assert "Supabase" in message, "must name where a real token comes from"
+    assert "deployed" in message, "must distinguish local from deployed"
+    assert "Unset it for local work" not in message
+
+
 async def test_a_missing_secret_is_refused(
     dev_token_script: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
@@ -213,6 +242,64 @@ async def test_a_missing_secret_is_refused(
 
     assert code == 1
     assert "SUPABASE_JWT_SECRET" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+async def test_a_blank_secret_is_refused(
+    dev_token_script: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    blank: str,
+) -> None:
+    """Set-but-blank is missing, and the first version of this guard missed it.
+
+    It asked `is None`, and `SUPABASE_JWT_SECRET=` parses to `SecretStr('')`,
+    which is not None — so the script would have signed a token with an empty
+    key while the application refused to start at all. `engine.py` already treats
+    a set-but-empty `DATABASE_URL` this way; this brings the odd one out into
+    line, and it is the only place in the codebase that used identity rather
+    than truthiness on a `SecretStr`.
+    """
+    monkeypatch.setattr(
+        dev_token_script,
+        "get_settings",
+        lambda: Settings(_env_file=None, database_url=LOCAL_DSN, supabase_jwt_secret=blank),
+    )
+
+    code = await dev_token_script.run(args_for(dev_token_script, "--email", "a@b.test"))
+
+    assert code == 1
+    assert "SUPABASE_JWT_SECRET" in capsys.readouterr().err
+
+
+async def test_a_secret_with_surrounding_whitespace_is_not_trimmed(
+    dev_token_script: ModuleType,
+    db_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The guard validates on the stripped value and returns the raw one.
+
+    The application resolves the same setting through its own code and does not
+    trim. Trimming here would sign with `padded` while the verifier holds
+    `"  padded  "` — every token rejected, with a bare 401 and nothing pointing
+    at the cause. Asserted through the real verifier holding the *untrimmed*
+    key, which is the only thing that distinguishes the two.
+    """
+    padded = "  a-local-signing-secret-with-padding  "
+    auth_id = uuid4()
+    await seed(db_engine, "padded@example.test", auth_id=auth_id)
+    monkeypatch.setattr(
+        dev_token_script,
+        "get_settings",
+        lambda: settings_for(dsn_of(db_engine), supabase_jwt_secret=padded),
+    )
+
+    code = await dev_token_script.run(args_for(dev_token_script, "--email", "padded@example.test"))
+
+    assert code == 0
+    token = capsys.readouterr().out.strip()
+    assert SupabaseTokenVerifier(secret=padded).verify(token).subject == auth_id
 
 
 async def test_an_unknown_user_is_refused(
