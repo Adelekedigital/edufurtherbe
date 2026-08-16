@@ -42,8 +42,9 @@ from app.infra.db.models.mentoring import (
     MentorProfile,
     ServiceOffering,
 )
-from app.infra.db.models.reference import Country
+from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
+from app.infra.db.models.user import UserLanguage
 from app.infra.db.offerings import offerings_for
 
 #: The institution columns an embedded reference carries, matching what
@@ -69,8 +70,10 @@ def _education_statement(user_id: UUID) -> Select[Any]:
             EducationEntry.date_start,
             EducationEntry.date_end,
             EducationEntry.is_most_recent,
+            EducationEntry.degree_abbreviation,
             DegreeLevel.slug.label("degree_level_slug"),
             DegreeLevel.display_name.label("degree_level_name"),
+            DegreeLevel.short_name.label("degree_level_short_name"),
             *_INSTITUTION_REF,
         )
         # Outer joins throughout: an entry with no matched institution and no
@@ -80,7 +83,17 @@ def _education_statement(user_id: UUID) -> Select[Any]:
         .outerjoin(Country, Country.id == Institution.country_id)
         .outerjoin(DegreeLevel, DegreeLevel.id == EducationEntry.degree_level_id)
         .where(EducationEntry.user_id == user_id, EducationEntry.deleted_at.is_(None))
-        .order_by(EducationEntry.is_most_recent.desc(), EducationEntry.date_end.desc().nulls_last())
+        # **`is_most_recent` is deliberately not an ordering key**, though it was
+        # one until now. It is blank on all 21 dev-export rows (D98), so sorting
+        # by it was a no-op that read as a rule — and would have silently
+        # reordered every list the day anybody set it. `date_start` breaks the tie
+        # between two entries that ended in the same year, and `id` makes the
+        # order total so a page cannot shuffle between requests.
+        .order_by(
+            EducationEntry.date_end.desc().nulls_last(),
+            EducationEntry.date_start.desc().nulls_last(),
+            EducationEntry.id.desc(),
+        )
     )
 
 
@@ -214,3 +227,31 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
     # the mapping means "this mentor claimed none", which is an empty list here.
     grouped = await offerings_for(session, [user_id])
     return dict(row) | {"offerings": grouped.get(user_id, [])}
+
+
+async def list_languages(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]]:
+    """The languages a user speaks, alphabetically.
+
+    **Not "primary first", though the column invites it.** `user_languages` has
+    `is_primary`, and the ETL writes `false` on every migrated row — it is
+    derived from a Bubble column that carries no such distinction (D27). Ordering
+    by a field that is uniformly one value is a rule that does nothing and reads
+    as though it does, which is the same shape as `is_most_recent` on education
+    and `verification_status` on awards. Alphabetical is honest and total.
+
+    `proficiency` is deliberately absent from the projection. The column is
+    `NOT NULL` with a `'fluent'` default and the ETL never sets it, so every
+    migrated row claims fluency nobody was asked about. It becomes returnable
+    when a write path collects it.
+    """
+    statement = (
+        select(
+            Language.id,
+            Language.display_name,
+            Language.code_639_3.label("code"),
+        )
+        .join(UserLanguage, UserLanguage.language_id == Language.id)
+        .where(UserLanguage.user_id == user_id)
+        .order_by(Language.display_name)
+    )
+    return [dict(row) for row in (await session.execute(statement)).mappings()]
