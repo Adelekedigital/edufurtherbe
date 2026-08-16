@@ -67,6 +67,16 @@ all** — it is the one type that can be dropped today for free.
 **17 enum types across 22 columns in 15 tables.** Plus `unlisted_reason`, which
 has zero columns.
 
+**This is an inventory of the present, and it cannot warn you about the future.**
+A count taken from the live schema necessarily omits types that do not exist yet
+— and the migration package's canonical DDL still declares several, because it
+predates settled decision #100. `calendar_connections` is the known case:
+`00_foundation.sql` declares `calendar_provider` and `connection_status`, that
+table is deferred, and building it verbatim would add two types to the very list
+below while every gate stayed green (see ADR 0012, *For the phase that builds
+`calendar_connections`*). Converting 22 columns and then accepting 2 new ones is
+a net loss. **#100 governs new vocabularies as well as old ones.**
+
 | Table | Enum columns |
 |---|---|
 | `session_events` | 4 — `actor_type`, `from_status`, `to_status`, `reason_code` |

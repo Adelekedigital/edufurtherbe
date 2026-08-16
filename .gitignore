@@ -28,6 +28,7 @@ data/
 exports/
 migration/out/
 *.csv
+FE-ui-guide
 # Root only. A catalogue snapshot is taken as `--from-file catalogue.json`
 # here; the Bubble exports are covered by the directory rules above. Repo-wide
 # `*.json` also swallowed `.claude/settings.json` and any test fixture, and
@@ -55,3 +56,14 @@ desktop.ini
 # a half-updated set is the failure `config.py` now refuses to start on.
 .env.staging
 .env.production
+
+# Google OAuth material for the calendar spike. The client secret is downloaded
+# from the Cloud console and the token is minted by consenting in a browser —
+# neither is ours to commit, and both land in `scripts/` where the spike runs.
+# The doubled suffix is not a typo: Windows appends `.json` to a file whose
+# extension it is already hiding, and the real download is named that way.
+scripts/client_secret*.json
+scripts/*client_secret*
+scripts/calendar_spike_token.json
+# The id of the calendar a run created, so --cleanup-only can find it.
+scripts/calendar_spike_state.json

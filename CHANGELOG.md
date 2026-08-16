@@ -56,6 +56,30 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **Session calendars move to EduFurther's own Google account (ADR 0012, still
+  `Proposed`).** That record named two behaviours as load-bearing and untested
+  and asked for them measured before calendar work began. `scripts/calendar_spike.py`
+  measured them against real accounts; both came back yes, and a third thing
+  nobody had asked about changed the decision.
+
+  **The invitation's sender is the account whose token made the call.** A
+  mentor-owned calendar puts the mentor's personal email address on every
+  invitation a mentee receives — not a setting, a consequence of whose token
+  writes. The calendar is now EduFurther's, with mentor and mentee as attendees.
+
+  The session still reaches the mentor's primary calendar, by invitation rather
+  than by write, which is the placement ADR 0004 files under capabilities needing
+  a sensitive scope. A mentor's consent narrows to `calendar.freebusy` alone. And
+  **booking no longer depends on calendar connection at all** — the grant buys
+  conflict detection, not the ability to hold a session.
+
+  Three records disagreed about when `calendar_connections` ships and two were
+  already falsified: `models/user.py` said M3, which shipped without it, and
+  settled decision #80 said M4 on reasoning this measurement retired. Both now
+  point at #21. ADR 0012 also gains instructions for whoever builds that table —
+  the canonical DDL would create two PostgreSQL enum types that #100 forbids, and
+  carries a Composio column that point 6 made dead.
+
 - **A mentor's booking settings are read from their primary offering (D88),
   reader step.** `GET /users/{id}/session-types` takes each offering's
   `meeting_venue` from the offering itself, and the owner's mentor profile takes

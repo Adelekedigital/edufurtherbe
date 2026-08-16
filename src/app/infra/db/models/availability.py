@@ -23,8 +23,16 @@ the drift that made the legacy front-search table untrustworthy (D19), and at
 availability file and the M1 migration promised it for M3, but nothing in M3
 reads or writes it — ADR 0004 puts the free/busy read at slot render and at
 confirmation, both M4 — and ADR 0012, which decides the OAuth arrangement its
-columns encode, is still Proposed with two behaviours it names as untested.
-Settled decision #21 governs: it ships with the phase that first needs it.
+columns encode, is still Proposed. Settled decision #21 governs: it ships with
+the phase that first needs it.
+
+The two behaviours ADR 0012 named as untested were **measured on 2026-08-16**,
+and the answer moved the calendar into EduFurther's own Google account rather
+than each mentor's. A mentor's row therefore records a ``calendar.freebusy``
+grant and nothing else, and **booking no longer depends on this table at all** —
+the grant buys conflict detection, not the ability to hold a session. Read ADR
+0012 before building it: three columns in the package DDL are wrong for that
+decision, including two PostgreSQL enum types that settled decision #100 forbids.
 """
 
 import datetime

@@ -17,7 +17,10 @@ two legal tables are what it becomes.
 - ``calendar_connections`` — its DDL lives in the package's availability file, its
   legacy ``composioAuthId`` values are known-dead (the Composio managed-auth
   outage in the failure log), and ADR 0004 has every mentor reconnect at first
-  login regardless. It ships with M3.
+  login regardless. **It ships with the phase that first needs it** (settled
+  decision #21) — this said "with M3", and M3 shipped without it. See the same
+  entry in ``models/availability.py``, which is where the reasoning lives, and
+  ADR 0012 for what its columns must and must not be.
 - ``account_deletion_requests`` — no legacy data and no feature depends on it.
 - The GIN full-text index on ``about_me`` — nothing searches until M2.
 - ``legacy_created_at`` / ``legacy_modified_at`` — withdrawn. Bubble's Creation
