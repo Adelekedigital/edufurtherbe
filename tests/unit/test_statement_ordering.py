@@ -1,4 +1,10 @@
-"""Both pages of mentor discovery order by something unique.
+"""Every statement whose order a reader can see orders by something unique.
+
+Three so far — mentor browse, mentor search, and the education list on a public
+profile. This file began as the search one alone and is now named for the
+invariant rather than the endpoint, because that is the third instance of one
+shape: an ordering introduced deliberately, described accurately in prose, and
+asserted nowhere. Each was found by mutation rather than by any gate.
 
 **A rank is not unique, and ties are the normal case rather than an edge one.**
 `ts_rank_cd` scores a document, so two similar profiles matching a term the same
@@ -24,15 +30,20 @@ its two mentors hold different ranks, so it would turn flaky rather than red.
 from __future__ import annotations
 
 import re
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.infra.db.mentor_search_store import _page, _ranked
+from app.infra.db.profile_store import _education_statement
 
-#: The column that makes an order total. It is the cursor for browse and the
-#: tiebreak for search, which is why both modes name it.
-UNIQUE_KEY = "mentor_profiles.id"
+#: The column that makes the mentor orders total. It is the cursor for browse and
+#: the tiebreak for search, which is why both modes name it.
+MENTOR_KEY = "mentor_profiles.id"
+
+#: Education lists rows of a different table, so its total order ends elsewhere.
+EDUCATION_KEY = "education_entries.id"
 
 
 def order_by(statement: object) -> str:
@@ -71,18 +82,27 @@ def order_by(statement: object) -> str:
 
 
 @pytest.mark.parametrize(
-    ("mode", "statement"),
-    [("browse", _page(None, 20)), ("search", _ranked("ada", 0, 20))],
+    ("mode", "statement", "unique_key"),
+    [
+        ("browse", _page(None, 20), MENTOR_KEY),
+        ("search", _ranked("ada", 0, 20), MENTOR_KEY),
+        ("education", _education_statement(uuid4()), EDUCATION_KEY),
+    ],
 )
-def test_the_order_is_total(mode: str, statement: object) -> None:
-    """Neither mode may order by something two rows can share.
+def test_the_order_is_total(mode: str, statement: object, unique_key: str) -> None:
+    """No listed statement may order by something two rows can share.
 
-    Browse orders by the key alone; search orders by rank *then* the key. Both
-    end up naming it, and a mode that stopped would page non-deterministically.
+    Browse orders by the key alone; search orders by rank *then* the key;
+    education orders by two dates and then the key. All three end up naming one,
+    and any that stopped would return rows in an order the database is free to
+    change between two identical requests.
+
+    The key differs per statement, which is why it is parametrised rather than a
+    module constant — education's rows are `education_entries`, not mentors.
     """
     clause = order_by(statement)
 
-    assert UNIQUE_KEY in clause, f"{mode} orders by {clause!r}, which two rows can tie on"
+    assert unique_key in clause, f"{mode} orders by {clause!r}, which two rows can tie on"
 
 
 def test_search_ranks_before_it_breaks_the_tie() -> None:
@@ -95,4 +115,21 @@ def test_search_ranks_before_it_breaks_the_tie() -> None:
     """
     clause = order_by(_ranked("ada", 0, 20))
 
-    assert clause.index("ts_rank_cd") < clause.index(UNIQUE_KEY)
+    assert clause.index("ts_rank_cd") < clause.index(MENTOR_KEY)
+
+
+def test_education_sorts_by_when_a_degree_ended_not_when_it_started() -> None:
+    """Which date leads is a product decision, and swapping them broke nothing.
+
+    The list moved off `is_most_recent` — blank on every migrated row, so it
+    decided nothing while reading as though it did — onto `date_end`, then
+    `date_start`, then the key. Reversing the first two leaves every test green
+    while silently changing what a profile shows first: a part-time master's
+    spanning a doctorate orders differently by start than by end.
+
+    Not reachable in today's data — no mentor has two entries whose orderings
+    disagree — which is exactly why prose was the only thing holding it.
+    """
+    clause = order_by(_education_statement(uuid4()))
+
+    assert clause.index("date_end") < clause.index("date_start")
