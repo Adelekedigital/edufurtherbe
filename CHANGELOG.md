@@ -54,6 +54,50 @@ released. A tag with no matching section here fails the release job.
   per offering. Per-offering control needs an offering-management endpoint, and
   this fan-out is what it replaces.
 
+- **The enum-to-text handoff plan was wrong in four places, one of which would
+  have broken production.** Re-censused against the live schema before starting;
+  the counts held, the hazards did not.
+
+  `docs/handoff-enum-to-text-check.md` recorded *"no trigger reads an enum
+  column"*. `trg_apply_mentor_status` reads `mentor_status_events.status_type`
+  and writes `mentor_profiles.approval_status` and `.listing_status`. A plpgsql
+  body carries no dependency records, so the planned `DROP TYPE` would have
+  succeeded with every gate green and killed the mentor approval write path at
+  the next insert. Those three columns are now one step, with the function
+  rewritten in the same migration.
+
+  The plan's five steps also covered only 15 of 21 columns — `mentor_profiles`,
+  `session_events` and `session_participants` were named nowhere — and it
+  undercounted the enum-column indexes (five, not three) and omitted
+  `session_type_booking_configs.meeting_venue` from a default list its own prose
+  numbered at eleven. The order is now eight steps and the arithmetic is shown.
+
+  Settled decision #100 carried the same error, describing
+  `mentor_status_events.reason` as *"the whole pattern by accident"*. It is not:
+  the column takes free text on a decline and free admin text on an unlisting via
+  `set_listing`, so no `CHECK` can guard it, and `UnlistedReason` is a set of
+  sentinels rather than a closed vocabulary. Both the decision and the model
+  comment now say so.
+
+### Removed
+
+- **The orphaned `unlisted_reason` PostgreSQL type — step 1 of 8 under settled
+  decision #100.** It was attached to no column: `mentor_profiles.unlisted_reason`
+  was replaced by `mentor_status_events` in `f2a8c31b7e45`, and dropping a column
+  does not drop a type. No column changes type in this migration, which is the
+  point — the conversion runs to eight migrations across 21 columns, and this one
+  proves the harness before any data moves.
+
+  The vocabulary is untouched. `UnlistedReason` is still written by `pause` and
+  `decide` and read back by `may_self_resume`; only the unused database type goes.
+
+  `infra/db/types.py` now carries three registries rather than one, and
+  `test_every_domain_enum_is_registered_exactly_once` asserts they partition
+  `domain/enums.py` — every vocabulary in exactly one of `PG_ENUM_TYPES`,
+  `TEXT_CHECK_ENUMS` or `UNCONSTRAINED_ENUMS`. Disjointness is asserted as loudly
+  as completeness, because a class left in two registries is precisely the
+  half-converted state where the database and the models disagree.
+
 ### Changed
 
 - **D88 is complete: `mentor_profiles` loses `default_meeting_venue`,
