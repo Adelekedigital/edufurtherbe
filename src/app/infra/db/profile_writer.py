@@ -47,10 +47,13 @@ from app.infra.db.public_visibility import session_type_is_live
 
 GOAL_COLUMNS = ("degree_goal_id", "degree_goal_raw", "target_start_term", "notes")
 AWARD_COLUMNS = ("title", "institution", "scholarship_program_id", "year", "evidence_url")
+#: `requires_booking_confirmation` is deliberately absent. The column left this
+#: table in D88's contract step, and `_fan_out_booking_confirmation` below is now
+#: the only writer — it reaches the mentor's offerings, which is where the
+#: setting lives and where every reader looks.
 MENTOR_COLUMNS = (
     "headline",
     "years_of_experience",
-    "requires_booking_confirmation",
     "primary_study_country_id",
     "primary_study_program",
 )
@@ -69,9 +72,14 @@ def _sent(payload: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
 
     **Taking `payload.get(key)` for every column is wrong on an insert**: it
     writes an explicit `NULL` where the client said nothing, and an explicit NULL
-    overrides a server default. `mentor_profiles.requires_booking_confirmation`
-    is `NOT NULL DEFAULT false`, so applying to be a mentor without mentioning it
-    raised a not-null violation. Caught by a test, not by reading.
+    overrides a server default rather than falling back to it.
+
+    The worked example used to be `mentor_profiles.requires_booking_confirmation`
+    — `NOT NULL DEFAULT false`, so applying to be a mentor without mentioning it
+    raised a not-null violation, caught by a test rather than by reading. That
+    column has since left this table, but the trap has not: it caught the test
+    factory in the reader step, where naming `meeting_venue` unconditionally sent
+    a NULL that a fresh server default could not rescue.
     """
     return {key: value for key, value in payload.items() if key in columns}
 
@@ -263,6 +271,15 @@ async def _fan_out_booking_confirmation(
     Per-offering control is a real feature and this is not it — it needs an
     offering-management endpoint, which does not exist. When it arrives, this
     fan-out is what has to go.
+
+    **A mentor with no offerings is a no-op, and that is correct rather than a
+    lost write.** Since the contract step there is nowhere else the setting could
+    land, and the read side agrees: `get_mentor_profile` reports `null` for a
+    mentor with no primary offering. Someone with nothing bookable has no booking
+    policy, and inventing a row to hold one would be asserting otherwise. Worth
+    stating because it looks like silent data loss and is not — and because
+    removing the field from `MentorProfileWrite` to "fix" it would break the case
+    that works, which is every mentor who has an offering.
     """
     # Presence, not truthiness — `False` is a value the mentor chose. There is no
     # `None` branch: `MentorProfileWrite` types this `bool`, so an explicit null

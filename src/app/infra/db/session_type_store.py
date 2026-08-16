@@ -11,12 +11,14 @@ now. Those are different answers — 404 and an empty page — and collapsing th
 would tell a caller that a mentor who has switched everything off does not
 exist. The same shape as `list_session_events`, and for the same reason.
 
-**`meeting_venue` is resolved here, not returned raw.** Null on a config means
-*inherit from the mentor* (package D21), so handing the null to a client makes
-them implement the cascade — and a client that gets it wrong shows "no venue"
-for a mentor who has one. Settled decision #88 will move that column onto the
-config and change where the fallback comes from; until that ships, this endpoint
-speaks the schema that exists.
+**`meeting_venue` is read straight off the offering, and there is nothing to
+resolve.** This used to `COALESCE` onto `mentor_profiles.default_meeting_venue`,
+because null on a config meant *inherit from the mentor* (package D21). D88 moved
+the column here and then removed the inherit entirely: the cascade's terminus was
+a state a mentor can legitimately be in — live offerings, no primary — so the
+column became `NOT NULL` with a server default and every offering carries its
+own. The contract step then dropped the mentor-level column, so there is no
+second place a venue could come from.
 """
 
 from __future__ import annotations

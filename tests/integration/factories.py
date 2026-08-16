@@ -38,10 +38,6 @@ async def make_public_mentor(
     #: The legacy public profile handle. Nullable in the schema and on 4 of 43
     #: migrated users, so a mentor without one must stay reachable by id.
     slug: str | None = None,
-    #: `mentor_profiles.default_meeting_venue` is NOT NULL with a server
-    #: default, so "no default" is not a state a mentor can be in.
-    default_venue: str = "google_meet",
-    custom_meeting_url: str | None = None,
 ) -> UUID:
     """A mentor and their profile, with every reason to be refused as a knob.
 
@@ -62,17 +58,13 @@ async def make_public_mentor(
         await conn.execute(
             text(
                 "INSERT INTO mentor_profiles "
-                "(user_id, headline, approval_status, listing_status, "
-                " default_meeting_venue, custom_meeting_url) "
-                "VALUES (:u, 'M', CAST(:a AS approval_status), CAST(:l AS listing_status), "
-                "        CAST(:v AS meeting_provider), :c)"
+                "(user_id, headline, approval_status, listing_status) "
+                "VALUES (:u, 'M', CAST(:a AS approval_status), CAST(:l AS listing_status))"
             ),
             {
                 "u": mentor,
                 "a": "approved" if approved else "pending",
                 "l": "listed" if listed else "unlisted",
-                "v": default_venue,
-                "c": custom_meeting_url,
             },
         )
     return mentor

@@ -11,13 +11,12 @@ models, mentor and mentee separate and this table moves to its own module
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import TIMESTAMP, ForeignKey, Index, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import (
     ApprovalStatus,
     ListingStatus,
-    MeetingProvider,
     MentorStatusType,
 )
 from app.infra.db.base import Base, TimestampMixin
@@ -152,26 +151,6 @@ class MentorProfile(TimestampMixin, Base):
 
     # DEFAULT false, where the package has true. Legacy stored a blank on 10 of
     # 15 mentors, and blank meant "never turned it on" — so false is what the
-    # data says, and a migrated mentor and a new one should not start on
-    # opposite settings. The exposure is bounded: a mentor is only bookable when
-    # approved AND listed, both of which they opted into, and in M3 a mentor with
-    # no availability has no bookable slots regardless.
-    #
-    # This is the mentor's *general* setting. Per-session-type configs override
-    # it in M4, resolving as COALESCE(session_type.x, mentor.x).
-    requires_booking_confirmation: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
-
-    default_meeting_venue: Mapped[MeetingProvider] = mapped_column(
-        pg_enum(MeetingProvider), nullable=False, server_default=text("'google_meet'")
-    )
-    # Null on every migrated row. Legacy stored a link even when the venue was
-    # not custom — residue, because selecting custom auto-created a per-session
-    # link that lived on the session record. The CHECK is what stops that residue
-    # being carried forward as a static personal room.
-    custom_meeting_url: Mapped[str | None] = mapped_column(Text)
-
     #: The offering a mentee lands on, and what an unconfigured offering falls
     #: back to (D88).
     #:
@@ -223,25 +202,6 @@ class MentorProfile(TimestampMixin, Base):
         # when" — now a query against `mentor_status_events`, served by that
         # table's own index. `ix_mentor_profiles_searchable` already covers
         # `listing_status` for the directory.
-        # **One direction only, and that is forced rather than lax.** A custom
-        # URL requires the custom venue; the custom venue does **not** require a
-        # URL. The symmetric version —
-        # `(default_meeting_venue = 'custom') = (custom_meeting_url IS NOT NULL)`
-        # — would reject rows this migration has to write: legacy "External
-        # Video Tool" maps to `custom`, and its stored link is residue that we
-        # deliberately drop, so those mentors arrive on `custom` with a null URL.
-        #
-        # The gap that leaves is real and belongs to M3, not to a constraint: a
-        # mentor on `custom` with no URL has no link and no way to auto-create
-        # one, so booking must refuse or fall back rather than produce a session
-        # nobody can join. Recorded here so that is a decision rather than an
-        # oversight.
-        #
-        # Bare name; the `ck` convention renders the `ck_mentor_profiles_` prefix.
-        CheckConstraint(
-            "custom_meeting_url IS NULL OR default_meeting_venue = 'custom'",
-            name="custom_url_requires_custom_venue",
-        ),
     )
 
 

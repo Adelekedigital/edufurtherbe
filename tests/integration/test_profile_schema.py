@@ -58,16 +58,10 @@ async def lookup_id(conn: AsyncConnection, table: str, column: str, value: str) 
 async def add_mentor_profile(
     conn: AsyncConnection,
     user_id: uuid.UUID,
-    *,
-    venue: str = "google_meet",
-    custom_url: str | None = None,
 ) -> uuid.UUID:
     result = await conn.execute(
-        text(
-            "INSERT INTO mentor_profiles (user_id, default_meeting_venue, custom_meeting_url) "
-            "VALUES (:u, CAST(:v AS meeting_provider), :c) RETURNING id"
-        ),
-        {"u": user_id, "v": venue, "c": custom_url},
+        text("INSERT INTO mentor_profiles (user_id) VALUES (:u) RETURNING id"),
+        {"u": user_id},
     )
     return result.scalar_one()
 
@@ -370,31 +364,18 @@ async def test_an_unlinked_award_still_records_its_title(db_engine: AsyncEngine)
 # --------------------------------------------------------------------------
 
 
-async def test_a_custom_meeting_url_requires_the_custom_venue(db_engine: AsyncEngine) -> None:
-    """A static personal room on a Meet or Daily profile is a privacy incident.
-
-    Both of those create a per-session link at confirmation, so a stored URL
-    there would be shared by back-to-back sessions and an early joiner would
-    walk into the previous one. The CHECK is what makes that unwriteable rather
-    than merely discouraged.
-    """
-    async with db_engine.begin() as conn:
-        mentor = await add_user(conn, "mentor@example.com")
-
-        with pytest.raises(IntegrityError):
-            await add_mentor_profile(
-                conn, mentor, venue="google_meet", custom_url="https://meet.google.com/abc-defg"
-            )
-
-
-async def test_a_custom_url_is_accepted_with_the_custom_venue(db_engine: AsyncEngine) -> None:
-    async with db_engine.begin() as conn:
-        mentor = await add_user(conn, "mentor@example.com")
-        profile = await add_mentor_profile(
-            conn, mentor, venue="custom", custom_url="https://teams.microsoft.com/l/room"
-        )
-
-    assert profile is not None
+# `test_a_custom_meeting_url_requires_the_custom_venue` and
+# `test_a_custom_url_is_accepted_with_the_custom_venue` were deleted here by
+# D88's contract step, along with the constraint they pinned.
+#
+# They asserted that a static personal room could not be stored against a Meet or
+# Daily profile — a privacy incident, because both create a per-session link and a
+# stored URL would be shared by back-to-back sessions. `custom_meeting_url` was
+# removed rather than moved: nothing in `src/` had ever written it.
+#
+# **`MeetingProvider.CUSTOM` still exists and now has nowhere to keep a URL.** If
+# booking gives it one, these two tests are the shape the new constraint needs,
+# and this comment is here so they are rewritten rather than reinvented.
 
 
 async def test_a_user_may_hold_only_one_mentor_profile(db_engine: AsyncEngine) -> None:
@@ -420,20 +401,15 @@ async def test_a_user_may_hold_only_one_goals_row(db_engine: AsyncEngine) -> Non
             await add_mentee_goals(conn, user)
 
 
-async def test_booking_confirmation_defaults_to_false(db_engine: AsyncEngine) -> None:
-    """A departure from the package, asserted so changing it back is deliberate.
-
-    Legacy stored a blank on 10 of 15 mentors and blank meant "never turned it
-    on". The exposure is bounded by approval and listing, both of which the
-    mentor opted into.
-    """
-    async with db_engine.begin() as conn:
-        mentor = await add_user(conn, "mentor@example.com")
-        await add_mentor_profile(conn, mentor)
-
-        row = await conn.execute(text("SELECT requires_booking_confirmation FROM mentor_profiles"))
-
-    assert row.scalar_one() is False
+# `test_booking_confirmation_defaults_to_false` was deleted by D88's contract
+# step. It pinned `mentor_profiles.requires_booking_confirmation` defaulting to
+# `false` — a departure from the package, asserted so that changing it back would
+# be deliberate.
+#
+# The departure survives; the column does not. The same default now sits on
+# `session_type_booking_configs.requires_booking_confirmation`, which is where
+# every reader and the fan-out writer look, and the reasoning is unchanged:
+# legacy stored a blank on 10 of 15 mentors and blank meant "never turned it on".
 
 
 async def test_a_new_profile_is_pending_and_unlisted(db_engine: AsyncEngine) -> None:

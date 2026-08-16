@@ -87,7 +87,9 @@ def plan_of(**overrides: object) -> SessionPlan:
                 BUBBLE_CREATED,
             ),
         ),
-        "session_types": (SessionTypeRow(MENTOR, "General Mentorship", 45),),
+        "session_types": (
+            SessionTypeRow(MENTOR, "General Mentorship", 45, MeetingProvider.DAILY, True),
+        ),
         "source_booking_ids": ("sb-1",),
     }
     values.update(overrides)

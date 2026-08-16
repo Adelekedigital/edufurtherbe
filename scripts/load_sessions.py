@@ -47,12 +47,21 @@ from app.infra.etl.satellites import user_id_map
 from app.infra.etl.sessions import SessionLoader
 
 
-def build_plan(directory: Path) -> SessionPlan:
+def build_plan(directory: Path, mentors_thing: str = "mentorsearch") -> SessionPlan:
     source = open_export(directory)
     users = list(source.read("allusers"))
     bookings = list(source.read("sessionbookings"))
     trackers = list(source.read("sessiontracker"))
     calendar = list(source.read("calendarsettings"))
+    # **`mentorsearch`, and the name matters more than it looks.** This is the
+    # Thing `load_profiles.py` reads mentors from; the first draft here guessed
+    # `allmentors`, which exists, parses, and carries anchors that match nothing.
+    # The result was silent: every offering took the column default instead of
+    # its mentor's venue, and the load still reported five configs expected and
+    # five loaded. Read by this transform *and* by `load_profiles.py` since D88's
+    # contract step, because those columns no longer carry the value between the
+    # two loads.
+    mentors = list(source.read(mentors_thing))
 
     # Raw records in, and the zone from the source rather than a second constant
     # here. Deciding who counts as a mentor, which tracker belongs to which
@@ -63,7 +72,9 @@ def build_plan(directory: Path) -> SessionPlan:
     # `load_availability.py`, for different fields. That is deliberate and the
     # sessions module states it: Generation A rows are quarantined for their
     # times and still carry a usable `meetingDuration-TxT`.
-    return plan_sessions(users, bookings, trackers, calendar, export_timezone=source.timezone)
+    return plan_sessions(
+        users, bookings, trackers, calendar, mentors, export_timezone=source.timezone
+    )
 
 
 async def load(plan: SessionPlan) -> None:
@@ -114,6 +125,9 @@ def main() -> int:
         or plan.overlapping_live_windows
         or plan.duration_defaulted
         or plan.duration_disagreements
+        # A defaulted venue means a mentor record was not found, which in this
+        # script has exactly one plausible cause: the wrong Thing name above.
+        or plan.booking_defaulted
     )
 
     if args.dry_run:

@@ -228,17 +228,27 @@ class VerificationStatus(StrEnum):
 class MeetingProvider(StrEnum):
     """Where a session happens.
 
-    **Only ``CUSTOM`` ever stores a URL.** ``GOOGLE_MEET`` and ``DAILY`` both
-    create a per-session link at confirmation — Meet through the calendar
-    integration, Daily through its API — so a stored link would be redundant for
-    them and actively harmful: a static personal room means back-to-back sessions
-    share a room and an early joiner walks into the previous one. That is why
-    ``custom_meeting_url`` is gated by a CHECK rather than by convention.
+    ``GOOGLE_MEET`` and ``DAILY`` both create a per-session link at confirmation
+    — Meet through the calendar integration, Daily through its API — so a stored
+    link would be redundant for them and actively harmful: a static personal room
+    means back-to-back sessions share a room and an early joiner walks into the
+    previous one.
+
+    **``CUSTOM`` currently has nowhere to keep a URL, and one migrated offering
+    is on it.** ``mentor_profiles.custom_meeting_url`` was the only such column
+    and D88's contract step removed it — as a removal rather than a move, because
+    nothing had ever written it. Until booking decides whether a custom venue
+    needs a link and where it lives, an offering on ``CUSTOM`` resolves to a
+    venue with no way to reach it.
+
+    The value cannot simply be dropped from the enum: ``meeting_venue`` is still
+    a PostgreSQL enum and there is no ``ALTER TYPE ... DROP VALUE``. Removing it
+    waits on the ``text`` + ``CHECK`` conversion (settled decision #100).
 
     ``ZOOM`` ships with no legacy source. Legacy offered only "Edufurther Video"
     (Daily) and "External Video Tool" (custom), and every stored link was a
-    Google Meet URL left behind as residue — so the migration writes no
-    ``custom_meeting_url`` at all.
+    Google Meet URL left behind as residue — so the migration wrote no custom
+    URL at all, which is why removing the column lost nothing.
     """
 
     GOOGLE_MEET = "google_meet"

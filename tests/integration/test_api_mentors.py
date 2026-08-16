@@ -270,26 +270,23 @@ async def test_no_private_field_reaches_the_public_profile(
 ) -> None:
     """The allowlist, asserted rather than assumed.
 
-    `custom_meeting_url` is the sharpest: a static room link is a bearer
-    credential anyone holding it can walk into, not a description.
+    **`custom_meeting_url` was the sharpest case and is gone.** A static room
+    link is a bearer credential anyone holding it can walk into, and this test
+    proved one never reached the public profile — until D88's contract step
+    removed the column, at which point the assertion could no longer fail. The
+    email and status assertions below are the live half.
+
+    If booking reintroduces a URL for the custom venue, the assertion comes back
+    with it. That is the condition, written down rather than left to whoever
+    notices.
     """
-    mentor = await make_public_mentor(
-        db_engine,
-        "private",
-        slug="private",
-        # `ck_mentor_profiles_custom_url_requires_custom_venue`: a static room
-        # link is only legal alongside the custom venue. The schema says the two
-        # travel together, so the fixture has to as well.
-        default_venue="custom",
-        custom_meeting_url="https://meet.test/ada-room",
-    )
+    mentor = await make_public_mentor(db_engine, "private", slug="private")
     await give_profile(db_engine, mentor)
 
     raw = (await api_client.get(url(mentor))).text
 
     assert "mentor-private@example.test" not in raw
     assert "email" not in raw
-    assert "ada-room" not in raw
     assert "approval_status" not in raw
     assert "listing_status" not in raw
     assert "gender" not in raw

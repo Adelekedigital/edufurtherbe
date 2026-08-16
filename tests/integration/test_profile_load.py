@@ -216,18 +216,19 @@ async def test_all_seven_tables_load_from_one_snapshot(db_engine: AsyncEngine) -
     assert (counts.goal_needs, counts.goal_countries) == (2, 0)
 
 
-async def test_two_columns_are_deliberately_never_written(db_engine: AsyncEngine) -> None:
-    """Both are claims the loader makes about itself, so both are asserted.
-
-    ``custom_meeting_url`` stays null because the legacy ``meetingVenueLink`` is
-    residue — selecting a venue auto-created a per-session link that lived on the
-    session record. Writing it would carry a static personal room forward, which
-    the package calls a privacy incident, and would violate the CHECK on every
-    non-``custom`` row besides.
+async def test_a_column_is_deliberately_never_written(db_engine: AsyncEngine) -> None:
+    """A claim the loader makes about itself, so it is asserted.
 
     ``institution_id`` stays null because matching is a separate, re-runnable
-    pass (settled decision 61). A loader that quietly started filling either
-    would pass every other test in this file.
+    pass (settled decision 61). A loader that quietly started filling it would
+    pass every other test in this file.
+
+    **This tested two columns until D88's contract step.** The other was
+    ``custom_meeting_url``, which stayed null because the legacy
+    ``meetingVenueLink`` is residue — selecting a venue auto-created a
+    per-session link that lived on the session record. That column is now gone,
+    and the fact it was null on every migrated row is what made removing it free
+    rather than lossy.
     """
     async with db_engine.begin() as conn:
         await load_everything(
@@ -238,15 +239,13 @@ async def test_two_columns_are_deliberately_never_written(db_engine: AsyncEngine
         )
         stored = await conn.execute(
             text(
-                "SELECT (SELECT count(*) FROM mentor_profiles "
-                "        WHERE custom_meeting_url IS NOT NULL), "
-                "(SELECT count(*) FROM education_entries WHERE institution_id IS NOT NULL), "
+                "SELECT (SELECT count(*) FROM education_entries WHERE institution_id IS NOT NULL), "
                 "(SELECT count(*) FROM education_entries WHERE school_name_raw IS NOT NULL)"
             )
         )
 
-    # The third is the positive half: null links, but never a null raw name.
-    assert stored.one() == (0, 0, 1)
+    # The second is the positive half: null links, but never a null raw name.
+    assert stored.one() == (0, 1)
 
 
 async def test_a_second_load_changes_nothing(db_engine: AsyncEngine) -> None:

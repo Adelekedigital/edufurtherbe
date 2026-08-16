@@ -64,8 +64,13 @@ all** — it is the one type that can be dropped today for free.
 
 ## Scope, measured
 
-**17 enum types across 22 columns in 15 tables.** Plus `unlisted_reason`, which
+**17 enum types across 21 columns in 15 tables.** Plus `unlisted_reason`, which
 has zero columns.
+
+*Counted from the live schema on 2026-08-16, after D88's contract step dropped*
+*`mentor_profiles.default_meeting_venue`. It read 22 columns before that, and*
+*the figures below moved with it — re-measure rather than adjust, because this*
+*inventory is a plan somebody executes.*
 
 **This is an inventory of the present, and it cannot warn you about the future.**
 A count taken from the live schema necessarily omits types that do not exist yet
@@ -74,13 +79,13 @@ predates settled decision #100. `calendar_connections` is the known case:
 `00_foundation.sql` declares `calendar_provider` and `connection_status`, that
 table is deferred, and building it verbatim would add two types to the very list
 below while every gate stayed green (see ADR 0012, *For the phase that builds
-`calendar_connections`*). Converting 22 columns and then accepting 2 new ones is
+`calendar_connections`*). Converting 21 columns and then accepting 2 new ones is
 a net loss. **#100 governs new vocabularies as well as old ones.**
 
 | Table | Enum columns |
 |---|---|
 | `session_events` | 4 — `actor_type`, `from_status`, `to_status`, `reason_code` |
-| `mentor_profiles` | 3 — `approval_status`, `listing_status`, `default_meeting_venue` |
+| `mentor_profiles` | 2 — `approval_status`, `listing_status` |
 | `sessions` | 2 — `status`, `meeting_provider` |
 | `session_participants` | 2 — `role`, `attendance_status` |
 | 11 others | 1 each |
@@ -89,7 +94,7 @@ Types used by more than one column — these are the ones where a half-finished
 conversion leaves the schema inconsistent:
 
 - **`session_status`** — `sessions.status`, `session_events.from_status`, `session_events.to_status`
-- **`meeting_provider`** — `mentor_profiles.default_meeting_venue`, `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider`
+- **`meeting_provider`** — `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider`
 - **`lookup_status`** — `institutions.status`, `scholarship_programs.status`
 
 ---
@@ -130,7 +135,7 @@ cannot.
 Check whether `session_window()` references the status column before assuming the
 function is unaffected.
 
-### 3. Twelve columns carry a server default
+### 3. Eleven columns carry a server default
 
 Each is `DEFAULT 'x'::some_enum` and must be dropped before the type change and
 re-added as a text literal, or the `ALTER` fails on a default it cannot cast.
@@ -140,7 +145,6 @@ institutions.status            'approved'      users.primary_role          'ment
 scholarship_programs.status    'approved'      sessions.status             'pending_mentor_approval'
 mentor_profiles.approval_status 'pending'      session_events.actor_type   'user'
 mentor_profiles.listing_status 'unlisted'      session_participants.attendance_status 'pending'
-mentor_profiles.default_meeting_venue 'google_meet'
 user_awards.verification_status 'unverified'   user_languages.proficiency  'fluent'
 ```
 
