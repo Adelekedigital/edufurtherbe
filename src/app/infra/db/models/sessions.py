@@ -187,7 +187,19 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     )
 
     duration_minutes: Mapped[int] = mapped_column(nullable=False)
-    min_notice_minutes: Mapped[int] = mapped_column(nullable=False, server_default=text("120"))
+    #: How far ahead a mentee must book. **The platform rule is 24 hours — no
+    #: same-day booking — and this default is where it lives**, because the ETL
+    #: never sets the column and no endpoint could until offering writes shipped.
+    #: It defaulted to 120 through M2—M4 and every migrated offering took it,
+    #: which quietly permitted booking two hours out against a rule of
+    #: twenty-four.
+    #:
+    #: **The `CHECK` below is sanity, not policy.** The product rule — 24h floor,
+    #: 72h ceiling, the mentor's choice per session type — is enforced at the
+    #: Pydantic boundary on the write schema, and moves to `booking_policies`
+    #: when that table lands. A `CHECK` carrying it would need a migration every
+    #: time the product changed its mind.
+    min_notice_minutes: Mapped[int] = mapped_column(nullable=False, server_default=text("1440"))
     #: Where this offering is held. Never a URL, and there is nowhere for one to
     #: live: `mentor_profiles.custom_meeting_url` was **dropped** by D88's
     #: contract step rather than moved here, because nothing read it. A
@@ -231,6 +243,11 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("session_type_id"),
         CheckConstraint("duration_minutes BETWEEN 5 AND 480", name="duration_minutes_valid"),
+        # Thirty days. Wide on purpose: a sanity bound must never be the thing
+        # blocking a product decision, and the 72-hour ceiling is already
+        # expected to rise. `0` stays legal — it is what fixtures use to test the
+        # slot maths without a notice window in the way.
+        CheckConstraint("min_notice_minutes BETWEEN 0 AND 43200", name="min_notice_minutes_sane"),
     )
 
 

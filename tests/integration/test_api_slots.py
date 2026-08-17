@@ -48,7 +48,7 @@ async def make_mentor(
     approved: bool = True,
     listed: bool = True,
     duration: int = 45,
-    notice: int = 0,
+    notice: int | None = 0,
     active_type: bool = True,
     deleted_type: bool = False,
     config: bool = True,
@@ -90,13 +90,21 @@ async def make_mentor(
             )
         ).scalar_one()
         if config:
+            # `notice=None` omits the column so it takes its server default —
+            # the platform's 24-hour floor. Every other caller passes `0`, which
+            # is what keeps a notice window out of the way of the slot maths.
+            # Naming the column unconditionally, as this did, meant no test here
+            # could exercise the default at all.
+            columns = "(session_type_id, duration_minutes"
+            values = "(:t, :d"
+            params: dict[str, object] = {"t": session_type, "d": duration}
+            if notice is not None:
+                columns += ", min_notice_minutes"
+                values += ", :n"
+                params["n"] = notice
             await conn.execute(
-                text(
-                    "INSERT INTO session_type_booking_configs "
-                    "(session_type_id, duration_minutes, min_notice_minutes) "
-                    "VALUES (:t, :d, :n)"
-                ),
-                {"t": session_type, "d": duration, "n": notice},
+                text(f"INSERT INTO session_type_booking_configs {columns}) VALUES {values})"),  # noqa: S608
+                params,
             )
         if deleted_type:
             # Soft-deleted after its config exists, which is the order a real
@@ -336,6 +344,56 @@ async def test_a_session_starting_before_the_window_still_blocks_inside_it(
 
     assert at(FIRST_DAY, "08:00") not in first_day, "the session runs through this slot"
     assert at(FIRST_DAY, "08:45") in first_day, "and frees 08:45 exactly, because `[)`"
+
+
+async def test_the_platform_floor_keeps_every_slot_a_day_away(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The behaviour change, asserted through the default rather than a value.**
+
+    The 24-hour rule lives in the column's server default, so a test that passes
+    a notice explicitly proves nothing about it — it asserts the number it just
+    supplied. `notice=None` omits the column, which is the only path that reaches
+    the default, and until this PR neither fixture had one.
+
+    **Asserted as "nothing sooner than a day from now", not as "tomorrow is
+    empty".** The first draft asserted the latter and was wall-clock dependent:
+    `now + 24h` lands mid-morning tomorrow when this runs in the morning, so
+    tomorrow's later slots survive and the test fails — green or red depending on
+    the hour, which `failure-modes.md` already records twice. The rule itself has
+    no such ambiguity.
+    """
+    mentor, session_type = await make_mentor(db_engine, "floor", notice=None)
+    floor = dt.datetime.now(dt.UTC) + dt.timedelta(minutes=1440)
+
+    offered = await starts(
+        api_client,
+        slots_url(mentor, session_type, start=dt.date.today(), end=LAST_DAY),
+    )
+
+    assert offered, "the floor emptied the grid rather than moving it"
+    assert min(offered) >= floor, "a slot was offered inside the 24-hour floor"
+
+
+async def test_without_the_floor_the_same_mentor_is_bookable_sooner(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The contrast that makes the test above mean something.
+
+    Identical fixture but with the notice window out of the way, so the earliest
+    slot is *not* pushed a day out. Without this, a grid that happened to start
+    more than 24 hours away for unrelated reasons would satisfy the assertion and
+    prove nothing about the floor.
+    """
+    mentor, session_type = await make_mentor(db_engine, "no-floor", notice=0)
+    floor = dt.datetime.now(dt.UTC) + dt.timedelta(minutes=1440)
+
+    offered = await starts(
+        api_client,
+        slots_url(mentor, session_type, start=dt.date.today(), end=LAST_DAY),
+    )
+
+    assert min(offered) < floor, "the grid never reached inside a day, so the floor proves nothing"
 
 
 async def test_notice_hides_the_soonest_slots_without_moving_the_grid(
