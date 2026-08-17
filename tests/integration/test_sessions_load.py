@@ -112,9 +112,7 @@ def plan_of(**overrides: object) -> SessionPlan:
                 BUBBLE_MODIFIED,
             ),
         ),
-        "session_types": (
-            SessionTypeRow(MENTOR, "General Mentorship", 45, MeetingProvider.DAILY, True),
-        ),
+        "session_types": (SessionTypeRow(MENTOR, "General Mentorship", 45, MeetingProvider.DAILY),),
         "source_booking_ids": ("sb-1",),
     }
     values.update(overrides)
@@ -378,24 +376,24 @@ async def test_two_live_types_with_one_name_are_refused(
 
 
 # --------------------------------------------------------------------------
-# D88's expand step: the config carries what the mentor chose
+# The config carries the venue, and inherits the confirmation
 # --------------------------------------------------------------------------
 
 
-async def test_the_config_takes_the_venue_and_confirmation_from_the_plan(
+async def test_the_config_takes_the_venue_from_the_plan(
     seeded: tuple[AsyncConnection, dict[str, UUID]],
 ) -> None:
-    """**These arrive on `SessionTypeRow` now, and that is the contract step.**
+    """**The venue arrives on `SessionTypeRow`, and that is D88's contract step.**
 
-    They used to be selected off `mentor_profiles`, which worked only because the
-    profile load runs first and left them there — two ETL processes coupled
-    through columns. Those columns are gone, so a value that crossed the database
-    now crosses the plan.
+    It used to be selected off `mentor_profiles`, which worked only because the
+    profile load runs first and left it there — two ETL processes coupled through
+    a column. That column is gone, so a value that crossed the database now
+    crosses the plan.
 
     The migration's backfill runs **once**, so a database built fresh — migrate,
-    then load — is exactly the path that would otherwise take column defaults
-    instead of the mentor's real choice. Both values here are non-default, so a
-    loader that dropped them answers `google_meet`/`False` and fails.
+    then load — is exactly the path that would otherwise take the column default
+    instead of the mentor's real choice. `daily` is non-default, so a loader that
+    dropped it answers `google_meet` and fails.
 
     Loaded from the real export this is not hypothetical: the twelve mentors
     split `google_meet` 5, `daily` 5, `custom` 2.
@@ -404,16 +402,39 @@ async def test_the_config_takes_the_venue_and_confirmation_from_the_plan(
 
     await SessionLoader(conn).load(users=users, plan=plan_of())
 
+    row = (await conn.execute(text("SELECT meeting_venue FROM session_type_booking_configs"))).one()
+    assert row.meeting_venue == "daily"
+
+
+async def test_the_load_leaves_every_offering_inheriting_its_confirmation(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """**Null, not the mentor's value — and the difference is the whole reversal.**
+
+    `requires_booking_confirmation` went back to `mentor_profiles`, where the
+    profile load writes it. Null on the config means *inherit from the mentor*.
+
+    Writing the mentor's own value down here instead would look harmless and
+    reconcile perfectly: every offering would hold exactly what the mentor chose,
+    every count would match, and every existing assertion would pass. It would
+    also make every migrated offering a permanent **override** that merely
+    happens to agree — so the mentor's toggle would change `mentor_profiles`,
+    change nothing anybody resolves, and the setting would appear not to work.
+
+    That is the defect this migration exists to remove, arriving through the ETL
+    instead of through the schema. It is asserted here because nothing else would
+    catch it: the value would be right.
+    """
+    conn, users = seeded
+
+    await SessionLoader(conn).load(users=users, plan=plan_of())
+
     row = (
         await conn.execute(
-            text(
-                "SELECT c.meeting_venue, c.requires_booking_confirmation "
-                "FROM session_type_booking_configs c"
-            )
+            text("SELECT requires_booking_confirmation FROM session_type_booking_configs")
         )
     ).one()
-    assert row.meeting_venue == "daily"
-    assert row.requires_booking_confirmation is True
+    assert row.requires_booking_confirmation is None
 
 
 async def test_the_load_names_a_primary_offering(

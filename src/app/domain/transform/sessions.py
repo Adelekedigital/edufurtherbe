@@ -277,19 +277,23 @@ class SessionEventRow:
 class SessionTypeRow:
     """A mentor's offering, and the booking config that ships with it.
 
-    ``meeting_venue`` and ``requires_booking_confirmation`` are **per offering**
-    (D88) and travel here rather than being read back off ``mentor_profiles``.
-    The loader used to select them from that table, which worked only because the
-    profile load happens first and left them there; the contract step drops those
-    columns, so a value that crossed two ETL processes through the database now
-    crosses one transform instead.
+    ``meeting_venue`` is **per offering** and travels here rather than being read
+    back off ``mentor_profiles``. The loader used to select it from that table,
+    which worked only because the profile load happens first and left it there;
+    D88's contract step dropped that column, so a value that crossed two ETL
+    processes through the database now crosses one transform instead.
+
+    **``requires_booking_confirmation`` is no longer here.** It rode alongside
+    the venue while D88 held it on the offering, and it goes back to
+    ``MentorProfileRow`` with the column. Both halves still come from one
+    ``booking_defaults`` call, so the two transforms cannot read the legacy field
+    two different ways — they just no longer put the answer in the same place.
     """
 
     mentor_bubble_id: str
     name: str
     duration_minutes: int
     meeting_venue: MeetingProvider
-    requires_booking_confirmation: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1022,14 +1026,16 @@ def plan_sessions(
         if booking is None:
             booking_missing.append(mentor)
             booking = (MeetingProvider.GOOGLE_MEET, False)
-        venue, confirmation = booking
+        # The confirmation half is `MentorProfileRow`'s now, written by the
+        # profile load. Unpacked and dropped rather than indexed, so the shape of
+        # `booking_defaults` stays visible at the point it is consumed.
+        venue, _confirmation = booking
         session_types.append(
             SessionTypeRow(
                 mentor_bubble_id=mentor,
                 name=GENERAL_MENTORSHIP,
                 duration_minutes=minutes,
                 meeting_venue=venue,
-                requires_booking_confirmation=confirmation,
             )
         )
 

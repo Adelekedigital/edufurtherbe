@@ -10,6 +10,55 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Changed
+
+- **`requires_booking_confirmation` returns to `mentor_profiles`, and the
+  per-offering column becomes a nullable override where null means inherit.**
+
+  D88 moved the setting onto `session_type_booking_configs` as part of one
+  fallback mechanism covering three fields. All three left that mechanism, each
+  differently — `meeting_venue` became per-offering and `NOT NULL` because its
+  cascade had a reachable, empty bottom; `custom_meeting_url` was deleted because
+  nothing read it; and this one comes back to the mentor. The premise failed,
+  not any individual placement, and that is what is recorded so the idea is not
+  re-proposed.
+
+  D88's argument against a nullable boolean does not apply to the new shape and
+  that is the whole point. *A boolean has no room for a third state, so null
+  would be indistinguishable from false* was right about inheriting from a
+  **primary offering**, because a mentor may hold live offerings and no primary.
+  A mentor row always exists, so the terminus cannot be missing.
+
+  `GET /users/{id}/mentor-profile` therefore reports
+  `requires_booking_confirmation` as a bool for every mentor, where it previously
+  reported `null` for one with no primary offering. Narrowing rather than
+  breaking: the field never stops being present and a client that handled the old
+  `null` still validates a bool. `default_meeting_venue` is unchanged and still
+  nullable.
+
+- **The fan-out in `profile_writer` is deleted; the toggle writes one row.** It
+  existed only because the column had moved while this endpoint was still the
+  mentor's only control over it, so a toggle had to be copied onto every live
+  offering or it would answer 200 and change nothing anybody read. Two writers
+  for one column is the duplication non-negotiable #8 calls a defect.
+
+  This fixes a case that was previously a silent no-op: **a mentor with no
+  offerings can now store the setting.** Under the fan-out there was nowhere for
+  it to land, which is the ordinary onboarding order rather than an edge case.
+
+  The ETL follows: `mentor_profiles` is written by the profile load and every
+  migrated offering is left inheriting. Writing the mentor's own value down onto
+  the offerings would reconcile perfectly and be wrong — each would become a
+  permanent override that merely happens to agree, and the mentor's toggle would
+  stop affecting anything a reader resolves.
+
+  The migration seeds the mentor column from `bool_or` over their non-deleted
+  offerings **before** clearing them. Reversing those two statements loses every
+  mentor's setting with the row count unchanged and every constraint satisfied,
+  so a test writes an offering at `true` under the prior revision and upgrades
+  over it. `test_booking_confirmation_defaults_to_false`, deleted by D88's
+  contract step, is restored with the column.
+
 ### Fixed
 
 - **Two settled decisions contradicted #100, and the education list's order was

@@ -75,28 +75,28 @@ DO UPDATE SET name = EXCLUDED.name
 RETURNING id
 """
 
-# `meeting_venue` and `requires_booking_confirmation` are **passed in** now.
+# `meeting_venue` is **passed in**. It used to be selected off `mentor_profiles`,
+# which worked only because the profile load runs first and left it there — two
+# ETL processes coupled through columns rather than through a plan. D88's
+# contract step dropped that column, so `SessionTypeRow` carries the value and
+# `transform/profiles.booking_defaults` is the single place the legacy field is
+# read.
 #
-# They used to be selected off `mentor_profiles`, which worked only because the
-# profile load runs first and left them there — two ETL processes coupled through
-# columns rather than through a plan. The contract step drops those columns, so
-# `SessionTypeRow` carries the values and `transform/profiles.booking_defaults`
-# is the single place the legacy fields are read.
-#
-# The join to `mentor_profiles` stays, and is still inner: `session_types`
-# references that table, so an offering whose mentor has no profile row cannot
-# exist, and the join asserts it rather than assuming it.
+# **`requires_booking_confirmation` is deliberately not written here.** It went
+# back to `mentor_profiles`, the profile load writes it, and on this table null
+# now means *inherit from the mentor*. A migrated offering must be left
+# inheriting: writing the mentor's own value into it would make every migrated
+# offering a permanent override that merely happens to agree, and the mentor's
+# toggle would then change nothing — which is the defect this reversal removes.
 UPSERT_BOOKING_CONFIG = """
 INSERT INTO session_type_booking_configs
-    (session_type_id, duration_minutes, meeting_venue, requires_booking_confirmation)
+    (session_type_id, duration_minutes, meeting_venue)
 VALUES (
-    :session_type_id, :duration_minutes,
-    :meeting_venue, :requires_booking_confirmation
+    :session_type_id, :duration_minutes, :meeting_venue
 )
 ON CONFLICT (session_type_id) DO UPDATE SET
-    duration_minutes              = EXCLUDED.duration_minutes,
-    meeting_venue                 = EXCLUDED.meeting_venue,
-    requires_booking_confirmation = EXCLUDED.requires_booking_confirmation
+    duration_minutes = EXCLUDED.duration_minutes,
+    meeting_venue    = EXCLUDED.meeting_venue
 """
 
 # The pointer D88 introduces, set once the offering exists. It cannot be written
@@ -217,7 +217,6 @@ class SessionLoader:
                     "session_type_id": type_id,
                     "duration_minutes": row.duration_minutes,
                     "meeting_venue": row.meeting_venue.value,
-                    "requires_booking_confirmation": row.requires_booking_confirmation,
                 },
             )
             # `IS NULL` in the statement rather than a check here: a re-run must

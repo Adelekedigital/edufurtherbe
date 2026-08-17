@@ -358,6 +358,71 @@ def test_the_notice_backfill_reaches_rows_that_predate_it(
     )
 
 
+def test_the_confirmation_seed_reads_the_offerings_before_clearing_them(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """**The one regression `b4e9c72a1d58` can cause, and it is invisible.**
+
+    The migration seeds `mentor_profiles.requires_booking_confirmation` from the
+    offerings and *then* clears them. Reversing those two statements, or seeding
+    from the column default instead, leaves every mentor who required
+    confirmation silently not requiring it — with the row count unchanged, every
+    constraint satisfied, and every other test green, because every other test
+    creates a fresh mentor who takes the default.
+
+    So this writes an offering at `true` under the prior revision, where the
+    mentor column does not exist yet and the offering is the only place the
+    setting lives, and upgrades over it.
+
+    The second assertion is the other half and fails on a different mistake: a
+    migration that seeded correctly but left the offerings holding their values
+    would turn every migrated offering into a permanent override, and the
+    mentor's toggle would stop having any effect on what a reader resolves.
+    """
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "e7b4d29c3f16")
+
+    execute(
+        disposable_database,
+        """
+        WITH u AS (
+            INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+            VALUES ('confirm@example.test', gen_random_uuid(), 'Probe', 'mentor', 'UTC')
+            RETURNING id
+        ), p AS (
+            INSERT INTO mentor_profiles (user_id, headline) SELECT id, 'P' FROM u
+            RETURNING user_id
+        ), t AS (
+            INSERT INTO session_types (mentor_user_id, name)
+            SELECT user_id, 'Predates the migration' FROM p RETURNING id
+        )
+        INSERT INTO session_type_booking_configs
+            (session_type_id, duration_minutes, requires_booking_confirmation)
+        SELECT id, 45, true FROM t
+        """,
+    )
+
+    command.upgrade(config, "head")
+
+    assert (
+        scalar(disposable_database, "SELECT requires_booking_confirmation FROM mentor_profiles")
+        is True
+    ), (
+        "the seed did not carry the offering's setting up to the mentor; every "
+        "mentor who required confirmation would silently stop requiring it"
+    )
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT requires_booking_confirmation FROM session_type_booking_configs",
+        )
+        is None
+    ), (
+        "the offering kept its value instead of inheriting; it is now a "
+        "permanent override and the mentor's toggle resolves to nothing"
+    )
+
+
 def test_upgrade_downgrade_upgrade_is_clean(
     disposable_database: str, make_alembic_config: ConfigFactory
 ) -> None:

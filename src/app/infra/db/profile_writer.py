@@ -41,19 +41,21 @@ from app.infra.db.models.mentoring import (
     MentorServiceOffering,
 )
 from app.infra.db.models.scholarships import UserAward
-from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User, UserLanguage, UserProfile
-from app.infra.db.public_visibility import session_type_is_live
 
 GOAL_COLUMNS = ("degree_goal_id", "degree_goal_raw", "target_start_term", "notes")
 AWARD_COLUMNS = ("title", "institution", "scholarship_program_id", "year", "evidence_url")
-#: `requires_booking_confirmation` is deliberately absent. The column left this
-#: table in D88's contract step, and `_fan_out_booking_confirmation` below is now
-#: the only writer — it reaches the mentor's offerings, which is where the
-#: setting lives and where every reader looks.
+#: `requires_booking_confirmation` is back, and `_fan_out_booking_confirmation`
+#: is gone with it. The fan-out existed only because the column had moved to
+#: `session_type_booking_configs` while this endpoint was still the mentor's only
+#: control over it — so a toggle had to be copied onto every live offering or it
+#: would answer 200 and change nothing anybody read. With the mentor column
+#: authoritative again the toggle writes one row, and two writers for one column
+#: is the duplication non-negotiable #8 calls a defect.
 MENTOR_COLUMNS = (
     "headline",
     "years_of_experience",
+    "requires_booking_confirmation",
     "primary_study_country_id",
     "primary_study_program",
 )
@@ -74,12 +76,13 @@ def _sent(payload: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
     writes an explicit `NULL` where the client said nothing, and an explicit NULL
     overrides a server default rather than falling back to it.
 
-    The worked example used to be `mentor_profiles.requires_booking_confirmation`
-    — `NOT NULL DEFAULT false`, so applying to be a mentor without mentioning it
-    raised a not-null violation, caught by a test rather than by reading. That
-    column has since left this table, but the trap has not: it caught the test
-    factory in the reader step, where naming `meeting_venue` unconditionally sent
-    a NULL that a fresh server default could not rescue.
+    The worked example is `mentor_profiles.requires_booking_confirmation` —
+    `NOT NULL DEFAULT false`, so applying to be a mentor without mentioning it
+    raises a not-null violation, caught by a test rather than by reading. It left
+    this table under D88 and has now come back, so the example is live again
+    rather than historical. The trap outlived its absence either way: it caught
+    the test factory in the reader step, where naming `meeting_venue`
+    unconditionally sent a NULL that a fresh server default could not rescue.
     """
     return {key: value for key, value in payload.items() if key in columns}
 
@@ -247,52 +250,7 @@ async def create_mentor_profile(
     )
     await session.execute(update(User).where(User.id == user_id).values(primary_role="mentor"))
     await _write_offerings(session, user_id, payload)
-    await _fan_out_booking_confirmation(session, user_id, payload)
     return result.scalar_one()
-
-
-async def _fan_out_booking_confirmation(
-    session: AsyncSession, user_id: UUID, payload: dict[str, Any]
-) -> None:
-    """Carry the mentor-level confirmation setting onto their live offerings.
-
-    Under D88 the setting lives on ``session_type_booking_configs``, and that is
-    what every reader now reads. Writing only ``mentor_profiles`` would answer
-    200 and change nothing anybody looks at — the mentor toggles "require
-    confirmation", sees it saved, and bookings keep auto-confirming.
-
-    **Every live offering, not just the primary.** The column is ``NOT NULL``
-    with no inherit, so there is no cascade to carry a mentor-level choice
-    outward; and this endpoint is the mentor's only control over it today, so
-    touching the primary alone would leave their other offerings on whatever the
-    migration backfilled and unreachable. That reproduces today's behaviour
-    exactly: one setting, for all of this mentor's offerings.
-
-    Per-offering control is a real feature and this is not it — it needs an
-    offering-management endpoint, which does not exist. When it arrives, this
-    fan-out is what has to go.
-
-    **A mentor with no offerings is a no-op, and that is correct rather than a
-    lost write.** Since the contract step there is nowhere else the setting could
-    land, and the read side agrees: `get_mentor_profile` reports `null` for a
-    mentor with no primary offering. Someone with nothing bookable has no booking
-    policy, and inventing a row to hold one would be asserting otherwise. Worth
-    stating because it looks like silent data loss and is not — and because
-    removing the field from `MentorProfileWrite` to "fix" it would break the case
-    that works, which is every mentor who has an offering.
-    """
-    # Presence, not truthiness — `False` is a value the mentor chose. There is no
-    # `None` branch: `MentorProfileWrite` types this `bool`, so an explicit null
-    # is a 422 before anything here runs.
-    if "requires_booking_confirmation" not in payload:
-        return
-    value = payload["requires_booking_confirmation"]
-    live = select(SessionType.id).where(*session_type_is_live(user_id))
-    await session.execute(
-        update(SessionTypeBookingConfig)
-        .where(SessionTypeBookingConfig.session_type_id.in_(live))
-        .values(requires_booking_confirmation=value)
-    )
 
 
 async def _write_offerings(session: AsyncSession, user_id: UUID, payload: dict[str, Any]) -> None:
@@ -329,7 +287,6 @@ async def update_mentor_profile(
             .values(**values)
         )
     await _write_offerings(session, user_id, payload)
-    await _fan_out_booking_confirmation(session, user_id, payload)
     return True
 
 
