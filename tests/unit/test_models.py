@@ -146,7 +146,8 @@ def test_no_declared_identifier_exceeds_the_postgresql_limit() -> None:
     # `UNCONSTRAINED_ENUMS` is not checked: its values are reasons, not names.
     too_long += [
         f"check constraint {name}"
-        for name in TEXT_CHECK_ENUMS.values()
+        for names in TEXT_CHECK_ENUMS.values()
+        for name in names
         if len(name) > POSTGRES_IDENTIFIER_LIMIT
     ]
     too_long = [n for n in too_long if n]
@@ -338,7 +339,7 @@ def test_postgresql_type_names_are_unique() -> None:
     ``UNCONSTRAINED_ENUMS`` is excluded deliberately — its values are prose
     reasons, not identifiers, and nothing looks them up.
     """
-    names = list(PG_ENUM_TYPES.values()) + list(TEXT_CHECK_ENUMS.values())
+    names = list(PG_ENUM_TYPES.values()) + [n for ns in TEXT_CHECK_ENUMS.values() for n in ns]
 
     assert len(names) == len(set(names)), f"duplicate schema identifiers registered: {names}"
 
@@ -488,7 +489,7 @@ def test_the_converted_enum_labels_have_one_meaning() -> None:
     rather than read from the migration, so the convention itself is pinned: a
     step that names one of seven differently fails here rather than in review.
     """
-    by_name = {name: cls for cls, name in TEXT_CHECK_ENUMS.items()}
+    by_name = {name: cls for cls, names in TEXT_CHECK_ENUMS.items() for name in names}
     conversions = migration_tuples("CONVERSIONS")
 
     assert conversions, (

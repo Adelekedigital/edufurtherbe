@@ -146,12 +146,13 @@ EXPECTED_TABLES = [
 # `language_proficiency`, `legal_document_type`, `primary_role` and
 # `verification_status` are now `text` + `CHECK`, and this tuple shrinks with
 # each step until step 8 empties it.
+# `lookup_status` left in `e4b7d0c95a13`, step 3 — the first shared vocabulary,
+# and the first step to drop and recreate index predicates.
 ENUM_TYPE_NAMES = (
     "actor_type",
     "approval_status",
     "attendance_status",
     "listing_status",
-    "lookup_status",
     "meeting_provider",
     "mentor_status_type",
     "session_reason_code",

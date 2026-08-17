@@ -347,8 +347,7 @@ async def test_a_manual_institution_needs_no_country(db_engine: AsyncEngine) -> 
                 # write endpoints. A user-created institution always names who
                 # asked for it; a mirrored one never does.
                 "INSERT INTO institutions (name, source, status, created_by) "
-                "VALUES ('Some Unlisted Polytechnic', 'manual', "
-                "CAST('pending_review' AS lookup_status), :b)"
+                "VALUES ('Some Unlisted Polytechnic', 'manual', 'pending_review', :b)"
             ),
             {"b": creator},
         )

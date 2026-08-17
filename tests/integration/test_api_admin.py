@@ -76,7 +76,7 @@ async def add_institution(
             await conn.execute(
                 text(
                     "INSERT INTO institutions (name, source, status, created_by) "
-                    "VALUES (:n, 'manual', CAST(:s AS lookup_status), :b) RETURNING id"
+                    "VALUES (:n, 'manual', :s, :b) RETURNING id"
                 ),
                 {"n": name, "s": status, "b": creator},
             )
