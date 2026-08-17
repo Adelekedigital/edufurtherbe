@@ -100,6 +100,31 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **`meeting_provider` is now `text` + `CHECK` — step 5 of 8.**
+  `session_type_booking_configs.meeting_venue` and `sessions.meeting_provider`.
+  No index predicate names it and no function reads it, so this is the plain
+  multi-column case.
+
+  `sessions.meeting_provider` is nullable and the constraint needs no special
+  case: `NULL IN (...)` is unknown, and a `CHECK` rejects only what is *false*.
+  A null still means "venue not decided yet".
+
+  The point beyond the conversion: `CUSTOM` has nowhere to keep a URL — D88
+  removed `mentor_profiles.custom_meeting_url` because nothing had written it —
+  and one migrated offering sits on it, while `ZOOM` has no legacy source at all.
+  Neither could be shed while this was a PostgreSQL enum. Dropping either is now
+  one `CHECK` swap.
+
+  **The migration now ends with `ANALYZE`, and that is a real fix rather than a
+  test appeasement.** `ALTER COLUMN ... TYPE` rewrites the table and discards its
+  statistics, and the planner will not choose a partial index it can no longer
+  cost: `test_the_completed_count_uses_its_partial_index` caught the
+  completed-count query falling from `ix_sessions_mentor_completed` to
+  `ix_sessions_mentor_window`. Without it a deploy serves worse plans until
+  autovacuum catches up — in the window a migration is under most scrutiny.
+  Steps 2 to 4 lack it because that planner assertion exists only for `sessions`;
+  their tables are small enough that autovacuum closes the gap quickly.
+
 - **The mentor status cluster is now `text` + `CHECK`, and `apply_mentor_status`
   was rewritten with it — step 4 of 8.** `mentor_profiles.approval_status`,
   `.listing_status` and `mentor_status_events.status_type` convert in one
