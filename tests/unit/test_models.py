@@ -477,6 +477,17 @@ def test_the_converted_enum_labels_have_one_meaning() -> None:
     The constraint name is derived here as ``ck_{table}_{column}_is_known``
     rather than read from the migration, so the convention itself is pinned: a
     step that names one of seven differently fails here rather than in review.
+
+    **Only the newest migration per column is compared, and that correction came
+    from `withdrawn`.** The first version of this test compared *every*
+    migration's labels to the current class, which held exactly as long as no
+    vocabulary ever changed. Adding ``SessionStatus.WITHDRAWN`` made step 8's
+    migration "disagree" with the class — correctly, because it is a historical
+    artefact that must keep recording the seven values it wrote. Decision #43
+    says a migration is history; a test demanding history match the present
+    contradicts it, and would have forced either an edit to a shipped migration
+    or a deleted test on the first vocabulary change after the conversion. Since
+    filenames are date-prefixed, later in sorted order is later in the chain.
     """
     by_name = {name: cls for cls, names in TEXT_CHECK_ENUMS.items() for name in names}
     conversions = migration_tuples("CONVERSIONS")
@@ -486,18 +497,24 @@ def test_the_converted_enum_labels_have_one_meaning() -> None:
         "comparing nothing, which is the failure it exists to prevent"
     )
 
+    # Last writer wins: the newest migration touching a column is the one whose
+    # labels must equal the class today.
+    authoritative: dict[tuple[str, str], tuple[str, str]] = {}
+    for path in sorted(conversions):
+        for table, column, _type_name, labels, *_ in conversions[path]:
+            authoritative[(table, column)] = (path, labels)
+
+    assert authoritative, "no columns found in any CONVERSIONS table"
+
     divergent: dict[str, str] = {}
-    for path, rows in conversions.items():
-        for table, column, _type_name, labels, *_ in rows:
-            constraint = f"ck_{table}_{column}_is_known"
-            enum_cls = by_name.get(constraint)
-            if enum_cls is None:
-                divergent[f"{path}:{table}.{column}"] = (
-                    f"no TEXT_CHECK_ENUMS entry named {constraint}"
-                )
-                continue
-            expected = ", ".join(f"'{member.value}'" for member in enum_cls)
-            if labels != expected:
-                divergent[f"{path}:{table}.{column}"] = f"{labels!r} != {expected!r}"
+    for (table, column), (path, labels) in authoritative.items():
+        constraint = f"ck_{table}_{column}_is_known"
+        enum_cls = by_name.get(constraint)
+        if enum_cls is None:
+            divergent[f"{path}:{table}.{column}"] = f"no TEXT_CHECK_ENUMS entry named {constraint}"
+            continue
+        expected = ", ".join(f"'{member.value}'" for member in enum_cls)
+        if labels != expected:
+            divergent[f"{path}:{table}.{column}"] = f"{labels!r} != {expected!r}"
 
     assert not divergent, f"migration labels disagree with domain.enums: {divergent}"
