@@ -82,7 +82,7 @@ async def insert_event(
         await conn.execute(
             text(
                 "INSERT INTO mentor_status_events (mentor_user_id, status_type, reason) "
-                "VALUES (:u, CAST(:s AS mentor_status_type), :r)"
+                "VALUES (:u, :s, :r)"
             ),
             {"u": user_id, "s": status_type, "r": reason},
         )

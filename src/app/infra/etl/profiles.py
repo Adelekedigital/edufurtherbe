@@ -49,7 +49,7 @@ from app.domain.transform.profiles import (
 # `created_by` is null: nobody in this system made these decisions.
 SEED_MENTOR_HISTORY = """
 INSERT INTO mentor_status_events (mentor_user_id, status_type, reason, created_at)
-VALUES (:user_id, CAST(:status_type AS mentor_status_type), :reason, :created_at)
+VALUES (:user_id, :status_type, :reason, :created_at)
 """
 
 #: Whether this mentor already has a history, asked **once** before writing both
@@ -70,8 +70,8 @@ INSERT INTO mentor_profiles (
     primary_study_country_id, primary_study_program
 ) VALUES (
     :user_id, :legacy_bubble_id, :created_at, :updated_at,
-    CAST(:approval_status AS approval_status),
-    CAST(:listing_status AS listing_status),
+    :approval_status,
+    :listing_status,
     :primary_study_country_id, :primary_study_program
 )
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET

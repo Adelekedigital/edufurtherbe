@@ -100,6 +100,30 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **The mentor status cluster is now `text` + `CHECK`, and `apply_mentor_status`
+  was rewritten with it — step 4 of 8.** `mentor_profiles.approval_status`,
+  `.listing_status` and `mentor_status_events.status_type` convert in one
+  migration because the trigger reads one and writes the other two.
+
+  **This is the step the whole re-census existed to find.** A plpgsql body
+  carries no dependency records, so `DROP TYPE approval_status` succeeds while
+  the function still names it: the migration applies, every migration test
+  passes, `alembic check` reports no drift, and the trigger dies at the next
+  insert with *type "approval_status" does not exist* — on the path every
+  approval and every unlisting goes through. Confirmed by mutation: removing the
+  rewrite reproduces exactly that error.
+
+  The rewrite is a simplification, which is the tell the grouping is right. The
+  old body carried `NEW.status_type::text::approval_status`, a double cast that
+  existed only because PostgreSQL refuses a direct cast between two enum types.
+  With all three columns `text` the cast has nothing left to do, and the hack
+  disappears with the types that forced it.
+
+  `mentor_status_events.status_type` also gains a `CHECK` it never effectively
+  had: it is the value the trigger branches on, so an unknown one would reach the
+  `ELSE` arm and be projected into `listing_status` — a silent mis-write rather
+  than an error.
+
 - **`lookup_status` is now `text` + `CHECK` — step 3 of 8, and the first shared
   vocabulary.** `institutions.status` and `scholarship_programs.status`. A
   `CHECK` cannot span tables, so each column carries its own and `LookupStatus`

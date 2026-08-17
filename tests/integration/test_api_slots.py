@@ -72,7 +72,7 @@ async def make_mentor(
         await conn.execute(
             text(
                 "INSERT INTO mentor_profiles (user_id, headline, approval_status, listing_status) "
-                "VALUES (:u, 'M', CAST(:a AS approval_status), CAST(:l AS listing_status))"
+                "VALUES (:u, 'M', :a, :l)"
             ),
             {
                 "u": mentor,

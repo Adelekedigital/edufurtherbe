@@ -11,7 +11,7 @@ models, mentor and mentee separate and this table moves to its own module
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import (
@@ -20,7 +20,7 @@ from app.domain.enums import (
     MentorStatusType,
 )
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import pg_enum
+from app.infra.db.types import check_is_known, str_enum
 
 
 class ServiceOffering(TimestampMixin, Base):
@@ -129,7 +129,7 @@ class MentorProfile(TimestampMixin, Base):
     )
 
     approval_status: Mapped[ApprovalStatus] = mapped_column(
-        pg_enum(ApprovalStatus), nullable=False, server_default=text("'pending'")
+        str_enum(ApprovalStatus), nullable=False, server_default=text("'pending'")
     )
     # `approved_at`, `approved_by`, `declined_at`, `declined_by` and
     # `decline_reason` are gone. Each described only the *most recent* decision,
@@ -138,7 +138,7 @@ class MentorProfile(TimestampMixin, Base):
     # drift non-negotiable #8 names.
 
     listing_status: Mapped[ListingStatus] = mapped_column(
-        pg_enum(ListingStatus), nullable=False, server_default=text("'unlisted'")
+        str_enum(ListingStatus), nullable=False, server_default=text("'unlisted'")
     )
     # Defaults to `never_approved`, which is right for a new signup and wrong for
     # every migrated mentor — the unlisted ones in the extract are already
@@ -202,6 +202,20 @@ class MentorProfile(TimestampMixin, Base):
         # when" — now a query against `mentor_status_events`, served by that
         # table's own index. `ix_mentor_profiles_searchable` already covers
         # `listing_status` for the directory.
+        #
+        # Settled decision #100. Both columns are a **read model the database
+        # maintains** (#73): application code never writes them, so the constraint
+        # guards `apply_mentor_status` itself — the one writer — rather than a
+        # caller. `ix_mentor_profiles_searchable` indexes both and names no value
+        # in its predicate (`deleted_at IS NULL`), so it rebuilt with the table.
+        CheckConstraint(
+            check_is_known("approval_status", ApprovalStatus),
+            name="approval_status_is_known",
+        ),
+        CheckConstraint(
+            check_is_known("listing_status", ListingStatus),
+            name="listing_status_is_known",
+        ),
     )
 
 
@@ -385,7 +399,9 @@ class MentorStatusEvent(Base):
         ForeignKey("mentor_profiles.user_id", ondelete="RESTRICT"),
         nullable=False,
     )
-    status_type: Mapped[MentorStatusType] = mapped_column(pg_enum(MentorStatusType), nullable=False)
+    status_type: Mapped[MentorStatusType] = mapped_column(
+        str_enum(MentorStatusType), nullable=False
+    )
     #: Free text on a decline, and on an unlisting **either** an `UnlistedReason`
     #: value or free text — `pause` writes `mentor_paused` and `decide` writes
     #: `never_approved`, while an admin unlisting through `set_listing` writes
@@ -415,4 +431,12 @@ class MentorStatusEvent(Base):
     __table_args__ = (
         # The only read is one mentor's history, newest first.
         Index("ix_mentor_status_events_mentor", "mentor_user_id", text("created_at DESC")),
+        # Settled decision #100. This is the value `apply_mentor_status` branches
+        # on, so an unknown one would reach the ELSE arm and be written to
+        # `listing_status` — a silent mis-projection rather than an error. The
+        # constraint refuses it at the insert instead.
+        CheckConstraint(
+            check_is_known("status_type", MentorStatusType),
+            name="status_type_is_known",
+        ),
     )

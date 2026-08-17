@@ -148,13 +148,13 @@ EXPECTED_TABLES = [
 # each step until step 8 empties it.
 # `lookup_status` left in `e4b7d0c95a13`, step 3 — the first shared vocabulary,
 # and the first step to drop and recreate index predicates.
+# `approval_status`, `listing_status` and `mentor_status_type` left together in
+# `f5c3a81e6b29`, step 4 — one migration because `apply_mentor_status` reads one
+# and writes the other two, and a plpgsql body carries no dependency records.
 ENUM_TYPE_NAMES = (
     "actor_type",
-    "approval_status",
     "attendance_status",
-    "listing_status",
     "meeting_provider",
-    "mentor_status_type",
     "session_reason_code",
     "session_role",
     "session_status",

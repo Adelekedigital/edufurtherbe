@@ -1,6 +1,6 @@
 # Handoff — converting PostgreSQL enums to `text` + `CHECK`
 
-**Status:** steps 1–3 of 8 shipped. 12 columns left.
+**Status:** steps 1–4 of 8 shipped. 9 columns left, in 4 steps.
 **Written:** 2026-08-15, after `LEFT_EARLY` forced a decision that a droppable
 value would have made trivial.
 **The rule is settled decision #100**; this is the migration plan behind it.
@@ -264,7 +264,7 @@ the next reader can check it rather than trust it: 7+2+3+2+2+2+3 = 21.
 | 1 | **`unlisted_reason`** — drop the orphaned type | 0 | ✅ shipped as `c9d4e2a71f68` |
 | 2 | **Single-column, single-table** — `admin_users`, `auth_identities`, `availability_exceptions`, `legal_documents`, `user_awards`, `user_languages`, `users` | 7 | ✅ shipped as `d1f8a3c62b47`; all three indexes verified byte-identical before and after |
 | 3 | **`lookup_status`** — first shared type | 2 | ✅ shipped as `e4b7d0c95a13`; both partial indexes dropped and recreated by name |
-| 4 | **The mentor status cluster** — `mentor_status_events.status_type`, `mentor_profiles.approval_status`, `.listing_status` | 3 | **`apply_mentor_status` rewritten in the same migration**; `ix_mentor_profiles_searchable` |
+| 4 | **The mentor status cluster** — `mentor_status_events.status_type`, `mentor_profiles.approval_status`, `.listing_status` | 3 | ✅ shipped as `f5c3a81e6b29`; `apply_mentor_status` rewritten in the same migration, and the rewrite *removed* the `::text::` hack |
 | 5 | **`meeting_provider`** — `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider` | 2 | no index predicates; one server default |
 | 6 | **`session_participants`** — `role`, `attendance_status` | 2 | `ix_session_participants_one_mentor` — **unique** and partial on `role` |
 | 7 | **`session_events`** — `actor_type`, `reason_code` | 2 | `ix_session_events_reason` needs no rewrite |
@@ -374,6 +374,25 @@ first pass reported, which is the point.
 Step 3 was scoped at two sites and was really five — the three extra were quoted
 literals. Step 8's twelve are the ones to be careful with; four of them are
 quoted literals too.
+
+### Verify against a private database, not the shared one
+
+Step 4 found the local `edufurther` database on a revision that exists in no
+branch (`f1b6a92c7d4e`), with the step-2 columns back to enums — another
+workstream on the same PostgreSQL had migrated it. A `git worktree` isolates the
+checkout and **isolates nothing about the database**.
+
+The suite was unaffected, and that is worth knowing rather than assuming: the
+`db` tier uses `TEST_DATABASE_URL` only as a *maintenance* connection to create
+disposable databases, so its own schema state never matters. Only hand-run
+`alembic upgrade` verification does.
+
+So per-step manual verification creates its own database and drops it:
+
+```bash
+docker exec edufurther-postgres psql -U edufurther -d postgres -c "CREATE DATABASE enumstepN;"
+DATABASE_URL=postgresql://edufurther:edufurther@localhost:55432/enumstepN uv run alembic upgrade head
+```
 
 ### `alembic check` sees a missing index, not a wrong one
 
