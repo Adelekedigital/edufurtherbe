@@ -59,9 +59,6 @@ from app.domain.enums import (
 # omitted from the check by being forgotten here — nor can a converted one be
 # left in two places while the conversion is half done.
 PG_ENUM_TYPES: dict[type[StrEnum], str] = {
-    ApprovalStatus: "approval_status",
-    ListingStatus: "listing_status",
-    MentorStatusType: "mentor_status_type",
     MeetingProvider: "meeting_provider",
     SessionStatus: "session_status",
     SessionRole: "session_role",
@@ -113,6 +110,13 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
             "ck_scholarship_programs_status_is_known",
         }
     ),
+    # Step 4 — the mentor status cluster. These three convert together because
+    # `apply_mentor_status` reads `status_type` and writes the other two, and a
+    # plpgsql body carries no dependency records: dropping one type while the
+    # function still names it succeeds silently and fails at the next write.
+    ApprovalStatus: frozenset({"ck_mentor_profiles_approval_status_is_known"}),
+    ListingStatus: frozenset({"ck_mentor_profiles_listing_status_is_known"}),
+    MentorStatusType: frozenset({"ck_mentor_status_events_status_type_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.
