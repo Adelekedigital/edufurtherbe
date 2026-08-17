@@ -407,8 +407,8 @@ async def test_a_pending_institution_still_renders_on_its_creators_profile(
             await conn.execute(
                 text(
                     "INSERT INTO institutions (name, source, status, created_by) "
-                    "VALUES ('Unlisted Polytechnic', 'manual', "
-                    "CAST('pending_review' AS lookup_status), :u) RETURNING id"
+                    "VALUES ('Unlisted Polytechnic', 'manual', 'pending_review', :u) "
+                    "RETURNING id"
                 ),
                 {"u": user_id},
             )

@@ -27,7 +27,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import LookupStatus, VerificationStatus
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import check_is_known, pg_enum, str_enum
+from app.infra.db.types import check_is_known, str_enum
 
 
 class ScholarshipProgram(TimestampMixin, Base):
@@ -80,7 +80,7 @@ class ScholarshipProgram(TimestampMixin, Base):
     official_url: Mapped[str | None] = mapped_column(Text)
 
     status: Mapped[LookupStatus] = mapped_column(
-        pg_enum(LookupStatus), nullable=False, server_default=text("'approved'")
+        str_enum(LookupStatus), nullable=False, server_default=text("'approved'")
     )
 
     merged_into_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -118,6 +118,14 @@ class ScholarshipProgram(TimestampMixin, Base):
             "ix_scholarship_programs_pending",
             "created_at",
             postgresql_where=text("status = 'pending_review'"),
+        ),
+        # Settled decision #100. The predicate above needs no change — it was
+        # already a plain string — but the *rendered* index in the database moves
+        # from `'pending_review'::lookup_status` to `::text`, which is why this
+        # index is dropped and recreated by name rather than left alone.
+        CheckConstraint(
+            check_is_known("status", LookupStatus),
+            name="status_is_known",
         ),
     )
 

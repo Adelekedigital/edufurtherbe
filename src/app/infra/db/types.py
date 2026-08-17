@@ -59,7 +59,6 @@ from app.domain.enums import (
 # omitted from the check by being forgotten here — nor can a converted one be
 # left in two places while the conversion is half done.
 PG_ENUM_TYPES: dict[type[StrEnum], str] = {
-    LookupStatus: "lookup_status",
     ApprovalStatus: "approval_status",
     ListingStatus: "listing_status",
     MentorStatusType: "mentor_status_type",
@@ -82,17 +81,38 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
 # double-prefix defect `test_check_constraints_land_under_the_name_the_model_reports`
 # exists to catch — the two representations are deliberate and cross-checked.
 #
-# Step 2 of 8: the single-column, single-table vocabularies. No index predicate
-# names any of these, no function reads one, and only three carry a server
-# default — which is why they went first and built the shape the rest copy.
-TEXT_CHECK_ENUMS: dict[type[StrEnum], str] = {
-    PrimaryRole: "ck_users_primary_role_is_known",
-    AdminRole: "ck_admin_users_admin_role_is_known",
-    AuthProvider: "ck_auth_identities_provider_is_known",
-    LanguageProficiency: "ck_user_languages_proficiency_is_known",
-    LegalDocumentType: "ck_legal_documents_type_is_known",
-    VerificationStatus: "ck_user_awards_verification_status_is_known",
-    AvailabilityExceptionType: "ck_availability_exceptions_type_is_known",
+# **A set per class, because a vocabulary can guard more than one column.** Step
+# 2 was seven classes on seven columns and a bare string sufficed; `lookup_status`
+# in step 3 is one class on two tables, and `session_status` in step 8 is one on
+# three. A `CHECK` cannot span tables, so each column carries its own — which is
+# the one real cost of `text` + `CHECK` over a shared enum type, and the reason
+# this maps to a set rather than a name.
+#
+# The names are the **rendered** form, not the bare one the model passes. The `ck`
+# convention expands `admin_role_is_known` into
+# `ck_admin_users_admin_role_is_known`, and this is what
+# `test_every_converted_enum_has_a_check_naming_its_values` looks up in
+# `pg_constraint`. Passing a rendered name to `CheckConstraint` is the
+# double-prefix defect `test_check_constraints_land_under_the_name_the_model_reports`
+# exists to catch — the two representations are deliberate and cross-checked.
+TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
+    # Step 2 — single column, single table.
+    PrimaryRole: frozenset({"ck_users_primary_role_is_known"}),
+    AdminRole: frozenset({"ck_admin_users_admin_role_is_known"}),
+    AuthProvider: frozenset({"ck_auth_identities_provider_is_known"}),
+    LanguageProficiency: frozenset({"ck_user_languages_proficiency_is_known"}),
+    LegalDocumentType: frozenset({"ck_legal_documents_type_is_known"}),
+    VerificationStatus: frozenset({"ck_user_awards_verification_status_is_known"}),
+    AvailabilityExceptionType: frozenset({"ck_availability_exceptions_type_is_known"}),
+    # Step 3 — the first shared vocabulary. Two tables whose rows users create
+    # and an admin curates; `degree_levels` and `service_offerings` have no
+    # status column because nobody can add a row to them.
+    LookupStatus: frozenset(
+        {
+            "ck_institutions_status_is_known",
+            "ck_scholarship_programs_status_is_known",
+        }
+    ),
 }
 
 # Vocabularies with no single database column to constrain, and why.

@@ -1,6 +1,6 @@
 # Handoff — converting PostgreSQL enums to `text` + `CHECK`
 
-**Status:** steps 1–2 of 8 shipped (`c9d4e2a71f68`, `d1f8a3c62b47`). 14 columns left.
+**Status:** steps 1–3 of 8 shipped. 12 columns left.
 **Written:** 2026-08-15, after `LEFT_EARLY` forced a decision that a droppable
 value would have made trivial.
 **The rule is settled decision #100**; this is the migration plan behind it.
@@ -263,7 +263,7 @@ the next reader can check it rather than trust it: 7+2+3+2+2+2+3 = 21.
 |---|---|---|---|
 | 1 | **`unlisted_reason`** — drop the orphaned type | 0 | ✅ shipped as `c9d4e2a71f68` |
 | 2 | **Single-column, single-table** — `admin_users`, `auth_identities`, `availability_exceptions`, `legal_documents`, `user_awards`, `user_languages`, `users` | 7 | ✅ shipped as `d1f8a3c62b47`; all three indexes verified byte-identical before and after |
-| 3 | **`lookup_status`** — first shared type | 2 | one partial index each |
+| 3 | **`lookup_status`** — first shared type | 2 | ✅ shipped as `e4b7d0c95a13`; both partial indexes dropped and recreated by name |
 | 4 | **The mentor status cluster** — `mentor_status_events.status_type`, `mentor_profiles.approval_status`, `.listing_status` | 3 | **`apply_mentor_status` rewritten in the same migration**; `ix_mentor_profiles_searchable` |
 | 5 | **`meeting_provider`** — `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider` | 2 | no index predicates; one server default |
 | 6 | **`session_participants`** — `role`, `attendance_status` | 2 | `ix_session_participants_one_mentor` — **unique** and partial on `role` |
@@ -343,21 +343,56 @@ exist*, on the admin-grant load path. Step 2 hit two in `src/` and two in
 **Run this before every step, and treat it as part of the census:**
 
 ```bash
-grep -rnE "CAST\(\s*:?\w+\s+AS\s+(TYPE1|TYPE2)\b|::(TYPE1|TYPE2)\b" src/ tests/ scripts/
+grep -rnE "CAST\([^)]*\bAS\s+(TYPE1|TYPE2)\b|::(TYPE1|TYPE2)\b" src/ tests/ scripts/
 ```
+
+**Match anything inside `CAST(...)`, not a parameter or a bare word.** The first
+version of this grep was `CAST\(\s*:?\w+\s+AS\s+…`, which assumed the cast
+argument is `:param` or an identifier. Step 3 shipped a green local run and then
+failed three tests on `CAST('pending_review' AS lookup_status)` — a **quoted
+literal**, which `\w+` cannot match. Both branches must also list *every* type
+the step drops; the same first version listed the step's types in the `CAST`
+branch and a stale set in the `::` branch, so postfix casts were invisible too.
+A census grep that silently matches less than it claims is worse than no grep.
 
 The fix is to delete the cast, never to keep it: the parameter is already a
 string and the column is now `text`. The guarantee moves to the `CHECK`, which
 refuses exactly what the enum did on exactly this path.
 
-| Step | Raw-SQL casts to fix |
-|---|---|
-| 3 `lookup_status` | `tests/integration/test_api_catalogue.py`, `test_api_admin.py` |
-| 4 `approval_status`, `listing_status`, `mentor_status_type` | `infra/etl/profiles.py` ×3, `tests/integration/factories.py`, `test_api_slots.py` |
-| 5 `meeting_provider` | `infra/etl/sessions.py` ×2, `tests/integration/factories.py` |
-| 6 `session_role`, `attendance_status` | `infra/etl/sessions.py` ×2, `test_api_mentor_stats.py` ×2, `test_sessions_schema.py` |
-| 7 `actor_type` | `infra/etl/sessions.py` |
-| 8 `session_status` | `infra/etl/sessions.py` ×3, `test_api_sessions.py`, `factories.py`, `test_api_slots.py`, `test_api_mentor_stats.py`, `test_sessions_schema.py` ×2 |
+Re-derived with the corrected pattern; the counts below are higher than the
+first pass reported, which is the point.
+
+| Step | Sites | Where |
+|---|---|---|
+| 3 `lookup_status` ✅ | 5 | `test_api_catalogue.py` ×2, `test_api_admin.py`, `test_api_user_attributes.py`, `test_institution_sync.py` |
+| 4 `approval_status`, `listing_status`, `mentor_status_type` | 6 | `infra/etl/profiles.py` ×3, `factories.py`, `test_api_slots.py`, `test_mentor_status_log.py` |
+| 5 `meeting_provider` | 3 | `infra/etl/sessions.py` ×2, `factories.py` |
+| 6 `session_role`, `attendance_status` | 5 | `infra/etl/sessions.py` ×2, `test_api_mentor_stats.py` ×2, `test_sessions_schema.py` |
+| 7 `actor_type` | 2 | `infra/etl/sessions.py`, `test_api_sessions.py` |
+| 8 `session_status` | 12 | `infra/etl/sessions.py` ×3, `factories.py`, `test_api_mentor_stats.py`, `test_api_sessions.py` ×2, `test_api_slots.py`, `test_sessions_schema.py` ×4 |
+
+Step 3 was scoped at two sites and was really five — the three extra were quoted
+literals. Step 8's twelve are the ones to be careful with; four of them are
+quoted literals too.
+
+### `alembic check` sees a missing index, not a wrong one
+
+Measured in step 3, because the distinction decides how much verification the
+predicate steps need. Removing the index recreation from the migration failed two
+tests, so **a partial index dropped and never recreated is caught**. Recreating it
+with the *wrong* predicate is not: `compare_metadata` does not compare `WHERE`
+clauses, which `project-conventions` already states as one of its blind spots.
+
+That failure is quiet in the worst way. `ix_sessions_mentor_upcoming` rebuilt as
+`WHERE status = 'completed'` still exists, still has its name, still gets planned
+against — and simply never matches an upcoming session. The query it serves falls
+back to a sequential scan and the rows it should rank go missing from a listing.
+
+`test_every_partial_index_predicate_survives_a_conversion` closes it, comparing
+the **literal values** in each predicate against what the model declares rather
+than the rendered SQL — because the cast is expected to change
+(`'pending_review'::lookup_status` becomes `::text`) and the values are what must
+not. Steps 6 and 8 inherit it; step 8 drops four objects and needs it most.
 
 ### The ORM stops coercing, and that is invisible
 
