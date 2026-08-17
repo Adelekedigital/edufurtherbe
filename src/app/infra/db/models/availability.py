@@ -44,7 +44,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import AvailabilityExceptionType
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import pg_enum
+from app.infra.db.types import check_is_known, str_enum
 
 
 class AvailabilityRule(TimestampMixin, Base):
@@ -177,7 +177,7 @@ class AvailabilityException(TimestampMixin, Base):
     )
 
     type: Mapped[AvailabilityExceptionType] = mapped_column(
-        pg_enum(AvailabilityExceptionType), nullable=False
+        str_enum(AvailabilityExceptionType), nullable=False
     )
     #: Half-open `[lo, hi)`. A single blocked day is `[d, d+1)`, which is what
     #: the fan-out writes — inclusive-upper would make "one day" ambiguous
@@ -208,6 +208,13 @@ class AvailabilityException(TimestampMixin, Base):
         CheckConstraint("(start_time IS NULL) = (end_time IS NULL)", name="exception_times_paired"),
         CheckConstraint(
             "start_time IS NULL OR end_time > start_time", name="exception_window_ordered"
+        ),
+        # Settled decision #100. `OVERRIDE` ships with no legacy source, and this
+        # is the constraint that will let it be *removed* if the product never
+        # writes one — the thing a PostgreSQL enum could never do.
+        CheckConstraint(
+            check_is_known("type", AvailabilityExceptionType),
+            name="type_is_known",
         ),
         # GiST over `(uuid, daterange)`, which needs `btree_gist` — uuid has no
         # GiST operator class without it. Verified present on the local

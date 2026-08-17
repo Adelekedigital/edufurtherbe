@@ -1,6 +1,6 @@
 # Handoff — converting PostgreSQL enums to `text` + `CHECK`
 
-**Status:** step 1 of 8 shipped (`c9d4e2a71f68`). 21 columns still to convert.
+**Status:** steps 1–2 of 8 shipped (`c9d4e2a71f68`, `d1f8a3c62b47`). 14 columns left.
 **Written:** 2026-08-15, after `LEFT_EARLY` forced a decision that a droppable
 value would have made trivial.
 **The rule is settled decision #100**; this is the migration plan behind it.
@@ -262,7 +262,7 @@ the next reader can check it rather than trust it: 7+2+3+2+2+2+3 = 21.
 | # | Step | Columns | What it carries |
 |---|---|---|---|
 | 1 | **`unlisted_reason`** — drop the orphaned type | 0 | ✅ shipped as `c9d4e2a71f68` |
-| 2 | **Single-column, single-table** — `admin_users`, `auth_identities`, `availability_exceptions`, `legal_documents`, `user_awards`, `user_languages`, `users` | 7 | `ix_auth_identities_provider_user`, `ix_legal_documents_type_version`, `ix_admin_users_active_grant` — rebuilt, not rewritten |
+| 2 | **Single-column, single-table** — `admin_users`, `auth_identities`, `availability_exceptions`, `legal_documents`, `user_awards`, `user_languages`, `users` | 7 | ✅ shipped as `d1f8a3c62b47`; all three indexes verified byte-identical before and after |
 | 3 | **`lookup_status`** — first shared type | 2 | one partial index each |
 | 4 | **The mentor status cluster** — `mentor_status_events.status_type`, `mentor_profiles.approval_status`, `.listing_status` | 3 | **`apply_mentor_status` rewritten in the same migration**; `ix_mentor_profiles_searchable` |
 | 5 | **`meeting_provider`** — `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider` | 2 | no index predicates; one server default |
@@ -277,6 +277,121 @@ bite* §6.
 
 Each step is its own migration and its own PR. **Do not batch them**: a failure
 in step 8 must not require rolling back step 2.
+
+## The front-loaded audit
+
+Run once, on 2026-08-16 at `a3c81f7e5b24`, across all eight steps — so each PR
+executes a known plan rather than rediscovering one. Re-run the cheap checks
+anyway; this table is the expectation to compare them against, and a step whose
+real dependencies differ from it is a stop-and-ask.
+
+**Ruled out for every step, checked and not assumed:** no views, no materialised
+views, no generated or identity columns, no row-level security policies. And
+`apply_mentor_status` is the **only** function in the schema that touches an enum
+column — every other hit in `pg_proc` is pgcrypto, btree_gist or pg_trgm.
+
+**`pg_depend` is the drop-list, not the predicate text.** An index appears as a
+dependency of an enum type only when its definition references that type, which
+is exactly the set that cannot survive the column changing type. Reading
+predicates by eye is what produced the "three more indexes" error above.
+
+```sql
+SELECT t.typname, c.relname, c.relkind
+FROM pg_depend d
+JOIN pg_type t ON t.oid = d.refobjid AND t.typtype = 'e'
+JOIN pg_class c ON c.oid = d.objid AND d.classid = 'pg_class'::regclass
+WHERE t.typnamespace = 'public'::regnamespace AND d.deptype <> 'i';
+```
+
+| Step | Columns | Must drop + recreate | Defaults | Function |
+|---|---|---|---|---|
+| 1 ✅ | 0 | — | 0 | — |
+| 2 ✅ | 7 | — none — | 3 | — |
+| 3 | 2 | `ix_institutions_pending`, `ix_scholarship_programs_pending` | 2 | — |
+| 4 | 3 | — none — | 2 | **`apply_mentor_status`** |
+| 5 | 2 | — none — | 1 | — |
+| 6 | 2 | `ix_session_participants_one_mentor` (unique, partial) | 1 | — |
+| 7 | 2 | — none — | 1 | — |
+| 8 | 3 | `ix_sessions_mentor_completed`, `ix_sessions_mentee_upcoming`, `ix_sessions_mentor_upcoming`, `sessions_no_mentor_double_booking` | 1 | — |
+
+Seven index dependencies, eleven defaults, twenty-one columns — all three
+reconcile against the census. Eleven of the twelve objects are **bare indexes**
+(`op.drop_index` / `op.create_index`); only `sessions_no_mentor_double_booking`
+is a constraint (`contype x`), and it is step 8's.
+
+These five index enum **columns** and need no action at all, because their
+predicates name no enum literal: `ix_admin_users_active_grant`,
+`ix_auth_identities_provider_user`, `ix_legal_documents_type_version` (step 2),
+`ix_mentor_profiles_searchable` (step 4), `ix_session_events_reason` (step 7).
+
+### Raw SQL that names the type — the class `pg_depend` cannot see
+
+**Found the hard way in step 2, after the audit said the step was clean.**
+`pg_depend` inventories database objects. It knows nothing about a type name
+sitting inside a Python string, and this codebase has 30 of them:
+
+```
+CAST(:admin_role AS admin_role)
+```
+
+`infra/etl/*.py` writes these columns with hand-written SQL — which is the whole
+reason #100 keeps the guarantee in the database — and the cast names the type the
+step is about to drop. It fails at runtime with *type "admin_role" does not
+exist*, on the admin-grant load path. Step 2 hit two in `src/` and two in
+`tests/`; the remaining twenty-six are waiting in the steps below.
+
+**Run this before every step, and treat it as part of the census:**
+
+```bash
+grep -rnE "CAST\(\s*:?\w+\s+AS\s+(TYPE1|TYPE2)\b|::(TYPE1|TYPE2)\b" src/ tests/ scripts/
+```
+
+The fix is to delete the cast, never to keep it: the parameter is already a
+string and the column is now `text`. The guarantee moves to the `CHECK`, which
+refuses exactly what the enum did on exactly this path.
+
+| Step | Raw-SQL casts to fix |
+|---|---|
+| 3 `lookup_status` | `tests/integration/test_api_catalogue.py`, `test_api_admin.py` |
+| 4 `approval_status`, `listing_status`, `mentor_status_type` | `infra/etl/profiles.py` ×3, `tests/integration/factories.py`, `test_api_slots.py` |
+| 5 `meeting_provider` | `infra/etl/sessions.py` ×2, `tests/integration/factories.py` |
+| 6 `session_role`, `attendance_status` | `infra/etl/sessions.py` ×2, `test_api_mentor_stats.py` ×2, `test_sessions_schema.py` |
+| 7 `actor_type` | `infra/etl/sessions.py` |
+| 8 `session_status` | `infra/etl/sessions.py` ×3, `test_api_sessions.py`, `factories.py`, `test_api_slots.py`, `test_api_mentor_stats.py`, `test_sessions_schema.py` ×2 |
+
+### The ORM stops coercing, and that is invisible
+
+`pg_enum` does more than create the type: the dialect-level `ENUM` turns each row
+back into the Python class on read. **A plain `text` column returns `str`**, so
+`Mapped[ApprovalStatus]` over `Text` type-checks clean and yields a string. `==`
+still works — a `StrEnum` member equals its value — so the defect hides. `is`
+does not, and `mentor_status_store.may_self_resume` used identity:
+
+```python
+if row is None or row[0] is not ApprovalStatus.APPROVED:
+```
+
+Converted naively that is `False` for every mentor, and a self-paused mentor can
+never resume: fails closed, so not an exposure, but a feature that stops working
+with a green suite. **`str_enum` in `infra/db/types.py` is the answer** and every
+step uses it. Audited across the codebase: that was the only identity comparison
+reading a database column; the other twenty-nine sit on transform dataclasses
+holding real Python enums and are unaffected.
+
+### The migration template
+
+`d1f8a3c62b47` is the reference implementation — copied per step, never imported,
+because a shared helper is a live symbol that changes what an old revision does
+on replay (decision #43). Per column: drop default → `ALTER COLUMN … TYPE text
+USING col::text` → re-add default as a text literal → add `CHECK`; then
+`DROP TYPE` once every column is off it. Steps 3, 6 and 8 drop their `pg_depend`
+objects first and recreate them after, **with the same name**.
+
+The duplication is answered by verification rather than by abstraction:
+`test_every_converted_enum_has_a_check_naming_its_values` and
+`test_the_database_agrees_with_how_each_vocabulary_is_declared` assert the
+outcome for every converted column, whoever wrote the migration — which is
+strictly more than a helper could guarantee.
 
 ## Definition of done, per step
 

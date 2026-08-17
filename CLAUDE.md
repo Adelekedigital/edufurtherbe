@@ -82,9 +82,17 @@ make check                     # the full local gate — before every commit
 Six rules, added after a retrospective on M1. Each one is here because it cost
 real time — the count is in `failure-modes.md`.
 
-1. **Never stack pull requests.** Branch from `main`, merge to `main`, one at a
-   time. Every stack so far needed rebase surgery and a force-push; one PR was
-   destroyed outright. Sequential work waits.
+1. ~~**Never stack pull requests.**~~ **Reversed 2026-08-16, deliberately.**
+   Stacking is allowed: branch from the PR you build on, merge in order. The
+   original rule cost more than the stacks did — the enum-to-text conversion is
+   eight sequential migrations, and one-at-a-time made it eight round trips.
+   What stands from the old rule is *why* it existed: every stack so far needed
+   rebase surgery. So the price is named rather than wished away — **Alembic's
+   chain is linear**, so two open PRs each adding a migration off the same head
+   produce two heads and `alembic upgrade head` fails outright. A stacked
+   migration PR fixes its `down_revision` at merge time, in merge order. Set the
+   PR base to the branch below it so the diff stays readable; GitHub retargets to
+   `main` when the parent merges.
 2. **An ADR lands `Accepted` in the PR that implements it.** `Proposed` plus a
    second acceptance PR is for a decision that genuinely blocks someone else —
    not the default. Two PRs per decision was pure overhead.

@@ -74,13 +74,18 @@ ON CONFLICT (provider, provider_user_id) DO UPDATE SET
 # Only where no live grant exists. A revoked grant stays, and a re-run must not
 # create a second live one — which the partial unique index would reject anyway,
 # turning a repeated load into a failure instead of a no-op.
+# No `CAST(... AS admin_role)` any more: settled decision #100 made the column
+# `text` + `CHECK`, and the cast named a type that no longer exists. The guarantee
+# did not weaken — `ck_admin_users_admin_role_is_known` refuses an unknown value
+# from this statement exactly as the enum did, and this is the path that needs it,
+# since the loader writes raw SQL and never builds a model.
 UPSERT_ADMIN = """
 INSERT INTO admin_users (user_id, admin_role)
-SELECT :user_id, CAST(:admin_role AS admin_role)
+SELECT :user_id, :admin_role
 WHERE NOT EXISTS (
     SELECT 1 FROM admin_users
     WHERE user_id = :user_id
-      AND admin_role = CAST(:admin_role AS admin_role)
+      AND admin_role = :admin_role
       AND revoked_at IS NULL
 )
 """

@@ -13,13 +13,19 @@ trigger are different facts, and only one of them is visible from the model.
 import ast
 from enum import StrEnum
 
+import pytest
 from sqlalchemy import TIMESTAMP
 
 from app.domain import enums
 from app.infra.db import models
 from app.infra.db.base import Base
 from app.infra.db.models.sessions import LIVE_STATUSES
-from app.infra.db.types import PG_ENUM_TYPES, TEXT_CHECK_ENUMS, UNCONSTRAINED_ENUMS
+from app.infra.db.types import (
+    PG_ENUM_TYPES,
+    TEXT_CHECK_ENUMS,
+    UNCONSTRAINED_ENUMS,
+    StrEnumText,
+)
 from conftest import PROJECT_ROOT
 
 # Every model the project is expected to define. Update deliberately, in the same
@@ -409,3 +415,99 @@ def test_the_unlisted_reason_labels_have_one_meaning() -> None:
     )
     divergent = {path: value for path, value in copies.items() if value != expected}
     assert not divergent, f"UnlistedReason declares {expected!r}: {divergent}"
+
+
+def test_a_converted_column_hands_back_the_enum_member_not_a_string() -> None:
+    """The whole reason ``StrEnumText`` exists rather than a bare ``Text``.
+
+    A plain ``Text`` column returns ``str``. ``==`` still works, because a
+    ``StrEnum`` member equals its value, so most code is unaffected and the
+    defect hides — but ``is`` does not, and identity is what
+    ``mentor_status_store.may_self_resume`` uses to decide whether a mentor may
+    put themselves back on the list. Converted without the decorator, that
+    comparison is ``False`` for every mentor: fails closed, so not an exposure,
+    but a feature that silently stops working with a green suite.
+
+    Asserted with ``is`` deliberately. ``==`` would pass against a raw string and
+    prove nothing at all.
+    """
+    column = StrEnumText(enums.PrimaryRole)
+
+    assert column.process_result_value("mentee", None) is enums.PrimaryRole.MENTEE
+    assert column.process_result_value(None, None) is None
+    assert column.process_bind_param(enums.PrimaryRole.MENTOR, None) == "mentor"
+    assert column.process_bind_param(None, None) is None
+
+    # A value the class does not have is a loud read, not a silent passthrough.
+    # The CHECK should make this unreachable; if it ever is not, this is how it
+    # surfaces.
+    with pytest.raises(ValueError, match="not a valid PrimaryRole"):
+        column.process_result_value("wizard", None)
+
+
+def migration_tuples(name: str) -> dict[str, list[tuple[str, ...]]]:
+    """Every migration defining a module-level tuple-of-tuples ``name``.
+
+    ``migration_constants`` above reads a plain string and handles ``ast.Assign``
+    only. A conversion table is annotated, so it parses as ``ast.AnnAssign``, and
+    its rows are nested tuples — different enough to be its own reader rather
+    than a flag on the first one.
+    """
+    found: dict[str, list[tuple[str, ...]]] = {}
+    for path in sorted((PROJECT_ROOT / "migrations" / "versions").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            target = None
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                target = node.target.id
+            elif isinstance(node, ast.Assign):
+                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+                target = names[0] if names else None
+            if target != name or not isinstance(node.value, ast.Tuple):
+                continue
+            found[path.name] = [
+                tuple(str(el.value) for el in row.elts if isinstance(el, ast.Constant))
+                for row in node.value.elts
+                if isinstance(row, ast.Tuple)
+            ]
+    return found
+
+
+def test_the_converted_enum_labels_have_one_meaning() -> None:
+    """Pins each conversion migration's transcribed labels to its ``StrEnum``.
+
+    The ``upgrade`` path is covered by the database:
+    ``test_every_converted_enum_has_a_check_naming_its_values`` compares the live
+    ``CHECK`` against the class. **The ``downgrade`` path is not.** It recreates
+    the PostgreSQL type from a label list written into the migration, runs on
+    almost no day, and asserts nothing about order — and PostgreSQL sorts an enum
+    by declaration order, so a rebuild from an alphabetised list restores a type
+    that compares differently from the one dropped.
+
+    The constraint name is derived here as ``ck_{table}_{column}_is_known``
+    rather than read from the migration, so the convention itself is pinned: a
+    step that names one of seven differently fails here rather than in review.
+    """
+    by_name = {name: cls for cls, name in TEXT_CHECK_ENUMS.items()}
+    conversions = migration_tuples("CONVERSIONS")
+
+    assert conversions, (
+        "no migration defines CONVERSIONS; this test would otherwise pass by "
+        "comparing nothing, which is the failure it exists to prevent"
+    )
+
+    divergent: dict[str, str] = {}
+    for path, rows in conversions.items():
+        for table, column, _type_name, labels, *_ in rows:
+            constraint = f"ck_{table}_{column}_is_known"
+            enum_cls = by_name.get(constraint)
+            if enum_cls is None:
+                divergent[f"{path}:{table}.{column}"] = (
+                    f"no TEXT_CHECK_ENUMS entry named {constraint}"
+                )
+                continue
+            expected = ", ".join(f"'{member.value}'" for member in enum_cls)
+            if labels != expected:
+                divergent[f"{path}:{table}.{column}"] = f"{labels!r} != {expected!r}"
+
+    assert not divergent, f"migration labels disagree with domain.enums: {divergent}"

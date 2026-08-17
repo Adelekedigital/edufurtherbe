@@ -140,24 +140,23 @@ EXPECTED_TABLES = [
 # therefore the one that proves the harness. The vocabulary is unaffected;
 # `UnlistedReason` is still written and read as a sentinel, and now lives in
 # `UNCONSTRAINED_ENUMS` with the reason no `CHECK` can guard it.
+#
+# Seven more left in `d1f8a3c62b47`, step 2 — the single-column, single-table
+# vocabularies. `admin_role`, `auth_provider`, `availability_exception_type`,
+# `language_proficiency`, `legal_document_type`, `primary_role` and
+# `verification_status` are now `text` + `CHECK`, and this tuple shrinks with
+# each step until step 8 empties it.
 ENUM_TYPE_NAMES = (
     "actor_type",
-    "admin_role",
     "approval_status",
     "attendance_status",
-    "auth_provider",
-    "availability_exception_type",
-    "language_proficiency",
-    "legal_document_type",
     "listing_status",
     "lookup_status",
     "meeting_provider",
     "mentor_status_type",
-    "primary_role",
     "session_reason_code",
     "session_role",
     "session_status",
-    "verification_status",
 )
 
 ConfigFactory = Callable[[str], Config]
