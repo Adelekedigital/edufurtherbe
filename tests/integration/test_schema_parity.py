@@ -241,6 +241,65 @@ def test_check_constraints_land_under_the_name_the_model_reports(migrated_databa
     )
 
 
+SERVER_DEFAULTS = """
+SELECT c.relname AS tbl, a.attname AS col, pg_get_expr(d.adbin, d.adrelid) AS server_default
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+WHERE c.relkind = 'r' AND c.relname <> 'alembic_version'
+"""
+
+
+def test_every_declared_server_default_matches_the_database(migrated_database: str) -> None:
+    """A fourth thing ``alembic check`` cannot see, and the one this file's own
+    docstring opens with.
+
+    ``compare_metadata`` does not diff server defaults — the docstring above
+    names ``ALTER TABLE users ALTER COLUMN id SET DEFAULT uuid_generate_v7()`` as
+    silent — so a model declaring ``server_default=text("120")`` against a
+    database holding ``1440`` stays green everywhere. Nothing breaks until
+    somebody autogenerates a migration from the drifted model and it emits a
+    change nobody asked for.
+
+    **Found by a mutation, not by reading.** Reverting the notice column's model
+    default while leaving the migration alone survived the entire suite.
+
+    Compared as *substrings* rather than for equality: PostgreSQL renders a
+    default with its type, so ``text("1440")`` arrives as ``1440`` and
+    ``text("'google_meet'")`` as ``'google_meet'::meeting_provider``. The
+    declared form appearing inside the rendered one is the strongest claim that
+    survives both.
+    """
+    rendered = {
+        (row["tbl"], row["col"]): row["server_default"]
+        for row in query(migrated_database, SERVER_DEFAULTS)
+    }
+
+    drifted: list[str] = []
+    checked = 0
+    for table in Base.metadata.sorted_tables:
+        for column in table.columns:
+            if column.server_default is None:
+                continue
+            declared = str(getattr(column.server_default, "arg", "")).strip()
+            if not declared:
+                continue
+            actual = rendered.get((table.name, column.name))
+            checked += 1
+            if actual is None:
+                drifted.append(
+                    f"{table.name}.{column.name}: declared {declared!r}, none in database"
+                )
+            elif declared.strip("'") not in actual:
+                drifted.append(
+                    f"{table.name}.{column.name}: declared {declared!r}, database {actual!r}"
+                )
+
+    assert checked, "no server defaults inspected; this test would prove nothing"
+    assert not drifted, "model server defaults disagree with the database: " + "; ".join(drifted)
+
+
 PRIMARY_KEYS = """
 SELECT c.relname AS tbl,
        array_agg(a.attname ORDER BY k.ord) AS pk_columns,

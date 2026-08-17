@@ -100,6 +100,29 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **Booking notice is 24 hours, restoring a platform rule the migration was not
+  carrying.** `session_type_booking_configs.min_notice_minutes` defaulted to
+  **120** — two hours — and nothing has ever written it: the ETL does not set the
+  column and no endpoint could. So every migrated offering sat on that default
+  and would have permitted booking two hours out against a legacy rule of
+  twenty-four, which allowed no same-day booking at all.
+
+  Nobody chose that. It was invisible because 120 is a valid value: every count
+  reconciled, every test passed, and `/slots` simply offered times legacy would
+  never have shown.
+
+  **This is user-visible in two ways.** `GET /users/{id}/availability/slots`
+  stops offering anything within a day of now for migrated mentors. And
+  `min_notice_minutes` — exposed by both `GET /users/{id}/session-types` and
+  `GET /me/session-types` — reports **1440** where it reported 120. Same field,
+  same type, different number.
+
+  The column's new `CHECK` is **sanity, not policy**: `BETWEEN 0 AND 43200`. It
+  refuses a negative and refuses beyond thirty days, and deliberately does not
+  encode the 24-hour floor. The product rule — 24h minimum, 72h maximum, the
+  mentor's choice per session type — is enforced at the Pydantic boundary and
+  lands with the write schema, so that moving the range to `booking_policies`
+  later is a config change rather than a migration. See settled decision #104.
 - **Seven vocabularies are now `text` + `CHECK` — step 2 of 8 under settled
   decision #100.** `users.primary_role`, `admin_users.admin_role`,
   `auth_identities.provider`, `user_languages.proficiency`,
