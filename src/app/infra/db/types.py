@@ -19,6 +19,7 @@ forget the fifth.
 from collections.abc import Sequence
 from enum import StrEnum
 
+from sqlalchemy import Dialect, Text, TypeDecorator
 from sqlalchemy.dialects.postgresql import ENUM
 
 from app.domain.enums import (
@@ -58,18 +59,11 @@ from app.domain.enums import (
 # omitted from the check by being forgotten here — nor can a converted one be
 # left in two places while the conversion is half done.
 PG_ENUM_TYPES: dict[type[StrEnum], str] = {
-    PrimaryRole: "primary_role",
-    AdminRole: "admin_role",
-    AuthProvider: "auth_provider",
-    LanguageProficiency: "language_proficiency",
-    LegalDocumentType: "legal_document_type",
     LookupStatus: "lookup_status",
     ApprovalStatus: "approval_status",
     ListingStatus: "listing_status",
     MentorStatusType: "mentor_status_type",
-    VerificationStatus: "verification_status",
     MeetingProvider: "meeting_provider",
-    AvailabilityExceptionType: "availability_exception_type",
     SessionStatus: "session_status",
     SessionRole: "session_role",
     AttendanceStatus: "attendance_status",
@@ -80,12 +74,26 @@ PG_ENUM_TYPES: dict[type[StrEnum], str] = {
 # Vocabularies already converted per settled decision #100 — a `text` column and
 # a `CHECK` — mapped to the name of the constraint that guards them.
 #
-# Empty until the first column converts, and deliberately so: this ships with the
-# `unlisted_reason` step, whose whole job is to prove the harness before any data
-# moves. The parity test that walks this mapping arrives with the first entry,
-# because a test iterating an empty registry inspects nothing and reports green —
-# the failure shape `test_schema_parity.py` exists to prevent.
-TEXT_CHECK_ENUMS: dict[type[StrEnum], str] = {}
+# The **rendered** constraint name, not the bare one the model passes. The `ck`
+# naming convention expands `admin_role_is_known` into
+# `ck_admin_users_admin_role_is_known`, and this is what
+# `test_every_converted_enum_has_a_check_naming_its_values` looks up in
+# `pg_constraint`. Passing the rendered name to `CheckConstraint` is the
+# double-prefix defect `test_check_constraints_land_under_the_name_the_model_reports`
+# exists to catch — the two representations are deliberate and cross-checked.
+#
+# Step 2 of 8: the single-column, single-table vocabularies. No index predicate
+# names any of these, no function reads one, and only three carry a server
+# default — which is why they went first and built the shape the rest copy.
+TEXT_CHECK_ENUMS: dict[type[StrEnum], str] = {
+    PrimaryRole: "ck_users_primary_role_is_known",
+    AdminRole: "ck_admin_users_admin_role_is_known",
+    AuthProvider: "ck_auth_identities_provider_is_known",
+    LanguageProficiency: "ck_user_languages_proficiency_is_known",
+    LegalDocumentType: "ck_legal_documents_type_is_known",
+    VerificationStatus: "ck_user_awards_verification_status_is_known",
+    AvailabilityExceptionType: "ck_availability_exceptions_type_is_known",
+}
 
 # Vocabularies with no single database column to constrain, and why.
 #
@@ -143,3 +151,82 @@ def pg_enum[E: StrEnum](enum_cls: type[E]) -> ENUM:
 
 def _values(enum_cls: type[StrEnum]) -> Sequence[str]:
     return [member.value for member in enum_cls]
+
+
+class StrEnumText[E: StrEnum](TypeDecorator[E]):
+    """A ``text`` column that still hands Python the ``StrEnum`` member.
+
+    **This exists because plain ``Text`` silently returns ``str``.** Settled
+    decision #100 converts every vocabulary from a PostgreSQL enum to ``text`` +
+    ``CHECK``, and ``pg_enum`` was doing more than creating the type: the
+    dialect-level ``ENUM`` coerces each row back into the Python class on read.
+    A bare ``Text`` column does not, so ``Mapped[ApprovalStatus]`` over ``Text``
+    type-checks clean and yields a ``str`` at runtime.
+
+    Nothing raises when that happens. ``==`` still works, because a ``StrEnum``
+    member equals its value — so most code is unaffected and the defect hides.
+    **``is`` does not**, and identity is what
+    ``mentor_status_store.may_self_resume`` used:
+
+        if row is None or row[0] is not ApprovalStatus.APPROVED:
+
+    Converted without this decorator, that comparison is ``False`` for every
+    mentor and a self-paused mentor can never resume. It fails closed, so it is
+    not an exposure — it is simply a feature that stops working, with a green
+    suite. Audited 2026-08-16: it was the only identity comparison in the
+    codebase reading a database column; the other twenty-nine sit on transform
+    dataclasses that hold real Python enums and are unaffected.
+
+    **Why not ``sqlalchemy.Enum(..., native_enum=False)``**, which does this in
+    one argument: it emits ``VARCHAR(n)`` sized to the longest member at
+    definition time, so adding a longer value later becomes a column type change
+    and a table rewrite — reintroducing exactly the rigidity #100 exists to
+    escape — and it hands the ``CHECK`` to SQLAlchemy's rendering, when the point
+    of #100 is that the constraint is dropped and re-added in one statement.
+
+    ``process_result_value`` raises on a value the class does not have, rather
+    than passing the string through. The ``CHECK`` should make that impossible;
+    if it ever is not, a loud read beats a quiet one.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def __init__(self, enum_cls: type[E]) -> None:
+        self.enum_cls = enum_cls
+        super().__init__()
+
+    # `_dialect` rather than `noqa: ARG002`. SQLAlchemy calls both hooks
+    # positionally, so the name is ours to choose, and a suppressed rule is one
+    # more thing nobody reads.
+    def process_bind_param(self, value: E | None, _dialect: Dialect) -> str | None:
+        """``.value`` explicitly, matching what the ETL writes by hand."""
+        return None if value is None else self.enum_cls(value).value
+
+    def process_result_value(self, value: str | None, _dialect: Dialect) -> E | None:
+        return None if value is None else self.enum_cls(value)
+
+
+def str_enum[E: StrEnum](enum_cls: type[E]) -> StrEnumText[E]:
+    """The converted counterpart of :func:`pg_enum` — ``text``, not a type."""
+    return StrEnumText(enum_cls)
+
+
+def check_is_known(column: str, enum_cls: type[StrEnum]) -> str:
+    """The ``CHECK`` body for a converted column, rendered from the class.
+
+    **The value list is not written out per model, and that is rule 8.** Seven
+    columns convert in one release and fourteen more follow; a hand-typed
+    ``IN ('super_admin', 'mentor_approval', 'limited_access')`` beside each is
+    the same vocabulary in a second place, which this project calls a defect
+    rather than a style question. Rendering it means a member added to the
+    ``StrEnum`` cannot disagree with the model.
+
+    The migration still writes its own literal — no migration imports from
+    ``app`` — and `test_every_converted_enum_has_a_check_naming_its_values`
+    compares what actually landed in ``pg_constraint`` against the class, so a
+    migration that drifts from the model is caught by the database rather than
+    by review.
+    """
+    rendered = ", ".join(f"'{member.value}'" for member in enum_cls)
+    return f"{column} IN ({rendered})"

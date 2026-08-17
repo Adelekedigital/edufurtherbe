@@ -49,10 +49,9 @@ async def make_user(
             await conn.execute(
                 text(
                     "INSERT INTO admin_users (user_id, admin_role, revoked_at) "
-                    "VALUES (:u, CAST(:r AS admin_role), now())"
+                    "VALUES (:u, :r, now())"
                     if revoked
-                    else "INSERT INTO admin_users (user_id, admin_role) "
-                    "VALUES (:u, CAST(:r AS admin_role))"
+                    else "INSERT INTO admin_users (user_id, admin_role) VALUES (:u, :r)"
                 ),
                 {"u": user_id, "r": role},
             )

@@ -100,6 +100,31 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **Seven vocabularies are now `text` + `CHECK` — step 2 of 8 under settled
+  decision #100.** `users.primary_role`, `admin_users.admin_role`,
+  `auth_identities.provider`, `user_languages.proficiency`,
+  `legal_documents.type`, `user_awards.verification_status` and
+  `availability_exceptions.type`. Storage only: every value, default and index
+  is unchanged, and the three indexes over these columns were verified
+  byte-identical before and after.
+
+  **The ORM keeps handing back `StrEnum` members**, via a new `str_enum()` in
+  `infra/db/types.py`. This is not a convenience. `pg_enum` was doing two jobs
+  and only one was obvious — the dialect-level `ENUM` also coerces rows back
+  into the Python class, which plain `Text` does not. `Mapped[ApprovalStatus]`
+  over `Text` type-checks clean and returns a `str`, `==` still works because a
+  `StrEnum` member equals its value, and so the defect hides. `is` does not:
+  `may_self_resume` compares identity, and converted naively it returns `False`
+  for every mentor, leaving a self-paused mentor unable to resume. Fails closed,
+  so not an exposure — a feature that stops working with a green suite.
+
+  Two new parity tests assert the outcome for every converted column rather than
+  trusting the migration that wrote it: one that a `CHECK` exists naming exactly
+  the `StrEnum`'s values, one that the database and the model agree on which
+  vocabularies have converted. Steps 3 to 8 inherit both. The `CHECK` is the
+  only control on the ETL path, which writes these columns with hand-written SQL
+  and never constructs a model.
+
 - **D88 is complete: `mentor_profiles` loses `default_meeting_venue`,
   `requires_booking_confirmation` and `custom_meeting_url`.** The contract step,
   and the third of three releases — add and backfill, switch readers, drop.
