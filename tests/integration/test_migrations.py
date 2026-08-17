@@ -144,9 +144,7 @@ EXPECTED_TABLES = [
 # asserts from the other side.
 ENUM_TYPE_NAMES = (
     "actor_type",
-    "attendance_status",
     "session_reason_code",
-    "session_role",
     "session_status",
 )
 

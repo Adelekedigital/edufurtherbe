@@ -119,10 +119,7 @@ async def insert_participant(
     conn: AsyncConnection, session_id: str, user_id: str, role: str
 ) -> None:
     await conn.execute(
-        text(
-            "INSERT INTO session_participants (session_id, user_id, role) "
-            "VALUES (:s, :u, CAST(:role AS session_role))"
-        ),
+        text("INSERT INTO session_participants (session_id, user_id, role) VALUES (:s, :u, :role)"),
         {"s": session_id, "u": user_id, "role": role},
     )
 

@@ -99,7 +99,7 @@ async def add_session(
                 text(
                     "INSERT INTO session_participants "
                     "(session_id, user_id, role, attendance_status) "
-                    "VALUES (:s, :u, 'mentor', CAST(:a AS attendance_status))"
+                    "VALUES (:s, :u, 'mentor', :a)"
                 ),
                 {"s": session_id, "u": mentor, "a": attendance},
             )
@@ -108,7 +108,7 @@ async def add_session(
                 text(
                     "INSERT INTO session_participants "
                     "(session_id, user_id, role, attendance_status) "
-                    "VALUES (:s, :u, 'mentee', CAST(:a AS attendance_status))"
+                    "VALUES (:s, :u, 'mentee', :a)"
                 ),
                 {"s": session_id, "u": mentee, "a": mentee_attendance},
             )

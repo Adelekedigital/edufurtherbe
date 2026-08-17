@@ -144,8 +144,7 @@ UPSERT_PARTICIPANT = """
 INSERT INTO session_participants
     (session_id, user_id, role, joined_at, attendance_status)
 VALUES
-    (:session_id, :user_id, CAST(:role AS session_role), :joined_at,
-     CAST(:attendance_status AS attendance_status))
+    (:session_id, :user_id, :role, :joined_at, :attendance_status)
 ON CONFLICT (session_id, user_id) DO UPDATE SET
     role              = EXCLUDED.role,
     joined_at         = EXCLUDED.joined_at,
