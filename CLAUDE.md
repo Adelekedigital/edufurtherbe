@@ -83,8 +83,9 @@ make check                     # the full local gate — before every commit
 
 ## How we work
 
-Six rules, added after a retrospective on M1. Each one is here because it cost
-real time — the count is in `failure-modes.md`.
+Nine rules. The first six came out of a retrospective on M1 — each is there
+because it cost real time, and that count is in `failure-modes.md`. Rules 7–9 were
+added 2026-08-17, when the approval gate itself turned out to be one of the costs.
 
 1. ~~**Never stack pull requests.**~~ **Reversed 2026-08-16, deliberately.**
    Stacking is allowed: branch from the PR you build on, merge in order. The
@@ -108,8 +109,12 @@ real time — the count is in `failure-modes.md`.
    writing code against a tool's behaviour. This rule alone would have prevented
    an entire merged-then-deleted PR and two false "main is broken" reports.
 5. **Decide only where the answer is already settled** — the repo says it, or the
-   same pattern was handled before. Anything that is genuinely a choice comes back
-   for approval. Speed is not a reason to decide on someone's behalf.
+   same pattern was handled before. ~~Anything that is genuinely a choice comes
+   back for approval.~~ — **narrowed by rule 8 below:** what comes back is what
+   *blocks*. Two defensible options is not that; take the one the existing pattern
+   implies and state the assumption. Speed is still not a reason to decide on
+   someone's behalf — rule 8 changes which questions are worth a round trip, not
+   whose call it is.
 6. **Report in plain words, short.** Verdict first, evidence in a table, prose
    only for the one thing that matters. If the reader cannot act on it in under a
    minute, it is too long — and a decision nobody can follow is a decision nobody
