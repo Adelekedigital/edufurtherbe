@@ -52,8 +52,12 @@ make check                     # the full local gate — before every commit
 
 1. **`domain/` imports no framework and no other layer except `core/`.** Enforced
    by `scripts/check_layers.py`. Do not weaken the config to pass.
-2. **The checklist and Definition of Done are approved before implementation** —
-   as text, with no tool calls in the same response.
+2. **The checklist and Definition of Done are written before implementation.**
+   ~~And approved, as text, with no tool calls in the same response.~~ —
+   **amended by rule 7 below:** they are still written first, at every tier, but
+   only **Tier 1** waits for approval. `build-workflow` is tier 1 of the
+   standards package and still says wait at every tier; this file overrides it,
+   which is what tier 2 is for.
 3. **Watch every test fail before making it pass.** And assert the positive case,
    not only the negative.
 4. **Never lower a coverage, lint, or severity threshold to go green.** If a
@@ -111,13 +115,37 @@ real time — the count is in `failure-modes.md`.
    minute, it is too long — and a decision nobody can follow is a decision nobody
    can make.
 
+7. **Standing approval at Tiers 2 and 3.** Write the checklist and Definition of
+   Done, post them, and **continue in the same response** — they are the build's
+   specification and its verification contract, not a request. Tier 1 still stops
+   for approval before implementation: a migration, a backfill, an auth change or
+   anything touching real data is where a wrong turn is expensive to reverse.
+   Amends non-negotiable #2, which stopped at every tier and cost a round trip on
+   renames and docs.
+8. **Escalate only what blocks.** A question qualifies if proceeding either way
+   would be unsafe, would need rework to undo, or would commit a public contract
+   to a shape that is breaking to change. It does **not** qualify because two
+   options both look reasonable, because a settled decision does not name this
+   exact case, or because the codebase has no precedent — take the option the
+   existing pattern implies, state the assumption in the PR body, and keep
+   building. When something genuinely does qualify, **batch it**: hold it until
+   the tier's natural pause and ask everything at once, in the #50 shape.
+9. **Unchanged by 7 and 8**, because these are what make the speed safe: watch
+   every test fail before it passes; no threshold lowered to go green;
+   object-level authorization scoped in the query on every read and write path;
+   `security-checker` run whenever auth, input, SQL or PII is touched; the Build
+   Verification Gate in full before any work is called done; and a red gate is
+   fixed in the build that found it (#99).
+
 Working alone in the repository is assumed. When another session may be active,
 use `git worktree` rather than switching the shared checkout.
 
 ### How much verification
 
 Depth scales with what a mistake costs. **Every tier still gets a checklist and
-approval before implementation** — the tier decides verification, nothing else.
+a Definition of Done before implementation** — the tier decides verification,
+and, since rule 7, whether the build waits for approval. Tier 1 waits; Tiers 2
+and 3 post and continue.
 
 | Tier | What | Verification |
 |---|---|---|
