@@ -10,6 +10,37 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Removed
+
+- **`mentor_profiles.primary_session_type_id` is dropped, with
+  `trg_refuse_retiring_a_primary_offering`.**
+
+  D88 gave the pointer two jobs. The fallback lost its last member when
+  `requires_booking_confirmation` went back to the mentor; the other — *the
+  offering a mentee lands on, which also drives display order* — was never real.
+  Nothing lands a mentee on it and nothing orders by it: `_live_session_types`
+  orders by `name`, which is unique per mentor among live rows and therefore a
+  total order rather than a merely stable one. Measured before deciding: three
+  consumers in production code, and after the confirmation move, zero.
+
+  **Retiring an offering is now refused by nothing.** The guard fired on `UPDATE`
+  as well as delete, so the sanctioned *release the pointer, then retire* two-step
+  is gone and deactivating is a plain `is_active` toggle — a `409` the `PATCH` and
+  `DELETE` endpoints no longer have to translate, and would have returned a 500
+  without.
+
+  The guard's five tests are deleted with a record of what would bring each back,
+  in `tests/integration/test_offering_retirement.py`, which asserts the inverse.
+  Its trigger-inventory test asks `pg_trigger` directly, because behavioural tests
+  would also pass against a trigger whose predicate had quietly stopped matching.
+
+- **`default_meeting_venue` is removed from `GET /users/{id}/mentor-profile`.**
+  **Breaking** — a client gets a missing key, not a null. It was read through the
+  dropped pointer and venue has no mentor-level home, so a permanent null would
+  assert *this mentor has no venue*, a claim about the mentor, when venue is a
+  property of an offering. The owner reads it per offering in
+  `/me/session-types`; the public offering endpoint is unchanged.
+
 ### Changed
 
 - **`requires_booking_confirmation` returns to `mentor_profiles`, and the

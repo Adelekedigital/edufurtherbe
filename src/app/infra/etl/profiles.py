@@ -264,8 +264,8 @@ class ProfileLoader:
                     # Back on this row, and this loader is its only ETL writer.
                     # The session loader must not also write it: two writers for
                     # one fact is what D88 produced in the other direction.
-                    # `default_meeting_venue` stays absent — venue is per
-                    # offering and travels on `SessionTypeRow`.
+                    # There is no venue here and nowhere for one to go — venue is
+                    # per offering and travels on `SessionTypeRow`.
                     "requires_booking_confirmation": mentor.requires_booking_confirmation,
                     "primary_study_country_id": country_id,
                     "primary_study_program": mentor.primary_study_program,

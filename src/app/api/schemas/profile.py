@@ -191,11 +191,13 @@ class MentorProfileRead(BaseModel):
     # Narrowing rather than breaking: a client that handled the old `null` still
     # validates a bool, and the field never stops being present.
     requires_booking_confirmation: bool
-    # Still the primary offering's, so still absent for a mentor who has no
-    # primary — a new applicant, or one mid-way through the two-step that swaps
-    # which offering is primary. `None` says "no venue yet"; `'google_meet'`
-    # would be a claim about someone who has nothing to book.
-    default_meeting_venue: str | None = None
+    # `default_meeting_venue` is **removed**, not made optional. It was read
+    # through `primary_session_type_id`, which is dropped, and venue has no
+    # mentor-level home to fall back to. Keeping the key with a permanent `null`
+    # would assert "this mentor has no venue" — a claim about the mentor, when
+    # venue is a property of an offering. The owner reads it per offering in
+    # `/me/session-types`. This removes a field from a shipped response and is
+    # breaking, deliberately.
     primary_study_program: str | None = None
     primary_study_country: CountryRef | None = None
     offerings: list[LookupRef] = []
@@ -215,11 +217,6 @@ class MentorProfileRead(BaseModel):
             approval_status=str(row["approval_status"]),
             listing_status=str(row["listing_status"]),
             requires_booking_confirmation=bool(row["requires_booking_confirmation"]),
-            default_meeting_venue=(
-                None
-                if row.get("default_meeting_venue") is None
-                else str(row["default_meeting_venue"])
-            ),
             primary_study_program=row.get("primary_study_program"),
             primary_study_country=country,
             offerings=[

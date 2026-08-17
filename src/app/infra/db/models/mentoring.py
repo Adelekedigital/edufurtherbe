@@ -168,25 +168,14 @@ class MentorProfile(TimestampMixin, Base):
         nullable=False, server_default=text("false")
     )
 
-    #: The offering a mentee lands on, and what an unconfigured offering falls
-    #: back to (D88).
-    #:
-    #: **Nullable, and the cycle is why.** This references ``session_types``,
-    #: whose ``mentor_user_id`` references this table — a cycle between the
-    #: tables though never between two rows: the profile is written with a null
-    #: pointer, the offering is written, then the pointer is set. A ``NOT NULL``
-    #: column could never be inserted at all.
-    #:
-    #: Null is also the ordinary state rather than an edge — 7 of 12 migrated
-    #: mentors have no session type, and the 5 who do have exactly one, so
-    #: *primary* is currently unambiguous by construction rather than by choice.
-    #:
-    #: ``RESTRICT`` cannot protect it: retirement is a soft delete or a cleared
-    #: ``is_active``, both UPDATEs, which no foreign key sees. That is what
-    #: ``trg_refuse_retiring_a_primary_offering`` is for (D90).
-    primary_session_type_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("session_types.id", ondelete="RESTRICT")
-    )
+    # `primary_session_type_id` is gone, and with it
+    # `trg_refuse_retiring_a_primary_offering`. D88 gave it two jobs: the
+    # offering a mentee lands on, and the source an unconfigured offering fell
+    # back to. The fallback lost its last member when
+    # `requires_booking_confirmation` came back to this table, and the first job
+    # was never real — nothing landed a mentee on it and nothing ordered by it.
+    # `_live_session_types` orders by `name`, unique per mentor among live rows
+    # and therefore total.
 
     # Display and filter convenience only. The full history is on
     # `education_entries` — a mentor with degrees from Nigeria, then the UK, then

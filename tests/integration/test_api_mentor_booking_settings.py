@@ -1,19 +1,22 @@
-"""The owner profile's booking settings: venue from the primary offering,
-confirmation from the mentor.
+"""The owner profile's one booking setting: confirmation, from the mentor.
 
-**This file was D88's reader step and half of it is now reversed.** D88 moved
-`requires_booking_confirmation` onto `session_type_booking_configs` and this
-suite pinned the move; the column has gone back to `mentor_profiles`, so the
-assertions follow it rather than being deleted. What the file is *for* has not
-changed: a write that answers 200 and reaches nothing anybody reads is invisible
-to the write suite (which asserts the response) and to the read suite (which
-seeds rows directly), and only a write-then-read through the API sees it.
+**Renamed from `test_api_primary_offering_readers.py`, which no longer describes
+it.** That file was D88's reader step, pinning two settings read through
+`mentor_profiles.primary_session_type_id`. Both halves have since left: the
+confirmation went back to `mentor_profiles` and is asserted here, and
+`default_meeting_venue` was **removed from the response entirely** when the
+pointer was dropped, along with `make_primary`, `release_primary` and the three
+tests that exercised the pointer's null cases.
 
-`default_meeting_venue` still comes from the primary offering and its null cases
-are still not an edge: `trg_refuse_retiring_a_primary_offering` refuses to retire
-an offering something points at, so *release the pointer, then retire* is the
-sanctioned two-step and "live offerings, no primary" is a state mentors pass
-through by design. That half leaves with the pointer, in the next release.
+What the file is *for* is unchanged, and is why it survives the rename: a write
+that answers 200 and reaches nothing anybody reads is invisible to the write
+suite (which asserts the response) and to the read suite (which seeds rows
+directly). Only a write-then-read through the API sees it.
+
+`default_meeting_venue` is asserted **absent** rather than null. Venue has no
+mentor-level home, so a null would claim the mentor has no venue when the truth
+is that venue belongs to an offering — the owner reads it per offering in
+`/me/session-types`.
 """
 
 from __future__ import annotations
@@ -44,22 +47,6 @@ async def as_mentor(engine: AsyncEngine, tag: str, **kwargs: object) -> tuple[UU
             text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentor}
         )
     return mentor, auth_id
-
-
-async def make_primary(engine: AsyncEngine, mentor: UUID, session_type: UUID) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE mentor_profiles SET primary_session_type_id = :t WHERE user_id = :u"),
-            {"t": session_type, "u": mentor},
-        )
-
-
-async def release_primary(engine: AsyncEngine, mentor: UUID) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE mentor_profiles SET primary_session_type_id = NULL WHERE user_id = :u"),
-            {"u": mentor},
-        )
 
 
 async def set_confirmation(engine: AsyncEngine, mentor: UUID, value: bool) -> None:
@@ -120,25 +107,30 @@ async def read_profile(
 
 
 # --------------------------------------------------------------------------
-# The read: venue from the primary, confirmation from the mentor
+# The read: confirmation from the mentor, and no venue at all
 # --------------------------------------------------------------------------
 
 
-async def test_the_owner_profile_reads_the_venue_from_the_primary_offering(
+async def test_the_owner_profile_no_longer_carries_a_venue(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The venue half of D88's reader step, which this release does not touch.
+    """**Absent, not null — and `not in` is the whole assertion.**
 
-    Non-default on purpose, so a reader that returned the column default still
-    fails.
+    `assert profile["default_meeting_venue"] is None` would pass against a field
+    that is still there and merely unset, which is exactly the state this release
+    rejects. The mentor here has a live offering with a non-default venue, so a
+    reader still resolving one would answer `"zoom"` and fail.
+
+    Replaces `test_the_owner_profile_reads_the_venue_from_the_primary_offering`.
+    What would bring that back is a mentor-level venue column — and there is not
+    one, deliberately: venue is a property of an offering.
     """
-    mentor, auth_id = await as_mentor(db_engine, "reads-primary")
-    session_type = await add_session_type(db_engine, mentor, name="Mock interview", venue="zoom")
-    await make_primary(db_engine, mentor, session_type)
+    mentor, auth_id = await as_mentor(db_engine, "no-venue")
+    await add_session_type(db_engine, mentor, name="Mock interview", venue="zoom")
 
     profile = await read_profile(api_client, mentor, auth_id)
 
-    assert profile["default_meeting_venue"] == "zoom"
+    assert "default_meeting_venue" not in profile
 
 
 async def test_the_owner_profile_reads_confirmation_from_the_mentor_not_the_offering(
@@ -156,7 +148,6 @@ async def test_the_owner_profile_reads_confirmation_from_the_mentor_not_the_offe
     """
     mentor, auth_id = await as_mentor(db_engine, "confirmation-source")
     session_type = await add_session_type(db_engine, mentor, name="SOP review")
-    await make_primary(db_engine, mentor, session_type)
     await set_confirmation(db_engine, mentor, True)
     async with db_engine.begin() as conn:
         await conn.execute(
@@ -172,10 +163,10 @@ async def test_the_owner_profile_reads_confirmation_from_the_mentor_not_the_offe
     assert profile["requires_booking_confirmation"] is True
 
 
-async def test_a_mentor_with_no_primary_still_reports_a_confirmation_setting(
+async def test_a_mentor_with_no_offerings_still_reports_a_confirmation_setting(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """**Changed deliberately: this asserted `None` and now asserts a bool.**
+    """**Asserted `None` before PR 12, and a bool since.**
 
     It read `None` because the value lived on a primary offering the mentor did
     not have — a chain with a reachable, empty bottom. `mentor_profiles` is
@@ -183,40 +174,34 @@ async def test_a_mentor_with_no_primary_still_reports_a_confirmation_setting(
     this is unknown. That is the entire argument for moving the column back, and
     a test still permitting `None` would allow the terminus to go missing again.
 
-    `default_meeting_venue` keeps its null: venue has no mentor-level home, so a
-    mentor with no primary genuinely has no venue. The two fields answering
-    differently in the same response is the point, not an inconsistency.
+    The venue half of this test went with the field. What it asserted — that a
+    mentor without a primary reads null rather than 500 — is not a state that
+    exists any more: there is no primary and no venue on this response.
     """
-    mentor, auth_id = await as_mentor(db_engine, "no-primary")
+    mentor, auth_id = await as_mentor(db_engine, "no-offerings")
 
     profile = await read_profile(api_client, mentor, auth_id)
 
-    assert profile["default_meeting_venue"] is None
     assert profile["requires_booking_confirmation"] is False
 
 
-async def test_a_released_pointer_still_reads_rather_than_failing(
+async def test_an_offering_still_resolves_its_own_venue_publicly(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The state the guard creates: live offerings, no primary.
+    """Venue left the *owner profile*, not the product.
 
-    This is the exact configuration a mentor is in between the two steps of
-    swapping which offering is primary, so it must be a legible profile rather
-    than an error — and the public offerings must still resolve a venue, which
-    they do because they carry their own.
+    Replaces `test_a_released_pointer_still_reads_rather_than_failing`, which
+    checked that offerings kept resolving a venue while their mentor had no
+    primary. The pointer is gone, so that intermediate state no longer exists —
+    but the thing it was really protecting does, and this is where a client
+    reads it: the public offering carries its own venue and always did.
     """
-    mentor, auth_id = await as_mentor(db_engine, "released")
-    session_type = await add_session_type(db_engine, mentor, name="SOP review", venue="daily")
-    await make_primary(db_engine, mentor, session_type)
-    await release_primary(db_engine, mentor)
+    mentor, _ = await as_mentor(db_engine, "public-venue")
+    await add_session_type(db_engine, mentor, name="SOP review", venue="daily")
 
-    profile = await read_profile(api_client, mentor, auth_id)
     offerings = (await api_client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
 
-    assert profile["default_meeting_venue"] is None
-    assert [o["meeting_venue"] for o in offerings] == ["daily"], (
-        "an offering stopped resolving a venue once its mentor had no primary"
-    )
+    assert [o["meeting_venue"] for o in offerings] == ["daily"]
 
 
 # --------------------------------------------------------------------------
@@ -232,8 +217,7 @@ async def test_toggling_confirmation_survives_a_read(
     Asserting the 200 alone passes against a writer that reaches nothing.
     """
     mentor, auth_id = await as_mentor(db_engine, "toggle")
-    session_type = await add_session_type(db_engine, mentor, name="SOP review")
-    await make_primary(db_engine, mentor, session_type)
+    await add_session_type(db_engine, mentor, name="SOP review")
 
     response = await api_client.patch(
         profile_url(mentor),
@@ -265,9 +249,8 @@ async def test_the_toggle_writes_the_mentor_and_leaves_every_offering_inheriting
     different write with a different shape, not this one.
     """
     mentor, auth_id = await as_mentor(db_engine, "fan-out-gone")
-    primary = await add_session_type(db_engine, mentor, name="SOP review")
+    await add_session_type(db_engine, mentor, name="SOP review")
     await add_session_type(db_engine, mentor, name="Mock interview")
-    await make_primary(db_engine, mentor, primary)
 
     await api_client.patch(
         profile_url(mentor),
