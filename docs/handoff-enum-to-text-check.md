@@ -472,10 +472,12 @@ The duplication is answered by verification rather than by abstraction:
 outcome for every converted column, whoever wrote the migration — which is
 strictly more than a helper could guarantee.
 
-## Queued behind step 8: `SessionStatus.WITHDRAWN`
+## Shipped after step 8: `SessionStatus.WITHDRAWN`
 
-**Decided 2026-08-16: step 8 lands first, then the value is added.** Recorded
-here because the ordering is the whole decision and it expires once step 8 ships.
+**Landed as `e7b4d29c3f16`, three reversible `CHECK` swaps.** The ordering
+decision — step 8 first, then the value — is kept below because it is the
+worked example of what the conversion bought, and the reasoning applies to every
+vocabulary change from here.
 
 A mentee withdrawing a request before it expires has no status today. It lands as
 `CANCELLED`, which conflates it with calling off an already-confirmed session — a
@@ -495,17 +497,34 @@ Three, not one: `session_status` guards `sessions.status`,
 `session_events.from_status` and `session_events.to_status`, and a `CHECK` cannot
 span tables. Still one migration.
 
-Adding it early would make it the **ninth** dead label if the flow is later
-modelled as a `reason_code` on `CANCELLED` instead — joining the eight this
-document was written about. #100's standing rule applies: *do not add a value
-until something writes it.* The one condition that flips the ordering is the
-withdraw flow shipping before step 8, in which case take the permanent version
-rather than block the feature.
+**#100's sub-rule did not survive its own success, and that is worth stating.**
+*"Do not add a value until something writes it"* was justified by permanence:
+`ADD VALUE` could not be undone. Step 8 removed the permanence, so the rule no
+longer follows from its own reason. `WITHDRAWN` landed ahead of the withdraw
+flow deliberately, and it is reversible until the first row uses it — at which
+point the downgrade fails loudly rather than rewriting live rows, which is the
+correct behaviour and was verified.
 
-**One constraint either way:** `LIVE_STATUSES` is
-`status IN ('pending_mentor_approval', 'confirmed')` and defines which sessions
-hold a mentor's booking slot. `WITHDRAWN` stays outside it, as `EXPIRED`,
-`DECLINED` and `CANCELLED` correctly do.
+The rule still holds for a vocabulary that is *not* converted. There are none
+left in this schema, so in practice it is retired.
+
+**`LIVE_STATUSES` is untouched, and that is the load-bearing part.** A withdrawn
+request holds no booking slot, so it sits outside the predicate with `EXPIRED`,
+`DECLINED` and `CANCELLED`. Verified against real rows: a mentor **can** be
+booked over a withdrawn request, because `sessions_no_mentor_double_booking`
+ignores the row. Adding `withdrawn` to that predicate would keep a withdrawn
+request blocking the slot it just released.
+
+**The transition rule is `PENDING_MENTOR_APPROVAL -> WITHDRAWN` only.** A
+confirmed session called off is `CANCELLED`, whoever calls it off — the mentor
+has already committed time, and that is the fact the two statuses separate.
+Nothing enforces transitions in the schema; the rule lives at the endpoint that
+writes the status, and is recorded on the enum member because the value is
+meaningless without it.
+
+`SessionStatus` now has **8 members**. The product's A–H list is 8 states, but
+they do not line up one-to-one: "Upcoming" is derived from `CONFIRMED` plus a
+future `starts_at` rather than being a status of its own.
 
 Two related cautions recorded at the same time, both about `NO_SHOW`:
 
