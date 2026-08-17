@@ -60,8 +60,6 @@ from app.domain.enums import (
 # left in two places while the conversion is half done.
 PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     SessionStatus: "session_status",
-    SessionRole: "session_role",
-    AttendanceStatus: "attendance_status",
     SessionReasonCode: "session_reason_code",
     ActorType: "actor_type",
 }
@@ -125,6 +123,9 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
             "ck_sessions_meeting_provider_is_known",
         }
     ),
+    # Step 6 — `role` carries the first **unique** partial index to move.
+    SessionRole: frozenset({"ck_session_participants_role_is_known"}),
+    AttendanceStatus: frozenset({"ck_session_participants_attendance_status_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.
