@@ -571,7 +571,10 @@ Two related cautions recorded at the same time, both about `NO_SHOW`:
   `created_at`, a name, a `sort_order`, an id or a similarity rank.
 - **`refuse_retiring_a_primary_offering` is unaffected.** The schema's other
   business-rule trigger reads `deleted_at`, `is_active` and
-  `primary_session_type_id`, and no enum column.
+  `primary_session_type_id`, and no enum column. *(It was true throughout the
+  conversion and is now moot: that trigger and its column were dropped by
+  `c8f1a3e2b904`. Left as written, because this document is the record of what
+  the conversion had to consider.)*
 
 ## What to check before starting
 

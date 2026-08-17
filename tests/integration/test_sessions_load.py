@@ -334,20 +334,17 @@ async def test_a_retired_type_does_not_block_a_new_one(
 ) -> None:
     """The index is partial on `deleted_at IS NULL` for exactly this.
 
-    **The pointer is released first, and that line is new.** Since D88 the loader
-    names a primary offering, and `trg_refuse_retiring_a_primary_offering` refuses
-    to let one be retired while it is still pointed at — so this test began
-    failing with a `RestrictViolationError` rather than a wrong count.
-
-    That is the guard working, not a test that needed loosening: retiring the
-    offering mentees land on is a decision the mentor has to make explicitly,
-    because everything else falls back to it. The alternative — a trigger that
-    silently nulled the pointer — would leave a mentor with live offerings and no
-    fallback source, which is the drift the guard exists to prevent.
+    **A pointer-release line stood here and is deleted with the pointer.** Under
+    D88 the loader named a primary offering and
+    `trg_refuse_retiring_a_primary_offering` refused to retire one still pointed
+    at, so this test raised `RestrictViolationError` rather than reporting a
+    wrong count until the pointer was released first. Both the guard and the
+    pointer are gone, so the line guarded nothing and would have sat here as
+    setup that reads as meaningful and does nothing — which is worse than absent,
+    because the next reader has to work out that it is dead.
     """
     conn, users = seeded
     await SessionLoader(conn).load(users=users, plan=plan_of())
-    await conn.execute(text("UPDATE mentor_profiles SET primary_session_type_id = NULL"))
     await conn.execute(text("UPDATE session_types SET deleted_at = now()"))
 
     await conn.execute(
@@ -437,63 +434,13 @@ async def test_the_load_leaves_every_offering_inheriting_its_confirmation(
     assert row.requires_booking_confirmation is None
 
 
-async def test_the_load_names_a_primary_offering(
-    seeded: tuple[AsyncConnection, dict[str, UUID]],
-) -> None:
-    """`primary_session_type_id` cannot be written with the profile.
-
-    `mentor_profiles` and `session_types` reference each other, so the order is
-    profile, offering, pointer — and a mentor whose profile exists before any
-    offering does is the ordinary case, not an edge: 7 of 12 migrated mentors
-    have no session type at all and keep a null pointer forever.
-    """
-    conn, users = seeded
-    await SessionLoader(conn).load(users=users, plan=plan_of())
-
-    pointer = (
-        await conn.execute(
-            text("SELECT primary_session_type_id FROM mentor_profiles WHERE user_id = :u"),
-            {"u": users[MENTOR]},
-        )
-    ).scalar_one()
-    session_type = (await conn.execute(text("SELECT id FROM session_types"))).scalar_one()
-    assert pointer == session_type
-
-
-async def test_a_re_run_does_not_move_a_primary_somebody_chose(
-    seeded: tuple[AsyncConnection, dict[str, UUID]],
-) -> None:
-    """Re-running the loader is the recovery plan (D40), not a reset.
-
-    Once a mentor has picked which offering mentees land on, a second load must
-    leave that decision alone — which is what the `IS NULL` in the statement is
-    for. Without it the loader would quietly reassign it on every re-run, and the
-    count-based idempotency tests above would all still pass.
-    """
-    conn, users = seeded
-    loader = SessionLoader(conn)
-    await loader.load(users=users, plan=plan_of())
-
-    chosen = (
-        await conn.execute(
-            text(
-                "INSERT INTO session_types (mentor_user_id, name) "
-                "VALUES (:u, 'Chosen') RETURNING id"
-            ),
-            {"u": users[MENTOR]},
-        )
-    ).scalar_one()
-    await conn.execute(
-        text("UPDATE mentor_profiles SET primary_session_type_id = :s WHERE user_id = :u"),
-        {"s": chosen, "u": users[MENTOR]},
-    )
-
-    await loader.load(users=users, plan=plan_of())
-
-    pointer = (
-        await conn.execute(
-            text("SELECT primary_session_type_id FROM mentor_profiles WHERE user_id = :u"),
-            {"u": users[MENTOR]},
-        )
-    ).scalar_one()
-    assert pointer == chosen
+# `test_the_load_names_a_primary_offering` and
+# `test_a_re_run_does_not_move_a_primary_somebody_chose` were deleted with
+# `primary_session_type_id` in `c8f1a3e2b904`. The first pinned the three-step
+# write order the table cycle forced — profile, offering, pointer; the second
+# pinned the `IS NULL` that stopped a re-run reassigning a primary the mentor had
+# chosen, which every count-based idempotency test above would have missed.
+#
+# What would bring them back is a column on `mentor_profiles` referencing
+# `session_types` again. The cycle, and the write order it dictates, is a
+# property of that reference rather than of anything the loader does.

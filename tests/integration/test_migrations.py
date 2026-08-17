@@ -30,19 +30,22 @@ pytestmark = pytest.mark.db
 #: RANGE` rather than written out; they are ours, and they are dropped with the
 #: type. `session_window` joins in M4 (`d7c31f8a2b45`).
 #:
-#: `refuse_retiring_a_primary_offering` joins in `d5a83b17c9e4` and is the first
-#: **business-rule** function here — every other entry is infrastructure. It is
-#: what D90 requires, because `ON DELETE RESTRICT` cannot see a retirement that
-#: happens as `deleted_at` or `is_active = false`; both are UPDATEs, which no
-#: foreign key observes.
+#: `refuse_retiring_a_primary_offering` joined in `d5a83b17c9e4` and **left in
+#: `c8f1a3e2b904`**, with `mentor_profiles.primary_session_type_id`. It was the
+#: only **business-rule** function here — every remaining entry is
+#: infrastructure — and it existed because `ON DELETE RESTRICT` cannot see a
+#: retirement that happens as `deleted_at` or `is_active = false`, both UPDATEs.
+#: With nothing pointing at a session type there is nothing for it to protect.
+#: `tests/integration/test_offering_retirement.py` asserts its absence directly,
+#: because this tuple would also pass against a trigger left in place over a
+#: dropped function.
 #:
-#: This tuple catching it is the test doing its job: a schema-level object added
-#: without a downgrade would survive `downgrade base` and break the next upgrade
-#: on "already exists", which is exactly what the assertion above the re-upgrade
-#: is for.
+#: This tuple catching a *new* one is the test doing its job: a schema-level
+#: object added without a downgrade would survive `downgrade base` and break the
+#: next upgrade on "already exists", which is exactly what the assertion above
+#: the re-upgrade is for.
 FUNCTION_NAMES = (
     "apply_mentor_status",
-    "refuse_retiring_a_primary_offering",
     "session_window",
     "set_updated_at",
     "timemultirange",
@@ -420,6 +423,57 @@ def test_the_confirmation_seed_reads_the_offerings_before_clearing_them(
     ), (
         "the offering kept its value instead of inheriting; it is now a "
         "permanent override and the mentor's toggle resolves to nothing"
+    )
+
+
+def test_the_primary_pointer_downgrade_restores_data_not_just_a_column(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """**A downgrade that restores an empty column is not a downgrade.**
+
+    `c8f1a3e2b904` drops `primary_session_type_id` and
+    `trg_refuse_retiring_a_primary_offering`. Recreating the column, the key, the
+    function and the trigger restores the *mechanism* and leaves it inert: every
+    pointer would be null, so the guard would refuse nothing and every reader
+    through it would resolve to nothing. Both directions of `alembic` would report
+    success and `test_upgrade_downgrade_upgrade_is_clean` would stay green,
+    because it asserts the chain runs rather than what it leaves behind.
+
+    So this creates a mentor with a live offering at head, downgrades one step,
+    and asserts the pointer **points at that offering** — the re-seed, not the
+    column.
+    """
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "head")
+
+    execute(
+        disposable_database,
+        """
+        WITH u AS (
+            INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+            VALUES ('reseed@example.test', gen_random_uuid(), 'Probe', 'mentor', 'UTC')
+            RETURNING id
+        ), p AS (
+            INSERT INTO mentor_profiles (user_id, headline) SELECT id, 'P' FROM u
+            RETURNING user_id
+        )
+        INSERT INTO session_types (mentor_user_id, name)
+        SELECT user_id, 'Live offering' FROM p
+        """,
+    )
+
+    command.downgrade(config, "b4e9c72a1d58")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT mp.primary_session_type_id = st.id "
+            "  FROM mentor_profiles mp JOIN session_types st ON st.mentor_user_id = mp.user_id",
+        )
+        is True
+    ), (
+        "the downgrade restored the column without re-seeding it; the guard is "
+        "installed and inert, and every read through the pointer resolves to null"
     )
 
 

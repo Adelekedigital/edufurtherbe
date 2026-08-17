@@ -206,11 +206,16 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     #: `MeetingProvider.CUSTOM` venue names a provider and stores no address.
     #:
     #: **Not an inherit**, though D21 describes it as one. A null here would have
-    #: meant *fall back to the primary offering*, and the guard that protects a
-    #: primary offering makes "live offerings, no primary" a state mentors pass
-    #: through by design — so the chain had a reachable and empty bottom, while
-    #: `SessionTypeRead.meeting_venue` is required (D92). Every offering carries
-    #: its own instead.
+    #: meant *fall back to the primary offering* — and while that pointer existed,
+    #: the guard protecting it made "live offerings, no primary" a state mentors
+    #: passed through by design, so the chain had a reachable and empty bottom
+    #: while `SessionTypeRead.meeting_venue` is required (D92). Every offering
+    #: carries its own instead.
+    #:
+    #: **Past tense on purpose:** the pointer and its guard are gone (#107). That
+    #: does not reopen the question — venue still has no mentor-level home to
+    #: inherit from, so `NOT NULL` here is the only thing keeping the required
+    #: response field satisfiable.
     meeting_venue: Mapped[MeetingProvider] = mapped_column(
         str_enum(MeetingProvider), nullable=False, server_default=text("'google_meet'")
     )

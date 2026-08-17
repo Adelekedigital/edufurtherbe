@@ -33,7 +33,6 @@ from uuid import UUID
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.mentoring import (
@@ -45,7 +44,6 @@ from app.infra.db.models.mentoring import (
 )
 from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
-from app.infra.db.models.sessions import SessionTypeBookingConfig
 from app.infra.db.models.user import UserLanguage
 from app.infra.db.offerings import offerings_for
 
@@ -206,14 +204,16 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
     can set one yet (#21), and a ``COALESCE`` written before anything writes the
     overriding column would be a mechanism with no producer.
 
-    **``default_meeting_venue`` still comes from the primary offering** (D88) and
-    is null when there is no primary. That is not a degraded read: venue only
-    exists on an offering, so a mentor who has claimed none has no value rather
-    than a default one, and reporting ``'google_meet'`` would invent a booking
-    policy for someone who cannot be booked. It leaves this response with the
-    primary offering itself.
+    **``default_meeting_venue`` is gone from this response**, with
+    ``primary_session_type_id``. It was read through that pointer, and venue has
+    no mentor-level home to fall back to — so the field is **absent** rather than
+    null. Null would say *this mentor has no venue*, which is a claim about the
+    mentor; venue is a property of an offering, and the owner sees it per
+    offering in ``/me/session-types``.
+
+    **This query no longer touches ``session_types`` or its booking configs at
+    all.** The only join left is the country lookup.
     """
-    primary = aliased(SessionTypeBookingConfig, name="primary_config")
     row = (
         (
             await session.execute(
@@ -224,18 +224,11 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
                     MentorProfile.approval_status,
                     MentorProfile.listing_status,
                     MentorProfile.requires_booking_confirmation,
-                    primary.meeting_venue.label("default_meeting_venue"),
                     MentorProfile.primary_study_program,
                     Country.code.label("primary_study_country_code"),
                     Country.display_name.label("primary_study_country_name"),
                 )
                 .outerjoin(Country, Country.id == MentorProfile.primary_study_country_id)
-                # Outer, because a mentor need not have a primary offering — the
-                # guard on retiring one makes releasing the pointer a legitimate
-                # intermediate state, and a new mentor has never had one.
-                .outerjoin(
-                    primary, primary.session_type_id == MentorProfile.primary_session_type_id
-                )
                 .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
             )
         )
