@@ -159,6 +159,84 @@ async def test_the_venue_is_never_null(
     assert offering["meeting_venue"] == "google_meet"
 
 
+async def test_an_offering_takes_the_platform_notice_floor(db_engine: AsyncEngine) -> None:
+    """**The default is the platform rule, so the default is what needs asserting.**
+
+    The 24-hour no-same-day-booking rule lives in this column's server default,
+    because the ETL never sets it and nothing could until offering writes shipped.
+    Every migrated offering therefore takes whatever the default says — it said
+    120, which permitted booking two hours out against a rule of twenty-four.
+
+    **Passing `notice=None` is the only way to reach the default**, and it did not
+    exist until this test needed it: the factory named the column unconditionally,
+    as did the slot suite's own fixture, so no test could construct an offering
+    that takes it. That is the same trap as `meeting_venue` in the reader step,
+    one PR earlier.
+    """
+    mentor = await make_public_mentor(db_engine, "notice-default")
+    session_type = await add_session_type(db_engine, mentor, notice=None)
+
+    async with db_engine.connect() as conn:
+        stored = (
+            await conn.execute(
+                text(
+                    "SELECT min_notice_minutes FROM session_type_booking_configs "
+                    "WHERE session_type_id = :t"
+                ),
+                {"t": session_type},
+            )
+        ).scalar_one()
+
+    assert stored == 1440
+
+
+@pytest.mark.parametrize("value", [-1, 43201])
+async def test_an_insane_notice_is_refused_by_the_database(
+    db_engine: AsyncEngine, value: int
+) -> None:
+    """Sanity, not policy. The 24-hour floor is **not** enforced here — it is a
+    product rule and lives at the Pydantic boundary, so that moving it to
+    `booking_policies` later is a config change rather than a migration."""
+    mentor = await make_public_mentor(db_engine, f"insane-{value}")
+    session_type = await add_session_type(db_engine, mentor, config=False)
+
+    with pytest.raises(IntegrityError, match="min_notice_minutes"):
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO session_type_booking_configs "
+                    "(session_type_id, duration_minutes, min_notice_minutes) "
+                    "VALUES (:t, 45, :n)"
+                ),
+                {"t": session_type, "n": value},
+            )
+
+
+async def test_zero_notice_is_still_accepted_by_the_database(db_engine: AsyncEngine) -> None:
+    """The line between sanity and policy, asserted from the permissive side.
+
+    A `CHECK` at 1440 would have been the obvious move and would have forbidden
+    every fixture in this suite from building an offering with no notice window —
+    which is how the slot tests exercise the slot maths without a 24-hour gap in
+    the way. Fifty-four call sites depend on `0` remaining legal.
+    """
+    mentor = await make_public_mentor(db_engine, "zero-notice")
+    session_type = await add_session_type(db_engine, mentor, notice=0)
+
+    async with db_engine.connect() as conn:
+        stored = (
+            await conn.execute(
+                text(
+                    "SELECT min_notice_minutes FROM session_type_booking_configs "
+                    "WHERE session_type_id = :t"
+                ),
+                {"t": session_type},
+            )
+        ).scalar_one()
+
+    assert stored == 0
+
+
 async def test_a_config_cannot_be_written_without_a_venue(db_engine: AsyncEngine) -> None:
     """The database half, because the API cannot create an offering at all.
 

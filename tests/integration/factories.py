@@ -79,7 +79,7 @@ async def add_session_type(
     category: str | None = None,
     application_stage: str | None = None,
     duration: int = 45,
-    notice: int = 0,
+    notice: int | None = 0,
     venue: str | None = None,
     active: bool = True,
     deleted: bool = False,
@@ -110,9 +110,20 @@ async def add_session_type(
             # reader step, and an explicit NULL overrides a server default — so
             # naming the column unconditionally would fail every offering that
             # does not care which venue it is on.
-            columns = "(session_type_id, duration_minutes, min_notice_minutes"
-            values = "(:t, :d, :n"
-            params: dict[str, object] = {"t": session_type, "d": duration, "n": notice}
+            #: `min_notice_minutes` is omitted the same way when the caller passes
+            #: `None`, and that is the *only* path that can exercise its server
+            #: default. Both this factory and the slot suite's own fixture named
+            #: the column unconditionally, so no test could construct an offering
+            #: that takes the platform floor — which is precisely what the notice
+            #: PR changes. Defaulting to `0` rather than `None` is deliberate:
+            #: most tests want no notice window in the way of the slot maths.
+            columns = "(session_type_id, duration_minutes"
+            values = "(:t, :d"
+            params: dict[str, object] = {"t": session_type, "d": duration}
+            if notice is not None:
+                columns += ", min_notice_minutes"
+                values += ", :n"
+                params["n"] = notice
             if venue is not None:
                 columns += ", meeting_venue"
                 values += ", CAST(:v AS meeting_provider)"

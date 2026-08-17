@@ -174,6 +174,19 @@ def scalar(url: str, sql: str) -> Any:
     return asyncio.run(_run())
 
 
+def execute(url: str, sql: str) -> None:
+    """Mirrors `scalar`, for statements that return nothing."""
+
+    async def _run() -> None:
+        conn = await asyncpg.connect(url)
+        try:
+            await conn.execute(sql)
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
 def function_names(url: str) -> list[str]:
     """Every function **we** created, asked of the database rather than named.
 
@@ -309,6 +322,61 @@ def test_models_and_the_chain_agree(
     that the migration is complete.
     """
     command.check(make_alembic_config(migrated_database))
+
+
+def test_the_notice_backfill_reaches_rows_that_predate_it(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """A migration's backfill is the half no ordinary test can reach.
+
+    Every other test creates a fresh offering, which takes the column *default* —
+    so the `UPDATE` in `f1b6a92c7d4e` could be deleted entirely and the whole
+    suite would stay green. A mutation proved exactly that. A fresh
+    migrate-then-load cannot reach it either: migrations run before any data is
+    loaded, so those rows also take the default.
+
+    The backfill only matters for rows that **predate** the migration — the
+    migrated offerings sitting at 120 in staging and production, which is the
+    entire population this PR exists to correct. Reaching them needs a row
+    created at the prior revision, so this test upgrades to it, writes one, and
+    then upgrades the rest of the way.
+    """
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "c9d4e2a71f68")
+
+    execute(
+        disposable_database,
+        """
+        WITH u AS (
+            INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+            VALUES ('backfill@example.test', gen_random_uuid(), 'Probe', 'mentor', 'UTC')
+            RETURNING id
+        ), p AS (
+            INSERT INTO mentor_profiles (user_id, headline) SELECT id, 'P' FROM u
+            RETURNING user_id
+        ), t AS (
+            INSERT INTO session_types (mentor_user_id, name)
+            SELECT user_id, 'Predates the migration' FROM p RETURNING id
+        )
+        INSERT INTO session_type_booking_configs
+            (session_type_id, duration_minutes, min_notice_minutes)
+        SELECT id, 45, 120 FROM t
+        """,
+    )
+    assert (
+        scalar(disposable_database, "SELECT min_notice_minutes FROM session_type_booking_configs")
+        == 120
+    )
+
+    command.upgrade(config, "head")
+
+    assert (
+        scalar(disposable_database, "SELECT min_notice_minutes FROM session_type_booking_configs")
+        == 1440
+    ), (
+        "the backfill did not reach a row that predates it; every migrated "
+        "offering would keep two-hour notice while the default reads twenty-four"
+    )
 
 
 def test_upgrade_downgrade_upgrade_is_clean(
