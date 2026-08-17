@@ -1,26 +1,35 @@
-"""Column-type helpers shared by the models.
+"""How a closed vocabulary is stored, and the registries that keep it honest.
 
-One function, and it exists to stop a specific silent defect.
+**Every one is a ``text`` column with a ``CHECK``** — settled decision #100,
+completed across eight migrations ending with ``session_status``. This schema has
+no PostgreSQL enum types left, and this module no longer offers a way to make
+one.
 
-**SQLAlchemy's ``Enum`` sends member *names* to the database, not values.**
-Given ``PrimaryRole.MENTEE = "mentee"``, the default behaviour creates a
-PostgreSQL type whose labels are ``MENTEE`` and ``MENTOR``. Nothing fails: the
-migration applies, the ORM round-trips, and every test passes — because the ORM
-is translating both ways and never shows you the label. It surfaces later, from
-`psql`, from a reporting view, or from the ETL writing a literal, at which point
-the labels disagree with `docs/edufurther-migration/` and with every hand-written
-query anyone has authored against them.
+Two functions and two registries:
 
-``values_callable`` is the documented fix. Wrapping it here rather than repeating
-the lambda per column is what makes it impossible to apply to four enums and
-forget the fifth.
+``str_enum``      the column type — ``text`` in the database, the ``StrEnum``
+                  member in Python
+``check_is_known`` the ``CHECK`` body, rendered from the class so the vocabulary
+                  is never typed out twice
+``TEXT_CHECK_ENUMS`` every converted vocabulary and the constraints guarding it
+``UNCONSTRAINED_ENUMS`` the ones no single column can hold, each with the reason
+
+**Both defects this module has met were silent, and both shaped what is here.**
+The first belonged to the enums it replaced: SQLAlchemy's ``Enum`` sends member
+*names*, so ``PrimaryRole.MENTEE`` created a label ``MENTEE`` while the ORM
+translated both ways and showed nobody — surfacing only from `psql` or from the
+ETL writing a literal. The second belongs to the replacement: a bare ``Text``
+column returns ``str``, so ``Mapped[ApprovalStatus]`` type-checks clean and every
+``is`` comparison against a member becomes permanently false. ``str_enum``
+exists for the second exactly as the deleted ``pg_enum`` existed for the first.
+
+The pattern in both: the wrong thing works well enough that nothing reports it.
+That is why the registries are iterated by tests rather than merely read.
 """
 
-from collections.abc import Sequence
 from enum import StrEnum
 
 from sqlalchemy import Dialect, Text, TypeDecorator
-from sqlalchemy.dialects.postgresql import ENUM
 
 from app.domain.enums import (
     ActorType,
@@ -43,26 +52,23 @@ from app.domain.enums import (
     VerificationStatus,
 )
 
-# Every closed vocabulary that has a PostgreSQL type, and the name of that type.
+# **`PG_ENUM_TYPES` and `pg_enum` are gone, and their absence is the point.**
 #
-# A registry rather than a per-column argument, because it is the only thing a
-# test can iterate. `alembic check` is **blind to enum labels** — verified, not
-# assumed: after `ALTER TYPE language_proficiency ADD VALUE 'expert'` on a
-# migrated database it still reports "No new upgrade operations detected". So
-# adding a member to a StrEnum and forgetting the migration passes ruff, mypy,
-# the layer check, `alembic check` and the whole suite, then fails at runtime
-# with `invalid input value for enum` on the first insert that uses it.
+# Settled decision #100 finished with `session_status` in step 8: this schema has
+# no PostgreSQL enum types left, and a new vocabulary takes `text` + `CHECK`. A
+# helper that still existed would be an invitation to use it, and #100 would go
+# back to being enforced by prose — which this project has watched fail twice,
+# with every gate green. Deleting it makes the rule structural: there is nothing
+# to call.
 #
-# `test_every_enum_type_matches_its_python_class` walks this mapping, and
-# `test_every_domain_enum_is_registered_exactly_once` asserts the three registries
-# below partition every StrEnum in `domain.enums`, so a new vocabulary cannot be
-# omitted from the check by being forgotten here — nor can a converted one be
-# left in two places while the conversion is half done.
-PG_ENUM_TYPES: dict[type[StrEnum], str] = {
-    SessionStatus: "session_status",
-}
-
-# Vocabularies already converted per settled decision #100 — a `text` column and
+# The reasoning that registry carried is preserved where it still applies.
+# `alembic check` was blind to enum labels, and it is equally blind to `CHECK`
+# constraints — `compare_metadata` does not diff them at all. So the parity tests
+# did not retire with the enums; they moved to the constraints, and
+# `test_every_converted_enum_has_a_check_naming_its_values` is the direct
+# descendant of `test_every_enum_type_matches_its_python_class`.
+#
+# Vocabularies converted per #100 — a `text` column and
 # a `CHECK` — mapped to the name of the constraint that guards them.
 #
 # **A set per class, because a vocabulary can guard more than one column.** Step
@@ -120,6 +126,18 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # partial on `reason_code IS NOT NULL`, which names no enum literal.
     ActorType: frozenset({"ck_session_events_actor_type_is_known"}),
     SessionReasonCode: frozenset({"ck_session_events_reason_code_is_known"}),
+    # Step 8 — the last one, and the widest: three columns across two tables,
+    # three `CHECK`s, and four objects whose definitions named the type. Adding a
+    # value here is now three constraint swaps in one migration rather than a
+    # permanent `ALTER TYPE ... ADD VALUE`, which is what makes `WITHDRAWN`
+    # cheap — see `docs/handoff-enum-to-text-check.md`.
+    SessionStatus: frozenset(
+        {
+            "ck_sessions_status_is_known",
+            "ck_session_events_from_status_is_known",
+            "ck_session_events_to_status_is_known",
+        }
+    ),
 }
 
 # Vocabularies with no single database column to constrain, and why.
@@ -146,46 +164,13 @@ UNCONSTRAINED_ENUMS: dict[type[StrEnum], str] = {
 }
 
 
-def pg_enum[E: StrEnum](enum_cls: type[E]) -> ENUM:
-    """A PostgreSQL enum whose labels are the member *values*.
-
-    The type name comes from ``PG_ENUM_TYPES`` rather than from the class name:
-    it is a schema identifier that must match
-    `docs/edufurther-migration/schema/00_foundation.sql` exactly, and deriving it
-    would couple it to a Python class name that is free to change.
-
-    ``create_type=False`` says SQLAlchemy must not emit ``CREATE TYPE`` of its
-    own accord; the migration creates and drops every type by hand, so that the
-    ``DROP TYPE`` statements in ``downgrade`` are visible in the file rather than
-    implied. Without them ``DROP TABLE`` leaves the type behind and the next
-    ``upgrade`` fails with "type already exists".
-
-    **This is ``postgresql.ENUM``, not the generic ``sqlalchemy.Enum``, and the
-    difference is not cosmetic.** Both compile the column to the native type, so
-    the two look interchangeable. But ``create_type`` is a dialect-level
-    parameter: the generic type accepts the keyword, silently discards it, and
-    leaves no attribute behind — verified, not assumed. A no-op that reports
-    nothing is the shape of defect this module exists to prevent, and it very
-    nearly shipped inside the helper written to prevent it.
-    """
-    return ENUM(
-        enum_cls,
-        name=PG_ENUM_TYPES[enum_cls],
-        create_type=False,
-        values_callable=_values,
-    )
-
-
-def _values(enum_cls: type[StrEnum]) -> Sequence[str]:
-    return [member.value for member in enum_cls]
-
-
 class StrEnumText[E: StrEnum](TypeDecorator[E]):
     """A ``text`` column that still hands Python the ``StrEnum`` member.
 
     **This exists because plain ``Text`` silently returns ``str``.** Settled
     decision #100 converts every vocabulary from a PostgreSQL enum to ``text`` +
-    ``CHECK``, and ``pg_enum`` was doing more than creating the type: the
+    ``CHECK``, and the ``pg_enum`` helper it replaced was doing more than
+    creating the type: the
     dialect-level ``ENUM`` coerces each row back into the Python class on read.
     A bare ``Text`` column does not, so ``Mapped[ApprovalStatus]`` over ``Text``
     type-checks clean and yields a ``str`` at runtime.
@@ -235,7 +220,7 @@ class StrEnumText[E: StrEnum](TypeDecorator[E]):
 
 
 def str_enum[E: StrEnum](enum_cls: type[E]) -> StrEnumText[E]:
-    """The converted counterpart of :func:`pg_enum` — ``text``, not a type."""
+    """How every closed vocabulary is declared: ``text``, never a type."""
     return StrEnumText(enum_cls)
 
 

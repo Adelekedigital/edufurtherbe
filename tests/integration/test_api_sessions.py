@@ -80,7 +80,7 @@ async def make_session(
                 text(
                     "INSERT INTO sessions (mentor_id, mentee_id, status, starts_at, "
                     "duration_minutes, booking_message) "
-                    "VALUES (:m, :e, CAST(:s AS session_status), :t, 45, :b) RETURNING id"
+                    "VALUES (:m, :e, :s, :t, 45, :b) RETURNING id"
                 ),
                 {"m": mentor_id, "e": mentee_id, "s": status, "t": starts_at, "b": message},
             )
@@ -89,7 +89,7 @@ async def make_session(
             await conn.execute(
                 text(
                     "INSERT INTO session_events (session_id, to_status, actor_type) "
-                    "VALUES (:s, CAST('cancelled' AS session_status), "
+                    "VALUES (:s, 'cancelled', "
                     "'system')"
                 ),
                 {"s": session_id},
