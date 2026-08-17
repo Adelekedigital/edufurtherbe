@@ -142,11 +142,7 @@ EXPECTED_TABLES = [
 # A name still here must have a live PostgreSQL type; a name removed must have a
 # `CHECK` instead, which `test_every_converted_enum_has_a_check_naming_its_values`
 # asserts from the other side.
-ENUM_TYPE_NAMES = (
-    "actor_type",
-    "session_reason_code",
-    "session_status",
-)
+ENUM_TYPE_NAMES = ("session_status",)
 
 ConfigFactory = Callable[[str], Config]
 

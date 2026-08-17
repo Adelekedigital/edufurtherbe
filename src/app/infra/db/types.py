@@ -60,20 +60,10 @@ from app.domain.enums import (
 # left in two places while the conversion is half done.
 PG_ENUM_TYPES: dict[type[StrEnum], str] = {
     SessionStatus: "session_status",
-    SessionReasonCode: "session_reason_code",
-    ActorType: "actor_type",
 }
 
 # Vocabularies already converted per settled decision #100 — a `text` column and
 # a `CHECK` — mapped to the name of the constraint that guards them.
-#
-# The **rendered** constraint name, not the bare one the model passes. The `ck`
-# naming convention expands `admin_role_is_known` into
-# `ck_admin_users_admin_role_is_known`, and this is what
-# `test_every_converted_enum_has_a_check_naming_its_values` looks up in
-# `pg_constraint`. Passing the rendered name to `CheckConstraint` is the
-# double-prefix defect `test_check_constraints_land_under_the_name_the_model_reports`
-# exists to catch — the two representations are deliberate and cross-checked.
 #
 # **A set per class, because a vocabulary can guard more than one column.** Step
 # 2 was seven classes on seven columns and a bare string sufficed; `lookup_status`
@@ -126,6 +116,10 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # Step 6 — `role` carries the first **unique** partial index to move.
     SessionRole: frozenset({"ck_session_participants_role_is_known"}),
     AttendanceStatus: frozenset({"ck_session_participants_attendance_status_is_known"}),
+    # Step 7 — neither has an index dependency; `ix_session_events_reason` is
+    # partial on `reason_code IS NOT NULL`, which names no enum literal.
+    ActorType: frozenset({"ck_session_events_actor_type_is_known"}),
+    SessionReasonCode: frozenset({"ck_session_events_reason_code_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.

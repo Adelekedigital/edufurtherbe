@@ -157,7 +157,7 @@ INSERT INTO session_events
 VALUES
     (:session_id, CAST(:from_status AS session_status),
      CAST(:to_status AS session_status), :actor_id,
-     CAST(:actor_type AS actor_type), :reason_text, :created_at)
+     :actor_type, :reason_text, :created_at)
 """
 
 #: Scoped to the sessions this plan wrote. `expanding=True` is the documented

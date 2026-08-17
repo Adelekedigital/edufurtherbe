@@ -543,10 +543,10 @@ class SessionEvent(Base):
         Uuid, ForeignKey("users.id", ondelete="RESTRICT")
     )
     actor_type: Mapped[ActorType] = mapped_column(
-        pg_enum(ActorType), nullable=False, server_default=text("'user'")
+        str_enum(ActorType), nullable=False, server_default=text("'user'")
     )
 
-    reason_code: Mapped[SessionReasonCode | None] = mapped_column(pg_enum(SessionReasonCode))
+    reason_code: Mapped[SessionReasonCode | None] = mapped_column(str_enum(SessionReasonCode))
     reason_text: Mapped[str | None] = mapped_column(Text)
     metadata_: Mapped[dict[str, object]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default=text("'{}'")
@@ -566,5 +566,19 @@ class SessionEvent(Base):
             "reason_code",
             "created_at",
             postgresql_where=text("reason_code IS NOT NULL"),
+        ),
+        # Settled decision #100. The index above needs no rewrite: its predicate
+        # is `reason_code IS NOT NULL` and names no enum literal, so it rebuilds
+        # with the table — `pg_depend` lists neither type against an index.
+        CheckConstraint(
+            check_is_known("actor_type", ActorType),
+            name="actor_type_is_known",
+        ),
+        # Nullable, and the `IN` form permits that without a special case:
+        # migrated cancellation events carry no code, because legacy had no coded
+        # field behind its free-text cancel message.
+        CheckConstraint(
+            check_is_known("reason_code", SessionReasonCode),
+            name="reason_code_is_known",
         ),
     )
