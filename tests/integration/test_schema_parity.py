@@ -131,7 +131,11 @@ def test_every_converted_enum_has_a_check_naming_its_values(migrated_database: s
     by_name = {(row["tbl"], row["conname"]): row["def"] for row in rows}
 
     for table, column, enum_cls in columns:
-        expected_name = TEXT_CHECK_ENUMS[enum_cls]
+        # One `CHECK` per column, not per class: a constraint cannot span tables,
+        # so a shared vocabulary carries one on each column it guards. The name is
+        # matched from the class's set rather than assumed to be its only member.
+        candidates = {n for n in TEXT_CHECK_ENUMS[enum_cls] if (table, n) in by_name}
+        expected_name = next(iter(candidates), f"ck_{table}_{column}_is_known")
         definition = by_name.get((table, expected_name))
 
         assert definition is not None, (
@@ -149,6 +153,67 @@ def test_every_converted_enum_has_a_check_naming_its_values(migrated_database: s
             f"only in Python {expected - in_database}, "
             f"only in the constraint {in_database - expected}"
         )
+
+    # Every registered name is real. Without this the loop above could fall back
+    # to a derived name and pass while `TEXT_CHECK_ENUMS` named a constraint that
+    # does not exist — a registry nobody checks is the thing this file is for.
+    registered = {name for names in TEXT_CHECK_ENUMS.values() for name in names}
+    present = {name for _, name in by_name}
+    assert not registered - present, (
+        f"TEXT_CHECK_ENUMS names constraints absent from the database: "
+        f"{sorted(registered - present)}"
+    )
+
+
+def test_every_partial_index_predicate_survives_a_conversion(migrated_database: str) -> None:
+    """The gap between "the index exists" and "the index is right".
+
+    ``alembic check`` compares indexes by presence, so a partial index dropped
+    for a type change and never recreated **is** caught — measured, not assumed:
+    removing the recreate from step 3 failed two tests. What it does not compare
+    is the ``WHERE`` clause, and `project-conventions` says so. An index dropped
+    and recreated with the wrong predicate is therefore silent, and steps 3, 6
+    and 8 drop and recreate seven of them between them.
+
+    That failure is quiet in the worst way. ``ix_sessions_mentor_upcoming``
+    rebuilt as ``WHERE status = 'completed'`` still exists, still has its name,
+    still gets used — and simply never matches an upcoming session, so the query
+    it exists to serve goes to a sequential scan and the rows it should have
+    ranked go missing from a listing.
+
+    Compares the literal values, not the rendered SQL: the cast is *expected* to
+    change, from ``'pending_review'::lookup_status`` to ``'pending_review'::text``.
+    The values inside it are what must not.
+    """
+    declared: dict[str, set[str]] = {}
+    for table in Base.metadata.tables.values():
+        for index in table.indexes:
+            where = index.dialect_options.get("postgresql", {}).get("where")
+            if where is None:
+                continue
+            declared[str(index.name)] = set(re.findall(r"'([^']*)'", str(where)))
+
+    partial = {name: values for name, values in declared.items() if values}
+    assert partial, "no partial index declares a literal; this test would inspect nothing"
+
+    rows = query(
+        migrated_database,
+        "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'",
+    )
+    in_database = {row["indexname"]: row["indexdef"] for row in rows}
+
+    divergent: dict[str, str] = {}
+    for name, values in partial.items():
+        definition = in_database.get(name)
+        if definition is None:
+            divergent[name] = "absent from the database"
+            continue
+        _, _, clause = definition.partition(" WHERE ")
+        found = set(re.findall(r"'([^']*)'", clause))
+        if found != values:
+            divergent[name] = f"model declares {sorted(values)}, database has {sorted(found)}"
+
+    assert not divergent, f"partial index predicates disagree with the models: {divergent}"
 
 
 def test_the_database_agrees_with_how_each_vocabulary_is_declared(migrated_database: str) -> None:

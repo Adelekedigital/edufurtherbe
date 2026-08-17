@@ -22,7 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import LookupStatus
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import pg_enum
+from app.infra.db.types import check_is_known, str_enum
 
 
 class Institution(TimestampMixin, Base):
@@ -98,7 +98,7 @@ class Institution(TimestampMixin, Base):
     source: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'hipolabs'"))
 
     status: Mapped[LookupStatus] = mapped_column(
-        pg_enum(LookupStatus), nullable=False, server_default=text("'approved'")
+        str_enum(LookupStatus), nullable=False, server_default=text("'approved'")
     )
 
     # The losing row of a merge survives and points here, so a client holding a
@@ -184,6 +184,13 @@ class Institution(TimestampMixin, Base):
         CheckConstraint(
             "source <> 'manual' OR created_by IS NOT NULL",
             name="manual_names_its_creator",
+        ),
+        # Settled decision #100. `source` above has run this exact pattern since
+        # M2 and is the precedent the whole conversion copies — the two now sit
+        # side by side, which is the point.
+        CheckConstraint(
+            check_is_known("status", LookupStatus),
+            name="status_is_known",
         ),
     )
 

@@ -100,6 +100,27 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **`lookup_status` is now `text` + `CHECK` — step 3 of 8, and the first shared
+  vocabulary.** `institutions.status` and `scholarship_programs.status`. A
+  `CHECK` cannot span tables, so each column carries its own and `LookupStatus`
+  maps to a *set* of constraint names — the one real cost of `text` + `CHECK`
+  over a shared enum type, paid deliberately for a droppable vocabulary.
+
+  Also the first step to move index predicates. `ix_institutions_pending` and
+  `ix_scholarship_programs_pending` are partial on
+  `status = 'pending_review'`, which cannot survive the column changing type;
+  both are dropped and recreated under the same name. Their definitions are
+  deliberately **not** byte-identical afterwards — the literal is now
+  `'pending_review'::text` — and the rows matched are unchanged.
+
+  **`alembic check` sees a missing index but not a wrong one.** Measured rather
+  than assumed: removing the recreation failed two tests, while recreating with
+  a wrong predicate passed everything. `compare_metadata` does not diff `WHERE`
+  clauses. A new test compares the literal values in every partial index
+  predicate against what the model declares, which is what steps 6 and 8 need —
+  an index rebuilt as `WHERE status = 'completed'` still exists and still has its
+  name, and simply never matches the rows it was built for.
+
 - **Seven vocabularies are now `text` + `CHECK` — step 2 of 8 under settled
   decision #100.** `users.primary_role`, `admin_users.admin_role`,
   `auth_identities.provider`, `user_languages.proficiency`,

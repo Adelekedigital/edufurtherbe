@@ -38,7 +38,7 @@ async def add_institution(
         row = await conn.execute(
             text(
                 "INSERT INTO institutions (name, domain, status, merged_into_id, source) "
-                "VALUES (:n, :d, CAST(:s AS lookup_status), :m, 'hipolabs') RETURNING id"
+                "VALUES (:n, :d, :s, :m, 'hipolabs') RETURNING id"
             ),
             {"n": name, "d": domain, "s": status, "m": merged_into},
         )
@@ -408,7 +408,7 @@ async def test_a_pending_scholarship_programme_is_not_listed(
         await conn.execute(
             text(
                 "INSERT INTO scholarship_programs (display_name, status) "
-                "VALUES ('Unvetted Award', CAST('pending_review' AS lookup_status))"
+                "VALUES ('Unvetted Award', 'pending_review')"
             )
         )
 
