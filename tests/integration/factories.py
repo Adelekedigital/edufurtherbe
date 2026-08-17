@@ -292,7 +292,7 @@ async def add_completed_sessions(
                     "INSERT INTO sessions "
                     "(mentor_id, mentee_id, session_type_id, starts_at, duration_minutes, status) "
                     "VALUES (:m, :e, :t, :starts, 45, "
-                    "        CAST(:status AS session_status))"
+                    "        :status)"
                 ),
                 {
                     "m": mentor,

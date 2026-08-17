@@ -154,7 +154,7 @@ async def book(
         await conn.execute(
             text(
                 "INSERT INTO sessions (mentor_id, mentee_id, status, starts_at, duration_minutes) "
-                "VALUES (:m, :e, CAST(:s AS session_status), :t, :d)"
+                "VALUES (:m, :e, :s, :t, :d)"
             ),
             {"m": mentor, "e": mentee, "s": status, "t": starts_at, "d": minutes},
         )

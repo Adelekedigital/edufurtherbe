@@ -100,6 +100,40 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **Settled decision #100 is complete: this schema has no PostgreSQL enum types
+  left.** Step 8 converts `sessions.status`, `session_events.from_status` and
+  `.to_status`, and drops `session_status` — the last of seventeen types across
+  twenty-one columns, over eight migrations.
+
+  **Four objects named the type**, including the `EXCLUDE USING gist` constraint
+  that makes a mentor's overlapping live sessions impossible. It is dropped and
+  recreated **inside one transaction and deliberately not `CONCURRENTLY`**: the
+  `ALTER TABLE` holds `ACCESS EXCLUSIVE` throughout, so there is no window in
+  which the constraint is absent — only a lock. The usual advice about avoiding
+  long exclusive locks is right and does not apply here; a booking that blocks
+  for a moment is correct, and one that races past an absent constraint is not.
+  `lock_timeout` and `statement_timeout` are set, as `d7c31f8a2b45` set them.
+
+  The guarantee was re-proved against real rows rather than inferred from the
+  constraint definition: an overlapping `confirmed` session is refused, the same
+  overlap as `cancelled` is accepted because it sits outside `LIVE_STATUSES`, a
+  non-overlapping `confirmed` session is accepted, and an unknown status is
+  refused by the new `CHECK`.
+
+  **`pg_enum` and `PG_ENUM_TYPES` are deleted rather than left unused.** A helper
+  that still existed would be an invitation to use it, and #100 would go back to
+  being enforced by prose — which this project has watched fail twice with every
+  gate green. `test_every_enum_type_matches_its_python_class` is replaced by
+  `test_no_postgresql_enum_type_survives`, which fails the moment a migration
+  creates a type. That is the live regression: the deferred `calendar_connections`
+  and `search_impressions_suppressed` tables both declare enums in the canonical
+  DDL, and building either verbatim would reintroduce one.
+
+  The predicate test now also walks `ExcludeConstraint`, which lives in
+  `table.constraints` rather than `table.indexes` and was therefore outside its
+  reach. Four behavioural tests already covered that constraint, so this is
+  defence in depth rather than a closed hole.
+
 - **`session_events.actor_type` and `.reason_code` are now `text` + `CHECK` —
   step 7 of 8.** Neither has an index dependency: `ix_session_events_reason` is
   partial on `reason_code IS NOT NULL`, which names no enum literal, so it

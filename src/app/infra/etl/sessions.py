@@ -118,7 +118,7 @@ INSERT INTO sessions
      topic, booking_message, meeting_provider, meeting_url, external_room_id,
      external_calendar_event_id, created_at, updated_at, legacy_bubble_id)
 VALUES
-    (:mentor_id, :mentee_id, :session_type_id, CAST(:status AS session_status),
+    (:mentor_id, :mentee_id, :session_type_id, :status,
      :starts_at, :duration_minutes, :topic, :booking_message,
      :meeting_provider, :meeting_url, :external_room_id,
      :external_calendar_event_id, COALESCE(:created_at, now()),
@@ -155,8 +155,8 @@ INSERT_EVENT = """
 INSERT INTO session_events
     (session_id, from_status, to_status, actor_id, actor_type, reason_text, created_at)
 VALUES
-    (:session_id, CAST(:from_status AS session_status),
-     CAST(:to_status AS session_status), :actor_id,
+    (:session_id, :from_status,
+     :to_status, :actor_id,
      :actor_type, :reason_text, :created_at)
 """
 

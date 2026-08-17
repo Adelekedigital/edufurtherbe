@@ -179,7 +179,7 @@ class ProvisioningStore:
                     "first_name": first_name,
                     # A StrEnum is already its own wire value, but passing the
                     # member would send the *name* on some drivers — the defect
-                    # `pg_enum` exists to prevent one layer down.
+                    # the deleted `pg_enum` helper existed to prevent one layer down.
                     "primary_role": role.value,
                     "new_auth_id": auth_id,
                 },

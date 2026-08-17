@@ -84,7 +84,8 @@ class UserLoader:
                 parameters = asdict(row)
                 # The enum member is a StrEnum, so it is already its own wire
                 # value; passing the member itself would send the *name* on some
-                # drivers — the exact defect `pg_enum` exists to prevent one
+                # drivers — the exact defect the deleted `pg_enum` helper
+                # existed to prevent one
                 # layer down.
                 parameters["primary_role"] = row.primary_role.value
                 await self._connection.execute(text(UPSERT_USER), parameters)
