@@ -99,15 +99,10 @@ ON CONFLICT (session_type_id) DO UPDATE SET
     meeting_venue    = EXCLUDED.meeting_venue
 """
 
-# The pointer D88 introduces, set once the offering exists. It cannot be written
-# with the profile — `mentor_profiles` and `session_types` reference each other,
-# so the row order is profile, offering, pointer.
-SET_PRIMARY_OFFERING = """
-UPDATE mentor_profiles mp
-   SET primary_session_type_id = :session_type_id
- WHERE mp.user_id = :mentor_user_id
-   AND mp.primary_session_type_id IS NULL
-"""
+# `SET_PRIMARY_OFFERING` is gone with `primary_session_type_id`. It existed
+# because the two tables referenced each other, which forced a three-step write
+# order — profile, offering, pointer. With the pointer dropped the cycle is gone
+# and the order is just profile, then offering.
 
 # Every enum cast is spelled out: the ETL writes raw SQL, so nothing in Pydantic
 # or the ORM sits between a transform bug and the column. The enum is what
@@ -217,16 +212,6 @@ class SessionLoader:
                     "session_type_id": type_id,
                     "duration_minutes": row.duration_minutes,
                     "meeting_venue": row.meeting_venue.value,
-                },
-            )
-            # `IS NULL` in the statement rather than a check here: a re-run must
-            # not move a primary somebody has since chosen deliberately, and the
-            # loader is re-run as the recovery plan (D40).
-            await self._connection.execute(
-                text(SET_PRIMARY_OFFERING),
-                {
-                    "session_type_id": type_id,
-                    "mentor_user_id": user_id(row.mentor_bubble_id, "session type"),
                 },
             )
         return type_ids
