@@ -100,6 +100,25 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **`session_participants.role` and `.attendance_status` are now `text` +
+  `CHECK` — step 6 of 8.** The first **unique** partial index to move.
+
+  `ix_session_participants_one_mentor` is `UNIQUE ... WHERE role = 'mentor'` and
+  is the only thing enforcing one mentor per session — the invariant that catches
+  drift between `sessions.mentor_id` and the participant rows. It is dropped and
+  recreated under the same name, and the invariant was re-proved directly: a
+  second `mentor` row on the same session is refused, a `mentee` row is accepted.
+
+  A wrong predicate here would be worse than a missing index. Rebuilt as
+  `WHERE role = 'mentee'` the index still exists, is still unique, still carries
+  its name — and the rule silently stops applying to mentors. Confirmed by
+  mutation that only `test_every_partial_index_predicate_survives_a_conversion`
+  catches it; the migration tests pass.
+
+  The two levels of "did not show up" stay two levels: `attendance_status` is per
+  person, `sessions.status = 'no_show'` is per session, and a mentee-attended,
+  mentor-absent session has two participant rows and exactly one session outcome.
+
 - **`meeting_provider` is now `text` + `CHECK` — step 5 of 8.**
   `session_type_booking_configs.meeting_venue` and `sessions.meeting_provider`.
   No index predicate names it and no function reads it, so this is the plain

@@ -458,14 +458,14 @@ class SessionParticipant(TimestampMixin, Base):
         Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
 
-    role: Mapped[SessionRole] = mapped_column(pg_enum(SessionRole), nullable=False)
+    role: Mapped[SessionRole] = mapped_column(str_enum(SessionRole), nullable=False)
     joined_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     #: No legacy source. Bubble records an arrival and never a departure, so this
     #: is null on every migrated row and `AttendanceStatus.LEFT_EARLY` is first
     #: written by the product.
     left_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     attendance_status: Mapped[AttendanceStatus] = mapped_column(
-        pg_enum(AttendanceStatus), nullable=False, server_default=text("'pending'")
+        str_enum(AttendanceStatus), nullable=False, server_default=text("'pending'")
     )
 
     __table_args__ = (
@@ -480,6 +480,20 @@ class SessionParticipant(TimestampMixin, Base):
             postgresql_where=text("role = 'mentor'"),
         ),
         Index("ix_session_participants_user", "user_id"),
+        # Settled decision #100. **`role` is the one that matters here**: the
+        # unique index above is partial on `role = 'mentor'`, so a value outside
+        # the vocabulary would sit outside the predicate and the "exactly one
+        # mentor per session" invariant would simply not apply to that row.
+        CheckConstraint(
+            check_is_known("role", SessionRole),
+            name="role_is_known",
+        ),
+        # `LEFT_EARLY` has no legacy source and is first written by the product,
+        # which is precisely the kind of value #100 exists to keep removable.
+        CheckConstraint(
+            check_is_known("attendance_status", AttendanceStatus),
+            name="attendance_status_is_known",
+        ),
     )
 
 
