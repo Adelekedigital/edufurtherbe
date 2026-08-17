@@ -1,6 +1,6 @@
 # Handoff — building the session flows from `FE-ui-guide/`
 
-**Status:** 11 PRs shipped, 13 remaining. The read surface is complete, the enum conversion is done, and the write surface is still empty — no `POST`, `PATCH` or `DELETE` exists on `sessions` or `session_types`, so a mentor cannot create an offering and a mentee cannot book one.
+**Status:** 11 PRs shipped, 14 remaining. The read surface is complete, the enum conversion is done, and the write surface is still empty — no `POST`, `PATCH` or `DELETE` exists on `sessions` or `session_types`, so a mentor cannot create an offering and a mentee cannot book one.
 **Written:** 2026-08-16, from the 14 screens in `FE-ui-guide/` measured against the codebase and
 `docs/edufurther-migration/`.
 **Companion:** `handoff-enum-to-text-check.md` — its five steps are PRs 4–8 below.
@@ -379,6 +379,115 @@ Consequences, both deliberate:
 **#88**, **#92**, **#102**, **#58** all describe the primary offering or the cascade. Each is
 amended in the PR that implements the change, not in a separate one.
 
+## Conferencing becomes a mentor's own table — decided 2026-08-17
+
+**`meeting_venue` was a label, and half its vocabulary named capabilities we do not have.**
+`google_meet` and `daily` are minted by the platform and need nothing from a mentor; `zoom` has no
+integration and nothing can create one; `custom` needs a URL and `custom_meeting_url` was deleted
+by D88's contract step. So two of four values could not produce a joinable session, and the column
+could not tell the difference between *which provider* and *whether this mentor can host on it*.
+
+### `mentor_conferencing_options`
+
+| column | type | |
+|---|---|---|
+| `id` | `uuid` PK | `uuid_generate_v7()` (ADR 0015) |
+| `user_id` | `uuid NOT NULL` | → `mentor_profiles(user_id)`, following `session_types` and `availability_rules` |
+| `provider` | `text NOT NULL` | `CHECK IN ('google_meet','daily','custom')` |
+| `is_default` | `bool NOT NULL` | default `false` |
+| `custom_url` | `text NULL` | the static room |
+| `external_account_id` | `text NULL` | **future** — the connected Zoom or Teams account |
+| `status` | `text NOT NULL` | **future** — `active` / `expired` / `revoked` |
+| `connected_at` | `timestamptz NULL` | **future** |
+
+**Preference now, connections later.** The three connection columns are declared because the table
+exists to hold them the moment a provider needs authenticating; until then every row is a
+preference and `status` is always `active`. `zoom` and `teams` **enter the vocabulary at the point
+they have a connection behind them, not before** — a mentor must not be able to select something
+that cannot produce a session.
+
+Four constraints, three of them load-bearing:
+
+- `UNIQUE (user_id, provider)` — one row per provider per mentor.
+- `UNIQUE (user_id, id)` — **exists only so the composite key below can reference it.**
+- partial `UNIQUE (user_id) WHERE is_default` — exactly one default, true by construction rather
+  than by application code.
+- `CHECK ((provider = 'custom') = (custom_url IS NOT NULL))` — **symmetric**. The old
+  `mentor_profiles` CHECK ran one direction only and permitted `custom` with no URL, leaving a
+  mentor bookable with nowhere to meet. That gap is recorded at `MeetingProvider.CUSTOM` and this
+  is where it closes.
+
+### `session_types` gains the reference, and the config loses the label
+
+`session_types.conferencing_option_id`, `uuid NULL`, **null meaning use my default** — the same
+inherit-from-the-mentor shape confirmation now uses. `session_type_booking_configs.meeting_venue`
+is dropped.
+
+```sql
+FOREIGN KEY (mentor_user_id, conferencing_option_id)
+  REFERENCES mentor_conferencing_options (user_id, id)
+```
+
+**The key is composite, and that is the reason the reference sits on `session_types` rather than
+on the booking config.** A single-column foreign key is satisfied by *any* option row, including
+another mentor's; the composite version makes that unrepresentable. `session_types` already
+carries `mentor_user_id`, so it costs nothing there and would cost a denormalised column or a
+trigger on the config. Venue stops sitting beside duration and notice, and database-enforced
+integrity is worth that.
+
+### Resolution, and why it has three steps rather than two
+
+```
+offering.conferencing_option_id  →  that option
+      ↓ null
+mentor's option WHERE is_default
+      ↓ missing
+'google_meet'                        ← platform fallback; the answer is never null
+```
+
+**Seeding every mentor with a default row is not sufficient on its own.** That is the guard that
+already failed once: *"it cannot happen because creation always sets it"* was true of
+`primary_session_type_id` right up until the retirement trigger made release-then-retire a legal
+state, and the venue cascade then had a reachable, empty bottom. `SessionTypeRead.meeting_venue`
+is a required field, so a resolution that can return null is a 500 waiting for the first mentor
+who slips through. Seed **and** fall back.
+
+### The cost, stated
+
+`meeting_venue` moves for the **fourth** time — mentor column, per-offering nullable, per-offering
+`NOT NULL`, now a foreign key. The first three moved a *label*. This one stops storing a label at
+all and stores a reference to something the mentor configured, which is what lets `custom` carry a
+URL and stops `zoom` being selectable before it works.
+
+**Sequenced before offering CRUD.** A mentor picking a venue should be picking from their own
+options, and building the write path against a column that is about to become a foreign key is how
+that column moves a fifth time.
+
+## The platform Google account stays a consumer Gmail — decided 2026-08-17
+
+**Measured, not assumed:** the ADR 0012 spike created a calendar, created an event, invited two
+external guests and minted a Meet link from `edufurtherlearning@gmail.com` — a consumer account —
+and **the invitations arrived**.
+
+Google's published limits are the Workspace ones: 600 API requests per minute per user, creation
+throttling past 100,000 events, external invitations throttling at 10,000, roughly 2,000 emails to
+external guests per 24 hours. The consumer figures are **not published**, so "tighter limits" is an
+unknown rather than an observed ceiling — and at 44 mentors an anti-bulk-abuse throttle is
+unlikely to be reached.
+
+**Two things make this safe to defer rather than pay for now:**
+
+- **The decision is cheaply reversible.** Mentors grant `calendar.freebusy` on their *own*
+  accounts; the platform identity is ours alone. Moving it to Workspace later changes one stored
+  refresh token and **re-consents nobody**.
+- **A failed calendar write must not fail the booking.** If Google ever throttles, the session
+  still exists and the calendar event retries. That belongs in the booking PR and is what makes
+  the limit question stop mattering.
+
+Worth knowing rather than acting on: every limit above is **per user**, and ADR 0012 funnels every
+booking through one account, so they are a single bucket rather than spread across mentors.
+Concentration is the risk, not volume.
+
 ## The PR sequence
 
 Each gets its own checklist and DoD before implementation (§2), as text, with no tool calls in the
@@ -410,19 +519,22 @@ applied is not a trustworthy oracle — it reported four surviving types that a 
 |---|---|---|---|
 | 12 | confirmation to `mentor_profiles`, config column nullable, fan-out deleted | yes | 1 |
 | 13 | drop `primary_session_type_id` and its trigger; venue leaves the owner profile | yes | 1 |
-| 14 | `POST` / `PATCH /me/session-types` | no | 2 |
-| 15 | `DELETE /me/session-types/{id}` | no | 2 |
-| 16 | `custom_stage_label`, `category` → `service_offerings` FK, + ADR | yes | 1 |
-| 17 | the intake stack — four canonical tables | yes | 1 |
-| 18 | intake question endpoints, keyed on a session type | no | 2 |
-| 19 | per-session-type scheduling windows + ADR | yes | 1 |
-| 20 | `idempotency_keys` + `POST /sessions` | yes | 1 |
-| 21 | the four transitions — accept, decline, cancel, withdraw | no | 2 |
-| 22 | response deadline: `respond_by`, the expiry producer, reminders | yes | 1 |
-| 23 | join-window attendance — `−5 min` to `+15 min` | no | 2 |
-| 24 | mentee attendance rate, and "New mentee" for null | no | 2 |
+| 14 | `mentor_conferencing_options`; `session_types.conferencing_option_id`; `meeting_venue` dropped | yes | 1 |
+| 15 | `POST` / `PATCH /me/session-types` | no | 2 |
+| 16 | `DELETE /me/session-types/{id}` | no | 2 |
+| 17 | `custom_stage_label`, `category` → `service_offerings` FK, + ADR | yes | 1 |
+| 18 | the intake stack — four canonical tables | yes | 1 |
+| 19 | intake question endpoints, keyed on a session type | no | 2 |
+| 20 | per-session-type scheduling windows + ADR | yes | 1 |
+| 21 | `idempotency_keys` + `POST /sessions` | yes | 1 |
+| 22 | the four transitions — accept, decline, cancel, withdraw | no | 2 |
+| 23 | response deadline: `respond_by`, the expiry producer, reminders | yes | 1 |
+| 24 | join-window attendance — `−5 min` to `+15 min` | no | 2 |
+| 25 | mentee attendance rate, and "New mentee" for null | no | 2 |
 
-**Order is not preference.** 12 before 13, because the owner profile loses its only source
+**Order is not preference.** 14 before 15, because a mentor picking a venue should be picking from
+their own options, and building the write path against a column about to become a foreign key is
+how `meeting_venue` moves a fifth time. 12 before 13, because the owner profile loses its only source
 otherwise. 14 after 13, so writes are built against a shape that is not about to lose a column. 16
 after 14, so the vocabulary lands on an endpoint that already exists. 20 after 16, because a
 booking references a session type whose contract should be settled. 21 after 20 — there is nothing
@@ -448,6 +560,13 @@ it gets a missing field rather than a null. And `trg_refuse_retiring_a_primary_o
 means deactivation stops being refused — the two-step release-then-retire becomes a plain toggle.
 *Catches it:* the guard's four existing tests must be **deleted deliberately**, each recording
 what would bring it back, not quietly dropped because they turned red.
+
+**14 — the conferencing table.** `meeting_venue` moves for the fourth time, and the resolution
+gains a fallback chain. The migration must **seed every mentor a default row from their current
+`meeting_venue`** before dropping the column, or every migrated offering resolves to the platform
+fallback and mentors on `daily` or `custom` silently become Google Meet. *Catches it:* a fresh
+migrate-then-load compared against the baseline — `google_meet` 1, `daily` 3, `custom` 1 — which is
+the check that caught the silent `allmentors` bug in #100.
 
 **14 — the writes.** `session_type_is_live()` has four callers including `slot_store`. The
 owner-facing path needs ownership and soft-delete but **not** `is_active`; a mis-defaulted flag
