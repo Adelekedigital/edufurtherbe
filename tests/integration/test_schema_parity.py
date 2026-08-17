@@ -17,6 +17,7 @@ drops a constraint by the name the model reports and fails in every environment.
 """
 
 import asyncio
+import re
 from collections.abc import Iterable
 
 import asyncpg
@@ -25,7 +26,7 @@ from sqlalchemy import CheckConstraint
 
 from app.infra.db import models
 from app.infra.db.base import Base
-from app.infra.db.types import PG_ENUM_TYPES
+from app.infra.db.types import PG_ENUM_TYPES, TEXT_CHECK_ENUMS, StrEnumText
 
 pytestmark = pytest.mark.db
 
@@ -74,6 +75,123 @@ def test_every_enum_type_matches_its_python_class(migrated_database: str) -> Non
             f"{enum_cls.__name__} and the {type_name} type disagree: "
             f"only in Python {expected - actual[type_name]}, "
             f"only in PostgreSQL {actual[type_name] - expected}"
+        )
+
+
+def converted_columns() -> list[tuple[str, str, type]]:
+    """``(table, column, enum class)`` for every column declared as ``text``.
+
+    Read off the models rather than from a registry, because the models are what
+    the database is built from. ``TEXT_CHECK_ENUMS`` carries only the constraint
+    *name*; asking it which columns converted would be asking the same question
+    twice and letting the two answers drift.
+    """
+    found: list[tuple[str, str, type]] = []
+    for table in Base.metadata.tables.values():
+        for column in table.c:
+            if isinstance(column.type, StrEnumText):
+                found.append((table.name, column.name, column.type.enum_cls))
+    return found
+
+
+def test_every_converted_enum_has_a_check_naming_its_values(migrated_database: str) -> None:
+    """Settled decision #100's actual guarantee, asserted against the database.
+
+    The ``StrEnum`` at the Pydantic boundary is not the control. **The ETL and
+    ``scripts/load_*.py`` write these columns with hand-written SQL and never
+    construct a model**, so the ``CHECK`` is the only thing standing between a
+    transform bug and ``'Mentor'`` or ``'wizard'`` in a closed vocabulary. This
+    is the test that says it is really there.
+
+    ``alembic check`` cannot do it: ``compare_metadata`` does not diff CHECK
+    constraints at all, so a migration that converted a column and forgot its
+    constraint leaves the whole gate green and the column unguarded — strictly
+    worse than the enum it replaced.
+
+    Values are compared, not just presence. A constraint naming three of four
+    members refuses a legitimate value in production and nothing else would
+    notice until a user hit it.
+    """
+    columns = converted_columns()
+
+    assert columns, (
+        "no converted columns found; this test would inspect nothing. Once a "
+        "vocabulary is in TEXT_CHECK_ENUMS its column must use StrEnumText"
+    )
+    assert {cls for _, _, cls in columns} == set(TEXT_CHECK_ENUMS), (
+        "TEXT_CHECK_ENUMS and the StrEnumText columns disagree about which "
+        "vocabularies have converted"
+    )
+
+    rows = query(
+        migrated_database,
+        "SELECT conrelid::regclass::text AS tbl, conname, pg_get_constraintdef(oid) AS def "
+        "FROM pg_constraint WHERE contype = 'c' AND connamespace = 'public'::regnamespace",
+    )
+    by_name = {(row["tbl"], row["conname"]): row["def"] for row in rows}
+
+    for table, column, enum_cls in columns:
+        expected_name = TEXT_CHECK_ENUMS[enum_cls]
+        definition = by_name.get((table, expected_name))
+
+        assert definition is not None, (
+            f"{table}.{column} converted to text with no {expected_name} constraint; "
+            f"the column is unguarded against every writer that is not Pydantic. "
+            f"CHECK constraints on {table}: "
+            f"{sorted(name for tbl, name in by_name if tbl == table)}"
+        )
+
+        # `col IN (...)` renders as `col = ANY (ARRAY['a'::text, ...])`.
+        in_database = set(re.findall(r"'([^']*)'::text", definition))
+        expected = {member.value for member in enum_cls}
+        assert in_database == expected, (
+            f"{table}.{column} and {enum_cls.__name__} disagree: "
+            f"only in Python {expected - in_database}, "
+            f"only in the constraint {in_database - expected}"
+        )
+
+
+def test_the_database_agrees_with_how_each_vocabulary_is_declared(migrated_database: str) -> None:
+    """Catches a conversion applied to the model but not to the schema, or back.
+
+    The two halves of a step land in one commit — the migration and the registry
+    move — and nothing else checks they agree. A model switched to ``str_enum``
+    with no migration leaves a live PostgreSQL enum the code believes is text;
+    the reverse leaves a text column still registered as a type. Both pass
+    ``alembic check``, because it compares a ``TypeDecorator`` by its ``impl``
+    and sees ``TEXT`` either way.
+    """
+    rows = query(
+        migrated_database,
+        "SELECT table_name, column_name, data_type, udt_name "
+        "FROM information_schema.columns WHERE table_schema = 'public'",
+    )
+    actual = {(row["table_name"], row["column_name"]): row for row in rows}
+
+    converted = converted_columns()
+    assert converted, "no converted columns; this test would inspect nothing"
+
+    for table, column, enum_cls in converted:
+        row = actual[(table, column)]
+        assert row["data_type"] == "text", (
+            f"{table}.{column} is declared str_enum({enum_cls.__name__}) but the "
+            f"database has it as {row['udt_name']} — the migration did not run, "
+            f"or ran without the model change"
+        )
+
+    still_native = [
+        (table.name, column.name, column.type.name)
+        for table in Base.metadata.tables.values()
+        for column in table.c
+        if getattr(column.type, "name", None) in set(PG_ENUM_TYPES.values())
+    ]
+    assert still_native, "no un-converted enum columns; update this test when step 8 lands"
+
+    for table, column, type_name in still_native:
+        row = actual[(table, column)]
+        assert row["data_type"] == "USER-DEFINED" and row["udt_name"] == type_name, (
+            f"{table}.{column} is declared pg_enum({type_name}) but the database "
+            f"has it as {row['data_type']} — a converted column left in PG_ENUM_TYPES"
         )
 
 

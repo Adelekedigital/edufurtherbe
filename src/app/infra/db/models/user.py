@@ -44,7 +44,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import AuthProvider, LanguageProficiency, PrimaryRole
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import pg_enum
+from app.infra.db.types import check_is_known, str_enum
 
 
 class User(TimestampMixin, Base):
@@ -103,7 +103,7 @@ class User(TimestampMixin, Base):
 
     # UX hint. NEVER an authorization check — see PrimaryRole.
     primary_role: Mapped[PrimaryRole] = mapped_column(
-        pg_enum(PrimaryRole),
+        str_enum(PrimaryRole),
         nullable=False,
         server_default=text("'mentee'"),
     )
@@ -169,6 +169,14 @@ class User(TimestampMixin, Base):
         ),
         # Bare name; the `ck` convention renders the `ck_users_` prefix.
         CheckConstraint("email = lower(email)", name="email_is_lowercase"),
+        # Settled decision #100. **This guards the value, not access.** The
+        # column is a UX hint and a permission check on it is a bug, per
+        # PrimaryRole — the constraint stops the ETL writing `'Mentor'` or
+        # `'mentor '`, which is the failure this project has actually met.
+        CheckConstraint(
+            check_is_known("primary_role", PrimaryRole),
+            name="primary_role_is_known",
+        ),
     )
 
 
@@ -304,7 +312,7 @@ class AuthIdentity(TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    provider: Mapped[AuthProvider] = mapped_column(pg_enum(AuthProvider), nullable=False)
+    provider: Mapped[AuthProvider] = mapped_column(str_enum(AuthProvider), nullable=False)
     provider_user_id: Mapped[str] = mapped_column(Text, nullable=False)
 
     linked_at: Mapped[datetime] = mapped_column(
@@ -318,6 +326,13 @@ class AuthIdentity(TimestampMixin, Base):
         # five-field nullable update with no audit trail.
         Index("ix_auth_identities_provider_user", "provider", "provider_user_id", unique=True),
         Index("ix_auth_identities_user", "user_id"),
+        # Settled decision #100. `linkedin` has zero rows in the dev extract —
+        # Email 37 / Google 6 / LinkedIn 0 — so it is one of the eight dead
+        # labels this conversion exists to make removable.
+        CheckConstraint(
+            check_is_known("provider", AuthProvider),
+            name="provider_is_known",
+        ),
     )
 
 
@@ -377,7 +392,7 @@ class UserLanguage(TimestampMixin, Base):
         Uuid, ForeignKey("languages.id", ondelete="RESTRICT"), nullable=False
     )
     proficiency: Mapped[LanguageProficiency] = mapped_column(
-        pg_enum(LanguageProficiency),
+        str_enum(LanguageProficiency),
         nullable=False,
         server_default=text("'fluent'"),
     )
@@ -402,5 +417,12 @@ class UserLanguage(TimestampMixin, Base):
             "user_id",
             unique=True,
             postgresql_where=text("is_primary"),
+        ),
+        # Settled decision #100. The members are ordered strongest to weakest and
+        # **nothing depends on that order** — re-verified for this conversion,
+        # since text sorts alphabetically where an enum sorted by declaration.
+        CheckConstraint(
+            check_is_known("proficiency", LanguageProficiency),
+            name="proficiency_is_known",
         ),
     )

@@ -27,7 +27,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import LookupStatus, VerificationStatus
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import pg_enum
+from app.infra.db.types import check_is_known, pg_enum, str_enum
 
 
 class ScholarshipProgram(TimestampMixin, Base):
@@ -173,7 +173,7 @@ class UserAward(TimestampMixin, Base):
     year: Mapped[int | None] = mapped_column()
 
     verification_status: Mapped[VerificationStatus] = mapped_column(
-        pg_enum(VerificationStatus), nullable=False, server_default=text("'unverified'")
+        str_enum(VerificationStatus), nullable=False, server_default=text("'unverified'")
     )
     evidence_url: Mapped[str | None] = mapped_column(Text)
     verified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
@@ -197,5 +197,12 @@ class UserAward(TimestampMixin, Base):
         CheckConstraint(
             "year IS NULL OR year BETWEEN 1950 AND EXTRACT(YEAR FROM now())::int + 1",
             name="year_is_sane",
+        ),
+        # Settled decision #100. Three of these four members ship with no
+        # producer — nothing verifies an award yet — which is exactly the case
+        # the handoff cites for why a droppable vocabulary matters.
+        CheckConstraint(
+            check_is_known("verification_status", VerificationStatus),
+            name="verification_status_is_known",
         ),
     )

@@ -50,15 +50,19 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     updated_at     = EXCLUDED.updated_at
 """
 
-# `CAST(... AS availability_exception_type)` spelled out: the ETL writes raw SQL,
-# so nothing in Pydantic or the ORM is between a transform bug and the column.
-# The enum is what refuses a value the vocabulary does not contain.
+# The ETL writes raw SQL, so nothing in Pydantic or the ORM is between a
+# transform bug and the column. **The database is what refuses a value the
+# vocabulary does not contain**, and that is still true after settled decision
+# #100 — the `CAST(... AS availability_exception_type)` that used to be spelled
+# out here named a type that no longer exists, and
+# `ck_availability_exceptions_type_is_known` now does the same job on a `text`
+# column. The reasoning this comment carried is unchanged; only the mechanism is.
 UPSERT_EXCEPTION = """
 INSERT INTO availability_exceptions
     (mentor_user_id, type, date_range, timezone, max_sessions_per_day,
      created_at, updated_at, legacy_bubble_id)
 VALUES
-    (:mentor_user_id, CAST(:kind AS availability_exception_type),
+    (:mentor_user_id, :kind,
      daterange(:start_date, :end_date, '[)'), :timezone, :max_sessions_per_day,
      COALESCE(:created_at, now()), COALESCE(:updated_at, now()), :legacy_bubble_id)
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET
