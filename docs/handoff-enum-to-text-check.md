@@ -1,6 +1,6 @@
 # Handoff — converting PostgreSQL enums to `text` + `CHECK`
 
-**Status:** steps 1–6 of 8 shipped. 5 columns left, in 2 steps.
+**Status:** steps 1–7 of 8 shipped. **`session_status` is the only type left** — 3 columns, in step 8.
 **Written:** 2026-08-15, after `LEFT_EARLY` forced a decision that a droppable
 value would have made trivial.
 **The rule is settled decision #100**; this is the migration plan behind it.
@@ -267,7 +267,7 @@ the next reader can check it rather than trust it: 7+2+3+2+2+2+3 = 21.
 | 4 | **The mentor status cluster** — `mentor_status_events.status_type`, `mentor_profiles.approval_status`, `.listing_status` | 3 | ✅ shipped as `f5c3a81e6b29`; `apply_mentor_status` rewritten in the same migration, and the rewrite *removed* the `::text::` hack |
 | 5 | **`meeting_provider`** — `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider` | 2 | ✅ shipped as `a7d2f4b8c051`; one column nullable, which the `IN` constraint permits without a special case |
 | 6 | **`session_participants`** — `role`, `attendance_status` | 2 | ✅ shipped as `b8e1c5d70f42`; unique partial index rebuilt by name, invariant re-proved by inserting a second mentor |
-| 7 | **`session_events`** — `actor_type`, `reason_code` | 2 | `ix_session_events_reason` needs no rewrite |
+| 7 | **`session_events`** — `actor_type`, `reason_code` | 2 | ✅ shipped as `c2f9b6a41d83`; `ix_session_events_reason` needed no rewrite, as predicted |
 | 8 | **`session_status`** — last, and on its own | 3 | five index predicates, the gist exclusion constraint, and `from_status`/`to_status` recording transitions that must stay readable across the change |
 
 Step 2 no longer includes `mentor_status_events`: its `status_type` is read by

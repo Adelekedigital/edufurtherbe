@@ -90,7 +90,7 @@ async def make_session(
                 text(
                     "INSERT INTO session_events (session_id, to_status, actor_type) "
                     "VALUES (:s, CAST('cancelled' AS session_status), "
-                    "CAST('system' AS actor_type))"
+                    "'system')"
                 ),
                 {"s": session_id},
             )

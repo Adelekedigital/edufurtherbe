@@ -100,6 +100,25 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **`session_events.actor_type` and `.reason_code` are now `text` + `CHECK` —
+  step 7 of 8.** Neither has an index dependency: `ix_session_events_reason` is
+  partial on `reason_code IS NOT NULL`, which names no enum literal, so it
+  rebuilds with the table.
+
+  **`from_status` and `to_status` are deliberately left alone.** Both are
+  `session_status`, which is step 8. Converting one column of a shared type and
+  leaving its siblings is the half-finished state the ordering exists to avoid,
+  and it would leave `sessions.status` disagreeing with the two event columns
+  about its own type. Four enum columns on one table, split across two
+  migrations, on purpose.
+
+  `reason_code` stays nullable. Legacy supplied no coded cancellation field at
+  all — `Session Cancel/Decline Message` is free text and became `reason_text` —
+  so every migrated cancellation event carries a null code, which is why the
+  index over it is partial.
+
+  **`session_status` is now the only PostgreSQL enum type left in the schema.**
+
 - **`session_participants.role` and `.attendance_status` are now `text` +
   `CHECK` — step 6 of 8.** The first **unique** partial index to move.
 
