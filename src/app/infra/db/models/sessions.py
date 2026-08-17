@@ -69,7 +69,7 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import pg_enum
+from app.infra.db.types import check_is_known, pg_enum, str_enum
 
 #: The statuses a session is still *live* in — awaiting a decision, or agreed.
 #:
@@ -200,7 +200,7 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     #: `SessionTypeRead.meeting_venue` is required (D92). Every offering carries
     #: its own instead.
     meeting_venue: Mapped[MeetingProvider] = mapped_column(
-        pg_enum(MeetingProvider), nullable=False, server_default=text("'google_meet'")
+        str_enum(MeetingProvider), nullable=False, server_default=text("'google_meet'")
     )
 
     #: Whether a booking against this offering waits for the mentor.
@@ -231,6 +231,14 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("session_type_id"),
         CheckConstraint("duration_minutes BETWEEN 5 AND 480", name="duration_minutes_valid"),
+        # Settled decision #100. `CUSTOM` currently has nowhere to keep a URL and
+        # one migrated offering is on it — this constraint is what will let the
+        # value be **removed** once booking decides, which `ALTER TYPE` never
+        # could.
+        CheckConstraint(
+            check_is_known("meeting_venue", MeetingProvider),
+            name="meeting_venue_is_known",
+        ),
     )
 
 
@@ -312,7 +320,7 @@ class Session(TimestampMixin, Base):
     topic: Mapped[str | None] = mapped_column(Text)
     booking_message: Mapped[str | None] = mapped_column(Text)
 
-    meeting_provider: Mapped[MeetingProvider | None] = mapped_column(pg_enum(MeetingProvider))
+    meeting_provider: Mapped[MeetingProvider | None] = mapped_column(str_enum(MeetingProvider))
     #: Generated per session at confirmation. A static personal room means
     #: back-to-back sessions share it and an early joiner walks into the previous
     #: one — a privacy incident rather than a UX annoyance (package D21). Every
@@ -392,6 +400,14 @@ class Session(TimestampMixin, Base):
             "mentor_id",
             text("session_window(starts_at, duration_minutes)"),
             postgresql_using="gist",
+        ),
+        # Settled decision #100. **Nullable, and the constraint needs no special
+        # case for it**: `NULL IN (...)` is unknown, and a CHECK rejects only what
+        # is false. A null here means the venue is not decided yet, which stays a
+        # legal state.
+        CheckConstraint(
+            check_is_known("meeting_provider", MeetingProvider),
+            name="meeting_provider_is_known",
         ),
     )
 

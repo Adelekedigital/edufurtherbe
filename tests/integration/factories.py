@@ -115,7 +115,7 @@ async def add_session_type(
             params: dict[str, object] = {"t": session_type, "d": duration, "n": notice}
             if venue is not None:
                 columns += ", meeting_venue"
-                values += ", CAST(:v AS meeting_provider)"
+                values += ", :v"
                 params["v"] = venue
             await conn.execute(
                 text(f"INSERT INTO session_type_booking_configs {columns}) VALUES {values})"),  # noqa: S608

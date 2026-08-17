@@ -59,7 +59,6 @@ from app.domain.enums import (
 # omitted from the check by being forgotten here — nor can a converted one be
 # left in two places while the conversion is half done.
 PG_ENUM_TYPES: dict[type[StrEnum], str] = {
-    MeetingProvider: "meeting_provider",
     SessionStatus: "session_status",
     SessionRole: "session_role",
     AttendanceStatus: "attendance_status",
@@ -117,6 +116,15 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     ApprovalStatus: frozenset({"ck_mentor_profiles_approval_status_is_known"}),
     ListingStatus: frozenset({"ck_mentor_profiles_listing_status_is_known"}),
     MentorStatusType: frozenset({"ck_mentor_status_events_status_type_is_known"}),
+    # Step 5 — two columns, one nullable. `sessions.meeting_provider` allows
+    # NULL and the `IN` constraint permits it without a special case: `NULL IN
+    # (...)` is unknown, and a CHECK rejects only what is *false*.
+    MeetingProvider: frozenset(
+        {
+            "ck_session_type_booking_configs_meeting_venue_is_known",
+            "ck_sessions_meeting_provider_is_known",
+        }
+    ),
 }
 
 # Vocabularies with no single database column to constrain, and why.
