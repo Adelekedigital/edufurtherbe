@@ -44,6 +44,11 @@ promptdump.md
 
 # Local agent overrides (personal, not shared)
 .claude/settings.local.json
+# CLAUDE.md tells a second session to use `git worktree` rather than switching
+# the shared checkout, and this is where they land. A worktree is a checkout of
+# this same repository, so leaving it untracked put a full second copy of the
+# tree into every repo-wide grep and into `git status`.
+.claude/worktrees/
 
 # Editors and OS
 .idea/

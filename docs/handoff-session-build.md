@@ -1,6 +1,6 @@
 # Handoff — building the session flows from `FE-ui-guide/`
 
-**Status:** decisions taken, nothing built.
+**Status:** 11 PRs shipped, 13 remaining. The read surface is complete, the enum conversion is done, and the write surface is still empty — no `POST`, `PATCH` or `DELETE` exists on `sessions` or `session_types`, so a mentor cannot create an offering and a mentee cannot book one.
 **Written:** 2026-08-16, from the 14 screens in `FE-ui-guide/` measured against the codebase and
 `docs/edufurther-migration/`.
 **Companion:** `handoff-enum-to-text-check.md` — its five steps are PRs 4–8 below.
@@ -288,7 +288,7 @@ The platform rule stays **24 hours**. Mentors may raise it **per session type**,
   24 / 48 / 72.
 - `min_notice_minutes` therefore needs **a bound it has never had** — it has no `CHECK` at all today
   and can be set to zero. Range: **1440–4320 minutes**.
-- The default moves 120 → **1440**, with migrated rows backfilled (PR 2).
+- The default moves 120 → **1440**, with migrated rows backfilled (shipped, #100).
 - **The floor is what keeps the response window coherent.** A confirmation-required offering promises
   the mentee an answer by `starts_at − W`; a mentor who could accept 6-hour bookings while promising
   24-hour notice would generate requests that expire before they are seen. With the floor at 24h and
@@ -314,95 +314,195 @@ It also changes **slot computation**, which is built and tested — `slot_store`
 a migration, an ADR, and a change to the slot query. Landing them together would put a schema change
 and a rewrite of a tested read path into a PR that otherwise has neither.
 
+## D88 is reversed for two of its three fields — decided 2026-08-17
+
+**One fallback mechanism covering three fields was the mistake, not any individual
+placement.** D88 said *an offering without its own X uses the primary offering's X*, and each
+field then went somewhere else on contact:
+
+| field | ended up |
+|---|---|
+| `meeting_venue` | **per offering**, `NOT NULL`. Its cascade had a reachable, empty bottom (#102) |
+| `custom_meeting_url` | **nowhere** — deleted rather than moved, because nothing read it |
+| `requires_booking_confirmation` | **per mentor**, reversing here |
+
+Recorded so the one-mechanism idea is not re-proposed: it is the premise that failed, three
+times, in three different ways.
+
+### Confirmation returns to `mentor_profiles`, with an optional per-offering override
+
+`mentor_profiles.requires_booking_confirmation` comes back as the authority, `NOT NULL`.
+`session_type_booking_configs.requires_booking_confirmation` becomes **nullable, and null means
+inherit**. Every session type follows the mentor unless it overrides.
+
+**The D88 argument against a nullable boolean does not apply here, and that is the whole
+point.** It said *"a boolean has no room for a third state, so null would mean inherit and be
+indistinguishable from false"* — true when inheriting from a **primary offering**, because a
+mentor can legitimately have live offerings and no primary, so the chain bottoms out at nothing.
+A mentor row always exists. **The terminus cannot be missing**, which is exactly what killed the
+venue cascade and exactly what this one has.
+
+The fan-out in `profile_writer` is **deleted**. It existed because the column had moved while the
+mentor-level toggle was still the only control; with the mentor column authoritative, the toggle
+writes one row and nothing needs copying. Two writers for one column is the duplication
+non-negotiable #8 calls a defect.
+
+The UI may not expose the per-offering override yet. The column carries it regardless — a null
+costs nothing and the alternative is a second migration when the UI catches up.
+
+### `primary_session_type_id` is dropped, with its trigger
+
+**Measured before deciding: three consumers in production code, and after the change above,
+zero.**
+
+| | was |
+|---|---|
+| `profile_store.py` | read booking settings off the primary — moves to the mentor column |
+| `etl/sessions.py` | set the pointer at load |
+| `models/mentoring.py` | the column and `trg_refuse_retiring_a_primary_offering` |
+
+**Nothing lands a mentee on it and nothing orders by it.** `_live_session_types` orders by `name`,
+which is unique per mentor among live rows and therefore total. A session type is *active* or
+*inactive*; mentees see what the mentor created, in name order.
+
+Consequences, both deliberate:
+
+- **`default_meeting_venue` leaves the owner profile response.** It was read from the primary, and
+  venue is per-offering with no mentor-level home. The owner sees venue per offering in
+  `/me/session-types`. This removes a field from a shipped response.
+- **`trg_refuse_retiring_a_primary_offering` goes**, and with it the two-step
+  release-then-retire dance. Deactivating an offering becomes a plain `is_active` toggle, which is
+  what `DELETE`'s and `PATCH`'s `409` mapping no longer has to translate.
+
+### Settled decisions this amends
+
+**#88**, **#92**, **#102**, **#58** all describe the primary offering or the cascade. Each is
+amended in the PR that implements the change, not in a separate one.
+
 ## The PR sequence
 
-One at a time, never stacked. Each gets its own checklist and DoD before implementation (§2), as
-text, with no tool calls in the same response.
+Each gets its own checklist and DoD before implementation (§2), as text, with no tool calls in the
+same response.
 
-| # | PR | Migration | Tier | |
-|---|---|---|---|---|
-| 1 | `GET /api/v1/me/session-types` | no | 2 | **merged, #87** |
-| 2 | booking notice floor — default 1440, bound, backfill | yes | 1 | **new** |
-| 3 | enum step 1 — drop the orphaned `unlisted_reason` type | yes | 1 | *other session* |
-| 4 | enum step 2 — single-column enums, 8 tables | yes | 1 | *other session* |
-| 5 | enum step 3 — `lookup_status` | yes | 1 | *other session* |
-| 6 | enum step 4 — `meeting_provider` (2 columns) | yes | 1 | *other session* |
-| 7 | enum step 5 — `session_status` **+ `withdrawn`** | yes | 1 | *other session* |
-| 8 | `custom_stage_label`, `category` FK, + ADR | yes | 1 | **moved after the enums** |
-| 9 | `POST` / `PATCH /me/session-types` | no | 2 | |
-| 10 | `DELETE /me/session-types/{id}` | no | 2 | |
-| 11 | per-session-type scheduling windows + ADR | yes | 1 | **new** |
+**"One at a time, never stacked" is struck.** CLAUDE.md rule 1 reversed it on 2026-08-16 and this
+line outlived the reversal. Stacking is allowed: branch from the PR you build on, merge in order.
+What survives is the price — **Alembic's chain is linear**, so two open PRs each adding a migration
+off the same head produce two heads and `alembic upgrade head` fails outright. Seven of the
+thirteen below carry a migration, so a stacked one fixes its `down_revision` at merge time, in
+merge order.
 
-Then, behind PR 7 because every one writes `sessions.status`: `POST /sessions` with
-`idempotency_keys`, the four transitions (accept, decline, cancel, **withdraw**), the response
-deadline and its expiry producer, and the join-window attendance rule.
+### Shipped
+
+| PR | | |
+|---|---|---|
+| **#87** | `GET /api/v1/me/session-types` | the mentor's own offerings, inactive included |
+| **#100** | booking notice floor — default 1440, sanity bound, backfill | |
+| **#88, #89/#91, #95, #97, #102, #104, #105, #106** | the enum conversion, all eight steps | no PostgreSQL enum types remain |
+| **#107** | `SessionStatus.WITHDRAWN` | the first value added after the conversion |
+
+**Verified from a clean `base` → `head` build**, not from an incrementally upgraded database: zero
+columns on an enum type. An incrementally upgraded dev database that has had branch migrations
+applied is not a trustworthy oracle — it reported four surviving types that a clean build did not.
+
+### Remaining
+
+| # | PR | Migration | Tier |
+|---|---|---|---|
+| 12 | confirmation to `mentor_profiles`, config column nullable, fan-out deleted | yes | 1 |
+| 13 | drop `primary_session_type_id` and its trigger; venue leaves the owner profile | yes | 1 |
+| 14 | `POST` / `PATCH /me/session-types` | no | 2 |
+| 15 | `DELETE /me/session-types/{id}` | no | 2 |
+| 16 | `custom_stage_label`, `category` → `service_offerings` FK, + ADR | yes | 1 |
+| 17 | the intake stack — four canonical tables | yes | 1 |
+| 18 | intake question endpoints, keyed on a session type | no | 2 |
+| 19 | per-session-type scheduling windows + ADR | yes | 1 |
+| 20 | `idempotency_keys` + `POST /sessions` | yes | 1 |
+| 21 | the four transitions — accept, decline, cancel, withdraw | no | 2 |
+| 22 | response deadline: `respond_by`, the expiry producer, reminders | yes | 1 |
+| 23 | join-window attendance — `−5 min` to `+15 min` | no | 2 |
+| 24 | mentee attendance rate, and "New mentee" for null | no | 2 |
+
+**Order is not preference.** 12 before 13, because the owner profile loses its only source
+otherwise. 14 after 13, so writes are built against a shape that is not about to lose a column. 16
+after 14, so the vocabulary lands on an endpoint that already exists. 20 after 16, because a
+booking references a session type whose contract should be settled. 21 after 20 — there is nothing
+to transition until something can be created.
+
+**Deferred deliberately, each with a reason recorded above:** credits (`credit_lots`,
+`credit_transactions`), reviews, messaging, `booking_policies`. All four have canonical schemas
+waiting; none blocks booking.
 
 ### The regression each PR can cause, and what catches it
 
-Named per PR, because "run the gate" is not a plan. Each is a thing that would pass every count and
-still be wrong.
+Named per PR, because "run the gate" is not a plan. Each is a thing that would pass every count
+and still be wrong.
 
-**PR 2 — the notice floor.** `min_notice_minutes` has **no `CHECK` today** and **54 test call sites**
-take the factory's default of `0`. The slot suite's own fixture comments that it books *"far enough
-ahead that no notice window reaches it"* — so raising the floor to 24h can make its 20 tests pass
-**vacuously**, exercising nothing. *Catches it:* re-verify each slot test still fails when its own
-rule is broken, not merely that it passes; a test that a below-floor value is refused; a fresh
-migrate-then-load comparing resolved notice against the baseline. `api/routes/slots.py` also
-documents "two hours by default" and becomes a lie.
+**12 — confirmation moves.** A backfill is invisible to the suite: every test creates a fresh row
+that takes the *default*, and a fresh migrate-then-load runs migrations before any data. The
+mentor column must be seeded from what the offerings currently hold, not from `false`, or every
+mentor who required confirmation silently stops. *Catches it:* a test that upgrades to the prior
+revision, writes offerings at `true`, and upgrades — the shape PR #100 needed for the same reason.
 
-**PRs 3–7 — the enums.** The named regression is **ordering**: enum ordering is declaration order,
-text ordering is alphabetical, so any query sorting by a converted column silently reorders.
-*Catches it:* the enum handoff's per-step DoD — every index and constraint recreated **under the
-same name**, verified against `pg_indexes` before and after. Step 7 additionally rebuilds
-`sessions_no_mentor_double_booking`, which every booking transition later maps its `409` off.
+**13 — the primary drops.** `default_meeting_venue` leaves `MentorProfileRead`; a client reading
+it gets a missing field rather than a null. And `trg_refuse_retiring_a_primary_offering` going
+means deactivation stops being refused — the two-step release-then-retire becomes a plain toggle.
+*Catches it:* the guard's four existing tests must be **deleted deliberately**, each recording
+what would bring it back, not quietly dropped because they turned red.
 
-**PR 8 — the vocabularies.** Three docstrings assert `category` and `application_stage` are "free
-text with no constraint, no vocabulary and no value anywhere" and all three become false in this PR
-(see *Documentation regression* below). Publishing them is also a **public contract change**: #92
-excludes both today and a test asserts they never appear in the body. *Catches it:* update all three
-copies in this PR, and change the allowlist test deliberately rather than deleting it.
+**14 — the writes.** `session_type_is_live()` has four callers including `slot_store`. The
+owner-facing path needs ownership and soft-delete but **not** `is_active`; a mis-defaulted flag
+reaching `slot_store` makes deactivated types **bookable**, against #90. *Catches it:* reuse
+#87's narrower helper — **do not parameterise**. This PR also owns the `min_notice_minutes`
+boundary bound deferred out of #100, and must create the booking config in the same transaction:
+`/slots` inner-joins it, so an offering without one is invisible and unbookable.
 
-**PR 9 — the writes.** `session_type_is_live()` has **four callers**, including `slot_store`. The
-mentor's own list needs its ownership and soft-delete predicates but **not** `is_active`, and a
-mis-defaulted flag reaching `slot_store` makes deactivated types **bookable** — against #90.
-*Catches it:* extract a narrower helper and recompose; **do not parameterise**. This PR also owns
-the boundary bound on `min_notice_minutes`, and must expose *which scheduling mode* an offering is
-in, per the decision above.
+**15 — the delete.** Refuses with `409` when non-terminal sessions are booked, **carrying a reason
+code** — two refusals a client cannot otherwise tell apart. *Catches it:* a test per reason, not
+one per status code.
 
-**PR 10 — the delete.** `trg_refuse_retiring_a_primary_offering` fires on **`UPDATE` as well as
-delete**, so the `is_active` toggle needs the same `409` mapping or deactivating a primary offering
-returns a 500. *Catches it:* a test on the toggle, not only on `DELETE`.
+**16 — the vocabularies.** Three docstrings assert these columns are "free text with no
+constraint, no vocabulary and no value anywhere" and all three become false. Publishing them is a
+**public contract change**: #92 excludes both and a test asserts they never appear in the body.
+*Catches it:* update all three copies here, and change the allowlist test deliberately.
 
-**PR 11 — the windows.** `slot_store` is built and tested, and every existing slot test assumes
+**17 — the intake stack.** Four tables landing together. *Catches it:* the canonical DDL declares
+`session_type_question_options`, which the UI's two question types do not use — build what is
+specified or record why not, but do not silently drop a table from a package that ADR 0007 makes
+canonical.
+
+**18 — the question endpoints.** Max five questions per session type is a product rule with no
+column to hold it. *Catches it:* enforced at the boundary, and a test that the sixth is refused.
+
+**19 — the windows.** `slot_store` is built and tested, and every existing slot test assumes
 `availability_rules` is the only source. Windows **replace** it. *Catches it:* an offering with no
-windows must produce **byte-identical** slots to today — that is the regression test, not a new
-feature test — plus a test that `availability_exceptions` still subtract when windows are in effect.
+windows must produce **byte-identical** slots to today — that is the regression test, not a
+feature test — plus a test that `availability_exceptions` still subtract when windows are in
+effect.
 
-**Two changes from the original sequence.**
+**20 — booking.** `sessions_no_mentor_double_booking` is an `EXCLUDE` over `LIVE_STATUSES`; every
+booking maps its `409` off it. Conflict checks must run **before** the write, because free/busy is
+eventually consistent and a flow can read its own write as absent. *Catches it:* a test that two
+bookings for one slot produce one session and one `409`.
 
-`idempotency_keys` **was PR 2 and is deferred** to whichever PR first needs it, which is
-`POST /sessions`. It is not a large build — eleven columns and one index, with the lock and replay
-semantics of the dependency being the real work — but it has **no consumer** until that endpoint
-exists, and settled decision **#21** governs: *nothing ships earlier than the phase that creates a
-dependency on it*. Designing lock semantics against an imagined caller is how they come out wrong.
-The double-booking `EXCLUDE` constraint already covers the hazard people expect idempotency to
-cover; what it cannot cover is a retry with side effects outside the database — a credit debit, a
-calendar write, an invitation — none of which exist yet.
+**21 — the transitions.** Every one writes a `session_events` row, and the reason codes drive
+refund policy. A mentee may never accept their own request; either party may cancel; nobody may
+cancel within ten minutes of `starts_at` — time-relative, so a trigger rather than a `CHECK`.
+*Catches it:* one test per illegal transition, not one per legal one.
 
-**The booking notice fix is new and comes early** because it is small, depends on nothing, and is
-a live correctness problem: migrated mentors would otherwise permit two-hour bookings against a
-twenty-four-hour platform rule.
+**22 — the deadline.** `respond_by` must be a **stored column with a sweep**, not derived: a
+pending request past its deadline whose status was never written keeps holding the mentor's slot
+forever, and constraint predicates must be `IMMUTABLE` while `now()` is `STABLE`. *Catches it:* a
+test that an expired request stops blocking its slot.
 
-Deferred but specified: `POST /sessions`, and the transition endpoints — accept, decline, cancel,
-**withdraw**. All write `sessions.status`, so all sit behind PR 8. Landing with them: the response
-deadline and its expiry producer, the join-window attendance rule, and `idempotency_keys`.
+**23 — attendance.** The join window decides Completed against Missed, and `session_participants`
+already carries `joined_at` and `attendance_status` with nothing computing them for a live
+session. *Catches it:* a test per outcome — both present, one absent, both absent.
 
-Then, each its own migration, all specified in the canonical package: the intake stack (four tables,
-lands whole), credits, reviews, messaging, booking policies.
+**24 — the mentee rate.** `session_stats` is mentor-only by design. The mirror must render null as
+**"New mentee"**, never `0%` — zero says "never shows up", null says "no data". *Catches it:* the
+null case asserted explicitly, which is how the mentor-side rate was got right.
 
----
-
-## Documentation regression to carry into PR 3
+## Documentation regression to carry into PR 16
 
 Three places assert that `category` and `application_stage` are "free text with no constraint, no
 vocabulary and no value anywhere in the data":
@@ -411,8 +511,8 @@ vocabulary and no value anywhere in the data":
 - `infra/db/session_type_store.py` — module docstring, ~line 59
 - `api/schemas/session_types.py` — module docstring
 
-**PR 3's migration makes all three clauses false.** One fact, three copies (§8). Update all of them
-in that PR or leave a lie sitting beside the code.
+**PR 16's migration makes all three clauses false.** One fact, three copies (§8). Update all of
+them in that PR or leave a lie sitting beside the code.
 
 ---
 
@@ -434,17 +534,17 @@ the visible part and the model underneath it was the mistake.*
 
 ## Still open
 
-Nothing below blocks PR 2. Each is named where it will be decided.
+Nothing below blocks PR 12. Each is named where it will be decided.
 
 | | Open | Decide with |
 |---|---|---|
 | 1 | **`W` — the response window.** Legacy 24h, moving to 6h, mentor's choice later | the transitions |
 | 2 | **The reminder schedule** during that window — how many, when | the transitions |
 | 3 | ~~Is the 24-hour notice a floor or a default?~~ **Answered: a floor.** Mentors raise it per session type, 24h–72h; the mock's 6-hour option is dropped | *closed* |
-| 4 | **`withdrawn`: status, or `cancelled` + reason code?** | PR 8 / the transitions |
+| 4 | ~~`withdrawn`: status, or `cancelled` + reason code?~~ **Answered: a status.** Shipped in #107 | *closed* |
 | 5 | **Expiry mechanism** — lazy-on-write plus a slow sweep, or a fast sweep alone | the transitions |
-| 6 | **Does `DELETE`'s 409 carry a reason code?** Two different refusals — primary offering, and sessions still booked — are otherwise indistinguishable to any client. **This was briefly written here as a requirement derived from the mock; it is not.** The UI is a guide, and the argument stands or falls on the API's own terms | PR 10 |
-| 7 | **`DELETE` with future bookings refuses with `409`** — settled. What is open is only #6, how the refusal explains itself | PR 10 |
+| 6 | ~~Does `DELETE`'s 409 carry a reason code?~~ **Answered: yes.** Two refusals — primary offering, and sessions still booked — are otherwise indistinguishable to any client. Note the first of those disappears with PR 13 | *closed* |
+| 7 | **`DELETE` with future bookings refuses with `409`** — settled. What is open is only #6, how the refusal explains itself | PR 15 |
 
 ### Where the notice rule is enforced — settled
 
@@ -459,7 +559,7 @@ Nothing below blocks PR 2. Each is named where it will be decided.
 Measured against the three tests it had to pass:
 
 - **Fits now.** The API is the only writer this column will ever have — the ETL does not set it and
-  no script does. So the boundary *is* the enforcement point in practice. It also keeps PR 2 small:
+  no script does. So the boundary *is* the enforcement point in practice. It also kept #100 small:
   the 54 fixture call sites defaulting to `0` stay legal, and the 20 slot tests keep exercising
   short-notice behaviour **directly** rather than through a 24-hour window that hides it.
 - **Scales.** `booking_policies` is already in the canonical package. When the 24–72 range moves
