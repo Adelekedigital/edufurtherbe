@@ -490,8 +490,10 @@ Concentration is the risk, not volume.
 
 ## The PR sequence
 
-Each gets its own checklist and DoD before implementation (§2), as text, with no tool calls in the
-same response.
+Each gets its own checklist and DoD before implementation (§2). ~~As text, with no tool calls in
+the same response.~~ — **struck by CLAUDE.md rule 7 (2026-08-17):** the checklist and DoD are still
+written first at every tier, but only **Tier 1** waits for approval. Eight of the fourteen below are
+Tier 1 and still stop; the six Tier 2 rows post and continue.
 
 **"One at a time, never stacked" is struck.** CLAUDE.md rule 1 reversed it on 2026-08-16 and this
 line outlived the reversal. Stacking is allowed: branch from the PR you build on, merge in order.
@@ -535,9 +537,9 @@ applied is not a trustworthy oracle — it reported four surviving types that a 
 **Order is not preference.** 14 before 15, because a mentor picking a venue should be picking from
 their own options, and building the write path against a column about to become a foreign key is
 how `meeting_venue` moves a fifth time. 12 before 13, because the owner profile loses its only source
-otherwise. 14 after 13, so writes are built against a shape that is not about to lose a column. 16
-after 14, so the vocabulary lands on an endpoint that already exists. 20 after 16, because a
-booking references a session type whose contract should be settled. 21 after 20 — there is nothing
+otherwise. 15 after 13, so writes are built against a shape that is not about to lose a column. 17
+after 15, so the vocabulary lands on an endpoint that already exists. 21 after 17, because a
+booking references a session type whose contract should be settled. 22 after 21 — there is nothing
 to transition until something can be created.
 
 **Deferred deliberately, each with a reason recorded above:** credits (`credit_lots`,
@@ -568,56 +570,56 @@ fallback and mentors on `daily` or `custom` silently become Google Meet. *Catche
 migrate-then-load compared against the baseline — `google_meet` 1, `daily` 3, `custom` 1 — which is
 the check that caught the silent `allmentors` bug in #100.
 
-**14 — the writes.** `session_type_is_live()` has four callers including `slot_store`. The
+**15 — the writes.** `session_type_is_live()` has four callers including `slot_store`. The
 owner-facing path needs ownership and soft-delete but **not** `is_active`; a mis-defaulted flag
 reaching `slot_store` makes deactivated types **bookable**, against #90. *Catches it:* reuse
 #87's narrower helper — **do not parameterise**. This PR also owns the `min_notice_minutes`
 boundary bound deferred out of #100, and must create the booking config in the same transaction:
 `/slots` inner-joins it, so an offering without one is invisible and unbookable.
 
-**15 — the delete.** Refuses with `409` when non-terminal sessions are booked, **carrying a reason
+**16 — the delete.** Refuses with `409` when non-terminal sessions are booked, **carrying a reason
 code** — two refusals a client cannot otherwise tell apart. *Catches it:* a test per reason, not
 one per status code.
 
-**16 — the vocabularies.** Three docstrings assert these columns are "free text with no
+**17 — the vocabularies.** Three docstrings assert these columns are "free text with no
 constraint, no vocabulary and no value anywhere" and all three become false. Publishing them is a
 **public contract change**: #92 excludes both and a test asserts they never appear in the body.
 *Catches it:* update all three copies here, and change the allowlist test deliberately.
 
-**17 — the intake stack.** Four tables landing together. *Catches it:* the canonical DDL declares
+**18 — the intake stack.** Four tables landing together. *Catches it:* the canonical DDL declares
 `session_type_question_options`, which the UI's two question types do not use — build what is
 specified or record why not, but do not silently drop a table from a package that ADR 0007 makes
 canonical.
 
-**18 — the question endpoints.** Max five questions per session type is a product rule with no
+**19 — the question endpoints.** Max five questions per session type is a product rule with no
 column to hold it. *Catches it:* enforced at the boundary, and a test that the sixth is refused.
 
-**19 — the windows.** `slot_store` is built and tested, and every existing slot test assumes
+**20 — the windows.** `slot_store` is built and tested, and every existing slot test assumes
 `availability_rules` is the only source. Windows **replace** it. *Catches it:* an offering with no
 windows must produce **byte-identical** slots to today — that is the regression test, not a
 feature test — plus a test that `availability_exceptions` still subtract when windows are in
 effect.
 
-**20 — booking.** `sessions_no_mentor_double_booking` is an `EXCLUDE` over `LIVE_STATUSES`; every
+**21 — booking.** `sessions_no_mentor_double_booking` is an `EXCLUDE` over `LIVE_STATUSES`; every
 booking maps its `409` off it. Conflict checks must run **before** the write, because free/busy is
 eventually consistent and a flow can read its own write as absent. *Catches it:* a test that two
 bookings for one slot produce one session and one `409`.
 
-**21 — the transitions.** Every one writes a `session_events` row, and the reason codes drive
+**22 — the transitions.** Every one writes a `session_events` row, and the reason codes drive
 refund policy. A mentee may never accept their own request; either party may cancel; nobody may
 cancel within ten minutes of `starts_at` — time-relative, so a trigger rather than a `CHECK`.
 *Catches it:* one test per illegal transition, not one per legal one.
 
-**22 — the deadline.** `respond_by` must be a **stored column with a sweep**, not derived: a
+**23 — the deadline.** `respond_by` must be a **stored column with a sweep**, not derived: a
 pending request past its deadline whose status was never written keeps holding the mentor's slot
 forever, and constraint predicates must be `IMMUTABLE` while `now()` is `STABLE`. *Catches it:* a
 test that an expired request stops blocking its slot.
 
-**23 — attendance.** The join window decides Completed against Missed, and `session_participants`
+**24 — attendance.** The join window decides Completed against Missed, and `session_participants`
 already carries `joined_at` and `attendance_status` with nothing computing them for a live
 session. *Catches it:* a test per outcome — both present, one absent, both absent.
 
-**24 — the mentee rate.** `session_stats` is mentor-only by design. The mirror must render null as
+**25 — the mentee rate.** `session_stats` is mentor-only by design. The mirror must render null as
 **"New mentee"**, never `0%` — zero says "never shows up", null says "no data". *Catches it:* the
 null case asserted explicitly, which is how the mentor-side rate was got right.
 
