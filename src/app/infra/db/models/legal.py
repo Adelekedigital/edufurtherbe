@@ -20,13 +20,13 @@ separate deliberate act, and nothing downstream should treat them as one.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
 from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import LegalDocumentType
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import pg_enum
+from app.infra.db.types import check_is_known, str_enum
 
 
 class LegalDocument(TimestampMixin, Base):
@@ -37,7 +37,7 @@ class LegalDocument(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
     )
-    type: Mapped[LegalDocumentType] = mapped_column(pg_enum(LegalDocumentType), nullable=False)
+    type: Mapped[LegalDocumentType] = mapped_column(str_enum(LegalDocumentType), nullable=False)
 
     # Free text rather than a parsed semantic version. What matters is that two
     # published documents are distinguishable and that a consent names one
@@ -52,7 +52,16 @@ class LegalDocument(TimestampMixin, Base):
 
     effective_from: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
 
-    __table_args__ = (Index("ix_legal_documents_type_version", "type", "version", unique=True),)
+    __table_args__ = (
+        Index("ix_legal_documents_type_version", "type", "version", unique=True),
+        # Settled decision #100. The unique index above covers this column and
+        # names no value, so it rebuilt with the table rather than needing a
+        # drop and recreate.
+        CheckConstraint(
+            check_is_known("type", LegalDocumentType),
+            name="type_is_known",
+        ),
+    )
 
 
 class UserLegalConsent(TimestampMixin, Base):

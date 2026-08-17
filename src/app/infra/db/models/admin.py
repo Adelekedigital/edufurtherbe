@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import AdminRole
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import pg_enum
+from app.infra.db.types import check_is_known, str_enum
 
 
 class AdminUser(TimestampMixin, Base):
@@ -42,7 +42,7 @@ class AdminUser(TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
-    admin_role: Mapped[AdminRole] = mapped_column(pg_enum(AdminRole), nullable=False)
+    admin_role: Mapped[AdminRole] = mapped_column(str_enum(AdminRole), nullable=False)
 
     # Nullable, and null is the honest value for every migrated row: the legacy
     # option set recorded that someone was an admin, never who made them one. A
@@ -79,5 +79,12 @@ class AdminUser(TimestampMixin, Base):
         CheckConstraint(
             "revoked_by IS NULL OR revoked_at IS NOT NULL",
             name="revoker_implies_revocation",
+        ),
+        # Settled decision #100: the vocabulary is guarded here, not by a
+        # PostgreSQL type. `ix_admin_users_active_grant` indexes this column but
+        # names no value in its predicate, so it rebuilt with the table.
+        CheckConstraint(
+            check_is_known("admin_role", AdminRole),
+            name="admin_role_is_known",
         ),
     )
