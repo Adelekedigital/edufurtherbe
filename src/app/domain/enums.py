@@ -299,6 +299,19 @@ class SessionStatus(StrEnum):
     which values *occur*, not proof of which *exist*. The transform re-derives the
     vocabulary from the production extract and raises on a value it has not seen,
     rather than defaulting.
+
+    **``WITHDRAWN`` is not ``CANCELLED``, and the transition rule is narrow.**
+    Only ``PENDING_MENTOR_APPROVAL -> WITHDRAWN``: a mentee taking back a request
+    the mentor has not answered yet. A *confirmed* session called off is
+    ``CANCELLED``, whoever calls it off — the mentor has already committed time,
+    and that is the fact the two statuses separate. Collapsing them would put a
+    request nobody had accepted into the same bucket as a booking broken after
+    agreement, which carries different policy for refunds and for
+    mentor-reliability statistics.
+
+    Nothing enforces transitions in the schema, here or anywhere else; the rule
+    lives at the endpoint that writes the status. It is recorded here because the
+    value is meaningless without it.
     """
 
     PENDING_MENTOR_APPROVAL = "pending_mentor_approval"
@@ -308,6 +321,17 @@ class SessionStatus(StrEnum):
     DECLINED = "declined"
     EXPIRED = "expired"
     NO_SHOW = "no_show"
+    #: A mentee withdrawing a request before the mentor answers. **Outside
+    #: ``LIVE_STATUSES``**, with ``EXPIRED``, ``DECLINED`` and ``CANCELLED``: a
+    #: withdrawn request holds no booking slot, so the mentor's time frees
+    #: immediately and the double-booking constraint ignores it.
+    #:
+    #: Added after settled decision #100 finished, which is what made it cheap —
+    #: three ``CHECK`` swaps in one reversible migration rather than a permanent
+    #: ``ALTER TYPE ... ADD VALUE``. #100's rule *"do not add a value until
+    #: something writes it"* was justified by that permanence and does not
+    #: survive it; the value lands ahead of the withdraw flow deliberately.
+    WITHDRAWN = "withdrawn"
 
 
 class SessionRole(StrEnum):

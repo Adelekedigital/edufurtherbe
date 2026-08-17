@@ -408,6 +408,36 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`SessionStatus.WITHDRAWN` — a mentee taking back a request the mentor has
+  not answered yet.** `SessionStatus` now has 8 members.
+
+  **Not `CANCELLED`, and the distinction is the point.** A confirmed session
+  called off is cancelled whoever calls it off, because the mentor has already
+  committed time. Collapsing the two would put a request nobody accepted into
+  the same bucket as a booking broken after agreement, and they carry different
+  policy for refunds and for mentor-reliability statistics. The transition rule
+  is `PENDING_MENTOR_APPROVAL -> WITHDRAWN` only; nothing enforces transitions in
+  the schema, so it lives at the endpoint that writes the status and is recorded
+  on the enum member.
+
+  **`LIVE_STATUSES` is untouched**, which is the load-bearing part: a withdrawn
+  request holds no booking slot. Verified against real rows — a mentor *can* be
+  booked over a withdrawn request, because the double-booking constraint ignores
+  it. Adding `withdrawn` to that predicate would keep a withdrawn request
+  blocking the slot it just released.
+
+  **Three `CHECK` swaps, and reversible.** Before the conversion this would have
+  been `ALTER TYPE ... ADD VALUE` — one line and permanent. The downgrade
+  narrows the vocabulary again and **fails loudly if any row already holds the
+  value**, which is correct: reversing is only safe while nothing uses it, and a
+  downgrade that silently rewrote live rows would be destroying a fact. Both
+  paths verified.
+
+  This is the first evidence #100 bought something rather than only costing eight
+  releases. Its sub-rule — *do not add a value until something writes it* — was
+  justified by permanence and does not survive its removal; `withdrawn` lands
+  ahead of the withdraw flow deliberately.
+
 - **`GET /api/v1/me/session-types` — a mentor's own offerings, including the
   ones they have switched off.** The SESSIONS management screen had no data
   source: `GET /users/{user_id}/session-types` looks like it serves it and
