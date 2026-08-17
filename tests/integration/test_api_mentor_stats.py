@@ -82,7 +82,7 @@ async def add_session(
                 text(
                     "INSERT INTO sessions "
                     "(mentor_id, mentee_id, session_type_id, starts_at, duration_minutes, status) "
-                    "VALUES (:m, :e, :t, :s, :d, CAST(:st AS session_status)) RETURNING id"
+                    "VALUES (:m, :e, :t, :s, :d, :st) RETURNING id"
                 ),
                 {
                     "m": mentor,

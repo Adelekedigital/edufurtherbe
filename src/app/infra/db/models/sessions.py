@@ -69,7 +69,7 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.infra.db.base import Base, TimestampMixin
-from app.infra.db.types import check_is_known, pg_enum, str_enum
+from app.infra.db.types import check_is_known, str_enum
 
 #: The statuses a session is still *live* in — awaiting a decision, or agreed.
 #:
@@ -325,7 +325,7 @@ class Session(TimestampMixin, Base):
     )
 
     status: Mapped[SessionStatus] = mapped_column(
-        pg_enum(SessionStatus), nullable=False, server_default=text("'pending_mentor_approval'")
+        str_enum(SessionStatus), nullable=False, server_default=text("'pending_mentor_approval'")
     )
 
     starts_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
@@ -354,6 +354,14 @@ class Session(TimestampMixin, Base):
 
     __table_args__ = (
         CheckConstraint("mentor_id <> mentee_id", name="no_self_booking"),
+        # Settled decision #100, and the last vocabulary to convert. `status` is
+        # named by all three partial indexes below **and** by the exclusion
+        # constraint, so this column is the one whose predicate transcriptions
+        # have to be right — see the migration.
+        CheckConstraint(
+            check_is_known("status", SessionStatus),
+            name="status_is_known",
+        ),
         CheckConstraint("duration_minutes BETWEEN 5 AND 480", name="duration_minutes_valid"),
         # **The constraint this table exists for.**
         #
@@ -536,8 +544,8 @@ class SessionEvent(Base):
     )
 
     #: Null on the creation event, where there is no prior state.
-    from_status: Mapped[SessionStatus | None] = mapped_column(pg_enum(SessionStatus))
-    to_status: Mapped[SessionStatus] = mapped_column(pg_enum(SessionStatus), nullable=False)
+    from_status: Mapped[SessionStatus | None] = mapped_column(str_enum(SessionStatus))
+    to_status: Mapped[SessionStatus] = mapped_column(str_enum(SessionStatus), nullable=False)
 
     actor_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="RESTRICT")
@@ -580,5 +588,15 @@ class SessionEvent(Base):
         CheckConstraint(
             check_is_known("reason_code", SessionReasonCode),
             name="reason_code_is_known",
+        ),
+        # Settled decision #100. `from_status` is null on the creation event,
+        # where there is no prior state; the `IN` form permits that.
+        CheckConstraint(
+            check_is_known("from_status", SessionStatus),
+            name="from_status_is_known",
+        ),
+        CheckConstraint(
+            check_is_known("to_status", SessionStatus),
+            name="to_status_is_known",
         ),
     )

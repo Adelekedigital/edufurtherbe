@@ -20,12 +20,7 @@ from app.domain import enums
 from app.infra.db import models
 from app.infra.db.base import Base
 from app.infra.db.models.sessions import LIVE_STATUSES
-from app.infra.db.types import (
-    PG_ENUM_TYPES,
-    TEXT_CHECK_ENUMS,
-    UNCONSTRAINED_ENUMS,
-    StrEnumText,
-)
+from app.infra.db.types import TEXT_CHECK_ENUMS, UNCONSTRAINED_ENUMS, StrEnumText
 from conftest import PROJECT_ROOT
 
 # Every model the project is expected to define. Update deliberately, in the same
@@ -136,11 +131,6 @@ def test_no_declared_identifier_exceeds_the_postgresql_limit() -> None:
         names = [c.name for c in table.constraints if c.name] + [i.name for i in table.indexes]
         too_long += [str(n) for n in names if len(str(n)) > POSTGRES_IDENTIFIER_LIMIT]
 
-    too_long += [
-        f"enum type {name}"
-        for name in PG_ENUM_TYPES.values()
-        if len(name) > POSTGRES_IDENTIFIER_LIMIT
-    ]
     # The CHECK that replaces a dropped type is an identifier under the same
     # limit, and `ck_<table>_<rule>` is where this schema's longest names live.
     # `UNCONSTRAINED_ENUMS` is not checked: its values are reasons, not names.
@@ -153,7 +143,7 @@ def test_no_declared_identifier_exceeds_the_postgresql_limit() -> None:
     too_long = [n for n in too_long if n]
 
     assert Base.metadata.tables, "no tables registered; this test would inspect nothing"
-    assert PG_ENUM_TYPES, "no enum types registered; this test would inspect nothing"
+    assert TEXT_CHECK_ENUMS, "no vocabularies registered; this test would inspect nothing"
     assert not too_long, (
         "these identifiers exceed PostgreSQL's 63-character limit and will be "
         f"silently truncated and hashed: {sorted(too_long)}"
@@ -280,7 +270,7 @@ def test_the_supabase_auth_id_is_a_column_not_the_key() -> None:
 
 
 def test_every_domain_enum_is_registered_exactly_once() -> None:
-    """``PG_ENUM_TYPES`` is what the label-parity test iterates.
+    """``TEXT_CHECK_ENUMS`` is what the constraint-parity test iterates.
 
     An enum missing from it is not checked against the database at all, and the
     omission is invisible — the parity test simply inspects one fewer type and
@@ -293,10 +283,10 @@ def test_every_domain_enum_is_registered_exactly_once() -> None:
     ``CHECK``, one migration at a time, so for most of that work the enums are
     split across two states with a third — ``UNCONSTRAINED_ENUMS`` — for the ones
     no single column can hold. Asserting only "every enum is somewhere" would let
-    a half-finished conversion sit in both ``PG_ENUM_TYPES`` and
-    ``TEXT_CHECK_ENUMS`` and report green, which is exactly the window where the
-    database and the model disagree. Disjointness is therefore asserted as
-    loudly as completeness.
+    a vocabulary sit in both registries and report green. Settled decision #100
+    is finished — every vocabulary is now converted or deliberately
+    unconstrained — but the partition is what a *new* one has to satisfy, and it
+    is the reason a new vocabulary cannot be added without deciding which it is.
     """
     declared = {
         obj
@@ -304,7 +294,6 @@ def test_every_domain_enum_is_registered_exactly_once() -> None:
         if isinstance(obj, type) and issubclass(obj, StrEnum) and obj is not StrEnum
     }
     registries = {
-        "PG_ENUM_TYPES": set(PG_ENUM_TYPES),
         "TEXT_CHECK_ENUMS": set(TEXT_CHECK_ENUMS),
         "UNCONSTRAINED_ENUMS": set(UNCONSTRAINED_ENUMS),
     }
@@ -339,7 +328,7 @@ def test_postgresql_type_names_are_unique() -> None:
     ``UNCONSTRAINED_ENUMS`` is excluded deliberately — its values are prose
     reasons, not identifiers, and nothing looks them up.
     """
-    names = list(PG_ENUM_TYPES.values()) + [n for ns in TEXT_CHECK_ENUMS.values() for n in ns]
+    names = [n for ns in TEXT_CHECK_ENUMS.values() for n in ns]
 
     assert len(names) == len(set(names)), f"duplicate schema identifiers registered: {names}"
 

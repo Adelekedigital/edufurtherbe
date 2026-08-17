@@ -124,25 +124,20 @@ EXPECTED_TABLES = [
     "sessions",
 ]
 
-# Every enum type at head — five from M1, one from M2. Named here because a type
-# outlives the table that used it: `DROP TABLE` does not remove one, so a
-# downgrade that forgets leaves an orphan and the next upgrade fails with "type
-# already exists".
+# **No enum types at head, and that is settled decision #100 completed.**
 #
-# M2 adds only `lookup_status`. The other six vocabularies in `02_profiles.sql`
-# are consumed by tables in the next pull request and ship with them, per settled
-# decision #21 — a type no table uses is a schema asserting a choice nobody took.
+# This tuple used to name every type the chain created, because a type outlives
+# the table that used it: `DROP TABLE` does not remove one, so a downgrade that
+# forgets leaves an orphan and the next upgrade fails on "already exists". Eight
+# migrations converted all seventeen to `text` + `CHECK`, ending with
+# `session_status` in `d3a6f81b52c7`.
 #
-# **This tuple is shrinking to nothing, and that is settled decision #100.** Each
-# step converts a vocabulary to `text` + `CHECK` and drops its type; step 8 empties
-# what is left. `docs/handoff-enum-to-text-check.md` tracks which step owns which,
-# so the history lives there rather than accreting a line here per migration.
-#
-# What remains below is what has *not* converted yet — the session vocabularies.
-# A name still here must have a live PostgreSQL type; a name removed must have a
-# `CHECK` instead, which `test_every_converted_enum_has_a_check_naming_its_values`
-# asserts from the other side.
-ENUM_TYPE_NAMES = ("session_status",)
+# Empty is an assertion, not an absence of one: `enum_type_names(db) == []` fails
+# the moment a migration creates a type. That is the regression to guard — the
+# deferred `calendar_connections` and `search_impressions_suppressed` tables both
+# declare enums in the canonical DDL, and building either verbatim would
+# reintroduce one while every other gate stayed green.
+ENUM_TYPE_NAMES: tuple[str, ...] = ()
 
 ConfigFactory = Callable[[str], Config]
 

@@ -26,7 +26,7 @@ from sqlalchemy import CheckConstraint
 
 from app.infra.db import models
 from app.infra.db.base import Base
-from app.infra.db.types import PG_ENUM_TYPES, TEXT_CHECK_ENUMS, StrEnumText
+from app.infra.db.types import TEXT_CHECK_ENUMS, StrEnumText
 
 pytestmark = pytest.mark.db
 
@@ -42,40 +42,30 @@ def query(url: str, sql: str) -> list[asyncpg.Record]:
     return asyncio.run(_run())
 
 
-def test_every_enum_type_matches_its_python_class(migrated_database: str) -> None:
-    """Labels, not just type names.
+def test_no_postgresql_enum_type_survives(migrated_database: str) -> None:
+    """The replacement for ``test_every_enum_type_matches_its_python_class``.
 
-    ``tests/integration/test_migrations.py`` asserts the five type *names* exist.
-    That passes just as happily when a type is missing a label the Python class
-    has — and adding a member to a ``StrEnum`` without a migration does exactly
-    that, passing ruff, mypy, the layer check, ``alembic check`` and the whole
-    suite before failing at the first insert that uses the new member.
+    That test compared each PostgreSQL enum's labels against its Python class,
+    because ``alembic check`` is blind to enum labels. Settled decision #100
+    finished in step 8 and there are no enum types left to compare, so the
+    assertion inverts: **none may exist**.
 
-    The comparison is by value, because ``pg_enum`` sends member values rather
-    than member names; a regression there would show up here as every label
-    disagreeing at once.
+    It is not a test that passes by inspecting nothing. It fails the moment a
+    migration creates a type — which is exactly the regression to guard, since
+    the deferred ``calendar_connections`` and ``search_impressions_suppressed``
+    tables both declare enums in the canonical DDL, and building either verbatim
+    would reintroduce one with every other gate green.
     """
     rows = query(
         migrated_database,
-        "SELECT t.typname, e.enumlabel FROM pg_type t "
-        "JOIN pg_enum e ON e.enumtypid = t.oid "
-        "JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public'",
+        "SELECT t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace "
+        "WHERE n.nspname = 'public' AND t.typtype = 'e'",
     )
 
-    actual: dict[str, set[str]] = {}
-    for row in rows:
-        actual.setdefault(row["typname"], set()).add(row["enumlabel"])
-
-    assert PG_ENUM_TYPES, "no enum types registered; this test would inspect nothing"
-
-    for enum_cls, type_name in PG_ENUM_TYPES.items():
-        expected = {member.value for member in enum_cls}
-        assert type_name in actual, f"{enum_cls.__name__} has no {type_name} type in the database"
-        assert actual[type_name] == expected, (
-            f"{enum_cls.__name__} and the {type_name} type disagree: "
-            f"only in Python {expected - actual[type_name]}, "
-            f"only in PostgreSQL {actual[type_name] - expected}"
-        )
+    assert [row["typname"] for row in rows] == [], (
+        "settled decision #100 removed every PostgreSQL enum type; a new one is a "
+        "regression, and takes text + CHECK instead"
+    )
 
 
 def converted_columns() -> list[tuple[str, str, type]]:
@@ -193,6 +183,19 @@ def test_every_partial_index_predicate_survives_a_conversion(migrated_database: 
                 continue
             declared[str(index.name)] = set(re.findall(r"'([^']*)'", str(where)))
 
+        # **`ExcludeConstraint` is not an `Index`**, and missing that would have
+        # left the most important object in the whole conversion unchecked.
+        # `sessions_no_mentor_double_booking` lives in `table.constraints`, is
+        # backed by an index PostgreSQL reports in `pg_indexes`, and carries the
+        # `LIVE_STATUSES` predicate that step 8 had to transcribe. Walking only
+        # `table.indexes` covered the three partial indexes beside it and not the
+        # constraint they sit next to.
+        for constraint in table.constraints:
+            where = getattr(constraint, "where", None)
+            if where is None or constraint.name is None:
+                continue
+            declared[str(constraint.name)] = set(re.findall(r"'([^']*)'", str(where)))
+
     partial = {name: values for name, values in declared.items() if values}
     assert partial, "no partial index declares a literal; this test would inspect nothing"
 
@@ -244,20 +247,9 @@ def test_the_database_agrees_with_how_each_vocabulary_is_declared(migrated_datab
             f"or ran without the model change"
         )
 
-    still_native = [
-        (table.name, column.name, column.type.name)
-        for table in Base.metadata.tables.values()
-        for column in table.c
-        if getattr(column.type, "name", None) in set(PG_ENUM_TYPES.values())
-    ]
-    assert still_native, "no un-converted enum columns; update this test when step 8 lands"
-
-    for table, column, type_name in still_native:
-        row = actual[(table, column)]
-        assert row["data_type"] == "USER-DEFINED" and row["udt_name"] == type_name, (
-            f"{table}.{column} is declared pg_enum({type_name}) but the database "
-            f"has it as {row['data_type']} — a converted column left in PG_ENUM_TYPES"
-        )
+    # The mirror half — "a column declared `pg_enum` must be a live type" — is
+    # gone with `pg_enum` itself. `test_no_postgresql_enum_type_survives` covers
+    # what it protected, from the database side.
 
 
 def model_check_constraint_names() -> Iterable[tuple[str, str]]:

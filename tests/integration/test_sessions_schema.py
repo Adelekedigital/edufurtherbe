@@ -430,7 +430,7 @@ async def test_an_event_defaults_to_a_user_actor_and_empty_metadata(
     await conn.execute(
         text(
             "INSERT INTO session_events (session_id, to_status) "
-            "VALUES (:s, CAST('pending_mentor_approval' AS session_status))"
+            "VALUES (:s, 'pending_mentor_approval')"
         ),
         {"s": session_id},
     )
@@ -497,10 +497,7 @@ async def test_a_session_with_events_cannot_be_deleted(
     conn, mentor_id, mentee_id = booking
     session_id = await insert_session(conn, mentor_id, mentee_id)
     await conn.execute(
-        text(
-            "INSERT INTO session_events (session_id, to_status) "
-            "VALUES (:s, CAST('cancelled' AS session_status))"
-        ),
+        text("INSERT INTO session_events (session_id, to_status) VALUES (:s, 'cancelled')"),
         {"s": session_id},
     )
 
@@ -693,14 +690,14 @@ async def test_overlaps_outside_the_live_statuses_are_accepted(
 
     a = await insert_session(conn, mentor_id, mentee_id, duration=60)
     await conn.execute(
-        text("UPDATE sessions SET status = CAST(:s AS session_status) WHERE id = :i"),
+        text("UPDATE sessions SET status = :s WHERE id = :i"),
         {"s": first, "i": a},
     )
     b = await insert_session(
         conn, mentor_id, other, starts_at=STARTS_AT + timedelta(minutes=30), duration=60
     )
     await conn.execute(
-        text("UPDATE sessions SET status = CAST(:s AS session_status) WHERE id = :i"),
+        text("UPDATE sessions SET status = :s WHERE id = :i"),
         {"s": second, "i": b},
     )
 
