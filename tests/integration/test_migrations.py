@@ -133,28 +133,18 @@ EXPECTED_TABLES = [
 # are consumed by tables in the next pull request and ship with them, per settled
 # decision #21 — a type no table uses is a schema asserting a choice nobody took.
 #
-# `unlisted_reason` is **absent, and by that same rule.** It reached head attached
-# to no column at all: `mentor_status_events.reason` is plain `text`, so the type
-# asserted a choice nothing enforced. Settled decision #100 drops it as the first
-# step of the `text` + `CHECK` conversion — the one step that moves no data, and
-# therefore the one that proves the harness. The vocabulary is unaffected;
-# `UnlistedReason` is still written and read as a sentinel, and now lives in
-# `UNCONSTRAINED_ENUMS` with the reason no `CHECK` can guard it.
+# **This tuple is shrinking to nothing, and that is settled decision #100.** Each
+# step converts a vocabulary to `text` + `CHECK` and drops its type; step 8 empties
+# what is left. `docs/handoff-enum-to-text-check.md` tracks which step owns which,
+# so the history lives there rather than accreting a line here per migration.
 #
-# Seven more left in `d1f8a3c62b47`, step 2 — the single-column, single-table
-# vocabularies. `admin_role`, `auth_provider`, `availability_exception_type`,
-# `language_proficiency`, `legal_document_type`, `primary_role` and
-# `verification_status` are now `text` + `CHECK`, and this tuple shrinks with
-# each step until step 8 empties it.
-# `lookup_status` left in `e4b7d0c95a13`, step 3 — the first shared vocabulary,
-# and the first step to drop and recreate index predicates.
-# `approval_status`, `listing_status` and `mentor_status_type` left together in
-# `f5c3a81e6b29`, step 4 — one migration because `apply_mentor_status` reads one
-# and writes the other two, and a plpgsql body carries no dependency records.
+# What remains below is what has *not* converted yet — the session vocabularies.
+# A name still here must have a live PostgreSQL type; a name removed must have a
+# `CHECK` instead, which `test_every_converted_enum_has_a_check_naming_its_values`
+# asserts from the other side.
 ENUM_TYPE_NAMES = (
     "actor_type",
     "attendance_status",
-    "meeting_provider",
     "session_reason_code",
     "session_role",
     "session_status",

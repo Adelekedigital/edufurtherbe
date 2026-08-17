@@ -91,7 +91,7 @@ INSERT INTO session_type_booking_configs
     (session_type_id, duration_minutes, meeting_venue, requires_booking_confirmation)
 VALUES (
     :session_type_id, :duration_minutes,
-    CAST(:meeting_venue AS meeting_provider), :requires_booking_confirmation
+    :meeting_venue, :requires_booking_confirmation
 )
 ON CONFLICT (session_type_id) DO UPDATE SET
     duration_minutes              = EXCLUDED.duration_minutes,
@@ -120,7 +120,7 @@ INSERT INTO sessions
 VALUES
     (:mentor_id, :mentee_id, :session_type_id, CAST(:status AS session_status),
      :starts_at, :duration_minutes, :topic, :booking_message,
-     CAST(:meeting_provider AS meeting_provider), :meeting_url, :external_room_id,
+     :meeting_provider, :meeting_url, :external_room_id,
      :external_calendar_event_id, COALESCE(:created_at, now()),
      COALESCE(:updated_at, now()), :legacy_bubble_id)
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET

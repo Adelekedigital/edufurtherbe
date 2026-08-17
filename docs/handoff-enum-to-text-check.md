@@ -1,6 +1,6 @@
 # Handoff — converting PostgreSQL enums to `text` + `CHECK`
 
-**Status:** steps 1–4 of 8 shipped. 9 columns left, in 4 steps.
+**Status:** steps 1–5 of 8 shipped. 7 columns left, in 3 steps.
 **Written:** 2026-08-15, after `LEFT_EARLY` forced a decision that a droppable
 value would have made trivial.
 **The rule is settled decision #100**; this is the migration plan behind it.
@@ -265,7 +265,7 @@ the next reader can check it rather than trust it: 7+2+3+2+2+2+3 = 21.
 | 2 | **Single-column, single-table** — `admin_users`, `auth_identities`, `availability_exceptions`, `legal_documents`, `user_awards`, `user_languages`, `users` | 7 | ✅ shipped as `d1f8a3c62b47`; all three indexes verified byte-identical before and after |
 | 3 | **`lookup_status`** — first shared type | 2 | ✅ shipped as `e4b7d0c95a13`; both partial indexes dropped and recreated by name |
 | 4 | **The mentor status cluster** — `mentor_status_events.status_type`, `mentor_profiles.approval_status`, `.listing_status` | 3 | ✅ shipped as `f5c3a81e6b29`; `apply_mentor_status` rewritten in the same migration, and the rewrite *removed* the `::text::` hack |
-| 5 | **`meeting_provider`** — `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider` | 2 | no index predicates; one server default |
+| 5 | **`meeting_provider`** — `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider` | 2 | ✅ shipped as `a7d2f4b8c051`; one column nullable, which the `IN` constraint permits without a special case |
 | 6 | **`session_participants`** — `role`, `attendance_status` | 2 | `ix_session_participants_one_mentor` — **unique** and partial on `role` |
 | 7 | **`session_events`** — `actor_type`, `reason_code` | 2 | `ix_session_events_reason` needs no rewrite |
 | 8 | **`session_status`** — last, and on its own | 3 | five index predicates, the gist exclusion constraint, and `from_status`/`to_status` recording transitions that must stay readable across the change |
@@ -394,6 +394,31 @@ docker exec edufurther-postgres psql -U edufurther -d postgres -c "CREATE DATABA
 DATABASE_URL=postgresql://edufurther:edufurther@localhost:55432/enumstepN uv run alembic upgrade head
 ```
 
+### A table rewrite discards statistics, and the planner notices
+
+`ALTER COLUMN ... TYPE` rewrites the table. The rewrite also throws away its
+statistics, and **the planner will not choose a partial index it can no longer
+cost**. Step 5 was caught by `test_the_completed_count_uses_its_partial_index`,
+which asserts the completed-count query reaches `ix_sessions_mentor_completed`;
+after the rewrite it took `ix_sessions_mentor_window` instead.
+
+So every remaining step ends with `ANALYZE` on the tables it rewrote, in both
+directions. `ANALYZE` is permitted inside a transaction block — `VACUUM` is not,
+and is not what is needed, since the rewrite already reclaimed the space.
+
+**Steps 2 to 4 do not have it**, and that is a known gap rather than an oversight
+left unstated. That planner assertion exists only for `sessions`, so nothing was
+watching when `users`, `institutions` and `mentor_profiles` were rewritten.
+Autovacuum re-analyses them and the tables are small — `users` is 43 rows — so
+the exposure is a bounded window of worse plans rather than a lasting one. If a
+deploy wants belt-and-braces, a follow-up migration that does nothing but
+`ANALYZE` those tables is a safe one-liner; it is not worth destabilising two
+open PRs for.
+
+The window matters most where the table is large and the read is hot, which is
+`sessions` (step 8), `session_participants` (step 6) and `session_events`
+(step 7) — the three still to come.
+
 ### `alembic check` sees a missing index, not a wrong one
 
 Measured in step 3, because the distinction decides how much verification the
@@ -446,6 +471,52 @@ The duplication is answered by verification rather than by abstraction:
 `test_the_database_agrees_with_how_each_vocabulary_is_declared` assert the
 outcome for every converted column, whoever wrote the migration — which is
 strictly more than a helper could guarantee.
+
+## Queued behind step 8: `SessionStatus.WITHDRAWN`
+
+**Decided 2026-08-16: step 8 lands first, then the value is added.** Recorded
+here because the ordering is the whole decision and it expires once step 8 ships.
+
+A mentee withdrawing a request before it expires has no status today. It lands as
+`CANCELLED`, which conflates it with calling off an already-confirmed session — a
+different fact carrying different policy for refunds and mentor-reliability
+stats. It is reconstructable from `session_events`
+(`from_status = 'pending_mentor_approval'`, `actor_type = 'user'`,
+`reason_code = 'mentee_no_longer_needed'`) but not queryable as a status.
+
+The ordering matters because the two costs are not comparable:
+
+| When | Cost | Reversible |
+|---|---|---|
+| Before step 8 | `ALTER TYPE ... ADD VALUE` — one line, works in a transaction | **No.** `DROP VALUE` is unimplemented |
+| After step 8 | three `CHECK` swaps in one migration | Yes |
+
+Three, not one: `session_status` guards `sessions.status`,
+`session_events.from_status` and `session_events.to_status`, and a `CHECK` cannot
+span tables. Still one migration.
+
+Adding it early would make it the **ninth** dead label if the flow is later
+modelled as a `reason_code` on `CANCELLED` instead — joining the eight this
+document was written about. #100's standing rule applies: *do not add a value
+until something writes it.* The one condition that flips the ordering is the
+withdraw flow shipping before step 8, in which case take the permanent version
+rather than block the feature.
+
+**One constraint either way:** `LIVE_STATUSES` is
+`status IN ('pending_mentor_approval', 'confirmed')` and defines which sessions
+hold a mentor's booking slot. `WITHDRAWN` stays outside it, as `EXPIRED`,
+`DECLINED` and `CANCELLED` correctly do.
+
+Two related cautions recorded at the same time, both about `NO_SHOW`:
+
+- **Session-level and per-person are deliberately two levels.** `NO_SHOW` on
+  `sessions.status` says the session did not happen; `session_participants.attendance_status`
+  says one named person did not arrive. A mentee-attended, mentor-absent session
+  has two participant rows and exactly one session outcome.
+- **No synonym for it.** "Uncompleted" as a second name for `NO_SHOW` is how one
+  rule becomes two representations, which non-negotiable #8 forbids.
+- Nothing currently transitions a past-dated `CONFIRMED` session to `NO_SHOW`.
+  That job does not exist yet, and this conversion does not create it.
 
 ## Definition of done, per step
 
