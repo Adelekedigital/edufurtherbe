@@ -183,12 +183,18 @@ class MentorProfileRead(BaseModel):
     years_of_experience: int | None = None
     approval_status: str
     listing_status: str
-    # Both live on the primary offering now (D88), so both are absent for a
-    # mentor who has no primary — a new applicant, or one mid-way through the
-    # two-step that swaps which offering is primary. `None` says "no booking
-    # policy yet"; a default would say "bookable on Google Meet, no confirmation
-    # needed", which is a claim about someone who has nothing to book.
-    requires_booking_confirmation: bool | None = None
+    # Back to a plain bool, and back off the primary offering. `mentor_profiles`
+    # holds it `NOT NULL` and a mentor row always exists, so there is no mentor
+    # for whom this is unknown — which is the difference between inheriting from
+    # a row that must exist and one that need not.
+    #
+    # Narrowing rather than breaking: a client that handled the old `null` still
+    # validates a bool, and the field never stops being present.
+    requires_booking_confirmation: bool
+    # Still the primary offering's, so still absent for a mentor who has no
+    # primary — a new applicant, or one mid-way through the two-step that swaps
+    # which offering is primary. `None` says "no venue yet"; `'google_meet'`
+    # would be a claim about someone who has nothing to book.
     default_meeting_venue: str | None = None
     primary_study_program: str | None = None
     primary_study_country: CountryRef | None = None
@@ -208,11 +214,7 @@ class MentorProfileRead(BaseModel):
             years_of_experience=row.get("years_of_experience"),
             approval_status=str(row["approval_status"]),
             listing_status=str(row["listing_status"]),
-            requires_booking_confirmation=(
-                None
-                if row.get("requires_booking_confirmation") is None
-                else bool(row["requires_booking_confirmation"])
-            ),
+            requires_booking_confirmation=bool(row["requires_booking_confirmation"]),
             default_meeting_venue=(
                 None
                 if row.get("default_meeting_venue") is None

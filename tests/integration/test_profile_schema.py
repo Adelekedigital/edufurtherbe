@@ -401,15 +401,26 @@ async def test_a_user_may_hold_only_one_goals_row(db_engine: AsyncEngine) -> Non
             await add_mentee_goals(conn, user)
 
 
-# `test_booking_confirmation_defaults_to_false` was deleted by D88's contract
-# step. It pinned `mentor_profiles.requires_booking_confirmation` defaulting to
-# `false` — a departure from the package, asserted so that changing it back would
-# be deliberate.
-#
-# The departure survives; the column does not. The same default now sits on
-# `session_type_booking_configs.requires_booking_confirmation`, which is where
-# every reader and the fan-out writer look, and the reasoning is unchanged:
-# legacy stored a blank on 10 of 15 mentors and blank meant "never turned it on".
+async def test_booking_confirmation_defaults_to_false(db_engine: AsyncEngine) -> None:
+    """A departure from the package, pinned so reverting it is deliberate (#57).
+
+    **Deleted by D88's contract step and restored here with the column.** The
+    tombstone this replaces recorded that the departure survived on
+    `session_type_booking_configs` while the mentor column did not; the reversal
+    puts the authority back, so the assertion belongs back on the row that
+    carries it. The reasoning never moved: legacy stored a blank on 10 of 15
+    mentors and blank meant "never turned it on", so `false` is what the data
+    says, and migrated and new mentors starting on opposite settings would be a
+    difference nobody could explain later.
+    """
+    async with db_engine.begin() as conn:
+        mentor = await add_user(conn, "confirmation-default@example.com")
+        await add_mentor_profile(conn, mentor)
+
+        stored = await conn.execute(
+            text("SELECT requires_booking_confirmation FROM mentor_profiles")
+        )
+        assert stored.scalar_one() is False
 
 
 async def test_a_new_profile_is_pending_and_unlisted(db_engine: AsyncEngine) -> None:

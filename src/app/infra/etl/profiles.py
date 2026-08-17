@@ -66,12 +66,13 @@ SELECT 1 FROM mentor_status_events WHERE mentor_user_id = :user_id LIMIT 1
 UPSERT_MENTOR_PROFILE = """
 INSERT INTO mentor_profiles (
     user_id, legacy_bubble_id, created_at, updated_at,
-    approval_status, listing_status,
+    approval_status, listing_status, requires_booking_confirmation,
     primary_study_country_id, primary_study_program
 ) VALUES (
     :user_id, :legacy_bubble_id, :created_at, :updated_at,
     :approval_status,
     :listing_status,
+    :requires_booking_confirmation,
     :primary_study_country_id, :primary_study_program
 )
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET
@@ -80,6 +81,7 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     updated_at                    = EXCLUDED.updated_at,
     approval_status               = EXCLUDED.approval_status,
     listing_status                = EXCLUDED.listing_status,
+    requires_booking_confirmation = EXCLUDED.requires_booking_confirmation,
     primary_study_country_id      = EXCLUDED.primary_study_country_id,
     primary_study_program         = EXCLUDED.primary_study_program
 """
@@ -259,10 +261,12 @@ class ProfileLoader:
                     "updated_at": mentor.updated_at,
                     "approval_status": mentor.approval_status.value,
                     "listing_status": mentor.listing_status.value,
-                    # `requires_booking_confirmation` and `default_meeting_venue`
-                    # are absent: D88's contract step removed both columns, and
-                    # the session loader now takes those values off `SessionTypeRow`
-                    # rather than reading them back out of this table.
+                    # Back on this row, and this loader is its only ETL writer.
+                    # The session loader must not also write it: two writers for
+                    # one fact is what D88 produced in the other direction.
+                    # `default_meeting_venue` stays absent — venue is per
+                    # offering and travels on `SessionTypeRow`.
+                    "requires_booking_confirmation": mentor.requires_booking_confirmation,
                     "primary_study_country_id": country_id,
                     "primary_study_program": mentor.primary_study_program,
                 },

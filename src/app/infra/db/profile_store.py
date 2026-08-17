@@ -198,12 +198,20 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
     an empty object would say "they are a mentor with nothing filled in", which
     is a different and wrong claim.
 
-    **``default_meeting_venue`` and ``requires_booking_confirmation`` come from
-    the primary offering** (D88), not from ``mentor_profiles``, and both are null
-    when there is no primary. That is not a degraded read: after the move these
-    settings only exist on an offering, so a mentor who has claimed none has no
-    value rather than a default one. Reporting ``'google_meet'`` and ``false``
-    there would invent a booking policy for someone who cannot be booked.
+    **``requires_booking_confirmation`` comes from ``mentor_profiles`` again**,
+    reversing the half of D88 that put it on the primary offering. It is
+    ``NOT NULL`` there, so it is a bool for every mentor including one who has
+    claimed no offering — the mentor row is the terminus and cannot be missing.
+    The per-offering override is nullable and **is not resolved here**: nothing
+    can set one yet (#21), and a ``COALESCE`` written before anything writes the
+    overriding column would be a mechanism with no producer.
+
+    **``default_meeting_venue`` still comes from the primary offering** (D88) and
+    is null when there is no primary. That is not a degraded read: venue only
+    exists on an offering, so a mentor who has claimed none has no value rather
+    than a default one, and reporting ``'google_meet'`` would invent a booking
+    policy for someone who cannot be booked. It leaves this response with the
+    primary offering itself.
     """
     primary = aliased(SessionTypeBookingConfig, name="primary_config")
     row = (
@@ -215,7 +223,7 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
                     MentorProfile.years_of_experience,
                     MentorProfile.approval_status,
                     MentorProfile.listing_status,
-                    primary.requires_booking_confirmation,
+                    MentorProfile.requires_booking_confirmation,
                     primary.meeting_venue.label("default_meeting_venue"),
                     MentorProfile.primary_study_program,
                     Country.code.label("primary_study_country_code"),

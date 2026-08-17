@@ -214,6 +214,22 @@ def test_a_blank_confirmation_is_false() -> None:
     assert confirmation is False
 
 
+def test_the_mentor_row_carries_the_confirmation_setting() -> None:
+    """**Moved here from `test_sessions_transform.py` with the column.**
+
+    It used to be asserted on `SessionTypeRow`, because D88 held the setting on
+    the offering and the session transform was what carried it. The column went
+    back to `mentor_profiles`, so the value now has to survive *this* transform
+    instead — and if it does not, the profile load writes the column default and
+    every migrated mentor who required confirmation stops requiring it.
+
+    Non-default on purpose: `booking_defaults` returning the wrong half of its
+    tuple, or the field being dropped, both answer `False` and fail here.
+    """
+    row = to_mentor_profile(record(**{"confirmationRequired": "yes"}), USER_ID, export_timezone=NY)
+    assert row.requires_booking_confirmation is True
+
+
 # --------------------------------------------------------------------------
 # Awards
 # --------------------------------------------------------------------------

@@ -27,9 +27,11 @@ column became `NOT NULL` with a server default and every offering carries its
 own. The contract step then dropped the mentor-level column, so there is no
 second place a venue could come from.
 
-Settled decision #102 records why the venue left the fallback while
-`requires_booking_confirmation` kept it, and `models/sessions.py` states the same
-fact at the column.
+Settled decision #102 records why the venue left the fallback. It also recorded
+that `requires_booking_confirmation` kept it, which #106 has since reversed —
+that column went back to `mentor_profiles` and inherits from the *mentor* rather
+than from a primary offering. Venue is unaffected and has no mentor-level home.
+`models/sessions.py` states both facts at the columns.
 """
 
 from __future__ import annotations

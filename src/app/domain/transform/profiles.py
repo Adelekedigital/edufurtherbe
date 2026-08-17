@@ -316,6 +316,11 @@ class MentorProfileRow:
     approved_at: datetime | None
     listing_status: ListingStatus
     unlisted_reason: UnlistedReason | None
+    #: The confirmation half of ``booking_defaults``. It travelled on
+    #: ``SessionTypeRow`` while D88 held the column on the offering; the reversal
+    #: puts it back on the mentor, which is also where the legacy field it comes
+    #: from lived. The **venue** half stays on the offering and does not follow.
+    requires_booking_confirmation: bool
     primary_study_country_name: str | None
     primary_study_program: str | None
     service_slugs: tuple[str, ...]
@@ -505,6 +510,9 @@ def to_mentor_profile(
         ),
         listing_status=listing,
         unlisted_reason=unlisted_reason,
+        # `booking_defaults` returns (venue, confirmation) and this row wants
+        # only the second. The first stays with the offering.
+        requires_booking_confirmation=booking_defaults(record, bubble_id=bubble_id)[1],
         primary_study_country_name=_text(record, MENTOR_STUDY_COUNTRY_FIELD),
         primary_study_program=_text(record, MENTOR_STUDY_PROGRAM_FIELD),
         service_slugs=tuple(

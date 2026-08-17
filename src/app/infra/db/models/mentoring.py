@@ -149,8 +149,25 @@ class MentorProfile(TimestampMixin, Base):
     headline: Mapped[str | None] = mapped_column(Text)
     years_of_experience: Mapped[int | None] = mapped_column()
 
-    # DEFAULT false, where the package has true. Legacy stored a blank on 10 of
-    # 15 mentors, and blank meant "never turned it on" — so false is what the
+    #: Whether a booking against this mentor waits for them to accept it.
+    #:
+    #: ``DEFAULT false``, where the package has ``true``. The argument is settled
+    #: decision #57 and is not restated here (#51).
+    #:
+    #: **This is the authority, and a config may override it.** D88 moved this
+    #: column onto ``session_type_booking_configs``; the move is reversed because
+    #: the mechanism was wrong rather than the destination — one fallback
+    #: covering three fields, and all three failed differently. What makes a
+    #: nullable override work here and not there: a mentor row always exists, so
+    #: the chain cannot bottom out at nothing, which is precisely what killed the
+    #: venue cascade (#102).
+    #:
+    #: ``NOT NULL``. Null on the *config* means inherit; null here would mean
+    #: nothing at all.
+    requires_booking_confirmation: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("false")
+    )
+
     #: The offering a mentee lands on, and what an unconfigured offering falls
     #: back to (D88).
     #:

@@ -1,18 +1,19 @@
-"""D88's reader step: the owner profile reads its booking settings from the
-primary offering, and the mentor-level write reaches them.
+"""The owner profile's booking settings: venue from the primary offering,
+confirmation from the mentor.
 
-**The write half is why this file exists.** The expand step dual-wrote from the
-ETL and not from `profile_writer`, so `PATCH /mentor-profile` set
-`requires_booking_confirmation` on `mentor_profiles` alone. That was harmless
-while `mentor_profiles` was still authoritative and becomes silent data loss the
-moment the readers move — the mentor toggles the setting, is answered 200, and
-nothing they or anyone else reads changes. No existing test could see it: the
-write suite asserts the response, and the read suite seeds rows directly.
+**This file was D88's reader step and half of it is now reversed.** D88 moved
+`requires_booking_confirmation` onto `session_type_booking_configs` and this
+suite pinned the move; the column has gone back to `mentor_profiles`, so the
+assertions follow it rather than being deleted. What the file is *for* has not
+changed: a write that answers 200 and reaches nothing anybody reads is invisible
+to the write suite (which asserts the response) and to the read suite (which
+seeds rows directly), and only a write-then-read through the API sees it.
 
-The null cases are not an edge. `trg_refuse_retiring_a_primary_offering` refuses
-to retire an offering something points at, so *release the pointer, then retire*
-is the sanctioned two-step and "live offerings, no primary" is a state mentors
-pass through by design.
+`default_meeting_venue` still comes from the primary offering and its null cases
+are still not an edge: `trg_refuse_retiring_a_primary_offering` refuses to retire
+an offering something points at, so *release the pointer, then retire* is the
+sanctioned two-step and "live offerings, no primary" is a state mentors pass
+through by design. That half leaves with the pointer, in the next release.
 """
 
 from __future__ import annotations
@@ -61,19 +62,35 @@ async def release_primary(engine: AsyncEngine, mentor: UUID) -> None:
         )
 
 
-async def set_confirmation(engine: AsyncEngine, session_type: UUID, value: bool) -> None:
+async def set_confirmation(engine: AsyncEngine, mentor: UUID, value: bool) -> None:
+    """The mentor's own setting — the authority, and what a reader must resolve."""
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "UPDATE session_type_booking_configs SET requires_booking_confirmation = :v "
-                "WHERE session_type_id = :t"
+                "UPDATE mentor_profiles SET requires_booking_confirmation = :v WHERE user_id = :u"
             ),
-            {"v": value, "t": session_type},
+            {"v": value, "u": mentor},
         )
 
 
-async def confirmations(engine: AsyncEngine, mentor: UUID) -> dict[str, bool]:
-    """Every offering this mentor has, by name, with its confirmation setting."""
+async def stored_confirmation(engine: AsyncEngine, mentor: UUID) -> bool:
+    async with engine.connect() as conn:
+        return bool(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT requires_booking_confirmation "
+                        "FROM mentor_profiles WHERE user_id = :u"
+                    ),
+                    {"u": mentor},
+                )
+            ).scalar_one()
+        )
+
+
+async def overrides(engine: AsyncEngine, mentor: UUID) -> dict[str, bool | None]:
+    """Every offering this mentor has, by name, with its **override** — normally
+    null, meaning it follows the mentor."""
     async with engine.connect() as conn:
         rows = await conn.execute(
             text(
@@ -103,49 +120,79 @@ async def read_profile(
 
 
 # --------------------------------------------------------------------------
-# The read moves to the primary offering
+# The read: venue from the primary, confirmation from the mentor
 # --------------------------------------------------------------------------
 
 
-async def test_the_owner_profile_reads_its_settings_from_the_primary_offering(
+async def test_the_owner_profile_reads_the_venue_from_the_primary_offering(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The positive case.
+    """The venue half of D88's reader step, which this release does not touch.
 
-    Written when `mentor_profiles` still carried both columns, so it set the two
-    locations to *opposite* values and only the new source could produce this
-    answer. The contract step removed the old location entirely, which is a
-    stronger guarantee than the fixture was: there is no second place a reader
-    could be looking. Non-default values are kept anyway, so a reader returning
-    column defaults still fails.
+    Non-default on purpose, so a reader that returned the column default still
+    fails.
     """
     mentor, auth_id = await as_mentor(db_engine, "reads-primary")
     session_type = await add_session_type(db_engine, mentor, name="Mock interview", venue="zoom")
     await make_primary(db_engine, mentor, session_type)
-    await set_confirmation(db_engine, session_type, True)
 
     profile = await read_profile(api_client, mentor, auth_id)
 
     assert profile["default_meeting_venue"] == "zoom"
+
+
+async def test_the_owner_profile_reads_confirmation_from_the_mentor_not_the_offering(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The reversal, in one assertion.**
+
+    The two locations are set to *opposite* values, so only the new source can
+    produce this answer. The offering says `False` and the mentor says `True`; a
+    reader still resolving through the primary offering — which is what shipped
+    before this release — answers `False` and fails here.
+
+    This is the shape the original reader step used and it is worth keeping: a
+    single-valued fixture cannot tell a moved reader from an unmoved one.
+    """
+    mentor, auth_id = await as_mentor(db_engine, "confirmation-source")
+    session_type = await add_session_type(db_engine, mentor, name="SOP review")
+    await make_primary(db_engine, mentor, session_type)
+    await set_confirmation(db_engine, mentor, True)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_type_booking_configs SET requires_booking_confirmation = false "
+                "WHERE session_type_id = :t"
+            ),
+            {"t": session_type},
+        )
+
+    profile = await read_profile(api_client, mentor, auth_id)
+
     assert profile["requires_booking_confirmation"] is True
 
 
-async def test_a_mentor_with_no_primary_reports_no_booking_settings(
+async def test_a_mentor_with_no_primary_still_reports_a_confirmation_setting(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Null, not a default, and **not a 500**.
+    """**Changed deliberately: this asserted `None` and now asserts a bool.**
 
-    Both fields were required on the response model, which is what made the
-    terminus question blocking: a mentor with no primary is ordinary, and a
-    required field with no value is a serialisation error on the owner's own
-    profile.
+    It read `None` because the value lived on a primary offering the mentor did
+    not have — a chain with a reachable, empty bottom. `mentor_profiles` is
+    `NOT NULL` and a mentor row always exists, so there is no mentor for whom
+    this is unknown. That is the entire argument for moving the column back, and
+    a test still permitting `None` would allow the terminus to go missing again.
+
+    `default_meeting_venue` keeps its null: venue has no mentor-level home, so a
+    mentor with no primary genuinely has no venue. The two fields answering
+    differently in the same response is the point, not an inconsistency.
     """
     mentor, auth_id = await as_mentor(db_engine, "no-primary")
 
     profile = await read_profile(api_client, mentor, auth_id)
 
     assert profile["default_meeting_venue"] is None
-    assert profile["requires_booking_confirmation"] is None
+    assert profile["requires_booking_confirmation"] is False
 
 
 async def test_a_released_pointer_still_reads_rather_than_failing(
@@ -173,7 +220,7 @@ async def test_a_released_pointer_still_reads_rather_than_failing(
 
 
 # --------------------------------------------------------------------------
-# The write reaches the new location
+# The write reaches the mentor row, and only that
 # --------------------------------------------------------------------------
 
 
@@ -182,8 +229,7 @@ async def test_toggling_confirmation_survives_a_read(
 ) -> None:
     """Write-then-read through the API, which is the only shape that sees this.
 
-    Asserting the 200, or asserting `mentor_profiles`, both pass against a
-    writer that never reaches the offering.
+    Asserting the 200 alone passes against a writer that reaches nothing.
     """
     mentor, auth_id = await as_mentor(db_engine, "toggle")
     session_type = await add_session_type(db_engine, mentor, name="SOP review")
@@ -200,16 +246,25 @@ async def test_toggling_confirmation_survives_a_read(
     assert profile["requires_booking_confirmation"] is True
 
 
-async def test_the_toggle_reaches_every_live_offering(
+async def test_the_toggle_writes_the_mentor_and_leaves_every_offering_inheriting(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """All of them, not only the primary.
+    """**Replaces `test_the_toggle_reaches_every_live_offering`, inverted.**
 
-    The column has no inherit, and this endpoint is the mentor's only control
-    over it — so touching the primary alone would leave their other offerings on
-    whatever the backfill wrote, with no way to reach them.
+    That test asserted the fan-out copied the mentor's choice onto all of their
+    live offerings, and it was right for the schema it was written against: the
+    config column was `NOT NULL` with no inherit, so a mentor-level toggle had
+    nowhere else to land. With the mentor column authoritative the copy is not
+    merely unnecessary, it is harmful — every offering it wrote would become a
+    permanent override, and the next toggle would change `mentor_profiles` while
+    every reader kept resolving the stale copy.
+
+    So the assertion is inverted rather than dropped: the offerings must be left
+    **null**. What would bring the old test back is an offering-management
+    endpoint that sets an override deliberately, per offering — which is a
+    different write with a different shape, not this one.
     """
-    mentor, auth_id = await as_mentor(db_engine, "fan-out")
+    mentor, auth_id = await as_mentor(db_engine, "fan-out-gone")
     primary = await add_session_type(db_engine, mentor, name="SOP review")
     await add_session_type(db_engine, mentor, name="Mock interview")
     await make_primary(db_engine, mentor, primary)
@@ -220,18 +275,42 @@ async def test_the_toggle_reaches_every_live_offering(
         headers=bearer(api_token(auth_id)),
     )
 
-    assert await confirmations(db_engine, mentor) == {"SOP review": True, "Mock interview": True}
+    assert await stored_confirmation(db_engine, mentor) is True
+    assert await overrides(db_engine, mentor) == {"SOP review": None, "Mock interview": None}
 
 
-async def test_the_toggle_does_not_reach_another_mentors_offerings(
+async def test_a_mentor_with_no_offerings_can_still_store_the_setting(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The scoping half. A fan-out missing its `WHERE` changes the platform."""
+    """**The case that was a silent no-op, and is why the column moved back.**
+
+    Under the fan-out this `PATCH` answered 200 and wrote nothing: there were no
+    offerings to write to, and the docstring on `_fan_out_booking_confirmation`
+    argued that was correct because someone with nothing bookable has no booking
+    policy. That argument does not survive the mentor having a column — a mentor
+    who sets their policy before creating their first offering is the ordinary
+    onboarding order, not an edge case, and their choice must outlive the request.
+    """
+    mentor, auth_id = await as_mentor(db_engine, "no-offerings")
+
+    response = await api_client.patch(
+        profile_url(mentor),
+        json={"requires_booking_confirmation": True},
+        headers=bearer(api_token(auth_id)),
+    )
+    assert response.status_code in (200, 204), response.text
+
+    assert await stored_confirmation(db_engine, mentor) is True
+    profile = await read_profile(api_client, mentor, auth_id)
+    assert profile["requires_booking_confirmation"] is True
+
+
+async def test_the_toggle_does_not_reach_another_mentor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The scoping half. An `UPDATE` missing its `WHERE` changes the platform."""
     mentor, auth_id = await as_mentor(db_engine, "mine")
-    mine = await add_session_type(db_engine, mentor, name="Mine")
-    await make_primary(db_engine, mentor, mine)
     other = await make_public_mentor(db_engine, "theirs")
-    await add_session_type(db_engine, other, name="Theirs")
 
     await api_client.patch(
         profile_url(mentor),
@@ -239,7 +318,7 @@ async def test_the_toggle_does_not_reach_another_mentors_offerings(
         headers=bearer(api_token(auth_id)),
     )
 
-    assert await confirmations(db_engine, other) == {"Theirs": False}
+    assert await stored_confirmation(db_engine, other) is False
 
 
 async def test_an_explicit_null_confirmation_is_refused_rather_than_a_500(
@@ -252,14 +331,11 @@ async def test_an_explicit_null_confirmation_is_refused_rather_than_a_500(
     right to send an explicit `null`, which `_sent` forwarded to a `NOT NULL`
     column: an authenticated 500 on a value the schema advertised as legal.
 
-    Pre-existing rather than introduced here, and fixed here because this is the
-    field the release is about and the fan-out would otherwise need a dead
-    `None` branch to guard a case the boundary should never admit.
+    The column is `NOT NULL` again, on a different table, so the trap is the same
+    trap and the guard still earns its place.
     """
     mentor, auth_id = await as_mentor(db_engine, "null-confirm")
-    session_type = await add_session_type(db_engine, mentor, name="SOP review")
-    await make_primary(db_engine, mentor, session_type)
-    await set_confirmation(db_engine, session_type, True)
+    await set_confirmation(db_engine, mentor, True)
 
     response = await api_client.patch(
         profile_url(mentor),
@@ -268,7 +344,7 @@ async def test_an_explicit_null_confirmation_is_refused_rather_than_a_500(
     )
 
     assert response.status_code == 422, response.text
-    assert await confirmations(db_engine, mentor) == {"SOP review": True}
+    assert await stored_confirmation(db_engine, mentor) is True
 
 
 async def test_a_patch_that_says_nothing_about_confirmation_leaves_it_alone(
@@ -276,14 +352,11 @@ async def test_a_patch_that_says_nothing_about_confirmation_leaves_it_alone(
 ) -> None:
     """Absent is not false.
 
-    `_sent` already draws this line for the mentor row; the fan-out has to draw
-    it again, because a `PATCH` of the headline alone would otherwise reset
-    every offering's booking policy.
+    `_sent` draws this line, and a `PATCH` of the headline alone would otherwise
+    reset the mentor's booking policy.
     """
     mentor, auth_id = await as_mentor(db_engine, "untouched")
-    session_type = await add_session_type(db_engine, mentor, name="SOP review")
-    await make_primary(db_engine, mentor, session_type)
-    await set_confirmation(db_engine, session_type, True)
+    await set_confirmation(db_engine, mentor, True)
 
     await api_client.patch(
         profile_url(mentor),
@@ -291,4 +364,4 @@ async def test_a_patch_that_says_nothing_about_confirmation_leaves_it_alone(
         headers=bearer(api_token(auth_id)),
     )
 
-    assert await confirmations(db_engine, mentor) == {"SOP review": True}
+    assert await stored_confirmation(db_engine, mentor) is True

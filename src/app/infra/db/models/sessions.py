@@ -215,30 +215,31 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
         str_enum(MeetingProvider), nullable=False, server_default=text("'google_meet'")
     )
 
-    #: Whether a booking against this offering waits for the mentor.
+    #: Whether a booking against *this offering* waits for the mentor —
+    #: **or null, meaning follow the mentor's own setting.**
     #:
-    #: Moving here from ``mentor_profiles`` under D88, so one offering can
-    #: auto-confirm while another waits — a mentor may want a free intro
-    #: booked instantly and a paid review reviewed first. **Not nullable and
-    #: not an inherit**: a boolean has no room for a third state, so null would
-    #: mean *inherit* and be indistinguishable from *false* to every reader that
-    #: forgot the cascade exists.
+    #: ``mentor_profiles.requires_booking_confirmation`` is the authority. This
+    #: column exists so one offering can auto-confirm while another waits: a free
+    #: intro booked instantly, a paid review looked at first.
     #:
-    #: This once read "unlike ``meeting_venue`` above", which stopped being true
-    #: when D88's contract step made that column ``NOT NULL`` too (settled
-    #: decision #102). Neither column is a null-means-inherit today; what still
-    #: differs is that #102 keeps *this* one in D88's primary-offering fallback
-    #: and takes ``meeting_venue`` out of it.
+    #: **Null means inherit, and that is not the state D88 argued against.** D88
+    #: moved this column here and rejected a nullable boolean, on the grounds
+    #: that *a boolean has no room for a third state, so null would be
+    #: indistinguishable from false to any reader who forgot the cascade*. That
+    #: was right about inheriting from a **primary offering**, because a mentor
+    #: may hold live offerings and no primary — the chain had a reachable, empty
+    #: bottom, which is what also killed the venue cascade (#102). It is wrong
+    #: about inheriting from the mentor: that row always exists.
     #:
-    #: **This column is the one that is read.** That reverses what this note
-    #: said while D88 was mid-flight — "``mentor_profiles`` is still
-    #: authoritative; both are written until the readers move" — because the
-    #: readers moved in the D88 reader step: ``get_mentor_profile`` selects the
-    #: *primary offering's* value and never consults ``mentor_profiles``. Both
-    #: locations are still written, so the older column is maintained and unread.
-    requires_booking_confirmation: Mapped[bool] = mapped_column(
-        nullable=False, server_default=text("false")
-    )
+    #: **No server default, deliberately.** A default of ``false`` under a
+    #: nullable column would make every inserted row an override that happens to
+    #: agree, and the inherit would be reachable only by writing null by hand.
+    #:
+    #: **Nothing reads it yet** (#21). The mentor column answers every question
+    #: asked today; this one starts being consulted when an endpoint can set it.
+    #: Ship it now anyway — a null costs nothing and the alternative is a second
+    #: migration when the UI catches up.
+    requires_booking_confirmation: Mapped[bool | None] = mapped_column(nullable=True)
 
     __table_args__ = (
         UniqueConstraint("session_type_id"),

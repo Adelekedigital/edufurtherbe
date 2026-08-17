@@ -511,14 +511,19 @@ def test_every_mentor_holding_a_session_gets_one_type() -> None:
     assert result.session_types[0].duration_minutes == 45
 
 
-def test_the_offering_carries_its_mentors_venue_and_confirmation() -> None:
-    """**The contract step's whole point.**
+def test_the_offering_carries_its_mentors_venue() -> None:
+    """**The contract step's whole point, now for one value rather than two.**
 
-    These two values used to reach `session_type_booking_configs` by being
-    written to `mentor_profiles` by the *profile* load and selected back out by
-    the *session* load — two processes coupled through columns that no longer
-    exist. Both are non-default here, so a transform that dropped them on the
-    floor would answer `google_meet`/`False` and be caught.
+    The venue used to reach `session_type_booking_configs` by being written to
+    `mentor_profiles` by the *profile* load and selected back out by the
+    *session* load — two processes coupled through a column that no longer
+    exists. It is non-default here, so a transform that dropped it on the floor
+    would answer `google_meet` and be caught.
+
+    `requires_booking_confirmation` left this row when the column went back to
+    `mentor_profiles`. It is asserted on `MentorProfileRow` in
+    `test_profile_transform.py` instead — the assertion moved rather than going
+    away, because the value still has to survive the transform.
     """
     result = plan(
         [booking()],
@@ -533,7 +538,7 @@ def test_the_offering_carries_its_mentors_venue_and_confirmation() -> None:
 
     (offering,) = result.session_types
     assert offering.meeting_venue is MeetingProvider.CUSTOM
-    assert offering.requires_booking_confirmation is True
+    assert not hasattr(offering, "requires_booking_confirmation")
 
 
 def test_an_offering_whose_mentor_has_no_record_takes_the_column_defaults() -> None:
@@ -545,7 +550,6 @@ def test_an_offering_whose_mentor_has_no_record_takes_the_column_defaults() -> N
 
     (offering,) = result.session_types
     assert offering.meeting_venue is MeetingProvider.GOOGLE_MEET
-    assert offering.requires_booking_confirmation is False
     # **And it is reported.** Falling back silently is what made reading the
     # wrong Bubble Thing invisible: it parsed, matched no anchor, and produced a
     # load where every count reconciled and every mentor was on `google_meet`.
