@@ -15,6 +15,12 @@ an omission here makes that test pass by looking at less.
 from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.availability import AvailabilityException, AvailabilityRule
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
+from app.infra.db.models.intake import (
+    IntakeAnswer,
+    IntakeSubmission,
+    SessionTypeQuestion,
+    SessionTypeQuestionOption,
+)
 from app.infra.db.models.legal import LegalDocument, UserLegalConsent
 from app.infra.db.models.mentoring import (
     MenteeGoal,
@@ -52,6 +58,8 @@ __all__ = [
     "DegreeLevel",
     "EducationEntry",
     "Institution",
+    "IntakeAnswer",
+    "IntakeSubmission",
     "Language",
     "LegalDocument",
     "MenteeGoal",
@@ -68,6 +76,8 @@ __all__ = [
     "SessionParticipant",
     "SessionType",
     "SessionTypeBookingConfig",
+    "SessionTypeQuestion",
+    "SessionTypeQuestionOption",
     "User",
     "UserAward",
     "UserLanguage",
