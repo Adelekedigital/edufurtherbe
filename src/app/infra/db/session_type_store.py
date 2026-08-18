@@ -119,6 +119,43 @@ def _resolved_venue() -> Any:
     ).label("meeting_venue")
 
 
+async def resolve_venue(
+    session: AsyncSession, session_type_id: UUID
+) -> tuple[ConferencingProvider, str | None] | None:
+    """Where this offering is held, and its URL if the mentor supplied one.
+
+    **Here rather than in the writer, so the precedence has one home.** The two
+    read models already resolve a venue through `_resolved_venue`, and
+    provisioning must agree with what a mentee was shown — an offering listed as
+    held on Daily that mints a Meet link is a contract broken silently.
+
+    The custom URL rides along because it is the one venue nothing creates: for
+    `custom` the URL *is* the resolution, and fetching it in a second query
+    would let the two disagree about which option row won.
+
+    ``None`` when the offering does not exist. Unreachable from the writer,
+    which has already resolved the offering to book it, and returned rather than
+    raised so a caller cannot mistake an absence for a default.
+    """
+    row = (
+        (
+            await session.execute(
+                _with_venue(
+                    select(
+                        _resolved_venue(),
+                        func.coalesce(_chosen.custom_url, _default.custom_url).label("custom_url"),
+                    ).select_from(SessionType)
+                ).where(SessionType.id == session_type_id)
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    return ConferencingProvider(str(row["meeting_venue"])), row["custom_url"]
+
+
 def _with_taxonomy(statement: Select[Any]) -> Select[Any]:
     """Attach the service-offering join. **Outer**: classifying an offering is
     optional, and an inner join would silently drop every unclassified one from

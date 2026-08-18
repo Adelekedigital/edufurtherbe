@@ -101,25 +101,31 @@ def test_a_missing_template_is_an_operator_fault_not_a_fallback() -> None:
 
 
 def test_the_default_notifier_delivers_nothing_and_says_so() -> None:
-    """**Not a fake.** It records the intent so a producer can be run end to end
-    with the sends visible in the log, and so the absence of a provider is a
-    line somebody can read rather than silence.
+    """**Not a fake, and not a failure either.** It is the state of a system with
+    no provider configured, and every path above it has to keep working — so the
+    call returns `None` rather than raising, and it records the intent so a
+    producer can be run end to end with the sends visible in the log.
 
     It resolves no template, deliberately: requiring one would make local
     development need a configured provider to exercise a path that sends
     nothing.
 
-    **Captured off the emitting logger rather than through `caplog`.** `caplog`
-    reads records from the handler it installs on the *root* logger, and by the
-    time the whole suite has run there are two `LogCaptureHandler`s on root with
-    the level left at `WARNING` — so an `INFO` record reaches a handler that this
-    fixture is not the reader of, and `caplog.text` is empty. It passed in
-    isolation and failed in the suite, which is the signature of shared state
-    rather than of the code under test.
+    **Captured off the emitting logger rather than through `caplog`, and the
+    logger's own level is lowered.** That second half is what makes it hold.
+    Measured after an `api_client` test has run:
 
-    Attaching to `app.infra.clients.notifications` depends on neither the root
-    level nor which handlers are on it. This is the suite's only `caplog` user,
-    so nothing else was relying on the behaviour that broke.
+        GLOBAL_DISABLE=0   PROPAGATE=True
+        TARGET_LEVEL=0  EFFECTIVE=30
+        ROOT_HANDLERS=[..., LogCaptureHandler, LogCaptureHandler]
+
+    Root sits at `WARNING` with two capture handlers, so `caplog` reads from one
+    the record never reached. A handler attached to this module's logger fails
+    the same way *unless* the logger's level is lowered too — at `NOTSET` it
+    inherits `WARNING` from root and drops the `INFO` record before any handler
+    sees it. Neither `logging.disable` nor propagation is involved.
+
+    So the log line stays asserted. It is the whole of what `NullNotifier` does,
+    and an unasserted diagnostic is one somebody deletes.
     """
     emitter = logging.getLogger("app.infra.clients.notifications")
     records: list[logging.LogRecord] = []
@@ -133,10 +139,12 @@ def test_the_default_notifier_delivers_nothing_and_says_so() -> None:
     emitter.addHandler(handler)
     emitter.setLevel(logging.INFO)
     try:
-        NullNotifier().send(a_message())
+        returned = NullNotifier().send(a_message())
     finally:
         emitter.removeHandler(handler)
         emitter.setLevel(restore)
+
+    assert returned is None
 
     logged = "\n".join(record.getMessage() for record in records)
     assert "not sent" in logged
