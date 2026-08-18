@@ -12,6 +12,30 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`DELETE /api/v1/me/session-types/{id}` — a mentor can remove an offering.**
+
+  Soft, never hard: `sessions.session_type_id` is `RESTRICT`, so an offering
+  that was ever booked could not be hard-deleted anyway, and the row is what a
+  past session still points at — which is what keeps that mentee's history
+  readable. The reads stop returning it; the row survives.
+
+  **Refused with `409` while sessions are still booked**, meaning
+  `pending_mentor_approval` or `confirmed`. A cancelled or completed session
+  does not hold an offering open — a mentor whose offering ran for a year must
+  not be told it is permanently undeletable because it was once used.
+
+  **The `409` carries no machine-readable reason code, reversing a settled
+  answer whose premise lapsed.** It was to carry one so a client could tell it
+  from the primary-offering refusal; that refusal left with
+  `primary_session_type_id`. One refusal has nothing to be distinguished from,
+  and the error envelope has no reason-code mechanism, so adding one would
+  change a shared contract to serve a single caller. The RFC 9457 `type` slot is
+  where it goes when a second reason exists — additive, so nothing here blocks
+  it.
+
+  Deleting frees the name immediately, and a switched-off offering is still
+  deletable — pausing before deleting is the obvious order to work in.
+
 - **`POST` and `PATCH /api/v1/me/session-types` — a mentor can create and change
   their own offerings.** The write surface these tables have been waiting for:
   every screen had a `GET` behind it and no offering could be created at all.

@@ -47,7 +47,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, insert, literal, select, update
+from sqlalchemy import Select, func, insert, literal, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -55,7 +55,12 @@ from sqlalchemy.orm import aliased
 from app.core.errors import ConflictError
 from app.domain.enums import ConferencingProvider
 from app.infra.db.models.mentoring import MentorConferencingOption, MentorProfile
-from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
+from app.infra.db.models.sessions import (
+    LIVE_STATUSES,
+    Session,
+    SessionType,
+    SessionTypeBookingConfig,
+)
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import (
     mentor_is_public,
@@ -65,6 +70,7 @@ from app.infra.db.public_visibility import (
 
 __all__ = [
     "create_session_type",
+    "delete_session_type",
     "list_own_session_types",
     "list_session_types",
     "update_session_type",
@@ -412,4 +418,59 @@ async def update_session_type(
             .where(SessionTypeBookingConfig.session_type_id == session_type_id)
             .values(**config)
         )
+    return True
+
+
+async def delete_session_type(
+    session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID
+) -> bool:
+    """Soft-delete one offering. ``False`` if it is not this mentor's, or is gone.
+
+    **Refuses while a live session is booked on it**, which is a `409` rather
+    than a `404`: the mentor is entitled to delete their own offering, and the
+    refusal is about state they can resolve — the sessions finish, or they cancel
+    them.
+
+    **`LIVE_STATUSES` is reused, not retyped.** It is the predicate behind the
+    double-booking exclusion constraint and three partial indexes, and a
+    predicate inside a `text()` string is not a symbol any linter can bind — the
+    exact shape that put `deleted_at IS NULL` into five statements here with the
+    fifth missed. A cancelled or completed session does **not** block deletion;
+    only a session still awaiting a decision or already agreed does.
+
+    **Checked in application code, and that is forced rather than preferred.**
+    A soft delete is an `UPDATE`, so `sessions.session_type_id`'s `RESTRICT`
+    never fires — the same blindness that made `trg_refuse_retiring_a_primary_offering`
+    necessary for the pointer. A trigger would close the race and this does not:
+    a booking landing between the check and the update leaves a live session on a
+    deleted offering. That is survivable and the alternative is not free — PR 13
+    removed this schema's only business-rule trigger, and reintroducing one for a
+    race whose loser still has a readable session is a trade worth naming rather
+    than making silently. `GET /sessions/{id}` does not consult the offering, so
+    the mentee keeps their session either way.
+
+    **Soft, never hard.** `sessions.session_type_id` is `RESTRICT`, so an offering
+    that was ever booked can never be hard-deleted, and the row is what a past
+    session's `session_type_id` still points at.
+    """
+    scoped = select(SessionType.id).where(
+        *session_type_of(mentor_user_id), SessionType.id == session_type_id
+    )
+    if (await session.execute(scoped)).first() is None:
+        return False
+
+    booked = await session.execute(
+        select(literal(1))
+        .select_from(Session)
+        .where(Session.session_type_id == session_type_id, text(LIVE_STATUSES))
+    )
+    if booked.first() is not None:
+        raise ConflictError(
+            "this session type still has sessions booked on it; cancel them or "
+            "wait for them to finish, or switch the offering off instead"
+        )
+
+    await session.execute(
+        update(SessionType).where(SessionType.id == session_type_id).values(deleted_at=func.now())
+    )
     return True

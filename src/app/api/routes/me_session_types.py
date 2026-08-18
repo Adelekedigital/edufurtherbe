@@ -25,6 +25,7 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
     CreatedOwnSessionTypeDep,
+    DeletedOwnSessionTypeDep,
     OwnSessionTypesDep,
     UpdatedOwnSessionTypeDep,
 )
@@ -158,3 +159,41 @@ async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> dict[str, 
     if not changed:
         raise NotFoundError("no such session type")
     return {"updated": True}
+
+
+@router.delete(
+    "/session-types/{session_type_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete one of your session types",
+    description=(
+        "Removes the offering from your list and from everything a mentee can "
+        "see or book. Past sessions keep pointing at it, so their history stays "
+        "readable — the row survives, marked deleted.\n\n"
+        "**Refused with `409` while sessions are still booked on it.** A session "
+        "awaiting your decision, or already agreed, is somebody's plan; cancel "
+        "them or let them finish first. Cancelled and completed sessions do not "
+        "hold an offering open.\n\n"
+        "**Switching off is the reversible alternative** and is usually what is "
+        "wanted: `PATCH` with `is_active: false` makes an offering invisible and "
+        "unbookable while leaving it to switch back on. Deletion is not "
+        "reversible through this API.\n\n"
+        "The name becomes free immediately — a deleted offering does not reserve "
+        "it.\n\n"
+        "An offering that is not yours, or is already deleted, gets `404`."
+    ),
+    responses=WRITE_RESPONSES
+    | {
+        status.HTTP_409_CONFLICT: {
+            "description": (
+                "Sessions are still booked on this offering. **The only refusal "
+                "this endpoint has**, which is why it carries no machine-readable "
+                "reason: the primary-offering refusal it once had to be "
+                "distinguished from no longer exists. A second reason would "
+                "bring one back."
+            )
+        }
+    },
+)
+async def remove_own_session_type(removed: DeletedOwnSessionTypeDep) -> None:
+    if not removed:
+        raise NotFoundError("no such session type")
