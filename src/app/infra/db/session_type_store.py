@@ -54,7 +54,11 @@ from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError
 from app.domain.enums import ConferencingProvider
-from app.infra.db.models.mentoring import MentorConferencingOption, MentorProfile
+from app.infra.db.models.mentoring import (
+    MentorConferencingOption,
+    MentorProfile,
+    ServiceOffering,
+)
 from app.infra.db.models.sessions import (
     LIVE_STATUSES,
     Session,
@@ -115,6 +119,15 @@ def _resolved_venue() -> Any:
     ).label("meeting_venue")
 
 
+def _with_taxonomy(statement: Select[Any]) -> Select[Any]:
+    """Attach the service-offering join. **Outer**: classifying an offering is
+    optional, and an inner join would silently drop every unclassified one from
+    both lists — which is all of them today."""
+    return statement.outerjoin(
+        ServiceOffering, ServiceOffering.id == SessionType.service_offering_id
+    )
+
+
 def _with_venue(statement: Select[Any]) -> Select[Any]:
     """Attach both option joins. Outer on both — an offering need not have chosen
     one, and a mentor need not have configured any."""
@@ -149,11 +162,16 @@ def _public_mentor(user_id: UUID) -> Select[Any]:
 def _live_session_types(user_id: UUID) -> Select[Any]:
     """This mentor's session types, as a stranger sees them.
 
-    **`created_by`, `category` and `application_stage` are absent on purpose.**
-    The first is internal attribution, null on every migrated row. The other two
-    are free text with no constraint, no vocabulary and no value anywhere in the
-    data — publishing them would commit a public contract to a shape nobody has
-    designed, and removing a field later is breaking where adding one is not.
+    **`created_by` is absent on purpose** — internal attribution, null on every
+    migrated row.
+
+    **`service_offering_id` and `application_stage` are no longer absent.** They
+    were withheld while they were free text with no vocabulary, because
+    publishing them would have committed a public contract to a shape nobody had
+    designed. Both have a designed shape now — a reference to the closed taxonomy
+    and a five-value closed set — so the reason lapsed rather than being
+    overruled. Removing a field later is breaking where adding one is not, which
+    is why the bar for adding was high and is now met.
 
     Ordered by name, which is unique per mentor among live rows, so the order is
     total and stable rather than merely usually-stable.
@@ -163,6 +181,10 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             SessionType.id,
             SessionType.name,
             SessionType.description,
+            ServiceOffering.slug.label("service_offering_slug"),
+            ServiceOffering.display_name.label("service_offering_name"),
+            SessionType.application_stage,
+            SessionType.custom_stage_label,
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
             # Resolved, not read. See `_resolved_venue`.
@@ -177,7 +199,7 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
         .join(User, User.id == SessionType.mentor_user_id)
     )
     return (
-        _with_venue(statement)
+        _with_taxonomy(_with_venue(statement))
         .where(*session_type_is_live(user_id), *mentor_is_public())
         .order_by(SessionType.name)
     )
@@ -197,11 +219,12 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
     returned and flagged rather than hidden — a management list that silently
     omits what you switched off gives you no way to switch it back on.
 
-    **`category` and `application_stage` are returned here and withheld publicly.**
-    That is not a contradiction of the note above: the public reasoning is that
-    publishing free text with no vocabulary would commit a *public* contract to an
-    undesigned shape, and removing a field later is breaking. Neither applies to
-    the mentor who typed the value — they are being shown their own row.
+    **`category` and `application_stage` used to be returned here and withheld
+    publicly, and that asymmetry is gone.** The public reasoning was that
+    publishing free text with no vocabulary would commit a *public* contract to
+    an undesigned shape; both columns have a shape now, so both lists carry them.
+    What still differs is `is_active` — the public list cannot express a paused
+    offering because it does not return one.
 
     Ordered by name for the same reason the public query is, and the guarantee
     survives the wider row set: the unique index is
@@ -223,8 +246,10 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionType.id,
             SessionType.name,
             SessionType.description,
-            SessionType.category,
+            ServiceOffering.slug.label("service_offering_slug"),
+            ServiceOffering.display_name.label("service_offering_name"),
             SessionType.application_stage,
+            SessionType.custom_stage_label,
             SessionType.is_active,
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
@@ -236,7 +261,11 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionTypeBookingConfig.session_type_id == SessionType.id,
         )
     )
-    return _with_venue(statement).where(*session_type_of(mentor_user_id)).order_by(SessionType.name)
+    return (
+        _with_taxonomy(_with_venue(statement))
+        .where(*session_type_of(mentor_user_id))
+        .order_by(SessionType.name)
+    )
 
 
 async def list_own_session_types(
@@ -349,8 +378,9 @@ async def create_session_type(
                     mentor_user_id=mentor_user_id,
                     name=payload["name"],
                     description=payload.get("description"),
-                    category=payload.get("category"),
+                    service_offering_id=payload.get("service_offering_id"),
                     application_stage=payload.get("application_stage"),
+                    custom_stage_label=payload.get("custom_stage_label"),
                 )
                 .returning(SessionType.id)
             )
@@ -372,7 +402,14 @@ async def create_session_type(
 #: Which payload keys belong to which table. Split here rather than at the
 #: boundary because the write model is one shape by design — a mentor edits *an
 #: offering*, and that it spans two tables is this layer's problem.
-SESSION_TYPE_COLUMNS = ("name", "description", "category", "application_stage", "is_active")
+SESSION_TYPE_COLUMNS = (
+    "name",
+    "description",
+    "service_offering_id",
+    "application_stage",
+    "custom_stage_label",
+    "is_active",
+)
 BOOKING_CONFIG_COLUMNS = ("duration_minutes", "min_notice_minutes")
 
 

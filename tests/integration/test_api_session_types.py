@@ -268,8 +268,16 @@ async def test_the_response_carries_nothing_it_should_not(
 ) -> None:
     """An allowlist, asserted as one.
 
-    `category` and `application_stage` are free text with no vocabulary, and
-    publishing them would commit this contract to a shape nobody has designed.
+    **Changed deliberately: `service_offering`, `application_stage` and
+    `custom_stage_label` are now *in* the allowlist.** They were withheld because
+    they were free text with no vocabulary, so publishing them would have
+    committed this contract to a shape nobody had designed. Both have a designed
+    shape now — a reference to the closed taxonomy, and a five-value closed set —
+    so the reason lapsed rather than being overruled, and adding a field is
+    additive where removing one is breaking.
+
+    The assertion is *changed*, not relaxed: it is still an exact set, so a
+    fourth field arriving unannounced still fails.
 
     **This test used to guard a third thing and no longer can.**
     `custom_meeting_url` was a static room link — a bearer credential anyone
@@ -281,7 +289,7 @@ async def test_the_response_carries_nothing_it_should_not(
     """
     mentor = await make_public_mentor(db_engine, "leak")
     await add_session_type(
-        db_engine, mentor, category="internal-classification", application_stage="postgrad"
+        db_engine, mentor, service_offering="document-preparation", application_stage="other"
     )
 
     response = await api_client.get(url(mentor))
@@ -295,9 +303,17 @@ async def test_the_response_carries_nothing_it_should_not(
         "duration_minutes",
         "min_notice_minutes",
         "meeting_venue",
+        "service_offering",
+        "application_stage",
+        "custom_stage_label",
     }
-    assert "internal-classification" not in body
-    assert "postgrad" not in body
+    assert offering["service_offering"] == {
+        "code": "document-preparation",
+        "display_name": "Document Preparation",
+    }
+    assert offering["application_stage"] == "other"
+    assert offering["custom_stage_label"] == "My own wording"
+    assert "created_by" not in body
 
 
 async def test_offerings_are_ordered_by_name(

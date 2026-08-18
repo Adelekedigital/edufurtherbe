@@ -54,10 +54,10 @@ make check                     # the full local gate — before every commit
    by `scripts/check_layers.py`. Do not weaken the config to pass.
 2. **The checklist and Definition of Done are written before implementation.**
    ~~And approved, as text, with no tool calls in the same response.~~ —
-   **amended by rule 7 below:** they are still written first, at every tier, but
-   only **Tier 1** waits for approval. `build-workflow` is tier 1 of the
-   standards package and still says wait at every tier; this file overrides it,
-   which is what tier 2 is for.
+   **amended by rule 7 below:** they are still written first, at every tier, and
+   none of them waits for approval. `build-workflow` is tier 1 of the standards
+   package and still says wait; this file overrides it, which is what tier 2 is
+   for.
 3. **Watch every test fail before making it pass.** And assert the positive case,
    not only the negative.
 4. **Never lower a coverage, lint, or severity threshold to go green.** If a
@@ -120,13 +120,27 @@ added 2026-08-17, when the approval gate itself turned out to be one of the cost
    minute, it is too long — and a decision nobody can follow is a decision nobody
    can make.
 
-7. **Standing approval at Tiers 2 and 3.** Write the checklist and Definition of
+7. **Standing approval at every tier.** Write the checklist and Definition of
    Done, post them, and **continue in the same response** — they are the build's
-   specification and its verification contract, not a request. Tier 1 still stops
-   for approval before implementation: a migration, a backfill, an auth change or
-   anything touching real data is where a wrong turn is expensive to reverse.
-   Amends non-negotiable #2, which stopped at every tier and cost a round trip on
+   specification and its verification contract, not a request. Amends
+   non-negotiable #2, which stopped at every tier and cost a round trip on
    renames and docs.
+
+   ~~Tier 1 still stops for approval before implementation.~~ **Widened
+   2026-08-18, on evidence rather than preference.** Four consecutive Tier 1
+   pauses changed the outcome **once**: a migration that could not carry a value
+   faithfully and needed a human to choose between quarantining it, relaxing the
+   constraint it violated, and silently rewriting the data. That question
+   qualified under rule 8 on its own terms, so it would have been asked with no
+   blanket pause in place; the other three cost a round trip and came back
+   "approved as written". **What protects a migration is rule 8's escalation bar
+   and rule 9's guarantees, not the tier.** The tier still decides *verification
+   depth*, which is what it was for.
+
+   So a Tier 1 build posts its checklist and proceeds — and stops the moment it
+   finds something rule 8 qualifies, which for a migration routinely includes
+   data that cannot be carried faithfully, a backfill whose source is ambiguous,
+   and anything irreversible once applied to real rows.
 8. **Escalate only what blocks.** A question qualifies if proceeding either way
    would be unsafe, would need rework to undo, or would commit a public contract
    to a shape that is breaking to change. It does **not** qualify because two
@@ -148,9 +162,10 @@ use `git worktree` rather than switching the shared checkout.
 ### How much verification
 
 Depth scales with what a mistake costs. **Every tier still gets a checklist and
-a Definition of Done before implementation** — the tier decides verification,
-and, since rule 7, whether the build waits for approval. Tier 1 waits; Tiers 2
-and 3 post and continue.
+a Definition of Done before implementation** — the tier decides verification
+depth and nothing else. Since rule 7 was widened, **no tier waits for approval**:
+the build posts its checklist and proceeds, and escalates only what rule 8
+qualifies.
 
 | Tier | What | Verification |
 |---|---|---|

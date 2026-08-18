@@ -63,6 +63,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import (
     ActorType,
+    ApplicationStage,
     AttendanceStatus,
     MeetingProvider,
     SessionReasonCode,
@@ -113,8 +114,26 @@ class SessionType(TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    category: Mapped[str | None] = mapped_column(Text)
-    application_stage: Mapped[str | None] = mapped_column(Text)
+
+    #: What *kind* of help this offering is — a reference to the closed six-row
+    #: `service_offerings` taxonomy, which is the axis a mentee's need and a
+    #: mentor's offer already join on (#53). No new vocabulary.
+    #:
+    #: **Called `service_offering_id`, not `category`, and the rename is not
+    #: cosmetic.** `service_offerings` has its own `category` column — a display
+    #: grouping — so a foreign key named `category` would point at a table with a
+    #: different `category` one join away. `mentor_service_offerings` and
+    #: `mentee_goal_needs` already use this name.
+    service_offering_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("service_offerings.id", ondelete="RESTRICT")
+    )
+
+    #: Which stage of an application this offering is aimed at. A closed set
+    #: (#100), `text` + `CHECK`, with `ApplicationStage` at the boundary.
+    application_stage: Mapped[ApplicationStage | None] = mapped_column(str_enum(ApplicationStage))
+    #: `OTHER`'s label, and **only** `OTHER`'s — tied by the symmetric `CHECK`
+    #: below. See `ApplicationStage` for why the escape hatch is kept.
+    custom_stage_label: Mapped[str | None] = mapped_column(Text)
 
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
@@ -143,6 +162,7 @@ class SessionType(TimestampMixin, Base):
             ["mentor_conferencing_options.user_id", "mentor_conferencing_options.id"],
             name="fk_session_types_conferencing_option",
             ondelete="RESTRICT",
+            # `application_stage` and `custom_stage_label` are guarded below.
         ),
         # The only read: this mentor's live offerings. Partial, and `alembic
         # check` cannot compare the predicate, so a test asserts it.
@@ -176,6 +196,22 @@ class SessionType(TimestampMixin, Base):
             "name",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # `IS NULL OR` because the column is nullable and a `CHECK` rejects only
+        # what is *false* — `NULL IN (...)` is unknown and would pass anyway, but
+        # spelling it out is what stops the next reader adding a `NOT NULL` here
+        # by inference.
+        CheckConstraint(
+            f"application_stage IS NULL OR {check_is_known('application_stage', ApplicationStage)}",
+            name="application_stage_is_known",
+        ),
+        # **Symmetric.** `other` with no label renders a blank chip; a named
+        # stage carrying a stale label is dead data that survives an edit. The
+        # one-directional form is what let `mentor_profiles.custom_meeting_url`
+        # sit on a venue that was not custom.
+        CheckConstraint(
+            "(application_stage = 'other') = (custom_stage_label IS NOT NULL)",
+            name="custom_stage_label_matches_stage",
         ),
     )
 

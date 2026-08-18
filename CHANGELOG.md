@@ -10,6 +10,36 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Changed
+
+- **`session_types.category` becomes `service_offering_id`, and
+  `application_stage` becomes a closed set.** Both shipped as free `text` with no
+  constraint and no value in any row, withheld from the public contract because
+  publishing them would have committed it to a shape nobody had designed. The UI
+  designed both, so that argument lapsed rather than being overruled. See ADR
+  0022.
+
+  **Breaking on `/me/session-types`:** `category` was a free-text string and is
+  now a `service_offering` object with `code` and `display_name`. The name
+  changed because `service_offerings` has its own `category` column — a display
+  grouping — so a foreign key called `category` would point at a table with a
+  different `category` one join away.
+
+  **Additive on the public endpoint:** `GET /users/{id}/session-types` gains
+  `service_offering`, `application_stage` and `custom_stage_label`.
+
+  `application_stage` takes five values — `early_exploration`, `drafting_stage`,
+  `post_submission`, `revisions`, `other` — as `text` + `CHECK` with a `StrEnum`
+  at the boundary. `other` carries its label in a new `custom_stage_label`, tied
+  by a **symmetric** constraint: the one-directional form is satisfied by a null
+  label and never requires the payload it exists to require, which is the same
+  hole that let a mentor sit on a `custom` venue with nowhere to meet.
+
+  `sessions.topic` is deliberately not converted. The same decision names it as
+  the same taxonomy from the mentee side, but the ETL writes it from legacy on
+  every migrated session — a data migration over real rows rather than a schema
+  change over an empty column.
+
 ### Added
 
 - **`DELETE /api/v1/me/session-types/{id}` — a mentor can remove an offering.**
