@@ -12,6 +12,24 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **The notification shape, ahead of the providers.** A `Notification`
+  vocabulary, `EMAIL_TEMPLATES` and `WHATSAPP_TEMPLATES` settings, and three
+  adapters — `NullNotifier` (the default), `EmailitNotifier` and
+  `ZernioNotifier`.
+
+  **Neither real adapter is built, and both refuse loudly.** A stub that
+  reported success would make the first real send the first time anybody
+  discovered the shape was wrong, and the producer above it would look correct
+  while delivering nothing.
+
+  **The default delivers nothing and logs that it did.** That is the current
+  state of the world: no email provider is configured, and WhatsApp can reach
+  nobody until the deferred `phone_*` columns exist.
+
+  Template ids are configured, not coded — every WhatsApp message this platform
+  sends is business-initiated and so needs a Meta-approved template, and that
+  approval has a lead time nobody here controls.
+
 - **A session says when its join window opens and shuts, and whether each party
   has arrived.** `join_opens_at`, `join_closes_at`, and `joined_at` +
   `attendance_status` on both parties of `SessionRead`.
