@@ -49,6 +49,7 @@ from app.api.schemas.profile import (
     UserLanguagesWrite,
     UserProfileWrite,
 )
+from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionTypeWrite
 from app.core.config import Settings, get_settings
 from app.core.errors import (
     AuthenticationError,
@@ -123,7 +124,12 @@ from app.infra.db.session_store import (
     list_session_events,
     list_sessions,
 )
-from app.infra.db.session_type_store import list_own_session_types, list_session_types
+from app.infra.db.session_type_store import (
+    create_session_type,
+    list_own_session_types,
+    list_session_types,
+    update_session_type,
+)
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
@@ -1135,6 +1141,46 @@ async def own_session_types(user: CurrentUserDep, session: SessionDep) -> list[d
 
 
 OwnSessionTypesDep = Annotated[list[dict[str, Any]], Depends(own_session_types)]
+
+
+async def created_own_session_type(
+    payload: MentorSessionTypeWrite, user: CurrentUserDep, session: SessionDep
+) -> UUID:
+    """The offering and its booking config, in one transaction.
+
+    **One commit, after both inserts.** `/slots` and both read paths inner-join
+    `session_type_booking_configs`, so an offering without one is invisible
+    everywhere and unbookable, and nothing writes a config on its own — a commit
+    between the two statements would make that state reachable and permanent.
+
+    `CurrentUserDep` rather than `OwnerDep`: there is no `{user_id}` in the path
+    to resolve, so the caller *is* the scope, matching `own_session_types` above.
+    """
+    session_type_id = await create_session_type(session, user["id"], payload.model_dump())
+    if session_type_id is None:
+        raise NotFoundError("this user has no mentor profile")
+    await session.commit()
+    return session_type_id
+
+
+async def updated_own_session_type(
+    session_type_id: UUID,
+    payload: MentorSessionTypePatch,
+    user: CurrentUserDep,
+    session: SessionDep,
+) -> bool:
+    """`exclude_unset` is what makes this a PATCH: a field the client did not send
+    is absent, not null. Without it every omitted field is written as its default
+    and a one-field edit blanks the rest."""
+    changed = await update_session_type(
+        session, user["id"], session_type_id, payload.model_dump(exclude_unset=True)
+    )
+    await session.commit()
+    return changed
+
+
+CreatedOwnSessionTypeDep = Annotated[UUID, Depends(created_own_session_type)]
+UpdatedOwnSessionTypeDep = Annotated[bool, Depends(updated_own_session_type)]
 
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]

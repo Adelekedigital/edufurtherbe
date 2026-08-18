@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.api.schemas.common import Normalised
 from app.domain.enums import ConferencingProvider
 
 
@@ -107,9 +108,10 @@ class OwnSessionTypeRead(BaseModel):
     )
     meeting_venue: ConferencingProvider = Field(
         description=(
-            "Where this offering is held. Every offering carries its own — there "
-            "is no cascade from the mentor to resolve. The meeting **link** is "
-            "generated per session and never appears here."
+            "Where this offering is held, **resolved** the same way the public "
+            "endpoint resolves it: this offering's own conferencing option, "
+            "else your default, else `google_meet`. Never null. The meeting "
+            "**link** is generated per session and never appears here."
         ),
     )
     is_active: bool = Field(
@@ -158,3 +160,67 @@ class OwnSessionTypeRead(BaseModel):
             category=str(row["category"]) if row["category"] else None,
             application_stage=(str(row["application_stage"]) if row["application_stage"] else None),
         )
+
+
+class MentorSessionTypeWrite(Normalised):
+    """A new offering, as its mentor describes it.
+
+    **`meeting_venue` is deliberately absent.** An offering is held on one of the
+    mentor's `mentor_conferencing_options`, and nothing yet lists or creates
+    those — so a value here could only be a provider name this endpoint would
+    have to turn into a row, inventing a `custom_url` it has no way to ask for.
+    A new offering leaves `conferencing_option_id` null, which resolves to the
+    mentor's default and then to the platform fallback, so it is never null on
+    the way out. Per-offering venue arrives with the surface that manages
+    options (settled decision #21).
+
+    **`is_active` is absent too, and that is not the same reason.** A new
+    offering is active; there is no draft state, and `POST {"is_active": false}`
+    would be a client asking to create something invisible. It is writable on
+    `PATCH`, where switching one off is the whole point.
+    """
+
+    name: str = Field(max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    #: The `CHECK` on the column, restated at the boundary so a bad value is a
+    #: 422 naming the field rather than a 500 naming a constraint. Pinned against
+    #: the constraint by a test, per non-negotiable #8 — the copy is real and
+    #: this is the mechanism that keeps it honest.
+    duration_minutes: int = Field(ge=5, le=480)
+    #: **The product rule, and the boundary is where it lives** (settled decision
+    #: #104). 24 hours is the platform floor and 72 the current ceiling; the
+    #: column's `CHECK` is sanity only — `BETWEEN 0 AND 43200` — because a
+    #: database refuses what is *impossible* and an application refuses what is
+    #: *disallowed*. When `booking_policies` lands this range moves there and
+    #: becomes a config change rather than a migration.
+    #:
+    #: The default is the floor rather than a value a mentor picked, which is the
+    #: same thing the column default says and the reason it says it.
+    min_notice_minutes: int = Field(default=1440, ge=1440, le=4320)
+    category: str | None = Field(default=None, max_length=100)
+    application_stage: str | None = Field(default=None, max_length=100)
+
+
+class MentorSessionTypePatch(Normalised):
+    """A change to one offering. Every field optional; absent is not null.
+
+    **`is_active` appears here and not on the create model.** Deactivating is a
+    bare boolean with no cascade — it hides the offering from new bookings and
+    leaves existing ones alone — so industry practice keeps it a field rather
+    than an action endpoint, which is reserved for transitions with side effects.
+    Draft-to-publish, when it lands, *is* such a transition and gets its own
+    endpoint; it must not be modelled as `PATCH {"status": ...}`.
+
+    **Nothing refuses a deactivation any more.** While
+    `trg_refuse_retiring_a_primary_offering` existed this toggle needed the same
+    `409` mapping as `DELETE` or it returned a 500. The trigger went with the
+    pointer, so the toggle is now plain — see `test_offering_retirement.py`.
+    """
+
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    duration_minutes: int | None = Field(default=None, ge=5, le=480)
+    min_notice_minutes: int | None = Field(default=None, ge=1440, le=4320)
+    category: str | None = Field(default=None, max_length=100)
+    application_stage: str | None = Field(default=None, max_length=100)
+    is_active: bool | None = None
