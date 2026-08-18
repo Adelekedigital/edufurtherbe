@@ -12,6 +12,26 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Per-offering scheduling windows, which replace general availability.**
+  `session_type_scheduling_windows` — an offering with windows is bookable in
+  those and nowhere else; one with none uses `availability_rules`, unchanged.
+  See ADR 0023.
+
+  The screen's copy says the windows *restrict* availability, and its own example
+  shows why intersecting is wrong: a deliberate evening window against normal
+  working hours yields zero slots and an empty calendar with nothing to explain
+  it.
+
+  **`availability_exceptions` still subtract, always** — windows replace
+  availability, not unavailability. **A mentor with windows and no general
+  availability is bookable**, which is newly reachable and not a
+  misconfiguration.
+
+  No window-management surface yet, and the offering read model does not yet say
+  which mode it is in. Both ship together; ADR 0023 records the second as an
+  obligation rather than an omission.
+
+
 - **A mentor can manage the intake form their offering asks.** Four endpoints on
   `/api/v1/me/session-types/{id}/questions` — list, add, change, remove. This
   gives `session_type_questions` its first reader.

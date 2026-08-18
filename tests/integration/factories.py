@@ -326,3 +326,49 @@ async def add_completed_sessions(
                     "status": status,
                 },
             )
+
+
+async def add_scheduling_window(
+    engine: AsyncEngine,
+    session_type: UUID,
+    *,
+    day_of_week: int = 1,
+    start: str = "17:00",
+    end: str = "20:00",
+    timezone: str = LAGOS,
+    active: bool = True,
+) -> None:
+    """One weekly window on a single offering, which **replaces** the mentor's
+    general availability for that offering rather than intersecting it."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO session_type_scheduling_windows "
+                "(session_type_id, day_of_week, start_time, end_time, timezone, is_active) "
+                "VALUES (:t, :d, :s, :e, :z, :a)"
+            ),
+            {
+                "t": session_type,
+                "d": day_of_week,
+                "s": dt.time.fromisoformat(start),
+                "e": dt.time.fromisoformat(end),
+                "z": timezone,
+                "a": active,
+            },
+        )
+
+
+async def add_block(engine: AsyncEngine, mentor: UUID, day: object) -> None:
+    """A whole-day block, in the mentor's zone. Exceptions subtract from windows
+    and from general availability alike."""
+    import datetime as _dt
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO availability_exceptions "
+                "(mentor_user_id, type, date_range, timezone) "
+                "VALUES (:u, 'block', daterange(:d, :e), :z)"
+            ),
+            {"u": mentor, "d": day, "e": day + _dt.timedelta(days=1), "z": LAGOS},
+        )
