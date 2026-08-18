@@ -70,6 +70,7 @@ from app.domain.enums import AdminRole
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES, process
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
+from app.infra.clients.meetings import NullCalendar, NullRooms
 from app.infra.db.admin_store import (
     approve_institution,
     merge_institution,
@@ -145,7 +146,12 @@ from app.infra.db.session_type_store import (
     list_session_types,
     update_session_type,
 )
-from app.infra.db.session_writer import book_session, record_arrival, transition
+from app.infra.db.session_writer import (
+    book_session,
+    provision_meeting,
+    record_arrival,
+    transition,
+)
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
@@ -972,8 +978,24 @@ async def viewer_session_events(
 # Booking
 # --------------------------------------------------------------------------
 
+
 #: What the fingerprint and the stored row call this endpoint. One string, so a
 #: replay can never be served across endpoints because two literals drifted.
+def _rooms(request: Request) -> Any:
+    """The room provider, or the null one.
+
+    **Read off `app.state` rather than constructed here**, following
+    `app.state.storage`: the composition root wires a real adapter when one
+    exists, and everything else keeps working against a default that creates
+    nothing. `main.py` and this module are the sanctioned wiring points.
+    """
+    return getattr(request.app.state, "meeting_rooms", None) or NullRooms()
+
+
+def _calendar(request: Request) -> Any:
+    return getattr(request.app.state, "calendar", None) or NullCalendar()
+
+
 ENDPOINT_BOOKING = "POST /api/v1/sessions"
 
 #: The one success code booking has. Stored on the key so a replay returns the
@@ -985,6 +1007,7 @@ async def booked_session(
     payload: SessionBookingWrite,
     user: CurrentUserDep,
     session: SessionDep,
+    request: Request,
     idempotency_key: Annotated[
         str,
         Header(
@@ -1037,6 +1060,13 @@ async def booked_session(
     session_id = await book_session(
         session, user["id"], payload.model_dump(), now=dt.datetime.now(dt.UTC)
     )
+    # **In the booking's own transaction**, so a session cannot be committed
+    # without whatever venue it was going to get. It no-ops unless the session
+    # confirmed — a request that waits for the mentor gets its link at
+    # `/accept` — and that guard is inside `provision_meeting` rather than here,
+    # because this call site and the transition one would both have to remember
+    # it.
+    await provision_meeting(session, session_id, rooms=_rooms(request), calendar=_calendar(request))
     row = await get_session_row(session, session_id, user["id"])
     if row is None:  # pragma: no cover - the row was just written in this transaction
         raise NotFoundError("no such session")
@@ -1068,6 +1098,7 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
         session_id: UUID,
         user: CurrentUserDep,
         session: SessionDep,
+        request: Request,
         payload: SessionTransitionWrite | None = None,
     ) -> None:
         await transition(
@@ -1078,6 +1109,14 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
             payload.model_dump() if payload else {},
             now=dt.datetime.now(dt.UTC),
         )
+        # The second confirmation point. Accepting is the moment a
+        # confirmation-required session becomes real, and it is the only action
+        # that produces `confirmed` — declining, withdrawing and cancelling all
+        # end a session rather than starting one.
+        if action == "accept":
+            await provision_meeting(
+                session, session_id, rooms=_rooms(request), calendar=_calendar(request)
+            )
         await session.commit()
 
     return dependency

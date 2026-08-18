@@ -29,6 +29,7 @@ flight.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from typing import Any, cast
 from uuid import UUID
 
@@ -47,16 +48,19 @@ from app.domain.attendance import (
 from app.domain.enums import (
     ActorType,
     AttendanceStatus,
+    MeetingProvider,
     SessionReasonCode,
     SessionRole,
     SessionStatus,
 )
+from app.domain.meetings import plan_for
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
     respond_by,
     too_late_to_cancel,
 )
+from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import (
     Session,
@@ -67,12 +71,16 @@ from app.infra.db.models.sessions import (
 )
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
+from app.infra.db.session_type_store import resolve_venue
 from app.infra.db.slot_store import list_slots
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DOUBLE_BOOKED",
     "book_session",
     "expire_requests",
+    "provision_meeting",
     "record_arrival",
     "settle_attendance",
     "transition",
@@ -706,3 +714,120 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime) -> int:
         ],
     )
     return len(expired)
+
+
+async def provision_meeting(
+    session: AsyncSession,
+    session_id: UUID,
+    *,
+    rooms: Any,
+    calendar: Any,
+) -> None:
+    """Give a newly confirmed session somewhere to meet. Does not commit.
+
+    **Called at confirmation, which is two places rather than one:** booking, for
+    an offering that auto-confirms, and ``/accept`` for one that does not. The
+    model has always said the link is generated per session at confirmation —
+    *"a static personal room means back-to-back sessions share it and an early
+    joiner walks into the previous one"* — and until now nothing generated it.
+
+    **The provider decides two independent things**, and `plan_for` holds the
+    table because a reader who assumes *needs a room* and *wants a conference*
+    are opposites gets Meet right and Daily wrong. Meet's link is a property of
+    the calendar event; Daily's room is its own object created first; a custom
+    venue is a URL that already exists.
+
+    **A failure here does not fail the booking.** The session exists, the slot is
+    held, and a link can be minted later — where refusing the booking because a
+    third party was slow loses something that cannot be recovered. So the room
+    and calendar calls are attempted and their absence is left as a null column
+    rather than raised, which is also exactly what happens today with the null
+    adapters wired.
+    """
+    row = (
+        (
+            await session.execute(
+                select(
+                    Session.status,
+                    Session.session_type_id,
+                    Session.starts_at,
+                    Session.duration_minutes,
+                    Session.meeting_url,
+                ).where(Session.id == session_id)
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or row["session_type_id"] is None:
+        return
+    # **The guard lives here, not at the two call sites.** Booking calls this
+    # for every session and only some of them confirm, so a check at the caller
+    # is a check somebody has to remember twice — and the cost of forgetting is
+    # a room minted for a request that may be declined, which on a metered
+    # provider is a room somebody pays for. Caught by a test asserting a pending
+    # request gets nothing, which the first version of this failed.
+    if SessionStatus(row["status"]) is not SessionStatus.CONFIRMED:
+        return
+
+    resolved = await resolve_venue(session, row["session_type_id"])
+    if resolved is None:  # pragma: no cover - the offering was just booked
+        return
+    provider, custom_url = resolved
+    plan = plan_for(provider)
+
+    meeting_url: str | None = custom_url if plan.reuses_a_static_room else row["meeting_url"]
+    external_room_id: str | None = None
+    external_event_id: str | None = None
+
+    # Only the opening edge: the room outlives the join window, so its close
+    # comes from the session's own length rather than from the window.
+    opens, _ = join_window(row["starts_at"])
+    try:
+        if plan.needs_room:
+            room = rooms.create(
+                name=room_name(str(session_id), provider),
+                opens_at=opens,
+                # The room outlives the join window by the session's own length:
+                # a room that shut at `join_closes_at` would evict everybody
+                # fifteen minutes into an hour-long session.
+                closes_at=row["starts_at"] + dt.timedelta(minutes=row["duration_minutes"]),
+            )
+            meeting_url, external_room_id = room.url, room.external_id
+    except (VenueUnavailableError, NotImplementedError) as exc:
+        logger.info("no room for session %s: %s", session_id, exc)
+
+    try:
+        event = calendar.create_event(
+            organiser_id=str(session_id),
+            attendee_email="",
+            starts_at=row["starts_at"],
+            duration_minutes=int(row["duration_minutes"]),
+            summary="EduFurther session",
+            # **Only Meet, and this is the line that matters.** Asking for a
+            # conference on a session held in Daily puts a second link on the
+            # event, and the invitee clicks whichever the client renders first.
+            wants_conference=plan.wants_conference,
+            meeting_url=meeting_url,
+        )
+    except (VenueUnavailableError, NotImplementedError) as exc:
+        logger.info("no calendar event for session %s: %s", session_id, exc)
+        event = None
+
+    if event is not None:
+        external_event_id = event.external_id
+        # Meet's link arrives by this path and no other, so it is taken only
+        # when the event was asked for one — otherwise the URL we already had
+        # stands.
+        meeting_url = event.meeting_url or meeting_url
+
+    await session.execute(
+        update(Session)
+        .where(Session.id == session_id)
+        .values(
+            meeting_provider=MeetingProvider(str(provider)),
+            meeting_url=meeting_url,
+            external_room_id=external_room_id,
+            external_calendar_event_id=external_event_id,
+        )
+    )
