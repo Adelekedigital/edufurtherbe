@@ -109,6 +109,20 @@ class SessionRead(BaseModel):
             "joiner walks into the previous one."
         ),
     )
+    respond_by: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "When this request stops waiting and becomes `expired`, shown to "
+            "users as **Unconfirmed**. Six hours before the session.\n\n"
+            "**Null on an offering that auto-confirms**, where nothing is "
+            "awaiting an answer — not merely unset. A `confirmed` session never "
+            "has one.\n\n"
+            "Measured backwards from `starts_at`, so the guarantee is to the "
+            "*mentee*: you learn the answer before the session, early enough "
+            "for it to be useful. It stays on the row after the mentor answers, "
+            "as a record of how long they actually had."
+        ),
+    )
     created_at: dt.datetime = Field(description="When the session was booked.")
     mentee_attendance_rate: int | None = Field(
         default=None,
@@ -151,6 +165,7 @@ class SessionRead(BaseModel):
                 MeetingProvider(str(row["meeting_provider"])) if row["meeting_provider"] else None
             ),
             meeting_url=str(row["meeting_url"]) if row["meeting_url"] else None,
+            respond_by=row.get("respond_by"),  # type: ignore[arg-type]
             created_at=row["created_at"],  # type: ignore[arg-type]
             mentee_attendance_rate=(
                 int(str(row["mentee_attendance_rate"]))

@@ -12,6 +12,28 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A request nobody answers now dies, and gives the mentor's hour back.**
+  `sessions.respond_by` plus an hourly sweep. `expired` gets its producer, and
+  `SessionStatus.EXPIRED` stops being a value nothing could reach.
+
+  **This closes a live defect**, not just a gap: the exclusion constraint covers
+  `pending_mentor_approval`, so until now an abandoned request held a mentor's
+  slot indefinitely — invisible on the grid and bookable by nobody.
+
+  **`respond_by = starts_at - 6h`, on confirmation-required offerings only.**
+  Null where nothing awaits an answer. Six rather than twenty-four because of
+  the booking floor: the mentor's time to answer is
+  `(starts_at - booked_at) - W`, so a 24-hour window against the 24-hour notice
+  floor leaves **zero**. Six leaves eighteen.
+
+  The deadline is returned on `SessionRead`, and stays on the row after the
+  mentor answers as a record of how long they actually had.
+
+  **Reminders are settled and unbuilt** — on booking, 24h before the deadline
+  where the lead allows it, 12h before. They need a notification channel; the
+  deadline ships without them because freeing the slot is the half that does not
+  depend on telling anybody.
+
 - **A mentee's attendance rate, on the row where a mentor decides.**
   `SessionRead.mentee_attendance_rate` — a whole-number percentage of the
   sessions they booked that have finished, correlated per row so a page of

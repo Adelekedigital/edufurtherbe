@@ -1,12 +1,18 @@
 name: Settle sessions
 
-# Decides `completed` against `no_show` for every session whose join window has
-# shut (settled decision #119).
+# Advances every session whose deadline has passed: an unanswered request past
+# `respond_by` becomes `expired`, and a confirmed session past its join window
+# becomes `completed` or `no_show` (settled decisions #119 and #121).
 #
-# WHY A SCHEDULE. Nothing else can do it. The outcome depends on a *deadline
-# passing* rather than on anybody acting, so there is no request to hang it off:
-# a session both parties abandoned generates no traffic at all, and an outcome
-# nobody writes leaves `session_stats` reading a `confirmed` session forever.
+# WHY A SCHEDULE. Nothing else can do it. Both outcomes depend on a *deadline
+# passing* rather than on anybody acting, so there is no request to hang either
+# off: a session both parties abandoned generates no traffic at all, and neither
+# does a request the mentor never opened.
+#
+# The expiry half is the one with a cost attached. `sessions_no_mentor_double_
+# booking` covers `pending_mentor_approval`, so until this runs an abandoned
+# request holds the mentor's hour — a slot nobody can book and nobody is
+# waiting on.
 #
 # WHY GITHUB ACTIONS AND NOT A QUEUE VENDOR. The same reason `sync-institutions`
 # gives: `migrate.yml` already reaches the database from a runner, so the
@@ -22,8 +28,10 @@ name: Settle sessions
 # an outcome is. An unsettled session stays `confirmed`, which keeps holding its
 # slot exactly as it did while it was upcoming, and stays out of `session_stats`
 # because that reads terminal statuses only — so a late run under-reports rather
-# than misreports. Running *early* is the dangerous direction, and the script
-# cannot: the boundary comes from `JOIN_CLOSES`, not from the schedule.
+# than misreports. A late expiry costs the mentee a slot that is free but still
+# hidden, for at most one interval — an hour, against a six-hour response
+# window. Running *early* is the dangerous direction and neither sweep can: both
+# boundaries come from the data, not from the schedule.
 #
 # SAFE TO RUN REPEATEDLY, WHICH IT WILL BE. The participant update touches only
 # `pending` rows and the session update only `confirmed` ones, so a second run
@@ -52,7 +60,7 @@ concurrency:
 
 jobs:
   settle:
-    name: settle sessions (staging)
+    name: expire and settle (staging)
     runs-on: ubuntu-latest
     # Staging only, deliberately — the same reason `sync-institutions` gives:
     # there is no production environment to hold a `DATABASE_URL`, and a
@@ -75,7 +83,7 @@ jobs:
       # sync, this job has no partial-success condition to distinguish. Anything
       # other than 0 fails the run, which is the only signal there is: nothing
       # alerts on a sweep that has quietly stopped.
-      - name: Settle
+      - name: Expire and settle
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: uv run python scripts/settle_sessions.py

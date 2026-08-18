@@ -55,6 +55,7 @@ _SESSION_COLUMNS = (
     Session.booking_message,
     Session.meeting_provider,
     Session.meeting_url,
+    Session.respond_by,
     Session.created_at,
     # **The mentee's reliability, on the row where a mentor decides.**
     #
