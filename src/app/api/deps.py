@@ -16,7 +16,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import httpx
-from fastapi import Depends, File, Path, Query, Request, UploadFile
+from fastapi import Depends, File, Header, Path, Query, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -51,6 +51,7 @@ from app.api.schemas.profile import (
     UserProfileWrite,
 )
 from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionTypeWrite
+from app.api.schemas.sessions import SessionBookingWrite, SessionRead
 from app.core.config import Settings, get_settings
 from app.core.errors import (
     AuthenticationError,
@@ -62,6 +63,7 @@ from app.core.errors import (
 from app.domain.assets import AssetKind, object_path
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
 from app.domain.enums import AdminRole
+from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES, process
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.db.admin_store import (
@@ -82,6 +84,7 @@ from app.infra.db.availability_writer import (
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.idempotency import Held, Mismatched, Replayed, record_response, reserve
 from app.infra.db.intake_store import (
     create_question,
     delete_question,
@@ -138,6 +141,7 @@ from app.infra.db.session_type_store import (
     list_session_types,
     update_session_type,
 )
+from app.infra.db.session_writer import book_session
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
@@ -958,6 +962,88 @@ async def viewer_session_events(
     if rows is None:
         raise NotFoundError("no such session")
     return rows
+
+
+# --------------------------------------------------------------------------
+# Booking
+# --------------------------------------------------------------------------
+
+#: What the fingerprint and the stored row call this endpoint. One string, so a
+#: replay can never be served across endpoints because two literals drifted.
+ENDPOINT_BOOKING = "POST /api/v1/sessions"
+
+#: The one success code booking has. Stored on the key so a replay returns the
+#: same status as the original, rather than a `200` this endpoint never issues.
+CREATED = status.HTTP_201_CREATED
+
+
+async def booked_session(
+    payload: SessionBookingWrite,
+    user: CurrentUserDep,
+    session: SessionDep,
+    idempotency_key: Annotated[
+        str,
+        Header(
+            alias="Idempotency-Key",
+            min_length=1,
+            max_length=255,
+            description="A value unique to this booking attempt. Retries must reuse it.",
+        ),
+    ],
+) -> tuple[dict[str, Any], int, bool]:
+    """Reserve the key, book the hour, store the answer — one transaction.
+
+    **Required rather than optional, which is the one deviation from Stripe.**
+    Stripe treats the header as recommended, and it can: its clients are servers
+    written once. The retry here is a phone on a bad connection, and an optional
+    header makes the guarantee opt-in for exactly the caller who most needs it.
+    Requiring it now is also the safe direction to be wrong in — relaxing a
+    required header later breaks nobody, and requiring an optional one breaks
+    every client.
+
+    **The key and the session commit together**, because a stored `201` for a
+    session that was never written would replay the id of nothing. That also
+    makes a refusal clean: `book_session` rolls back on a conflict, so the
+    reservation goes with it and the client's next attempt starts fresh instead
+    of being told forever that a request is in flight.
+
+    **Read back through `get_session`, scoped to the caller.** A second query,
+    deliberately: the response is the same shape `GET /sessions/{id}` returns,
+    assembled by the same code, so the two cannot drift — and building it from
+    the insert's own values would mean composing the party join by hand at the
+    one moment there is no row to read it from.
+    """
+    reservation = await reserve(
+        session,
+        key=idempotency_key,
+        user_id=user["id"],
+        endpoint=ENDPOINT_BOOKING,
+        request_hash=request_fingerprint(ENDPOINT_BOOKING, payload.model_dump(mode="json")),
+    )
+    if isinstance(reservation, Replayed):
+        return reservation.body, reservation.status_code, True
+    if isinstance(reservation, Mismatched):
+        raise ValidationError(
+            "this Idempotency-Key was already used for a different request; "
+            "use a new key, or resend the original body"
+        )
+    if not isinstance(reservation, Held):
+        raise ConflictError("a request with this Idempotency-Key is still in flight")
+
+    session_id = await book_session(
+        session, user["id"], payload.model_dump(), now=dt.datetime.now(dt.UTC)
+    )
+    row = await get_session_row(session, session_id, user["id"])
+    if row is None:  # pragma: no cover - the row was just written in this transaction
+        raise NotFoundError("no such session")
+
+    body = SessionRead.from_row(row).model_dump(mode="json")
+    await record_response(session, reservation, status_code=CREATED, body=body)
+    await session.commit()
+    return body, CREATED, False
+
+
+BookedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(booked_session)]
 
 
 # --------------------------------------------------------------------------

@@ -70,11 +70,11 @@ EXPECTED_MODELS = {
     # intersecting them. Same module as the rules they replace, and the same
     # shape, so `bookable()` needs no second code path.
     "SessionTypeSchedulingWindow",
-    # M4 sessions. Five of the package's nine tables in `04_sessions.sql`:
-    # `SessionTypeQuestion`, `SessionTypeQuestionOption`, `IntakeSubmission`,
-    # `IntakeAnswer` and `SessionNote` are deliberately absent. None has a legacy
-    # source or a read surface, and settled decision #21 ships a table with the
-    # phase that first needs it — the intake stack is a unit and arrives whole.
+    # M4 sessions. Eight of the package's nine tables in `04_sessions.sql`.
+    # `SessionNote` is the one still absent: it has no legacy source and no read
+    # surface, and settled decision #21 ships a table with the phase that first
+    # needs it. The intake stack was absent for the same reason and has since
+    # arrived, whole, because it is a unit.
     "SessionType",
     "SessionTypeBookingConfig",
     # The intake stack, in its own module: `sessions.py` is already five
@@ -87,6 +87,10 @@ EXPECTED_MODELS = {
     "Session",
     "SessionParticipant",
     "SessionEvent",
+    # Platform infrastructure, which serves every feature and belongs to none.
+    # First of the three in `08_features_platform.sql`; `outbox_events` and
+    # `feature_flags` ship with whatever first needs them (#21).
+    "IdempotencyKey",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")

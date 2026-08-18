@@ -136,6 +136,10 @@ EXPECTED_TABLES = [
     "intake_submissions",
     "session_type_question_options",
     "session_type_questions",
+    # M4 — platform infrastructure, which serves every feature and belongs to
+    # none. First of the three in `08_features_platform.sql`; `outbox_events`
+    # and `feature_flags` ship with whatever first needs them (#21).
+    "idempotency_keys",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**
