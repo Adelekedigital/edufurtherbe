@@ -14,11 +14,14 @@ distinction (package D3) — measured on the dev export, the two agree on mentor
 duration, cancellation, room and venue on all 103 linked pairs. A booking is the
 *act* of claiming a slot; the row it creates is a session.
 
-**Four of the package's nine tables in ``04_sessions.sql`` are deliberately
-absent** — ``session_type_questions``, ``session_type_question_options``,
-``intake_submissions``, ``intake_answers`` — along with ``session_notes``. None
-has a legacy source or a read surface, and settled decision #21 ships a table
-with the phase that first needs it. The intake stack is a unit and arrives whole.
+**The intake stack has since arrived, whole, in ``models/intake.py``** —
+``session_type_questions``, ``session_type_question_options``,
+``intake_submissions`` and ``intake_answers``. It was deferred out of this module
+under settled decision #21 and landed as a unit, in a module of its own because
+this one is already five models and past #54's line tripwire.
+
+``session_notes`` is still absent, for the reason that deferred all five: no
+legacy source and no read surface.
 
 **Deletion policy, derived from ADR 0013 rather than copied from the package.**
 The record's rule is cascade where the child is meaningless without its parent

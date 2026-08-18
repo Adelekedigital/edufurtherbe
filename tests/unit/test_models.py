@@ -73,6 +73,13 @@ EXPECTED_MODELS = {
     # phase that first needs it — the intake stack is a unit and arrives whole.
     "SessionType",
     "SessionTypeBookingConfig",
+    # The intake stack, in its own module: `sessions.py` is already five
+    # models and past #54's line tripwire, and "the intake form" is a
+    # subject of its own.
+    "SessionTypeQuestion",
+    "SessionTypeQuestionOption",
+    "IntakeSubmission",
+    "IntakeAnswer",
     "Session",
     "SessionParticipant",
     "SessionEvent",

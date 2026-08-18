@@ -322,6 +322,50 @@ class ApplicationStage(StrEnum):
     OTHER = "other"
 
 
+class QuestionType(StrEnum):
+    """What shape of answer an intake question expects.
+
+    **`MULTI_CHOICE` ships with nothing using it**, and that is a departure from
+    how this project usually decides. Settled decision #21 says nothing ships
+    before the phase that needs it, and the UI's intake screens use two of these
+    three.
+
+    Two things make it right here. The package is canonical (ADR 0007) and
+    declares all three plus `session_type_question_options`, so dropping one
+    would be an undeclared divergence rather than a deferral. And **#100's
+    sub-rule against adding an unused value has been retired** — it existed
+    because `ALTER TYPE ... ADD VALUE` is permanent and PostgreSQL has no
+    `DROP VALUE`, and #107 recorded that the argument "does not survive its
+    removal" once the conversion made a vocabulary a freely-altered `CHECK`. The
+    cost of being early is now one migration rather than forever.
+
+    So the option rows have a table to live in the day a mentor needs them, and
+    `exactly_one_answer_form` already knows how such an answer is shaped.
+    """
+
+    FREE_TEXT = "free_text"
+    FILE_UPLOAD = "file_upload"
+    MULTI_CHOICE = "multi_choice"
+
+
+class IntakeStatus(StrEnum):
+    """How far a mentee has got with the form attached to their booking.
+
+    `REVIEWED` is the mentor's acknowledgement, not a second submission — the
+    mentee cannot move a form out of it, and nothing here enforces transitions.
+    That belongs with the endpoints that write the column.
+
+    **`DRAFT` is the default and is why the row exists early.** A submission is
+    created with the booking so answers have somewhere to go while the mentee is
+    still typing; the alternative is holding partial answers client-side and
+    losing them, which is what an intake form is least able to afford.
+    """
+
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    REVIEWED = "reviewed"
+
+
 class AvailabilityExceptionType(StrEnum):
     """What an exception does to a mentor's recurring availability.
 

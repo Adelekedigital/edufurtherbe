@@ -40,6 +40,7 @@ from app.domain.enums import (
     AuthProvider,
     AvailabilityExceptionType,
     ConferencingProvider,
+    IntakeStatus,
     LanguageProficiency,
     LegalDocumentType,
     ListingStatus,
@@ -47,6 +48,7 @@ from app.domain.enums import (
     MeetingProvider,
     MentorStatusType,
     PrimaryRole,
+    QuestionType,
     SessionReasonCode,
     SessionRole,
     SessionStatus,
@@ -128,6 +130,10 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     MeetingProvider: frozenset({"ck_sessions_meeting_provider_is_known"}),
     ConferencingProvider: frozenset({"ck_mentor_conferencing_options_provider_is_known"}),
     # Step 6 — `role` carries the first **unique** partial index to move.
+    # The intake stack. `question_type` carries `multi_choice`, which nothing
+    # writes yet — see the enum for why shipping it early is now cheap.
+    QuestionType: frozenset({"ck_session_type_questions_question_type_is_known"}),
+    IntakeStatus: frozenset({"ck_intake_submissions_status_is_known"}),
     SessionRole: frozenset({"ck_session_participants_role_is_known"}),
     AttendanceStatus: frozenset({"ck_session_participants_attendance_status_is_known"}),
     # Step 7 — neither has an index dependency; `ix_session_events_reason` is

@@ -10,6 +10,40 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Added
+
+- **The intake stack — four tables, landing together.**
+  `session_type_questions`, `session_type_question_options`,
+  `intake_submissions` and `intake_answers`, the four deferred out of
+  `04_sessions.sql` when M4 shipped. No endpoints yet; those follow.
+
+  They land as a unit because half of them is worse than none: a question
+  definition with nowhere to store an answer is a schema asserting a feature
+  nobody can use.
+
+  **`session_type_question_options` ships with nothing writing it**, and so does
+  `multi_choice`. The UI's intake screens use two of the three question types,
+  but the package is canonical (ADR 0007) so dropping a table is an undeclared
+  divergence rather than a deferral — and #100's completion made being early
+  cheap: the sub-rule against an unused vocabulary value existed because
+  `ALTER TYPE ... ADD VALUE` is permanent, and that no longer applies.
+
+  **An answer restricts its question, while a question cascades from its
+  offering.** That asymmetry is ADR 0013 applied literally — a question is
+  meaningless without the offering that asks it, an answer is evidence of what
+  was asked — and it is why `session_type_questions` carries `deleted_at`:
+  retiring a question is how a mentor edits their form without being refused by
+  every answer ever given to it.
+
+  `exactly_one_answer_form` sums rather than chains, because
+  `a IS NULL OR b IS NULL OR c IS NULL` permits an answer carrying nothing at
+  all.
+
+  No ADR: this follows canonical. The five differences — `text` + `CHECK`
+  vocabularies, `ix_` names, per-table `updated_at` triggers, explicit
+  foreign-key actions, surrogate keys — are standing rules this schema already
+  applies everywhere.
+
 ### Changed
 
 - **`session_types.category` becomes `service_offering_id`, and
