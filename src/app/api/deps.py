@@ -126,6 +126,7 @@ from app.infra.db.session_store import (
 )
 from app.infra.db.session_type_store import (
     create_session_type,
+    delete_session_type,
     list_own_session_types,
     list_session_types,
     update_session_type,
@@ -1179,8 +1180,23 @@ async def updated_own_session_type(
     return changed
 
 
+async def deleted_own_session_type(
+    session_type_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> bool:
+    """Soft-delete, or a `409` raised from the store when sessions are booked.
+
+    The refusal is raised rather than returned because it is not the absence of a
+    row: `False` already means *not yours or already gone*, and folding a second
+    meaning into one boolean is how a 409 becomes a 404 at the route.
+    """
+    removed = await delete_session_type(session, user["id"], session_type_id)
+    await session.commit()
+    return removed
+
+
 CreatedOwnSessionTypeDep = Annotated[UUID, Depends(created_own_session_type)]
 UpdatedOwnSessionTypeDep = Annotated[bool, Depends(updated_own_session_type)]
+DeletedOwnSessionTypeDep = Annotated[bool, Depends(deleted_own_session_type)]
 
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]

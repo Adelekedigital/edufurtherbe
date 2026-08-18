@@ -72,3 +72,8 @@ scripts/*client_secret*
 scripts/calendar_spike_token.json
 # The id of the calendar a run created, so --cleanup-only can find it.
 scripts/calendar_spike_state.json
+
+# Worktrees a second session created at the repo root. `.claude/worktrees/`
+# covers the sanctioned location; these do not live there, and `git add -A`
+# stages one as an embedded git repository without being asked twice.
+_wt*/
