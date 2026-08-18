@@ -12,6 +12,22 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentee's attendance rate, on the row where a mentor decides.**
+  `SessionRead.mentee_attendance_rate` — a whole-number percentage of the
+  sessions they booked that have finished, correlated per row so a page of
+  requests is still one statement.
+
+  **`null` means no data and a client must render it as "New mentee", never
+  `0%`.** Zero says *never shows up*; every mentee's first booking is null. The
+  API does not send the words: substituting them would be a display decision
+  made in the wrong layer, in one language, that no client could change.
+
+  **The side is load-bearing.** `session_stats.attendance_rate` now takes the
+  side as a parameter — one function, two populations. A person who hosts
+  diligently and books unreliably has two records, and pooling them would let
+  the first flatter the second on exactly the card where it matters. The
+  mentor's rate is unchanged and stays on their public profile.
+
 - **Join-window attendance, and the outcome it decides.**
   `POST /api/v1/sessions/{id}/join` marks **you** present, from five minutes
   before the start to fifteen after. `completed` and `no_show` finally have a

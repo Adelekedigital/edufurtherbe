@@ -110,6 +110,28 @@ class SessionRead(BaseModel):
         ),
     )
     created_at: dt.datetime = Field(description="When the session was booked.")
+    mentee_attendance_rate: int | None = Field(
+        default=None,
+        description=(
+            "How often this mentee has turned up, as a whole-number percentage "
+            "of the sessions they booked that have finished.\n\n"
+            "**`null` means no data, and a client must render it as *New "
+            "mentee* rather than as `0%`.** Zero says *never shows up*; null "
+            "says *we do not know yet*, and every mentee's first booking is "
+            "null. The API does not send the words: substituting them here "
+            "would be a display decision made in the wrong layer, in one "
+            "language, that no client could change — the same reason a party "
+            "with no name comes back with nulls rather than *Unknown*.\n\n"
+            "Counted over **finished** sessions only. A cancelled one is not a "
+            "missed one, and a confirmed one next week has not happened; "
+            "either in the denominator would report an absence that never "
+            "occurred.\n\n"
+            "**There is no matching mentor rate here.** The mentor's is on "
+            "their public profile, and it counts sessions they *hosted* — a "
+            "different population from the same person's mentee record, which "
+            "is why the two are never pooled."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> SessionRead:
@@ -130,6 +152,11 @@ class SessionRead(BaseModel):
             ),
             meeting_url=str(row["meeting_url"]) if row["meeting_url"] else None,
             created_at=row["created_at"],  # type: ignore[arg-type]
+            mentee_attendance_rate=(
+                int(str(row["mentee_attendance_rate"]))
+                if row.get("mentee_attendance_rate") is not None
+                else None
+            ),
         )
 
 
