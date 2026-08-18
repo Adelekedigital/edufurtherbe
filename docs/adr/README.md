@@ -29,6 +29,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0019](0019-profile-images-move-to-supabase-storage.md) | Profile images move to Supabase Storage, keyed on their own content | Accepted |
 | [0020](0020-mirror-the-institution-catalogue.md) | Mirror the institution catalogue, refreshed weekly | Accepted — supersedes part of 0008 |
 | [0021](0021-conferencing-is-a-mentor-owned-table.md) | A mentor's conferencing options are their own table | Accepted — diverges from canonical `04_sessions.sql` |
+| [0022](0022-session-type-vocabularies.md) | A session type's classification and stage get vocabularies | Accepted — diverges from canonical `04_sessions.sql` |
 
 ## Conventions
 

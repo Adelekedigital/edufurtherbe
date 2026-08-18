@@ -76,7 +76,7 @@ async def add_session_type(
     *,
     name: str = "General Mentorship",
     description: str | None = None,
-    category: str | None = None,
+    service_offering: str | None = None,
     application_stage: str | None = None,
     duration: int = 45,
     notice: int | None = 0,
@@ -91,15 +91,19 @@ async def add_session_type(
             await conn.execute(
                 text(
                     "INSERT INTO session_types "
-                    "(mentor_user_id, name, description, category, application_stage, is_active) "
-                    "VALUES (:u, :n, :d, :c, :s, :active) RETURNING id"
+                    "(mentor_user_id, name, description, service_offering_id, "
+                    " application_stage, custom_stage_label, is_active) "
+                    "VALUES (:u, :n, :d, "
+                    "        (SELECT id FROM service_offerings WHERE slug = :c), "
+                    "        :s, :label, :active) RETURNING id"
                 ),
                 {
                     "u": mentor,
                     "n": name,
                     "d": description,
-                    "c": category,
+                    "c": service_offering,
                     "s": application_stage,
+                    "label": "My own wording" if application_stage == "other" else None,
                     "active": active,
                 },
             )

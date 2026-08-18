@@ -14,19 +14,48 @@ of help exists and is what matching joins on. Two different concepts, and the
 word "service" belongs to the other one.
 
 The fields here are an allowlist rather than a projection of the table.
-`created_by` is internal attribution and null on every migrated row;
-`category` and `application_stage` are free text with no constraint, no
-vocabulary and no value in any row today, so publishing them would commit this
-contract to a shape nobody has designed. Adding a field later is additive;
-removing one is breaking.
+`created_by` is internal attribution and null on every migrated row and stays
+out.
+
+**`service_offering` and `application_stage` are now published, and that
+reverses the reason they were withheld.** They were free text with no
+constraint, no vocabulary and no value in any row, so publishing them would have
+committed this contract to a shape nobody had designed. Both have a designed
+shape now — a reference to the closed six-row taxonomy, and a five-value closed
+set — so the argument lapsed rather than being overruled. Adding a field is
+additive; it is removing one that is breaking, which is why the bar for adding
+was ever high.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Self
+from uuid import UUID
+
+from pydantic import BaseModel, Field, model_validator
 
 from app.api.schemas.common import Normalised
-from app.domain.enums import ConferencingProvider
+from app.api.schemas.profile import LookupRef
+from app.domain.enums import ApplicationStage, ConferencingProvider
+
+
+def _taxonomy(row: dict[str, object]) -> LookupRef | None:
+    """The service offering as a `code`/`display_name` pair, or `None`.
+
+    **A `LookupRef` rather than the bare slug**, matching `MentorProfileRead.
+    offerings`. A slug alone would make every client join against
+    `/catalog/service-offerings` to render a chip, for a six-row table the
+    response can carry inline at no cost.
+    """
+    slug = row.get("service_offering_slug")
+    if slug is None:
+        return None
+    return LookupRef(code=str(slug), display_name=str(row["service_offering_name"]))
+
+
+def _stage(row: dict[str, object]) -> ApplicationStage | None:
+    value = row.get("application_stage")
+    return None if value is None else ApplicationStage(str(value))
 
 
 class SessionTypeRead(BaseModel):
@@ -52,6 +81,32 @@ class SessionTypeRead(BaseModel):
             "empty on a mentor who is free."
         )
     )
+    service_offering: LookupRef | None = Field(
+        default=None,
+        description=(
+            "What *kind* of help this is — one row of the closed taxonomy at "
+            "`/api/v1/catalog/service-offerings`, which is the axis mentee needs "
+            "and mentor offers are matched on. Null when the mentor has not "
+            "classified this offering, which is not an error: it simply matches "
+            "no filter."
+        ),
+    )
+    application_stage: ApplicationStage | None = Field(
+        default=None,
+        description=(
+            "Which stage of an application this offering is aimed at. Null means "
+            "any stage. `other` always carries `custom_stage_label`, and no other "
+            "value ever does — the two are tied in the database, so a client can "
+            "render the label whenever the value is `other` without checking."
+        ),
+    )
+    custom_stage_label: str | None = Field(
+        default=None,
+        description=(
+            "The mentor's own wording, and **only** when `application_stage` is "
+            "`other`. Render it in place of the stage name."
+        ),
+    )
     meeting_venue: ConferencingProvider = Field(
         description=(
             "Where the session happens, **resolved** from the mentor's "
@@ -73,6 +128,11 @@ class SessionTypeRead(BaseModel):
             duration_minutes=int(str(row["duration_minutes"])),
             min_notice_minutes=int(str(row["min_notice_minutes"])),
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
+            service_offering=_taxonomy(row),
+            application_stage=_stage(row),
+            custom_stage_label=(
+                str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
+            ),
         )
 
 
@@ -125,25 +185,30 @@ class OwnSessionTypeRead(BaseModel):
             "list needs in order to offer switching it back on."
         )
     )
-    # Neither description states how many rows currently hold a value. Three
-    # places in this repository already say these columns have "no value anywhere
-    # in the data", and the migration that gives `category` a foreign key makes
-    # all three false — a published contract is the worst place to add a fourth
-    # copy of a fact with an expiry date on it. What is described here is the
-    # field's meaning and its current constraint, both of which a client acts on.
-    category: str | None = Field(
+    # No description states how many rows hold a value. Three places in this
+    # repository said these columns had "no value anywhere in the data", and the
+    # migration that gave one a foreign key made all three false — a published
+    # contract is the worst place to keep a fact with an expiry date on it.
+    service_offering: LookupRef | None = Field(
         default=None,
         description=(
-            "The mentor's own grouping for this offering. Free text today, with "
-            "no vocabulary behind it. Withheld from the public contract for that "
-            "reason; returned here because it is the caller's own value."
+            "What kind of help this offering is, from the closed taxonomy at "
+            "`/api/v1/catalog/service-offerings`. **Was `category`, a free-text "
+            "string of your own** — it is now a reference to the axis mentees "
+            "are matched on, so classifying an offering is what makes it "
+            "findable rather than a private note."
         ),
     )
-    application_stage: str | None = Field(
+    application_stage: ApplicationStage | None = Field(
+        default=None,
+        description="Which stage of an application this offering is aimed at.",
+    )
+    custom_stage_label: str | None = Field(
         default=None,
         description=(
-            "The stage of an application this offering is aimed at. Free text "
-            "today, like `category`, and public only to its owner."
+            "Your own wording, and only when `application_stage` is `other`. "
+            "Sending one with any other stage is refused, and so is `other` "
+            "without one."
         ),
     )
 
@@ -157,9 +222,40 @@ class OwnSessionTypeRead(BaseModel):
             min_notice_minutes=int(str(row["min_notice_minutes"])),
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
             is_active=bool(row["is_active"]),
-            category=str(row["category"]) if row["category"] else None,
-            application_stage=(str(row["application_stage"]) if row["application_stage"] else None),
+            service_offering=_taxonomy(row),
+            application_stage=_stage(row),
+            custom_stage_label=(
+                str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
+            ),
         )
+
+
+def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePatch](
+    model: Write,
+) -> Write:
+    """Mirror the symmetric `CHECK` at the boundary.
+
+    **One function, called from both write models**, because the rule is one rule
+    — a copy in each would be non-negotiable #8 in its plainest form, and the
+    copy somebody forgets is the one that stops matching the database.
+
+    **Only when both fields are present.** On a `PATCH` an absent field means
+    *leave it alone*, so a request naming only `custom_stage_label` cannot be
+    judged here — the database still refuses the combination the row would end
+    up in, which is the guarantee. Judging it here anyway would refuse a legal
+    edit: setting the label on an offering that is already `other`.
+    """
+    stage = model.application_stage
+    label = model.custom_stage_label
+    if stage is None or (label is None and stage is not ApplicationStage.OTHER):
+        return model
+    if stage is ApplicationStage.OTHER and label is None:
+        raise ValueError("application_stage 'other' needs custom_stage_label")
+    if stage is not ApplicationStage.OTHER and label is not None:
+        raise ValueError(
+            f"custom_stage_label belongs only to 'other'; this stage is {stage.value!r}"
+        )
+    return model
 
 
 class MentorSessionTypeWrite(Normalised):
@@ -197,8 +293,19 @@ class MentorSessionTypeWrite(Normalised):
     #: The default is the floor rather than a value a mentor picked, which is the
     #: same thing the column default says and the reason it says it.
     min_notice_minutes: int = Field(default=1440, ge=1440, le=4320)
-    category: str | None = Field(default=None, max_length=100)
-    application_stage: str | None = Field(default=None, max_length=100)
+    #: The taxonomy row, by id. Optional: an unclassified offering is bookable
+    #: and simply matches no filter, and forcing a mentor to classify before they
+    #: can sell would put a required field in front of the thing they came to do.
+    service_offering_id: UUID | None = None
+    application_stage: ApplicationStage | None = None
+    #: Only with `OTHER`, and required by it. Enforced here **and** by a symmetric
+    #: `CHECK`: the database refuses what is impossible, and this turns the same
+    #: refusal into a 422 naming the field rather than a 500 naming a constraint.
+    custom_stage_label: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def _label_matches_stage(self) -> Self:
+        return _refuse_mismatched_label(self)
 
 
 class MentorSessionTypePatch(Normalised):
@@ -221,6 +328,17 @@ class MentorSessionTypePatch(Normalised):
     description: str | None = Field(default=None, max_length=2000)
     duration_minutes: int | None = Field(default=None, ge=5, le=480)
     min_notice_minutes: int | None = Field(default=None, ge=1440, le=4320)
-    category: str | None = Field(default=None, max_length=100)
-    application_stage: str | None = Field(default=None, max_length=100)
+    #: The taxonomy row, by id. Optional: an unclassified offering is bookable
+    #: and simply matches no filter, and forcing a mentor to classify before they
+    #: can sell would put a required field in front of the thing they came to do.
+    service_offering_id: UUID | None = None
+    application_stage: ApplicationStage | None = None
+    #: Only with `OTHER`, and required by it. Enforced here **and** by a symmetric
+    #: `CHECK`: the database refuses what is impossible, and this turns the same
+    #: refusal into a 422 naming the field rather than a 500 naming a constraint.
+    custom_stage_label: str | None = Field(default=None, max_length=100)
     is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def _label_matches_stage(self) -> Self:
+        return _refuse_mismatched_label(self)

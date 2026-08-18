@@ -302,8 +302,8 @@ async def test_the_response_carries_the_three_owner_only_fields(
         mentor,
         name="Full",
         description="Everything filled in",
-        category="internal-classification",
-        application_stage="postgrad",
+        service_offering="document-preparation",
+        application_stage="other",
         active=False,
     )
 
@@ -317,12 +317,17 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "min_notice_minutes",
         "meeting_venue",
         "is_active",
-        "category",
+        "service_offering",
         "application_stage",
+        "custom_stage_label",
     }
     assert offering["is_active"] is False
-    assert offering["category"] == "internal-classification"
-    assert offering["application_stage"] == "postgrad"
+    # `category` was a free-text string of the mentor's own and is now a
+    # reference to the taxonomy mentees are matched on, so the owner sees the
+    # same `code`/`display_name` pair a client would render.
+    assert offering["service_offering"]["code"] == "document-preparation"
+    assert offering["application_stage"] == "other"
+    assert offering["custom_stage_label"] == "My own wording"
 
 
 async def test_the_public_contract_did_not_gain_the_owner_only_fields(
@@ -338,7 +343,11 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
     """
     mentor = await make_public_mentor(db_engine, "public-unchanged")
     await add_session_type(
-        db_engine, mentor, name="Public", category="internal", application_stage="postgrad"
+        db_engine,
+        mentor,
+        name="Public",
+        service_offering="document-preparation",
+        application_stage="other",
     )
 
     response = await api_client.get(public_url(mentor))
@@ -351,7 +360,14 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         "duration_minutes",
         "min_notice_minutes",
         "meeting_venue",
+        # The two vocabularies are published now that both have a designed
+        # shape, so this set grew — but `is_active` is still owner-only, which
+        # is what this test is actually about.
+        "service_offering",
+        "application_stage",
+        "custom_stage_label",
     }
+    assert "is_active" not in offering
     assert "internal" not in response.text
     assert "postgrad" not in response.text
 

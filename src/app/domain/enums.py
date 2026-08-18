@@ -287,6 +287,41 @@ class ConferencingProvider(StrEnum):
     CUSTOM = "custom"
 
 
+class ApplicationStage(StrEnum):
+    """Where in their application a mentee is, for an offering aimed at a stage.
+
+    **The first vocabulary this project designed rather than received.** The
+    column shipped as free `text` with no constraint and no value in any row,
+    withheld from the public contract precisely because publishing it *"would
+    commit this contract to a shape nobody has designed"*. The UI designed it, so
+    that reason has lapsed and the column stops being free text.
+
+    **`OTHER` is the one that costs something**, and it is kept deliberately. A
+    closed set with no escape hatch pushes anything unanticipated into whichever
+    member is least wrong, which is worse than an honest "something else" — and
+    this vocabulary was drawn from fourteen mock screens rather than from data,
+    so being incomplete is the expected case rather than the surprising one.
+
+    Its label lives in ``session_types.custom_stage_label``, tied to it by a
+    **symmetric** ``CHECK``: ``OTHER`` with no label renders a blank chip, and a
+    named stage carrying a stale label is dead data that survives an edit. Both
+    directions, for the same reason the conferencing constraint is symmetric —
+    the one-directional form is what let a mentor be bookable with nowhere to
+    meet.
+
+    **Not a lookup table**, unlike ``service_offerings`` next door. The handoff's
+    test applies: adding a value here requires a code change anyway, because
+    nothing consumes a stage it does not know how to render — so it is a closed
+    set, and #100 makes a closed set ``text`` + ``CHECK``.
+    """
+
+    EARLY_EXPLORATION = "early_exploration"
+    DRAFTING_STAGE = "drafting_stage"
+    POST_SUBMISSION = "post_submission"
+    REVISIONS = "revisions"
+    OTHER = "other"
+
+
 class AvailabilityExceptionType(StrEnum):
     """What an exception does to a mentor's recurring availability.
 

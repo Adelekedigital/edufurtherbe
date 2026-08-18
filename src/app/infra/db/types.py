@@ -34,6 +34,7 @@ from sqlalchemy import Dialect, Text, TypeDecorator
 from app.domain.enums import (
     ActorType,
     AdminRole,
+    ApplicationStage,
     ApprovalStatus,
     AttendanceStatus,
     AuthProvider,
@@ -95,6 +96,11 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     LegalDocumentType: frozenset({"ck_legal_documents_type_is_known"}),
     VerificationStatus: frozenset({"ck_user_awards_verification_status_is_known"}),
     AvailabilityExceptionType: frozenset({"ck_availability_exceptions_type_is_known"}),
+    # The first vocabulary this project designed rather than received, and
+    # nullable — `application_stage IS NULL OR ...`, because a `CHECK` rejects
+    # only what is false and an offering aimed at no particular stage is
+    # ordinary.
+    ApplicationStage: frozenset({"ck_session_types_application_stage_is_known"}),
     # Step 3 — the first shared vocabulary. Two tables whose rows users create
     # and an admin curates; `degree_levels` and `service_offerings` have no
     # status column because nobody can add a row to them.
