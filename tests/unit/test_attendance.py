@@ -71,31 +71,35 @@ def test_joining_and_settling_never_overlap(offset: dt.timedelta) -> None:
 
 
 @pytest.mark.parametrize(
-    ("attendance", "expected"),
+    ("mentor", "mentee", "expected"),
     [
-        ((True, True), SessionStatus.COMPLETED),
-        ((True, False), SessionStatus.NO_SHOW),
-        ((False, True), SessionStatus.NO_SHOW),
-        ((False, False), SessionStatus.NO_SHOW),
+        (True, True, SessionStatus.COMPLETED),
+        (True, False, SessionStatus.NO_SHOW),
+        (False, True, SessionStatus.NO_SHOW),
+        (False, False, SessionStatus.NO_SHOW),
     ],
 )
-def test_a_session_happened_only_if_everybody_came(
-    attendance: tuple[bool, ...], expected: SessionStatus
+def test_a_session_happened_only_if_both_parties_came(
+    mentor: bool, mentee: bool, expected: SessionStatus
 ) -> None:
-    """**`all`, not `any`, and the two one-sided cases are both here.**
+    """**Both, not either, and the two one-sided cases are both here.**
 
     A session one party attended alone did not happen, whichever party it was.
     Testing only "both came" and "neither came" would leave `any` passing, and
     `any` is the reading that reports a mentor who turned up to an empty room as
     having delivered a session.
     """
-    assert outcome(attendance) is expected
+    assert outcome(mentor_attended=mentor, mentee_attended=mentee) is expected
 
 
-def test_a_session_with_no_participants_did_not_happen() -> None:
-    """Unreachable — booking writes two rows — and the right answer anyway.
+def test_a_missing_record_is_absence_rather_than_doubt() -> None:
+    """**The correction, and the case the settlement disagreed on.**
 
-    Worth pinning because the obvious `all(...)` is `True` for an empty
-    iterable, which would report a session nobody was recorded at as completed.
+    The first version took an iterable and asked whether anybody *in it* was
+    absent — so a session with one participant row, or with none, contained
+    nobody absent and came back `completed`. By the time this is asked the join
+    window has shut, so a party with no record did not record attending, and the
+    parties are named rather than inferred from the rows that happen to exist.
     """
-    assert outcome(()) is SessionStatus.NO_SHOW
+    assert outcome(mentor_attended=True, mentee_attended=False) is SessionStatus.NO_SHOW
+    assert outcome(mentor_attended=False, mentee_attended=False) is SessionStatus.NO_SHOW

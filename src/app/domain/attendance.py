@@ -13,6 +13,16 @@ somebody arriving, and fifteen late is somebody who was held up rather than
 somebody who never came. Later a mentor preference, which is why the two are
 separate constants.
 
+**A recorded arrival is an intention to attend, not an attendance.** Pressing
+Join says *I am here now*; it does not say the other party was, or that either
+stayed. Two parties can both be recorded present without the session having
+happened — one arriving as the other gives up and leaves — and nothing in this
+module can see that, because a single instant per party carries no overlap. What
+would see it is a repeated signal while a tab is open, from which co-presence
+falls out; that is a decision this project has not taken yet, and until it does
+``COMPLETED`` means *both parties turned up within the window* rather than *the
+session happened*.
+
 **Attendance is client-reported, and there is no second source.** ADR 0004 makes
 the calendar a write target and an on-demand free/busy read, so nothing tells
 this service that a Meet room had two people in it — and `mentor_stats` already
@@ -25,7 +35,6 @@ reader treating `attended` as observed fact.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Iterable
 
 from app.domain.enums import SessionStatus
 
@@ -76,30 +85,47 @@ def window_has_closed(starts_at: dt.datetime, now: dt.datetime) -> bool:
     return now >= starts_at + JOIN_CLOSES
 
 
-def outcome(attendance: Iterable[bool]) -> SessionStatus:
-    """``COMPLETED`` when everybody came, ``NO_SHOW`` when anybody did not.
+def outcome(*, mentor_attended: bool, mentee_attended: bool) -> SessionStatus:
+    """``COMPLETED`` only when **both named parties** are recorded present.
 
-    **The rule is *all*, not *any*, and the asymmetry is the product's.** A
+    **The two parties are named rather than counted**, and that is the
+    correction. The first version took an iterable and asked whether anybody in
+    it was absent, which is a different question with the same answer in the
+    ordinary case and a wrong one at the edges: a session with *one* participant
+    row, or with none at all, contains nobody who is absent and was therefore
+    reported as `completed`. `sessions` is 1:1 between exactly one mentor and
+    one mentee by design (package D4), so the expected set is knowable and there
+    is no reason to infer it from the rows that happen to exist.
+
+    **A missing row is ``False``, not unknown.** By the time this is asked the
+    join window has shut, so there is nothing further to learn: somebody with no
+    attendance record did not record attending.
+
+    **The rule is *both*, not *either*, and the asymmetry is the product's.** A
     session one party attended alone did not happen, whichever party it was —
     the mentee sitting in an empty room and the mentor sitting in one are the
     same outcome for the session, and the two are told apart by the
-    *participants'* statuses rather than by the session's.
+    *participants'* statuses and by the event's reason code rather than by the
+    session's status.
 
     ``NO_SHOW`` here is not `AttendanceStatus.NO_SHOW`: this one says the session
     did not happen, that one says a named person did not arrive.
 
-    An empty iterable yields ``NO_SHOW``, which is unreachable — every session
-    has two participant rows written with it — and is the right answer anyway:
-    a session nobody was recorded at is not one that happened.
+    **What it does not decide is whether the two were ever there at the same
+    time.** Both parties can be recorded present without the session having
+    happened — one arriving as the other leaves — and nothing here can see that,
+    because a press of Join records an intention to attend rather than an
+    attendance. That is a known limit, not an oversight; see the module
+    docstring.
 
     **The settlement does not call this**, and that is the one thing here worth
     being uneasy about. It decides the same question set-based in SQL, because a
     per-session loop would make a partial settlement reachable — a session saying
     `completed` while its participants still say `pending`. So the rule exists
     twice, which non-negotiable #8 calls a defect unless the copies are pinned by
-    a test that fails when they diverge. They are: this function is the
-    *specification*, and `test_the_settlement_agrees_with_the_rule` drives every
-    combination through both and compares.
+    a test that fails when they diverge. **They were not pinned well enough:**
+    `test_the_settlement_agrees_with_the_rule` drove only sessions created
+    through booking, which always have both rows, so it never reached the case
+    the two disagreed on. It now drives the missing-row cases too.
     """
-    values = list(attendance)
-    return SessionStatus.COMPLETED if values and all(values) else SessionStatus.NO_SHOW
+    return SessionStatus.COMPLETED if mentor_attended and mentee_attended else SessionStatus.NO_SHOW
