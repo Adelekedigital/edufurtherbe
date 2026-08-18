@@ -145,7 +145,7 @@ from app.infra.db.session_type_store import (
     list_session_types,
     update_session_type,
 )
-from app.infra.db.session_writer import book_session, transition
+from app.infra.db.session_writer import book_session, record_arrival, transition
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
@@ -1087,6 +1087,21 @@ AcceptedSessionDep = Annotated[None, Depends(transitions("accept"))]
 DeclinedSessionDep = Annotated[None, Depends(transitions("decline"))]
 WithdrawnSessionDep = Annotated[None, Depends(transitions("withdraw"))]
 CancelledSessionDep = Annotated[None, Depends(transitions("cancel"))]
+
+
+async def joined_session(session_id: UUID, user: CurrentUserDep, session: SessionDep) -> None:
+    """Record that the caller arrived at their own session.
+
+    **Not a transition, and not in the table above.** Arriving changes no
+    status: a session stays `confirmed` while it runs, and what it becomes is
+    decided once for both parties when the join window shuts. Putting this in
+    `TRANSITIONS` would have needed a `to` state it does not have.
+    """
+    await record_arrival(session, session_id, user["id"], now=dt.datetime.now(dt.UTC))
+    await session.commit()
+
+
+JoinedSessionDep = Annotated[None, Depends(joined_session)]
 
 
 # --------------------------------------------------------------------------

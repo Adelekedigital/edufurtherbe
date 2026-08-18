@@ -32,12 +32,19 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, insert, or_, select, update
+from sqlalchemy import case, func, insert, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
-from app.domain.enums import ActorType, SessionRole, SessionStatus
+from app.domain.attendance import JOIN_CLOSES, join_window, within_join_window
+from app.domain.enums import (
+    ActorType,
+    AttendanceStatus,
+    SessionReasonCode,
+    SessionRole,
+    SessionStatus,
+)
 from app.domain.sessions import CANCELLATION_CUTOFF, TRANSITIONS, too_late_to_cancel
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import (
@@ -51,7 +58,13 @@ from app.infra.db.models.user import User
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 from app.infra.db.slot_store import list_slots
 
-__all__ = ["DOUBLE_BOOKED", "book_session", "transition"]
+__all__ = [
+    "DOUBLE_BOOKED",
+    "book_session",
+    "record_arrival",
+    "settle_attendance",
+    "transition",
+]
 
 #: The exclusion constraint's name, which is how a 409 is told from a 500.
 #:
@@ -364,3 +377,190 @@ def _past(action: str) -> str:
     from string surgery, which would have to know that `cancel` doubles its `l`.
     """
     return str(TRANSITIONS[action].to)
+
+
+async def record_arrival(
+    session: AsyncSession, session_id: UUID, actor_id: UUID, *, now: dt.datetime
+) -> None:
+    """Mark the caller present at their own session.
+
+    **Only their own row.** The `WHERE` names `user_id = actor_id`, so a mentor
+    cannot mark a mentee present or a mentee vouch for a mentor — which matters
+    because attendance drives both parties' reliability statistics, so marking
+    somebody else present is editing their record.
+
+    **Idempotent, and `joined_at` keeps the *first* arrival.** Pressing Join
+    twice is the ordinary case — a dropped call, a refreshed tab — and the
+    second press must not rewrite when they arrived. The `COALESCE` is what does
+    that; without it the column would record the last press, which is the one
+    fact nobody wants.
+
+    Raises :class:`NotFoundError` when the session is not the caller's, and
+    :class:`ConflictError` when it is not confirmed or the window is shut. Does
+    not commit.
+    """
+    row = (
+        (
+            await session.execute(
+                select(Session.status, Session.starts_at).where(
+                    Session.id == session_id,
+                    or_(Session.mentor_id == actor_id, Session.mentee_id == actor_id),
+                )
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        raise NotFoundError("no such session")
+    if SessionStatus(row["status"]) is not SessionStatus.CONFIRMED:
+        # A pending request has not been agreed to and a terminal one is over.
+        # Both are `409` rather than a quiet no-op: a client that believes it has
+        # registered an arrival will not try again.
+        raise ConflictError(f"a {row['status']} session cannot be joined")
+    if not within_join_window(row["starts_at"], now):
+        opens, closes = join_window(row["starts_at"])
+        raise ConflictError(
+            f"this session can be joined between {opens.isoformat()} and {closes.isoformat()}"
+        )
+
+    await session.execute(
+        update(SessionParticipant)
+        .where(
+            SessionParticipant.session_id == session_id,
+            SessionParticipant.user_id == actor_id,
+        )
+        .values(
+            joined_at=func.coalesce(SessionParticipant.joined_at, now),
+            attendance_status=AttendanceStatus.ATTENDED,
+        )
+    )
+
+
+def _window_shut(now: dt.datetime) -> Any:
+    """Sessions whose join window has shut, in SQL.
+
+    Built from :data:`JOIN_CLOSES` rather than from a literal, so this boundary
+    and :func:`window_has_closed`'s are one definition rather than two that
+    happen to agree today. A settlement running a minute early would mark
+    somebody absent while they still had time to arrive.
+    """
+    shut = text(f"interval '{int(JOIN_CLOSES.total_seconds())} seconds'")
+    return Session.starts_at + shut <= now
+
+
+async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
+    """Decide every confirmed session whose join window has shut. Returns the count.
+
+    **This is the producer `session_stats` has been waiting for.** That module
+    records the problem plainly: `sessions.status` and
+    `session_participants.attendance_status` are independent columns, a `CHECK`
+    cannot tie them because it spans two tables, and *the migrated data already
+    violates the invariant* — three sessions are `completed` with somebody
+    absent. This settles sessions **booked after cutover** from their attendance,
+    so from here forward there is one place the outcome is decided.
+
+    It does not retrofit the migrated rows, and must not: those record what the
+    legacy app believed, and rewriting them would destroy the evidence that the
+    two figures disagree.
+
+    **Set-based, in three statements plus the log.** The whole population is
+    about a thousand sessions, so a per-session loop would buy nothing and cost
+    a round trip each — and it would make a partial settlement reachable, where
+    a session says `completed` while its participants still say `pending`.
+
+    **Idempotent.** The participant update touches only `pending` rows and the
+    session update only `confirmed` ones, so a second run settles nothing and
+    writes no second event. That matters more than usual: this is driven by an
+    external scheduler, because settled decision #13 rules out a platform-native
+    cron — and an external scheduler is the kind that fires twice.
+
+    Does not commit.
+    """
+    due = select(Session.id).where(Session.status == SessionStatus.CONFIRMED, _window_shut(now))
+
+    # 1. Everybody still unknown was absent. `pending` only, so an arrival
+    #    already recorded by `record_arrival` is left exactly as it is.
+    await session.execute(
+        update(SessionParticipant)
+        .where(
+            SessionParticipant.session_id.in_(due),
+            SessionParticipant.attendance_status == AttendanceStatus.PENDING,
+        )
+        .values(attendance_status=AttendanceStatus.NO_SHOW)
+    )
+
+    # 2. The session's own outcome. Written as "no participant is absent" rather
+    #    than "every participant attended" — the same thing today, and still
+    #    right if `left_early` ever starts being written.
+    #
+    #    **This is `domain.attendance.outcome` expressed in SQL**, which is one
+    #    rule in two places. The Python is the specification and this is the
+    #    implementation, pinned by `test_the_settlement_agrees_with_the_rule`,
+    #    which drives every combination through both and compares.
+    absent = (
+        select(SessionParticipant.id)
+        .where(
+            SessionParticipant.session_id == Session.id,
+            SessionParticipant.attendance_status == AttendanceStatus.NO_SHOW,
+        )
+        .correlate(Session)
+        .exists()
+    )
+    settled = (
+        (
+            await session.execute(
+                update(Session)
+                .where(Session.status == SessionStatus.CONFIRMED, _window_shut(now))
+                .values(
+                    status=case(
+                        (absent, SessionStatus.NO_SHOW.value),
+                        else_=SessionStatus.COMPLETED.value,
+                    )
+                )
+                .returning(Session.id, Session.status)
+            )
+        )
+        .mappings()
+        .all()
+    )
+    if not settled:
+        return 0
+
+    # 3. The log. `actor_id` is null and `actor_type` is `system`, which the
+    #    model's own docstring calls honest for a sweep and better than
+    #    inventing a system user. `from_status` is `confirmed` on every row,
+    #    because nothing else was selected.
+    await session.execute(
+        insert(SessionEvent),
+        [
+            {
+                "session_id": row["id"],
+                "from_status": SessionStatus.CONFIRMED,
+                "to_status": row["status"],
+                "actor_id": None,
+                "actor_type": ActorType.SYSTEM,
+                "reason_code": _absence_code(row["status"]),
+            }
+            for row in settled
+        ],
+    )
+    return len(settled)
+
+
+def _absence_code(status: str) -> SessionReasonCode | None:
+    """The coded reason for a missed session, or none for one that happened.
+
+    **One code for both absences, deliberately coarse.** The vocabulary has
+    `MENTOR_NO_SHOW` and `MENTEE_NO_SHOW`, and choosing between them here would
+    make the session-level event assert *which* party was absent — a fact the
+    participant rows already hold precisely, and hold correctly when both were
+    absent, which neither code can express. Duplicating it into the event is the
+    second copy that drifts.
+
+    So the event says *somebody was absent*, and the per-person truth stays in
+    the one place that can state it.
+    """
+    if SessionStatus(status) is not SessionStatus.NO_SHOW:
+        return None
+    return SessionReasonCode.MENTEE_NO_SHOW
