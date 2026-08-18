@@ -1,10 +1,21 @@
-"""Decide the outcome of every session whose join window has shut.
+"""Advance every session whose deadline has passed.
 
-    # settle, and report how many
+    # advance what is due, and report how many
     uv run python scripts/settle_sessions.py
 
-    # report what would be settled, touching nothing
+    # report what would move, touching nothing
     uv run python scripts/settle_sessions.py --dry-run
+
+**Two sweeps, one job.** An unanswered *request* past ``respond_by`` becomes
+``expired``; a *confirmed* session past its join window becomes ``completed`` or
+``no_show``. They act on disjoint statuses, so their order does not matter — and
+they are one script because they are one kind of thing: a deadline elapsed with
+nobody acting. Two scripts would mean two schedules, two workflows and two
+places to notice a failure.
+
+**The expiry half is the one that frees a slot.**
+``sessions_no_mentor_double_booking`` covers ``pending_mentor_approval``, so
+until this runs an abandoned request holds the mentor's hour indefinitely.
 
 **A script rather than a scheduled job inside the application**, because settled
 decision #13 uses no platform-native queue or cron: the escape from FastAPI Cloud
@@ -19,8 +30,13 @@ second event.
 **How often it runs decides how stale an outcome is, and nothing more.** An
 unsettled session stays `confirmed`, which keeps holding its slot exactly as it
 did while it was upcoming, and stays out of `session_stats` because that reads
-terminal statuses only. So a late run under-reports rather than misreports —
-which is the right way round, and is why this needs no tight interval.
+terminal statuses only. So a late run under-reports rather than misreports.
+
+For the expiry half a late run costs the mentee a slot that is free but still
+hidden, for at most one interval — an hour on the current schedule, against a
+response window of six. Running *early* is the direction that would do damage,
+and neither sweep can: both boundaries come from the data rather than from the
+schedule.
 """
 
 from __future__ import annotations
@@ -33,7 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import get_settings
 from app.infra.db.engine import resolve_async_dsn
-from app.infra.db.session_writer import settle_attendance
+from app.infra.db.session_writer import expire_requests, settle_attendance
 from app.infra.etl.cli import EXIT_OK, configure_streams
 
 
@@ -41,15 +57,19 @@ async def run(args: argparse.Namespace) -> int:
     engine = create_async_engine(resolve_async_dsn(get_settings()))
     try:
         async with AsyncSession(engine) as session:
-            settled = await settle_attendance(session, now=datetime.now(UTC))
+            now = datetime.now(UTC)
+            # One clock for both sweeps. Reading it twice would let a session
+            # sit exactly on a boundary and be judged by two different instants.
+            expired = await expire_requests(session, now=now)
+            settled = await settle_attendance(session, now=now)
             if args.dry_run:
                 # Rolled back rather than skipped: a dry run that took a
                 # different code path would report on a query nobody runs.
                 await session.rollback()
-                print(f"would settle {settled} session(s)")
+                print(f"would expire {expired} request(s), settle {settled} session(s)")
             else:
                 await session.commit()
-                print(f"settled {settled} session(s)")
+                print(f"expired {expired} request(s), settled {settled} session(s)")
     finally:
         await engine.dispose()
     return EXIT_OK
