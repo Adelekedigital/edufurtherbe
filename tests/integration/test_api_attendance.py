@@ -352,12 +352,36 @@ async def test_the_settlement_agrees_with_the_rule(
             await api_client.post(join_url(booking), headers=booking["mentee"])
         bookings.append((booking, (mentor_came, mentee_came)))
 
+    # **The cases the first version of this test could not reach**, and exactly
+    # the ones the two copies disagreed on: a session with one participant row,
+    # and one with none. Both are unreachable through booking — which writes
+    # both rows in a single transaction — so the rows are removed deliberately.
+    only_mentee = await a_confirmed_session(
+        db_engine, api_client, "at-rule-partial", starts_in=dt.timedelta(minutes=1)
+    )
+    await api_client.post(join_url(only_mentee), headers=only_mentee["mentee"])
+    orphan = await a_confirmed_session(
+        db_engine, api_client, "at-rule-orphan", starts_in=dt.timedelta(minutes=1)
+    )
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM session_participants WHERE session_id = :i AND role = 'mentor'"),
+            {"i": only_mentee["id"]},
+        )
+        await conn.execute(
+            text("DELETE FROM session_participants WHERE session_id = :i"), {"i": orphan["id"]}
+        )
+    bookings += [(only_mentee, (False, True)), (orphan, (False, False))]
+
     async with db_engine.begin() as conn:
         await conn.execute(text("UPDATE sessions SET starts_at = now() - interval '1 hour'"))
-    assert await settle(db_engine) == len(combinations)
+    assert await settle(db_engine) == len(bookings)
 
-    for booking, came in bookings:
-        assert await status_of(db_engine, booking["id"]) == outcome(came).value
+    for booking, (mentor_came, mentee_came) in bookings:
+        assert (
+            await status_of(db_engine, booking["id"])
+            == outcome(mentor_attended=mentor_came, mentee_attended=mentee_came).value
+        )
 
 
 async def test_settling_is_safe_to_run_twice(
@@ -435,7 +459,11 @@ async def test_the_settlement_event_has_no_human_actor(
     assert settled["actor_id"] is None
     assert settled["actor_type"] == "system"
     assert settled["from_status"] == SessionStatus.CONFIRMED.value
-    assert settled["reason_code"] is not None
+    # **Null when both were absent**: no code in the vocabulary can say it, and
+    # inventing one would make an aggregate over `reason_code` wrong in a way
+    # nobody could see. The participant rows are the only thing that can state
+    # it, and they do.
+    assert settled["reason_code"] is None
 
 
 async def test_migrated_contradictions_are_left_exactly_as_they_are(
@@ -471,3 +499,104 @@ async def test_migrated_contradictions_are_left_exactly_as_they_are(
     assert await settle(db_engine) == 0
     assert await status_of(db_engine, booking["id"]) == "completed"
     assert (await attendance(db_engine, booking["id"]))["mentor"]["attendance_status"] == "no_show"
+
+
+async def test_the_reason_code_names_the_party_who_was_absent(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**These codes are what refund policy runs on**, so naming the wrong party
+    is the wrong answer to the question that decides a refund — not merely
+    coarse.
+
+    The first version filed every absence under `mentee_no_show`, a mentor's
+    included. Both one-sided cases are asserted, because a version that picked
+    one code for both would still pass on whichever half it happened to choose.
+    """
+    mentor_missing = await a_confirmed_session(
+        db_engine, api_client, "at-code-mentor", starts_in=dt.timedelta(minutes=1)
+    )
+    await api_client.post(join_url(mentor_missing), headers=mentor_missing["mentee"])
+    mentee_missing = await a_confirmed_session(
+        db_engine, api_client, "at-code-mentee", starts_in=dt.timedelta(minutes=1)
+    )
+    await api_client.post(join_url(mentee_missing), headers=mentee_missing["mentor"])
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE sessions SET starts_at = now() - interval '1 hour'"))
+    await settle(db_engine)
+
+    async def code(booking: dict[str, Any]) -> Any:
+        events = await api_client.get(
+            f"/api/v1/sessions/{booking['id']}/events", headers=booking["mentor"]
+        )
+        return events.json()["data"][-1]["reason_code"]
+
+    assert await code(mentor_missing) == "mentor_no_show"
+    assert await code(mentee_missing) == "mentee_no_show"
+
+
+async def test_a_completed_session_carries_no_reason_code(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Nothing to explain. A code here would put every delivered session into
+    whatever aggregate the codes feed."""
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-code-none", starts_in=dt.timedelta(minutes=1)
+    )
+    await api_client.post(join_url(booking), headers=booking["mentor"])
+    await api_client.post(join_url(booking), headers=booking["mentee"])
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET starts_at = now() - interval '1 hour' WHERE id = :i"),
+            {"i": booking["id"]},
+        )
+    await settle(db_engine)
+
+    events = await api_client.get(
+        f"/api/v1/sessions/{booking['id']}/events", headers=booking["mentor"]
+    )
+    assert events.json()["data"][-1]["reason_code"] is None
+
+
+async def test_joining_a_session_with_no_record_for_you_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**A silent success is the worst answer available here.**
+
+    The update used to match zero rows and still report `{"joined": true}`, so
+    the caller would be told their arrival was recorded, walk away, and be
+    settled as absent with nothing to appeal against.
+    """
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-norecord", starts_in=dt.timedelta(minutes=1)
+    )
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM session_participants WHERE session_id = :i AND role = 'mentee'"),
+            {"i": booking["id"]},
+        )
+
+    refused = await api_client.post(join_url(booking), headers=booking["mentee"])
+
+    assert refused.status_code == 409, refused.text
+
+
+async def test_a_session_nobody_was_recorded_at_did_not_happen(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The defect a probe found, asserted directly.**
+
+    A confirmed session with no participant rows contains nobody who is absent,
+    so the old "is anybody absent" reading settled it as `completed` — a session
+    nobody was recorded at, reported as delivered and counted in the mentor's
+    figures.
+    """
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-orphan", starts_in=-dt.timedelta(hours=1)
+    )
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM session_participants WHERE session_id = :i"), {"i": booking["id"]}
+        )
+
+    assert await settle(db_engine) == 1
+    assert await status_of(db_engine, booking["id"]) == "no_show"
