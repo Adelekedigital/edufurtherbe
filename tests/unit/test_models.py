@@ -66,6 +66,10 @@ EXPECTED_MODELS = {
     # first needs it.
     "AvailabilityRule",
     "AvailabilityException",
+    # Per-offering windows, which **replace** general availability rather than
+    # intersecting them. Same module as the rules they replace, and the same
+    # shape, so `bookable()` needs no second code path.
+    "SessionTypeSchedulingWindow",
     # M4 sessions. Five of the package's nine tables in `04_sessions.sql`:
     # `SessionTypeQuestion`, `SessionTypeQuestionOption`, `IntakeSubmission`,
     # `IntakeAnswer` and `SessionNote` are deliberately absent. None has a legacy

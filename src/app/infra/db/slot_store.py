@@ -45,7 +45,11 @@ from app.domain.availability import (
     bookable,
 )
 from app.domain.enums import AvailabilityExceptionType
-from app.infra.db.models.availability import AvailabilityException, AvailabilityRule
+from app.infra.db.models.availability import (
+    AvailabilityException,
+    AvailabilityRule,
+    SessionTypeSchedulingWindow,
+)
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session, SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
@@ -167,20 +171,54 @@ async def list_slots(
     if (end - start).days > MAX_PROJECTION_DAYS:
         raise ValidationError(f"a range may span at most {MAX_PROJECTION_DAYS} days")
 
+    # **The offering's own windows replace general availability; they do not
+    # intersect it.** Asked first, and only if it has none does the mentor's
+    # `availability_rules` answer — which is what every offering did before
+    # windows existed, and is why an offering with none produces byte-identical
+    # slots to before.
+    #
+    # Intersecting was the obvious reading and the mock's own example shows why
+    # it is wrong: deliberate evening and morning windows, intersected with
+    # normal working hours, yield zero slots and an empty calendar with nothing
+    # to explain it.
+    #
+    # `exceptions` below are **not** switched. Windows replace *availability*,
+    # not *unavailability*: a mentor who blocked a date blocked it for every
+    # offering.
     rules = (
         await session.execute(
             select(
-                AvailabilityRule.day_of_week,
-                AvailabilityRule.start_time,
-                AvailabilityRule.end_time,
-                AvailabilityRule.timezone,
+                SessionTypeSchedulingWindow.day_of_week,
+                SessionTypeSchedulingWindow.start_time,
+                SessionTypeSchedulingWindow.end_time,
+                SessionTypeSchedulingWindow.timezone,
             ).where(
-                AvailabilityRule.mentor_user_id == user_id,
-                AvailabilityRule.is_active.is_(True),
-                AvailabilityRule.deleted_at.is_(None),
+                SessionTypeSchedulingWindow.session_type_id == session_type_id,
+                SessionTypeSchedulingWindow.is_active.is_(True),
+                SessionTypeSchedulingWindow.deleted_at.is_(None),
             )
         )
     ).mappings()
+    windows = [dict(row) for row in rules]
+
+    if not windows:
+        windows = [
+            dict(row)
+            for row in (
+                await session.execute(
+                    select(
+                        AvailabilityRule.day_of_week,
+                        AvailabilityRule.start_time,
+                        AvailabilityRule.end_time,
+                        AvailabilityRule.timezone,
+                    ).where(
+                        AvailabilityRule.mentor_user_id == user_id,
+                        AvailabilityRule.is_active.is_(True),
+                        AvailabilityRule.deleted_at.is_(None),
+                    )
+                )
+            ).mappings()
+        ]
 
     exceptions = (
         await session.execute(
@@ -221,7 +259,7 @@ async def list_slots(
                     end_time=row["end_time"],
                     timezone=row["timezone"],
                 )
-                for row in rules
+                for row in windows
             ],
             exceptions=[
                 DatedException(

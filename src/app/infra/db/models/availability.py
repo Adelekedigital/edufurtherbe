@@ -227,3 +227,92 @@ class AvailabilityException(TimestampMixin, Base):
             postgresql_using="gist",
         ),
     )
+
+
+class SessionTypeSchedulingWindow(TimestampMixin, Base):
+    """One recurring weekly window in which **a single offering** can be booked.
+
+    **Windows replace a mentor's general availability; they do not intersect
+    it.** An offering with windows is bookable in *those* and nowhere else; an
+    offering with none uses `availability_rules`, as everything did before.
+
+    Intersecting was the obvious reading and the mock's own example shows why it
+    is wrong: Wednesday 5-8pm and Thursday 9am-1pm read as deliberate evening and
+    morning slots, and intersected with normal working hours they yield **zero**
+    slots — an empty calendar with nothing to explain it.
+
+    **`availability_exceptions` still subtract, always.** Windows replace
+    *availability*, not *unavailability*: a mentor who blocked a date blocked it
+    for every offering. That is derived rather than stated in the decision, and
+    is written here so "replace" is not read as replacing everything.
+
+    **A mentor with windows and no general availability is bookable**, which is
+    newly reachable and is not a misconfiguration.
+
+    Same shape as `AvailabilityRule` deliberately — `bookable()` takes a list of
+    weekly windows and does not care which table they came from, which is what
+    makes "replace" a swap of the source rather than a second code path through
+    the slot maths.
+    """
+
+    __tablename__ = "session_type_scheduling_windows"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    #: The offering, which is also what carries ownership: a window is reached
+    #: through the session type, and `session_type_of()` is what scopes the
+    #: writes. `CASCADE` because a window has no meaning without its offering and
+    #: records no fact about anybody (ADR 0013).
+    #: Named by hand. The `fk_%(table)s_%(column)s_%(referred_table)s`
+    #: convention renders 64 characters here — one over the limit, where
+    #: SQLAlchemy silently truncates and appends a hash. This is the **fourth**
+    #: table in this milestone to trip it, which is what long table names cost.
+    session_type_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "session_types.id",
+            ondelete="CASCADE",
+            name="fk_session_type_scheduling_windows_session_type_id",
+        ),
+        nullable=False,
+    )
+
+    day_of_week: Mapped[int] = mapped_column(nullable=False)
+    start_time: Mapped[datetime.time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[datetime.time] = mapped_column(Time, nullable=False)
+    #: The mentor's IANA zone, stored per row exactly as `availability_rules`
+    #: does. A window is declared in the zone the mentor was thinking in, and
+    #: resolving it later against a profile column would silently move every
+    #: window the day they travel.
+    timezone: Mapped[str] = mapped_column(Text, nullable=False)
+
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("day_of_week BETWEEN 0 AND 6", name="day_of_week_valid"),
+        CheckConstraint("end_time > start_time", name="scheduling_window_ordered"),
+        # **Scoped to the offering, not the mentor** — that is the one meaningful
+        # difference from `availability_rules_no_overlap`. Two offerings may
+        # legitimately cover the same hours; two windows on *one* offering
+        # covering the same hours is a duplicate the slot grid would count twice.
+        #
+        # `'[)'` is load-bearing, letting 09:00-12:00 and 12:00-14:00 touch
+        # without colliding, and the partial `WHERE` keeps a switched-off or
+        # deleted window from blocking the slot it used to occupy.
+        ExcludeConstraint(
+            ("session_type_id", "="),
+            ("day_of_week", "="),
+            (text("timerange(start_time, end_time, '[)')"), "&&"),
+            name="session_type_scheduling_windows_no_overlap",
+            using="gist",
+            where=text("is_active AND deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_session_type_scheduling_windows_offering",
+            "session_type_id",
+            "day_of_week",
+            postgresql_where=text("is_active AND deleted_at IS NULL"),
+        ),
+    )
