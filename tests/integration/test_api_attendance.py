@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import add_availability, add_session_type, make_public_mentor
 
-from app.domain.attendance import outcome
+from app.domain.attendance import JOIN_CLOSES, JOIN_OPENS, outcome
 from app.domain.enums import SessionStatus
 from app.infra.db.session_writer import settle_attendance
 from conftest import api_token, bearer
@@ -658,3 +658,92 @@ async def test_only_the_settlement_claims_evidence(
         ).scalar_one()
 
     assert creation == {}
+
+
+async def test_the_session_says_when_its_window_opens_and_shuts(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Sent rather than left to the client to compute.**
+
+    The offsets are a product rule that will become a mentor preference, and a
+    client hardcoding five and fifteen drifts from us the day that lands —
+    silently, because nothing on either side would notice.
+    """
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-window", starts_in=dt.timedelta(hours=2)
+    )
+
+    seen = (
+        await api_client.get(f"/api/v1/sessions/{booking['id']}", headers=booking["mentee"])
+    ).json()
+
+    starts_at = dt.datetime.fromisoformat(seen["starts_at"])
+    assert dt.datetime.fromisoformat(seen["join_opens_at"]) == starts_at - JOIN_OPENS
+    assert dt.datetime.fromisoformat(seen["join_closes_at"]) == starts_at + JOIN_CLOSES
+
+
+async def test_each_party_shows_whether_they_have_arrived(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The distinction the waiting screen needs.**
+
+    "Your mentor has not joined yet" is a different message from "your mentor
+    left", and a client cannot tell them apart from the session's own status —
+    which stays `confirmed` throughout.
+    """
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-arrived", starts_in=dt.timedelta(minutes=1)
+    )
+    await api_client.post(join_url(booking), headers=booking["mentor"])
+
+    seen = (
+        await api_client.get(f"/api/v1/sessions/{booking['id']}", headers=booking["mentee"])
+    ).json()
+
+    assert seen["mentor"]["joined_at"] is not None
+    assert seen["mentor"]["attendance_status"] == "attended"
+    assert seen["mentee"]["joined_at"] is None
+    assert seen["mentee"]["attendance_status"] == "pending"
+
+
+async def test_a_party_with_no_attendance_record_reads_as_pending(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A missing participant row is not an arrival, and `pending` is the same
+    answer an unsettled row gives — both mean *we do not know*, which is true of
+    both. Two of the 105 migrated bookings are in exactly this state."""
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-norow", starts_in=dt.timedelta(hours=2)
+    )
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM session_participants WHERE session_id = :i"), {"i": booking["id"]}
+        )
+
+    seen = (
+        await api_client.get(f"/api/v1/sessions/{booking['id']}", headers=booking["mentee"])
+    ).json()
+
+    assert seen["mentee"]["joined_at"] is None
+    assert seen["mentee"]["attendance_status"] == "pending"
+
+
+async def test_arrivals_travel_with_every_row_of_the_list(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The page is where the cards are, and a correlated subquery is what keeps
+    it one statement — a join to `session_participants` would multiply rows
+    before the limit and lose them at the cursor boundary."""
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-listed", starts_in=dt.timedelta(minutes=1)
+    )
+    await api_client.post(join_url(booking), headers=booking["mentee"])
+
+    page = await api_client.get(
+        f"/api/v1/users/{booking['mentee_id']}/sessions", headers=booking["mentee"]
+    )
+
+    assert page.status_code == 200, page.text
+    (row,) = page.json()["data"]
+    assert row["mentee"]["attendance_status"] == "attended"
+    assert row["mentor"]["attendance_status"] == "pending"

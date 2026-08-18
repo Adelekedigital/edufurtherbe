@@ -21,6 +21,11 @@ is here rather than on a mentee endpoint of its own because the question it
 answers is asked *on the request card* — a mentor deciding whether to accept —
 and a second round trip per card is worse for the same work. The arithmetic
 belongs to ``session_stats`` and is imported, not restated.
+
+**Each party's arrival travels with it too**, for the same reason and a second
+one: the screen that needs it is the one a participant is sitting on while they
+wait, and *"your mentor has not joined yet"* is a different message from *"your
+mentor left"*. A client cannot tell those apart from the session alone.
 """
 
 from __future__ import annotations
@@ -34,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.errors import ValidationError
-from app.infra.db.models.sessions import Session, SessionEvent
+from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.session_stats import MENTEE, attendance_rate
 
@@ -93,6 +98,33 @@ _MENTEE = aliased(User, name="mentee_user")
 _MENTOR_PROFILE = aliased(UserProfile, name="mentor_profile")
 _MENTEE_PROFILE = aliased(UserProfile, name="mentee_profile")
 
+#: Each party's attendance, correlated per side.
+#:
+#: **Correlated subqueries rather than two more joins**, and the reason is the
+#: page. `list_sessions` is keyset-paged, and a join to `session_participants`
+#: would multiply rows before the limit is applied — which on a paged list does
+#: not merely repeat a card, it consumes the page and shifts the cursor, so rows
+#: are lost at the boundary rather than seen twice. `mentor_is_bookable` records
+#: the same trap from the other direction.
+#:
+#: A session with no participant row for a side reports `null` and `pending`,
+#: which is what two of the 105 dev bookings look like — and the honest answer,
+#: since a missing row is not an arrival.
+
+
+def _attendance(side: Any, column: Any, label: str) -> Any:
+    return (
+        select(column)
+        .where(
+            SessionParticipant.session_id == Session.id,
+            SessionParticipant.user_id == side,
+        )
+        .correlate(Session)
+        .scalar_subquery()
+        .label(label)
+    )
+
+
 _PARTY_COLUMNS = (
     _MENTOR.first_name.label("mentor_first_name"),
     _MENTOR.last_name.label("mentor_last_name"),
@@ -100,6 +132,14 @@ _PARTY_COLUMNS = (
     _MENTEE.first_name.label("mentee_first_name"),
     _MENTEE.last_name.label("mentee_last_name"),
     _MENTEE_PROFILE.avatar_url.label("mentee_avatar_url"),
+    _attendance(Session.mentor_id, SessionParticipant.joined_at, "mentor_joined_at"),
+    _attendance(
+        Session.mentor_id, SessionParticipant.attendance_status, "mentor_attendance_status"
+    ),
+    _attendance(Session.mentee_id, SessionParticipant.joined_at, "mentee_joined_at"),
+    _attendance(
+        Session.mentee_id, SessionParticipant.attendance_status, "mentee_attendance_status"
+    ),
 )
 
 
