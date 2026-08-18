@@ -208,6 +208,24 @@ released. A tag with no matching section here fails the release job.
 
 ### Fixed
 
+- **A session nobody was recorded at is `no_show`, not `completed`.** The
+  settlement asked *is anybody absent*, which is the same question in the
+  ordinary case and the wrong one at the edges: a session with one participant
+  row — or with none — contains nobody absent and was reported as delivered. It
+  now requires **both named parties** recorded present, which `sessions` can
+  state because it is 1:1 by design.
+
+- **A missed session names the party who missed it.** Every absence was filed as
+  `mentee_no_show`, a mentor's included. These codes are what refund policy runs
+  on, so naming the wrong party is the wrong answer to the question that decides
+  a refund. Both absent stays null — no code can say it, and the participant
+  rows already do.
+
+- **Recording an arrival no longer reports success when it wrote nothing.**
+  `POST /sessions/{id}/join` returned `{"joined": true}` when the update matched
+  zero rows, so a caller could be told their arrival was recorded, walk away,
+  and be settled as absent with nothing to appeal against.
+
 - **A declined, withdrawn or expired request no longer blocks the mentor's
   calendar.** `slot_store` subtracted no status at all, which was right while
   none of the three was reachable and became a mentor-facing denial of service

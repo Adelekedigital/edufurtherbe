@@ -29,10 +29,11 @@ flight.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import case, func, insert, or_, select, text, update
+from sqlalchemy import and_, case, func, insert, or_, select, text, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -424,7 +425,7 @@ async def record_arrival(
             f"this session can be joined between {opens.isoformat()} and {closes.isoformat()}"
         )
 
-    await session.execute(
+    recorded = await session.execute(
         update(SessionParticipant)
         .where(
             SessionParticipant.session_id == session_id,
@@ -435,6 +436,17 @@ async def record_arrival(
             attendance_status=AttendanceStatus.ATTENDED,
         )
     )
+    # `rowcount` is a `CursorResult` attribute and `execute()` is typed as the
+    # `Result` base, so the cast is a typing fact rather than a runtime one:
+    # a DML statement always returns a cursor result.
+    if not cast("CursorResult[Any]", recorded).rowcount:
+        # **A silent success is the worst answer available here.** Every session
+        # booked through this service has both rows, written in the same
+        # transaction, so reaching this means a session that predates that or
+        # one whose rows were removed — and the caller would otherwise be told
+        # their arrival was recorded, walk away, and be settled as absent with
+        # nothing to appeal against.
+        raise ConflictError("this session has no attendance record for you")
 
 
 def _window_shut(now: dt.datetime) -> Any:
@@ -490,23 +502,36 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
         .values(attendance_status=AttendanceStatus.NO_SHOW)
     )
 
-    # 2. The session's own outcome. Written as "no participant is absent" rather
-    #    than "every participant attended" — the same thing today, and still
-    #    right if `left_early` ever starts being written.
+    # 2. The session's own outcome: **both named parties recorded present**.
+    #
+    #    Counted rather than asked as "is anybody absent", which is the same
+    #    question in the ordinary case and the wrong one at the edges — a
+    #    session with one participant row, or with none, contains nobody absent
+    #    and was settled as `completed`. `sessions` is 1:1 between exactly one
+    #    mentor and one mentee by design (package D4), so the expected set is
+    #    knowable and `= 2` is that invariant rather than a magic number. Group
+    #    sessions would change this line, and would change the column layout
+    #    that makes it possible.
     #
     #    **This is `domain.attendance.outcome` expressed in SQL**, which is one
     #    rule in two places. The Python is the specification and this is the
-    #    implementation, pinned by `test_the_settlement_agrees_with_the_rule`,
-    #    which drives every combination through both and compares.
-    absent = (
-        select(SessionParticipant.id)
-        .where(
-            SessionParticipant.session_id == Session.id,
-            SessionParticipant.attendance_status == AttendanceStatus.NO_SHOW,
+    #    implementation, pinned by `test_the_settlement_agrees_with_the_rule` —
+    #    which used to drive only sessions created through booking, so it never
+    #    reached the case the two disagreed on.
+    def _came(party: Any) -> Any:
+        return (
+            select(SessionParticipant.id)
+            .where(
+                SessionParticipant.session_id == Session.id,
+                SessionParticipant.user_id == party,
+                SessionParticipant.attendance_status == AttendanceStatus.ATTENDED,
+            )
+            .correlate(Session)
+            .exists()
         )
-        .correlate(Session)
-        .exists()
-    )
+
+    mentor_came = _came(Session.mentor_id)
+    mentee_came = _came(Session.mentee_id)
     settled = (
         (
             await session.execute(
@@ -514,11 +539,24 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
                 .where(Session.status == SessionStatus.CONFIRMED, _window_shut(now))
                 .values(
                     status=case(
-                        (absent, SessionStatus.NO_SHOW.value),
-                        else_=SessionStatus.COMPLETED.value,
+                        (
+                            and_(mentor_came, mentee_came),
+                            SessionStatus.COMPLETED.value,
+                        ),
+                        else_=SessionStatus.NO_SHOW.value,
                     )
                 )
-                .returning(Session.id, Session.status)
+                # The two facts travel with the row so the reason code can name
+                # the party who was absent. PostgreSQL allows a subquery in
+                # `RETURNING`, and it is evaluated against the *pre-update* row —
+                # which is what is wanted: attendance is not what this statement
+                # changes.
+                .returning(
+                    Session.id,
+                    Session.status,
+                    mentor_came.label("mentor_came"),
+                    mentee_came.label("mentee_came"),
+                )
             )
         )
         .mappings()
@@ -540,7 +578,9 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
                 "to_status": row["status"],
                 "actor_id": None,
                 "actor_type": ActorType.SYSTEM,
-                "reason_code": _absence_code(row["status"]),
+                "reason_code": _absence_code(
+                    mentor_came=bool(row["mentor_came"]), mentee_came=bool(row["mentee_came"])
+                ),
             }
             for row in settled
         ],
@@ -548,19 +588,28 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
     return len(settled)
 
 
-def _absence_code(status: str) -> SessionReasonCode | None:
-    """The coded reason for a missed session, or none for one that happened.
+def _absence_code(*, mentor_came: bool, mentee_came: bool) -> SessionReasonCode | None:
+    """Which party was absent, when exactly one was.
 
-    **One code for both absences, deliberately coarse.** The vocabulary has
-    `MENTOR_NO_SHOW` and `MENTEE_NO_SHOW`, and choosing between them here would
-    make the session-level event assert *which* party was absent — a fact the
-    participant rows already hold precisely, and hold correctly when both were
-    absent, which neither code can express. Duplicating it into the event is the
-    second copy that drifts.
+    **Named when the vocabulary can say it, null when it cannot.** The first
+    version returned `MENTEE_NO_SHOW` for every missed session, on the argument
+    that the participant rows already hold the per-person truth and a session
+    event asserting one party would be a second copy. Half of that argument
+    survives and half does not: it is right that *both absent* has no correct
+    code, and wrong that a mentor's absence should be filed under the mentee's —
+    these codes are what refund policy runs on, so naming the wrong party is
+    not coarseness, it is the wrong answer to the question that decides a
+    refund.
 
-    So the event says *somebody was absent*, and the per-person truth stays in
-    the one place that can state it.
+    So: null when the session happened, null when both were absent — the
+    participant rows are the only thing that can state that, and inventing a
+    code would make an aggregate over `reason_code` wrong in a way nobody could
+    see — and the exact code when exactly one party failed to turn up.
     """
-    if SessionStatus(status) is not SessionStatus.NO_SHOW:
+    if mentor_came and mentee_came:
         return None
-    return SessionReasonCode.MENTEE_NO_SHOW
+    if mentee_came:
+        return SessionReasonCode.MENTOR_NO_SHOW
+    if mentor_came:
+        return SessionReasonCode.MENTEE_NO_SHOW
+    return None
