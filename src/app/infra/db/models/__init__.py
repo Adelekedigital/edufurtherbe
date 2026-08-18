@@ -36,6 +36,7 @@ from app.infra.db.models.mentoring import (
     MentorStatusEvent,
     ServiceOffering,
 )
+from app.infra.db.models.platform import IdempotencyKey
 from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
 from app.infra.db.models.sessions import (
@@ -61,6 +62,7 @@ __all__ = [
     "Country",
     "DegreeLevel",
     "EducationEntry",
+    "IdempotencyKey",
     "Institution",
     "IntakeAnswer",
     "IntakeSubmission",
