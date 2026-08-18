@@ -406,21 +406,47 @@ applied is not a trustworthy oracle — it reported four surviving types that a 
 
 ### Remaining
 
-| # | PR | Migration | Tier |
-|---|---|---|---|
-| 12 | confirmation to `mentor_profiles`, config column nullable, fan-out deleted | yes | 1 |
-| 13 | drop `primary_session_type_id` and its trigger; venue leaves the owner profile | yes | 1 |
-| 14 | `POST` / `PATCH /me/session-types` | no | 2 |
-| 15 | `DELETE /me/session-types/{id}` | no | 2 |
-| 16 | `custom_stage_label`, `category` → `service_offerings` FK, + ADR | yes | 1 |
-| 17 | the intake stack — four canonical tables | yes | 1 |
-| 18 | intake question endpoints, keyed on a session type | no | 2 |
-| 19 | per-session-type scheduling windows + ADR | yes | 1 |
-| 20 | `idempotency_keys` + `POST /sessions` | yes | 1 |
-| 21 | the four transitions — accept, decline, cancel, withdraw | no | 2 |
-| 22 | response deadline: `respond_by`, the expiry producer, reminders | yes | 1 |
-| 23 | join-window attendance — `−5 min` to `+15 min` | no | 2 |
-| 24 | mentee attendance rate, and "New mentee" for null | no | 2 |
+**Twelve of thirteen are built.** Row 22 is the only one left, and it is blocked
+on the three open questions in the register below rather than on effort.
+
+| # | PR | Migration | Tier | |
+|---|---|---|---|---|
+| 12 | confirmation to `mentor_profiles`, config column nullable, fan-out deleted | yes | 1 | **built** |
+| 13 | drop `primary_session_type_id` and its trigger; venue leaves the owner profile | yes | 1 | **built** |
+| 14 | `POST` / `PATCH /me/session-types` | no | 2 | **built** |
+| 15 | `DELETE /me/session-types/{id}` | no | 2 | **built** |
+| 16 | `custom_stage_label`, `category` → `service_offerings` FK, + ADR | yes | 1 | **built** — ADR 0022 |
+| 17 | the intake stack — four canonical tables | yes | 1 | **built** |
+| 18 | intake question endpoints, keyed on a session type | no | 2 | **built** |
+| 19 | per-session-type scheduling windows + ADR | yes | 1 | **built** — ADR 0023 |
+| 20 | `idempotency_keys` + `POST /sessions` | yes | 1 | **built** — ADR 0024 |
+| 21 | the four transitions — accept, decline, cancel, withdraw | no | 2 | **built** |
+| 22 | response deadline: `respond_by`, the expiry producer, reminders | yes | 1 | **blocked** — see the register |
+| 23 | join-window attendance — `-5 min` to `+15 min` | no | 2 | **built** |
+| 24 | mentee attendance rate, and "New mentee" for null | no | 2 | **built** |
+
+**23 and 24 were built out of order, ahead of 22.** Neither depends on the
+response deadline: attendance needs a *confirmed* session, and the deadline
+governs a *pending* one. Building them first meant the blocked row blocked only
+itself.
+
+### What the build changed about row 22's problem
+
+Two things moved while 22 waited, and both make it smaller than the register
+below describes.
+
+**`NEVER_AGREED` already frees an expired request's slot.** `slot_store._busy`
+now subtracts `declined`, `withdrawn` and `expired`, so the moment something
+writes `expired` the hour comes back. The register's central argument — *a
+pending request past its deadline keeps holding the mentor's slot forever* — is
+now entirely about the missing **producer**, not about the read.
+
+**The expiry producer has a working precedent.** `scripts/settle_sessions.py`
+plus `.github/workflows/settle-sessions.yml` is a set-based, idempotent sweep on
+an hourly schedule, and the expiry sweep is the same shape against a different
+predicate. Open question 5 — *lazy-on-write plus a slow sweep, or a fast sweep
+alone* — should be re-read with that in mind: the sweep half already exists and
+costs nothing to point at a second predicate.
 
 **Order is not preference.** 12 before 13, because the owner profile loses its only source
 otherwise. 14 after 13, so writes are built against a shape that is not about to lose a column. 16
@@ -449,7 +475,8 @@ means deactivation stops being refused — the two-step release-then-retire beco
 *Catches it:* the guard's four existing tests must be **deleted deliberately**, each recording
 what would bring it back, not quietly dropped because they turned red.
 
-**14 — the writes.** `session_type_is_live()` has four callers including `slot_store`. The
+**14 — the writes.** `session_type_is_live()` had four callers including `slot_store` when this
+was written; it has three today — `session_type_store`, `slot_store` and `session_writer`. The
 owner-facing path needs ownership and soft-delete but **not** `is_active`; a mis-defaulted flag
 reaching `slot_store` makes deactivated types **bookable**, against #90. *Catches it:* reuse
 #87's narrower helper — **do not parameterise**. This PR also owns the `min_notice_minutes`
@@ -538,11 +565,11 @@ Nothing below blocks PR 12. Each is named where it will be decided.
 
 | | Open | Decide with |
 |---|---|---|
-| 1 | **`W` — the response window.** Legacy 24h, moving to 6h, mentor's choice later | the transitions |
-| 2 | **The reminder schedule** during that window — how many, when | the transitions |
+| 1 | **`W` — the response window.** Legacy 24h, moving to 6h, mentor's choice later | *still open — the transitions shipped without needing it* |
+| 2 | **The reminder schedule** during that window — how many, when | *still open — and it needs a notification channel that does not exist yet* |
 | 3 | ~~Is the 24-hour notice a floor or a default?~~ **Answered: a floor.** Mentors raise it per session type, 24h–72h; the mock's 6-hour option is dropped | *closed* |
 | 4 | ~~`withdrawn`: status, or `cancelled` + reason code?~~ **Answered: a status.** Shipped in #107 | *closed* |
-| 5 | **Expiry mechanism** — lazy-on-write plus a slow sweep, or a fast sweep alone | the transitions |
+| 5 | **Expiry mechanism** — lazy-on-write plus a slow sweep, or a fast sweep alone | *narrowed: an hourly idempotent sweep now exists in `settle_sessions`, so the question is only whether the booking write should also expire stale rows for that mentor inside its own transaction* |
 | 6 | ~~Does `DELETE`'s 409 carry a reason code?~~ **Answered: yes.** Two refusals — primary offering, and sessions still booked — are otherwise indistinguishable to any client. Note the first of those disappears with PR 13 | *closed* |
 | 7 | **`DELETE` with future bookings refuses with `409`** — settled. What is open is only #6, how the refusal explains itself | PR 15 |
 
