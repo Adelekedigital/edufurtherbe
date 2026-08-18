@@ -12,6 +12,26 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A session says when its join window opens and shuts, and whether each party
+  has arrived.** `join_opens_at`, `join_closes_at`, and `joined_at` +
+  `attendance_status` on both parties of `SessionRead`.
+
+  **The window is sent rather than computed client-side.** The offsets are a
+  product rule that will become a mentor preference, and a client hardcoding
+  five and fifteen would drift the day that lands — silently.
+
+  It is also what makes a waiting screen correct: *"your mentor can still join
+  until 15:15"* is true, where *"wait up to fifteen minutes"* is wrong for
+  somebody who arrived at 15:14.
+
+  **"Your mentor has not joined yet" and "your mentor left" are different
+  messages**, and the session's own status stays `confirmed` through both — so
+  a client could not tell them apart without this.
+
+  Correlated per side rather than joined, so a page of sessions stays one
+  statement: a join to `session_participants` would multiply rows before the
+  limit and lose them at the cursor boundary.
+
 - **Every attendance outcome now records how it was reached.**
   `session_events.metadata` carries `{"evidence": "reported"}` — its first
   writer since the column shipped. When a provider starts reporting
