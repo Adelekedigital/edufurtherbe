@@ -12,6 +12,28 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Join-window attendance, and the outcome it decides.**
+  `POST /api/v1/sessions/{id}/join` marks **you** present, from five minutes
+  before the start to fifteen after. `completed` and `no_show` finally have a
+  producer: `scripts/settle_sessions.py`, on an hourly schedule.
+
+  **You can only mark yourself.** Attendance drives both parties' reliability
+  figures, so marking somebody present is editing their record. Joining twice is
+  safe and keeps the *first* arrival.
+
+  **The window is half-open**, so joining and settling never claim the same
+  instant — a sweep on the boundary would brand somebody absent in the second
+  they were still allowed to arrive, and nothing later could undo it.
+
+  **A session happened only if everybody came.** One party alone in a room is
+  `no_show` whichever party it was; *which* one stays on the participant rows,
+  because a session-level status cannot say both.
+
+  **Migrated sessions are never rewritten.** The sweep settles `confirmed` rows
+  only. Three migrated sessions are `completed` with somebody absent — they
+  record what the legacy app believed, and correcting them would destroy the
+  evidence that the two figures disagree.
+
 - **The four session transitions.** `POST /api/v1/sessions/{id}/accept`,
   `/decline`, `/withdraw` and `/cancel`. `withdrawn` finally has a producer, and
   so do `declined` and `confirmed`-after-approval.

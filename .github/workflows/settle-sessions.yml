@@ -1,0 +1,81 @@
+name: Settle sessions
+
+# Decides `completed` against `no_show` for every session whose join window has
+# shut (settled decision #119).
+#
+# WHY A SCHEDULE. Nothing else can do it. The outcome depends on a *deadline
+# passing* rather than on anybody acting, so there is no request to hang it off:
+# a session both parties abandoned generates no traffic at all, and an outcome
+# nobody writes leaves `session_stats` reading a `confirmed` session forever.
+#
+# WHY GITHUB ACTIONS AND NOT A QUEUE VENDOR. The same reason `sync-institutions`
+# gives: `migrate.yml` already reaches the database from a runner, so the
+# mechanism and the credential exist, and settled decision #13 keeps the FastAPI
+# Cloud → Railway exit real by using no platform-native cron. Actions moves with
+# the repository rather than the host.
+#
+# WHY IT IS THE SAME SCRIPT. `scripts/settle_sessions.py` is the only
+# implementation and is run by hand when somebody wants an outcome now. Two
+# implementations of one job drift, and the one nobody invokes by hand rots.
+#
+# WHY HOURLY IS ENOUGH, AND WHY LATE IS SAFE. The interval decides only how stale
+# an outcome is. An unsettled session stays `confirmed`, which keeps holding its
+# slot exactly as it did while it was upcoming, and stays out of `session_stats`
+# because that reads terminal statuses only — so a late run under-reports rather
+# than misreports. Running *early* is the dangerous direction, and the script
+# cannot: the boundary comes from `JOIN_CLOSES`, not from the schedule.
+#
+# SAFE TO RUN REPEATEDLY, WHICH IT WILL BE. The participant update touches only
+# `pending` rows and the session update only `confirmed` ones, so a second run
+# settles nothing and writes no second event.
+
+on:
+  schedule:
+    # Hourly, on the half hour. Off the hour deliberately: sessions start on the
+    # hour, so a sweep at :00 would run against the busiest minute of the
+    # calendar for no benefit.
+    - cron: "30 * * * *"
+  # No inputs, for the reason `sync-institutions` gives: one environment during
+  # the build and migration phase makes a one-option dropdown decoration.
+  workflow_dispatch:
+
+permissions:
+  # Read-only. This job changes a database, never the repository.
+  contents: read
+
+concurrency:
+  # Two sweeps against one database would race on the same rows. Not cancelled
+  # in progress: the work is idempotent, so a late finish is harmless and a
+  # half-killed transaction is not.
+  group: settle-sessions-staging
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    name: settle sessions (staging)
+    runs-on: ubuntu-latest
+    # Staging only, deliberately — the same reason `sync-institutions` gives:
+    # there is no production environment to hold a `DATABASE_URL`, and a
+    # schedule pointed at one that does not exist fails every hour, silently
+    # enough that nobody looks.
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      # FAIL CLOSED. No exit code is forgiven here — unlike the institution
+      # sync, this job has no partial-success condition to distinguish. Anything
+      # other than 0 fails the run, which is the only signal there is: nothing
+      # alerts on a sweep that has quietly stopped.
+      - name: Settle
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: uv run python scripts/settle_sessions.py
