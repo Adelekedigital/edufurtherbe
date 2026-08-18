@@ -13,6 +13,7 @@ from app.api.routes import (
     availability,
     catalogue,
     health,
+    me_intake,
     me_session_types,
     mentors,
     session_types,
@@ -138,6 +139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(slots.router)
     application.include_router(session_types.router)
     application.include_router(me_session_types.router)
+    application.include_router(me_intake.router)
     application.include_router(sessions.router)
     application.include_router(admin.router)
     return application

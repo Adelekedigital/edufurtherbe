@@ -39,6 +39,7 @@ from app.api.schemas.common import (
     encode_id_cursor,
     next_offset_cursor,
 )
+from app.api.schemas.intake import QuestionPatch, QuestionWrite
 from app.api.schemas.profile import (
     AwardPatch,
     AwardWrite,
@@ -81,6 +82,12 @@ from app.infra.db.availability_writer import (
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.intake_store import (
+    create_question,
+    delete_question,
+    list_questions,
+    update_question,
+)
 from app.infra.db.mentor_public_store import get_public_mentor
 from app.infra.db.mentor_search_store import search_mentors
 from app.infra.db.mentor_status_store import (
@@ -1197,6 +1204,63 @@ async def deleted_own_session_type(
 CreatedOwnSessionTypeDep = Annotated[UUID, Depends(created_own_session_type)]
 UpdatedOwnSessionTypeDep = Annotated[bool, Depends(updated_own_session_type)]
 DeletedOwnSessionTypeDep = Annotated[bool, Depends(deleted_own_session_type)]
+
+
+async def own_questions(
+    session_type_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    """This offering's live questions, or a 404 that says nothing about why.
+
+    `None` from the store means the offering is not the caller's — or does not
+    exist, or is deleted. Indistinguishable on purpose: telling them apart says
+    which ids exist.
+    """
+    rows = await list_questions(session, user["id"], session_type_id)
+    if rows is None:
+        raise NotFoundError("no such session type")
+    return rows
+
+
+async def created_own_question(
+    session_type_id: UUID, payload: QuestionWrite, user: CurrentUserDep, session: SessionDep
+) -> UUID:
+    question_id = await create_question(session, user["id"], session_type_id, payload.model_dump())
+    if question_id is None:
+        raise NotFoundError("no such session type")
+    await session.commit()
+    return question_id
+
+
+async def updated_own_question(
+    session_type_id: UUID,
+    question_id: UUID,
+    payload: QuestionPatch,
+    user: CurrentUserDep,
+    session: SessionDep,
+) -> bool:
+    changed = await update_question(
+        session,
+        user["id"],
+        session_type_id,
+        question_id,
+        payload.model_dump(exclude_unset=True),
+    )
+    await session.commit()
+    return changed
+
+
+async def deleted_own_question(
+    session_type_id: UUID, question_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> bool:
+    removed = await delete_question(session, user["id"], session_type_id, question_id)
+    await session.commit()
+    return removed
+
+
+OwnQuestionsDep = Annotated[list[dict[str, Any]], Depends(own_questions)]
+CreatedOwnQuestionDep = Annotated[UUID, Depends(created_own_question)]
+UpdatedOwnQuestionDep = Annotated[bool, Depends(updated_own_question)]
+DeletedOwnQuestionDep = Annotated[bool, Depends(deleted_own_question)]
 
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
