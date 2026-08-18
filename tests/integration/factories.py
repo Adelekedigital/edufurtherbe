@@ -104,19 +104,43 @@ async def add_session_type(
                 },
             )
         ).scalar_one()
+        if venue is not None:
+            # **Venue is a reference now, not a column on the config.** The
+            # offering points at one of the mentor's conferencing options, and
+            # `UNIQUE (user_id, provider)` means two offerings on the same venue
+            # share one row — hence the upsert rather than a plain insert.
+            #
+            # `custom` gets a URL because the `CHECK` is symmetric and refuses
+            # the provider without one. A caller asking for `custom` is asking
+            # for a reachable custom venue; supplying the URL here is what makes
+            # the factory able to build the state at all.
+            option = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO mentor_conferencing_options "
+                        "(user_id, provider, custom_url) VALUES (:u, :p, :url) "
+                        "ON CONFLICT (user_id, provider) "
+                        "DO UPDATE SET provider = EXCLUDED.provider RETURNING id"
+                    ),
+                    {
+                        "u": mentor,
+                        "p": venue,
+                        "url": f"https://example.test/{mentor}" if venue == "custom" else None,
+                    },
+                )
+            ).scalar_one()
+            await conn.execute(
+                text("UPDATE session_types SET conferencing_option_id = :o WHERE id = :t"),
+                {"o": option, "t": session_type},
+            )
         if config:
-            # `meeting_venue` omitted rather than passed as NULL when the caller
-            # said nothing. It is NOT NULL with a server default since D88's
-            # reader step, and an explicit NULL overrides a server default — so
-            # naming the column unconditionally would fail every offering that
-            # does not care which venue it is on.
-            #: `min_notice_minutes` is omitted the same way when the caller passes
-            #: `None`, and that is the *only* path that can exercise its server
-            #: default. Both this factory and the slot suite's own fixture named
-            #: the column unconditionally, so no test could construct an offering
-            #: that takes the platform floor — which is precisely what the notice
-            #: PR changes. Defaulting to `0` rather than `None` is deliberate:
-            #: most tests want no notice window in the way of the slot maths.
+            #: `min_notice_minutes` is omitted when the caller passes `None`, and
+            #: that is the *only* path that can exercise its server default. Both
+            #: this factory and the slot suite's own fixture named the column
+            #: unconditionally, so no test could construct an offering that takes
+            #: the platform floor — which is precisely what the notice PR
+            #: changes. Defaulting to `0` rather than `None` is deliberate: most
+            #: tests want no notice window in the way of the slot maths.
             columns = "(session_type_id, duration_minutes"
             values = "(:t, :d"
             params: dict[str, object] = {"t": session_type, "d": duration}
@@ -124,10 +148,6 @@ async def add_session_type(
                 columns += ", min_notice_minutes"
                 values += ", :n"
                 params["n"] = notice
-            if venue is not None:
-                columns += ", meeting_venue"
-                values += ", :v"
-                params["v"] = venue
             await conn.execute(
                 text(f"INSERT INTO session_type_booking_configs {columns}) VALUES {values})"),  # noqa: S608
                 params,

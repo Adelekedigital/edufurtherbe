@@ -130,6 +130,9 @@ conversion leaves the schema inconsistent:
 
 - **`session_status`** — `sessions.status`, `session_events.from_status`, `session_events.to_status`
 - **`meeting_provider`** — `session_type_booking_configs.meeting_venue`, `sessions.meeting_provider`
+  *(the first of those was dropped by `d9e2b74c1f36`; a mentor's choice moved to
+  `mentor_conferencing_options.provider` under a narrower vocabulary. Left as
+  written — this document records what the conversion covered.)*
 - **`lookup_status`** — `institutions.status`, `scholarship_programs.status`
 
 ---

@@ -51,6 +51,10 @@ EXPECTED_MODELS = {
     "MentorProfile",
     "MentorServiceOffering",
     "MentorStatusEvent",
+    # The fourth `mentor_*` table, which is why it lives in `mentoring.py` rather
+    # than beside `session_types`. It fires #54's seven-model tripwire; the split
+    # of mentor from mentee is deferred deliberately — see the model's docstring.
+    "MentorConferencingOption",
     "EducationEntry",
     "UserAward",
     "MenteeGoal",
@@ -463,6 +467,35 @@ def migration_tuples(name: str) -> dict[str, list[tuple[str, ...]]]:
     return found
 
 
+def test_conferencing_providers_are_meeting_providers() -> None:
+    """The two vocabularies overlap, and must not drift apart by accident.
+
+    `ConferencingProvider` is what a mentor may **choose**; `MeetingProvider` is
+    what a session **used**, and keeps `zoom` because a session that happened on
+    a venue keeps naming it after the venue stops being selectable. So the first
+    is a strict subset of the second, and the values are genuinely duplicated.
+
+    Non-negotiable #8 admits exactly this shape — *extract, or pin the copies
+    with a test that fails when they diverge* — and extraction is not available
+    here: the sets differ, and a single enum could not express "selectable now"
+    and "ever written" at once.
+
+    **Strict subset, not equality.** Equality would fail the moment `zoom` is
+    correct to keep on one side and absent from the other, which is today. What
+    this catches is a value added to `ConferencingProvider` that
+    `MeetingProvider` does not know — a venue a mentor can select and a session
+    cannot record.
+    """
+    conferencing = {member.value for member in enums.ConferencingProvider}
+    meeting = {member.value for member in enums.MeetingProvider}
+
+    assert conferencing < meeting, (
+        f"selectable providers are not a strict subset of recorded ones: "
+        f"{conferencing - meeting} can be chosen but never written to "
+        f"sessions.meeting_provider"
+    )
+
+
 def test_the_converted_enum_labels_have_one_meaning() -> None:
     """Pins each conversion migration's transcribed labels to its ``StrEnum``.
 
@@ -506,8 +539,25 @@ def test_the_converted_enum_labels_have_one_meaning() -> None:
 
     assert authoritative, "no columns found in any CONVERSIONS table"
 
+    # A column the schema no longer has cannot be compared to a live class, and
+    # demanding it be is the same mistake `withdrawn` corrected one step further
+    # on. `session_type_booking_configs.meeting_venue` was converted by
+    # `a7d2f4b8c051` and dropped by `d9e2b74c1f36`; its migration is history and
+    # must keep naming the vocabulary it wrote.
+    #
+    # Keyed on the column being **absent from the models**, which is a fact about
+    # the schema rather than an exemption list somebody maintains — so a
+    # misspelled constraint on a column that still exists is not skipped.
+    live_columns = {
+        (table.name, column.name)
+        for table in Base.metadata.tables.values()
+        for column in table.columns
+    }
+
     divergent: dict[str, str] = {}
     for (table, column), (path, labels) in authoritative.items():
+        if (table, column) not in live_columns:
+            continue
         constraint = f"ck_{table}_{column}_is_known"
         enum_cls = by_name.get(constraint)
         if enum_cls is None:

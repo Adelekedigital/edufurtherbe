@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from app.domain.enums import MeetingProvider
+from app.domain.enums import ConferencingProvider
 
 
 class SessionTypeRead(BaseModel):
@@ -51,15 +51,15 @@ class SessionTypeRead(BaseModel):
             "empty on a mentor who is free."
         )
     )
-    meeting_venue: MeetingProvider = Field(
+    meeting_venue: ConferencingProvider = Field(
         description=(
-            "Where the session happens. **Every offering carries its own** — "
-            "there is no cascade from the mentor to resolve, and the field is "
-            "required because the column is `NOT NULL` with a server default "
-            "rather than because a fallback fills it in. The meeting **link** "
-            "is generated per session and never appears here: a static room "
-            "means back-to-back sessions share it and an early joiner walks "
-            "into the previous one."
+            "Where the session happens, **resolved** from the mentor's "
+            "conferencing options: this offering's own, else the mentor's "
+            "default, else `google_meet`. Required, and never null — the "
+            "platform fallback is the last step precisely so this field cannot "
+            "be absent. The meeting **link** is generated per session and never "
+            "appears here: a static room means back-to-back sessions share it "
+            "and an early joiner walks into the previous one."
         ),
     )
 
@@ -71,7 +71,7 @@ class SessionTypeRead(BaseModel):
             description=str(row["description"]) if row["description"] else None,
             duration_minutes=int(str(row["duration_minutes"])),
             min_notice_minutes=int(str(row["min_notice_minutes"])),
-            meeting_venue=MeetingProvider(str(row["meeting_venue"])),
+            meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
         )
 
 
@@ -105,7 +105,7 @@ class OwnSessionTypeRead(BaseModel):
     min_notice_minutes: int = Field(
         description="How far ahead a booking must be made against this offering."
     )
-    meeting_venue: MeetingProvider = Field(
+    meeting_venue: ConferencingProvider = Field(
         description=(
             "Where this offering is held. Every offering carries its own — there "
             "is no cascade from the mentor to resolve. The meeting **link** is "
@@ -153,7 +153,7 @@ class OwnSessionTypeRead(BaseModel):
             description=str(row["description"]) if row["description"] else None,
             duration_minutes=int(str(row["duration_minutes"])),
             min_notice_minutes=int(str(row["min_notice_minutes"])),
-            meeting_venue=MeetingProvider(str(row["meeting_venue"])),
+            meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
             is_active=bool(row["is_active"]),
             category=str(row["category"]) if row["category"] else None,
             application_stage=(str(row["application_stage"]) if row["application_stage"] else None),

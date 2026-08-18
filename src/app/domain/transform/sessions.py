@@ -376,6 +376,21 @@ class SessionPlan:
     #: cleanly, matches no anchor, and produces a database where every count
     #: reconciles and every mentor is on `google_meet`. Nothing else notices.
     booking_defaulted: tuple[str, ...] = ()
+    #: Mentors whose legacy venue was `custom` and who have **no URL to carry**.
+    #:
+    #: `mentor_conferencing_options` requires a URL for a `custom` provider — a
+    #: symmetric `CHECK`, so `custom` with nothing to reach is unrepresentable.
+    #: The legacy export has no such URL: `mentor_profiles.custom_meeting_url`
+    #: was removed *as a removal rather than a move, because nothing had ever
+    #: written it*, and "External Video Tool" is still what
+    #: `booking_defaults` maps to `CUSTOM`.
+    #:
+    #: So these mentors are loaded on `google_meet`, which keeps them bookable,
+    #: and named here for a human to follow up. **Reported rather than guessed**,
+    #: on the `CalendarSettings` precedent (#81): the alternatives were inventing
+    #: a URL, relaxing the constraint the table exists to enforce, or silently
+    #: rewriting the venue with every count still reconciling.
+    custom_venue_quarantined: tuple[str, ...] = ()
     #: Sessions carrying a previously chosen slot — evidence of a reschedule
     #: that cannot be linked, because legacy edited the row in place.
     reschedule_evidence: tuple[Disagreement, ...] = ()
@@ -466,6 +481,10 @@ class SessionPlan:
             ("duration disagreements (modal wins)", self.duration_disagreements),
             ("duration defaulted to the legacy mode", self.duration_defaulted),
             ("venue and confirmation defaulted (no mentor record)", self.booking_defaulted),
+            (
+                "CUSTOM VENUE, NO URL - loaded on google_meet, needs re-declaring",
+                self.custom_venue_quarantined,
+            ),
             ("reschedule evidence, unlinkable", self.reschedule_evidence),
             ("session mentors with no mentor link", self.mentors_without_link),
             ("confirmations that cannot be placed in time", self.unplaceable_confirmations),
@@ -1012,6 +1031,7 @@ def plan_sessions(
     # ----------------------------------------------------------- session types
     defaulted: list[str] = []
     booking_missing: list[str] = []
+    custom_quarantined: list[str] = []
     session_types: list[SessionTypeRow] = []
     for mentor in sorted({row.mentor_bubble_id for row in sessions}):
         minutes = durations.get(mentor)
@@ -1030,6 +1050,12 @@ def plan_sessions(
         # profile load. Unpacked and dropped rather than indexed, so the shape of
         # `booking_defaults` stays visible at the point it is consumed.
         venue, _confirmation = booking
+        if venue is MeetingProvider.CUSTOM:
+            # No URL exists to carry, and `custom` without one is
+            # unrepresentable. Reported, not guessed — see
+            # `SessionPlan.custom_venue_quarantined`.
+            custom_quarantined.append(mentor)
+            venue = MeetingProvider.GOOGLE_MEET
         session_types.append(
             SessionTypeRow(
                 mentor_bubble_id=mentor,
@@ -1056,6 +1082,7 @@ def plan_sessions(
         duration_disagreements=tuple(duration_disagreements),
         duration_defaulted=tuple(defaulted),
         booking_defaulted=tuple(booking_missing),
+        custom_venue_quarantined=tuple(custom_quarantined),
         reschedule_evidence=tuple(reschedules),
         mentors_without_link=tuple(sorted(set(mentors_without_link))),
         overlapping_live_windows=tuple(overlapping_windows(sessions)),

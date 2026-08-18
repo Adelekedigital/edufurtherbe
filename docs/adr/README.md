@@ -28,6 +28,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0018](0018-eager-auth-provisioning-and-how-it-recovers.md) | Auth provisioning is eager, idempotent, and silent | Accepted |
 | [0019](0019-profile-images-move-to-supabase-storage.md) | Profile images move to Supabase Storage, keyed on their own content | Accepted |
 | [0020](0020-mirror-the-institution-catalogue.md) | Mirror the institution catalogue, refreshed weekly | Accepted — supersedes part of 0008 |
+| [0021](0021-conferencing-is-a-mentor-owned-table.md) | A mentor's conferencing options are their own table | Accepted — diverges from canonical `04_sessions.sql` |
 
 ## Conventions
 
