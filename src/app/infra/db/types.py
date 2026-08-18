@@ -38,6 +38,7 @@ from app.domain.enums import (
     AttendanceStatus,
     AuthProvider,
     AvailabilityExceptionType,
+    ConferencingProvider,
     LanguageProficiency,
     LegalDocumentType,
     ListingStatus,
@@ -110,15 +111,16 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     ApprovalStatus: frozenset({"ck_mentor_profiles_approval_status_is_known"}),
     ListingStatus: frozenset({"ck_mentor_profiles_listing_status_is_known"}),
     MentorStatusType: frozenset({"ck_mentor_status_events_status_type_is_known"}),
-    # Step 5 — two columns, one nullable. `sessions.meeting_provider` allows
+    # Step 5 — one column now, and nullable. `sessions.meeting_provider` allows
     # NULL and the `IN` constraint permits it without a special case: `NULL IN
     # (...)` is unknown, and a CHECK rejects only what is *false*.
-    MeetingProvider: frozenset(
-        {
-            "ck_session_type_booking_configs_meeting_venue_is_known",
-            "ck_sessions_meeting_provider_is_known",
-        }
-    ),
+    #
+    # `ck_session_type_booking_configs_meeting_venue_is_known` was the second
+    # entry and left with the column (`d9e2b74c1f36`). What a mentor may *choose*
+    # is `ConferencingProvider` below; this enum is what a session *used*, and
+    # keeps `zoom` for history even though nothing can select it.
+    MeetingProvider: frozenset({"ck_sessions_meeting_provider_is_known"}),
+    ConferencingProvider: frozenset({"ck_mentor_conferencing_options_provider_is_known"}),
     # Step 6 — `role` carries the first **unique** partial index to move.
     SessionRole: frozenset({"ck_session_participants_role_is_known"}),
     AttendanceStatus: frozenset({"ck_session_participants_attendance_status_is_known"}),

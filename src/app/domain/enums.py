@@ -234,16 +234,18 @@ class MeetingProvider(StrEnum):
     means back-to-back sessions share a room and an early joiner walks into the
     previous one.
 
-    **``CUSTOM`` currently has nowhere to keep a URL, and one migrated offering
-    is on it.** ``mentor_profiles.custom_meeting_url`` was the only such column
-    and D88's contract step removed it — as a removal rather than a move, because
-    nothing had ever written it. Until booking decides whether a custom venue
-    needs a link and where it lives, an offering on ``CUSTOM`` resolves to a
-    venue with no way to reach it.
+    **``CUSTOM`` now has somewhere to keep a URL**, and that is what
+    ``mentor_conferencing_options.custom_url`` is for. It had none for two
+    releases: ``mentor_profiles.custom_meeting_url`` was the only such column and
+    D88's contract step removed it — as a removal rather than a move, because
+    nothing had ever written it — which left an offering on ``CUSTOM`` resolving
+    to a venue with no way to reach it. A **symmetric** ``CHECK`` on the new table
+    makes that state unrepresentable in both directions.
 
-    The value cannot simply be dropped from the enum: ``meeting_venue`` is still
-    a PostgreSQL enum and there is no ``ALTER TYPE ... DROP VALUE``. Removing it
-    waits on the ``text`` + ``CHECK`` conversion (settled decision #100).
+    **This enum is history; :class:`ConferencingProvider` is choice.** A mentor
+    selects from the latter, which omits ``ZOOM``; ``sessions.meeting_provider``
+    keeps this one, because a session that happened on a venue keeps naming it
+    even after the venue stops being selectable.
 
     ``ZOOM`` ships with no legacy source. Legacy offered only "Edufurther Video"
     (Daily) and "External Video Tool" (custom), and every stored link was a
@@ -254,6 +256,34 @@ class MeetingProvider(StrEnum):
     GOOGLE_MEET = "google_meet"
     DAILY = "daily"
     ZOOM = "zoom"
+    CUSTOM = "custom"
+
+
+class ConferencingProvider(StrEnum):
+    """What a mentor can **host on** — not where a session happened.
+
+    **Deliberately not :class:`MeetingProvider`, and the difference is tense.**
+    That enum answers *where did this session take place*, so it keeps every value
+    the platform has ever written, including ones nothing can create today.
+    This one answers *what may a mentor select right now*, and a value belongs
+    here only once something can produce a joinable session from it.
+
+    ``ZOOM`` is therefore absent. It has no integration and nothing can mint a
+    link for it, so offering it would let a mentor choose a venue that cannot
+    host — the exact failure the symmetric ``custom_url`` constraint closes from
+    the other direction. ``ZOOM`` and ``TEAMS`` join **at the point they have a
+    connection behind them**, which is what the three connection columns on
+    ``mentor_conferencing_options`` exist to hold.
+
+    The two vocabularies overlap and must not drift apart by accident, so
+    ``test_conferencing_providers_are_meeting_providers`` asserts every member
+    here is a member there. That is non-negotiable #8's *pin the copies* form:
+    the values genuinely are duplicated, and the test is what makes the
+    duplication safe.
+    """
+
+    GOOGLE_MEET = "google_meet"
+    DAILY = "daily"
     CUSTOM = "custom"
 
 

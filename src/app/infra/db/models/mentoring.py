@@ -11,11 +11,21 @@ models, mentor and mentee separate and this table moves to its own module
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import (
+    TIMESTAMP,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import (
     ApprovalStatus,
+    ConferencingProvider,
     ListingStatus,
     MentorStatusType,
 )
@@ -369,6 +379,103 @@ class MenteeGoalNeed(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_mentee_goal_needs_pair", "user_id", "service_offering_id", unique=True),
         Index("ix_mentee_goal_needs_offering", "service_offering_id"),
+    )
+
+
+class MentorConferencingOption(TimestampMixin, Base):
+    """What a mentor can host on — one row per provider, exactly one default.
+
+    **This module's 7-model tripwire (#54) fired here, and the split is
+    deliberately deferred.** The rule says a module splits *by subject, never by
+    size*, and the subject test is unambiguous: `mentor_profiles`,
+    `mentor_service_offerings` and `mentor_status_events` all live here, and this
+    is the fourth `mentor_*` table. Separating mentor from mentee is the split
+    #54 anticipates, and it is a move of six models that has no business riding
+    inside a feature change.
+
+    **Replaces `session_type_booking_configs.meeting_venue`, which was a label.**
+    A label could not distinguish *which provider* from *whether this mentor can
+    host on it* — `zoom` had no integration and `custom` had nowhere to keep a
+    URL, so two of four values could not produce a joinable session.
+
+    **The vocabulary is `ConferencingProvider`, not `MeetingProvider`**, and it
+    omits `zoom`. This column is what a mentor may *choose*;
+    `sessions.meeting_provider` is what a session *used*, and keeps every value
+    the platform ever wrote.
+
+    **`custom_url` is a bearer credential, not a description.** A static room link
+    lets anyone holding it join, so it is withheld from the public offering
+    payload for the same reason `mentor_profiles.custom_meeting_url` was — the
+    allowlist in `api/schemas/session_types.py` is what enforces it.
+    """
+
+    __tablename__ = "mentor_conferencing_options"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    #: `mentor_profiles.user_id`, not `users.id` — the same value with a
+    #: different guarantee, following `session_types` and `availability_rules`.
+    #: `CASCADE` rather than `RESTRICT`: an option is configuration belonging to
+    #: the profile, with no independent existence once the profile is gone.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("mentor_profiles.user_id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[ConferencingProvider] = mapped_column(
+        str_enum(ConferencingProvider), nullable=False
+    )
+    is_default: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    #: Only for `CUSTOM`, and required for it — see the symmetric CHECK below.
+    custom_url: Mapped[str | None] = mapped_column(Text)
+
+    #: Declared now, written by nothing. The table exists to hold a connection
+    #: the moment a provider needs authenticating, and `zoom` joins the
+    #: vocabulary at that point rather than before. Shipping these three here is
+    #: the one place #21 is knowingly not applied: the alternative is a second
+    #: migration on a table that already has a composite key pointed at it.
+    external_account_id: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
+    connected_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        # **Both named by hand, and they must be.** The `uq` convention renders
+        # `uq_%(table_name)s_%(column_0_name)s` — the *first* column only — so
+        # two constraints both starting at `user_id` collide on one name and
+        # `alembic check` reports a phantom drop-and-recreate every run.
+        # `base.py` warns about exactly this case.
+        UniqueConstraint(
+            "user_id", "provider", name="uq_mentor_conferencing_options_user_id_provider"
+        ),
+        # **Exists only so `session_types`' composite foreign key can reference
+        # it.** Redundant as a uniqueness claim — `id` is already the primary key
+        # — and required by PostgreSQL, which needs a unique constraint on
+        # exactly the referenced column pair. Deleting it as "obviously
+        # redundant" breaks the key that makes cross-mentor references
+        # unrepresentable.
+        UniqueConstraint("user_id", "id", name="uq_mentor_conferencing_options_user_id_id"),
+        CheckConstraint(
+            check_is_known("provider", ConferencingProvider),
+            name="provider_is_known",
+        ),
+        # **Symmetric, and that is the whole point.** The old
+        # `ck_mentor_profiles_custom_url_requires_custom_venue` ran one direction
+        # only — `custom_url IS NULL OR venue = 'custom'` — so it permitted
+        # `custom` with no URL and left a mentor bookable with nowhere to meet.
+        # Both directions matter: a stale URL on a `google_meet` row is dead data
+        # that survives an edit.
+        CheckConstraint(
+            "(provider = 'custom') = (custom_url IS NOT NULL)",
+            name="custom_url_matches_provider",
+        ),
+        # Exactly one default per mentor, true by construction. Partial, so a
+        # mentor may hold many non-default options. `alembic check` cannot
+        # compare a partial index predicate, so a test asserts it.
+        Index(
+            "ix_mentor_conferencing_options_default",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
     )
 
 

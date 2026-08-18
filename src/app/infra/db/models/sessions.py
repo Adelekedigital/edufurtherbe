@@ -51,6 +51,7 @@ from sqlalchemy import (
     TIMESTAMP,
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Text,
     UniqueConstraint,
@@ -117,12 +118,32 @@ class SessionType(TimestampMixin, Base):
 
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
+    #: Which of this mentor's conferencing options this offering is held on, or
+    #: **null meaning use my default** — the same inherit-from-the-mentor shape
+    #: `requires_booking_confirmation` uses.
+    #:
+    #: **The foreign key is composite**, declared in `__table_args__` below, and
+    #: that is why the reference sits here rather than on the booking config. A
+    #: single-column key is satisfied by *any* option row, including another
+    #: mentor's; `(mentor_user_id, conferencing_option_id)` makes that
+    #: unrepresentable. This table already carries `mentor_user_id`, so it costs
+    #: nothing here and would cost a denormalised column or a trigger there.
+    conferencing_option_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="RESTRICT")
     )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     __table_args__ = (
+        # Named by hand: the convention renders on `column_0_name`, which would
+        # give two different composite keys on this table the same prefix.
+        ForeignKeyConstraint(
+            ["mentor_user_id", "conferencing_option_id"],
+            ["mentor_conferencing_options.user_id", "mentor_conferencing_options.id"],
+            name="fk_session_types_conferencing_option",
+            ondelete="RESTRICT",
+        ),
         # The only read: this mentor's live offerings. Partial, and `alembic
         # check` cannot compare the predicate, so a test asserts it.
         Index(
@@ -166,9 +187,10 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     carried it in two other places — ``CalendarSettings.meetingDuration-TxT`` and
     a mentor-level field — and both are dropped.
 
-    ``meeting_venue`` is where the offering is held, and it is per-offering
-    rather than inherited: a mentor runs everything on Google Meet but records
-    mock interviews on Zoom. Package D21 called it an inherit; see the column.
+    **Venue is not here any more.** It was a per-offering label for two releases;
+    it is now ``session_types.conferencing_option_id``, a composite reference to
+    something the mentor configured. Package D21 called it an inherit, and it has
+    ended up as one — from the mentor's default rather than from another offering.
 
     **Surrogate ``id``, where the package makes ``session_type_id`` the primary
     key.** ADR 0015 admits no exception, and the invariant that key carried is
@@ -200,26 +222,6 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     #: when that table lands. A `CHECK` carrying it would need a migration every
     #: time the product changed its mind.
     min_notice_minutes: Mapped[int] = mapped_column(nullable=False, server_default=text("1440"))
-    #: Where this offering is held. Never a URL, and there is nowhere for one to
-    #: live: `mentor_profiles.custom_meeting_url` was **dropped** by D88's
-    #: contract step rather than moved here, because nothing read it. A
-    #: `MeetingProvider.CUSTOM` venue names a provider and stores no address.
-    #:
-    #: **Not an inherit**, though D21 describes it as one. A null here would have
-    #: meant *fall back to the primary offering* — and while that pointer existed,
-    #: the guard protecting it made "live offerings, no primary" a state mentors
-    #: passed through by design, so the chain had a reachable and empty bottom
-    #: while `SessionTypeRead.meeting_venue` is required (D92). Every offering
-    #: carries its own instead.
-    #:
-    #: **Past tense on purpose:** the pointer and its guard are gone (#107). That
-    #: does not reopen the question — venue still has no mentor-level home to
-    #: inherit from, so `NOT NULL` here is the only thing keeping the required
-    #: response field satisfiable.
-    meeting_venue: Mapped[MeetingProvider] = mapped_column(
-        str_enum(MeetingProvider), nullable=False, server_default=text("'google_meet'")
-    )
-
     #: Whether a booking against *this offering* waits for the mentor —
     #: **or null, meaning follow the mentor's own setting.**
     #:
@@ -254,14 +256,6 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
         # expected to rise. `0` stays legal — it is what fixtures use to test the
         # slot maths without a notice window in the way.
         CheckConstraint("min_notice_minutes BETWEEN 0 AND 43200", name="min_notice_minutes_sane"),
-        # Settled decision #100. `CUSTOM` currently has nowhere to keep a URL and
-        # one migrated offering is on it — this constraint is what will let the
-        # value be **removed** once booking decides, which `ALTER TYPE` never
-        # could.
-        CheckConstraint(
-            check_is_known("meeting_venue", MeetingProvider),
-            name="meeting_venue_is_known",
-        ),
     )
 
 

@@ -123,12 +123,20 @@ async def test_an_offering_that_is_off_or_deleted_is_absent(
 async def test_a_venue_of_its_own_is_returned_as_is(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
+    """**`zoom` used to be the fixture here, and it is no longer selectable.**
+
+    It was chosen precisely because nothing else would produce it, which made it
+    a good probe — and that is also why it went: `ConferencingProvider` omits it,
+    since nothing can mint a Zoom link and a mentor must not be able to pick a
+    venue that cannot host. `daily` does the same job; it is non-default, so a
+    reader falling through to the platform fallback still fails here.
+    """
     mentor = await make_public_mentor(db_engine, "own-venue")
-    await add_session_type(db_engine, mentor, venue="zoom")
+    await add_session_type(db_engine, mentor, venue="daily")
 
     (offering,) = (await api_client.get(url(mentor))).json()["data"]
 
-    assert offering["meeting_venue"] == "zoom"
+    assert offering["meeting_venue"] == "daily"
 
 
 # `test_the_offerings_venue_does_not_follow_the_mentors` was deleted by D88's
@@ -146,10 +154,11 @@ async def test_the_venue_is_never_null(
 ) -> None:
     """There is no "unset" state, which is why the field is required.
 
-    It used to be guaranteed by a COALESCE onto a NOT NULL mentor column. That
-    column is dropped in the contract step, so the guarantee moved into the
-    config's own `NOT NULL DEFAULT 'google_meet'` — an offering created without
-    a venue takes one rather than inheriting one.
+    The guarantee has moved three times and this test has outlived all of them:
+    a `COALESCE` onto a `NOT NULL` mentor column, then the config's own
+    `NOT NULL DEFAULT`, and now the last step of a three-step resolution. **The
+    assertion never changed**, which is the point — it pins the promise rather
+    than the mechanism, so each move had to keep it true.
     """
     mentor = await make_public_mentor(db_engine, "always-venue")
     await add_session_type(db_engine, mentor, venue=None)
@@ -237,27 +246,21 @@ async def test_zero_notice_is_still_accepted_by_the_database(db_engine: AsyncEng
     assert stored == 0
 
 
-async def test_a_config_cannot_be_written_without_a_venue(db_engine: AsyncEngine) -> None:
-    """The database half, because the API cannot create an offering at all.
-
-    Nothing in `api/` inserts a `session_type`, so every guarantee about this
-    column rests on the schema rather than on validation. An explicit NULL is
-    the interesting case: it is what a writer naming the column unconditionally
-    sends, and it overrides the server default rather than falling back to it.
-    """
-    mentor = await make_public_mentor(db_engine, "null-venue")
-    session_type = await add_session_type(db_engine, mentor, config=False)
-
-    with pytest.raises(IntegrityError, match="meeting_venue"):
-        async with db_engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO session_type_booking_configs "
-                    "(session_type_id, duration_minutes, meeting_venue) "
-                    "VALUES (:t, 45, NULL)"
-                ),
-                {"t": session_type},
-            )
+# `test_a_config_cannot_be_written_without_a_venue` was deleted by
+# `d9e2b74c1f36`. It asserted that an explicit NULL into
+# `session_type_booking_configs.meeting_venue` was refused — the trap where a
+# writer naming a column unconditionally overrides a server default instead of
+# falling back to it, which this repository has now hit three times.
+#
+# The column is gone, so there is nothing to write a NULL into. The guarantee it
+# protected — that a published offering always names a venue — did not weaken; it
+# moved to the last step of the resolution and is asserted by
+# `test_the_venue_is_never_null` above and by the three resolution tests in
+# `test_conferencing_options.py`.
+#
+# **What would bring it back** is any future `NOT NULL` column with a server
+# default that a writer might name unconditionally. The trap belongs to that
+# shape, not to this column.
 
 
 async def test_the_response_carries_nothing_it_should_not(

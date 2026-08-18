@@ -47,11 +47,13 @@ off for them would be copying M3's shape without its reason.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.domain.enums import MeetingProvider
 from app.domain.transform.sessions import SessionPlan
 from app.infra.db.triggers import timestamps_from_source_across
 
@@ -75,12 +77,27 @@ DO UPDATE SET name = EXCLUDED.name
 RETURNING id
 """
 
-# `meeting_venue` is **passed in**. It used to be selected off `mentor_profiles`,
-# which worked only because the profile load runs first and left it there — two
-# ETL processes coupled through columns rather than through a plan. D88's
-# contract step dropped that column, so `SessionTypeRow` carries the value and
-# `transform/profiles.booking_defaults` is the single place the legacy field is
-# read.
+# The mentor's conferencing option for this provider, created on first sight.
+#
+# `custom` never reaches here: `mentor_conferencing_options` requires a URL for it
+# and the legacy export carries none — `mentor_profiles.custom_meeting_url` was
+# removed as a removal rather than a move, because nothing had ever written it.
+# `_conferencing_option_id` maps those mentors to `google_meet` and reports them,
+# matching the quarantine `d9e2b74c1f36` performs for rows that predate the load.
+#
+# `DO UPDATE SET provider = EXCLUDED.provider` is a no-op write that exists so
+# `RETURNING id` yields a row on conflict — the same reason `UPSERT_SESSION_TYPE`
+# uses it. `DO NOTHING` returns nothing and the id is what the offering needs.
+UPSERT_CONFERENCING_OPTION = """
+INSERT INTO mentor_conferencing_options (user_id, provider, is_default)
+VALUES (:user_id, :provider, true)
+ON CONFLICT (user_id, provider) DO UPDATE SET provider = EXCLUDED.provider
+RETURNING id
+"""
+
+# `meeting_venue` is gone from this table. It used to be selected off
+# `mentor_profiles`, then passed in, and is now a reference: the offering names
+# one of the mentor's conferencing options, or null to follow their default.
 #
 # **`requires_booking_confirmation` is deliberately not written here.** It went
 # back to `mentor_profiles`, the profile load writes it, and on this table null
@@ -90,13 +107,18 @@ RETURNING id
 # toggle would then change nothing — which is the defect this reversal removes.
 UPSERT_BOOKING_CONFIG = """
 INSERT INTO session_type_booking_configs
-    (session_type_id, duration_minutes, meeting_venue)
+    (session_type_id, duration_minutes)
 VALUES (
-    :session_type_id, :duration_minutes, :meeting_venue
+    :session_type_id, :duration_minutes
 )
 ON CONFLICT (session_type_id) DO UPDATE SET
-    duration_minutes = EXCLUDED.duration_minutes,
-    meeting_venue    = EXCLUDED.meeting_venue
+    duration_minutes = EXCLUDED.duration_minutes
+"""
+
+SET_CONFERENCING_OPTION = """
+UPDATE session_types
+   SET conferencing_option_id = :option_id
+ WHERE id = :session_type_id
 """
 
 # `SET_PRIMARY_OFFERING` is gone with `primary_session_type_id`. It existed
@@ -192,6 +214,26 @@ class SessionLoader:
             await self._load_participants(plan, session_ids, user_id)
             await self._load_events(plan, session_ids, users)
 
+    async def _conferencing_option_id(self, mentor_user_id: UUID, venue: MeetingProvider) -> UUID:
+        """This mentor's option for ``venue``, created on first sight.
+
+        **``is_default`` is written ``true`` and the partial unique index is what
+        makes that safe.** A migrated mentor has exactly one offering, so the
+        first insert is also the only one; were a second provider ever to arrive
+        the index would refuse it, loudly, rather than leaving two defaults. That
+        is preferable to picking silently — the transform is where a rule about
+        *which* default belongs, and it has no basis to choose one.
+
+        ``venue`` is never ``CUSTOM``: the transform maps those to
+        ``GOOGLE_MEET`` and reports them, because the symmetric ``CHECK``
+        requires a URL the export does not carry.
+        """
+        result = await self._connection.execute(
+            text(UPSERT_CONFERENCING_OPTION),
+            {"user_id": mentor_user_id, "provider": venue.value},
+        )
+        return cast("UUID", result.scalar_one())
+
     async def _load_session_types(
         self, plan: SessionPlan, user_id: UserResolver
     ) -> dict[str, UUID]:
@@ -211,8 +253,14 @@ class SessionLoader:
                 {
                     "session_type_id": type_id,
                     "duration_minutes": row.duration_minutes,
-                    "meeting_venue": row.meeting_venue.value,
                 },
+            )
+            option_id = await self._conferencing_option_id(
+                user_id(row.mentor_bubble_id, "session type"), row.meeting_venue
+            )
+            await self._connection.execute(
+                text(SET_CONFERENCING_OPTION),
+                {"option_id": option_id, "session_type_id": type_id},
             )
         return type_ids
 

@@ -377,20 +377,21 @@ async def test_two_live_types_with_one_name_are_refused(
 # --------------------------------------------------------------------------
 
 
-async def test_the_config_takes_the_venue_from_the_plan(
+async def test_the_load_points_the_offering_at_a_conferencing_option(
     seeded: tuple[AsyncConnection, dict[str, UUID]],
 ) -> None:
-    """**The venue arrives on `SessionTypeRow`, and that is D88's contract step.**
+    """**The venue arrives on `SessionTypeRow` and lands as a reference.**
 
     It used to be selected off `mentor_profiles`, which worked only because the
     profile load runs first and left it there — two ETL processes coupled through
-    a column. That column is gone, so a value that crossed the database now
-    crosses the plan.
+    a column. Then it was a column on the config. It is now a row the mentor owns
+    and an offering points at, so the loader has to *create* it rather than write
+    a label.
 
     The migration's backfill runs **once**, so a database built fresh — migrate,
-    then load — is exactly the path that would otherwise take the column default
-    instead of the mentor's real choice. `daily` is non-default, so a loader that
-    dropped it answers `google_meet` and fails.
+    then load — is exactly the path that would otherwise take the platform
+    fallback instead of the mentor's real choice. `daily` is non-default, so a
+    loader that dropped it resolves to `google_meet` and fails here.
 
     Loaded from the real export this is not hypothetical: the twelve mentors
     split `google_meet` 5, `daily` 5, `custom` 2.
@@ -399,8 +400,21 @@ async def test_the_config_takes_the_venue_from_the_plan(
 
     await SessionLoader(conn).load(users=users, plan=plan_of())
 
-    row = (await conn.execute(text("SELECT meeting_venue FROM session_type_booking_configs"))).one()
-    assert row.meeting_venue == "daily"
+    row = (
+        await conn.execute(
+            text(
+                "SELECT o.provider, o.is_default "
+                "  FROM session_types st "
+                "  JOIN mentor_conferencing_options o "
+                "    ON o.id = st.conferencing_option_id AND o.user_id = st.mentor_user_id"
+            )
+        )
+    ).one()
+    assert row.provider == "daily"
+    # The mentor's only option is also their default, so an offering that later
+    # clears its pointer still resolves to what they chose rather than to the
+    # platform fallback.
+    assert row.is_default is True
 
 
 async def test_the_load_leaves_every_offering_inheriting_its_confirmation(

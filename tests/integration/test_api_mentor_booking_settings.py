@@ -119,14 +119,17 @@ async def test_the_owner_profile_no_longer_carries_a_venue(
     `assert profile["default_meeting_venue"] is None` would pass against a field
     that is still there and merely unset, which is exactly the state this release
     rejects. The mentor here has a live offering with a non-default venue, so a
-    reader still resolving one would answer `"zoom"` and fail.
+    reader still resolving one would answer `"daily"` and fail.
 
     Replaces `test_the_owner_profile_reads_the_venue_from_the_primary_offering`.
     What would bring that back is a mentor-level venue column — and there is not
     one, deliberately: venue is a property of an offering.
     """
     mentor, auth_id = await as_mentor(db_engine, "no-venue")
-    await add_session_type(db_engine, mentor, name="Mock interview", venue="zoom")
+    # `daily` rather than `zoom`: the latter left `ConferencingProvider` when a
+    # mentor's venue became a row they configure, because nothing can mint a Zoom
+    # link. Still non-default, which is all this fixture needs.
+    await add_session_type(db_engine, mentor, name="Mock interview", venue="daily")
 
     profile = await read_profile(api_client, mentor, auth_id)
 

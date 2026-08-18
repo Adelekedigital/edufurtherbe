@@ -301,7 +301,7 @@ class EducationEntry(TimestampMixin, Base):
     #: The abbreviation this user actually holds — ``LL.B``, ``M.Eng``, ``Ph.D``.
     #: **Null means inherit** ``degree_levels.short_name``, and that is the
     #: reason it is nullable rather than defaulted. This used to cite
-    #: ``session_type_booking_configs.meeting_venue`` as the same
+    #: ``mentor_conferencing_options.provider`` as the same
     #: null-means-inherit rule (D21); that column stopped inheriting when D88's
     #: contract step made it ``NOT NULL`` (settled decision #102), so the
     #: comparison is gone and this is now the only instance of the rule.

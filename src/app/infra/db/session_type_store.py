@@ -18,8 +18,14 @@ now. Those are different answers — 404 and an empty page — and collapsing th
 would tell a caller that a mentor who has switched everything off does not
 exist. The same shape as `list_session_events`, and for the same reason.
 
-**`meeting_venue` is read straight off the offering, and there is nothing to
-resolve.** This used to `COALESCE` onto `mentor_profiles.default_meeting_venue`,
+**`meeting_venue` is resolved, in three steps, by `_resolved_venue`** — the
+offering's own conferencing option, then the mentor's default, then the platform
+fallback. It is no longer a column: `session_type_booking_configs.meeting_venue`
+was a label and is now a composite reference to a row the mentor configured.
+
+*What follows is the history of that column, kept because it records why each
+move happened rather than only that it did.* It used to `COALESCE` onto
+`mentor_profiles.default_meeting_venue`,
 because null on a config meant *inherit from the mentor* (package D21). D88 moved
 the column here and then removed the inherit entirely: the cascade's terminus was
 a state a mentor can legitimately be in — live offerings, no primary — so the
@@ -39,10 +45,12 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, literal, select
+from sqlalchemy import Select, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.infra.db.models.mentoring import MentorProfile
+from app.domain.enums import ConferencingProvider
+from app.infra.db.models.mentoring import MentorConferencingOption, MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import (
@@ -52,6 +60,57 @@ from app.infra.db.public_visibility import (
 )
 
 __all__ = ["list_own_session_types", "list_session_types"]
+
+#: The offering's own option, joined on the **composite** key.
+#:
+#: Both columns are in the condition deliberately. `conferencing_option_id` alone
+#: would join correctly today and would keep joining correctly if the composite
+#: foreign key were ever weakened to a single column — which is exactly the
+#: mistake that would let one mentor's offering resolve another mentor's venue,
+#: silently and with every test still green.
+_chosen = aliased(MentorConferencingOption, name="chosen_option")
+
+#: The mentor's default, for an offering that chose nothing.
+_default = aliased(MentorConferencingOption, name="default_option")
+
+
+def _resolved_venue() -> Any:
+    """Where an offering is held: its own option, else the mentor's default, else
+    the platform fallback.
+
+    **One copy, because two would drift.** The public list and the owner list both
+    need it and a resolution rule written twice is non-negotiable #8.
+
+    **Three steps, and the third is not padding.** Seeding every mentor a default
+    row makes step three look unreachable, and *"it cannot happen because creation
+    always sets it"* is precisely the reasoning that failed for
+    `primary_session_type_id`: it was true until the retirement trigger made
+    release-then-retire a legal state, and the venue cascade then had a reachable,
+    empty bottom. `SessionTypeRead.meeting_venue` is a **required** field, so a
+    resolution that can return null is a 500 waiting for the first mentor who
+    slips through. Seed *and* fall back.
+
+    The literal is the enum member's value rather than a bare string, so renaming
+    the member moves this with it.
+    """
+    return func.coalesce(
+        _chosen.provider,
+        _default.provider,
+        literal(ConferencingProvider.GOOGLE_MEET.value),
+    ).label("meeting_venue")
+
+
+def _with_venue(statement: Select[Any]) -> Select[Any]:
+    """Attach both option joins. Outer on both — an offering need not have chosen
+    one, and a mentor need not have configured any."""
+    return statement.outerjoin(
+        _chosen,
+        (_chosen.id == SessionType.conferencing_option_id)
+        & (_chosen.user_id == SessionType.mentor_user_id),
+    ).outerjoin(
+        _default,
+        (_default.user_id == SessionType.mentor_user_id) & _default.is_default,
+    )
 
 
 def _public_mentor(user_id: UUID) -> Select[Any]:
@@ -84,17 +143,15 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
     Ordered by name, which is unique per mentor among live rows, so the order is
     total and stable rather than merely usually-stable.
     """
-    return (
+    statement = (
         select(
             SessionType.id,
             SessionType.name,
             SessionType.description,
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
-            # Read straight off the offering (D88). There is no cascade to
-            # resolve: the column is `NOT NULL`, because the fallback source it
-            # used to reach is one a mentor can legally be without.
-            SessionTypeBookingConfig.meeting_venue,
+            # Resolved, not read. See `_resolved_venue`.
+            _resolved_venue(),
         )
         .select_from(SessionType)
         .join(
@@ -103,6 +160,9 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
         )
         .join(MentorProfile, MentorProfile.user_id == SessionType.mentor_user_id)
         .join(User, User.id == SessionType.mentor_user_id)
+    )
+    return (
+        _with_venue(statement)
         .where(*session_type_is_live(user_id), *mentor_is_public())
         .order_by(SessionType.name)
     )
@@ -141,7 +201,7 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
     required response fields nullable, which is a contract change and belongs to
     the pull request that can actually produce such a row.
     """
-    return (
+    statement = (
         select(
             SessionType.id,
             SessionType.name,
@@ -151,16 +211,15 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionType.is_active,
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
-            SessionTypeBookingConfig.meeting_venue,
+            _resolved_venue(),
         )
         .select_from(SessionType)
         .join(
             SessionTypeBookingConfig,
             SessionTypeBookingConfig.session_type_id == SessionType.id,
         )
-        .where(*session_type_of(mentor_user_id))
-        .order_by(SessionType.name)
     )
+    return _with_venue(statement).where(*session_type_of(mentor_user_id)).order_by(SessionType.name)
 
 
 async def list_own_session_types(

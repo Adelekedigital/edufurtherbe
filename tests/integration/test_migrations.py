@@ -102,6 +102,7 @@ EXPECTED_TABLES = [
     "mentee_goal_countries",
     "mentee_goal_needs",
     "mentee_goals",
+    "mentor_conferencing_options",
     "mentor_profiles",
     "mentor_service_offerings",
     "mentor_status_events",
@@ -423,6 +424,92 @@ def test_the_confirmation_seed_reads_the_offerings_before_clearing_them(
     ), (
         "the offering kept its value instead of inheriting; it is now a "
         "permanent override and the mentor's toggle resolves to nothing"
+    )
+
+
+def test_the_conferencing_backfill_seeds_before_it_drops(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """**The named regression for `d9e2b74c1f36`, and it is invisible otherwise.**
+
+    The migration seeds `mentor_conferencing_options` from `meeting_venue` and
+    points each offering at its own row *before* dropping the column. Reversing
+    those loses the only source silently: every row count still reconciles, and
+    every migrated offering then resolves through the platform fallback — so a
+    mentor on `daily` becomes Google Meet with nothing reporting it.
+
+    Two mentors, because the two paths differ. `daily` is carried faithfully.
+    `custom` **cannot be** — the symmetric `CHECK` requires a URL and the legacy
+    schema has none — so that mentor is seeded `google_meet`, their offering's
+    pointer stays null, and the quarantine is what makes the difference visible.
+
+    `sessions.meeting_provider` is asserted untouched in the same test: it is a
+    different column on a different table with a *wider* vocabulary, and the
+    cheap mistake is a migration that tidies both.
+    """
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "c8f1a3e2b904")
+
+    execute(
+        disposable_database,
+        """
+        WITH u AS (
+            INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+            VALUES ('venue-daily@example.test', gen_random_uuid(), 'D', 'mentor', 'UTC'),
+                   ('venue-custom@example.test', gen_random_uuid(), 'C', 'mentor', 'UTC')
+            RETURNING id, email
+        ), p AS (
+            INSERT INTO mentor_profiles (user_id, headline) SELECT id, 'P' FROM u
+            RETURNING user_id
+        ), t AS (
+            INSERT INTO session_types (mentor_user_id, name)
+            SELECT user_id, 'Offering' FROM p RETURNING id, mentor_user_id
+        )
+        INSERT INTO session_type_booking_configs
+            (session_type_id, duration_minutes, meeting_venue)
+        SELECT t.id, 45,
+               CASE WHEN u.email LIKE 'venue-daily%' THEN 'daily' ELSE 'custom' END
+          FROM t JOIN u ON u.id = t.mentor_user_id
+        """,
+    )
+
+    command.upgrade(config, "head")
+
+    # The faithful path: the option exists and the offering points at it.
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT o.provider FROM session_types st "
+            "  JOIN mentor_conferencing_options o "
+            "    ON o.id = st.conferencing_option_id AND o.user_id = st.mentor_user_id "
+            "  JOIN users u ON u.id = st.mentor_user_id "
+            " WHERE u.email LIKE 'venue-daily%'",
+        )
+        == "daily"
+    ), "the backfill did not carry `daily`; every migrated mentor resolves to the fallback"
+
+    # The quarantined path: seeded google_meet, pointer left null.
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT o.provider FROM mentor_conferencing_options o "
+            "  JOIN users u ON u.id = o.user_id "
+            " WHERE u.email LIKE 'venue-custom%'",
+        )
+        == "google_meet"
+    ), "a mentor whose only venue was `custom` was left with no option and is unbookable"
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT st.conferencing_option_id FROM session_types st "
+            "  JOIN users u ON u.id = st.mentor_user_id "
+            " WHERE u.email LIKE 'venue-custom%'",
+        )
+        is None
+    ), "a custom offering was pointed at a substituted venue instead of inheriting it"
+
+    assert scalar(disposable_database, "SELECT count(*) FROM mentor_conferencing_options") == 2, (
+        "one option per mentor, and the quarantine must not create a second"
     )
 
 

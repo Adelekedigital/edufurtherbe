@@ -10,6 +10,38 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Added
+
+- **`mentor_conferencing_options` — what a mentor can host on, as a table.**
+
+  `session_type_booking_configs.meeting_venue` was a label, and half its
+  vocabulary named capabilities the platform does not have: `zoom` has no
+  integration and nothing can mint a link, `custom` needs a URL and
+  `mentor_profiles.custom_meeting_url` was deleted. Two of four values could not
+  produce a joinable session, and one column could not distinguish *which
+  provider* from *whether this mentor can host on it*. See ADR 0021.
+
+  An offering references one through a **composite** foreign key,
+  `(mentor_user_id, conferencing_option_id) → (user_id, id)`, which makes
+  pointing at another mentor's option unrepresentable rather than merely refused.
+  Null means *use my default*, and resolution is three steps — the offering's own
+  option, the mentor's default, then `google_meet` — so `meeting_venue` is never
+  null and stays a required field.
+
+  The `custom_url` check is **symmetric**, closing a gap the old one-directional
+  constraint left open: `custom` with no URL was permitted, leaving a mentor
+  bookable with nowhere to meet.
+
+  **Migrated offerings on `custom` are quarantined.** No URL exists to carry, so
+  those mentors load on `google_meet` — which keeps them bookable — and are named
+  in the migration output and the ETL report for follow-up. Reported rather than
+  guessed, on the `CalendarSettings` precedent.
+
+  **`SessionTypeRead.meeting_venue` narrows to a new `ConferencingProvider`**,
+  which omits `zoom`. It was advertised and never producible; the response enum
+  now describes what the data can hold. `sessions.meeting_provider` keeps
+  `MeetingProvider` — a session that happened on a venue keeps naming it.
+
 ### Removed
 
 - **`mentor_profiles.primary_session_type_id` is dropped, with
