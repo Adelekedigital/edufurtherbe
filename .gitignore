@@ -73,6 +73,12 @@ scripts/calendar_spike_token.json
 # The id of the calendar a run created, so --cleanup-only can find it.
 scripts/calendar_spike_state.json
 
+# Daily spike. The API key lives in `script-data-dev/`, which is ignored
+# wholesale; the state file records a room name and two meeting tokens, and a
+# meeting token is a bearer credential for a live room.
+scripts/daily_spike_state.json
+scripts/daily_api_key.txt
+
 # Worktrees a second session created at the repo root. `.claude/worktrees/`
 # covers the sanctioned location; these do not live there, and `git add -A`
 # stages one as an embedded git repository without being asked twice.
