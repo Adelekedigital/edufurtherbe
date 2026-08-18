@@ -32,16 +32,18 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
-from app.domain.enums import SessionStatus
+from app.domain.enums import ActorType, SessionRole, SessionStatus
+from app.domain.sessions import CANCELLATION_CUTOFF, TRANSITIONS, too_late_to_cancel
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import (
     Session,
     SessionEvent,
+    SessionParticipant,
     SessionType,
     SessionTypeBookingConfig,
 )
@@ -49,7 +51,7 @@ from app.infra.db.models.user import User
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 from app.infra.db.slot_store import list_slots
 
-__all__ = ["DOUBLE_BOOKED", "book_session"]
+__all__ = ["DOUBLE_BOOKED", "book_session", "transition"]
 
 #: The exclusion constraint's name, which is how a 409 is told from a 500.
 #:
@@ -228,6 +230,24 @@ async def book_session(
         await session.rollback()
         raise ConflictError("that time was taken while you were booking it") from exc
 
+    # **The participant rows, in the same transaction as the session**, which
+    # is what `SessionParticipant`'s own docstring promises: written together,
+    # they can never disagree with `mentor_id` and `mentee_id`, and the partial
+    # unique index on `role = 'mentor'` is what catches it if they ever do.
+    #
+    # Both start `pending`, which is the honest state before the session runs
+    # and is why the column is not nullable — "we do not know yet" is a real
+    # answer and distinguishable from `no_show`. Nothing computes them for a
+    # live session yet; the join-window sweep is the next release, and it needs
+    # these rows to exist before it can.
+    await session.execute(
+        insert(SessionParticipant),
+        [
+            {"session_id": session_id, "user_id": mentor_id, "role": SessionRole.MENTOR},
+            {"session_id": session_id, "user_id": mentee_id, "role": SessionRole.MENTEE},
+        ],
+    )
+
     # **The event is written by the same transaction as the status**, per the
     # model's own note: a trigger projecting one onto the other would be a
     # second mechanism for one fact.
@@ -240,7 +260,107 @@ async def book_session(
             from_status=None,
             to_status=status,
             actor_id=mentee_id,
-            actor_type="user",
+            actor_type=ActorType.USER,
         )
     )
     return session_id
+
+
+async def transition(
+    session: AsyncSession,
+    session_id: UUID,
+    actor_id: UUID,
+    action: str,
+    payload: dict[str, Any],
+    *,
+    now: dt.datetime,
+) -> None:
+    """Move one session along, and record who moved it and why.
+
+    **Four endpoints, one function.** The rules live in
+    :data:`app.domain.sessions.TRANSITIONS`, so accepting and declining differ
+    by a table row rather than by a code path — which is the only shape in which
+    "a mentee may never accept their own request" is enforced once instead of
+    hoped for four times.
+
+    Raises :class:`NotFoundError` when the session is not the caller's **or the
+    action is not theirs to take**. Those are one answer deliberately, following
+    ``require_admin``, which answers a non-admin with *no such endpoint* rather
+    than a refusal: ``/sessions/{id}/accept`` is the mentor's decision resource,
+    and to a mentee it does not exist. The mentee can still read the session, so
+    nothing is being hidden that they could otherwise see.
+
+    Raises :class:`ConflictError` when the caller is the right party and the
+    session is in the wrong state, and when a cancellation lands inside the
+    cutoff. Raises :class:`ValidationError` for a reason code this actor may not
+    give.
+
+    **Does not commit.** The caller owns the transaction, as everything in this
+    module does.
+    """
+    rule = TRANSITIONS[action]
+
+    row = (
+        (
+            await session.execute(
+                select(Session.status, Session.starts_at, Session.mentor_id, Session.mentee_id)
+                .where(Session.id == session_id)
+                # **Scoped in the query on the write path**, not checked after
+                # fetching. The roles this action permits are spread into the
+                # `WHERE` rather than compared afterwards, so a mentee reaching
+                # a mentor's action selects nothing at all.
+                .where(
+                    or_(
+                        *(
+                            Session.mentor_id == actor_id
+                            if role is SessionRole.MENTOR
+                            else Session.mentee_id == actor_id
+                            for role in rule.by
+                        )
+                    )
+                )
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        raise NotFoundError("no such session")
+
+    role = SessionRole.MENTOR if row["mentor_id"] == actor_id else SessionRole.MENTEE
+    if SessionStatus(row["status"]) not in rule.allowed_from:
+        raise ConflictError(f"a {row['status']} session cannot be {_past(action)}")
+    if rule.honours_cutoff and too_late_to_cancel(row["starts_at"], now):
+        minutes = int(CANCELLATION_CUTOFF.total_seconds() // 60)
+        raise ConflictError(f"a session cannot be cancelled within {minutes} minutes of its start")
+
+    reason_code = payload.get("reason_code")
+    if reason_code is not None and reason_code not in rule.reasons.get(role, frozenset()):
+        # A 422 rather than silently dropping it. The codes drive refund policy,
+        # so a mentee sending the mentor's code is claiming a refund by choosing
+        # a value — and a request that was partly honoured is worse than one
+        # refused, because the client believes the reason was recorded.
+        raise ValidationError(f"{reason_code} is not a reason you may give for {action}")
+
+    await session.execute(update(Session).where(Session.id == session_id).values(status=rule.to))
+    await session.execute(
+        insert(SessionEvent).values(
+            session_id=session_id,
+            from_status=row["status"],
+            to_status=rule.to,
+            actor_id=actor_id,
+            actor_type=ActorType.USER,
+            reason_code=reason_code,
+            reason_text=payload.get("reason_text"),
+        )
+    )
+
+
+def _past(action: str) -> str:
+    """`cancel` -> `cancelled`, for the refusal message.
+
+    The stored status is the word a client already knows, so the message uses it
+    rather than the verb — and it comes from the transition table rather than
+    from string surgery, which would have to know that `cancel` doubles its `l`.
+    """
+    return str(TRANSITIONS[action].to)

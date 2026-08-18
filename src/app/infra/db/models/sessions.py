@@ -85,6 +85,25 @@ from app.infra.db.types import check_is_known, str_enum
 #: `deleted_at IS NULL` reached five statements here and was missed on the fifth.
 LIVE_STATUSES = "status IN ('pending_mentor_approval', 'confirmed')"
 
+#: The statuses whose session never occupied the mentor's time, and therefore
+#: never blocks a slot.
+#:
+#: **The distinction is *was it ever agreed*, not *is it over*.** A `cancelled`
+#: session was agreed and then called off — the mentor usually cancelled
+#: *because* they are busy — so it keeps its hour until somebody deliberately
+#: releases it, which is the settled rule `slot_store._busy` was written around.
+#: A `declined`, `withdrawn` or `expired` request was never agreed to: nothing
+#: was ever on the mentor's calendar, and there is no busy-ness to preserve.
+#:
+#: **Reachable for the first time with the transitions**, and until then the
+#: distinction did not exist because nothing could produce these three. Leaving
+#: them blocking would mean any mentee could permanently empty a mentor's
+#: calendar by requesting every slot and withdrawing — the grid would keep
+#: hiding hours that `sessions_no_mentor_double_booking` would happily accept a
+#: booking for, because the constraint is over `LIVE_STATUSES` and already
+#: ignores all three.
+NEVER_AGREED = ("declined", "withdrawn", "expired")
+
 
 class SessionType(TimestampMixin, Base):
     """What a mentor offers. Availability says *when*; this says *what*.
