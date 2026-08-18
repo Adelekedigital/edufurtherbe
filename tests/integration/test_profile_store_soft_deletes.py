@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.base import Base
+from app.infra.db.intake_store import list_questions
 from app.infra.db.profile_store import get_mentor_profile, list_awards, list_education
 from app.infra.db.session_type_store import list_session_types
 from conftest import PROJECT_ROOT
@@ -58,13 +59,12 @@ EXEMPT = {"users"}
 #: deleted: the next table to arrive before its reader belongs here, and the
 #: mechanism only works if it stays.
 #:
-#: `session_type_questions` is that next table. It ships with the intake stack
-#: and has no reader — the question endpoints are the following release — so its
-#: `deleted_at` guards nothing yet. It carries the column because
-#: `intake_answers.question_id` restricts: retiring a question is how a mentor
-#: edits their form without being refused by every answer ever given to it. The
-#: guard fired on the full gate here too, and this is the fix it named.
-EXEMPT_UNTIL_READ: set[str] = {"session_type_questions"}
+#: `session_type_questions` passed through here for exactly one release. It
+#: shipped with the intake stack and had no reader; the question endpoints gave
+#: it one, the expiry test below fired on the full gate, and it moved to a real
+#: case in `CASES`. That is the whole mechanism working end to end, and the
+#: reason the set stays empty rather than being deleted.
+EXEMPT_UNTIL_READ: set[str] = set()
 
 
 async def seed_education(conn: Any, user_id: UUID) -> None:
@@ -130,6 +130,56 @@ async def seed_session_types(conn: Any, user_id: UUID) -> None:
         ),
         {"u": user_id},
     )
+
+
+async def seed_session_type_questions(conn: Any, user_id: UUID) -> None:
+    """One live question and one retired, on an offering owned by this mentor.
+
+    The offering needs no config: `list_questions` reads the question table and
+    scopes through `session_type_of()`, which is ownership and soft deletion —
+    it never joins the booking config the way the offering reads do.
+    """
+    await conn.execute(
+        text(
+            "INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'M') "
+            "ON CONFLICT (user_id) DO NOTHING"
+        ),
+        {"u": user_id},
+    )
+    session_type = (
+        await conn.execute(
+            text(
+                "INSERT INTO session_types (mentor_user_id, name) "
+                "VALUES (:u, 'Form owner') RETURNING id"
+            ),
+            {"u": user_id},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text(
+            "INSERT INTO session_type_questions "
+            "(session_type_id, question_text, question_type, deleted_at) VALUES "
+            "(:t, 'LIVE', 'free_text', NULL), (:t, 'DELETED', 'free_text', now())"
+        ),
+        {"t": session_type},
+    )
+
+
+async def read_session_type_questions(session: AsyncSession, user_id: UUID) -> list[str]:
+    """Every live question on this mentor's offerings.
+
+    `list_questions` takes one offering, so this finds it first — the seeder
+    creates exactly one, and reaching it by name keeps the case honest if a
+    future seeder adds a second.
+    """
+    session_type = (
+        await session.execute(
+            text("SELECT id FROM session_types WHERE mentor_user_id = :u AND name = 'Form owner'"),
+            {"u": user_id},
+        )
+    ).scalar_one()
+    rows = await list_questions(session, user_id, session_type)
+    return [] if rows is None else [str(row["question_text"]) for row in rows]
 
 
 async def read_session_types_for(session: AsyncSession, user_id: UUID) -> list[str]:
@@ -224,6 +274,15 @@ CASES: list[Case] = [
         ["2026-03-01"],
     ),
     ("session_types", seed_session_types, read_session_types_for, ["LIVE"]),
+    # Added the release its reader appeared, which is what
+    # `test_the_unread_exemption_expires_when_a_reader_appears` promised
+    # would happen — the guard fired on the full gate and named this fix.
+    (
+        "session_type_questions",
+        seed_session_type_questions,
+        read_session_type_questions,
+        ["LIVE"],
+    ),
 ]
 
 

@@ -12,6 +12,31 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor can manage the intake form their offering asks.** Four endpoints on
+  `/api/v1/me/session-types/{id}/questions` — list, add, change, remove. This
+  gives `session_type_questions` its first reader.
+
+  Nested under the offering because the offering is what carries ownership: both
+  ids are in the `WHERE` on every write, so a question is reached through the row
+  that says whose it is rather than looked up and checked afterwards.
+
+  **At most five questions per offering.** A product rule with no column to hold
+  it — "at most five rows in a group" is neither a `CHECK`, which sees one row,
+  nor a unique index, which enforces distinctness rather than cardinality. It is
+  counted in the store, which races; the loser leaves one extra question rather
+  than corrupting anything. The count is of *live* questions, so deleting frees a
+  slot.
+
+  **`multi_choice` is not selectable.** The column accepts it and
+  `session_type_question_options` exists for its choices, but nothing can create
+  an option yet — so the question would be one no mentee could answer. The
+  refusal lifts when option management arrives.
+
+  Deletion is soft, using the `deleted_at` the intake stack gave the table for
+  exactly this: `intake_answers.question_id` restricts, so a form that could
+  never change once anybody filled it in would not be a form.
+
+
 - **The intake stack — four tables, landing together.**
   `session_type_questions`, `session_type_question_options`,
   `intake_submissions` and `intake_answers`, the four deferred out of
