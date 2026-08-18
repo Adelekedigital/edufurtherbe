@@ -116,6 +116,72 @@ class Settings(BaseSettings):
         default_factory=list, validation_alias=env_key("cors_origins")
     )
 
+    #: Which template stands for which message, as ``{notification: id}``.
+    #:
+    #: **``NoDecode`` for the same reason ``cors_origins`` has it**, and the
+    #: reason is a deploy that took an afternoon to diagnose: without it
+    #: pydantic-settings JSON-decodes the value inside the settings source,
+    #: before any validator runs, and a malformed entry fails as
+    #: ``SettingsError`` naming neither the value nor the expected shape.
+    #:
+    #: Both spellings are accepted, for the same reason as there — JSON is what
+    #: ``.env.example`` documents, and ``a=1,b=2`` is what a person types into a
+    #: cloud console form field that gives no hint a map is wanted. Supporting
+    #: one and not the other breaks somebody, and the breakage is a service that
+    #: will not start.
+    #:
+    #: **Typed ``dict[str, str]``, not keyed on the message vocabulary**, and
+    #: that is the layer boundary rather than a preference: ``core`` may import
+    #: nothing, so it cannot name a ``domain`` enum. The adapter resolves a
+    #: `Notification` against this map and raises ``ConfigurationError`` when
+    #: there is no entry — which is where that error's own docstring says it
+    #: belongs, *"raised where the setting is consumed rather than at startup"*.
+    #:
+    #: Not a ``SecretStr``: a template id names a message, and hiding it would
+    #: only make an operator's misconfiguration harder to read.
+    email_templates: Annotated[dict[str, str], NoDecode] = Field(
+        default_factory=dict, validation_alias=env_key("email_templates")
+    )
+
+    #: Same shape, separate map. **Not one map with two columns**: a message
+    #: exists on one channel long before the other, since email reaches
+    #: everybody today and WhatsApp reaches nobody until phone numbers are
+    #: collected — and a single map would make the absent half look like a
+    #: mistake rather than a phase.
+    #:
+    #: Every WhatsApp send is business-initiated and therefore outside the
+    #: 24-hour customer-service window, so each of these must be a template Meta
+    #: has approved. That approval has a lead time nobody here controls, which
+    #: is the strongest argument for the ids living in configuration rather than
+    #: in code.
+    whatsapp_templates: Annotated[dict[str, str], NoDecode] = Field(
+        default_factory=dict, validation_alias=env_key("whatsapp_templates")
+    )
+
+    @field_validator("email_templates", "whatsapp_templates", mode="before")
+    @classmethod
+    def accept_json_or_key_value_pairs(cls, value: object) -> object:
+        """Take either spelling, because both have a legitimate author.
+
+        Anything that is not a string — a real mapping from code, as the tests
+        pass — is handed straight on to normal field validation. Disabling the
+        decoder must not also disable the type check.
+        """
+        if not isinstance(value, str):
+            return value
+
+        text = value.strip()
+        if not text:
+            return {}
+        if text.startswith("{"):
+            # Let a malformed object raise here: inside a validator it becomes a
+            # ``ValidationError`` naming the field, rather than the opaque
+            # ``SettingsError`` the annotation above exists to avoid.
+            return json.loads(text)
+        return dict(
+            part.split("=", 1) for part in (p.strip() for p in text.split(",")) if "=" in part
+        )
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def accept_json_or_a_comma_separated_list(cls, value: object) -> object:
