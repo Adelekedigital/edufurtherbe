@@ -12,6 +12,25 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **The four session transitions.** `POST /api/v1/sessions/{id}/accept`,
+  `/decline`, `/withdraw` and `/cancel`. `withdrawn` finally has a producer, and
+  so do `declined` and `confirmed`-after-approval.
+
+  **Four names for one table.** Who may take each action, from which state, and
+  which reason codes they may give live in `domain/sessions.py`, so *a mentee may
+  never accept their own request* is enforced once rather than hoped for four
+  times. The wrong party gets `404` — the action's URL does not exist for them,
+  the same answer `require_admin` gives a non-admin — and the right party in the
+  wrong state gets `409` naming the state.
+
+  **No session may be cancelled within ten minutes of its start**, or after it.
+  The rule is in `domain` rather than in a trigger: a `CHECK` cannot express it,
+  and a trigger would make every change to the number a migration.
+
+  **Reason codes are restricted per party.** They drive refund policy, so a
+  mentee free to send `mentor_unavailable` could claim a refund by choosing a
+  value. A code your side may not give is a `422` naming it.
+
 - **A mentee can book a session.** `POST /api/v1/sessions` — the first write to
   `sessions`, and the first table that serves every feature and belongs to none,
   `idempotency_keys`. See ADR 0024.
@@ -148,6 +167,35 @@ released. A tag with no matching section here fails the release job.
   the same taxonomy from the mentee side, but the ETL writes it from legacy on
   every migrated session — a data migration over real rows rather than a schema
   change over an empty column.
+
+### Fixed
+
+- **A declined, withdrawn or expired request no longer blocks the mentor's
+  calendar.** `slot_store` subtracted no status at all, which was right while
+  none of the three was reachable and became a mentor-facing denial of service
+  the moment the transitions shipped: a mentee could empty a calendar
+  permanently by requesting every hour and withdrawing. A **cancelled** session
+  still holds its hour — it was agreed and then called off, and the mentor
+  usually cancelled because they are busy.
+
+- **Booking now writes both `session_participants` rows**, in the same
+  transaction as the session, which is what the model's docstring has always
+  said and nothing did. The join-window attendance sweep needs them to exist.
+
+
+## [0.1.0] - 2026-08-01
+
+### Added
+
+- Project skeleton: `src/app/{api,domain,infra,core}` with the layer boundary
+  enforced by `scripts/check_layers.py`.
+- Configuration through `core/config.py` only, rejecting misspelled
+  `EDUFURTHER_` environment variables at startup.
+- `GET /health` liveness endpoint.
+- Full local gate via `scripts/check.py`, wrapped by `make check`.
+- CI, security, and release workflows; pre-commit hooks including secret
+  scanning and Conventional Commits.
+
 
 ### Added
 
@@ -2037,16 +2085,3 @@ released. A tag with no matching section here fails the release job.
 - Settled decisions 12–19, and two rows in `references/failure-modes.md`, were
   separated from their table headers by a blank line and so rendered as plain
   text rather than as table rows. Both tables are contiguous again.
-
-## [0.1.0] - 2026-08-01
-
-### Added
-
-- Project skeleton: `src/app/{api,domain,infra,core}` with the layer boundary
-  enforced by `scripts/check_layers.py`.
-- Configuration through `core/config.py` only, rejecting misspelled
-  `EDUFURTHER_` environment variables at startup.
-- `GET /health` liveness endpoint.
-- Full local gate via `scripts/check.py`, wrapped by `make check`.
-- CI, security, and release workflows; pre-commit hooks including secret
-  scanning and Conventional Commits.

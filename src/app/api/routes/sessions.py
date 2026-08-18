@@ -1,10 +1,14 @@
-"""Sessions a user is a party to, what happened to each one, and booking one.
+"""Sessions a user is a party to, what happened to each one, and the five writes.
 
-**One write, and it is the only one that needs no undecided rule.** Confirming
-and cancelling wait on the cancellation policy, which project conventions record
-as deliberately undecided; publishing a contract for those now would encode a
-rule nobody has taken. Creating a session asks a question already answered —
-what may be booked is whatever `/slots` currently offers, to the second.
+Booking, then the four transitions — accept, decline, withdraw, cancel. What is
+still absent is the *refund* policy, which is a different thing from the
+cancellation rule: the transitions capture `reason_code`, which is the input
+policy will read, and nothing prices it yet.
+
+**The four transitions are four names for one table.** Who may take each action,
+from which state, and which reason codes they may give all live in
+`domain/sessions.py`, so "a mentee may never accept their own request" is
+enforced once rather than hoped for four times.
 
 **Two addressing schemes, because they answer different questions.**
 ``/users/{id}/sessions`` is "this person's sessions", so it takes
@@ -25,10 +29,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
+    AcceptedSessionDep,
     BookedSessionDep,
+    CancelledSessionDep,
+    DeclinedSessionDep,
     SessionDetailDep,
     SessionEventsDep,
     SessionsPageDep,
+    WithdrawnSessionDep,
 )
 from app.api.schemas.common import Page, encode_cursor
 from app.api.schemas.sessions import SessionEventRead, SessionRead
@@ -221,3 +229,116 @@ async def book(booked: BookedSessionDep, response: Response) -> SessionRead:
     if replayed:
         response.headers[REPLAYED_HEADER] = "true"
     return SessionRead.model_validate(body)
+
+
+TRANSITION_RESPONSES: dict[int | str, dict[str, str]] = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "description": "The bearer token is absent, malformed, expired or wrongly signed."
+    },
+    status.HTTP_404_NOT_FOUND: {
+        "description": (
+            "No such session, you are not part of it, **or this action is not "
+            "yours to take** — a mentee has no accept, a mentor has no "
+            "withdraw. All one answer, following the same rule that answers a "
+            "non-admin with *no such endpoint*: the action's URL does not "
+            "exist for you. You can still read the session, so nothing is "
+            "hidden that you could otherwise see."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "You are the right party and the session is in the wrong state — "
+            "already answered, already called off, or finished. The message "
+            "names the state it is actually in."
+        )
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": (
+            "The body failed validation, or `reason_code` is not one your side "
+            "of the session may give. The codes drive refund policy, so they "
+            "are restricted per party rather than open."
+        )
+    },
+}
+
+
+@router.post(
+    "/sessions/{session_id}/accept",
+    summary="Accept a booking request",
+    description=(
+        "**The mentor's decision, and only the mentor's.** A mentee has no "
+        "accept: the whole point of `pending_mentor_approval` is that somebody "
+        "else has to answer it.\n\n"
+        "Only from `pending_mentor_approval`. An already-confirmed session is a "
+        "`409` rather than a silent success — a client that thinks it just "
+        "confirmed something has been told something untrue.\n\n"
+        "**No body.** Agreeing explains itself, and a reason field here would "
+        "be one more thing to send and for policy to have to ignore.\n\n"
+        "`meeting_url` is still null. It is generated per session, and the "
+        "surface that generates it is not built."
+    ),
+    responses=TRANSITION_RESPONSES,
+)
+async def accept_session(_: AcceptedSessionDep) -> dict[str, bool]:
+    return {"accepted": True}
+
+
+@router.post(
+    "/sessions/{session_id}/decline",
+    summary="Decline a booking request",
+    description=(
+        "**The mentor's other answer**, and the counterpart to `withdraw`: this "
+        "is the mentor refusing a request, that is the mentee taking one back. "
+        "Both act on a request nobody has agreed to yet, which is what "
+        "separates them from `cancel`.\n\n"
+        "A reason is optional. Better to give one, but requiring it turns a "
+        "clear-cut decision into a form to argue with — and every migrated "
+        "event carries none, because legacy held only free text."
+    ),
+    responses=TRANSITION_RESPONSES,
+)
+async def decline_session(_: DeclinedSessionDep) -> dict[str, bool]:
+    return {"declined": True}
+
+
+@router.post(
+    "/sessions/{session_id}/withdraw",
+    summary="Take back a booking request",
+    description=(
+        "**The mentee's, and only before the mentor answers.** Once a session "
+        "is confirmed it is `cancel`, and the two are separate statuses "
+        "deliberately: a request nobody accepted is not the same fact as a "
+        "booking broken after agreement, and they carry different policy for "
+        "refunds and for mentor-reliability statistics.\n\n"
+        "The slot goes back on the grid immediately — nothing was agreed, so "
+        "there is nothing to protect."
+    ),
+    responses=TRANSITION_RESPONSES,
+)
+async def withdraw_session(_: WithdrawnSessionDep) -> dict[str, bool]:
+    return {"withdrawn": True}
+
+
+@router.post(
+    "/sessions/{session_id}/cancel",
+    summary="Call off a confirmed session",
+    description=(
+        "**The one action either party may take.** The difference from "
+        "`withdraw` is the state rather than the person: a confirmed session "
+        "was agreed, so calling it off breaks an agreement whoever does it.\n\n"
+        "**Refused within ten minutes of the start**, and after it. By then the "
+        "other party is already on their way to the call, and what happened is "
+        "an absence rather than a cancellation — which is the attendance "
+        "sweep's answer to record, not this endpoint's.\n\n"
+        "**The slot is not handed back.** A cancelled session keeps its time "
+        "until somebody deliberately releases it: the mentor usually cancelled "
+        "*because* they are busy, and re-offering the hour would book them "
+        "straight back into it.\n\n"
+        "Which reason codes you may give depends on which side you are on. "
+        "Sending one you may not is a `422` that names it, rather than a "
+        "silently dropped field."
+    ),
+    responses=TRANSITION_RESPONSES,
+)
+async def cancel_session(_: CancelledSessionDep) -> dict[str, bool]:
+    return {"cancelled": True}

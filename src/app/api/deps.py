@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from functools import lru_cache
 from typing import Annotated, Any
@@ -51,7 +51,11 @@ from app.api.schemas.profile import (
     UserProfileWrite,
 )
 from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionTypeWrite
-from app.api.schemas.sessions import SessionBookingWrite, SessionRead
+from app.api.schemas.sessions import (
+    SessionBookingWrite,
+    SessionRead,
+    SessionTransitionWrite,
+)
 from app.core.config import Settings, get_settings
 from app.core.errors import (
     AuthenticationError,
@@ -141,7 +145,7 @@ from app.infra.db.session_type_store import (
     list_session_types,
     update_session_type,
 )
-from app.infra.db.session_writer import book_session
+from app.infra.db.session_writer import book_session, transition
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
@@ -1044,6 +1048,45 @@ async def booked_session(
 
 
 BookedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(booked_session)]
+
+
+def transitions(action: str) -> Callable[..., Awaitable[None]]:
+    """Build the dependency for one named transition.
+
+    **A factory rather than four copies**, and the argument is safe in a way the
+    `include_inactive` flag `session_type_is_live` refused was not: `action` is
+    a literal fixed at each of the four call sites below, never a value a caller
+    can send. A mis-defaulted flag there would have made a deactivated offering
+    bookable; there is no default here to get wrong.
+
+    Every rule the action carries — who may take it, from which state, which
+    reason codes they may give — is looked up in `domain/sessions.py` by this
+    name, so the four differ by a table row rather than by a code path.
+    """
+
+    async def dependency(
+        session_id: UUID,
+        user: CurrentUserDep,
+        session: SessionDep,
+        payload: SessionTransitionWrite | None = None,
+    ) -> None:
+        await transition(
+            session,
+            session_id,
+            user["id"],
+            action,
+            payload.model_dump() if payload else {},
+            now=dt.datetime.now(dt.UTC),
+        )
+        await session.commit()
+
+    return dependency
+
+
+AcceptedSessionDep = Annotated[None, Depends(transitions("accept"))]
+DeclinedSessionDep = Annotated[None, Depends(transitions("decline"))]
+WithdrawnSessionDep = Annotated[None, Depends(transitions("withdraw"))]
+CancelledSessionDep = Annotated[None, Depends(transitions("cancel"))]
 
 
 # --------------------------------------------------------------------------

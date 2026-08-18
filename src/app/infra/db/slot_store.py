@@ -51,7 +51,12 @@ from app.infra.db.models.availability import (
     SessionTypeSchedulingWindow,
 )
 from app.infra.db.models.mentoring import MentorProfile
-from app.infra.db.models.sessions import Session, SessionType, SessionTypeBookingConfig
+from app.infra.db.models.sessions import (
+    NEVER_AGREED,
+    Session,
+    SessionType,
+    SessionTypeBookingConfig,
+)
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 
@@ -97,13 +102,27 @@ def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
 
 
 def _busy(user_id: UUID, span_start: dt.datetime, span_end: dt.datetime) -> Select[Any]:
-    """Every session occupying the mentor's time over the span, whatever its status.
+    """Every session occupying the mentor's time over the span.
 
-    **Status is not filtered, and that is the settled rule.** A cancelled session
-    keeps its slot until somebody deliberately releases it — the mentor cancelled
-    because they were busy, and handing the time straight back would rebook them
-    into it. A `missed` one cannot arise here at all: its start has passed, and
+    **Almost every status counts, and the exception is not "is it over".** A
+    `cancelled` session keeps its slot until somebody deliberately releases it —
+    the mentor usually cancelled *because* they were busy, and handing the time
+    straight back would rebook them into it. That is the settled rule and it
+    stands. A `missed` one cannot arise here at all: its start has passed, and
     `bookable` never offers a slot before `now`.
+
+    **`NEVER_AGREED` is subtracted, and that is new with the transitions.** A
+    declined, withdrawn or expired *request* was never agreed to, so nothing was
+    ever on the mentor's calendar and there is no busy-ness to preserve. Until
+    the transitions shipped, nothing could produce any of the three, so the
+    distinction had no rows to apply to — which is why this filter arrives with
+    them rather than with the query.
+
+    Leaving them in would have been a mentor-facing denial of service: a mentee
+    requesting every slot and withdrawing would empty that mentor's calendar
+    permanently, while `sessions_no_mentor_double_booking` — which is over
+    `LIVE_STATUSES` and already ignores all three — would have accepted a
+    booking for every hour the grid was hiding.
 
     The overlap test is `&&` against `session_window()` rather than a comparison
     on `starts_at`, so a session that began before the span but runs into it is
@@ -116,6 +135,7 @@ def _busy(user_id: UUID, span_start: dt.datetime, span_end: dt.datetime) -> Sele
         func.upper(window).label("end"),
     ).where(
         Session.mentor_id == user_id,
+        Session.status.notin_(NEVER_AGREED),
         window.op("&&")(func.tstzrange(span_start, span_end)),
     )
 
