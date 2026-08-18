@@ -57,7 +57,14 @@ EXEMPT = {"users"}
 #: guard fired on the full gate and named the fix. The set is empty rather than
 #: deleted: the next table to arrive before its reader belongs here, and the
 #: mechanism only works if it stays.
-EXEMPT_UNTIL_READ: set[str] = set()
+#:
+#: `session_type_questions` is that next table. It ships with the intake stack
+#: and has no reader — the question endpoints are the following release — so its
+#: `deleted_at` guards nothing yet. It carries the column because
+#: `intake_answers.question_id` restricts: retiring a question is how a mentor
+#: edits their form without being refused by every answer ever given to it. The
+#: guard fired on the full gate here too, and this is the fix it named.
+EXEMPT_UNTIL_READ: set[str] = {"session_type_questions"}
 
 
 async def seed_education(conn: Any, user_id: UUID) -> None:
@@ -248,10 +255,21 @@ def test_the_unread_exemption_expires_when_a_reader_appears() -> None:
 
     Scoped to the store modules — `models/` names every table by definition, and
     a migration is a write path rather than a read.
+
+    **`types.py` is excluded, and that narrowing is worth justifying.** It holds
+    no query at all — no `select`, no session, nothing that could read a row —
+    and is a registry of column types and `CHECK` constraint names. A constraint
+    name necessarily embeds its table's name, so
+    `ck_session_type_questions_question_type_is_known` made this fire for a table
+    with no reader whatsoever. Excluding a module that *cannot* contain a read
+    removes a false positive rather than coverage; excluding one that could would
+    be the threshold-lowering non-negotiable #4 forbids.
     """
+    not_a_store = {"types.py"}
     store_source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (PROJECT_ROOT / "src" / "app" / "infra" / "db").glob("*.py")
+        if path.name not in not_a_store
     )
 
     assert store_source, "no store modules read; this assertion would pass on an empty string"

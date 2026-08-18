@@ -112,10 +112,9 @@ EXPECTED_TABLES = [
     # that first needs it. See the M3 migration's docstring.
     "availability_exceptions",
     "availability_rules",
-    # M4 — sessions. Five of the package's nine tables in `04_sessions.sql`:
-    # `session_type_questions`, `session_type_question_options`,
-    # `intake_submissions`, `intake_answers` and `session_notes` are deliberately
-    # absent. None has a legacy source or a read surface in this phase, and
+    # M4 — sessions. The four intake tables were deferred out of this phase and
+    # have since landed, listed below. `session_notes` is still absent, for the
+    # reason that deferred all five: no legacy source, no read surface, and
     # settled decision #21 ships a table with the phase that first needs it.
     # `calendar_connections` is still absent for the reason M3 recorded, now
     # joined by a second: the calendar integration goes direct to the Google API
@@ -126,6 +125,13 @@ EXPECTED_TABLES = [
     "session_type_booking_configs",
     "session_types",
     "sessions",
+    # M4 — the intake stack, deferred out of `04_sessions.sql` when M4 shipped
+    # and landing whole. `session_type_question_options` has no writer yet; see
+    # its model for why shipping it early is now cheap.
+    "intake_answers",
+    "intake_submissions",
+    "session_type_question_options",
+    "session_type_questions",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**
