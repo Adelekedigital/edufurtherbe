@@ -1,10 +1,10 @@
-"""Sessions and their lifecycle history, and the one write there is.
+"""Sessions, their lifecycle history, and the writes that move them along.
 
-**Booking has landed; confirming and cancelling have not.** Those need the
-cancellation policy, which project conventions still record as deliberately
-undecided, and publishing a write contract for them now would encode a rule
-nobody has taken. Creating a session needs no such rule: what may be booked is
-already decided by the slot grid.
+**Booking and the four transitions have landed.** What has not is the *refund*
+policy — which is a different thing from the cancellation rule and is what
+project conventions record as undecided. The transitions can ship without it
+because `session_events.reason_code` is the input that policy will read: the
+codes are captured now and nothing prices them yet.
 
 ``starts_at`` goes out as a UTC instant and is never rendered into a local
 string. The browser knows the viewer's zone; the server does not, and a session
@@ -240,4 +240,41 @@ class SessionBookingWrite(BaseModel):
         default=None,
         max_length=2000,
         description="A note to the mentor. Visible to both parties, like every other message here.",
+    )
+
+
+class SessionTransitionWrite(BaseModel):
+    """Why a session was declined, withdrawn or cancelled. Both fields optional.
+
+    **The two are not one field**, per package D6 and `SessionReasonCode`'s own
+    docstring: the text is what a person wrote and the code is what policy runs
+    on. A free-text reason cannot answer "what share of mentor-side
+    cancellations were scheduling conflicts" without somebody reading two
+    hundred rows.
+
+    **Which codes you may send depends on which side of the session you are
+    on**, and a code you may not give is a `422` rather than a silently dropped
+    field. That is authorization rather than tidiness: the codes drive refund
+    policy, so a mentee free to send the mentor's code is a mentee who can claim
+    a refund by choosing a value. The permitted sets are not published per-role
+    here because they are the *domain's* table, not the schema's — sending one
+    you may not give tells you so by name.
+
+    **Accepting takes no body at all.** Agreeing explains itself, and a reason
+    field on it would be one more thing for a client to send and for policy to
+    have to ignore.
+    """
+
+    reason_code: SessionReasonCode | None = Field(
+        default=None,
+        description=(
+            "The coded reason, which policy runs on. Optional — a required one "
+            "turns a clear-cut decision into a form to argue with, and every "
+            "migrated event carries none because legacy held only free text."
+        ),
+    )
+    reason_text: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="What you want the other party to read. Visible to both of you.",
     )
