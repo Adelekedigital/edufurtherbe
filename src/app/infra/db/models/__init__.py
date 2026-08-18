@@ -13,7 +13,11 @@ an omission here makes that test pass by looking at less.
 """
 
 from app.infra.db.models.admin import AdminUser
-from app.infra.db.models.availability import AvailabilityException, AvailabilityRule
+from app.infra.db.models.availability import (
+    AvailabilityException,
+    AvailabilityRule,
+    SessionTypeSchedulingWindow,
+)
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.intake import (
     IntakeAnswer,
@@ -78,6 +82,7 @@ __all__ = [
     "SessionTypeBookingConfig",
     "SessionTypeQuestion",
     "SessionTypeQuestionOption",
+    "SessionTypeSchedulingWindow",
     "User",
     "UserAward",
     "UserLanguage",

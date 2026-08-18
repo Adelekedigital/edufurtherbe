@@ -112,6 +112,10 @@ EXPECTED_TABLES = [
     # that first needs it. See the M3 migration's docstring.
     "availability_exceptions",
     "availability_rules",
+    # M4 — per-offering windows, which replace general availability for the
+    # offering that has them. Listed with M4 rather than M3 because they are
+    # a property of an offering.
+    "session_type_scheduling_windows",
     # M4 — sessions. The four intake tables were deferred out of this phase and
     # have since landed, listed below. `session_notes` is still absent, for the
     # reason that deferred all five: no legacy source, no read surface, and

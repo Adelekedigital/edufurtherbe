@@ -19,6 +19,7 @@ until somebody either adds a case or exempts it out loud.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
@@ -32,6 +33,7 @@ from app.infra.db.base import Base
 from app.infra.db.intake_store import list_questions
 from app.infra.db.profile_store import get_mentor_profile, list_awards, list_education
 from app.infra.db.session_type_store import list_session_types
+from app.infra.db.slot_store import list_slots
 from conftest import PROJECT_ROOT
 
 # `asyncio` is applied per test rather than to the module: the coverage check
@@ -165,6 +167,79 @@ async def seed_session_type_questions(conn: Any, user_id: UUID) -> None:
     )
 
 
+async def seed_scheduling_windows(conn: Any, user_id: UUID) -> None:
+    """One live window and one retired, on a publicly bookable offering.
+
+    The window's reader is `slot_store`, not `profile_store` — so this case is
+    about the same rule reached through a different module. The mentor must be
+    approved *and* listed and the offering must have a config, or `list_slots`
+    refuses for a reason that has nothing to do with soft deletion.
+
+    Both windows are on every weekday so the assertion does not depend on which
+    day the suite runs (#99), and they are at different hours so a read ignoring
+    `deleted_at` returns visibly more slots rather than the same ones.
+    """
+    await conn.execute(
+        text(
+            "INSERT INTO mentor_profiles (user_id, headline, approval_status, listing_status) "
+            "VALUES (:u, 'M', 'approved', 'listed') "
+            "ON CONFLICT (user_id) DO UPDATE SET approval_status = 'approved', "
+            "listing_status = 'listed'"
+        ),
+        {"u": user_id},
+    )
+    session_type = (
+        await conn.execute(
+            text(
+                "INSERT INTO session_types (mentor_user_id, name) "
+                "VALUES (:u, 'Windowed') RETURNING id"
+            ),
+            {"u": user_id},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text(
+            "INSERT INTO session_type_booking_configs "
+            "(session_type_id, duration_minutes, min_notice_minutes) VALUES (:t, 60, 0)"
+        ),
+        {"t": session_type},
+    )
+    for day in range(7):
+        await conn.execute(
+            text(
+                "INSERT INTO session_type_scheduling_windows "
+                "(session_type_id, day_of_week, start_time, end_time, timezone, deleted_at) "
+                "VALUES (:t, :d, '09:00', '10:00', 'Africa/Lagos', NULL), "
+                "       (:t, :d, '14:00', '17:00', 'Africa/Lagos', now())"
+            ),
+            {"t": session_type, "d": day},
+        )
+
+
+async def read_scheduling_windows(session: AsyncSession, user_id: UUID) -> list[str]:
+    """One day's slots, as hours. A read ignoring `deleted_at` returns four.
+
+    `LIVE` stands for the single live window's slot, so the case reads the same
+    way as every other one in this file.
+    """
+    session_type = (
+        await session.execute(
+            text("SELECT id FROM session_types WHERE mentor_user_id = :u AND name = 'Windowed'"),
+            {"u": user_id},
+        )
+    ).scalar_one()
+    day = dt.date.today() + dt.timedelta(days=7)
+    slots = await list_slots(
+        session,
+        user_id,
+        session_type,
+        start=day,
+        end=day + dt.timedelta(days=1),
+        now=dt.datetime.now(dt.UTC),
+    )
+    return ["LIVE" for _ in (slots or [])]
+
+
 async def read_session_type_questions(session: AsyncSession, user_id: UUID) -> list[str]:
     """Every live question on this mentor's offerings.
 
@@ -281,6 +356,15 @@ CASES: list[Case] = [
         "session_type_questions",
         seed_session_type_questions,
         read_session_type_questions,
+        ["LIVE"],
+    ),
+    # Reached through `slot_store` rather than `profile_store` — the same rule,
+    # a different module. One live one-hour window and one retired three-hour
+    # window, so a read ignoring `deleted_at` returns four slots instead of one.
+    (
+        "session_type_scheduling_windows",
+        seed_scheduling_windows,
+        read_scheduling_windows,
         ["LIVE"],
     ),
 ]
