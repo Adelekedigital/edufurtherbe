@@ -1,9 +1,10 @@
-"""Response shapes for sessions and their lifecycle history.
+"""Sessions and their lifecycle history, and the one write there is.
 
-**Read-only in this phase.** Booking, confirming and cancelling are write paths
-that need the cancellation policy, which project conventions record as
-deliberately undecided — so publishing a write contract now would encode a rule
-nobody has taken.
+**Booking has landed; confirming and cancelling have not.** Those need the
+cancellation policy, which project conventions still record as deliberately
+undecided, and publishing a write contract for them now would encode a rule
+nobody has taken. Creating a session needs no such rule: what may be booked is
+already decided by the slot grid.
 
 ``starts_at`` goes out as a UTC instant and is never rendered into a local
 string. The browser knows the viewer's zone; the server does not, and a session
@@ -24,8 +25,9 @@ as one problem would be applying a rule past its reason.
 from __future__ import annotations
 
 import datetime as dt
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 from app.domain.enums import (
     ActorType,
@@ -201,3 +203,41 @@ class SessionEventRead(BaseModel):
             reason_text=str(row["reason_text"]) if row["reason_text"] else None,
             created_at=row["created_at"],  # type: ignore[arg-type]
         )
+
+
+class SessionBookingWrite(BaseModel):
+    """What a mentee sends to book an hour.
+
+    **No `mentor_id`, and no `duration_minutes`.** Both are properties of the
+    offering, and accepting either would let a client send one that disagrees
+    with it — a request with two answers and no rule for which wins. The mentor
+    is derived from `session_type_id`, and the duration is snapshotted from the
+    booking config at the moment of booking (settled decision #10's reasoning,
+    applied to time rather than money).
+
+    **No `status`.** Whether a booking is confirmed or waits for the mentor is
+    the mentor's setting, not the mentee's request.
+    """
+
+    session_type_id: UUID = Field(
+        description="Which of the mentor's offerings to book. The mentor follows from it."
+    )
+    starts_at: AwareDatetime = Field(
+        description=(
+            "**A UTC instant, and it must be one `/slots` currently offers** — "
+            "exactly, to the second. Not a local time and not a date: the "
+            "mentee and mentor are routinely in different zones, and a naive "
+            "value has no single correct reading. A timezone-less string is "
+            "refused rather than guessed at.\n\n"
+            "Anything the grid does not offer is a `422`, whatever the reason: "
+            "inside the notice window, outside the mentor's hours, on a blocked "
+            "date, or already taken. The client's response to all four is the "
+            "same — re-read `/slots`."
+        )
+    )
+    topic: str | None = Field(default=None, max_length=200)
+    booking_message: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="A note to the mentor. Visible to both parties, like every other message here.",
+    )

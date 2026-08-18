@@ -12,6 +12,36 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentee can book a session.** `POST /api/v1/sessions` — the first write to
+  `sessions`, and the first table that serves every feature and belongs to none,
+  `idempotency_keys`. See ADR 0024.
+
+  **`starts_at` must be an instant `/slots` currently offers, to the second.**
+  The endpoint asks `list_slots` rather than reimplementing it, so the notice
+  window, the mentor's hours or the offering's own scheduling windows, blocked
+  dates and existing bookings all apply with no second set of rules to disagree
+  with. Everything the grid does not offer is one `422` — the client's answer to
+  every reason is the same, which is to re-read `/slots`.
+
+  **The status is the mentor's setting, not the mentee's choice.** Resolved
+  config first, then the mentor, which is the first thing to read
+  `session_type_booking_configs.requires_booking_confirmation` since it shipped.
+
+  **`Idempotency-Key` is required, and scoped to you.** A retry replays the
+  original response — the same session, the same `201`, plus
+  `Idempotent-Replayed: true` — rather than booking a second hour. Reusing a key
+  with a different body is a `422`. Keys are replayable for 24 hours and expire
+  by query rather than by a sweep, so the table self-heals.
+
+  The unique index is `(user_id, key)` where the canonical package has `key`
+  alone, because a key row holds a stored response body and the lookup must be
+  scoped to the caller. ADR 0024 records why a global key space is then a defect
+  rather than a stricter rule.
+
+  Nothing accepts, declines or expires a booking yet, so one that lands
+  `pending_mentor_approval` holds its slot until that ships.
+
+
 - **Per-offering scheduling windows, which replace general availability.**
   `session_type_scheduling_windows` — an offering with windows is bookable in
   those and nowhere else; one with none uses `availability_rules`, unchanged.

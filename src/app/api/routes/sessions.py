@@ -1,9 +1,10 @@
-"""Sessions a user is a party to, and what happened to each one.
+"""Sessions a user is a party to, what happened to each one, and booking one.
 
-**Read-only.** Booking, confirming and cancelling need the cancellation policy,
-which project conventions record as deliberately undecided — publishing a write
-contract now would encode a rule nobody has taken, and a contract is the
-expensive thing to get wrong.
+**One write, and it is the only one that needs no undecided rule.** Confirming
+and cancelling wait on the cancellation policy, which project conventions record
+as deliberately undecided; publishing a contract for those now would encode a
+rule nobody has taken. Creating a session asks a question already answered —
+what may be booked is whatever `/slots` currently offers, to the second.
 
 **Two addressing schemes, because they answer different questions.**
 ``/users/{id}/sessions`` is "this person's sessions", so it takes
@@ -21,9 +22,14 @@ so a client can tell which side they were on.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
-from app.api.deps import SessionDetailDep, SessionEventsDep, SessionsPageDep
+from app.api.deps import (
+    BookedSessionDep,
+    SessionDetailDep,
+    SessionEventsDep,
+    SessionsPageDep,
+)
 from app.api.schemas.common import Page, encode_cursor
 from app.api.schemas.sessions import SessionEventRead, SessionRead
 
@@ -123,3 +129,95 @@ async def read_session(session: SessionDetailDep) -> SessionRead:
 )
 async def read_session_events(events: SessionEventsDep) -> Page[SessionEventRead]:
     return Page(data=[SessionEventRead.from_row(row) for row in events], next_cursor=None)
+
+
+BOOKING_RESPONSES: dict[int | str, dict[str, str]] = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "description": "The bearer token is absent, malformed, expired or wrongly signed."
+    },
+    status.HTTP_404_NOT_FOUND: {
+        "description": (
+            "No such bookable offering. **Six reasons, one answer** — the "
+            "offering does not exist, is switched off, is deleted, or its "
+            "mentor is unapproved, unlisted or gone. The same conflation "
+            "`/slots` makes, for the same reason: telling them apart tells "
+            "anyone who can guess an id which mentors exist and what state "
+            "they are in."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "The mentor was booked into that hour while you were booking it, "
+            "**or** a request carrying this `Idempotency-Key` is still in "
+            "flight. Both are states that pass on their own — re-read `/slots` "
+            "and try again."
+        )
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": (
+            "The body failed validation, the instant is not one this mentor "
+            "offers, this `Idempotency-Key` already stands for a different "
+            "request, or you are the mentor."
+        )
+    },
+}
+
+#: Stripe's header, and the name is borrowed rather than invented so a client
+#: library that already understands one idempotent API understands this one.
+REPLAYED_HEADER = "Idempotent-Replayed"
+
+
+@router.post(
+    "/sessions",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SessionRead,
+    summary="Book a session",
+    description=(
+        "Books one of a mentor's offerings at an instant that offering "
+        "currently offers. The mentor follows from `session_type_id`; you are "
+        "the mentee.\n\n"
+        "**`starts_at` must match a slot from "
+        "`GET /users/{mentor_id}/availability/slots` exactly**, to the second. "
+        "That endpoint is the definition of what is bookable and this one asks "
+        "it rather than reimplementing it — so the notice window, the mentor's "
+        "hours or the offering's own scheduling windows, blocked dates and "
+        "existing bookings all apply here, with no second set of rules to "
+        "disagree with. Anything the grid does not offer is a `422`, whatever "
+        "the reason, and the client's response to every one of them is the "
+        "same: re-read `/slots`.\n\n"
+        "**The status you get back is the mentor's setting, not your choice.** "
+        "An offering that requires confirmation yields "
+        "`pending_mentor_approval` and waits for them; one that does not yields "
+        "`confirmed` immediately.\n\n"
+        "**`Idempotency-Key` is required.** Send a fresh value per booking "
+        "attempt and reuse it on every retry of that attempt: a retry replays "
+        "the original response — the same session, the same `201` — instead of "
+        "booking a second hour. A key is replayable for 24 hours and is scoped "
+        "to you, so it can never collide with another caller's. Reusing one "
+        "with a **different** body is a `422` rather than a silent replay of "
+        "the wrong answer.\n\n"
+        f"A replayed response carries `{REPLAYED_HEADER}: true`.\n\n"
+        "**`meeting_url` is null on a new session.** It is generated per "
+        "session when the session is confirmed — a static personal room means "
+        "back-to-back sessions share it and an early joiner walks into the "
+        "previous one."
+    ),
+    responses=BOOKING_RESPONSES,
+)
+async def book(booked: BookedSessionDep, response: Response) -> SessionRead:
+    """The status code comes from the reservation, not from the decorator.
+
+    They agree today — `201` is the only success booking has — and the plumbing
+    is here because the *stored* code is what a replay must return. A replay
+    answering `200` to a stored `201` would be a different answer to the same
+    request, which is the one thing an idempotent endpoint may not do.
+
+    The header is advisory and no client should need it, which is exactly why it
+    is worth sending: it is how an operator reading a log tells "the mentee
+    booked twice" from "the mentee's phone retried once".
+    """
+    body, status_code, replayed = booked
+    response.status_code = status_code
+    if replayed:
+        response.headers[REPLAYED_HEADER] = "true"
+    return SessionRead.model_validate(body)
