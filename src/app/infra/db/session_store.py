@@ -15,6 +15,12 @@ returning any session's history to anyone who knows an id.
 There is no ``deleted_at`` predicate anywhere, and that is deliberate rather than
 an omission. ``sessions`` has no soft delete: a cancelled session is still a
 session, still counted, still part of both parties' history (project vocabulary).
+
+**One derived figure travels with a session: the mentee's attendance rate.** It
+is here rather than on a mentee endpoint of its own because the question it
+answers is asked *on the request card* — a mentor deciding whether to accept —
+and a second round trip per card is worse for the same work. The arithmetic
+belongs to ``session_stats`` and is imported, not restated.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from sqlalchemy.orm import aliased
 from app.core.errors import ValidationError
 from app.infra.db.models.sessions import Session, SessionEvent
 from app.infra.db.models.user import User, UserProfile
+from app.infra.db.session_stats import MENTEE, attendance_rate
 
 __all__ = ["get_session", "list_session_events", "list_sessions"]
 
@@ -49,6 +56,19 @@ _SESSION_COLUMNS = (
     Session.meeting_provider,
     Session.meeting_url,
     Session.created_at,
+    # **The mentee's reliability, on the row where a mentor decides.**
+    #
+    # Correlated on `Session.mentee_id` rather than fetched per row, so a page
+    # of sessions is still one statement. `session_stats` owns the arithmetic
+    # and the side is passed in — the mentor's public rate is the same function
+    # with `MENTOR`, and pooling the two would let a diligent mentee's record
+    # flatter an unreliable mentor.
+    #
+    # Returned to **both** parties. It is the mentee's own data, and a mentor
+    # about to accept a request is precisely who it is for. There is no matching
+    # mentor rate here: that one is already on the public profile, and adding a
+    # second copy scoped differently is how a number acquires two definitions.
+    attendance_rate(Session.mentee_id, MENTEE).label("mentee_attendance_rate"),
 )
 
 #: The two people, aliased per side so one statement can join `users` twice.

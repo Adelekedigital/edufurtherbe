@@ -79,11 +79,21 @@ from uuid import UUID
 
 from sqlalchemy import Integer, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.domain.enums import AttendanceStatus, SessionStatus
 from app.infra.db.models.sessions import Session, SessionParticipant
 
-__all__ = ["ATTENDED", "EXPECTED", "TERMINAL", "delivered", "mentor_stats"]
+__all__ = [
+    "ATTENDED",
+    "EXPECTED",
+    "MENTEE",
+    "MENTOR",
+    "TERMINAL",
+    "attendance_rate",
+    "delivered",
+    "mentor_stats",
+]
 
 #: The mentor turned up.
 ATTENDED = (AttendanceStatus.ATTENDED,)
@@ -110,16 +120,41 @@ def delivered(mentor: Any) -> Any:
     return and_(Session.mentor_id == mentor, Session.status == SessionStatus.COMPLETED)
 
 
-def _attendance_rate(mentor: UUID) -> Any:
-    """The mentor's own attendance, as a whole-number percentage or ``NULL``.
+#: The inner ``sessions`` of the rate subquery, aliased.
+#:
+#: **Required, not stylistic.** The mentee rate is correlated — its subject comes
+#: from the *outer* query's ``sessions.mentee_id`` — so an unaliased inner
+#: reference would be the same table twice and PostgreSQL would resolve both to
+#: the outer row, quietly returning that one session's attendance as the rate.
+_RATE = aliased(Session, name="rate_session")
+
+#: Which side of the session the rate is about. Passed in rather than baked in,
+#: for the reason `delivered()` already takes its mentor as a parameter: the two
+#: numbers are the same arithmetic over different populations, and two copies is
+#: where one of them stops counting `no_show`.
+MENTOR = _RATE.mentor_id
+MENTEE = _RATE.mentee_id
+
+
+def attendance_rate(user: Any, side: Any) -> Any:
+    """One party's attendance on one side of the table, as a percentage or ``NULL``.
+
+    **The side is load-bearing and the two numbers are not interchangeable.** A
+    mentor who is also somebody's mentee has two rates: sessions they *hosted*
+    and turned up to, and sessions they *booked* and turned up to. Pooling them
+    would let a diligent mentee's record flatter an unreliable mentor, and the
+    discovery card already has a test for exactly that inversion on
+    `delivered()`.
 
     A scalar subquery rather than a join, so the ratio is computed where both
-    counts are in scope and the outer query stays one row.
+    counts are in scope and the outer query stays one row. ``user`` may be a
+    concrete id — the profile read has one — or a column of the outer query,
+    which is how a session list gets the rate of whichever mentee is on the row.
 
     **`NULL`, never zero, when nothing is known.** Zero percent says "never shows
-    up"; null says "no data yet". A mentor whose sessions have not been settled
-    yet must not be branded the first — which is every mentor whose only
-    sessions are still ahead of them.
+    up"; null says "no data yet". Somebody whose sessions have not been settled
+    yet must not be branded the first — which is everybody whose only sessions
+    are still ahead of them, and every mentee on their first booking.
     """
     came = func.count().filter(SessionParticipant.attendance_status.in_(ATTENDED))
     due = func.count().filter(SessionParticipant.attendance_status.in_(EXPECTED))
@@ -133,17 +168,17 @@ def _attendance_rate(mentor: UUID) -> Any:
                 else_=None,
             )
         )
-        .select_from(Session)
-        # Inner: a session with no mentor participant row carries no attendance
-        # fact at all, and *unknown* must not enter a denominator. Two of the 105
-        # dev bookings have no tracker and so no participant rows.
+        .select_from(_RATE)
+        # Inner: a session with no participant row for this person carries no
+        # attendance fact at all, and *unknown* must not enter a denominator.
+        # Two of the 105 dev bookings have no tracker and so no participant rows.
         # **No `role` filter, and a mutation is why.** Removing it changed
         # nothing: `uq_session_participants_session_id` is unique on
         # `(session_id, user_id)`, so this join already matches at most one row
         # per session, and `ck_sessions_no_self_booking` stops that row belonging
-        # to anyone but the mentor. A condition that cannot exclude anything is
-        # not a safeguard, it is a claim the reader has to verify — the fourth
-        # such guard dropped rather than kept untestable.
+        # to the other party. A condition that cannot exclude anything is not a
+        # safeguard, it is a claim the reader has to verify — the fourth such
+        # guard dropped rather than kept untestable.
         #
         # The join stays **inner** even though `FILTER` already ignores a null
         # attendance, so an outer join would return the same numbers. That is a
@@ -153,11 +188,11 @@ def _attendance_rate(mentor: UUID) -> Any:
         .join(
             SessionParticipant,
             and_(
-                SessionParticipant.session_id == Session.id,
-                SessionParticipant.user_id == mentor,
+                SessionParticipant.session_id == _RATE.id,
+                SessionParticipant.user_id == user,
             ),
         )
-        .where(Session.mentor_id == mentor, Session.status.in_(TERMINAL))
+        .where(side == user, _RATE.status.in_(TERMINAL))
         .scalar_subquery()
     )
 
@@ -183,7 +218,7 @@ async def mentor_stats(session: AsyncSession, mentor: UUID) -> dict[str, Any]:
         # count makes every client write the same fallback.
         func.coalesce(func.sum(Session.duration_minutes), 0).label("mentoring_minutes"),
         func.count(func.distinct(Session.mentee_id)).label("mentees_mentored"),
-        _attendance_rate(mentor).label("attendance_rate"),
+        attendance_rate(mentor, MENTOR).label("attendance_rate"),
     ).where(delivered(mentor))
 
     row = (await session.execute(statement)).mappings().one()
