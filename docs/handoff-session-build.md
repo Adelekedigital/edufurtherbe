@@ -492,8 +492,10 @@ Concentration is the risk, not volume.
 
 Each gets its own checklist and DoD before implementation (§2). ~~As text, with no tool calls in
 the same response.~~ — **struck by CLAUDE.md rule 7 (2026-08-17):** the checklist and DoD are still
-written first at every tier, but only **Tier 1** waits for approval. Eight of the fourteen below are
-Tier 1 and still stop; the six Tier 2 rows post and continue.
+written first at every tier, and ~~only **Tier 1** waits for approval~~ — **widened 2026-08-18:**
+no tier waits. Every row below posts its checklist and proceeds, escalating only what rule 8
+qualifies, which for the eight Tier 1 rows routinely includes data that cannot be carried
+faithfully and anything irreversible once applied to real rows.
 
 **"One at a time, never stacked" is struck.** CLAUDE.md rule 1 reversed it on 2026-08-16 and this
 line outlived the reversal. Stacking is allowed: branch from the PR you build on, merge in order.
