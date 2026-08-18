@@ -600,3 +600,61 @@ async def test_a_session_nobody_was_recorded_at_did_not_happen(
 
     assert await settle(db_engine) == 1
     assert await status_of(db_engine, booking["id"]) == "no_show"
+
+
+async def test_the_settlement_records_how_it_knew(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Written before anything reads it, and that is the justification.**
+
+    A session settled today cannot later be re-examined for whether anybody
+    observed it — so the fact is recorded at the moment the outcome is decided
+    or it is lost. Every outcome is `reported` until a provider starts sending
+    join and leave, and a payout rule can then require `observed` without a
+    second status and without re-judging history.
+
+    It is also `session_events.metadata`'s first writer; the JSONB column has
+    been there since M4 with nothing putting anything in it.
+    """
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-evidence", starts_in=-dt.timedelta(hours=1)
+    )
+    await settle(db_engine)
+
+    async with db_engine.connect() as conn:
+        recorded = (
+            await conn.execute(
+                text(
+                    "SELECT metadata FROM session_events "
+                    "WHERE session_id = :i ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"i": booking["id"]},
+            )
+        ).scalar_one()
+
+    assert recorded == {"evidence": "reported"}
+
+
+async def test_only_the_settlement_claims_evidence(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A booking or a transition asserts nothing about attendance, so its event
+    carries no evidence rather than an empty or default one — an absent key and
+    a key saying "we do not know" are different claims, and only the first is
+    true here."""
+    booking = await a_confirmed_session(
+        db_engine, api_client, "at-evidence-none", starts_in=dt.timedelta(hours=2)
+    )
+
+    async with db_engine.connect() as conn:
+        creation = (
+            await conn.execute(
+                text(
+                    "SELECT metadata FROM session_events "
+                    "WHERE session_id = :i ORDER BY created_at LIMIT 1"
+                ),
+                {"i": booking["id"]},
+            )
+        ).scalar_one()
+
+    assert creation == {}

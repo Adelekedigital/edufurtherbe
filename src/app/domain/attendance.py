@@ -13,6 +13,11 @@ somebody arriving, and fifteen late is somebody who was held up rather than
 somebody who never came. Later a mentor preference, which is why the two are
 separate constants.
 
+**Every outcome records how it was reached**, in ``session_events.metadata``.
+Today that is always ``AttendanceEvidence.REPORTED``, and saying so in the log
+is what stops ``completed`` quietly meaning two different things either side of
+the first provider integration.
+
 **A recorded arrival is an intention to attend, not an attendance.** Pressing
 Join says *I am here now*; it does not say the other party was, or that either
 stayed. Two parties can both be recorded present without the session having
@@ -35,17 +40,54 @@ reader treating `attended` as observed fact.
 from __future__ import annotations
 
 import datetime as dt
+from enum import StrEnum
 
 from app.domain.enums import SessionStatus
 
 __all__ = [
     "JOIN_CLOSES",
     "JOIN_OPENS",
+    "AttendanceEvidence",
     "join_window",
     "outcome",
     "window_has_closed",
     "within_join_window",
 ]
+
+
+class AttendanceEvidence(StrEnum):
+    """How an attendance outcome was arrived at, recorded with the outcome.
+
+    **Not in ``domain/enums.py``, deliberately.** That module holds the closed
+    vocabularies the *database* constrains — every one of them backs a column
+    with a ``CHECK``. This one is a value inside ``session_events.metadata``, a
+    JSONB field with no constraint, so putting it there would imply a column
+    that does not exist and invite somebody to add one.
+
+    **Written before anything reads it**, which is the opposite of this
+    project's usual rule and is justified by exactly one thing: it cannot be
+    reconstructed. A session settled today cannot later be re-examined for
+    whether anybody observed it, so the fact has to be recorded at the moment
+    the outcome is decided or it is lost. `respond_by` staying on an answered
+    row is the same argument.
+
+    What it buys: a payout rule can one day require ``OBSERVED`` without a
+    second status and without re-judging history, and ``completed`` cannot
+    quietly come to mean two different things either side of the first provider
+    integration.
+    """
+
+    #: Both parties pressed Join. Nothing watched the room, so this says they
+    #: each *said* they were there — not that they were there together. Every
+    #: outcome carries this today.
+    REPORTED = "reported"
+
+    #: A provider reported per-participant join and leave, and the two
+    #: intervals overlapped. Nothing produces this yet; Daily is where it comes
+    #: from, and `docs/daily-spike-guide.md` Q3 is the measurement that decides
+    #: whether it is reachable at all.
+    OBSERVED = "observed"
+
 
 #: How early a party may mark themselves present.
 JOIN_OPENS = dt.timedelta(minutes=5)
