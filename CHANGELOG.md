@@ -12,6 +12,37 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **`POST` and `PATCH /api/v1/me/session-types` — a mentor can create and change
+  their own offerings.** The write surface these tables have been waiting for:
+  every screen had a `GET` behind it and no offering could be created at all.
+
+  **The offering and its booking config are written in one transaction.** Both
+  read paths and `/slots` inner-join the config, so an offering without one is
+  invisible everywhere and unbookable — and nothing writes a config on its own,
+  so no endpoint could repair it.
+
+  `min_notice_minutes` accepts **1440 to 4320**: the 24-hour platform floor, no
+  same-day booking, and the current 72-hour ceiling. The column keeps its
+  sanity-only `CHECK BETWEEN 0 AND 43200` — a database refuses what is
+  impossible, an application refuses what is disallowed, and moving the range to
+  `booking_policies` should be a config change rather than a migration.
+
+  `is_active` is a `PATCH` field with no cascade, and **nothing refuses it any
+  more** — while `trg_refuse_retiring_a_primary_offering` existed this toggle
+  fired it and needed a `409` mapping or returned a 500. A switched-off offering
+  stays editable, which is what switching it back on requires.
+
+  **`meeting_venue` is not writable yet.** An offering is held on one of the
+  mentor's conferencing options and nothing lists or creates those, so a new
+  offering leaves the reference null and resolves through the mentor's default.
+  Per-offering venue arrives with the surface that manages options.
+
+  A duplicate live name is `409`, translated off the existing partial unique
+  index rather than re-implemented — checking first and inserting after is the
+  race the index exists to win. A deleted offering does not reserve its name. A
+  caller with no mentor profile gets `404`: the read endpoint's empty page is a
+  read-side argument, and there is no true empty answer to a write.
+
 - **`mentor_conferencing_options` — what a mentor can host on, as a table.**
 
   `session_type_booking_configs.meeting_venue` was a label, and half its

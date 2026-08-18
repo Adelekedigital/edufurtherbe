@@ -1,4 +1,4 @@
-"""A mentor's own session types — the management list, not the shop window.
+"""A mentor's own session types — the management surface, not the shop window.
 
 **Its own module, and a second router on `/api/v1/me`.** `users.py` is
 `prefix="/api/v1"` and already owns `/me`, so there is no path collision — but
@@ -13,18 +13,24 @@ in one file is how a reader ends up believing there is one endpoint.
 `public` tag to non-catalogue public endpoints and everything else "its domain
 name"; the `users` tag is described as "a user's own record and attributes", which
 is exactly what this is, and `user_attributes.py` already groups the caller's own
-sub-resources under it. When PRs 9 and 10 add the write surface, a `session-types`
-tag may earn its place — a tag is documentation grouping, not a wire contract, so
-regrouping later breaks nothing.
+sub-resources under it. The write surface has since landed here and the tag has
+not moved: a `session-types` tag may still earn its place once `DELETE` joins
+them, and a tag is documentation grouping rather than a wire contract, so
+regrouping breaks nothing whenever that happens.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
-from app.api.deps import OwnSessionTypesDep
+from app.api.deps import (
+    CreatedOwnSessionTypeDep,
+    OwnSessionTypesDep,
+    UpdatedOwnSessionTypeDep,
+)
 from app.api.schemas.common import Page
 from app.api.schemas.session_types import OwnSessionTypeRead
+from app.core.errors import NotFoundError
 
 router = APIRouter(prefix="/api/v1/me", tags=["users"])
 
@@ -79,3 +85,76 @@ OWNER_RESPONSES: dict[int | str, dict[str, str]] = {
 )
 async def read_own_session_types(session_types: OwnSessionTypesDep) -> Page[OwnSessionTypeRead]:
     return Page(data=[OwnSessionTypeRead.from_row(row) for row in session_types], next_cursor=None)
+
+
+WRITE_RESPONSES: dict[int | str, dict[str, str]] = OWNER_RESPONSES | {
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "The body failed validation."},
+}
+
+NAME_CONFLICT: dict[int | str, dict[str, str]] = {
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "You already have a live offering with this name. Names must be "
+            "distinguishable because a mentee choosing between two identical "
+            "ones cannot tell them apart. A **deleted** offering does not "
+            "reserve its name."
+        )
+    }
+}
+
+
+@router.post(
+    "/session-types",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a session type",
+    description=(
+        "The offering and its booking settings are created **together**, in one "
+        "transaction. Duration and notice are not optional extras: slots are "
+        "computed from them, so an offering without them could not be booked "
+        "and there is no second request that would supply them later.\n\n"
+        "**`min_notice_minutes` is 24 hours by default and may be raised to "
+        "72.** The floor is a platform rule — no same-day booking — and it is "
+        "the reason a value below `1440` is refused here rather than stored. "
+        "Sending nothing takes the floor.\n\n"
+        "**`meeting_venue` is not writable yet.** A new offering is held "
+        "wherever your default conferencing option says, and the read models "
+        "resolve it. Choosing a venue per offering needs a surface for managing "
+        "those options, which does not exist yet.\n\n"
+        "**A new offering is active.** There is no draft state, so there is "
+        "nothing to publish — `is_active` is writable on `PATCH`, where "
+        "switching one off is the point.\n\n"
+        "A caller with no mentor profile gets `404`: a session type belongs to a "
+        "mentor, and there is no true empty answer to a write."
+    ),
+    responses=WRITE_RESPONSES | NAME_CONFLICT,
+)
+async def create_own_session_type(
+    session_type_id: CreatedOwnSessionTypeDep, response: Response
+) -> dict[str, str]:
+    response.headers["Location"] = "/api/v1/me/session-types"
+    return {"id": str(session_type_id)}
+
+
+@router.patch(
+    "/session-types/{session_type_id}",
+    summary="Change one of your session types",
+    description=(
+        "Every field is optional and **absent is not null** — a field you do "
+        "not send is left alone rather than cleared.\n\n"
+        "**`is_active` switches an offering off and on, and nothing refuses "
+        "it.** Deactivating hides it from new bookings and leaves existing ones "
+        "untouched; `false` covers off, closed and hidden alike, so a "
+        "deactivated offering is invisible in search *and* unbookable by direct "
+        "link.\n\n"
+        "**A switched-off offering is still editable**, which is what switching "
+        "it back on requires — this endpoint scopes on ownership and deletion, "
+        "never on whether the offering is currently on offer.\n\n"
+        "An offering that is not yours, or is deleted, gets `404`. Not "
+        "`403`: that would confirm the id exists."
+    ),
+    responses=WRITE_RESPONSES | NAME_CONFLICT,
+)
+async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> dict[str, bool]:
+    if not changed:
+        raise NotFoundError("no such session type")
+    return {"updated": True}

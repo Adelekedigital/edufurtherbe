@@ -42,13 +42,17 @@ than from a primary offering. Venue is unaffected and has no mentor-level home.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, literal, select
+from sqlalchemy import Select, func, insert, literal, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.core.errors import ConflictError
 from app.domain.enums import ConferencingProvider
 from app.infra.db.models.mentoring import MentorConferencingOption, MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
@@ -59,7 +63,12 @@ from app.infra.db.public_visibility import (
     session_type_of,
 )
 
-__all__ = ["list_own_session_types", "list_session_types"]
+__all__ = [
+    "create_session_type",
+    "list_own_session_types",
+    "list_session_types",
+    "update_session_type",
+]
 
 #: The offering's own option, joined on the **composite** key.
 #:
@@ -196,10 +205,12 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
 
     **The join to the config stays inner**, matching the public query. Duration,
     notice and venue all come from that row and there is nothing to read without
-    it. Nothing in `api/` can create an offering without a config today, so this
-    excludes no row the product can reach — and a `LEFT JOIN` would make three
-    required response fields nullable, which is a contract change and belongs to
-    the pull request that can actually produce such a row.
+    it. **`create_session_type` writes both rows in one transaction**, so this
+    still excludes no row the product can reach — the claim used to be "nothing
+    can create an offering at all", and it is now the stronger one that nothing
+    can create a configless one. A `LEFT JOIN` would make three required response
+    fields nullable, which is a contract change and belongs to the release that
+    can actually produce such a row.
     """
     statement = (
         select(
@@ -258,3 +269,147 @@ async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[
 
     result = await session.execute(_live_session_types(user_id))
     return [dict(row) for row in result.mappings()]
+
+
+#: The partial unique index from `20260812_1000_m4_session_type_idempotency_key`,
+#: whose name says idempotency and whose job is not that: it is
+#: `UNIQUE (mentor_user_id, name) WHERE deleted_at IS NULL`.
+#:
+#: Named here because the message is matched against it. A bare `IntegrityError`
+#: catch would also swallow the booking config's `session_type_id` unique
+#: violation and the composite conferencing key, reporting a name clash for
+#: neither.
+NAME_INDEX = "ix_session_types_mentor_name"
+
+
+@asynccontextmanager
+async def _distinct_names() -> AsyncIterator[None]:
+    """Turn the partial unique index into a 409 rather than a 500.
+
+    The index is the mechanism. Selecting first and inserting after is a
+    check-then-insert race, and being unraceable is why the invariant lives in
+    the schema — so the write is attempted and the refusal translated, which is
+    the one order that cannot be raced.
+
+    **Partial on `deleted_at IS NULL`, which is why the message says so.** A
+    deleted offering does not reserve its name, and a mentor who deleted
+    "SOP review" and is being told the name is taken would have no way to find
+    the row holding it.
+    """
+    try:
+        yield
+    except IntegrityError as exc:
+        if NAME_INDEX in str(exc.orig):
+            raise ConflictError("you already have a live session type with this name") from exc
+        raise
+
+
+async def create_session_type(
+    session: AsyncSession, mentor_user_id: UUID, payload: dict[str, Any]
+) -> UUID | None:
+    """A new offering **and its booking config**, or ``None`` for a non-mentor.
+
+    **Both rows or neither, and that is the load-bearing part.** `/slots` and
+    both read paths inner-join `session_type_booking_configs`, so an offering
+    without one is invisible everywhere and unbookable — a state no endpoint can
+    repair, because nothing writes a config on its own. The caller commits once,
+    so a failure between the two statements rolls back both; splitting this into
+    two endpoints, or committing between them, is what would make the broken
+    state reachable.
+
+    **`None` rather than an exception for a caller with no mentor profile.**
+    `session_types.mentor_user_id` references `mentor_profiles`, so the insert
+    would raise a foreign-key violation — a 500 describing a constraint, for a
+    request that is simply not theirs to make. The route turns this into the same
+    404 `PATCH /mentor-profile` gives, and it is checked here rather than after
+    the fact because the check *is* a query.
+
+    `conferencing_option_id` is left null: it means *use my default*, and nothing
+    can create an option yet. The venue still resolves — see `_resolved_venue`.
+    """
+    owns = await session.execute(
+        select(literal(1))
+        .select_from(MentorProfile)
+        .where(MentorProfile.user_id == mentor_user_id, MentorProfile.deleted_at.is_(None))
+    )
+    if owns.first() is None:
+        return None
+
+    async with _distinct_names():
+        session_type_id = (
+            await session.execute(
+                insert(SessionType)
+                .values(
+                    mentor_user_id=mentor_user_id,
+                    name=payload["name"],
+                    description=payload.get("description"),
+                    category=payload.get("category"),
+                    application_stage=payload.get("application_stage"),
+                )
+                .returning(SessionType.id)
+            )
+        ).scalar_one()
+
+        # Inside the same block and the same transaction. `/slots` and both read
+        # paths inner-join this row, so an offering without one is invisible and
+        # unbookable with nothing able to repair it.
+        await session.execute(
+            insert(SessionTypeBookingConfig).values(
+                session_type_id=session_type_id,
+                duration_minutes=payload["duration_minutes"],
+                min_notice_minutes=payload["min_notice_minutes"],
+            )
+        )
+    return session_type_id
+
+
+#: Which payload keys belong to which table. Split here rather than at the
+#: boundary because the write model is one shape by design — a mentor edits *an
+#: offering*, and that it spans two tables is this layer's problem.
+SESSION_TYPE_COLUMNS = ("name", "description", "category", "application_stage", "is_active")
+BOOKING_CONFIG_COLUMNS = ("duration_minutes", "min_notice_minutes")
+
+
+async def update_session_type(
+    session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID, payload: dict[str, Any]
+) -> bool:
+    """Change one offering. ``False`` if it is not this mentor's, or is deleted.
+
+    **Scoped with `session_type_of()`, which is the narrower predicate and not a
+    flag on the live one.** The owner path needs ownership and soft deletion but
+    **not** `is_active` — a mentor editing a switched-off offering is the ordinary
+    case, and it is what switching it back on requires. Adding `include_inactive`
+    to `session_type_is_live()` instead would touch the predicate that decides
+    what is *bookable*, which `slot_store` spreads: a mis-defaulted flag reaching
+    it makes deactivated offerings bookable again, against settled decision #90,
+    silently and one keyword away. A predicate taking no argument cannot carry
+    that mistake.
+
+    **Not-yours and not-found are the same answer** (house convention), and here
+    they are the same *statement*: the scope is in the `WHERE`, so a row
+    belonging to somebody else is not found rather than found and refused.
+
+    The config `UPDATE` runs only when the payload touches it, so a rename does
+    not rewrite `updated_at` on a row nothing changed.
+    """
+    scoped = select(SessionType.id).where(
+        *session_type_of(mentor_user_id), SessionType.id == session_type_id
+    )
+    if (await session.execute(scoped)).first() is None:
+        return False
+
+    own = {key: value for key, value in payload.items() if key in SESSION_TYPE_COLUMNS}
+    if own:
+        async with _distinct_names():
+            await session.execute(
+                update(SessionType).where(SessionType.id == session_type_id).values(**own)
+            )
+
+    config = {key: value for key, value in payload.items() if key in BOOKING_CONFIG_COLUMNS}
+    if config:
+        await session.execute(
+            update(SessionTypeBookingConfig)
+            .where(SessionTypeBookingConfig.session_type_id == session_type_id)
+            .values(**config)
+        )
+    return True
