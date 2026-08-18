@@ -33,6 +33,7 @@ from app.api.deps import (
     BookedSessionDep,
     CancelledSessionDep,
     DeclinedSessionDep,
+    JoinedSessionDep,
     SessionDetailDep,
     SessionEventsDep,
     SessionsPageDep,
@@ -342,3 +343,32 @@ async def withdraw_session(_: WithdrawnSessionDep) -> dict[str, bool]:
 )
 async def cancel_session(_: CancelledSessionDep) -> dict[str, bool]:
     return {"cancelled": True}
+
+
+@router.post(
+    "/sessions/{session_id}/join",
+    summary="Record that you arrived",
+    description=(
+        "Marks **you** present, from five minutes before the start to fifteen "
+        "minutes after it. Either party calls it for themselves; neither can "
+        "call it for the other, because attendance drives both parties' "
+        "reliability figures and marking somebody present is editing their "
+        "record.\n\n"
+        "**Safe to call twice.** A dropped call or a refreshed tab is the "
+        "ordinary case, and `joined_at` keeps the *first* arrival rather than "
+        "the last press.\n\n"
+        "Outside the window, or on a session that is not `confirmed`, this is a "
+        "`409` rather than a quiet success — a client that believes it "
+        "registered an arrival will not try again.\n\n"
+        "**Attendance is what you tell us.** Nothing observes the meeting: the "
+        "calendar integration is a write target and an on-demand free/busy "
+        "read, and conference records are not reachable for an individual "
+        "mentor's Workspace. This press is the signal.\n\n"
+        "The session's own outcome — `completed` when both of you came, "
+        "`no_show` when either did not — is decided once for both parties after "
+        "the window shuts, not here."
+    ),
+    responses=TRANSITION_RESPONSES,
+)
+async def join_session(_: JoinedSessionDep) -> dict[str, bool]:
+    return {"joined": True}

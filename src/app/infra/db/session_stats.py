@@ -30,16 +30,24 @@ booking-tracker pairs — but most sessions come from the **164 orphan trackers*
 which take a different path entirely: `status = CANCELLED if cancelled else
 COMPLETED`, which never consults attendance. "Not cancelled" became "completed".
 
-**So nothing enforces the invariant and the data already violates it.**
+**Nothing enforces the invariant and the migrated data already violates it.**
 `sessions.status` and `session_participants.attendance_status` are independent
 columns, and a `CHECK` cannot tie them because it spans two tables.
 
 Every stat here therefore answers from the column it is *about* — the session
 says delivered, so it counts; the participant says absent, so the rate falls —
 and a reader seeing "11 sessions, 69%" is looking at a contradiction that is
-really in the data rather than at a number hiding it. The session lifecycle must
-derive status *from* attendance so there is one place it is decided; until then
-this is honest rather than correct, which is the better of the two available.
+really in the data rather than at a number hiding it.
+
+**A producer now exists, and it applies forward only.**
+`session_writer.settle_attendance` derives a session's outcome *from* its
+attendance once the join window shuts, so from that point there is one place the
+outcome is decided. It settles `confirmed` sessions only, which deliberately
+leaves every migrated row untouched: those record what the legacy app believed,
+and correcting them would destroy the evidence that the two figures disagree.
+So the split above is now historical rather than permanent — post-cutover
+sessions agree, migrated ones do not, and this module still reads each column
+for what it says.
 
 ATTENDANCE COUNTS TWO STATUSES AND IGNORES TWO
 ==============================================
@@ -50,9 +58,9 @@ expected at.
     denominator   attendance_status IN ('attended', 'no_show')
 
 `pending` is *unknown*, not absent — its own docstring says "we do not know yet
-is a real answer and distinguishable from `NO_SHOW`" — and until the lifecycle
-that marks attendance exists, it is the state of every session booked after
-cutover. Counting it as absence would report every new mentor as unreliable.
+is a real answer and distinguishable from `NO_SHOW`" — and it is the state of
+every session that has not yet been settled. Counting it as absence would report
+a mentor with a session next week as unreliable today.
 
 `left_early` is ignored for a different reason: nothing writes it and it is
 slated for removal (`docs/handoff-enum-to-text-check.md`). Enumerating the two
@@ -109,10 +117,9 @@ def _attendance_rate(mentor: UUID) -> Any:
     counts are in scope and the outer query stays one row.
 
     **`NULL`, never zero, when nothing is known.** Zero percent says "never shows
-    up"; null says "no data yet". A mentor whose sessions have not been marked up
-    must not be branded the first — and since the lifecycle that marks them does
-    not exist, that is currently every mentor with a session booked after
-    cutover.
+    up"; null says "no data yet". A mentor whose sessions have not been settled
+    yet must not be branded the first — which is every mentor whose only
+    sessions are still ahead of them.
     """
     came = func.count().filter(SessionParticipant.attendance_status.in_(ATTENDED))
     due = func.count().filter(SessionParticipant.attendance_status.in_(EXPECTED))
