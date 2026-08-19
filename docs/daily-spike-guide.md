@@ -15,7 +15,7 @@ Run against a real account on 2026-08-19, room `efspike-4baae5dedb`.
 
 | Question | Answer |
 |---|---|
-| Q1 `privacy: private` refuses a visitor holding the URL and no token | **not reported** |
+| Q1 `privacy: private` refuses a visitor holding the URL and no token | **not reported** — see below; every session room is private regardless |
 | Q2 a token's `nbf` refuses an early join | **not reported** |
 | Q3 the meeting record gives per-participant **join and leave** | **yes** — `join_time` plus `duration` |
 | Q4 the `user_id` minted onto the token reaches that record | **yes**, verbatim |
@@ -57,26 +57,37 @@ fewer clock to disagree with itself.
 
 The webhook additionally carries `event_ts`, documented as *close to but not
 exactly* when the participant left — so even there the arithmetic is the
-authority, not the timestamp.
+authority and the timestamp is not. That matters for the live path below: the
+event tells you *that* somebody left, and `joined_at + duration` tells you when.
 
-### And that settles whether we need a webhook: we do not
+### The two transports are for two different jobs
 
-Two transports carry the same fields, and the choice between them turns entirely
-on Q5:
+Both carry the same fields, so an earlier draft of this guide concluded we do not
+need the webhook at all. **That was wrong, and wrong in a specific way: it
+analysed settlement and stated the answer as though it covered everything.**
 
-| | needs | fits |
-|---|---|---|
-| **`GET /meetings`** | nothing new | the sweep that already exists |
-| `participant.left` webhook | a public endpoint, a shared secret, replay and ordering handling | a push model we do not otherwise have |
+| job | when | transport | why |
+|---|---|---|---|
+| **settle** — `completed` against `no_show` | after the session | `GET /meetings` | the sweep already runs; the record accumulates every participant, so nothing is missed between polls |
+| **show who is in the room** | during the session | `participant.left` / `participant.joined` webhook | polling at any tolerable rate is either laggy or expensive, and it is the *other* party who is waiting |
 
-A webhook earns its place when polling is too slow or too expensive. **Q5
-removed the first reason** — the record is readable during the call — and one
-extra read inside a sweep that already runs hourly removes the second. So the
-attendance reader is a REST pull in `settle_sessions`, and no new inbound
-surface, secret or retry semantics enter the system.
+**Settlement genuinely does not need a push.** The record aggregates, so a
+participant who joined and left between two polls is still in it — the hourly
+sweep loses nobody, and Q5 means the data is there when it asks.
 
-Worth stating because the opposite is the default assumption: *real-time
-attendance* sounds like it wants a webhook, and it does not.
+**Live attendance does.** The waiting screen built on `join_opens_at`,
+`join_closes_at` and each party's arrival is currently fed by our **own** Join
+button, which records an *intention*: a mentee who presses it and never reaches
+the room leaves the mentor looking at "your mentee has joined" while they sit
+alone. Daily's events are the only thing that makes that screen true, and
+"true within a second" is not something a poll can deliver without either a
+tight interval per live session or a stale display.
+
+So the webhook is a real component of the Daily phase, not an alternative to the
+pull. What it costs, stated so it is planned rather than discovered: a public
+endpoint, signature verification, and tolerance for retries and out-of-order
+delivery — a webhook that assumes exactly-once and in-order is a webhook that
+records a leave before the join it belongs to.
 
 ## What this changes
 
@@ -106,12 +117,23 @@ attendance is attributable without a lookup table.
 
 ## Still unanswered, and one of them is load-bearing
 
-**Q1 was not reported, and the withheld-link design rests on it.** If a bare
-room URL admits somebody, then not publishing the link protects nothing and the
-time gate becomes the only control — which makes Q2 decisive rather than merely
-useful. The room in this run had two participants and no third, but nobody
-recorded trying the untokened URL, and an absence of evidence is not the
-measurement.
+**Every session room is created private, and that is settled** — it is not a
+per-session judgement and there is no case for a public one. Q1 therefore stops
+being a design fork: if `privacy: private` did not refuse an untokened visitor,
+that would be a defect in Daily rather than a choice we would have made
+differently, and the response would be to raise it with them rather than to
+publish links.
+
+It is still worth thirty seconds to confirm, because *how* we describe the
+guarantee to a mentor depends on it — "nobody can join without the link we give
+you" is a promise, and a promise nobody checked is the kind that surfaces in a
+complaint. The run had two participants and no third, but nobody recorded trying
+the untokened URL, and an absence of evidence is not the measurement.
+
+**Q2 is the one that is genuinely still a fork.** If `nbf` is enforced at the
+door, early joining is impossible on Daily and merely discouraged on Meet. If it
+is advisory, both providers need the same UI copy and the difference between
+them narrows to attendance alone.
 
 Both are browser observations the script cannot make. Re-run and note them, or
 try the bare URL against any private room:

@@ -104,6 +104,9 @@ class NullRooms:
 class DailyRooms:
     """Daily, and it is not built.
 
+    Rooms are created ``private`` unconditionally — see the note on the spike
+    below.
+
     Raises rather than returning a plausible object, because a room URL that
     leads nowhere is worse than a session with no link at all: the mentee
     arrives, finds nothing, and has no reason to think anything is wrong with
@@ -114,9 +117,24 @@ class DailyRooms:
     ``room_name``, ``user_name``, ``user_id``, ``is_owner``, ``nbf`` and
     ``exp``, and the joined URL is ``<room url>?t=<token>``.
 
-    What it has not: whether ``privacy: private`` actually refuses an untokened
-    URL, and whether ``nbf`` is enforced at the door or merely recorded. The
-    withheld-link design rests on the first.
+    **Every session room is private, always.** Not a per-session judgement and
+    not a setting — there is no case for a public one, and the URL reaching a
+    participant only through the platform is what makes the join a thing we can
+    record. Whether Daily *enforces* it is unconfirmed; if it did not, that
+    would be a defect to raise with them rather than a choice to revisit.
+
+    Still open: whether ``nbf`` is enforced at the door or merely recorded. That
+    one is a genuine fork — enforced, early joining is impossible here and only
+    discouraged on Meet; advisory, both providers need the same UI copy.
+
+    **A webhook belongs beside this, not instead of it.** ``GET /meetings``
+    settles a finished session and the hourly sweep loses nobody, because the
+    record accumulates. It cannot make a *waiting* screen true: the arrival a
+    participant sees today is our own Join press, which records an intention, so
+    somebody who presses it and never reaches the room leaves the other party
+    looking at a lie. ``participant.joined`` and ``participant.left`` are what
+    fix that, and they bring a public endpoint, signature verification and
+    tolerance for retries and out-of-order delivery with them.
     """
 
     def __init__(self, api_key: str, client: Any = None) -> None:
