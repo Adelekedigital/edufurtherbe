@@ -61,7 +61,7 @@ These cost real time to find. None of them are guessable.
 | `session_type_is_live(user_id)` | Three predicates: ownership, `is_active IS TRUE`, `deleted_at IS NULL`. **Four callers**, including `slot_store` and `profile_writer` |
 | `_live_session_types` ordering | Orders by **`name`**, not `created_at` — deliberately, because name is unique per mentor among live rows, so the ordering is *total* rather than merely usually-stable |
 | `Page[T]` | **Cursor**-based (`encode_offset_cursor`, `MAX_SEARCH_OFFSET`), not limit/offset. And the public session-types endpoint does not paginate at all — it returns every row in a `Page` envelope |
-| `SessionStatus.EXPIRED` | Exists with **nothing able to produce it**. The response deadline is its missing producer |
+| `SessionStatus.EXPIRED` | ~~Exists with nothing able to produce it.~~ **The expiry sweep in `settle_sessions` produces it**, and `NEVER_AGREED` frees the slot the moment it does |
 
 **The dangerous one is `session_type_is_live`.** The mentor's own list needs its ownership and
 soft-delete predicates but *not* `is_active`. Adding an `include_inactive` flag touches the
@@ -196,10 +196,14 @@ mentee nothing.
 
 - **W is a platform value today and a mentor preference later.** Legacy default 24h; moving to 6h.
   The final number is **still open**.
-- **Reminders fire during the window** so the mentor can act. The schedule is **still open**.
+- **Reminders fire during the window** so the mentor can act. ~~The schedule is **still
+  open**.~~ **Answered: on booking, 24 hours before `respond_by` where the lead allows it, and
+  12 hours before**, measured from the deadline — the minimum gap from booking to deadline is
+  eighteen hours, so a reminder measured forward from booking would fire after it had passed.
+  **Unbuilt**: it needs a notification channel (ADR 0025).
 - **On elapse the session becomes `expired`**, surfaced to users as **"Unconfirmed"**, and both
-  parties are told. `expired` already exists in `SessionStatus` with nothing able to produce it;
-  this is its producer.
+  parties are told. `expired` existed in `SessionStatus` with nothing able to produce it, and
+  the expiry sweep is its producer — shipped, and telling both parties is the part that has not.
 - **Auto-confirming offerings have no response window at all.** Nothing is awaiting an answer.
 
 **The window cannot be born empty, and that is why the booking notice below matters.** If a request

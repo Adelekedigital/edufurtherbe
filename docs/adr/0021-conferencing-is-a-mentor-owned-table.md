@@ -137,6 +137,41 @@ the columns are what make the `zoom` deferral coherent rather than arbitrary.
 to follow the offering's reference. That is the cost of the composite key, paid
 deliberately.
 
+### Confirmation
+
+**Added 2026-08-19, and its absence was the point.** ADR 0004 onward require this
+subsection; 0021 shipped without one and three later records grew theirs while
+this stayed missing — which is exactly the shape a convention enforced only by
+prose takes, and the same failure non-negotiable #10 records for the surrogate
+key rule.
+
+| claim | what checks it |
+|---|---|
+| a cross-mentor reference is unrepresentable | `test_an_offering_cannot_point_at_another_mentors_option` — the composite key refuses it at the database rather than in code somebody remembers to write |
+| resolution has three steps | `test_step_one_the_offerings_own_option_wins`, `..._step_two_the_mentors_default...`, `..._step_three_the_platform_fallback...` |
+| the default is not borrowed by accident | `test_a_non_default_option_is_not_borrowed` |
+| the `custom_url` check is symmetric | `test_custom_without_a_url_is_refused` **and** `test_a_url_on_a_platform_provider_is_refused` — one test would prove only the direction the old constraint already had |
+| one row per provider, one default per mentor | `test_a_mentor_cannot_hold_two_rows_for_one_provider`, `test_a_mentor_cannot_hold_two_defaults`, with `test_two_mentors_may_each_hold_the_same_provider` and `test_a_mentor_may_hold_many_non_defaults` for the halves that must stay legal |
+| `zoom` is declared but not selectable | `test_zoom_is_not_selectable` |
+| an option in use cannot vanish under an offering | `test_an_option_in_use_cannot_be_deleted` |
+| the custom URL is a credential, not a description | `test_the_custom_url_never_reaches_the_public_payload` |
+
+**Blind spots.**
+
+- **Nothing writes this table.** There is no endpoint that creates, edits or
+  deletes a conferencing option, so every row in every test is seeded directly
+  and the resolution is exercised against states a mentor cannot yet reach
+  themselves. Settled decision #124 records what that costs: `custom` cannot be
+  hidden from a surface that does not exist.
+- **`external_account_id`, `status` and `connected_at` have no writer either.**
+  They are declared for the connection a provider like Zoom would need, and are
+  null on every row — so the claim that a provider "joins the vocabulary once
+  something can produce a joinable session" is a plan rather than a mechanism.
+- **The consumer arrived two releases later.** When this landed, nothing read the
+  resolution to *do* anything; `provision_meeting` now does, and its adapters are
+  stubs. So the resolution is tested and what it resolves *to* is not yet
+  reachable.
+
 ## Alternatives considered
 
 **Keep the label and add `custom_url` to the booking config.** Cheapest, and
