@@ -404,6 +404,23 @@ class Session(TimestampMixin, Base):
     external_room_id: Mapped[str | None] = mapped_column(Text)
     external_calendar_event_id: Mapped[str | None] = mapped_column(Text)
 
+    #: When an unanswered request dies — ``starts_at`` minus the response
+    #: window, or **null on an offering that auto-confirms**, where nothing is
+    #: awaiting an answer.
+    #:
+    #: **Stored rather than derived, and the exclusion constraint is why.**
+    #: `sessions_no_mentor_double_booking` covers `LIVE_STATUSES`, which includes
+    #: `pending_mentor_approval`, so a request nobody answered holds the
+    #: mentor's hour indefinitely. Nothing writes to an abandoned row, so a
+    #: trigger cannot free it, and the constraint's predicate cannot carry the
+    #: deadline at all: those must be `IMMUTABLE` and `now()` is `STABLE`.
+    #:
+    #: Left in place once the request is answered. The index below is partial on
+    #: the pending status so a settled row costs nothing, and the value is a
+    #: record of what the deadline *was* — clearing it would erase the only
+    #: evidence of how long the mentor actually had.
+    respond_by: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
     rescheduled_from_session_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("sessions.id", ondelete="RESTRICT")
     )
@@ -468,6 +485,14 @@ class Session(TimestampMixin, Base):
             postgresql_where=text("status = 'completed'"),
         ),
         Index("ix_sessions_starts_at", "starts_at"),
+        # **The expiry sweep's only read.** Partial on the one status that can
+        # expire: nothing else ever filters on `respond_by`, so a full index
+        # would be mostly rows the query discards.
+        Index(
+            "ix_sessions_pending_respond_by",
+            "respond_by",
+            postgresql_where=text("status = 'pending_mentor_approval'"),
+        ),
         # **The fourth read, and the only one that is not partial.** The public
         # slots endpoint subtracts a mentor's sessions whatever their status, so
         # the three above serve it not at all: between them they cover the live

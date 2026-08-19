@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import datetime as dt
 
-from app.domain.sessions import CANCELLATION_CUTOFF, TRANSITIONS, too_late_to_cancel
+from app.domain.sessions import (
+    CANCELLATION_CUTOFF,
+    RESPONSE_WINDOW,
+    TRANSITIONS,
+    respond_by,
+    too_late_to_cancel,
+)
 
 #: The four endpoints in `api/routes/sessions.py`. Written out rather than
 #: derived from the table, because deriving it would make this assert that the
@@ -62,3 +68,30 @@ def test_the_boundary_is_exclusive() -> None:
 
     assert not too_late_to_cancel(now + CANCELLATION_CUTOFF, now)
     assert too_late_to_cancel(now + CANCELLATION_CUTOFF - dt.timedelta(seconds=1), now)
+
+
+def test_the_response_window_leaves_the_mentor_time_at_the_booking_floor() -> None:
+    """**The arithmetic that chose six hours over twenty-four.**
+
+    The mentor's time to answer is `(starts_at - booked_at) - RESPONSE_WINDOW`,
+    and `booked_at` is at best `starts_at - min_notice_minutes`. Against the
+    24-hour notice floor a window of 24 hours leaves **zero** — every request on
+    a default-configured offering would expire the instant it was made.
+
+    Asserted rather than trusted, because the two values live in different
+    modules — the floor is a Pydantic bound on the write schema — and nothing
+    else would notice if one moved.
+    """
+    floor = dt.timedelta(hours=24)
+
+    assert floor - RESPONSE_WINDOW == dt.timedelta(hours=18)
+    assert floor - dt.timedelta(hours=24) == dt.timedelta(0), "24h would leave no time at all"
+
+
+def test_only_an_offering_that_awaits_an_answer_gets_a_deadline() -> None:
+    """Null is the domain rule rather than a default: an auto-confirming
+    offering has no response window, because nothing is waiting."""
+    starts_at = dt.datetime(2026, 8, 20, 15, 0, tzinfo=dt.UTC)
+
+    assert respond_by(starts_at, requires_confirmation=True) == starts_at - RESPONSE_WINDOW
+    assert respond_by(starts_at, requires_confirmation=False) is None

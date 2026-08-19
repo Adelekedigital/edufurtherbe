@@ -46,7 +46,12 @@ from app.domain.enums import (
     SessionRole,
     SessionStatus,
 )
-from app.domain.sessions import CANCELLATION_CUTOFF, TRANSITIONS, too_late_to_cancel
+from app.domain.sessions import (
+    CANCELLATION_CUTOFF,
+    TRANSITIONS,
+    respond_by,
+    too_late_to_cancel,
+)
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import (
     Session,
@@ -62,6 +67,7 @@ from app.infra.db.slot_store import list_slots
 __all__ = [
     "DOUBLE_BOOKED",
     "book_session",
+    "expire_requests",
     "record_arrival",
     "settle_attendance",
     "transition",
@@ -207,10 +213,9 @@ async def book_session(
         # re-read `/slots` — which the message says.
         raise ValidationError("that time is not available — re-read the mentor's slots")
 
+    requires_confirmation = bool(offering["requires_confirmation"])
     status = (
-        SessionStatus.PENDING_MENTOR_APPROVAL
-        if offering["requires_confirmation"]
-        else SessionStatus.CONFIRMED
+        SessionStatus.PENDING_MENTOR_APPROVAL if requires_confirmation else SessionStatus.CONFIRMED
     )
 
     try:
@@ -224,6 +229,10 @@ async def book_session(
                     session_type_id=payload["session_type_id"],
                     status=status,
                     starts_at=starts_at,
+                    # Null unless the mentor has to answer. The two are decided
+                    # by the same fact and are written together, so a confirmed
+                    # session can never carry a deadline nobody is waiting on.
+                    respond_by=respond_by(starts_at, requires_confirmation=requires_confirmation),
                     # **Snapshotted, never read live from the config.** Settled
                     # decision #10 gives the reason for a mentor's rate and it
                     # is the same one here: a later edit to the offering must
@@ -613,3 +622,65 @@ def _absence_code(*, mentor_came: bool, mentee_came: bool) -> SessionReasonCode 
     if mentor_came:
         return SessionReasonCode.MENTEE_NO_SHOW
     return None
+
+
+async def expire_requests(session: AsyncSession, *, now: dt.datetime) -> int:
+    """Kill every unanswered request past its deadline. Returns the count.
+
+    **This is what stops an abandoned request holding a mentor's hour forever.**
+    `sessions_no_mentor_double_booking` covers `LIVE_STATUSES`, which includes
+    `pending_mentor_approval`, and `slot_store._busy` counts it too — so until
+    something writes a terminal status the slot is gone. `expired` is in
+    `NEVER_AGREED`, so the moment this runs the hour comes back on both.
+
+    **The status is `expired`, which the UI shows as "Unconfirmed".** The label
+    differs from the stored value deliberately: nothing was declined and nobody
+    withdrew, and calling it either would attribute a decision to a person who
+    never made one.
+
+    **Idempotent**, like the attendance sweep beside it and for the same reason:
+    only `pending_mentor_approval` rows are touched, so a second run finds
+    nothing and writes no second event. The two sweeps act on disjoint statuses,
+    so their order in a run does not matter.
+
+    Does not commit.
+    """
+    expired = (
+        (
+            await session.execute(
+                update(Session)
+                .where(
+                    Session.status == SessionStatus.PENDING_MENTOR_APPROVAL,
+                    Session.respond_by.is_not(None),
+                    Session.respond_by <= now,
+                )
+                .values(status=SessionStatus.EXPIRED)
+                .returning(Session.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not expired:
+        return 0
+
+    # `actor_id` null with `actor_type` system: nobody decided this, and the
+    # model's own docstring calls that honest for a sweep and better than
+    # inventing a system user. The reason code is the one value in
+    # `SessionReasonCode` that only a sweep can produce, which is why no party
+    # is permitted to send it.
+    await session.execute(
+        insert(SessionEvent),
+        [
+            {
+                "session_id": session_id,
+                "from_status": SessionStatus.PENDING_MENTOR_APPROVAL,
+                "to_status": SessionStatus.EXPIRED,
+                "actor_id": None,
+                "actor_type": ActorType.SYSTEM,
+                "reason_code": SessionReasonCode.EXPIRED_NO_RESPONSE,
+            }
+            for session_id in expired
+        ],
+    )
+    return len(expired)

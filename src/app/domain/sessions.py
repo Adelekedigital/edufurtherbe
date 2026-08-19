@@ -33,8 +33,10 @@ from app.domain.enums import SessionReasonCode, SessionRole, SessionStatus
 
 __all__ = [
     "CANCELLATION_CUTOFF",
+    "RESPONSE_WINDOW",
     "TRANSITIONS",
     "Transition",
+    "respond_by",
     "too_late_to_cancel",
 ]
 
@@ -47,6 +49,48 @@ __all__ = [
 #: cancellation and starts being not turning up — which is the honest record,
 #: because by then the other party is already on their way to the call.
 CANCELLATION_CUTOFF = dt.timedelta(minutes=10)
+
+#: How long before the session an unanswered request dies.
+#:
+#: **Measured backwards from the session, not forwards from the request**, and
+#: the guarantee is to the *mentee*: you will know before the session, early
+#: enough for the answer to still be useful. Forwards from ``created_at``
+#: guarantees them nothing — a request made three weeks out could sit unanswered
+#: until the morning of.
+#:
+#: **Six hours, and the booking notice floor is what decides it.** The mentor's
+#: time to answer is ``(starts_at - booked_at) - RESPONSE_WINDOW``, and
+#: ``booked_at`` is at best ``starts_at - min_notice_minutes``. Against the
+#: 24-hour floor a window of 24 hours leaves **zero**: every request on a
+#: default-configured offering would expire the instant it was made. At six
+#: hours that mentor has eighteen, and a 72-hour notice gives sixty-six.
+#:
+#: **Reminders fire at fixed distances from the deadline** — on booking, 24
+#: hours before, and 12 hours before — and the first of those three is the only
+#: one that always fires: 18 hours is the minimum gap, so the 24-hour reminder
+#: is reachable only when the mentee booked at least 30 hours out. That schedule
+#: is settled and unbuilt; it needs a notification channel that does not exist,
+#: and the deadline ships without it because freeing the slot is the half that
+#: does not depend on being able to tell anybody.
+RESPONSE_WINDOW = dt.timedelta(hours=6)
+
+
+def respond_by(starts_at: dt.datetime, *, requires_confirmation: bool) -> dt.datetime | None:
+    """The deadline for answering a request, or ``None`` when none is awaited.
+
+    **Null is the domain rule, not a default.** An auto-confirming offering has
+    no response window at all: nothing is waiting on the mentor, so there is
+    nothing to elapse. Writing a deadline anyway would put confirmed sessions in
+    the sweep's path and make the partial index meaningless.
+
+    Can return an instant already in the past, and deliberately is not guarded
+    against. It requires a booking closer to the session than
+    ``RESPONSE_WINDOW``, which the 24-hour notice floor makes unreachable
+    through the API — so a guard here would be a branch nothing could exercise,
+    and the sweep already handles a born-expired request correctly by expiring
+    it on the next run.
+    """
+    return starts_at - RESPONSE_WINDOW if requires_confirmation else None
 
 
 @dataclass(frozen=True, slots=True)
