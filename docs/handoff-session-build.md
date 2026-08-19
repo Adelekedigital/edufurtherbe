@@ -1,6 +1,6 @@
 # Handoff — building the session flows from `FE-ui-guide/`
 
-**Status:** 11 PRs shipped, 14 remaining. The read surface is complete, the enum conversion is done, and the write surface is still empty — no `POST`, `PATCH` or `DELETE` exists on `sessions` or `session_types`, so a mentor cannot create an offering and a mentee cannot book one.
+**Status: the session build is done; the integration phase is not.** Every table, every endpoint and every rule ships. What does not is the three places our code meets an outside system — a meeting room, a notification, a free/busy read — all three of which are real adapters that `raise NotImplementedError` behind null ones. **Re-censused against the codebase on 2026-08-18**, because the previous status line said the write surface was empty and thirteen PRs had shipped since.
 **Written:** 2026-08-16, from the 14 screens in `FE-ui-guide/` measured against the codebase and
 `docs/edufurther-migration/`.
 **Companion:** `handoff-enum-to-text-check.md` — its five steps are PRs 4–8 below.
@@ -12,15 +12,26 @@ decisions do not get re-derived, re-argued, or silently reversed.
 
 ## The one-line state
 
-**The read surface is largely there; the write surface is empty.** Every screen has a `GET` behind
-it. There is no `POST`, `PATCH` or `DELETE` on `sessions` or `session_types` anywhere in the API, so
-a mentor cannot create a session type and a mentee cannot book one. Both flows read correctly and
-neither can be completed.
+**A mentee can book, a mentor can accept, and nobody gets a room.** That sentence is the whole of
+what is left.
 
-Measured: **18 of 46 UI requirements built**, across 29 built tables of the **66 the canonical
-package specifies**. The gap is build order, not design.
+Built and shipped — measured from the routes and the models, not from this document:
 
----
+| | |
+|---|---|
+| write surface | `POST /sessions`; `accept` · `decline` · `withdraw` · `cancel` · `join`; `POST`/`PATCH`/`DELETE` on `/me/session-types` and `/me/intake` |
+| tables | all five session tables, plus `mentor_conferencing_options`, `session_type_scheduling_windows`, `idempotency_keys`, and the four-table intake stack |
+| rules | idempotent booking, the four transitions, join-window attendance, the response deadline, per-offering windows, the mentee attendance rate |
+| the sweep | `scripts/settle_sessions.py` — two sweeps in one job, run by an external timer (#13). The expiry half is what frees an abandoned request's slot |
+
+**The three that remain are one kind of thing.** Each has a domain layer that is built and tested
+against a null adapter, and a concrete adapter that raises:
+
+| gap | adapter | consequence today |
+|---|---|---|
+| meeting room | `DailyRooms.create`, `GoogleCalendar.create_event` | a confirmed session has nowhere to meet |
+| notification | `EmailitNotifier.send`, `ZernioNotifier.send` | **nobody is ever told anything** |
+| free/busy | no call site at all | no conflict detection against a mentor's real calendar |
 
 ## Read this first, or repeat two mistakes
 
@@ -127,10 +138,20 @@ recreates `ix_sessions_mentee_upcoming`, `ix_sessions_mentor_upcoming` and the
 That pairing already exists as `LIVE_STATUSES = "status IN ('pending_mentor_approval', 'confirmed')"`
 in `infra/db/models/sessions.py` — the predicate behind the double-booking constraint. Reuse it.
 
-- **Accept** (mentor only): Pending → Upcoming. **Decline** (mentor only) and **Cancel** → History.
-- **Either party may cancel**, from Pending or Upcoming. A mentee can never accept their own request.
-- **Nobody may cancel within 10 minutes of `starts_at`.** Time-relative, so no `CHECK` can hold it; a
-  trigger can, on the `trg_refuse_retiring_a_primary_offering` precedent.
+- **Accept** (mentor only): Pending → Upcoming. **Decline** (mentor only): Pending → History.
+- **Withdraw** (mentee only): Pending → History. A mentee can never accept their own request.
+- **Cancel** (either party): **Upcoming only** → History. ~~Either party may cancel, from Pending or
+  Upcoming.~~ — **refined 2026-08-18 and confirmed.** A pending request is left by withdrawing or
+  declining, not by cancelling. The split follows `WITHDRAWN` (#107): a request nobody answered is not
+  a booking broken after agreement, and they carry different refund policy and reliability statistics.
+  Conflating them writes the wrong status into somebody's history.
+- **Nobody may cancel within 10 minutes of `starts_at`** — and since cancel now applies only to
+  Upcoming, **the cutoff only ever applies to Upcoming**. Shipped as `CANCELLATION_CUTOFF =
+  timedelta(minutes=10)` in `domain/sessions.py`, ~~a trigger, on the
+  `trg_refuse_retiring_a_primary_offering` precedent~~ — deliberately **not** a trigger: being
+  time-relative rules out a `CHECK` but does not by itself argue for one, and a rule the product will
+  revisit does not belong where every change is a migration. That precedent is also gone: the trigger
+  was dropped in `c8f1a3e2b904`.
 - **History filters by status only.** Filtering by date or mentor name is wanted eventually and was
   explicitly called not a priority. Do not build it speculatively.
 - **Every transition writes a `session_events` row.** The reason vocabulary already exists —
@@ -488,6 +509,81 @@ Worth knowing rather than acting on: every limit above is **per user**, and ADR 
 booking through one account, so they are a single bucket rather than spread across mentors.
 Concentration is the risk, not volume.
 
+## Completing M4 — the integration phase
+
+Read this before opening `infra/clients/`. Three adapters, one shape, and each carries a trap that
+is not visible from the call site.
+
+### The Google blocker is stale, and believing it will cost a table
+
+`meetings.py` says the Google side is blocked because *"`calendar_connections` was deferred… there
+is nowhere to read a mentor's token from, and no calendar event can be created for anybody until
+that lands."*
+
+**That reasoning was retired by ADR 0012's amendment and the file has not caught up.** The calendar
+is EduFurther's own Google account, not each mentor's. There is no mentor token to read because
+the booking path does not need one — the platform account creates the event and invites both
+parties, and the spike measured that working end to end on a **consumer Gmail account**:
+invitations delivered, Meet link minted, both guests joining a room the creator never entered.
+
+So `GoogleCalendar` is blocked on **one stored refresh token in config**, not on a table. Building
+`calendar_connections` to unblock it would be building the wrong thing — that table records a
+mentor's `calendar.freebusy` grant, which buys *conflict detection*, and is the third gap below
+rather than the first.
+
+`docs/calendar-spike-guide.md` has the measured results and the exact scopes. `scripts/calendar_spike.py`
+still runs.
+
+### Order, and why
+
+**1. Rooms first — `DailyRooms.create`.** It is the only one of the three with no external
+dependency beyond an API key, and `docs/daily-spike-guide.md` has already measured what the adapter
+needs. It unblocks the largest user-visible gap on its own: `daily` is a working venue for every
+mentor who picks it.
+
+**The trap is `ongoing`.** The spike found no read lag at all — a Daily record is readable *during*
+the call, the opposite of Google's free/busy. But a record read mid-call carries partial durations,
+and the join window shuts fifteen minutes into a session that may run ninety. **Attendance and
+co-presence are two questions answerable at two different times**, and the reader has to know which
+one it is serving. That distinction is the adapter's, not the caller's.
+
+**2. Notifications second, because the deadline is silent without them.** This is not polish. The
+response window was specified with *"a sequence of reminders so the mentor can take the right
+action"*, and expiry with *"the mentee and mentor get informed also"*. Today the sweep runs, the
+request dies, and neither party learns of it. A mentor discovers a booking request by opening the
+dashboard.
+
+**Two traps, and the second is a migration.**
+
+- `NullNotifier` has **no call sites at all**. The sequence is unwritten, not merely unsent —
+  `domain/notifications.py` ends mid-sentence on the point. So this PR designs *which* events send,
+  not only how.
+- **WhatsApp needs a column, not just a client.** Zernio is conversation-centric: the
+  `conversationId` is stable per participant and its own documentation says to store it beside the
+  contact record. And it can reach nobody regardless — the three `phone_*` columns were deferred,
+  so **no user has a number.** Email through Emailit has neither problem and is the honest first
+  channel.
+- Every WhatsApp message this platform sends is business-initiated and therefore outside the
+  24-hour window, so each needs a Meta-approved template. **That approval is a lead time nobody
+  here controls** — start it before it is the blocker.
+
+`core/config.py` already carries the template map, with `NoDecode` for a reason recorded there.
+
+**3. Free/busy last, and it is the one that needs `calendar_connections`.** Reading a mentor's
+real calendar is what stops a session being booked over their own commitments, and it is the only
+one of the three that needs a per-mentor token. When it lands, ADR 0012's section
+*For the phase that builds `calendar_connections`* is the specification: no PostgreSQL enum types
+(#100), omit `composio_auth_id`, and a row records a `freebusy` grant alone.
+
+**And free/busy is eventually consistent** — measured, twice, on the same window. A conflict check
+must run *before* the write, never after, because a flow can read its own write as absent.
+
+### What "complete" means, and what it does not
+
+M4 is complete when a mentee books, both parties are told, the session has a room, and the mentor's
+own calendar is honoured. **Credits, reviews, messaging and `booking_policies` are not M4** — all
+four have canonical schemas, none blocks booking, and each was deferred deliberately.
+
 ## The PR sequence
 
 Each gets its own checklist and DoD before implementation (§2). ~~As text, with no tool calls in
@@ -519,138 +615,49 @@ applied is not a trustworthy oracle — it reported four surviving types that a 
 
 ### Remaining
 
-**Thirteen of fourteen are built.** Row 23 is the only one left, and it is blocked
-on the three open questions in the register below rather than on effort.
+**Everything numbered 12–25 in the previous revision has shipped.** Kept only as the record of what
+was decided; the sequence below is what is left.
 
-| # | PR | Migration | Tier | |
-|---|---|---|---|---|
-| 12 | confirmation to `mentor_profiles`, config column nullable, fan-out deleted | yes | 1 | **built** |
-| 13 | drop `primary_session_type_id` and its trigger; venue leaves the owner profile | yes | 1 | **built** |
-| 14 | `mentor_conferencing_options`; `session_types.conferencing_option_id`; `meeting_venue` dropped | yes | 1 | **built** — ADR 0021 |
-| 15 | `POST` / `PATCH /me/session-types` | no | 2 | **built** |
-| 16 | `DELETE /me/session-types/{id}` | no | 2 | **built** |
-| 17 | `custom_stage_label`, `category` → `service_offerings` FK, + ADR | yes | 1 | **built** — ADR 0022 |
-| 18 | the intake stack — four canonical tables | yes | 1 | **built** |
-| 19 | intake question endpoints, keyed on a session type | no | 2 | **built** |
-| 20 | per-session-type scheduling windows + ADR | yes | 1 | **built** — ADR 0023 |
-| 21 | `idempotency_keys` + `POST /sessions` | yes | 1 | **built** — ADR 0024 |
-| 22 | the four transitions — accept, decline, cancel, withdraw | no | 2 | **built** |
-| 23 | response deadline: `respond_by`, the expiry producer, reminders | yes | 1 | **blocked** — see the register |
-| 24 | join-window attendance — `−5 min` to `+15 min` | no | 2 | **built** |
-| 25 | mentee attendance rate, and "New mentee" for null | no | 2 | **built** |
+| # | PR | Migration | Tier |
+|---|---|---|---|
+| 26 | `DailyRooms.create` — the room a `daily` session meets in | no | 2 |
+| 27 | `GoogleCalendar.create_event` — platform account, one stored refresh token | no | 2 |
+| 28 | the notification sequence: which events send, and email through Emailit | maybe | 2 |
+| 29 | `calendar_connections` + the free/busy conflict check | yes | 1 |
 
-**24 and 25 were built out of order, ahead of 23.** Neither depends on the
-response deadline: attendance needs a *confirmed* session, and the deadline
-governs a *pending* one. Building them first meant the blocked row blocked only
-itself.
+26 and 27 are independent and either may go first; 26 needs only an API key, 27 needs the platform
+account's token in config. 28 depends on neither but is what makes the response deadline audible.
+29 is last because it is the only one needing a per-mentor grant, and ADR 0012 already specifies
+the table.
 
-### What the build changed about row 23's problem
+**Deferred and not M4:** credits (`credit_lots`, `credit_transactions`), reviews, messaging,
+`booking_policies`. All canonical, none blocking.
 
-Two things moved while 23 waited, and both make it smaller than the register
-below describes.
+### The regression each PR can cause, and what catches it
 
-**`NEVER_AGREED` already frees an expired request's slot.** `slot_store._busy`
-now subtracts `declined`, `withdrawn` and `expired`, so the moment something
-writes `expired` the hour comes back. The register's central argument — *a
-pending request past its deadline keeps holding the mentor's slot forever* — is
-now entirely about the missing **producer**, not about the read.
+**26 — Daily rooms.** A record read mid-call carries partial durations, and the join window shuts
+fifteen minutes into a session that may run ninety. *Catches it:* a test that reads a record while
+`ongoing` and asserts the reader distinguishes attendance from co-presence — the two questions the
+spike separated.
 
-**The expiry producer has a working precedent.** `scripts/settle_sessions.py`
-plus `.github/workflows/settle-sessions.yml` is a set-based, idempotent sweep on
-an hourly schedule, and the expiry sweep is the same shape against a different
-predicate. Open question 5 — *lazy-on-write plus a slow sweep, or a fast sweep
-alone* — should be re-read with that in mind: the sweep half already exists and
-costs nothing to point at a second predicate.
+**27 — Google calendar.** The event is created by the **platform** account, so the sender is
+EduFurther and neither participant's mailbox appears. *Catches it:* assert the `creator` on the
+created event, not the `organizer` — the API's `organizer` names the calendar and is *not* what a
+recipient sees, which is the reading that sent an earlier analysis wrong. And **a failed calendar
+write must not fail the booking**: the session exists, the event retries.
 
-**Order is not preference.** 14 before 15, because a mentor picking a venue should be picking from
-their own options, and building the write path against a column about to become a foreign key is
-how `meeting_venue` moves a fifth time. 12 before 13, because the owner profile loses its only source
-otherwise. 15 after 13, so writes are built against a shape that is not about to lose a column. 17
-after 15, so the vocabulary lands on an endpoint that already exists. 21 after 17, because a
-booking references a session type whose contract should be settled. 22 after 21 — there is nothing
-to transition until something can be created.
+**28 — notifications.** `NullNotifier` has no call sites, so nothing fails when a message is never
+sent. *Catches it:* the sweep test asserts an expiry *notifies*, not merely that the status moved —
+otherwise the silent version passes exactly as it does today.
 
-**Deferred deliberately, each with a reason recorded above:** credits (`credit_lots`,
-`credit_transactions`), reviews, messaging, `booking_policies`. All four have canonical schemas
-waiting; none blocks booking.
+**29 — free/busy.** Eventually consistent, measured twice. *Catches it:* the conflict check runs
+before the write, and a test that a check immediately after a write does not see it — the behaviour
+that would otherwise be discovered in production.
 
 ### The regression each PR can cause, and what catches it
 
 Named per PR, because "run the gate" is not a plan. Each is a thing that would pass every count
 and still be wrong.
-
-**12 — confirmation moves.** A backfill is invisible to the suite: every test creates a fresh row
-that takes the *default*, and a fresh migrate-then-load runs migrations before any data. The
-mentor column must be seeded from what the offerings currently hold, not from `false`, or every
-mentor who required confirmation silently stops. *Catches it:* a test that upgrades to the prior
-revision, writes offerings at `true`, and upgrades — the shape PR #100 needed for the same reason.
-
-**13 — the primary drops.** `default_meeting_venue` leaves `MentorProfileRead`; a client reading
-it gets a missing field rather than a null. And `trg_refuse_retiring_a_primary_offering` going
-means deactivation stops being refused — the two-step release-then-retire becomes a plain toggle.
-*Catches it:* the guard's four existing tests must be **deleted deliberately**, each recording
-what would bring it back, not quietly dropped because they turned red.
-
-**14 — the conferencing table.** `meeting_venue` moves for the fourth time, and the resolution
-gains a fallback chain. The migration must **seed every mentor a default row from their current
-`meeting_venue`** before dropping the column, or every migrated offering resolves to the platform
-fallback and mentors on `daily` or `custom` silently become Google Meet. *Catches it:* a fresh
-migrate-then-load compared against the baseline — `google_meet` 1, `daily` 3, `custom` 1 — which is
-the check that caught the silent `allmentors` bug in #100.
-
-**15 — the writes.** `session_type_is_live()` had four callers including `slot_store` when this
-was written; it has three today — `session_type_store`, `slot_store` and `session_writer`. The
-owner-facing path needs ownership and soft-delete but **not** `is_active`; a mis-defaulted flag
-reaching `slot_store` makes deactivated types **bookable**, against #90. *Catches it:* reuse
-#87's narrower helper — **do not parameterise**. This PR also owns the `min_notice_minutes`
-boundary bound deferred out of #100, and must create the booking config in the same transaction:
-`/slots` inner-joins it, so an offering without one is invisible and unbookable.
-
-**16 — the delete.** Refuses with `409` when non-terminal sessions are booked, **carrying a reason
-code** — two refusals a client cannot otherwise tell apart. *Catches it:* a test per reason, not
-one per status code.
-
-**17 — the vocabularies.** Three docstrings assert these columns are "free text with no
-constraint, no vocabulary and no value anywhere" and all three become false. Publishing them is a
-**public contract change**: #92 excludes both and a test asserts they never appear in the body.
-*Catches it:* update all three copies here, and change the allowlist test deliberately.
-
-**18 — the intake stack.** Four tables landing together. *Catches it:* the canonical DDL declares
-`session_type_question_options`, which the UI's two question types do not use — build what is
-specified or record why not, but do not silently drop a table from a package that ADR 0007 makes
-canonical.
-
-**19 — the question endpoints.** Max five questions per session type is a product rule with no
-column to hold it. *Catches it:* enforced at the boundary, and a test that the sixth is refused.
-
-**20 — the windows.** `slot_store` is built and tested, and every existing slot test assumes
-`availability_rules` is the only source. Windows **replace** it. *Catches it:* an offering with no
-windows must produce **byte-identical** slots to today — that is the regression test, not a
-feature test — plus a test that `availability_exceptions` still subtract when windows are in
-effect.
-
-**21 — booking.** `sessions_no_mentor_double_booking` is an `EXCLUDE` over `LIVE_STATUSES`; every
-booking maps its `409` off it. Conflict checks must run **before** the write, because free/busy is
-eventually consistent and a flow can read its own write as absent. *Catches it:* a test that two
-bookings for one slot produce one session and one `409`.
-
-**22 — the transitions.** Every one writes a `session_events` row, and the reason codes drive
-refund policy. A mentee may never accept their own request; either party may cancel; nobody may
-cancel within ten minutes of `starts_at` — time-relative, so a trigger rather than a `CHECK`.
-*Catches it:* one test per illegal transition, not one per legal one.
-
-**23 — the deadline.** `respond_by` must be a **stored column with a sweep**, not derived: a
-pending request past its deadline whose status was never written keeps holding the mentor's slot
-forever, and constraint predicates must be `IMMUTABLE` while `now()` is `STABLE`. *Catches it:* a
-test that an expired request stops blocking its slot.
-
-**24 — attendance.** The join window decides Completed against Missed, and `session_participants`
-already carries `joined_at` and `attendance_status` with nothing computing them for a live
-session. *Catches it:* a test per outcome — both present, one absent, both absent.
-
-**25 — the mentee rate.** `session_stats` is mentor-only by design. The mirror must render null as
-**"New mentee"**, never `0%` — zero says "never shows up", null says "no data". *Catches it:* the
-null case asserted explicitly, which is how the mentor-side rate was got right.
 
 ## Documentation regression to carry into PR 16
 
