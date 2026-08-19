@@ -10,7 +10,27 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Three OpenAPI tags had no description** — `public`, `availability` and
+  `sessions`. Nothing compared the described list against the used one, so the
+  spec rendered with empty headings. Both directions are now asserted.
+
+- **A mentor's own offerings moved from the `users` tag to `session-types`.**
+  Settled decision #64 gives everything outside the catalogue its domain name,
+  and `me_session_types.py` said at the time that a tag *"may still earn its
+  place once `DELETE` joins them"*. It has — eight endpoints now.
+
 ### Added
+
+- **A mentor's status history can be filtered.**
+  `GET /api/v1/admin/mentors/{id}/history` takes `status` (repeat it to widen)
+  and a half-open `[since, until)` window of UTC instants.
+
+  Half-open so two adjacent ranges partition the log — a closed upper bound
+  returns a boundary event in both, and a reviewer paging month by month counts
+  it twice. Instants rather than dates: this log has no owning mentor whose day
+  it could mean, so a timezone-less value is refused rather than guessed.
 
 - **A confirmed session is given somewhere to meet.** `MeetingRoom` and
   `Calendar` ports with null adapters, `DailyRooms` and `GoogleCalendar`

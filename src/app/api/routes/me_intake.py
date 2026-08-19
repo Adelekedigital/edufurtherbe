@@ -30,7 +30,7 @@ from app.api.schemas.intake import QuestionRead
 from app.core.errors import NotFoundError
 from app.domain.intake import MAX_QUESTIONS
 
-router = APIRouter(prefix="/api/v1/me", tags=["users"])
+router = APIRouter(prefix="/api/v1/me", tags=["session-types"])
 
 QUESTION_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
