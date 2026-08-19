@@ -12,6 +12,27 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A `daily` session now has a room, and `/join` hands back the door.**
+  `DailyRooms` creates a private room gated by `nbf`/`exp`, and
+  `POST /sessions/{id}/join` mints a per-participant token and returns
+  `<room url>?t=<token>`.
+
+  **The token is returned, never stored.** A private room refuses anybody
+  without one, so the stored address opens nothing — and keeping a token on the
+  row would put two live bearer credentials per session into the database and
+  every backup, outliving the session they open.
+
+  The mentor's token is the owner's: on Daily that is who may admit, mute and
+  end. Every other venue returns its stored URL unchanged.
+
+  **`meeting_url` can be `null` on a success** — the arrival is recorded either
+  way, and a venue that could not be reached is a different thing from being
+  refused entry.
+
+  Set `DAILY_API_KEY` to enable it; unset, sessions book exactly as before.
+
+### Added
+
 - **ADR 0025 — the notification architecture.** Two email senders split by use
   case (Emailit for auth, marketing and subscription; Loops for transactional),
   each on its own sending subdomain, with provider-prefixed template ids so a
