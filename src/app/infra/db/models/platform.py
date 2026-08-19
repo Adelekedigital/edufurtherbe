@@ -1,11 +1,13 @@
 """Platform infrastructure: tables that serve every feature and belong to none.
 
-One table so far, and the module exists rather than the row joining
+Two tables now, and the module exists rather than the rows joining
 ``sessions.py`` because the subject is different (#33). ``idempotency_keys``
 does not describe a booking; it describes *a request that must not happen
 twice*, and the next two tables the canonical package puts beside it —
-``outbox_events`` and ``feature_flags`` — are the same kind of thing. Filing it
-under sessions would make the first non-booking user of it look misplaced.
+``outbox_events`` and ``feature_flags`` — are the same kind of thing.
+``outbox_events`` has since arrived, which is the argument holding: it carries
+notifications today and the package designed it for analytics dispatch, and
+neither is a session.
 
 Named for `08_features_platform.sql`, which is where the package puts all three.
 """
@@ -13,7 +15,7 @@ Named for `08_features_platform.sql`, which is where the package puts all three.
 import datetime
 import uuid
 
-from sqlalchemy import TIMESTAMP, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -126,4 +128,78 @@ class IdempotencyKey(TimestampMixin, Base):
         # package: a table nothing sweeps grows without bound, and the job that
         # sweeps it needs this to not scan.
         Index("ix_idempotency_keys_expires_at", "expires_at"),
+    )
+
+
+class OutboxEvent(TimestampMixin, Base):
+    """Something that happened, and somebody who is owed a message about it.
+
+    **Written in the same transaction as the fact it describes.** That is the
+    whole reason the table exists: a session and the intent to tell somebody
+    about it commit together or neither does, so there is no window where a
+    booking exists and nobody will ever hear, and none where somebody hears
+    about a booking that rolled back.
+
+    **The package designed this for analytics dispatch and it fits unchanged.**
+    ``destination`` defaults to ``'posthog'`` there and answers *where does this
+    go*; a channel is the same question, so notifications write ``'email'`` and
+    the analytics consumer the package anticipates can write ``'posthog'`` into
+    the same table without either knowing about the other.
+
+    **No divergence from the canonical DDL** — the first table this milestone
+    where the package already gave the surrogate ``id`` ADR 0015 requires, so
+    there was nothing to reconcile.
+
+    **No foreign key on ``entity_id``**, and the package has none either. The
+    column points at whichever table ``entity_type`` names, so a key could only
+    reference one of them — and an outbox that cannot describe a second entity
+    type is an outbox for one feature.
+    """
+
+    __tablename__ = "outbox_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+
+    #: The `Notification` member, as text. Not a `CHECK`ed vocabulary: this
+    #: column also carries analytics event names the product has not written
+    #: yet, and constraining it to today's notifications would make the
+    #: package's own use of the table illegal.
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+
+    #: The recipient's id and the template's variables. **An id rather than an
+    #: address**, so the drain resolves it at send time and somebody who changes
+    #: their email between the enqueue and the send is written to at the new
+    #: one.
+    payload: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+
+    destination: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'posthog'"))
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+
+    #: Incremented on every attempt whatever the outcome, which is what makes
+    #: the retry bound a bound rather than a suggestion.
+    attempts: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
+    sent_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'failed', 'skipped')",
+            name="status_is_known",
+        ),
+        # **Partial on pending**, where the package's index is not. The drain
+        # asks for exactly this and nothing else reads the table by date, and
+        # this table keeps every row it has ever written — so a full index would
+        # be almost entirely rows the query discards.
+        Index(
+            "ix_outbox_events_pending",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
     )

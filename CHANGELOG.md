@@ -30,6 +30,29 @@ released. A tag with no matching section here fails the release job.
   refused entry.
 
   Set `DAILY_API_KEY` to enable it; unset, sessions book exactly as before.
+- **People are told things.** `outbox_events` queues a message inside the
+  transaction that caused it; the drain in `settle_sessions` sends it through
+  Loops (ADR 0025).
+
+  **One rule decides who hears it:** a message caused by somebody goes to the
+  party who did *not* cause it, and a message caused by time going past goes to
+  both. So an auto-confirming booking tells the **mentor** and an acceptance
+  tells the **mentee** — the same rule twice, not two rules — and an expiry
+  tells both, because nobody acted.
+
+  **Queued, not sent, inside the request.** Sending inline would block a booking
+  on a third party and lose the message on a crash. The outbox makes *this
+  happened* and *this person was told* one transaction and one retryable unit.
+
+  Retries are bounded at 5; a recipient with no address is **skipped** rather
+  than failed; and the row's own id is the provider idempotency key, so a retry
+  after a timeout replays rather than sends twice.
+
+  Set `LOOPS_API_KEY` to enable delivery. Unset, the outbox still fills and
+  drains — a missing key is visible in a table rather than in nobody's inbox.
+
+  **Reminders are not in this**: they need QStash and a signed callback
+  endpoint, which is the same machinery the Daily attendance webhook needs.
 
 ### Added
 
