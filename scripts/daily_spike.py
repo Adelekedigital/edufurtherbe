@@ -67,9 +67,14 @@ HERE = Path(__file__).parent
 SECRET_DIRS = (HERE.parent / "script-data-dev", HERE)
 STATE_PATH = HERE / "daily_spike_state.json"
 
-#: How far ahead the room opens, so Q2 has something to refuse. Short enough
-#: that the spike is not a coffee break.
-GATE = dt.timedelta(minutes=2)
+#: How far ahead the room opens by default, so Q2 has something to refuse.
+#:
+#: **Two minutes was too short to actually answer Q2**, which is why it went
+#: unanswered on the first run: the questions it gates are browser observations,
+#: and by the time somebody has read the instructions and pasted a URL the room
+#: is already open. `--opens-in` exists so the measurement is unhurried; ten
+#: minutes costs nothing but patience.
+GATE_MINUTES = 2
 
 #: How long to keep asking for the meeting record before giving up on Q5. Ten
 #: minutes is generous; the answer that matters is *how long*, and "longer than
@@ -118,9 +123,9 @@ def show(label: str, response: httpx.Response) -> Any:
     return body
 
 
-def create(api: httpx.Client) -> dict[str, Any]:
-    """A private room that opens in two minutes and closes in one hour."""
-    opens = dt.datetime.now(dt.UTC) + GATE
+def create(api: httpx.Client, gate: dt.timedelta) -> dict[str, Any]:
+    """A private room that opens after `gate` and closes an hour later."""
+    opens = dt.datetime.now(dt.UTC) + gate
     closes = opens + dt.timedelta(hours=1)
     name = f"efspike-{uuid.uuid4().hex[:10]}"
 
@@ -183,10 +188,16 @@ def create(api: httpx.Client) -> dict[str, Any]:
 
 def instructions(state: dict[str, Any]) -> None:
     opens = dt.datetime.fromisoformat(str(state["opens"]))
+    waiting = int((opens - dt.datetime.now(dt.UTC)).total_seconds())
     rule("Now do this, in a browser")
     print(
         f"""
-The room opens at {opens.isoformat()} (about two minutes from creation).
+The room opens at {opens.isoformat()} — about {waiting // 60}m {waiting % 60}s from now.
+
+**Q1 and Q2 both have to happen BEFORE that instant**, and they are the two the
+first run left unanswered. Each should be refused, and if both work they are
+refused for *different* reasons — no token, against too early — which is how you
+tell them apart.
 
   Q1  BEFORE anything else, open the bare URL with NO token:
         {state["url"]}
@@ -282,6 +293,16 @@ def main() -> int:
         "--cleanup-only", action="store_true", help="Delete the spike room and stop."
     )
     parser.add_argument(
+        "--opens-in",
+        type=int,
+        default=GATE_MINUTES,
+        metavar="MINUTES",
+        help=(
+            f"How long until the room opens (default {GATE_MINUTES}). Q1 and Q2 "
+            "must be tried before then, so raise it if you want to take your time."
+        ),
+    )
+    parser.add_argument(
         "--measure-only",
         action="store_true",
         help="Skip creation and read the record for the room in the state file.",
@@ -299,7 +320,7 @@ def main() -> int:
             measure(api, json.loads(STATE_PATH.read_text(encoding="utf-8")))
             return 0
 
-        state = create(api)
+        state = create(api, dt.timedelta(minutes=args.opens_in))
         instructions(state)
         input("\nPress ENTER once both of you have joined and left... ")
         measure(api, state)
