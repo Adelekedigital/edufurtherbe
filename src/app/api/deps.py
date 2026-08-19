@@ -8,6 +8,7 @@ classes get bound to what the routes ask for.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
@@ -66,12 +67,18 @@ from app.core.errors import (
     ValidationError,
 )
 from app.domain.assets import AssetKind, object_path
+from app.domain.attendance import join_window
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
-from app.domain.enums import AdminRole, MentorStatusType
+from app.domain.enums import AdminRole, MeetingProvider, MentorStatusType
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES, process
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
-from app.infra.clients.meetings import NullCalendar, NullRooms
+from app.infra.clients.meetings import (
+    DailyRooms,
+    NullCalendar,
+    NullRooms,
+    VenueUnavailableError,
+)
 from app.infra.db.admin_store import (
     approve_institution,
     merge_institution,
@@ -155,6 +162,8 @@ from app.infra.db.session_writer import (
 )
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import StorageError, SupabaseStorage
+
+logger = logging.getLogger(__name__)
 
 #: How long a storage call may take before the request gives up.
 #:
@@ -1020,7 +1029,16 @@ def _rooms(request: Request) -> Any:
     exists, and everything else keeps working against a default that creates
     nothing. `main.py` and this module are the sanctioned wiring points.
     """
-    return getattr(request.app.state, "meeting_rooms", None) or NullRooms()
+    wired = getattr(request.app.state, "meeting_rooms", None)
+    if wired is not None:
+        return wired
+    # **Built per request rather than at startup**, so a key added to the
+    # environment takes effect on the next deploy without a wiring change, and
+    # so a test that sets no key gets the null adapter without unsetting
+    # anything. The client it constructs is cheap; Daily is called at most twice
+    # per session.
+    key = get_settings().daily_api_key
+    return DailyRooms(key.get_secret_value()) if key else NullRooms()
 
 
 def _calendar(request: Request) -> Any:
@@ -1159,19 +1177,61 @@ WithdrawnSessionDep = Annotated[None, Depends(transitions("withdraw"))]
 CancelledSessionDep = Annotated[None, Depends(transitions("cancel"))]
 
 
-async def joined_session(session_id: UUID, user: CurrentUserDep, session: SessionDep) -> None:
-    """Record that the caller arrived at their own session.
+async def joined_session(
+    session_id: UUID, user: CurrentUserDep, session: SessionDep, request: Request
+) -> str | None:
+    """Record that the caller arrived, and hand back the door.
 
     **Not a transition, and not in the table above.** Arriving changes no
     status: a session stays `confirmed` while it runs, and what it becomes is
     decided once for both parties when the join window shuts. Putting this in
     `TRANSITIONS` would have needed a `to` state it does not have.
+
+    **The URL is minted here rather than stored**, and only for a private room.
+    A Daily room refuses anybody without a token, so recording an arrival and
+    returning nothing would close none of the gap this endpoint exists for —
+    and storing the token instead would put two live bearer credentials per
+    session into the database and every backup, outliving the session they open.
+
+    For every other venue the door is the stored URL: a Meet link is on the
+    calendar event, and a custom venue is the address the mentor typed.
     """
-    await record_arrival(session, session_id, user["id"], now=dt.datetime.now(dt.UTC))
+    now = dt.datetime.now(dt.UTC)
+    row = await record_arrival(session, session_id, user["id"], now=now)
     await session.commit()
 
+    stored = row["meeting_url"]
+    if row["meeting_provider"] != MeetingProvider.DAILY or not row["external_room_id"]:
+        return str(stored) if stored else None
 
-JoinedSessionDep = Annotated[None, Depends(joined_session)]
+    # Only the opening edge: the token outlives the join window for the same
+    # reason the room does — one expiring at `join_closes_at` would evict its
+    # holder fifteen minutes into an hour-long session.
+    opens, _ = join_window(row["starts_at"])
+    try:
+        token = _rooms(request).token_for(
+            room=str(row["external_room_id"]),
+            user_id=str(user["id"]),
+            user_name=str(user.get("first_name") or "Guest"),
+            # The mentor hosts: on Daily an owner may admit, mute and end.
+            is_owner=bool(row["is_mentor"]),
+            opens_at=opens,
+            # The room outlives the window by the session's length, and so must
+            # the token — one expiring at `join_closes_at` would evict its
+            # holder fifteen minutes into an hour.
+            closes_at=row["starts_at"] + dt.timedelta(minutes=int(row["duration_minutes"])),
+        )
+    except (VenueUnavailableError, NotImplementedError) as exc:
+        # **Not a failure of the join.** The arrival is recorded and committed;
+        # what is missing is a way in, and saying so honestly beats a 500 on a
+        # request that already did the thing it was asked to do.
+        logger.info("no door for session %s: %s", session_id, exc)
+        return None
+
+    return f"{stored}?t={token}"
+
+
+JoinedSessionDep = Annotated[str | None, Depends(joined_session)]
 
 
 # --------------------------------------------------------------------------

@@ -145,7 +145,10 @@ async def test_joining_inside_the_window_marks_you_present(
     joined = await api_client.post(join_url(booking), headers=booking["mentee"])
 
     assert joined.status_code == 200, joined.text
-    assert joined.json() == {"joined": True}
+    # `meeting_url` joined the response when the room adapter landed. Null here
+    # because this fixture's mentor has no venue configured, which is a
+    # different thing from being refused entry — the arrival is still recorded.
+    assert joined.json() == {"joined": True, "meeting_url": None}
     rows = await attendance(db_engine, booking["id"])
     assert rows["mentee"]["attendance_status"] == "attended"
     assert rows["mentee"]["joined_at"] is not None

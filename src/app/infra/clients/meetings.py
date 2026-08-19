@@ -40,6 +40,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from app.core.errors import AppError
 from app.domain.enums import ConferencingProvider
 
@@ -54,6 +56,13 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+API_BASE = "https://api.daily.co/v1"
+
+#: Long enough for a slow third party, short enough that a booking does not hang
+#: on one. A room that fails to mint is recoverable; a request that never
+#: answers is not.
+TIMEOUT = httpx.Timeout(15.0)
 
 
 class VenueUnavailableError(AppError):
@@ -137,16 +146,100 @@ class DailyRooms:
     tolerance for retries and out-of-order delivery with them.
     """
 
-    def __init__(self, api_key: str, client: Any = None) -> None:
-        self._api_key = api_key
-        self._client = client
+    def __init__(self, api_key: str, client: httpx.Client | None = None) -> None:
+        self._client = client or httpx.Client(
+            base_url=API_BASE,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=TIMEOUT,
+        )
 
     def create(self, *, name: str, opens_at: dt.datetime, closes_at: dt.datetime) -> MeetingRoom:
-        del name, opens_at, closes_at
-        raise NotImplementedError(
-            "the Daily adapter is not built — run scripts/daily_spike.py first, "
-            "and see docs/daily-spike-guide.md for what each answer changes"
+        """A private room that exists between the two instants and no longer.
+
+        ``nbf`` and ``exp`` are the room's own gate. The spike confirmed Daily
+        accepts both and reflects them in ``config``; whether it *enforces*
+        ``nbf`` at the door is the one question still open, and the answer
+        decides whether "the room is shut until five minutes before" is a
+        promise or a request. Either way setting them costs nothing and is the
+        only mechanism available.
+
+        **The returned URL is not a door.** A private room refuses anybody
+        without a token, so this is the room's address and `token_for` is what
+        opens it — which is the whole point of not publishing the link.
+        """
+        room = self._post(
+            "/rooms",
+            {
+                "name": name,
+                "privacy": "private",
+                "properties": {
+                    "nbf": int(opens_at.timestamp()),
+                    "exp": int(closes_at.timestamp()),
+                    # So a refused join is visibly refused rather than a blank
+                    # page the participant has to interpret.
+                    "enable_prejoin_ui": True,
+                },
+            },
         )
+        return MeetingRoom(url=str(room["url"]), external_id=str(room.get("name") or name))
+
+    def token_for(
+        self,
+        *,
+        room: str,
+        user_id: str,
+        user_name: str,
+        is_owner: bool,
+        opens_at: dt.datetime,
+        closes_at: dt.datetime,
+    ) -> str:
+        """A short-lived credential for one person, minted when they ask.
+
+        **Never stored.** A meeting token is a bearer credential for a live
+        room, so keeping one on the session would put two of them in the
+        database and in every backup — and they would outlive the reason they
+        were made. Minting on demand costs one request at the moment somebody
+        is already waiting for a page.
+
+        ``user_id`` is our own `users.id`, which the spike measured coming back
+        verbatim on the meeting record. That is what makes attendance
+        attributable without a second lookup table.
+        """
+        minted = self._post(
+            "/meeting-tokens",
+            {
+                "properties": {
+                    "room_name": room,
+                    "user_id": user_id,
+                    "user_name": user_name,
+                    # The mentor hosts. On Daily an owner can admit, mute and
+                    # end — which is the mentor's role and not the mentee's.
+                    "is_owner": is_owner,
+                    "nbf": int(opens_at.timestamp()),
+                    "exp": int(closes_at.timestamp()),
+                }
+            },
+        )
+        return str(minted["token"])
+
+    def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        """One place where a Daily failure becomes ours.
+
+        Every network error and every non-2xx becomes `VenueUnavailableError`,
+        because the caller's decision is the same for all of them: carry on
+        without a venue rather than fail the booking. Letting `httpx` raise
+        would make a third party's bad afternoon into a 500 on a request that
+        had already done the thing the user asked for.
+        """
+        try:
+            response = self._client.post(path, json=body)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise VenueUnavailableError(f"daily {path} failed: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise VenueUnavailableError(f"daily {path} returned {type(payload).__name__}")
+        return payload
 
 
 class NullCalendar:

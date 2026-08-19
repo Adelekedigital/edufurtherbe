@@ -253,6 +253,14 @@ class Settings(BaseSettings):
         default=None, validation_alias=env_key("supabase_service_role_key")
     )
 
+    #: Daily's REST key, which mints rooms and the tokens that open them.
+    #:
+    #: ``SecretStr`` and absent by default. Unset means `NullRooms`, so a
+    #: deployment with no key still books sessions — it just cannot give them
+    #: anywhere to meet, which is the state every environment is in until an
+    #: operator sets this.
+    daily_api_key: SecretStr | None = Field(default=None, validation_alias=env_key("daily_api_key"))
+
     # Where re-hosted profile images live. A plain name, not a secret: it appears
     # in every public image URL. The bucket is created once by an operator in the
     # dashboard, not by the migration script — see `infra/storage/supabase.py`.
