@@ -54,6 +54,7 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.domain.meetings import plan_for
+from app.domain.notifications import Notification, recipients
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
@@ -70,6 +71,7 @@ from app.infra.db.models.sessions import (
     SessionTypeBookingConfig,
 )
 from app.infra.db.models.user import User
+from app.infra.db.outbox import enqueue
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 from app.infra.db.session_type_store import resolve_venue
 from app.infra.db.slot_store import list_slots
@@ -94,6 +96,17 @@ __all__ = [
 #: client's conflict, and they would retry forever against a row that can never
 #: be written.
 DOUBLE_BOOKED = "sessions_no_mentor_double_booking"
+
+#: Which message each transition sends. Beside the transition table rather than
+#: inside it, because `TRANSITIONS` is a domain rule about *what may happen* and
+#: this is a fact about what the platform then says — two vocabularies that move
+#: for different reasons.
+TRANSITION_NOTICE = {
+    "accept": Notification.REQUEST_ACCEPTED,
+    "decline": Notification.REQUEST_DECLINED,
+    "withdraw": Notification.REQUEST_WITHDRAWN,
+    "cancel": Notification.SESSION_CANCELLED,
+}
 
 #: How far either side of the requested instant to ask ``list_slots`` for.
 #:
@@ -284,6 +297,24 @@ async def book_session(
         ],
     )
 
+    # **Somebody is told, in this transaction.** Which of the two depends on
+    # who already knows: an offering that confirms itself leaves the mentee
+    # looking at a confirmation screen, so the mentor is the one learning
+    # something — and a request that waits is the mentor's to answer. Both are
+    # ADR 0025's rule rather than two decisions.
+    booked = (
+        Notification.SESSION_REQUESTED
+        if status is SessionStatus.PENDING_MENTOR_APPROVAL
+        else Notification.SESSION_BOOKED
+    )
+    await enqueue(
+        session,
+        booked,
+        entity_type="session",
+        entity_id=session_id,
+        recipient_ids=recipients(booked, mentor_id=mentor_id, mentee_id=mentee_id),
+    )
+
     # **The event is written by the same transaction as the status**, per the
     # model's own note: a trigger projecting one onto the other would be a
     # second mechanism for one fact.
@@ -389,6 +420,24 @@ async def transition(
             reason_code=reason_code,
             reason_text=payload.get("reason_text"),
         )
+    )
+
+    # **The party who did not act.** `cancel` is the only action either of them
+    # may take, which is why `recipients` needs the actor at all — for the other
+    # three the answer follows from the action.
+    told = TRANSITION_NOTICE[action]
+    await enqueue(
+        session,
+        told,
+        entity_type="session",
+        entity_id=session_id,
+        recipient_ids=recipients(
+            told,
+            mentor_id=row["mentor_id"],
+            mentee_id=row["mentee_id"],
+            actor_id=actor_id,
+        ),
+        variables={"reason_text": payload.get("reason_text") or ""},
     )
 
 
@@ -685,10 +734,10 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime) -> int:
                     Session.respond_by <= now,
                 )
                 .values(status=SessionStatus.EXPIRED)
-                .returning(Session.id)
+                .returning(Session.id, Session.mentor_id, Session.mentee_id)
             )
         )
-        .scalars()
+        .mappings()
         .all()
     )
     if not expired:
@@ -703,16 +752,32 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime) -> int:
         insert(SessionEvent),
         [
             {
-                "session_id": session_id,
+                "session_id": row["id"],
                 "from_status": SessionStatus.PENDING_MENTOR_APPROVAL,
                 "to_status": SessionStatus.EXPIRED,
                 "actor_id": None,
                 "actor_type": ActorType.SYSTEM,
                 "reason_code": SessionReasonCode.EXPIRED_NO_RESPONSE,
             }
-            for session_id in expired
+            for row in expired
         ],
     )
+
+    # **Both parties, and this is the rule's one exception.** Nobody acted, so
+    # neither of them already knows — the mentor let it lapse and the mentee has
+    # been waiting on an answer that is no longer coming.
+    for row in expired:
+        await enqueue(
+            session,
+            Notification.REQUEST_EXPIRED,
+            entity_type="session",
+            entity_id=row["id"],
+            recipient_ids=recipients(
+                Notification.REQUEST_EXPIRED,
+                mentor_id=row["mentor_id"],
+                mentee_id=row["mentee_id"],
+            ),
+        )
     return len(expired)
 
 

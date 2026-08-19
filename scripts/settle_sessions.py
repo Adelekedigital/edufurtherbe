@@ -6,12 +6,16 @@
     # report what would move, touching nothing
     uv run python scripts/settle_sessions.py --dry-run
 
-**Two sweeps, one job.** An unanswered *request* past ``respond_by`` becomes
+**Three sweeps, one job.** An unanswered *request* past ``respond_by`` becomes
 ``expired``; a *confirmed* session past its join window becomes ``completed`` or
-``no_show``. They act on disjoint statuses, so their order does not matter — and
-they are one script because they are one kind of thing: a deadline elapsed with
-nobody acting. Two scripts would mean two schedules, two workflows and two
-places to notice a failure.
+``no_show``; and whatever either of them queued gets sent. The first two act on
+disjoint statuses so their order does not matter, and the drain runs **last**
+deliberately — a message queued by this run goes out in this run rather than
+waiting an hour for the next one.
+
+They are one script because they are one kind of thing: work nobody is waiting
+on a request for. Three scripts would mean three schedules, three workflows and
+three places to notice a failure.
 
 **The expiry half is the one that frees a slot.**
 ``sessions_no_mentor_double_booking`` covers ``pending_mentor_approval``, so
@@ -48,9 +52,25 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import get_settings
+from app.infra.clients.notifications import LoopsNotifier, NullNotifier
 from app.infra.db.engine import resolve_async_dsn
+from app.infra.db.outbox import drain
 from app.infra.db.session_writer import expire_requests, settle_attendance
 from app.infra.etl.cli import EXIT_OK, configure_streams
+
+
+def _notifier() -> LoopsNotifier | NullNotifier:
+    """The real sender when a key is configured, and a loud nothing otherwise.
+
+    Unset is not an error: the outbox still fills and drains, and every message
+    is recorded as skipped rather than lost — so a missing key is visible in a
+    table rather than in nobody's inbox.
+    """
+    settings = get_settings()
+    key = settings.loops_api_key
+    if key is None:
+        return NullNotifier()
+    return LoopsNotifier(key.get_secret_value()).with_settings(settings)
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -62,14 +82,28 @@ async def run(args: argparse.Namespace) -> int:
             # sit exactly on a boundary and be judged by two different instants.
             expired = await expire_requests(session, now=now)
             settled = await settle_attendance(session, now=now)
+            # **The null notifier on a dry run, always.** A dry run rolls the
+            # database back and cannot roll back an email, so sending for real
+            # and then pretending nothing happened would be the one irreversible
+            # thing this flag exists to avoid.
+            sent = await drain(
+                session,
+                notifier=NullNotifier() if args.dry_run else _notifier(),
+                now=now,
+            )
             if args.dry_run:
                 # Rolled back rather than skipped: a dry run that took a
                 # different code path would report on a query nobody runs.
                 await session.rollback()
-                print(f"would expire {expired} request(s), settle {settled} session(s)")
+                print(
+                    f"would expire {expired} request(s), settle {settled} session(s), "
+                    f"send {sum(sent.values())} message(s)"
+                )
             else:
                 await session.commit()
-                print(f"expired {expired} request(s), settled {settled} session(s)")
+                print(
+                    f"expired {expired} request(s), settled {settled} session(s), messages {sent}"
+                )
     finally:
         await engine.dispose()
     return EXIT_OK

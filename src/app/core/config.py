@@ -253,6 +253,15 @@ class Settings(BaseSettings):
         default=None, validation_alias=env_key("supabase_service_role_key")
     )
 
+    #: Loops' transactional key (ADR 0025). Carries every message this service
+    #: sends; the Supabase auth code goes through Emailit's SMTP, configured in
+    #: the Supabase console rather than here.
+    #:
+    #: Unset means `NullNotifier`, so the outbox still fills and drains and
+    #: every message is recorded as **skipped** rather than lost — a missing key
+    #: is then visible in a table rather than in nobody's inbox.
+    loops_api_key: SecretStr | None = Field(default=None, validation_alias=env_key("loops_api_key"))
+
     # Where re-hosted profile images live. A plain name, not a secret: it appears
     # in every public image URL. The bucket is created once by an operator in the
     # dashboard, not by the migration script — see `infra/storage/supabase.py`.

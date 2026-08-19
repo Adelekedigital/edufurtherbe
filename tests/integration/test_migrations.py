@@ -140,6 +140,7 @@ EXPECTED_TABLES = [
     # none. First of the three in `08_features_platform.sql`; `outbox_events`
     # and `feature_flags` ship with whatever first needs them (#21).
     "idempotency_keys",
+    "outbox_events",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

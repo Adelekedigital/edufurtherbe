@@ -91,6 +91,9 @@ EXPECTED_MODELS = {
     # First of the three in `08_features_platform.sql`; `outbox_events` and
     # `feature_flags` ship with whatever first needs them (#21).
     "IdempotencyKey",
+    # The second, and the one the package designed for analytics dispatch —
+    # it carries notifications first because that is what has a producer.
+    "OutboxEvent",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
