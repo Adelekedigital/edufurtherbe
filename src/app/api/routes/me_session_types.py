@@ -33,7 +33,7 @@ from app.api.schemas.common import Page
 from app.api.schemas.session_types import OwnSessionTypeRead
 from app.core.errors import NotFoundError
 
-router = APIRouter(prefix="/api/v1/me", tags=["users"])
+router = APIRouter(prefix="/api/v1/me", tags=["session-types"])
 
 OWNER_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {

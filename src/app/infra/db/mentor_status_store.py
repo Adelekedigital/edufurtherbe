@@ -14,6 +14,8 @@ named for the actor would have one of them importing the other's.
 
 from __future__ import annotations
 
+import datetime as dt
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -186,8 +188,36 @@ async def resume(session: AsyncSession, *, user_id: UUID) -> bool:
     )
 
 
-async def history(session: AsyncSession, user_id: UUID, *, limit: int) -> list[dict[str, Any]]:
-    """One mentor's transitions, newest first."""
+async def history(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    limit: int,
+    kinds: Sequence[MentorStatusType] = (),
+    since: dt.datetime | None = None,
+    until: dt.datetime | None = None,
+) -> list[dict[str, Any]]:
+    """One mentor's transitions, newest first, narrowed by kind and by date.
+
+    **The filters are optional and compose.** A reviewer asking *"why was this
+    mentor unlisted in March"* is filtering both at once, and a log you can only
+    read whole is a log nobody reads past the first page.
+
+    ``kinds`` empty means every kind, which is what a caller who sends no
+    ``status`` gets. Spelled as an empty sequence rather than ``None`` because
+    "no filter" and "filter by nothing" would otherwise be the same value with
+    opposite meanings — and the second is what a client sending an empty list
+    means, which is a request for no rows.
+
+    **The window is half-open, ``[since, until)``**, so two adjacent ranges
+    partition the log with no row in both and none missed. A closed upper bound
+    would return an event landing exactly on midnight in both March and April.
+
+    Served by ``ix_mentor_status_events_mentor``, which is ``(mentor_user_id,
+    created_at DESC)`` — the date range rides the index and the kind filter is a
+    residual predicate over what is left, which at a few dozen events per mentor
+    is the right way round.
+    """
     statement = (
         select(
             MentorStatusEvent.id,
@@ -199,7 +229,13 @@ async def history(session: AsyncSession, user_id: UUID, *, limit: int) -> list[d
         )
         .outerjoin(User, User.id == MentorStatusEvent.created_by)
         .where(MentorStatusEvent.mentor_user_id == user_id)
-        .order_by(MentorStatusEvent.created_at.desc())
-        .limit(limit)
     )
+    if kinds:
+        statement = statement.where(MentorStatusEvent.status_type.in_(tuple(kinds)))
+    if since is not None:
+        statement = statement.where(MentorStatusEvent.created_at >= since)
+    if until is not None:
+        statement = statement.where(MentorStatusEvent.created_at < until)
+
+    statement = statement.order_by(MentorStatusEvent.created_at.desc()).limit(limit)
     return [dict(row) for row in (await session.execute(statement)).mappings()]

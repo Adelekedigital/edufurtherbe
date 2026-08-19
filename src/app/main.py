@@ -51,6 +51,83 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "public",
+        "description": (
+            "What a stranger may read about a mentor, with no token at all: "
+            "the profile a mentee is choosing from, the offerings they may "
+            "book, and the slots those offerings are free in.\n\n"
+            "**Two things must both be true for any of it to answer** — the "
+            "mentor is `approved` *and* `listed`. The pair is not redundant: "
+            "approval and listing are written by separate events so that one "
+            "event states one fact, and no constraint ties them, so a `pending` "
+            "mentor who is `listed` is a legal row. Gating on listing alone "
+            "would publish an unvetted mentor's calendar to anyone who asked."
+            "\n\n"
+            "Every refusal here is `404`, whatever the reason — no such mentor, "
+            "not approved, not listed, offering switched off, offering deleted. "
+            "Telling them apart tells anyone who can guess an id which mentors "
+            "exist and what state they are in.\n\n"
+            "Separate from `catalog`, which is reference data the world owns; "
+            "this is data about people who chose to be visible."
+        ),
+    },
+    {
+        "name": "availability",
+        "description": (
+            "What a mentor declares they are free for — **not** what a mentee "
+            "can book. Weekly rules and dated exceptions, owned and edited by "
+            "the mentor.\n\n"
+            "The bookable answer is `GET /users/{id}/availability/slots`, "
+            "which takes no token and sits under `public`: it reads these "
+            "rules, swaps in the offering's own scheduling windows where it has "
+            "any, subtracts exceptions and existing sessions, applies the "
+            "notice window, and returns instants. A client computing slots from "
+            "the rules directly would be reimplementing that, and would drift "
+            "from it.\n\n"
+            "Overlapping windows on one day are refused with `409` by an "
+            "exclusion constraint rather than by a check before the write — "
+            "checking then writing is the race the constraint exists to close."
+        ),
+    },
+    {
+        "name": "sessions",
+        "description": (
+            "A booking, from the moment it is claimed through whatever it "
+            "becomes. Reading is scoped to the two parties; writing is booking "
+            "and the four transitions.\n\n"
+            "**`starts_at` must be an instant `/slots` currently offers**, to "
+            "the second. This surface asks that endpoint rather than "
+            "reimplementing it, so everything deciding availability applies "
+            "here with no second set of rules to disagree with — and every "
+            "reason an instant is unavailable is one `422`, because the "
+            "client's answer to all of them is to re-read the slots.\n\n"
+            "**`Idempotency-Key` is required on booking.** A retry replays the "
+            "original response rather than booking a second hour.\n\n"
+            "Who may take an action is part of the action: a mentee has no "
+            "accept, a mentor has no withdraw, and either party may cancel a "
+            "confirmed session. Asking for one that is not yours gets `404` — "
+            "the action's URL does not exist for you — where being the right "
+            "party in the wrong state gets `409` naming the state."
+        ),
+    },
+    {
+        "name": "session-types",
+        "description": (
+            "A mentor's own offerings and the intake form each one asks — the "
+            "management surface, not the shop window.\n\n"
+            "**Its own tag rather than `users`**, which it shared until the "
+            "surface grew past a single list. Settled decision #64 gives "
+            "everything outside the catalogue *its domain name*, and this is a "
+            "domain: creating, editing and retiring what a mentor sells, plus "
+            "the questions a mentee answers when booking it.\n\n"
+            "**Not the same answer as `GET /users/{id}/session-types`**, which "
+            "is public and shows only what a mentee may book. An offering you "
+            "have switched off is absent there and present here, and while your "
+            "profile is unlisted that endpoint answers `404` for you as well as "
+            "for everybody else."
+        ),
+    },
+    {
         "name": "catalog",
         "description": (
             "Public reference data, readable without a token: the mirrored "

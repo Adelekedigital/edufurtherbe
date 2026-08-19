@@ -18,6 +18,7 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, File, Header, Path, Query, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import AwareDatetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
@@ -66,7 +67,7 @@ from app.core.errors import (
 )
 from app.domain.assets import AssetKind, object_path
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
-from app.domain.enums import AdminRole
+from app.domain.enums import AdminRole, MentorStatusType
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES, process
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
@@ -712,8 +713,38 @@ async def mentor_history(
     _: QueueViewerDep,
     session: SessionDep,
     limit: Annotated[int | None, Query(ge=1, le=200)] = None,
+    status: Annotated[
+        list[MentorStatusType] | None,
+        Query(description="Repeat to widen: `?status=approved&status=declined`."),
+    ] = None,
+    since: Annotated[
+        AwareDatetime | None,
+        Query(description="Only events at or after this instant. Inclusive."),
+    ] = None,
+    until: Annotated[
+        AwareDatetime | None,
+        Query(description="Only events strictly before this instant. Exclusive."),
+    ] = None,
 ) -> list[dict[str, Any]]:
-    return await history(session, user_id, limit=min(limit or 50, 200))
+    """One mentor's transitions, narrowed.
+
+    **The range is validated here rather than in the store**, unlike `/slots`.
+    There, an omitted `start` means the mentor's today and the default is only
+    knowable after the query that finds them, so legality could not be decided
+    at the edge. Here both bounds are absolute instants a caller either sent or
+    did not, and nothing downstream can change them — so the edge is where it
+    belongs.
+    """
+    if since is not None and until is not None and until <= since:
+        raise ValidationError("`until` must be after `since`")
+    return await history(
+        session,
+        user_id,
+        limit=min(limit or 50, 200),
+        kinds=status or (),
+        since=since,
+        until=until,
+    )
 
 
 async def paused_self(user_id: OwnerDep, session: SessionDep) -> bool:
