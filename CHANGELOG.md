@@ -12,6 +12,27 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A confirmed session is given somewhere to meet.** `MeetingRoom` and
+  `Calendar` ports with null adapters, `DailyRooms` and `GoogleCalendar`
+  skeletons, and the orchestration that decides which to call.
+
+  **The provider decides two independent things.** `google_meet` asks the
+  calendar for a conference and creates no room; `daily` creates a room and must
+  **not** ask — asking would put two links on the event, with the invitee
+  clicking whichever the client renders first; `custom` creates nothing and
+  reuses the mentor's URL.
+
+  **Provisioned at confirmation, which is two places** — booking for an
+  auto-confirming offering, `/accept` for one that waits. A request that may be
+  declined mints nothing.
+
+  The venue is resolved through the same `COALESCE` the read models use, so what
+  is provisioned agrees with what the mentee was shown.
+
+  **Neither real adapter is built.** Google is blocked on `calendar_connections`,
+  which does not exist; Daily is blocked on the spike. A failure to provision
+  does not fail the booking — the session exists and holds its slot.
+
 - **The notification shape, ahead of the providers.** A `Notification`
   vocabulary, `EMAIL_TEMPLATES` and `WHATSAPP_TEMPLATES` settings, and three
   adapters — `NullNotifier` (the default), `EmailitNotifier` and
