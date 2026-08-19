@@ -8,6 +8,8 @@ than reporting success.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from app.core.config import Settings
@@ -98,9 +100,7 @@ def test_a_missing_template_is_an_operator_fault_not_a_fallback() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_default_notifier_delivers_nothing_and_says_so(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_the_default_notifier_delivers_nothing_and_says_so() -> None:
     """**Not a fake.** It records the intent so a producer can be run end to end
     with the sends visible in the log, and so the absence of a provider is a
     line somebody can read rather than silence.
@@ -108,12 +108,39 @@ def test_the_default_notifier_delivers_nothing_and_says_so(
     It resolves no template, deliberately: requiring one would make local
     development need a configured provider to exercise a path that sends
     nothing.
-    """
-    with caplog.at_level("INFO"):
-        NullNotifier().send(a_message())
 
-    assert "not sent" in caplog.text
-    assert "mentor@example.test" in caplog.text
+    **Captured off the emitting logger rather than through `caplog`.** `caplog`
+    reads records from the handler it installs on the *root* logger, and by the
+    time the whole suite has run there are two `LogCaptureHandler`s on root with
+    the level left at `WARNING` — so an `INFO` record reaches a handler that this
+    fixture is not the reader of, and `caplog.text` is empty. It passed in
+    isolation and failed in the suite, which is the signature of shared state
+    rather than of the code under test.
+
+    Attaching to `app.infra.clients.notifications` depends on neither the root
+    level nor which handlers are on it. This is the suite's only `caplog` user,
+    so nothing else was relying on the behaviour that broke.
+    """
+    emitter = logging.getLogger("app.infra.clients.notifications")
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Collect(level=logging.INFO)
+    restore = emitter.level
+    emitter.addHandler(handler)
+    emitter.setLevel(logging.INFO)
+    try:
+        NullNotifier().send(a_message())
+    finally:
+        emitter.removeHandler(handler)
+        emitter.setLevel(restore)
+
+    logged = "\n".join(record.getMessage() for record in records)
+    assert "not sent" in logged
+    assert "mentor@example.test" in logged
 
 
 @pytest.mark.parametrize("adapter", [EmailitNotifier, ZernioNotifier])
