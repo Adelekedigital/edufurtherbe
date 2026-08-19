@@ -135,13 +135,38 @@ door, early joining is impossible on Daily and merely discouraged on Meet. If it
 is advisory, both providers need the same UI copy and the difference between
 them narrows to attendance alone.
 
-Both are browser observations the script cannot make. Re-run and note them, or
-try the bare URL against any private room:
+### How to actually answer them
+
+Both are browser observations the script cannot make, and **two minutes was too
+short** — which is why they went unanswered the first time. Give yourself room:
 
 ```bash
-uv run python scripts/daily_spike.py            # note Q1, Q2 and Q6 as you go
+uv run python scripts/daily_spike.py --opens-in 10
+```
+
+The room then opens ten minutes after creation, and the script prints the exact
+instant plus a countdown. Before it:
+
+1. **Q1** — paste the **bare** room URL, with no `?t=` on the end. Expected: you
+   are not admitted. If you land in the room, `privacy: private` is not doing
+   what the design assumes.
+2. **Q2** — paste the **mentor** URL, token and all. Expected: refused for being
+   early. If you land in the room, `nbf` is metadata rather than a gate.
+
+**If both work they refuse for different reasons** — *no token* against *too
+early* — and that difference is how you know you tested two things rather than
+one thing twice. Note the wording of each; it is what the product's copy has to
+be honest about.
+
+After it opens, join in two browsers for Q3–Q5 as before, then:
+
+```bash
 uv run python scripts/daily_spike.py --cleanup-only
 ```
+
+Both `nbf`s are set together — one on the room, one on the token — so a single
+run tests them as a pair. Telling them apart needs a second run with one of them
+removed, and is only worth doing if the pair turns out not to refuse.
 
 ## Why each question is here
 
