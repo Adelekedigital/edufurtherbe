@@ -516,6 +516,9 @@ is not visible from the call site.
 
 ### The Google blocker is stale, and believing it will cost a table
 
+*`meetings.py` has since caught up — the docstring now says one refresh token in
+configuration, and names the table as the separate thing it is.*
+
 `meetings.py` says the Google side is blocked because *"`calendar_connections` was deferred… there
 is nowhere to read a mentor's token from, and no calendar event can be created for anybody until
 that lands."*
@@ -561,7 +564,7 @@ dashboard.
 - **WhatsApp needs a column, not just a client.** Zernio is conversation-centric: the
   `conversationId` is stable per participant and its own documentation says to store it beside the
   contact record. And it can reach nobody regardless — the three `phone_*` columns were deferred,
-  so **no user has a number.** Email through Emailit has neither problem and is the honest first
+  so **no user has a number.** Email has neither problem and is the honest first
   channel.
 - Every WhatsApp message this platform sends is business-initiated and therefore outside the
   24-hour window, so each needs a Meta-approved template. **That approval is a lead time nobody
@@ -622,7 +625,7 @@ was decided; the sequence below is what is left.
 |---|---|---|---|
 | 26 | `DailyRooms.create` — the room a `daily` session meets in | no | 2 |
 | 27 | `GoogleCalendar.create_event` — platform account, one stored refresh token | no | 2 |
-| 28 | the notification sequence: which events send, and email through Emailit | maybe | 2 |
+| 28 | the notification sequence: which events send, and transactional email through **Loops** (ADR 0025) | maybe | 2 |
 | 29 | `calendar_connections` + the free/busy conflict check | yes | 1 |
 
 26 and 27 are independent and either may go first; 26 needs only an API key, 27 needs the platform

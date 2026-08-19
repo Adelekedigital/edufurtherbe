@@ -8,12 +8,21 @@ interchangeable, no ``Protocol`` declared.
 whether to ask for a conference, which columns to write — is ours and is tested
 against the null adapters. The calls themselves are the integration phase.
 
-**The Google side is blocked on something that does not exist**:
-``calendar_connections`` was deferred under settled decisions #21 and #26, and
-ADR 0012 has not settled the OAuth arrangement its columns would encode. So
-there is nowhere to read a mentor's token from, and no calendar event can be
-created for anybody until that lands. The null adapter is not a placeholder for
-laziness; it is the honest state of the system.
+**The Google side is blocked on one refresh token, not on a table.** An earlier
+version of this docstring said it needed ``calendar_connections`` — that nothing
+could create an event for anybody until a per-mentor token store existed. That
+was wrong, and wrong in the expensive direction: acting on it would have meant
+building a table to unblock something that never needed it.
+
+The calendar is **EduFurther's own Google account**, not each mentor's. The
+platform account creates the event and invites both parties, which the spike
+measured working end to end on a consumer Gmail: invitations delivered, a Meet
+link minted, and both guests joining a room the creator never entered.
+
+``calendar_connections`` is a real and separate piece of work — it records a
+mentor's ``calendar.freebusy`` grant, which buys *conflict detection* against
+their existing calendar. That is a later gap, and building it now to unblock this
+adapter would be building the wrong thing.
 
 **The Daily side was blocked on a measurement, and most of it is now answered.**
 `docs/daily-spike-guide.md` has the run. The record carries per-participant
@@ -186,10 +195,10 @@ class NullCalendar:
 class GoogleCalendar:
     """Google Calendar, and it is not built.
 
-    **Blocked on `calendar_connections`**, which does not exist: there is
-    nowhere to hold the mentor's token, and only mentors connect — the mentee
-    receives an invitation and completes no OAuth flow (settled decision #15,
-    proved by the spike's Q1).
+    **Blocked on a refresh token in configuration**, not on a table. The event is
+    created by the platform's own Google account and both parties are invited as
+    guests — neither completes an OAuth flow, which is settled decision #15 held
+    more strongly than it was written, and is what the spike's Q1 measured.
 
     Two things this adapter must get right, both measured rather than assumed:
 
@@ -222,8 +231,8 @@ class GoogleCalendar:
         del organiser_id, attendee_email, starts_at, duration_minutes
         del summary, wants_conference, meeting_url
         raise NotImplementedError(
-            "the Google Calendar adapter is not built — it needs calendar_connections "
-            "and ADR 0012's OAuth arrangement settled first"
+            "the Google Calendar adapter is not built — it needs the platform "
+            "account's refresh token in configuration"
         )
 
 
