@@ -11,18 +11,137 @@ Nothing is decided by running this. It prints what happened.
 
 ## Measured results
 
-*Not yet run.* Fill this table in from a real account, the way the calendar
-guide's table was filled in, and the port is built against these answers rather
-than against Daily's documentation.
+Run against a real account on 2026-08-19, room `efspike-4baae5dedb`.
 
 | Question | Answer |
 |---|---|
-| Q1 `privacy: private` refuses a visitor holding the URL and no token | |
-| Q2 a token's `nbf` refuses an early join | |
-| Q3 the meeting record gives per-participant **join and leave** | |
-| Q4 the `user_id` minted onto the token reaches that record | |
-| **Q5 how long after the call the record appears** | |
-| Q6 `exp` closes the room, and what somebody inside sees | |
+| Q1 `privacy: private` refuses a visitor holding the URL and no token | **not reported** — see below; every session room is private regardless |
+| Q2 a token's `nbf` refuses an early join | **not reported** |
+| Q3 the meeting record gives per-participant **join and leave** | **yes** — `join_time` plus `duration` |
+| Q4 the `user_id` minted onto the token reaches that record | **yes**, verbatim |
+| **Q5 how long after the call the record appears** | **it does not wait** — readable *during* the call |
+| Q6 `exp` closes the room, and what somebody inside sees | **not reported** |
+
+**Q5 is the opposite of the Google result, and that is the headline.** Free/busy
+read back empty right after a write; Daily's record was there mid-call, with
+`"ongoing": true`. There is no lag to design around.
+
+**But `ongoing` introduces a different trap, and it is the one to plan for.** A
+record read while the call is running carries *partial* durations — the second
+read of the same meeting returned identical numbers with `"ongoing": false`, so
+the finalised values only exist once everybody has gone. **The join window shuts
+fifteen minutes after the start, and a session runs thirty to ninety** — so at
+the moment the current settlement fires, the meeting is still in progress.
+
+**Q3 and Q4, measured:**
+
+```
+room opened (nbf)   02:34:26
+mentee  joined 02:35:52  left 02:38:09  present 137s   user_id spike-mentee-55e2d5c4
+mentor  joined 02:35:59  left 02:37:09  present  70s   user_id spike-mentor-9ae25809
+
+co-presence: 02:35:59 -> 02:37:09 = 70s
+```
+
+Two intervals, overlapping by 70 seconds, each attributed to the id we minted.
+Neither is a boundary case — the mentor arrived after the mentee and left before
+them — so the record genuinely distinguishes them rather than reporting one
+meeting-level span twice.
+
+There is no explicit `leave_time`, and **that is Daily's design rather than an
+omission in this endpoint** — their documentation says the same of the
+`participant.left` webhook, which carries `joined_at` and `duration` and no
+leave timestamp. `joined_at + duration` is the sanctioned derivation on both
+transports, so it is one definition rather than a workaround, and it has one
+fewer clock to disagree with itself.
+
+The webhook additionally carries `event_ts`, documented as *close to but not
+exactly* when the participant left — so even there the arithmetic is the
+authority and the timestamp is not. That matters for the live path below: the
+event tells you *that* somebody left, and `joined_at + duration` tells you when.
+
+### The two transports are for two different jobs
+
+Both carry the same fields, so an earlier draft of this guide concluded we do not
+need the webhook at all. **That was wrong, and wrong in a specific way: it
+analysed settlement and stated the answer as though it covered everything.**
+
+| job | when | transport | why |
+|---|---|---|---|
+| **settle** — `completed` against `no_show` | after the session | `GET /meetings` | the sweep already runs; the record accumulates every participant, so nothing is missed between polls |
+| **show who is in the room** | during the session | `participant.left` / `participant.joined` webhook | polling at any tolerable rate is either laggy or expensive, and it is the *other* party who is waiting |
+
+**Settlement genuinely does not need a push.** The record aggregates, so a
+participant who joined and left between two polls is still in it — the hourly
+sweep loses nobody, and Q5 means the data is there when it asks.
+
+**Live attendance does.** The waiting screen built on `join_opens_at`,
+`join_closes_at` and each party's arrival is currently fed by our **own** Join
+button, which records an *intention*: a mentee who presses it and never reaches
+the room leaves the mentor looking at "your mentee has joined" while they sit
+alone. Daily's events are the only thing that makes that screen true, and
+"true within a second" is not something a poll can deliver without either a
+tight interval per live session or a stale display.
+
+So the webhook is a real component of the Daily phase, not an alternative to the
+pull. What it costs, stated so it is planned rather than discovered: a public
+endpoint, signature verification, and tolerance for retries and out-of-order
+delivery — a webhook that assumes exactly-once and in-order is a webhook that
+records a leave before the join it belongs to.
+
+## What this changes
+
+**Co-presence is computable, so `completed` can mean the session happened.** The
+option this project deferred — *does `completed` require overlap* — is no longer
+blocked by "we cannot see it anywhere". It is answerable on Daily and remains
+unanswerable on Google Meet, which is the argument for Daily as the default.
+
+**Attendance settlement has to split into two questions asked at two times.**
+
+| question | answerable at | source |
+|---|---|---|
+| did each party turn up | `starts_at + 15m`, when the join window shuts | the platform's own `/join`, or the record |
+| were they ever in the room together | after the session ends, when `ongoing` goes false | the record |
+
+The current sweep answers both at the window's close, which is correct for the
+first and impossible for the second. Either it settles later, or attendance
+upgrades from `reported` to `observed` in a second pass — and
+`session_events.metadata` already carries that distinction for exactly this
+reason.
+
+**`session_participants.left_at` is writable**, from `join_time + duration`.
+That is the producer `left_early` was kept off the droppable list for.
+
+**The token's `user_id` must be our `users.id`.** It round-trips verbatim, so
+attendance is attributable without a lookup table.
+
+## Still unanswered, and one of them is load-bearing
+
+**Every session room is created private, and that is settled** — it is not a
+per-session judgement and there is no case for a public one. Q1 therefore stops
+being a design fork: if `privacy: private` did not refuse an untokened visitor,
+that would be a defect in Daily rather than a choice we would have made
+differently, and the response would be to raise it with them rather than to
+publish links.
+
+It is still worth thirty seconds to confirm, because *how* we describe the
+guarantee to a mentor depends on it — "nobody can join without the link we give
+you" is a promise, and a promise nobody checked is the kind that surfaces in a
+complaint. The run had two participants and no third, but nobody recorded trying
+the untokened URL, and an absence of evidence is not the measurement.
+
+**Q2 is the one that is genuinely still a fork.** If `nbf` is enforced at the
+door, early joining is impossible on Daily and merely discouraged on Meet. If it
+is advisory, both providers need the same UI copy and the difference between
+them narrows to attendance alone.
+
+Both are browser observations the script cannot make. Re-run and note them, or
+try the bare URL against any private room:
+
+```bash
+uv run python scripts/daily_spike.py            # note Q1, Q2 and Q6 as you go
+uv run python scripts/daily_spike.py --cleanup-only
+```
 
 ## Why each question is here
 

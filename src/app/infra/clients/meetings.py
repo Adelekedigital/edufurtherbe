@@ -15,12 +15,22 @@ there is nowhere to read a mentor's token from, and no calendar event can be
 created for anybody until that lands. The null adapter is not a placeholder for
 laziness; it is the honest state of the system.
 
-**The Daily side is blocked on a measurement**, not a decision.
-`scripts/daily_spike.py` asks six questions whose answers shape this adapter —
-whether a private room refuses an untokened URL, whether ``nbf`` is enforced,
-whether the meeting record carries per-participant join *and* leave, and how
-long after the call it appears. Building against the documentation before those
-are answered is what the calendar spike exists to stop us doing.
+**The Daily side was blocked on a measurement, and most of it is now answered.**
+`docs/daily-spike-guide.md` has the run. The record carries per-participant
+``join_time`` and ``duration`` — two ends, so intervals, so co-presence — the
+``user_id`` we mint round-trips verbatim, and there is **no lag at all**: the
+record is readable during the call, which is the opposite of the Google
+free/busy result.
+
+The trap it did surface is ``ongoing``. A record read mid-call carries partial
+durations, and the join window shuts fifteen minutes into a session that runs
+thirty to ninety — so attendance and *co-presence* are two questions answerable
+at two different times, and this adapter's reader has to know which it is
+serving.
+
+**Q1 and Q2 are still open**, and Q1 is load-bearing: whether ``privacy:
+private`` refuses a visitor holding the URL and no token is the whole basis for
+not publishing the link.
 """
 
 from __future__ import annotations
@@ -94,14 +104,37 @@ class NullRooms:
 class DailyRooms:
     """Daily, and it is not built.
 
+    Rooms are created ``private`` unconditionally — see the note on the spike
+    below.
+
     Raises rather than returning a plausible object, because a room URL that
     leads nowhere is worse than a session with no link at all: the mentee
     arrives, finds nothing, and has no reason to think anything is wrong with
     the platform rather than with them.
 
-    What the spike decides before this is written: whether ``privacy: private``
-    refuses an untokened URL — the whole withheld-link design rests on it — and
-    whether a token's ``nbf`` is enforced or advisory.
+    What the spike has since settled: the room accepts ``nbf`` and ``exp`` in
+    ``properties`` and reflects them in ``config``, a meeting token carries
+    ``room_name``, ``user_name``, ``user_id``, ``is_owner``, ``nbf`` and
+    ``exp``, and the joined URL is ``<room url>?t=<token>``.
+
+    **Every session room is private, always.** Not a per-session judgement and
+    not a setting — there is no case for a public one, and the URL reaching a
+    participant only through the platform is what makes the join a thing we can
+    record. Whether Daily *enforces* it is unconfirmed; if it did not, that
+    would be a defect to raise with them rather than a choice to revisit.
+
+    Still open: whether ``nbf`` is enforced at the door or merely recorded. That
+    one is a genuine fork — enforced, early joining is impossible here and only
+    discouraged on Meet; advisory, both providers need the same UI copy.
+
+    **A webhook belongs beside this, not instead of it.** ``GET /meetings``
+    settles a finished session and the hourly sweep loses nobody, because the
+    record accumulates. It cannot make a *waiting* screen true: the arrival a
+    participant sees today is our own Join press, which records an intention, so
+    somebody who presses it and never reaches the room leaves the other party
+    looking at a lie. ``participant.joined`` and ``participant.left`` are what
+    fix that, and they bring a public endpoint, signature verification and
+    tolerance for retries and out-of-order delivery with them.
     """
 
     def __init__(self, api_key: str, client: Any = None) -> None:
