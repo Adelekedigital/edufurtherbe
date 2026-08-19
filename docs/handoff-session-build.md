@@ -138,10 +138,20 @@ recreates `ix_sessions_mentee_upcoming`, `ix_sessions_mentor_upcoming` and the
 That pairing already exists as `LIVE_STATUSES = "status IN ('pending_mentor_approval', 'confirmed')"`
 in `infra/db/models/sessions.py` — the predicate behind the double-booking constraint. Reuse it.
 
-- **Accept** (mentor only): Pending → Upcoming. **Decline** (mentor only) and **Cancel** → History.
-- **Either party may cancel**, from Pending or Upcoming. A mentee can never accept their own request.
-- **Nobody may cancel within 10 minutes of `starts_at`.** Time-relative, so no `CHECK` can hold it; a
-  trigger can, on the `trg_refuse_retiring_a_primary_offering` precedent.
+- **Accept** (mentor only): Pending → Upcoming. **Decline** (mentor only): Pending → History.
+- **Withdraw** (mentee only): Pending → History. A mentee can never accept their own request.
+- **Cancel** (either party): **Upcoming only** → History. ~~Either party may cancel, from Pending or
+  Upcoming.~~ — **refined 2026-08-18 and confirmed.** A pending request is left by withdrawing or
+  declining, not by cancelling. The split follows `WITHDRAWN` (#107): a request nobody answered is not
+  a booking broken after agreement, and they carry different refund policy and reliability statistics.
+  Conflating them writes the wrong status into somebody's history.
+- **Nobody may cancel within 10 minutes of `starts_at`** — and since cancel now applies only to
+  Upcoming, **the cutoff only ever applies to Upcoming**. Shipped as `CANCELLATION_CUTOFF =
+  timedelta(minutes=10)` in `domain/sessions.py`, ~~a trigger, on the
+  `trg_refuse_retiring_a_primary_offering` precedent~~ — deliberately **not** a trigger: being
+  time-relative rules out a `CHECK` but does not by itself argue for one, and a rule the product will
+  revisit does not belong where every change is a migration. That precedent is also gone: the trigger
+  was dropped in `c8f1a3e2b904`.
 - **History filters by status only.** Filtering by date or mentor name is wanted eventually and was
   explicitly called not a priority. Do not build it speculatively.
 - **Every transition writes a `session_events` row.** The reason vocabulary already exists —
