@@ -32,6 +32,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0022](0022-session-type-vocabularies.md) | A session type's classification and stage get vocabularies | Accepted — diverges from canonical `04_sessions.sql` |
 | [0023](0023-per-offering-scheduling-windows.md) | Per-offering scheduling windows replace general availability | Accepted — no canonical counterpart |
 | [0024](0024-booking-is-idempotent-and-scoped-to-the-caller.md) | Booking is idempotent, and the key is scoped to the caller | Accepted — diverges from the package on `idempotency_keys` |
+| [0025](0025-notifications-two-senders-one-taxonomy.md) | Notifications: two senders, one taxonomy, and scheduled callbacks | Accepted — no canonical counterpart |
 
 ## Conventions
 

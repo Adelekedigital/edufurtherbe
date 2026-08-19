@@ -10,6 +10,25 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Added
+
+- **ADR 0025 — the notification architecture.** Two email senders split by use
+  case (Emailit for auth, marketing and subscription; Loops for transactional),
+  each on its own sending subdomain, with provider-prefixed template ids so a
+  message can move between them by configuration alone.
+
+  **One rule decides who is told:** a message caused by somebody goes to the
+  party who did not cause it; a message caused by time going past goes to both.
+  `expired` is the single exception, because no person produced it.
+
+  **Reminders are QStash callbacks that re-read the session before sending**, so
+  nothing is ever cancelled — a callback for a session called off simply does
+  nothing. The hourly sweep cannot deliver a 30-minute reminder, and a tighter
+  GitHub Actions cron is unreliable however short the interval.
+
+  Nothing is built. This is the shape, and the record says what the build has to
+  demonstrate.
+
 ### Fixed
 
 - **Three OpenAPI tags had no description** — `public`, `availability` and
