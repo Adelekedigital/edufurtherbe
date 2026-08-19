@@ -366,9 +366,28 @@ async def cancel_session(_: CancelledSessionDep) -> dict[str, bool]:
         "mentor's Workspace. This press is the signal.\n\n"
         "The session's own outcome — `completed` when both of you came, "
         "`no_show` when either did not — is decided once for both parties after "
-        "the window shuts, not here."
+        "the window shuts, not here.\n\n"
+        "**`meeting_url` in the response is where to go, and for a Daily "
+        "session it is not the URL on the session.** That room is private and "
+        "refuses anybody without a token, so what comes back here carries one "
+        "minted for you, for this session, expiring when it ends. It is "
+        "returned and never stored — a token kept on the row would be a live "
+        "credential sitting in every backup, outliving the session it "
+        "opens.\n\n"
+        "**It can be `null` on a success.** Your arrival is recorded either "
+        "way; a null means the venue could not be reached or none is "
+        "configured, which is a different thing from being refused entry and "
+        "should be shown as such."
     ),
     responses=TRANSITION_RESPONSES,
 )
-async def join_session(_: JoinedSessionDep) -> dict[str, bool]:
-    return {"joined": True}
+async def join_session(door: JoinedSessionDep) -> dict[str, object]:
+    """`meeting_url` is where to go, and it is **not** the stored one for Daily.
+
+    A private room refuses anybody without a token, so the address on the
+    session opens nothing. What comes back here carries a credential minted for
+    this caller, for this session, expiring when it ends — which is why it is
+    returned rather than stored, and why the response is the only place it
+    exists.
+    """
+    return {"joined": True, "meeting_url": door}

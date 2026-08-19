@@ -347,3 +347,160 @@ async def test_an_unwired_provider_does_not_fail_the_booking(
     stored = await venue_of(db_engine, session["id"])
     assert stored["meeting_url"] is None
     assert stored["meeting_provider"] == "daily"
+
+
+# --------------------------------------------------------------------------
+# The door
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class FakeDoor(FakeRooms):
+    """A room provider that also mints tokens, recording what it was asked."""
+
+    tokens: list[dict[str, Any]] = field(default_factory=list)
+
+    def token_for(self, **kwargs: Any) -> str:
+        self.tokens.append(kwargs)
+        return "minted-token"
+
+
+@pytest.fixture
+def door(api_client: httpx.AsyncClient) -> FakeDoor:
+    rooms = FakeDoor()
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.meeting_rooms = rooms
+    app.state.calendar = FakeCalendar()
+    return rooms
+
+
+async def joinable(
+    engine: AsyncEngine, client: httpx.AsyncClient, setup: dict[str, Any]
+) -> dict[str, Any]:
+    """A booked session moved into its own join window."""
+    session = await book(client, setup)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET starts_at = now() + interval '1 minute' WHERE id = :i"),
+            {"i": session["id"]},
+        )
+    return session
+
+
+async def test_joining_a_daily_session_returns_a_tokenised_url(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
+) -> None:
+    """**The gap this closes.** A private room refuses anybody without a token,
+    so recording an arrival and handing back the stored address would send the
+    participant somewhere that turns them away — worse than no link, because it
+    looks like the platform is broken rather than unfinished."""
+    setup = await a_mentor_on(db_engine, "door-daily", "daily")
+    session = await joinable(db_engine, api_client, setup)
+
+    joined = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
+
+    assert joined.status_code == 200, joined.text
+    assert joined.json()["meeting_url"] == "https://ef.daily.co/room?t=minted-token"
+    # One token, minted at the moment somebody asked — not stored on the row.
+    assert len(door.tokens) == 1
+
+
+async def test_the_token_carries_the_caller_and_their_role(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
+) -> None:
+    """Each party gets their own credential. The mentor is the owner — on Daily
+    that is who may admit, mute and end — and handing both the same token would
+    let a mentee end their mentor's session."""
+    setup = await a_mentor_on(db_engine, "door-role", "daily")
+    session = await joinable(db_engine, api_client, setup)
+
+    await api_client.post(f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"])
+    await api_client.post(f"/api/v1/sessions/{session['id']}/join", headers=setup["mentor_headers"])
+
+    mentee_token, mentor_token = door.tokens
+    assert mentee_token["is_owner"] is False
+    assert mentor_token["is_owner"] is True
+    assert mentee_token["user_id"] != mentor_token["user_id"]
+
+
+async def test_the_token_outlives_the_join_window(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
+) -> None:
+    """One expiring when the window shuts would evict its holder fifteen minutes
+    into an hour-long session — the same reason the room's own `exp` comes from
+    the duration."""
+    setup = await a_mentor_on(db_engine, "door-exp", "daily")
+    session = await joinable(db_engine, api_client, setup)
+
+    await api_client.post(f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"])
+
+    (minted,) = door.tokens
+    assert minted["closes_at"] - minted["opens_at"] > dt.timedelta(minutes=60)
+
+
+async def test_a_meet_session_returns_the_stored_link_unchanged(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
+) -> None:
+    """Meet's link is on the calendar event and is not ours to gate. Minting a
+    Daily token for it would produce a URL that goes nowhere."""
+    setup = await a_mentor_on(db_engine, "door-meet", "google_meet")
+    session = await joinable(db_engine, api_client, setup)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET meeting_url = :u WHERE id = :i"),
+            {"u": "https://meet.google.com/abc", "i": session["id"]},
+        )
+
+    joined = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
+
+    assert joined.json()["meeting_url"] == "https://meet.google.com/abc"
+    assert door.tokens == []
+
+
+async def test_an_unreachable_provider_still_records_the_arrival(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**A null door is not a refused join.** The arrival is committed either
+    way, and a 500 here would fail a request that had already done the thing it
+    was asked to do — for a session the participant is trying to attend *right
+    now*."""
+    setup = await a_mentor_on(db_engine, "door-down", "daily")
+    session = await joinable(db_engine, api_client, setup)
+
+    joined = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
+
+    assert joined.status_code == 200, joined.text
+    assert joined.json()["meeting_url"] is None
+    async with db_engine.connect() as conn:
+        status = (
+            await conn.execute(
+                text(
+                    "SELECT attendance_status FROM session_participants "
+                    "WHERE session_id = :i AND role = 'mentee'"
+                ),
+                {"i": session["id"]},
+            )
+        ).scalar_one()
+    assert status == "attended"
+
+
+async def test_a_refused_join_gets_no_door(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
+) -> None:
+    """Outside the window there is nothing to open, and minting a token anyway
+    would hand out a working credential for a session nobody may join yet."""
+    setup = await a_mentor_on(db_engine, "door-early", "daily")
+    session = await book(api_client, setup)
+
+    refused = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
+
+    assert refused.status_code == 409, refused.text
+    assert door.tokens == []

@@ -404,7 +404,7 @@ def _past(action: str) -> str:
 
 async def record_arrival(
     session: AsyncSession, session_id: UUID, actor_id: UUID, *, now: dt.datetime
-) -> None:
+) -> dict[str, Any]:
     """Mark the caller present at their own session.
 
     **Only their own row.** The `WHERE` names `user_id = actor_id`, so a mentor
@@ -418,6 +418,11 @@ async def record_arrival(
     that; without it the column would record the last press, which is the one
     fact nobody wants.
 
+    Returns what the caller needs to be sent somewhere: the venue, the stored
+    URL, the room's provider-side name, and which side of the session they are
+    on. **Resolving that into a door is the caller's job**, not this one's — the
+    writer has no HTTP client and should not grow one.
+
     Raises :class:`NotFoundError` when the session is not the caller's, and
     :class:`ConflictError` when it is not confirmed or the window is shut. Does
     not commit.
@@ -425,7 +430,15 @@ async def record_arrival(
     row = (
         (
             await session.execute(
-                select(Session.status, Session.starts_at).where(
+                select(
+                    Session.status,
+                    Session.starts_at,
+                    Session.duration_minutes,
+                    Session.meeting_url,
+                    Session.meeting_provider,
+                    Session.external_room_id,
+                    (Session.mentor_id == actor_id).label("is_mentor"),
+                ).where(
                     Session.id == session_id,
                     or_(Session.mentor_id == actor_id, Session.mentee_id == actor_id),
                 )
@@ -469,6 +482,8 @@ async def record_arrival(
         # their arrival was recorded, walk away, and be settled as absent with
         # nothing to appeal against.
         raise ConflictError("this session has no attendance record for you")
+
+    return dict(row)
 
 
 def _window_shut(now: dt.datetime) -> Any:
