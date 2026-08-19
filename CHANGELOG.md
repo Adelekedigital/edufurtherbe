@@ -59,6 +59,40 @@ released. A tag with no matching section here fails the release job.
   refused entry.
 
   Set `DAILY_API_KEY` to enable it; unset, sessions book exactly as before.
+- **Response reminders fire, and a signed callback is what fires them.**
+  `POST /api/v1/callbacks/reminders` — QStash publishes at booking, calls back
+  when a reminder is due, and the callback **re-reads the request** before
+  queueing anything.
+
+  **Nothing is ever cancelled.** A reminder for a request already accepted,
+  declined, withdrawn or expired does nothing and says so. The alternative makes
+  four transitions responsible for unscheduling, and the bug is the one somebody
+  forgets.
+
+  **Safe to call twice**, which QStash does on retry: a partial unique index
+  makes the second enqueue a no-op rather than a second identical email.
+
+  Verification checks the issuer, the destination, **and a hash of the exact
+  body** — without the last, anybody who observed one callback could replay its
+  signature against a body of their choosing.
+
+  Set `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and `PUBLIC_BASE_URL`. Unset,
+  reminders never fire and nothing else changes.
+
+### Fixed
+
+- **An app now carries its own settings.** `create_app(settings)` stored them
+  nowhere, so every dependency reading configuration called the process-wide
+  `get_settings()` cache and ignored what the app was handed — which is how
+  every test builds one.
+
+- **`.env.example` documents `LOOPS_API_KEY` and the template maps**, which the
+  outbox change should have added and did not: its edit was anchored on a line
+  that only exists on another branch, and a `.replace` with no assert did
+  nothing quietly.
+
+### Added
+
 - **People are told things.** `outbox_events` queues a message inside the
   transaction that caused it; the drain in `settle_sessions` sends it through
   Loops (ADR 0025).

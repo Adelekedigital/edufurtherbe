@@ -202,4 +202,21 @@ class OutboxEvent(TimestampMixin, Base):
             "created_at",
             postgresql_where=text("status = 'pending'"),
         ),
+        # **At most one reminder per session per kind, whatever QStash does.**
+        # A retried callback would otherwise queue an identical second email;
+        # nothing else in this table stops it, because two rows differing only
+        # by id are exactly what it is normally for. ADR 0015 prescribes this
+        # shape — a natural key re-declared as `UNIQUE` — so the index is the
+        # sanctioned form rather than a workaround.
+        #
+        # Partial on the reminder shape, so it constrains nothing else: every
+        # other message writes no `kind` and is skipped entirely.
+        Index(
+            "uq_outbox_events_reminder",
+            "entity_id",
+            "event_type",
+            text("(payload ->> 'kind')"),
+            unique=True,
+            postgresql_where=text("payload ? 'kind'"),
+        ),
     )

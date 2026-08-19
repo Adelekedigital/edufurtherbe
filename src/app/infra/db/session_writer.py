@@ -54,7 +54,7 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.domain.meetings import plan_for
-from app.domain.notifications import Notification, recipients
+from app.domain.notifications import Notification, recipients, reminders_for
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
@@ -62,6 +62,7 @@ from app.domain.sessions import (
     too_late_to_cancel,
 )
 from app.infra.clients.meetings import VenueUnavailableError, room_name
+from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import (
     Session,
@@ -85,6 +86,7 @@ __all__ = [
     "provision_meeting",
     "record_arrival",
     "release_meeting",
+    "remind_if_still_waiting",
     "settle_attendance",
     "transition",
 ]
@@ -193,6 +195,8 @@ async def book_session(
     payload: dict[str, Any],
     *,
     now: dt.datetime,
+    scheduler: Any = None,
+    callback_url: str | None = None,
 ) -> UUID:
     """Book ``starts_at`` on an offering, and return the new session's id.
 
@@ -315,6 +319,30 @@ async def book_session(
         entity_id=session_id,
         recipient_ids=recipients(booked, mentor_id=mentor_id, mentee_id=mentee_id),
     )
+
+    # **The reminders, scheduled here and fired by a callback later.**
+    #
+    # Only for a request that waits: an auto-confirmed session has nobody to
+    # nudge. And only for the ones still ahead — at the 24-hour booking floor
+    # the deadline is eighteen hours away, so `t24` is already behind and
+    # sending it now would be the booking message again, thirty seconds later.
+    #
+    # **A scheduling failure does not fail the booking.** The session exists and
+    # holds its slot; the mentor is simply not nudged, and the deadline still
+    # arrives on its own. Refusing the booking because a scheduler was slow
+    # would lose something that cannot be recovered to protect something that
+    # can.
+    deadline = respond_by(starts_at, requires_confirmation=requires_confirmation)
+    if deadline is not None and scheduler is not None and callback_url:
+        for kind, at in reminders_for(deadline, now=now):
+            try:
+                scheduler.schedule(
+                    url=callback_url,
+                    body={"session_id": str(session_id), "kind": kind},
+                    at=at,
+                )
+            except (SchedulerError, NotImplementedError) as exc:
+                logger.info("reminder %s for session %s not scheduled: %s", kind, session_id, exc)
 
     # **The event is written by the same transaction as the status**, per the
     # model's own note: a trigger projecting one onto the other would be a
@@ -975,3 +1003,49 @@ async def release_meeting(session: AsyncSession, session_id: UUID, *, calendar: 
     await session.execute(
         update(Session).where(Session.id == session_id).values(external_calendar_event_id=None)
     )
+
+
+async def remind_if_still_waiting(session: AsyncSession, session_id: UUID, kind: str) -> bool:
+    """Queue a reminder, unless the request has already been answered.
+
+    **This re-read is the whole design.** Scheduling ahead normally obliges four
+    transitions to unschedule, and the bug is the reminder that fires for a
+    request answered through the one path somebody forgot. Checking at delivery
+    makes that state unreachable rather than merely handled — nothing is ever
+    cancelled, because a callback for a settled request simply does nothing.
+
+    Returns whether anything was queued, so the route can say which happened
+    without the caller inspecting the database.
+
+    **Idempotent through the unique index**, not through this read: two
+    callbacks arriving together would both see a pending request, and the second
+    insert is the one that no-ops. QStash retries, so that is a real race rather
+    than a theoretical one.
+    """
+    row = (
+        (
+            await session.execute(
+                select(Session.status, Session.mentor_id, Session.mentee_id).where(
+                    Session.id == session_id
+                )
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or SessionStatus(row["status"]) is not SessionStatus.PENDING_MENTOR_APPROVAL:
+        return False
+
+    await enqueue(
+        session,
+        Notification.MENTOR_RESPONSE_REMINDER,
+        entity_type="session",
+        entity_id=session_id,
+        recipient_ids=recipients(
+            Notification.MENTOR_RESPONSE_REMINDER,
+            mentor_id=row["mentor_id"],
+            mentee_id=row["mentee_id"],
+        ),
+        variables={"kind": kind},
+    )
+    return True
