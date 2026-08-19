@@ -29,8 +29,10 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field
 
+from app.domain.attendance import join_window
 from app.domain.enums import (
     ActorType,
+    AttendanceStatus,
     MeetingProvider,
     SessionReasonCode,
     SessionStatus,
@@ -60,6 +62,28 @@ class PartyRead(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     avatar_url: str | None = None
+    joined_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "When this party marked themselves present, or `null` if they have "
+            "not. **The first arrival, not the latest** — pressing Join again "
+            "after a dropped call does not move it.\n\n"
+            "`null` while a session is upcoming is the ordinary case, not a "
+            "signal."
+        ),
+    )
+    attendance_status: AttendanceStatus = Field(
+        default=AttendanceStatus.PENDING,
+        description=(
+            "**`pending` means *we do not know yet*, not absent.** It is the "
+            "state of every party until the join window shuts, and counting it "
+            "as absence would report everybody with a session next week as "
+            "unreliable.\n\n"
+            "A party with no attendance record at all reports `pending` too — "
+            "two of the migrated bookings have no participant row, and a "
+            "missing row is not an arrival."
+        ),
+    )
 
 
 class SessionRead(BaseModel):
@@ -123,6 +147,29 @@ class SessionRead(BaseModel):
             "as a record of how long they actually had."
         ),
     )
+    join_opens_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "When either party may first mark themselves present — five "
+            "minutes before the start.\n\n"
+            "**Sent rather than left to the client to compute**, because the "
+            "offsets are a product rule that will become a mentor preference. "
+            "A client hardcoding five and fifteen drifts from us the day that "
+            "lands, and drifts silently."
+        ),
+    )
+    join_closes_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "When the window shuts — fifteen minutes after the start. Joining "
+            "after it is refused, and the session's outcome is decided from "
+            "this instant.\n\n"
+            "**This is the instant a waiting participant needs**, and the "
+            'reason it is here: *"your mentor can still join until 15:15"* is '
+            'correct, where *"wait up to fifteen minutes"* is wrong for '
+            "somebody who arrived at 15:14."
+        ),
+    )
     created_at: dt.datetime = Field(description="When the session was booked.")
     mentee_attendance_rate: int | None = Field(
         default=None,
@@ -149,6 +196,9 @@ class SessionRead(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> SessionRead:
+        # Derived here rather than stored, because it is `starts_at` plus two
+        # constants and a stored copy would be a second definition to drift.
+        opens, closes = join_window(row["starts_at"])  # type: ignore[arg-type]
         return cls(
             id=str(row["id"]),
             mentor_id=str(row["mentor_id"]),
@@ -166,6 +216,8 @@ class SessionRead(BaseModel):
             ),
             meeting_url=str(row["meeting_url"]) if row["meeting_url"] else None,
             respond_by=row.get("respond_by"),  # type: ignore[arg-type]
+            join_opens_at=opens,
+            join_closes_at=closes,
             created_at=row["created_at"],  # type: ignore[arg-type]
             mentee_attendance_rate=(
                 int(str(row["mentee_attendance_rate"]))
@@ -182,11 +234,17 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
     differ only by prefix, and two copies is where the mentee quietly stops
     getting the avatar somebody added to the mentor.
     """
+    status = row.get(f"{side}_attendance_status")
     return PartyRead(
         id=str(row[f"{side}_id"]),
         first_name=_text(row.get(f"{side}_first_name")),
         last_name=_text(row.get(f"{side}_last_name")),
         avatar_url=_text(row.get(f"{side}_avatar_url")),
+        joined_at=row.get(f"{side}_joined_at"),  # type: ignore[arg-type]
+        # A missing participant row arrives as `None` and becomes `pending`,
+        # which is the same answer as an unsettled row and the right one: both
+        # mean *we do not know*, and only a settled row can say otherwise.
+        attendance_status=(AttendanceStatus(str(status)) if status else AttendanceStatus.PENDING),
     )
 
 
