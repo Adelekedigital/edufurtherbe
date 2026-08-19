@@ -11,18 +11,115 @@ Nothing is decided by running this. It prints what happened.
 
 ## Measured results
 
-*Not yet run.* Fill this table in from a real account, the way the calendar
-guide's table was filled in, and the port is built against these answers rather
-than against Daily's documentation.
+Run against a real account on 2026-08-19, room `efspike-4baae5dedb`.
 
 | Question | Answer |
 |---|---|
-| Q1 `privacy: private` refuses a visitor holding the URL and no token | |
-| Q2 a token's `nbf` refuses an early join | |
-| Q3 the meeting record gives per-participant **join and leave** | |
-| Q4 the `user_id` minted onto the token reaches that record | |
-| **Q5 how long after the call the record appears** | |
-| Q6 `exp` closes the room, and what somebody inside sees | |
+| Q1 `privacy: private` refuses a visitor holding the URL and no token | **not reported** |
+| Q2 a token's `nbf` refuses an early join | **not reported** |
+| Q3 the meeting record gives per-participant **join and leave** | **yes** — `join_time` plus `duration` |
+| Q4 the `user_id` minted onto the token reaches that record | **yes**, verbatim |
+| **Q5 how long after the call the record appears** | **it does not wait** — readable *during* the call |
+| Q6 `exp` closes the room, and what somebody inside sees | **not reported** |
+
+**Q5 is the opposite of the Google result, and that is the headline.** Free/busy
+read back empty right after a write; Daily's record was there mid-call, with
+`"ongoing": true`. There is no lag to design around.
+
+**But `ongoing` introduces a different trap, and it is the one to plan for.** A
+record read while the call is running carries *partial* durations — the second
+read of the same meeting returned identical numbers with `"ongoing": false`, so
+the finalised values only exist once everybody has gone. **The join window shuts
+fifteen minutes after the start, and a session runs thirty to ninety** — so at
+the moment the current settlement fires, the meeting is still in progress.
+
+**Q3 and Q4, measured:**
+
+```
+room opened (nbf)   02:34:26
+mentee  joined 02:35:52  left 02:38:09  present 137s   user_id spike-mentee-55e2d5c4
+mentor  joined 02:35:59  left 02:37:09  present  70s   user_id spike-mentor-9ae25809
+
+co-presence: 02:35:59 -> 02:37:09 = 70s
+```
+
+Two intervals, overlapping by 70 seconds, each attributed to the id we minted.
+Neither is a boundary case — the mentor arrived after the mentee and left before
+them — so the record genuinely distinguishes them rather than reporting one
+meeting-level span twice.
+
+There is no explicit `leave_time`, and **that is Daily's design rather than an
+omission in this endpoint** — their documentation says the same of the
+`participant.left` webhook, which carries `joined_at` and `duration` and no
+leave timestamp. `joined_at + duration` is the sanctioned derivation on both
+transports, so it is one definition rather than a workaround, and it has one
+fewer clock to disagree with itself.
+
+The webhook additionally carries `event_ts`, documented as *close to but not
+exactly* when the participant left — so even there the arithmetic is the
+authority, not the timestamp.
+
+### And that settles whether we need a webhook: we do not
+
+Two transports carry the same fields, and the choice between them turns entirely
+on Q5:
+
+| | needs | fits |
+|---|---|---|
+| **`GET /meetings`** | nothing new | the sweep that already exists |
+| `participant.left` webhook | a public endpoint, a shared secret, replay and ordering handling | a push model we do not otherwise have |
+
+A webhook earns its place when polling is too slow or too expensive. **Q5
+removed the first reason** — the record is readable during the call — and one
+extra read inside a sweep that already runs hourly removes the second. So the
+attendance reader is a REST pull in `settle_sessions`, and no new inbound
+surface, secret or retry semantics enter the system.
+
+Worth stating because the opposite is the default assumption: *real-time
+attendance* sounds like it wants a webhook, and it does not.
+
+## What this changes
+
+**Co-presence is computable, so `completed` can mean the session happened.** The
+option this project deferred — *does `completed` require overlap* — is no longer
+blocked by "we cannot see it anywhere". It is answerable on Daily and remains
+unanswerable on Google Meet, which is the argument for Daily as the default.
+
+**Attendance settlement has to split into two questions asked at two times.**
+
+| question | answerable at | source |
+|---|---|---|
+| did each party turn up | `starts_at + 15m`, when the join window shuts | the platform's own `/join`, or the record |
+| were they ever in the room together | after the session ends, when `ongoing` goes false | the record |
+
+The current sweep answers both at the window's close, which is correct for the
+first and impossible for the second. Either it settles later, or attendance
+upgrades from `reported` to `observed` in a second pass — and
+`session_events.metadata` already carries that distinction for exactly this
+reason.
+
+**`session_participants.left_at` is writable**, from `join_time + duration`.
+That is the producer `left_early` was kept off the droppable list for.
+
+**The token's `user_id` must be our `users.id`.** It round-trips verbatim, so
+attendance is attributable without a lookup table.
+
+## Still unanswered, and one of them is load-bearing
+
+**Q1 was not reported, and the withheld-link design rests on it.** If a bare
+room URL admits somebody, then not publishing the link protects nothing and the
+time gate becomes the only control — which makes Q2 decisive rather than merely
+useful. The room in this run had two participants and no third, but nobody
+recorded trying the untokened URL, and an absence of evidence is not the
+measurement.
+
+Both are browser observations the script cannot make. Re-run and note them, or
+try the bare URL against any private room:
+
+```bash
+uv run python scripts/daily_spike.py            # note Q1, Q2 and Q6 as you go
+uv run python scripts/daily_spike.py --cleanup-only
+```
 
 ## Why each question is here
 
