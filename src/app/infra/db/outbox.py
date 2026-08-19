@@ -21,7 +21,7 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,8 +73,7 @@ async def enqueue(
     """
     if not recipient_ids:
         return
-    await session.execute(
-        insert(OutboxEvent),
+    statement = insert(OutboxEvent).values(
         [
             {
                 "event_type": notification,
@@ -84,8 +83,14 @@ async def enqueue(
                 "payload": {"recipient_id": str(recipient_id), **(variables or {})},
             }
             for recipient_id in recipient_ids
-        ],
+        ]
     )
+    # **A reminder queued twice is an identical email a mentor did not need**,
+    # and QStash retries by design — so a second enqueue for the same session
+    # and kind is a no-op rather than an error. Nothing else carries a `kind`,
+    # so the index this defers to skips every other message and the conflict
+    # target can never match one.
+    await session.execute(statement.on_conflict_do_nothing(index_where=text("payload ? 'kind'")))
 
 
 async def drain(session: AsyncSession, *, notifier: Any, now: dt.datetime) -> dict[str, int]:

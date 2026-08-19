@@ -262,6 +262,31 @@ class Settings(BaseSettings):
     #: is then visible in a table rather than in nobody's inbox.
     loops_api_key: SecretStr | None = Field(default=None, validation_alias=env_key("loops_api_key"))
 
+    #: QStash's publish token, and the keys it signs callbacks with.
+    #:
+    #: Unset means `NullScheduler`: bookings still work, deadlines still pass,
+    #: and the expiry sweep still frees the slot — the mentor is simply never
+    #: nudged. Nothing else degrades.
+    qstash_token: SecretStr | None = Field(default=None, validation_alias=env_key("qstash_token"))
+
+    #: **Two keys, because QStash rotates them.** Both are tried, so a rotation
+    #: does not drop callbacks in the window where the old and the new are each
+    #: live. Configuring only the current one is legal, and is what a deployment
+    #: that has never rotated looks like.
+    qstash_current_signing_key: SecretStr | None = Field(
+        default=None, validation_alias=env_key("qstash_current_signing_key")
+    )
+    qstash_next_signing_key: SecretStr | None = Field(
+        default=None, validation_alias=env_key("qstash_next_signing_key")
+    )
+
+    #: Where QStash calls back to. **Ours to state rather than derive**: the
+    #: service cannot see the URL a proxy presented to the caller, and the
+    #: signature names its destination — so a derived value that is wrong
+    #: rejects every callback with a message about signatures rather than about
+    #: configuration.
+    public_base_url: str | None = Field(default=None, validation_alias=env_key("public_base_url"))
+
     # Where re-hosted profile images live. A plain name, not a secret: it appears
     # in every public image URL. The bucket is created once by an operator in the
     # dashboard, not by the migration script — see `infra/storage/supabase.py`.

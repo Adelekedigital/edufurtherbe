@@ -8,6 +8,7 @@ classes get bound to what the routes ask for.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
@@ -70,8 +71,15 @@ from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
 from app.domain.enums import AdminRole, MentorStatusType
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES, process
+from app.domain.notifications import REMINDER_OFFSETS
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.clients.meetings import NullCalendar, NullRooms
+from app.infra.clients.scheduler import (
+    NullScheduler,
+    QStashScheduler,
+    UntrustedCallbackError,
+    verify_callback,
+)
 from app.infra.db.admin_store import (
     approve_institution,
     merge_institution,
@@ -151,6 +159,7 @@ from app.infra.db.session_writer import (
     book_session,
     provision_meeting,
     record_arrival,
+    remind_if_still_waiting,
     transition,
 )
 from app.infra.db.slot_store import list_slots
@@ -1027,6 +1036,12 @@ def _calendar(request: Request) -> Any:
     return getattr(request.app.state, "calendar", None) or NullCalendar()
 
 
+#: Where QStash is told to call back. One constant, because the value is
+#: signed into the token QStash mints — so the path the scheduler publishes
+#: and the path the verifier expects must be the same string, not two that
+#: happen to agree.
+REMINDER_CALLBACK_PATH = "/api/v1/callbacks/reminders"
+
 ENDPOINT_BOOKING = "POST /api/v1/sessions"
 
 #: The one success code booking has. Stored on the key so a replay returns the
@@ -1089,7 +1104,12 @@ async def booked_session(
         raise ConflictError("a request with this Idempotency-Key is still in flight")
 
     session_id = await book_session(
-        session, user["id"], payload.model_dump(), now=dt.datetime.now(dt.UTC)
+        session,
+        user["id"],
+        payload.model_dump(),
+        now=dt.datetime.now(dt.UTC),
+        scheduler=_scheduler(request),
+        callback_url=_reminder_callback_url(request),
     )
     # **In the booking's own transaction**, so a session cannot be committed
     # without whatever venue it was going to get. It no-ops unless the session
@@ -1109,6 +1129,88 @@ async def booked_session(
 
 
 BookedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(booked_session)]
+
+
+def _configured(request: Request) -> Settings:
+    """This app's settings, falling back to the process-wide cache.
+
+    Every dependency below that reaches for configuration goes through here.
+    `get_settings()` is an `lru_cache` over the environment, so calling it
+    directly means an app built with explicit settings — which is how every test
+    builds one — runs on whatever the process happens to hold instead.
+    """
+    return getattr(request.app.state, "settings", None) or get_settings()
+
+
+def _scheduler(request: Request) -> Any:
+    """The real scheduler when a token is configured, and a loud nothing else.
+
+    Built per call rather than wired at startup, following `_rooms`: a token
+    added to the environment takes effect on the next deploy without a wiring
+    change, and a test that sets none gets the null adapter without unsetting
+    anything.
+    """
+    token = _configured(request).qstash_token
+    return QStashScheduler(token.get_secret_value()) if token else NullScheduler()
+
+
+def _reminder_callback_url(request: Request) -> str | None:
+    """Where QStash should call back, or ``None`` if we cannot say.
+
+    **Stated in configuration rather than derived from the request.** A service
+    behind a proxy cannot see the URL the caller used, and the signature names
+    its destination — so a derived value that is wrong rejects every callback
+    with a message about signatures rather than about configuration, which is
+    the hardest kind of misconfiguration to diagnose.
+    """
+    base = _configured(request).public_base_url
+    return f"{base.rstrip('/')}{REMINDER_CALLBACK_PATH}" if base else None
+
+
+async def reminder_callback(request: Request, session: SessionDep) -> bool:
+    """Verify the caller is QStash, then fire the reminder if it is still owed.
+
+    **The signature is the whole authorization**, so it is checked before the
+    body is parsed as anything — a payload that has not been proved authentic is
+    input, not instruction.
+
+    Raises :class:`AuthenticationError` rather than a bespoke status, so this
+    endpoint answers `401` through the same handler as everything else. A caller
+    who cannot prove who they are has not been *refused permission*; there is
+    nobody to refuse.
+    """
+    settings = _configured(request)
+    keys = tuple(
+        key.get_secret_value()
+        for key in (settings.qstash_current_signing_key, settings.qstash_next_signing_key)
+        if key is not None
+    )
+    url = _reminder_callback_url(request)
+    token = request.headers.get("Upstash-Signature", "")
+    if not keys or not url:
+        # **Refused rather than waved through.** An unconfigured verifier on a
+        # public endpoint that queues messages is worse than one that rejects
+        # everything: the second is visibly broken, the first is quietly open.
+        raise AuthenticationError("callback verification is not configured")
+
+    body = await request.body()
+    try:
+        verify_callback(token=token, body=body, url=url, signing_keys=keys)
+    except UntrustedCallbackError as exc:
+        raise AuthenticationError(str(exc)) from exc
+
+    payload = json.loads(body or b"{}")
+    session_id = payload.get("session_id")
+    kind = payload.get("kind")
+    if not session_id or kind not in REMINDER_OFFSETS:
+        raise ValidationError("not a reminder callback")
+
+    queued = await remind_if_still_waiting(session, UUID(str(session_id)), str(kind))
+    await session.commit()
+    return queued
+
+
+ReminderCallbackDep = Annotated[bool, Depends(reminder_callback)]
 
 
 def transitions(action: str) -> Callable[..., Awaitable[None]]:
