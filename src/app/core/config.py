@@ -261,6 +261,34 @@ class Settings(BaseSettings):
     #: operator sets this.
     daily_api_key: SecretStr | None = Field(default=None, validation_alias=env_key("daily_api_key"))
 
+    #: The platform's own Google account, which creates every session's calendar
+    #: event and invites both parties as guests.
+    #:
+    #: **Not a per-mentor grant**, and that distinction already cost one wrong
+    #: belief: `meetings.py` claimed the adapter needed `calendar_connections`
+    #: and it never did. That table records a mentor's `calendar.freebusy`
+    #: grant, which buys *conflict detection* — a later, separate piece of work.
+    #:
+    #: Three values, because a refresh token is useless without the client that
+    #: minted it. Any of them unset means `NullCalendar`, so a deployment with
+    #: none still books sessions and simply writes no event.
+    google_oauth_client_id: str | None = Field(
+        default=None, validation_alias=env_key("google_oauth_client_id")
+    )
+    google_oauth_client_secret: SecretStr | None = Field(
+        default=None, validation_alias=env_key("google_oauth_client_secret")
+    )
+    google_calendar_refresh_token: SecretStr | None = Field(
+        default=None, validation_alias=env_key("google_calendar_refresh_token")
+    )
+
+    #: Which calendar on that account. `primary` is the account's own, which is
+    #: what the spike measured; a secondary calendar id works too and keeps
+    #: session events out of whatever else that account holds.
+    google_calendar_id: str = Field(
+        default="primary", validation_alias=env_key("google_calendar_id")
+    )
+
     # Where re-hosted profile images live. A plain name, not a secret: it appears
     # in every public image URL. The bucket is created once by an operator in the
     # dashboard, not by the migration script — see `infra/storage/supabase.py`.

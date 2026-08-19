@@ -12,6 +12,35 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A confirmed session gets a calendar event, and a Meet link when that is its
+  venue.** `GoogleCalendar` creates the event on the platform's **own** Google
+  account and invites both parties as guests — neither completes an OAuth flow.
+
+  `conferenceDataVersion=1` only when the venue is Meet: requesting a conference
+  for a Daily session would put **two links** on the event, and the invitee
+  clicks whichever renders first. A 200 with no link is treated as a failure,
+  because that is exactly how the parameter being dropped looks.
+
+  Plain REST through `httpx` rather than the Google SDK — two POSTs against a
+  discovery mechanism and a large dependency tree.
+
+  Set the three Google values to enable it; unset, sessions book exactly as
+  before.
+
+### Fixed
+
+- **A cancelled session no longer leaves a live meeting in both calendars.**
+  `external_calendar_event_id` was written by provisioning and read by nobody —
+  harmless while no event was ever created, and a defect the moment one is.
+  Declined, withdrawn, cancelled and expired all release it now; `completed` and
+  `no_show` deliberately do not.
+
+  The id is cleared **only on a successful removal**, so a failure keeps the
+  handle for a later run — and the transition still succeeds, because a session
+  cancelled in Google and confirmed here is worse than a stale event.
+
+### Added
+
 - **A `daily` session now has a room, and `/join` hands back the door.**
   `DailyRooms` creates a private room gated by `nbf`/`exp`, and
   `POST /sessions/{id}/join` mints a per-participant token and returns

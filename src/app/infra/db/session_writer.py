@@ -82,6 +82,7 @@ __all__ = [
     "expire_requests",
     "provision_meeting",
     "record_arrival",
+    "release_meeting",
     "settle_attendance",
     "transition",
 ]
@@ -669,7 +670,7 @@ def _absence_code(*, mentor_came: bool, mentee_came: bool) -> SessionReasonCode 
     return None
 
 
-async def expire_requests(session: AsyncSession, *, now: dt.datetime) -> int:
+async def expire_requests(session: AsyncSession, *, now: dt.datetime, calendar: Any = None) -> int:
     """Kill every unanswered request past its deadline. Returns the count.
 
     **This is what stops an abandoned request holding a mentor's hour forever.**
@@ -728,6 +729,14 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime) -> int:
             for session_id in expired
         ],
     )
+
+    # **An expired request ends a session too, so its event goes with it.**
+    # The calendar is optional here where it is required elsewhere: this runs in
+    # a sweep that predates the integration, and a caller passing none simply
+    # leaves the ids in place for a later run to clear.
+    if calendar is not None:
+        for session_id in expired:
+            await release_meeting(session, session_id, calendar=calendar)
     return len(expired)
 
 
@@ -768,6 +777,7 @@ async def provision_meeting(
                     Session.starts_at,
                     Session.duration_minutes,
                     Session.meeting_url,
+                    Session.mentee_id,
                 ).where(Session.id == session_id)
             )
         )
@@ -784,6 +794,10 @@ async def provision_meeting(
     # request gets nothing, which the first version of this failed.
     if SessionStatus(row["status"]) is not SessionStatus.CONFIRMED:
         return
+
+    mentee_email = (
+        await session.execute(select(User.email).where(User.id == row["mentee_id"]))
+    ).scalar_one_or_none()
 
     resolved = await resolve_venue(session, row["session_type_id"])
     if resolved is None:  # pragma: no cover - the offering was just booked
@@ -815,7 +829,10 @@ async def provision_meeting(
     try:
         event = calendar.create_event(
             organiser_id=str(session_id),
-            attendee_email="",
+            # **The mentee is the guest.** The platform account organises and
+            # the mentor is told through the platform, so an empty address here
+            # would create an event nobody outside this service ever sees.
+            attendee_email=str(mentee_email or ""),
             starts_at=row["starts_at"],
             duration_minutes=int(row["duration_minutes"]),
             summary="EduFurther session",
@@ -845,4 +862,46 @@ async def provision_meeting(
             external_room_id=external_room_id,
             external_calendar_event_id=external_event_id,
         )
+    )
+
+
+async def release_meeting(session: AsyncSession, session_id: UUID, *, calendar: Any) -> None:
+    """Remove the calendar event a session no longer needs. Does not commit.
+
+    **The partner fix to `provision_meeting`, and it was missing.**
+    `external_calendar_event_id` was written by provisioning and read by
+    nobody — harmless while no event was ever created, and a live defect the
+    moment one is: a cancelled session would leave a meeting sitting in both
+    parties' calendars forever, with an invitation nobody withdrew.
+
+    Called from every path that ends a session before it happens — declined,
+    withdrawn, cancelled, expired — but **not** from `completed` or `no_show`,
+    where the session did take place or its time has passed and the event is a
+    true record of what was scheduled.
+
+    **A failure does not fail the transition**, for the reason every venue call
+    in this module gives: the session is already off, and refusing to record
+    that because a third party was slow would leave the two facts disagreeing.
+    A stale event is recoverable by hand; a session that is cancelled in Google
+    and confirmed here is not.
+    """
+    external_id = (
+        await session.execute(
+            select(Session.external_calendar_event_id).where(Session.id == session_id)
+        )
+    ).scalar_one_or_none()
+    if not external_id:
+        return
+
+    try:
+        calendar.cancel_event(str(external_id))
+    except (VenueUnavailableError, NotImplementedError) as exc:
+        logger.info("calendar event for session %s not removed: %s", session_id, exc)
+        return
+
+    # Cleared only on success, so a failed removal leaves the id in place and a
+    # later run can try again — where clearing it regardless would lose the only
+    # handle on an event still in somebody's calendar.
+    await session.execute(
+        update(Session).where(Session.id == session_id).values(external_calendar_event_id=None)
     )
