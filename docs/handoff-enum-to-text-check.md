@@ -36,11 +36,11 @@ ERROR:  dropping an enum value is not implemented
 
 `ADD VALUE` is one line; `DROP VALUE` never comes. So every label added
 speculatively is permanent, and this schema has eight such labels already —
-each documented in the codebase as having no producer:
+each documented in the codebase as having no producer — one of which has since acquired one and is struck through below:
 
 | Enum | Value | Recorded reason |
 |---|---|---|
-| `attendance_status` | `left_early` | "no legacy field at all… first written by the product" |
+| ~~`attendance_status`~~ | ~~`left_early`~~ | **Off this list, 2026-08-18.** It had no producer because nothing reported a *departure* — and Daily's per-participant join and leave is exactly that producer. Removing it now would mean adding it back with the room integration, so it stays. `session_participants.left_at` is the column it writes to, and is likewise kept |
 | `meeting_provider` | `zoom` | "has no legacy source and must never be invented here" |
 | `availability_exception_type` | `override` | "ships with no source data" |
 | `auth_provider` | `linkedin` | dev export splits Email 37 / Google 6 / **LinkedIn 0** |

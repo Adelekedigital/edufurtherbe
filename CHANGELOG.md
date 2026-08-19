@@ -12,6 +12,16 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Every attendance outcome now records how it was reached.**
+  `session_events.metadata` carries `{"evidence": "reported"}` — its first
+  writer since the column shipped. When a provider starts reporting
+  per-participant join and leave it carries `observed` instead.
+
+  **Written before anything reads it, and that is the justification:** a session
+  settled today cannot later be re-examined for whether anybody observed it. It
+  is what will let a payout rule require observed attendance without a second
+  status and without re-judging history.
+
 - **A request nobody answers now dies, and gives the mentor's hour back.**
   `sessions.respond_by` plus an hourly sweep. `expired` gets its producer, and
   `SessionStatus.EXPIRED` stops being a value nothing could reach.

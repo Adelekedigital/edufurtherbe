@@ -38,7 +38,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
-from app.domain.attendance import JOIN_CLOSES, join_window, within_join_window
+from app.domain.attendance import (
+    JOIN_CLOSES,
+    AttendanceEvidence,
+    join_window,
+    within_join_window,
+)
 from app.domain.enums import (
     ActorType,
     AttendanceStatus,
@@ -578,6 +583,18 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
     #    model's own docstring calls honest for a sweep and better than
     #    inventing a system user. `from_status` is `confirmed` on every row,
     #    because nothing else was selected.
+    #
+    #    **The evidence is recorded with the outcome**, and this is the first
+    #    writer `session_events.metadata` has had. Today every outcome is
+    #    `REPORTED` — both parties pressed a button and nothing observed the
+    #    room. When a provider starts reporting join and leave, the same field
+    #    carries `OBSERVED` and the two become distinguishable *retrospectively*,
+    #    which is the whole reason to write it before anything reads it: a
+    #    session settled last month cannot be re-examined for how it was judged.
+    #
+    #    It is what lets a later payout rule require observed attendance without
+    #    a second status, and what stops `completed` quietly meaning two
+    #    different things either side of the Daily integration.
     await session.execute(
         insert(SessionEvent),
         [
@@ -590,6 +607,11 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
                 "reason_code": _absence_code(
                     mentor_came=bool(row["mentor_came"]), mentee_came=bool(row["mentee_came"])
                 ),
+                # `metadata_`, not `"metadata"`. The attribute is renamed to
+                # dodge `Base.metadata`, and an ORM insert matches attribute
+                # names — the column name is accepted in silence and the
+                # server default written instead, which a test caught.
+                "metadata_": {"evidence": AttendanceEvidence.REPORTED},
             }
             for row in settled
         ],
