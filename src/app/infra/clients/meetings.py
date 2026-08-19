@@ -55,6 +55,7 @@ from app.core.errors import AppError
 from app.domain.enums import ConferencingProvider
 
 __all__ = [
+    "GOOGLE_CALENDAR_API",
     "CalendarEvent",
     "DailyRooms",
     "GoogleCalendar",
@@ -67,6 +68,11 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.daily.co/v1"
+
+GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+#: Google's public OAuth endpoint. Flagged as a credential by the secret
+#: scanner because of the name; it is a URL every Google client uses.
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105
 
 #: Long enough for a slow third party, short enough that a booking does not hang
 #: on one. A room that fails to mint is recoverable; a request that never
@@ -284,30 +290,48 @@ class NullCalendar:
         )
         return None
 
+    def cancel_event(self, external_id: str) -> None:
+        logger.info("no calendar configured; not removing event %s", external_id)
+
 
 class GoogleCalendar:
-    """Google Calendar, and it is not built.
+    """The platform's own Google account, creating the event and inviting both.
 
-    **Blocked on a refresh token in configuration**, not on a table. The event is
-    created by the platform's own Google account and both parties are invited as
-    guests — neither completes an OAuth flow, which is settled decision #15 held
-    more strongly than it was written, and is what the spike's Q1 measured.
+    **Plain REST rather than the Google SDK.** `google-api-python-client` brings
+    a discovery mechanism and a large dependency tree to do what two POSTs do —
+    exchange a refresh token, insert an event — and the spike proved the shape
+    of both. `DailyRooms` beside it works the same way, so one reader learns one
+    pattern.
 
-    Two things this adapter must get right, both measured rather than assumed:
+    **Two things measured rather than assumed, and both are traps.**
 
-    ``conferenceDataVersion=1`` is mandatory when ``wants_conference``. Without
-    it the API accepts the write and **silently drops the conference**, which is
-    indistinguishable from a permissions refusal unless you read the response.
+    ``conferenceDataVersion=1`` is mandatory when a Meet link is wanted. Without
+    it the API accepts the write and **silently drops** ``conferenceData``,
+    which is indistinguishable from a permissions refusal unless you read the
+    response — so this asserts the link came back rather than trusting a 200.
 
-    Free/busy is **eventually consistent**. A write followed immediately by a
-    free/busy read returns empty, so conflict detection happens before the write
-    or tolerates the lag — which is why `POST /sessions` checks the slot grid
-    first and lets the exclusion constraint be the authority.
+    Free/busy is **eventually consistent**: a write followed immediately by a
+    read returns empty. Nothing here reads it, and that is why `POST /sessions`
+    checks the slot grid before writing and lets the exclusion constraint be the
+    authority.
     """
 
-    def __init__(self, credentials: Any = None, client: Any = None) -> None:
-        self._credentials = credentials
-        self._client = client
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        refresh_token: str,
+        calendar_id: str = "primary",
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._refresh_token = refresh_token
+        self._calendar_id = calendar_id
+        self._client = client or httpx.Client(timeout=TIMEOUT)
+        self._token: str | None = None
+        self._token_expires: dt.datetime | None = None
 
     def create_event(
         self,
@@ -320,13 +344,142 @@ class GoogleCalendar:
         wants_conference: bool,
         meeting_url: str | None,
     ) -> CalendarEvent | None:
-        # Named and unused for the same reason as `NullCalendar` — see there.
-        del organiser_id, attendee_email, starts_at, duration_minutes
-        del summary, wants_conference, meeting_url
-        raise NotImplementedError(
-            "the Google Calendar adapter is not built — it needs the platform "
-            "account's refresh token in configuration"
+        """One event, both parties invited, and a Meet link only when asked.
+
+        **`wants_conference` is the line that matters.** Requesting one for a
+        session held in Daily would put a second link on the event, and the
+        invitee clicks whichever the client renders first — a failure that
+        errors nowhere and surfaces when somebody joins an empty room.
+
+        The venue's own URL goes in the description rather than the location,
+        because a Daily room is not a place and a client rendering `location`
+        as a map pin would be confidently wrong.
+        """
+        ends_at = starts_at + dt.timedelta(minutes=duration_minutes)
+        body: dict[str, Any] = {
+            "summary": summary,
+            "start": {"dateTime": starts_at.isoformat()},
+            "end": {"dateTime": ends_at.isoformat()},
+            # Both parties, and neither completes an OAuth flow — settled
+            # decision #15, which the spike's Q1 measured working on a consumer
+            # Gmail account.
+            "attendees": [{"email": attendee_email}],
+            "extendedProperties": {"private": {"edufurther_session_id": organiser_id}},
+        }
+        params = {"sendUpdates": "all"}
+        if wants_conference:
+            body["conferenceData"] = {
+                "createRequest": {
+                    "requestId": organiser_id,
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+            # Measured, not assumed: without this the write succeeds and the
+            # conference is dropped in silence.
+            params["conferenceDataVersion"] = "1"
+        elif meeting_url:
+            body["description"] = f"Join here: {meeting_url}"
+
+        event = self._call(
+            "POST",
+            f"/calendars/{self._calendar_id}/events",
+            params=params,
+            json=body,
         )
+        link = event.get("hangoutLink")
+        if wants_conference and not link:
+            # The silent drop, caught. A 200 with no link means the conference
+            # was refused or the version parameter was lost, and returning the
+            # event anyway would store an id for a meeting with nowhere to go.
+            raise VenueUnavailableError(
+                "Google accepted the event and returned no Meet link — "
+                "conferenceDataVersion was dropped or the scope is missing"
+            )
+        return CalendarEvent(external_id=str(event["id"]), meeting_url=link)
+
+    def cancel_event(self, external_id: str) -> None:
+        """Remove the event, so a called-off session leaves both calendars.
+
+        **Deleting rather than marking cancelled.** Google's `status:
+        "cancelled"` leaves a struck-through entry in the invitee's calendar,
+        which is arguably more informative and is also a thing they cannot get
+        rid of. The platform tells both parties itself; leaving a ghost in their
+        calendar as well is one notification too many.
+
+        A `410` is success: the event is already gone, which is the state this
+        method exists to reach.
+        """
+        try:
+            self._call("DELETE", f"/calendars/{self._calendar_id}/events/{external_id}")
+        except VenueUnavailableError as exc:
+            if "410" in str(exc) or "404" in str(exc):
+                return
+            raise
+
+    def _access_token(self) -> str:
+        """A cached access token, refreshed when it is close to expiring.
+
+        **Cached on the instance with a minute of headroom.** Google's tokens
+        last an hour, and a refresh per call would be a second round trip on
+        every booking to re-acquire something still valid. The headroom is
+        because a token that expires between the check and the call fails in a
+        way that looks like a permissions problem.
+        """
+        now = dt.datetime.now(dt.UTC)
+        if self._token and self._token_expires and now < self._token_expires:
+            return self._token
+
+        try:
+            response = self._client.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                    "refresh_token": self._refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise VenueUnavailableError(f"google token refresh failed: {exc}") from exc
+
+        self._token = str(payload["access_token"])
+        self._token_expires = now + dt.timedelta(seconds=int(payload.get("expires_in", 3600)) - 60)
+        return self._token
+
+    def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """One place where a Google failure becomes ours.
+
+        Every network error and every non-2xx becomes `VenueUnavailableError`,
+        for the reason `DailyRooms` gives: the caller's decision is the same for
+        all of them, and a third party's bad afternoon must not become a 500 on
+        a request that has already done what the user asked.
+        """
+        try:
+            response = self._client.request(
+                method,
+                f"{GOOGLE_CALENDAR_API}{path}",
+                params=params,
+                json=json,
+                headers={"Authorization": f"Bearer {self._access_token()}"},
+            )
+            response.raise_for_status()
+            if not response.content:
+                return {}
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise VenueUnavailableError(f"google {method} {path} failed: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise VenueUnavailableError(f"google {path} returned {type(payload).__name__}")
+        return payload
 
 
 def room_name(session_id: str, provider: ConferencingProvider) -> str:

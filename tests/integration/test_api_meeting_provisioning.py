@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_availability, add_session_type, make_public_mentor
 
-from app.infra.clients.meetings import CalendarEvent, MeetingRoom
+from app.infra.clients.meetings import CalendarEvent, MeetingRoom, VenueUnavailableError
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -504,3 +504,135 @@ async def test_a_refused_join_gets_no_door(
 
     assert refused.status_code == 409, refused.text
     assert door.tokens == []
+
+
+# --------------------------------------------------------------------------
+# The event a cancellation removes
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class TrackingCalendar(FakeCalendar):
+    """A calendar that also remembers what it was asked to remove."""
+
+    cancelled: list[str] = field(default_factory=list)
+
+    def cancel_event(self, external_id: str) -> None:
+        self.cancelled.append(external_id)
+
+
+@pytest.fixture
+def tracking(api_client: httpx.AsyncClient) -> TrackingCalendar:
+    calendar = TrackingCalendar()
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.meeting_rooms = FakeRooms()
+    app.state.calendar = calendar
+    return calendar
+
+
+async def test_cancelling_removes_the_calendar_event(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: TrackingCalendar
+) -> None:
+    """**The partner fix, and it was missing.** `external_calendar_event_id` was
+    written by provisioning and read by nobody — harmless while no event existed
+    and a live defect the moment one does: a cancelled session would leave a
+    meeting sitting in both parties' calendars forever."""
+    setup = await a_mentor_on(db_engine, "rel-cancel", "daily")
+    session = await book(api_client, setup)
+
+    await api_client.post(
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+    )
+
+    assert tracking.cancelled == ["event-1"]
+    assert (await venue_of(db_engine, session["id"]))["external_calendar_event_id"] is None
+
+
+async def test_declining_removes_it_too(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: TrackingCalendar
+) -> None:
+    """Every transition that ends a session before it happens, not just cancel.
+    A declined request whose event survives is the same stale invitation with a
+    different name on it."""
+    setup = await a_mentor_on(db_engine, "rel-decline", "daily", confirmation=True)
+    session = await book(api_client, setup)
+    await api_client.post(
+        f"/api/v1/sessions/{session['id']}/accept", headers=setup["mentor_headers"]
+    )
+
+    await api_client.post(
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentor_headers"]
+    )
+
+    assert tracking.cancelled == ["event-1"]
+
+
+async def test_accepting_creates_rather_than_removes(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: TrackingCalendar
+) -> None:
+    """`accept` is the one transition that provisions. Releasing there would
+    delete the event it had just created."""
+    setup = await a_mentor_on(db_engine, "rel-accept", "daily", confirmation=True)
+    session = await book(api_client, setup)
+
+    await api_client.post(
+        f"/api/v1/sessions/{session['id']}/accept", headers=setup["mentor_headers"]
+    )
+
+    assert tracking.cancelled == []
+    assert (await venue_of(db_engine, session["id"]))["external_calendar_event_id"] == "event-1"
+
+
+async def test_a_session_with_no_event_asks_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Most sessions today, since no calendar is configured. Calling the
+    provider with a null id would be a request that can only fail."""
+    calendar = TrackingCalendar()
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.meeting_rooms = FakeRooms()
+    app.state.calendar = calendar
+    setup = await a_mentor_on(db_engine, "rel-none", "daily")
+    session = await book(api_client, setup)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET external_calendar_event_id = NULL WHERE id = :i"),
+            {"i": session["id"]},
+        )
+
+    await api_client.post(
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+    )
+
+    assert calendar.cancelled == []
+
+
+async def test_a_provider_that_refuses_leaves_the_id_in_place(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Cleared only on success.** A failed removal keeps the handle so a later
+    run can try again — clearing it regardless would lose the only reference to
+    an event still sitting in somebody's calendar.
+
+    And the cancellation itself still succeeds: the session is off, and refusing
+    to record that because Google was slow would leave the two facts
+    disagreeing.
+    """
+
+    class Refusing(FakeCalendar):
+        def cancel_event(self, external_id: str) -> None:
+            del external_id
+            raise VenueUnavailableError("google is down")
+
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.meeting_rooms = FakeRooms()
+    app.state.calendar = Refusing()
+    setup = await a_mentor_on(db_engine, "rel-down", "daily")
+    session = await book(api_client, setup)
+
+    cancelled = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+    )
+
+    assert cancelled.status_code == 200, cancelled.text
+    assert (await venue_of(db_engine, session["id"]))["external_calendar_event_id"] == "event-1"

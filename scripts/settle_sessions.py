@@ -52,6 +52,7 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import get_settings
+from app.infra.clients.meetings import GoogleCalendar, NullCalendar
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.db.outbox import drain
@@ -73,6 +74,27 @@ def _notifier() -> LoopsNotifier | NullNotifier:
     return LoopsNotifier(key.get_secret_value()).with_settings(settings)
 
 
+def _calendar() -> GoogleCalendar | NullCalendar:
+    """The real calendar when all three values are configured, else a null one.
+
+    All three or none: a refresh token is useless without the client that minted
+    it, and two of three is the shape most likely to be a half-finished setup.
+    """
+    settings = get_settings()
+    if not (
+        settings.google_oauth_client_id
+        and settings.google_oauth_client_secret
+        and settings.google_calendar_refresh_token
+    ):
+        return NullCalendar()
+    return GoogleCalendar(
+        client_id=settings.google_oauth_client_id,
+        client_secret=settings.google_oauth_client_secret.get_secret_value(),
+        refresh_token=settings.google_calendar_refresh_token.get_secret_value(),
+        calendar_id=settings.google_calendar_id,
+    )
+
+
 async def run(args: argparse.Namespace) -> int:
     engine = create_async_engine(resolve_async_dsn(get_settings()))
     try:
@@ -80,7 +102,7 @@ async def run(args: argparse.Namespace) -> int:
             now = datetime.now(UTC)
             # One clock for both sweeps. Reading it twice would let a session
             # sit exactly on a boundary and be judged by two different instants.
-            expired = await expire_requests(session, now=now)
+            expired = await expire_requests(session, now=now, calendar=_calendar())
             settled = await settle_attendance(session, now=now)
             # **The null notifier on a dry run, always.** A dry run rolls the
             # database back and cannot roll back an email, so sending for real
