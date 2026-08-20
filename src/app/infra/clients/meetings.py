@@ -416,14 +416,29 @@ class GoogleCalendar:
         **Deleting rather than marking cancelled.** Google's `status:
         "cancelled"` leaves a struck-through entry in the invitee's calendar,
         which is arguably more informative and is also a thing they cannot get
-        rid of. The platform tells both parties itself; leaving a ghost in their
-        calendar as well is one notification too many.
+        rid of.
+
+        **`sendUpdates=all`, matching `create_event`.** These are one pair and
+        were briefly not: the invitation notified and the cancellation did not,
+        so a meeting a mentee had accepted simply vanished from their calendar
+        with nothing said. Letting Google announce one end of a booking and not
+        the other is the worst of both arrangements — a duplicate message is
+        noise, where a silent disappearance is a mentee turning up to a session
+        that is not happening.
+
+        The platform's own notification is not an argument against this. It is
+        equally an argument against notifying on the invitation, and that is not
+        what the code does; whichever way it goes, both ends should agree.
 
         A `410` is success: the event is already gone, which is the state this
         method exists to reach.
         """
         try:
-            self._call("DELETE", f"/calendars/{self._calendar_id}/events/{external_id}")
+            self._call(
+                "DELETE",
+                f"/calendars/{self._calendar_id}/events/{external_id}",
+                params={"sendUpdates": "all"},
+            )
         except VenueUnavailableError as exc:
             if "410" in str(exc) or "404" in str(exc):
                 return
