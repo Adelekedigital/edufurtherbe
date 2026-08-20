@@ -58,11 +58,13 @@ from app.domain.notifications import Notification, recipients, reminders_for
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
+    records_unavailability,
     respond_by,
     too_late_to_cancel,
 )
 from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.clients.scheduler import SchedulerError
+from app.infra.db.availability_writer import block_session_window
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import (
     Session,
@@ -98,6 +100,15 @@ __all__ = [
 #: Mapping every ``IntegrityError`` to 409 would report our own bug as the
 #: client's conflict, and they would retry forever against a row that can never
 #: be written.
+#: What a mentor reads beside this block in their own availability.
+#:
+#: Free text rather than a link, because the exception carries no foreign key to
+#: the session and should not: once written it is the mentor's row to keep or
+#: delete, and a block that vanished when a session row changed would be a
+#: surprise. The cost is that nothing can later count which blocks came from
+#: cancellations.
+BLOCKED_BY_CANCELLATION = "Kept from a cancelled session"
+
 DOUBLE_BOOKED = "sessions_no_mentor_double_booking"
 
 #: Which message each transition sends. Beside the transition table rather than
@@ -409,7 +420,18 @@ async def transition(
     row = (
         (
             await session.execute(
-                select(Session.status, Session.starts_at, Session.mentor_id, Session.mentee_id)
+                select(
+                    Session.status,
+                    Session.starts_at,
+                    Session.mentor_id,
+                    Session.mentee_id,
+                    Session.duration_minutes,
+                    # **The mentor's own zone, not the rule's.** This block
+                    # appears on their calendar beside the ones they wrote by
+                    # hand, so it is stored the way those are.
+                    User.timezone,
+                )
+                .join(User, User.id == Session.mentor_id)
                 .where(Session.id == session_id)
                 # **Scoped in the query on the write path**, not checked after
                 # fetching. The roles this action permits are spread into the
@@ -449,6 +471,22 @@ async def transition(
         raise ValidationError(f"{reason_code} is not a reason you may give for {action}")
 
     await session.execute(update(Session).where(Session.id == session_id).values(status=rule.to))
+
+    # **The hour goes back on the grid by default**, because `cancelled` is in
+    # `FREES_THE_HOUR`. A mentor who says they are not free records that as an
+    # availability exception instead — the mechanism that already means it,
+    # which they can see and remove. Session state is not where unavailability
+    # lives; that reading is what kept a cancelled hour hidden and unbookable
+    # with nothing able to release it.
+    if records_unavailability(action, role, release_slot=bool(payload.get("release_slot", True))):
+        await block_session_window(
+            session,
+            row["mentor_id"],
+            starts_at=row["starts_at"],
+            duration_minutes=row["duration_minutes"],
+            timezone=row["timezone"],
+            reason=BLOCKED_BY_CANCELLATION,
+        )
     await session.execute(
         insert(SessionEvent).values(
             session_id=session_id,
@@ -764,7 +802,7 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime, calendar: 
     `sessions_no_mentor_double_booking` covers `LIVE_STATUSES`, which includes
     `pending_mentor_approval`, and `slot_store._busy` counts it too — so until
     something writes a terminal status the slot is gone. `expired` is in
-    `NEVER_AGREED`, so the moment this runs the hour comes back on both.
+    `FREES_THE_HOUR`, so the moment this runs the hour comes back on both.
 
     **The status is `expired`, which the UI shows as "Unconfirmed".** The label
     differs from the stored value deliberately: nothing was declined and nobody

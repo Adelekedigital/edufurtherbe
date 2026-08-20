@@ -45,6 +45,7 @@ from app.domain.enums import AvailabilityExceptionType
 __all__ = [
     "DEFAULT_PROJECTION_DAYS",
     "MAX_PROJECTION_DAYS",
+    "BlockedWindow",
     "DatedException",
     "UnknownTimezoneError",
     "UtcInterval",
@@ -52,6 +53,7 @@ __all__ = [
     "bookable",
     "normalise_timezone",
     "project",
+    "unavailable_windows",
 ]
 
 
@@ -291,6 +293,69 @@ def _resolve(day: dt.date, moment: dt.time, zone: ZoneInfo) -> dt.datetime:
     it enforces the rule instead of assuming it.
     """
     return dt.datetime.combine(day, moment.replace(fold=0), tzinfo=zone).astimezone(dt.UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class BlockedWindow:
+    """One row's worth of a block: a local date and the hours it covers."""
+
+    date: dt.date
+    start_time: dt.time
+    end_time: dt.time
+
+
+def unavailable_windows(
+    *, starts_at: dt.datetime, duration_minutes: int, timezone: str
+) -> tuple[BlockedWindow, ...]:
+    """A session's hours, expressed as the exception rows that would block them.
+
+    **A mentor cancelling and saying they are not free records an ordinary
+    availability exception**, so this converts the one thing the session knows —
+    a UTC instant and a length — into the shape that table stores.
+
+    **More than one row when the session crosses local midnight**, and it is
+    reachable rather than theoretical. A *declared* window can never cross
+    midnight, because `availability_window_ordered` requires `end_time >
+    start_time` and a slot must fit whole inside one — but that constraint is in
+    the **rule's** timezone, and nothing requires a rule's zone to be the
+    mentor's own. A mentor in Lagos with a window declared in New York time can
+    therefore hold a session that spans midnight where they live. Unsplit, the
+    row would violate that same CHECK and the cancellation would fail with a
+    `500` on a session the mentor is entitled to call off.
+
+    **A segment ending exactly at local midnight ends at `time.max` instead**,
+    because a window is `[start_time, end_time)` on one date and there is no
+    `24:00` to write. It leaves the final microsecond of the day unblocked,
+    which no slot can occupy — the shortest offering is minutes long. The
+    alternative is blocking the whole of the following day, which is a real
+    cost to a mentor rather than a theoretical one.
+
+    Times are resolved through the same DST rule as every other window here:
+    the end is computed in UTC and converted, never by adding a `timedelta` to a
+    local wall clock, which drifts by an hour across a transition.
+    """
+    zone = ZoneInfo(timezone)
+    local_start = starts_at.astimezone(zone)
+    local_end = (starts_at + dt.timedelta(minutes=duration_minutes)).astimezone(zone)
+
+    windows: list[BlockedWindow] = []
+    day = local_start.date()
+    while day <= local_end.date():
+        opens = max(local_start, _resolve(day, dt.time.min, zone).astimezone(zone))
+        midnight = _resolve(day + dt.timedelta(days=1), dt.time.min, zone).astimezone(zone)
+        closes = min(local_end, midnight)
+        if closes > opens:
+            windows.append(
+                BlockedWindow(
+                    date=day,
+                    start_time=opens.timetz().replace(tzinfo=None),
+                    end_time=(
+                        dt.time.max if closes == midnight else closes.timetz().replace(tzinfo=None)
+                    ),
+                )
+            )
+        day += dt.timedelta(days=1)
+    return tuple(windows)
 
 
 def _span(

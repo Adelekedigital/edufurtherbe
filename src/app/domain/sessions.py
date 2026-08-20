@@ -36,6 +36,7 @@ __all__ = [
     "RESPONSE_WINDOW",
     "TRANSITIONS",
     "Transition",
+    "records_unavailability",
     "respond_by",
     "too_late_to_cancel",
 ]
@@ -144,6 +145,24 @@ _MENTEE_REASONS = frozenset(
 #: actor and not a person; the second needs a reschedule flow that does not
 #: exist; the third belongs to an admin surface. Each is a value a party could
 #: otherwise assert about themselves.
+
+
+def records_unavailability(action: str, role: SessionRole, *, release_slot: bool) -> bool:
+    """Whether this transition should record the mentor as unavailable.
+
+    **Only a mentor, only on `cancel`, and only when they say they are not
+    free.** A mentee cancelling says nothing about the mentor's availability —
+    the mentor never became busy, so holding their hour would be the
+    `FREES_THE_HOUR` defect in a new place, and mentee-driven exactly as that
+    one was. Whatever a mentee sends here is ignored rather than refused: the
+    field is not theirs to answer, and a `422` would teach a client to send a
+    value it should never have had an opinion about.
+
+    **Withdrawing and declining never reach this**, because neither ends an
+    agreement — nothing was ever on the mentor's calendar to protect.
+    """
+    return action == "cancel" and role is SessionRole.MENTOR and not release_slot
+
 
 TRANSITIONS: dict[str, Transition] = {
     "accept": Transition(

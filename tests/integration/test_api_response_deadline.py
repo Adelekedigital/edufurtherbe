@@ -187,7 +187,7 @@ async def test_an_unanswered_request_expires_and_frees_its_slot(
 
     Before the sweep the hour is gone from the public grid — a pending request
     is inside `LIVE_STATUSES` and `_busy` counts it. After the sweep it is back,
-    because `expired` is in `NEVER_AGREED`.
+    because `expired` is in `FREES_THE_HOUR`.
     """
     request = await a_request(db_engine, api_client, "rb-expire")
     assert request["starts_at"] not in await offered(api_client, request)

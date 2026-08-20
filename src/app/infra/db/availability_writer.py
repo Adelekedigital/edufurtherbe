@@ -15,6 +15,7 @@ it is a 500; `overlap_free` turns it into the conflict it actually is.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -25,9 +26,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
+from app.domain.availability import unavailable_windows
+from app.domain.enums import AvailabilityExceptionType
 from app.infra.db.models.availability import AvailabilityException, AvailabilityRule
 
 __all__ = [
+    "block_session_window",
     "create_exception",
     "create_rule",
     "delete_exception",
@@ -135,6 +139,53 @@ async def create_exception(session: AsyncSession, user_id: UUID, payload: dict[s
         .returning(AvailabilityException.id)
     )
     return result.scalar_one()
+
+
+async def block_session_window(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    starts_at: dt.datetime,
+    duration_minutes: int,
+    timezone: str,
+    reason: str,
+) -> int:
+    """Block the hours a cancelled session occupied. Returns rows written.
+
+    **An ordinary exception, not a private flag.** A mentor who cancels and says
+    they are not free is saying the same thing they would say by blocking the
+    time themselves, so it is stored the same way: theirs to see beside every
+    other block, theirs to remove, and applying to every offering rather than
+    the one that happened to be booked.
+
+    **More than one row when the session crosses local midnight.** The split is
+    `unavailable_windows`, which explains why that is reachable; here it only
+    matters that the count is not always one.
+
+    **No overlap constraint to fear**, unlike `create_rule`. Exceptions carry
+    only a GiST lookup index, so writing a block over a date the mentor has
+    already blocked is legal and idempotent in effect — the projection subtracts
+    the union either way. That is why this needs no `overlap_free`.
+
+    Does not commit: it runs inside the transition that caused it, so a
+    cancellation that fails to record leaves no block behind.
+    """
+    windows = unavailable_windows(
+        starts_at=starts_at, duration_minutes=duration_minutes, timezone=timezone
+    )
+    for window in windows:
+        await session.execute(
+            insert(AvailabilityException).values(
+                mentor_user_id=user_id,
+                type=AvailabilityExceptionType.BLOCK,
+                date_range=func.daterange(window.date, window.date + dt.timedelta(days=1), "[)"),
+                start_time=window.start_time,
+                end_time=window.end_time,
+                timezone=timezone,
+                reason=reason,
+            )
+        )
+    return len(windows)
 
 
 async def delete_exception(session: AsyncSession, user_id: UUID, exception_id: UUID) -> bool:
