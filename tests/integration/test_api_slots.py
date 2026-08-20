@@ -289,15 +289,21 @@ async def test_a_booked_session_removes_its_slot_and_leaves_the_neighbours(
     ]
 
 
-async def test_a_cancelled_session_still_holds_its_slot(
+async def test_a_cancelled_session_no_longer_holds_its_slot(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The settled rule, and the one a reader is most likely to call a bug.
+    """**Reversed.** This test asserted the opposite and was the defect.
 
-    A mentor who cancelled was busy; handing the time straight back would rebook
-    them into it. Releasing it is a deliberate act that does not exist yet, and
-    when it does it will be a flag on the session rather than an inference from
-    the status.
+    The reasoning was that a mentor who cancelled was busy, so handing the time
+    back would rebook them. What it produced was an hour hidden from the grid
+    with nothing able to release it — `_busy` hid it, the exclusion constraint
+    (over `LIVE_STATUSES`, which excludes `cancelled`) would have accepted a
+    booking for it, and the "deliberate act" this docstring promised was never
+    built. A mentee could book and cancel repeatedly to empty a mentor's
+    calendar an hour at a time.
+
+    Unavailability is now an availability exception, which the mentor owns and
+    can see. `cancelled` is in `FREES_THE_HOUR` and the two layers agree.
     """
     mentor, session_type = await make_mentor(db_engine, "cancelled")
     mentee = await make_mentee(db_engine, "cancelled")
@@ -308,7 +314,7 @@ async def test_a_cancelled_session_still_holds_its_slot(
         slots_url(mentor, session_type, start=FIRST_DAY, end=FIRST_DAY + dt.timedelta(days=1)),
     )
 
-    assert at(FIRST_DAY, "08:45") not in first_day
+    assert at(FIRST_DAY, "08:45") in first_day
 
 
 async def test_a_session_starting_before_the_window_still_blocks_inside_it(

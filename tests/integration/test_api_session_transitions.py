@@ -12,6 +12,7 @@ table is being consulted.
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 from uuid import uuid4
 
@@ -497,33 +498,205 @@ async def test_a_withdrawn_request_frees_its_slot(
     assert booking["starts_at"] in await offered()
 
 
-async def test_a_cancelled_session_keeps_its_slot(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """**The settled rule, and the opposite of the test above.**
-
-    A mentor usually cancels *because* they are busy, and handing the hour
-    straight back would book them into it again. `_busy` filters no status, so
-    this is the behaviour that has always been there — asserted here because
-    cancelling is now reachable, and because the natural "free the slot" fix
-    would break it.
-    """
-    booking = await a_booking(db_engine, api_client, "tr-keep", confirmed=True)
-    async with db_engine.connect() as conn:
+async def _mentor_and_offering(engine: AsyncEngine, session_id: str) -> tuple[str, str]:
+    async with engine.connect() as conn:
         mentor, session_type = (
             await conn.execute(
                 text("SELECT mentor_id, session_type_id FROM sessions WHERE id = :i"),
-                {"i": booking["id"]},
+                {"i": session_id},
             )
         ).one()
+    return str(mentor), str(session_type)
+
+
+async def _offered_by(client: httpx.AsyncClient, mentor: str, session_type: str) -> list[str]:
+    response = await client.get(
+        f"/api/v1/users/{mentor}/availability/slots",
+        params={"session_type_id": session_type},
+    )
+    return [str(slot["start"]) for slot in response.json()["data"]]
+
+
+async def test_a_cancelled_session_frees_its_slot(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Reversed, and this test used to assert the opposite.**
+
+    It read: a mentor usually cancels *because* they are busy, so handing the
+    hour back would book them into it again. Both halves are true and neither
+    makes the hour occupied. What it produced was an hour hidden from the grid
+    that `sessions_no_mentor_double_booking` — over `LIVE_STATUSES`, which
+    excludes `cancelled` — would have accepted a booking for anyway, with
+    nothing anywhere able to release it.
+
+    A mentor who is genuinely not free says so, and the test below covers that.
+    """
+    booking = await a_booking(db_engine, api_client, "tr-frees", confirmed=True)
+    mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
 
     await api_client.post(url(booking, "cancel"), headers=booking["mentor"])
 
-    response = await api_client.get(
-        f"/api/v1/users/{mentor}/availability/slots",
-        params={"session_type_id": str(session_type)},
+    assert booking["starts_at"] in await _offered_by(api_client, mentor, session_type)
+
+
+async def test_a_mentor_who_is_not_free_blocks_the_time_instead(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The answer is an availability exception, not hidden session state.
+
+    Asserted through the grid **and** through the row, because the point is that
+    the mentor now owns a thing they can see and delete — a private flag would
+    make the grid identical and the calendar a mystery.
+    """
+    booking = await a_booking(db_engine, api_client, "tr-blocks", confirmed=True)
+    mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
+
+    response = await api_client.post(
+        url(booking, "cancel"), headers=booking["mentor"], json={"release_slot": False}
     )
-    assert booking["starts_at"] not in [str(slot["start"]) for slot in response.json()["data"]]
+
+    assert response.status_code == 200, response.text
+    assert booking["starts_at"] not in await _offered_by(api_client, mentor, session_type)
+    async with db_engine.connect() as conn:
+        blocks = (
+            await conn.execute(
+                text(
+                    "SELECT type, reason FROM availability_exceptions "
+                    "WHERE mentor_user_id = :m AND deleted_at IS NULL"
+                ),
+                {"m": mentor},
+            )
+        ).all()
+    assert [(str(kind), reason) for kind, reason in blocks] == [
+        ("block", "Kept from a cancelled session")
+    ]
+
+
+async def test_a_mentee_cannot_hold_a_mentors_hour(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The `FREES_THE_HOUR` defect, in the one place it could return.**
+
+    A mentee cancelling says nothing about whether the mentor is free. If their
+    `release_slot` were honoured, booking-and-cancelling would empty a mentor's
+    calendar an hour at a time — the same mentee-driven denial of service that
+    `withdrawn` once was, wearing a different status.
+
+    Ignored rather than refused: the field is not theirs to answer, and a `422`
+    would teach a client to send a value it should never have had an opinion
+    about.
+    """
+    booking = await a_booking(db_engine, api_client, "tr-mentee-hold", confirmed=True)
+    mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
+
+    response = await api_client.post(
+        url(booking, "cancel"), headers=booking["mentee"], json={"release_slot": False}
+    )
+
+    assert response.status_code == 200, response.text
+    assert booking["starts_at"] in await _offered_by(api_client, mentor, session_type)
+    async with db_engine.connect() as conn:
+        assert (
+            await conn.execute(
+                text("SELECT count(*) FROM availability_exceptions WHERE mentor_user_id = :m"),
+                {"m": mentor},
+            )
+        ).scalar_one() == 0
+
+
+async def test_cancelling_with_no_body_frees_the_hour(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The default, exercised through the path a client most easily takes.
+
+    `release_slot` defaults to releasing because the two ways of being wrong are
+    not equally visible: an hour offered while the mentor is busy arrives as a
+    booking they can decline, where an hour withheld while they are free arrives
+    as nothing at all.
+    """
+    booking = await a_booking(db_engine, api_client, "tr-nobody", confirmed=True)
+    mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
+
+    await api_client.post(url(booking, "cancel"), headers=booking["mentor"])
+
+    assert booking["starts_at"] in await _offered_by(api_client, mentor, session_type)
+
+
+async def test_a_session_crossing_the_mentors_midnight_can_still_be_cancelled(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The edge case that would otherwise be a 500 on a legitimate action.**
+
+    A mentor in Lagos whose availability is declared in New York time can hold a
+    session that spans midnight where they live. `exception_window_ordered`
+    requires `end_time > start_time`, so one row could not express it and the
+    cancellation would fail — on a session the mentor is entitled to call off,
+    for a reason that is not their fault.
+
+    Two rows, and the block still covers exactly the session's hours.
+    """
+    booking = await a_booking(db_engine, api_client, "tr-midnight", confirmed=True)
+    mentor, _ = await _mentor_and_offering(db_engine, booking["id"])
+    # 22:30Z for 90 minutes is 23:30-01:00 in Lagos, and 18:30-20:00 in New York
+    # — one ordered window there, two local days for the mentor.
+    crossing = dt.datetime.fromisoformat(booking["starts_at"]).replace(
+        hour=22, minute=30, second=0, microsecond=0
+    ) + dt.timedelta(days=1)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET starts_at = :s, duration_minutes = 90 WHERE id = :i"),
+            {"s": crossing, "i": booking["id"]},
+        )
+        await conn.execute(
+            text("UPDATE users SET timezone = 'Africa/Lagos' WHERE id = :u"), {"u": mentor}
+        )
+
+    response = await api_client.post(
+        url(booking, "cancel"), headers=booking["mentor"], json={"release_slot": False}
+    )
+
+    assert response.status_code == 200, response.text
+    async with db_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT lower(date_range) AS day, start_time, end_time "
+                    "FROM availability_exceptions WHERE mentor_user_id = :m "
+                    "ORDER BY lower(date_range)"
+                ),
+                {"m": mentor},
+            )
+        ).all()
+    assert len(rows) == 2, rows
+    assert rows[0].start_time == dt.time(23, 30)
+    assert rows[0].end_time == dt.time.max
+    assert rows[1].start_time == dt.time(0, 0)
+    assert rows[1].end_time == dt.time(1, 0)
+    assert rows[1].day == rows[0].day + dt.timedelta(days=1)
+
+
+async def test_removing_the_block_returns_the_hour(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The whole reason it is an exception rather than session state.
+
+    A mentor who changes their mind deletes an ordinary block on their own
+    availability. Nothing about cancellation has to be undone, and no endpoint
+    exists for undoing it.
+    """
+    booking = await a_booking(db_engine, api_client, "tr-unblock", confirmed=True)
+    mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
+    await api_client.post(
+        url(booking, "cancel"), headers=booking["mentor"], json={"release_slot": False}
+    )
+
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE availability_exceptions SET deleted_at = now() WHERE mentor_user_id = :m"),
+            {"m": mentor},
+        )
+
+    assert booking["starts_at"] in await _offered_by(api_client, mentor, session_type)
 
 
 # --------------------------------------------------------------------------

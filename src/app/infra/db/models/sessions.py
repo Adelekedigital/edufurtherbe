@@ -85,24 +85,32 @@ from app.infra.db.types import check_is_known, str_enum
 #: `deleted_at IS NULL` reached five statements here and was missed on the fifth.
 LIVE_STATUSES = "status IN ('pending_mentor_approval', 'confirmed')"
 
-#: The statuses whose session never occupied the mentor's time, and therefore
-#: never blocks a slot.
+#: The statuses whose session no longer occupies the mentor's time, and
+#: therefore no longer blocks a slot.
 #:
-#: **The distinction is *was it ever agreed*, not *is it over*.** A `cancelled`
-#: session was agreed and then called off — the mentor usually cancelled
-#: *because* they are busy — so it keeps its hour until somebody deliberately
-#: releases it, which is the settled rule `slot_store._busy` was written around.
-#: A `declined`, `withdrawn` or `expired` request was never agreed to: nothing
-#: was ever on the mentor's calendar, and there is no busy-ness to preserve.
+#: **The test is *does it still occupy the hour*, not *was it ever agreed*.**
+#: That earlier reading is why this was wrong: it kept `cancelled` out on the
+#: grounds that the mentor had agreed once and probably cancelled *because* they
+#: were busy. Both halves are true and neither makes the hour occupied — a
+#: cancelled session is not happening, and a guess about why is not a reason to
+#: keep selling nothing.
 #:
-#: **Reachable for the first time with the transitions**, and until then the
-#: distinction did not exist because nothing could produce these three. Leaving
-#: them blocking would mean any mentee could permanently empty a mentor's
-#: calendar by requesting every slot and withdrawing — the grid would keep
-#: hiding hours that `sessions_no_mentor_double_booking` would happily accept a
-#: booking for, because the constraint is over `LIVE_STATUSES` and already
-#: ignores all three.
-NEVER_AGREED = ("declined", "withdrawn", "expired")
+#: **Every entry here must also be absent from `LIVE_STATUSES`, and that is the
+#: invariant this list exists to hold.** The exclusion constraint is built over
+#: `LIVE_STATUSES`, so a status in neither is one the constraint would accept a
+#: booking for while the grid refuses to offer it. That asymmetry is not a
+#: cosmetic disagreement: it is a mentee-drivable denial of service, because the
+#: hours it hides never come back. `declined`, `withdrawn` and `expired` were
+#: the first three found this way; `cancelled` was the fourth and outlived them
+#: because the "was it ever agreed" reading made it look deliberate.
+#:
+#: **A mentor who is genuinely unavailable says so with an availability
+#: exception**, which is the mechanism that already means that, which they own
+#: and can see, and which applies across every offering. Cancelling a session
+#: writes one when they answer that they are not free. Session state is not the
+#: place to express unavailability, and this list is what stops it becoming so
+#: again.
+FREES_THE_HOUR = ("declined", "withdrawn", "expired", "cancelled")
 
 
 class SessionType(TimestampMixin, Base):

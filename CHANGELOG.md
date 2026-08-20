@@ -10,6 +10,28 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A cancelled session no longer holds the mentor's hour forever.** It was
+  hidden from the grid while `sessions_no_mentor_double_booking` — built over
+  `LIVE_STATUSES`, which excludes `cancelled` — would have accepted a booking
+  for it anyway, and nothing anywhere could release it. A mentee could book and
+  cancel repeatedly and empty a mentor's calendar an hour at a time: the same
+  shape `withdrawn` once had.
+
+  The hour now returns by default. **A mentor who is not free says so** —
+  `release_slot: false` on cancel writes an ordinary **availability exception**
+  they can see beside their own blocks and remove whenever they like. It is
+  mentor-only: a mentee's cancellation says nothing about the mentor's calendar,
+  and their answer is ignored.
+
+  It records *unavailability*, not a hold. Reserving time for a particular
+  person is a different feature and this is not it.
+
+  Nothing breaks: `release_slot` is optional, only `cancel` carries it, and
+  `reason_code` stays optional on all four transitions.
+
+
 ### Added
 
 - **A mentor's own calendar is subtracted from what a mentee may book.** If they
