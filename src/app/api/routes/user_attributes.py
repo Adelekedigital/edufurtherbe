@@ -291,8 +291,12 @@ async def remove_award(removed: DeletedAwardDep) -> None:
         "That flip grants nothing: `primary_role` picks a dashboard and is never "
         "an authorization claim. What a pending mentor may do follows from "
         "`approval_status`.\n\n"
-        "**Nothing approves an application yet.** Applications accumulate until "
-        "an admin surface exists, alongside institutions awaiting review."
+        "An admin approves or declines it at "
+        "`POST /admin/mentors/{user_id}/decision`, and **you are told either "
+        "way** — approval also lists you, so you are live in search the moment "
+        "it happens.\n\n"
+        "Nothing tells an admin an application is waiting yet, so it is found "
+        "by looking rather than by being alerted."
     ),
     responses=WRITE_RESPONSES | CONFLICT_RESPONSE,
 )
