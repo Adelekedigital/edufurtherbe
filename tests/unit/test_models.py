@@ -66,6 +66,10 @@ EXPECTED_MODELS = {
     # first needs it.
     "AvailabilityRule",
     "AvailabilityException",
+    # The mentor's own `calendar.freebusy` grant — deferred since M1 and
+    # arriving with its consumer (#21). Not the grant that writes events: that
+    # one is EduFurther's own account and needs no table (ADR 0012).
+    "CalendarConnection",
     # Per-offering windows, which **replace** general availability rather than
     # intersecting them. Same module as the rules they replace, and the same
     # shape, so `bookable()` needs no second code path.

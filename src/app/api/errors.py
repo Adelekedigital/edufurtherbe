@@ -28,6 +28,7 @@ from app.core.errors import (
     ConfigurationError,
     ConflictError,
     NotFoundError,
+    UpstreamError,
 )
 from app.core.errors import ValidationError as DomainValidationError
 
@@ -43,6 +44,11 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     NotFoundError: status.HTTP_404_NOT_FOUND,
     ConflictError: status.HTTP_409_CONFLICT,
     DomainValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    # **502, not 503.** The fault is always upstream — a provider refused, was
+    # unreachable, or answered in a shape we cannot use. 503 would claim *this*
+    # service is unavailable and invite a retry against a request that will fail
+    # the same way.
+    UpstreamError: status.HTTP_502_BAD_GATEWAY,
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx

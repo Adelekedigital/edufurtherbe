@@ -14,6 +14,7 @@ from app.api.routes import (
     callbacks,
     catalogue,
     health,
+    me_calendar,
     me_intake,
     me_session_types,
     mentors,
@@ -131,16 +132,21 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     {
         "name": "callbacks",
         "description": (
-            "Endpoints a machine calls, authenticated by **signature** rather "
-            "than by a bearer token. There is no user behind a request here, "
-            "which is why they are grouped apart: a token is absent by design, "
-            "not by mistake.\n\n"
+            "Endpoints a machine or a redirected browser lands on. **There is "
+            "no bearer token on a request here, by design rather than by "
+            "mistake**, which is why they are grouped apart: one of these "
+            "sitting among the authenticated routes is how somebody later "
+            "assumes a caller is present.\n\n"
+            "Each carries its own proof instead. A scheduler signs its "
+            "callbacks; an OAuth redirect carries a sealed, short-lived "
+            "`state` naming the user who started the flow. Neither is a "
+            "credential the caller chose, and both are refused when absent.\n\n"
             "Every callback re-reads the state it is about before acting, so "
             "one that arrives for something already settled does nothing and "
             "says so. That is what lets work be scheduled ahead without "
-            "anything ever having to cancel it.\n\n"
-            "Safe to call twice — the schedulers that drive these retry by "
-            "design, and a duplicate is a no-op rather than a second effect."
+            "anything ever having to cancel it, and it is what makes these "
+            "safe to call twice — the schedulers that drive them retry by "
+            "design."
         ),
     },
     {
@@ -240,6 +246,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(slots.router)
     application.include_router(session_types.router)
     application.include_router(me_session_types.router)
+    application.include_router(me_calendar.router)
+    application.include_router(me_calendar.callback_router)
     application.include_router(me_intake.router)
     application.include_router(callbacks.router)
     application.include_router(sessions.router)
