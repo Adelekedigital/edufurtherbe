@@ -157,6 +157,39 @@ def test_cancelling_deletes_the_event() -> None:
     assert "evt_1" in str(seen[0].url)
 
 
+def test_cancelling_tells_the_mentee_it_was_cancelled() -> None:
+    """**The pair `create_event` forms with this, which was briefly broken.**
+
+    The invitation passed `sendUpdates=all` and the cancellation passed nothing,
+    so Google announced the booking and said nothing about it being called off:
+    the event vanished from the mentee's calendar with no message. A duplicate
+    cancellation is noise; a silent disappearance is somebody turning up to a
+    session that is not happening.
+    """
+    api, seen = calendar(lambda _: httpx.Response(204))
+
+    api.cancel_event("evt_1")
+
+    assert "sendUpdates=all" in str(seen[0].url)
+
+
+def test_both_ends_of_a_booking_notify_the_same_way() -> None:
+    """Pins the pair, so neither can drift alone.
+
+    Whichever way this project decides to go — Google announces both, or Google
+    announces neither and the outbox carries it — the failure is one end
+    changing without the other. That is what happened, and no test objected.
+    """
+    inviting, invited = calendar(created(hangoutLink="https://meet.google.com/abc"))
+    insert(inviting, wants_conference=True)
+    cancelling, cancelled_call = calendar(lambda _: httpx.Response(204))
+    cancelling.cancel_event("evt_1")
+
+    assert invited[0].url.params.get("sendUpdates") == cancelled_call[0].url.params.get(
+        "sendUpdates"
+    )
+
+
 @pytest.mark.parametrize("status", [404, 410])
 def test_an_event_already_gone_is_success(status: int) -> None:
     """**The state this method exists to reach.** Raising would make a retry
