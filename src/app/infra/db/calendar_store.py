@@ -18,11 +18,12 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.availability import UtcInterval
+from app.domain.notifications import Notification
 from app.infra.clients.meetings import (
     CalendarAccessRevokedError,
     VenueUnavailableError,
@@ -30,17 +31,22 @@ from app.infra.clients.meetings import (
 )
 from app.infra.clients.secrets import SealError, unseal
 from app.infra.db.models.availability import CalendarConnection
+from app.infra.db.outbox import enqueue
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "STALE_AFTER",
     "MentorFreeBusy",
     "NullFreeBusy",
     "active_connection",
+    "check_connections",
     "connect",
+    "connections_due",
     "disconnect",
     "freebusy_token",
     "record_failure",
+    "record_success",
 ]
 
 PROVIDER = "google"
@@ -94,19 +100,31 @@ async def active_connection(session: AsyncSession, user_id: UUID) -> dict[str, A
     the mentor is connected and what to show them about it; the free/busy read
     that needs the credential will ask for it by name, and a general accessor
     handing one out is how it ends up somewhere it should not be.
+
+    **Includes a grant that broke**, which it did not until the health check
+    existed to find one. Before that, a revoked grant read as *never connected*
+    and the mentor had nothing to act on — the gap ADR 0004 names in its own
+    Confirmation section. `status` is returned so a client can tell the two
+    apart rather than inferring it from `last_error` being set.
     """
     row = (
         (
             await session.execute(
                 select(
                     CalendarConnection.id,
+                    CalendarConnection.status,
                     CalendarConnection.connected_at,
                     CalendarConnection.last_synced_at,
                     CalendarConnection.last_error,
                 ).where(
                     CalendarConnection.user_id == user_id,
                     CalendarConnection.provider == PROVIDER,
-                    CalendarConnection.status == "active",
+                    # **`error` too, and `revoked` deliberately not.** A grant
+                    # that broke is something the mentor needs to see and fix;
+                    # one they disconnected on purpose is something they already
+                    # know, and showing it back to them would read as a
+                    # disconnect that did not work.
+                    CalendarConnection.status.in_(("active", "error")),
                 )
             )
         )
@@ -161,7 +179,7 @@ async def freebusy_token(session: AsyncSession, user_id: UUID) -> str | None:
     ).scalar_one_or_none()
 
 
-async def record_failure(session: AsyncSession, user_id: UUID, error: str) -> None:
+async def record_failure(session: AsyncSession, user_id: UUID, error: str) -> bool:
     """Mark a grant dead. **Only for a failure that retrying cannot fix.**
 
     Deferred out of the PR that built this table precisely because the
@@ -178,6 +196,56 @@ async def record_failure(session: AsyncSession, user_id: UUID, error: str) -> No
     Self-limiting, which is what makes it safe on a read path: once the status
     leaves ``active`` this mentor is invisible to :func:`freebusy_token`, so no
     further call is made and no further write happens.
+
+    **Telling the mentor happens here rather than in the callers**, of which
+    there are two — the free/busy read that trips over a dead grant, and the
+    health sweep that goes looking for one. A message owed from one path and not
+    the other is the defect this shape forecloses, and it costs nothing to make
+    unreachable.
+
+    Returns whether a row moved. ``False`` means the grant was already dead, and
+    is what keeps a mentor from being told again on every sweep: the ``WHERE``
+    only matches ``active``, so the second call updates nothing and enqueues
+    nothing.
+    """
+    row = (
+        await session.execute(
+            update(CalendarConnection)
+            .where(
+                CalendarConnection.user_id == user_id,
+                CalendarConnection.provider == PROVIDER,
+                CalendarConnection.status == "active",
+            )
+            .values(status="error", refresh_token_encrypted="", last_error=error[:500])
+            .returning(CalendarConnection.id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+
+    await enqueue(
+        session,
+        Notification.CALENDAR_DISCONNECTED,
+        entity_type="calendar_connection",
+        entity_id=row,
+        recipient_ids=(user_id,),
+        variables={"reason": error[:500]},
+    )
+    return True
+
+
+async def record_success(session: AsyncSession, user_id: UUID, *, when: dt.datetime) -> None:
+    """Stamp a grant as confirmed working. No commit.
+
+    **Written by the sweep and never by the read path.** A slot render never
+    commits, so a stamp made there would be rolled back with the rest of the
+    request — and giving it its own transaction, the way a dead grant gets one,
+    would mean a write on every public slot render for every connected mentor.
+    The sweep already owns a transaction and already runs on a schedule.
+
+    So ``last_synced_at`` answers *when this connection was last confirmed to
+    work*, which is what a mentor wants to know and what lets the sweep skip
+    everything it checked recently.
     """
     await session.execute(
         update(CalendarConnection)
@@ -186,8 +254,120 @@ async def record_failure(session: AsyncSession, user_id: UUID, error: str) -> No
             CalendarConnection.provider == PROVIDER,
             CalendarConnection.status == "active",
         )
-        .values(status="error", refresh_token_encrypted="", last_error=error[:500])
+        .values(last_synced_at=when, last_error=None)
     )
+
+
+async def connections_due(
+    session: AsyncSession, *, now: dt.datetime, stale_after: dt.timedelta
+) -> tuple[UUID, ...]:
+    """Mentors whose calendar has not been confirmed working recently.
+
+    **Never-checked first, by ordering nulls first**, because a grant that has
+    never been probed is the one most likely to be broken — a mentor who
+    connected and then revoked in Google's settings looks exactly like this.
+
+    The staleness filter is what keeps this from being 44 Google calls an hour
+    forever. It is a filter rather than a limit: a bound on *count* would leave
+    the same connections at the back of the queue every run.
+    """
+    return tuple(
+        (
+            await session.execute(
+                select(CalendarConnection.user_id)
+                .where(
+                    CalendarConnection.provider == PROVIDER,
+                    CalendarConnection.status == "active",
+                    or_(
+                        CalendarConnection.last_synced_at.is_(None),
+                        CalendarConnection.last_synced_at < now - stale_after,
+                    ),
+                )
+                .order_by(CalendarConnection.last_synced_at.asc().nullsfirst())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+#: How long a confirmed-working connection is trusted before it is probed again.
+#:
+#: **Twelve hours, and the cost of being wrong is small in one direction only.**
+#: Too long means a mentor learns late that their calendar stopped being read;
+#: too short means an outbound request per mentor per run for no new
+#: information. A revoked grant already surfaces reactively the moment anybody
+#: renders that mentor's slots, so this is the backstop for the mentor nobody
+#: happens to look at — which is exactly the case ADR 0004 says went unnoticed.
+STALE_AFTER = dt.timedelta(hours=12)
+
+
+async def check_connections(
+    session: AsyncSession,
+    *,
+    now: dt.datetime,
+    reader: Callable[..., tuple[UtcInterval, ...]],
+    client_id: str,
+    client_secret: str,
+    key: str,
+    stale_after: dt.timedelta = STALE_AFTER,
+) -> dict[str, int]:
+    """Probe every calendar grant nobody has confirmed lately. Does not commit.
+
+    **The gap ADR 0004 names in its own Confirmation section**: *"nothing
+    currently alerts when connected accounts are revoked. That is precisely how
+    this situation went unnoticed."* A grant revoked in Google's settings sends
+    us nothing, so the only way to find out is to ask.
+
+    Reactive detection already exists — a free/busy read that trips over a dead
+    grant records it — but it needs somebody to render that mentor's slots. A
+    mentor nobody browses is a mentor whose calendar quietly stops being
+    consulted, which is the failure this closes.
+
+    **A transient failure is left completely alone**: not marked, not stamped,
+    not counted as checked. So the next run tries it again, which is what
+    distinguishes *Google was busy* from *this grant is dead* without having to
+    decide on one sample.
+
+    Returns counts rather than raising, because one unreachable mentor must not
+    stop the sweep reaching the rest.
+    """
+    counts = {"checked": 0, "healthy": 0, "disconnected": 0, "unreachable": 0}
+    for user_id in await connections_due(session, now=now, stale_after=stale_after):
+        sealed = await freebusy_token(session, user_id)
+        if not sealed:  # pragma: no cover - the row was just selected as active
+            continue
+        counts["checked"] += 1
+        try:
+            token = unseal(sealed, key=key)
+        except SealError:
+            # The key rotated, so this token can never be opened again. As dead
+            # as a revoked grant, and the mentor's fix is the same: reconnect.
+            await record_failure(session, user_id, "the stored credential could not be opened")
+            counts["disconnected"] += 1
+            continue
+
+        try:
+            # **A one-hour window, because the answer is not what is wanted.**
+            # This asks whether the grant still works, and the narrowest
+            # question Google will answer is the cheapest one to ask.
+            reader(
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=token,
+                start=now,
+                end=now + dt.timedelta(hours=1),
+            )
+        except CalendarAccessRevokedError as exc:
+            await record_failure(session, user_id, str(exc))
+            counts["disconnected"] += 1
+        except VenueUnavailableError as exc:
+            logger.info("calendar for %s could not be checked: %s", user_id, exc)
+            counts["unreachable"] += 1
+        else:
+            await record_success(session, user_id, when=now)
+            counts["healthy"] += 1
+    return counts
 
 
 class NullFreeBusy:

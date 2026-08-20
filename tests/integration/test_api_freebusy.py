@@ -279,15 +279,15 @@ async def test_a_revoked_grant_is_recorded_and_stops_being_called(
 async def test_the_mentor_can_see_why_it_stopped(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """`GET /me/calendar` reads `null` once the grant is dead.
+    """**The gap this test used to record, now closed.**
 
-    **Which is a gap, stated rather than hidden.** The row survives with its
-    `last_error`, so support can see what happened, but the mentor is shown
-    nothing to distinguish "you never connected" from "your grant was revoked
-    and we stopped reading". Closing that means `active_connection` returning
-    errored rows too, which changes what `/me/calendar` means — a contract
-    change belonging with the connection-health work ADR 0004 asks for, not
-    smuggled into the read that discovered it.
+    It asserted `null` — the row survived with its `last_error` so support could
+    see it, but the mentor was shown nothing to distinguish "you never
+    connected" from "your grant was revoked and we stopped reading". That was
+    deferred to the connection-health work ADR 0004 asks for, and this is it.
+
+    `revoked` is still hidden: a mentor who disconnected on purpose already
+    knows, and showing it back would read as a disconnect that did not take.
     """
     mentor, session_type = await make_mentor(db_engine, "fb-visible")
     await connect_calendar(db_engine, mentor)
@@ -302,7 +302,11 @@ async def test_the_mentor_can_see_why_it_stopped(
     response = await api_client.get("/api/v1/me/calendar", headers=bearer(api_token(auth_id)))
 
     assert response.status_code == 200
-    assert response.json() is None
+    body = response.json()
+    assert body is not None, "a broken connection must not read as never connected"
+    assert body["status"] == "error"
+    assert "revoked" in body["last_error"]
+    assert "a-refresh-token" not in response.text, "no read model may carry a credential"
 
 
 # --------------------------------------------------------------------------

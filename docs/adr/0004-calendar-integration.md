@@ -215,10 +215,13 @@ Partially mechanical, and the gaps are the interesting part.
 - **Not mechanical:** nothing prevents someone adding a poll, mirroring calendar
   contents into a table, or treating free/busy as the overbooking check. These
   are enforced by review against this record.
-- **Not mechanical, and a live gap:** nothing currently alerts when connected
-  accounts are revoked. That is precisely how this situation went unnoticed. A
-  connection-health check is unbuilt and should be, or the same failure recurs
-  silently.
+- ~~**Not mechanical, and a live gap:** nothing currently alerts when connected
+  accounts are revoked.~~ **Closed 2026-08-20.** A sweep in `settle_sessions`
+  probes every grant nobody has confirmed working in the last twelve hours,
+  records a revoked one, and tells the mentor. Reactive detection exists beside
+  it — a free/busy read that trips over a dead grant records it the same way —
+  but that needs somebody to render the mentor's slots, and a mentor nobody
+  browses was exactly the case this record said went unnoticed.
 
 ### Amendment, 2026-08-19 — the read fails open
 
