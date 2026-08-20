@@ -75,6 +75,7 @@ from app.domain.images import MAX_UPLOAD_BYTES, process
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.clients.meetings import (
     DailyRooms,
+    GoogleCalendar,
     NullCalendar,
     NullRooms,
     VenueUnavailableError,
@@ -158,6 +159,7 @@ from app.infra.db.session_writer import (
     book_session,
     provision_meeting,
     record_arrival,
+    release_meeting,
     transition,
 )
 from app.infra.db.slot_store import list_slots
@@ -1042,7 +1044,26 @@ def _rooms(request: Request) -> Any:
 
 
 def _calendar(request: Request) -> Any:
-    return getattr(request.app.state, "calendar", None) or NullCalendar()
+    wired = getattr(request.app.state, "calendar", None)
+    if wired is not None:
+        return wired
+    settings = get_settings()
+    # **All three or none.** A refresh token is useless without the client that
+    # minted it, and two of three configured is the shape most likely to be a
+    # half-finished setup — failing to `NullCalendar` there is quieter than
+    # failing every booking with an OAuth error.
+    if not (
+        settings.google_oauth_client_id
+        and settings.google_oauth_client_secret
+        and settings.google_calendar_refresh_token
+    ):
+        return NullCalendar()
+    return GoogleCalendar(
+        client_id=settings.google_oauth_client_id,
+        client_secret=settings.google_oauth_client_secret.get_secret_value(),
+        refresh_token=settings.google_calendar_refresh_token.get_secret_value(),
+        calendar_id=settings.google_calendar_id,
+    )
 
 
 ENDPOINT_BOOKING = "POST /api/v1/sessions"
@@ -1166,6 +1187,12 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
             await provision_meeting(
                 session, session_id, rooms=_rooms(request), calendar=_calendar(request)
             )
+        else:
+            # **Every other transition ends the session**, and an ended session
+            # must not leave a live event in either calendar. Decline, withdraw
+            # and cancel are the three; `accept` is the only one that creates
+            # rather than releases.
+            await release_meeting(session, session_id, calendar=_calendar(request))
         await session.commit()
 
     return dependency
