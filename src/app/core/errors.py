@@ -35,6 +35,21 @@ class ConfigurationError(AppError):
     """
 
 
+class UpstreamError(AppError):
+    """A third party we depend on failed, or answered in a way we cannot use.
+
+    **Here rather than beside the adapters that raise it**, for the reason
+    `AuthenticationError` gives below: `api` may not import `infra`, so an error
+    defined there is one the transport layer cannot map. Left in `infra` it fell
+    through to a 500 — an unmapped `AppError`, exactly the gap that table's
+    fallback exists to make visible.
+
+    Not the caller's fault, so never a 4xx. The one case where the caller can
+    act — a Google grant that came back without a refresh token — is still a
+    fault of the exchange rather than of the request that started it.
+    """
+
+
 class AuthenticationError(AppError):
     """The caller could not be authenticated.
 

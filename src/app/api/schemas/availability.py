@@ -192,3 +192,40 @@ class AvailabilityWindow(BaseModel):
     start: dt.datetime
     end: dt.datetime
     timezone: str
+
+
+class CalendarConnectionRead(BaseModel):
+    """A mentor's calendar grant, as they see it.
+
+    **No token, and no field that could carry one.** The credential is stored
+    encrypted and read only at the moment it is used; a read model that could
+    return it would make every future endpoint one mistake away from doing so.
+
+    **No field naming the connected account either**, which needs saying
+    because the column exists. Google names the account only in an `id_token`,
+    and it issues one only when `openid` is among the scopes — ADR 0012 asks
+    for `calendar.freebusy` alone. A field that is null on every row reads as a
+    bug in the fill rather than as a decision about the ask.
+
+    `last_error` is Google's words rather than ours. "Your calendar is
+    disconnected" with no reason is a support ticket; the provider's own message
+    is usually enough for a mentor to fix it themselves.
+    """
+
+    connected_at: dt.datetime
+    last_synced_at: dt.datetime | None = Field(
+        default=None,
+        description="When the platform last read your busy hours. Null until it has.",
+    )
+    last_error: str | None = Field(
+        default=None,
+        description="Why it stopped working, in Google's words. Null while it works.",
+    )
+
+    @classmethod
+    def from_row(cls, row: dict[str, object]) -> CalendarConnectionRead:
+        return cls(
+            connected_at=row["connected_at"],  # type: ignore[arg-type]
+            last_synced_at=row.get("last_synced_at"),  # type: ignore[arg-type]
+            last_error=str(row["last_error"]) if row.get("last_error") else None,
+        )

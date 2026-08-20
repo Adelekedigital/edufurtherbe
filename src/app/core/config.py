@@ -314,11 +314,46 @@ class Settings(BaseSettings):
         default=None, validation_alias=env_key("qstash_next_signing_key")
     )
 
-    #: Where QStash calls back to. **Ours to state rather than derive**: the
-    #: service cannot see the URL a proxy presented to the caller, and the
-    #: signature names its destination — so a derived value that is wrong
-    #: rejects every callback with a message about signatures rather than about
+    #: The Cloud project a **mentor** consents through.
+    #:
+    #: **A different client from the one above** (ADR 0012): sign-in and
+    #: calendar live in separate Cloud projects, and the platform account's own
+    #: `calendar.app.created` grant is configuration rather than consent.
+    #: Sharing one client would put both asks on one consent screen, which is
+    #: the opposite of the narrow ask that record exists to protect — a mentor
+    #: is asked for one thing, *"View your availability in your calendars."*
+    google_calendar_client_id: str | None = Field(
+        default=None, validation_alias=env_key("google_calendar_client_id")
+    )
+    google_calendar_client_secret: SecretStr | None = Field(
+        default=None, validation_alias=env_key("google_calendar_client_secret")
+    )
+
+    #: A Fernet key. Seals stored refresh tokens and the OAuth `state`.
+    #:
+    #: **Unset means a mentor cannot connect at all**, which is the right
+    #: failure: the alternative is storing somebody's credential in the clear
+    #: because an operator forgot a variable, and that is not a state worth
+    #: being able to reach.
+    #:
+    #: Generate one with::
+    #:
+    #:     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    calendar_token_key: SecretStr | None = Field(
+        default=None, validation_alias=env_key("calendar_token_key")
+    )
+
+    #: Where this service is reachable from outside. **Ours to state rather
+    #: than derive**: a service behind a proxy cannot see the URL the caller
+    #: used, and both consumers of this value are matched byte-for-byte by
+    #: somebody else — Google compares the redirect against what an operator
+    #: registered in the Cloud Console, and QStash signs its callbacks with
+    #: their destination in them. A derived value that is subtly wrong fails
+    #: with a message about signatures or redirects rather than about
     #: configuration.
+    #:
+    #: Register `{PUBLIC_BASE_URL}/api/v1/callbacks/google/calendar` as the
+    #: authorised redirect on the mentor-facing Cloud client.
     public_base_url: str | None = Field(default=None, validation_alias=env_key("public_base_url"))
 
     # Where re-hosted profile images live. A plain name, not a secret: it appears

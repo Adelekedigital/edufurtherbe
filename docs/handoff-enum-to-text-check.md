@@ -102,12 +102,16 @@ to at least one column, so there is no second free win in this list.
 **This is an inventory of the present, and it cannot warn you about the future.**
 A count taken from the live schema necessarily omits types that do not exist yet
 — and the migration package's canonical DDL still declares several, because it
-predates settled decision #100. `calendar_connections` is the known case:
-`00_foundation.sql` declares `calendar_provider` and `connection_status`, that
-table is deferred, and building it verbatim would add two types to the very list
-below while every gate stayed green (see ADR 0012, *For the phase that builds
-`calendar_connections`*). Converting 21 columns and then accepting 2 new ones is
-a net loss. **#100 governs new vocabularies as well as old ones.**
+predates settled decision #100.
+
+`calendar_connections` **was** the known case and is now the worked example.
+`00_foundation.sql` declares `calendar_provider` and `connection_status`;
+building it verbatim would have added two types to the very list below while
+every gate stayed green. It shipped instead with `provider` and `status` as
+`text` + `CHECK`, and the migration records the divergence. Converting 21
+columns and then accepting 2 new ones would have been a net loss.
+**#100 governs new vocabularies as well as old ones**, and this is the first
+deferred table to arrive since it was decided.
 
 **`unlisted_reason` is the second known case, and now the sharper one.**
 `08_features_platform.sql` declares
