@@ -10,6 +10,18 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A cancelled session now tells the mentee it was cancelled.** The invitation
+  passed `sendUpdates=all` and the cancellation passed nothing, so Google
+  announced the booking and said nothing about it being called off — the event
+  simply vanished from the mentee's calendar.
+
+  A duplicate cancellation message is noise; a silent disappearance is somebody
+  turning up to a session that is not happening. Both ends of a booking now
+  notify the same way, and a test pins the pair so neither can drift alone —
+  which is how this arose, with no test objecting.
+
 ### Added
 
 - **A mentor's own calendar is subtracted from what a mentee may book.** If they
