@@ -56,6 +56,7 @@ from app.api.schemas.profile import (
 from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionTypeWrite
 from app.api.schemas.sessions import (
     SessionBookingWrite,
+    SessionCancellationWrite,
     SessionRead,
     SessionTransitionWrite,
 )
@@ -1442,12 +1443,12 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
     name, so the four differ by a table row rather than by a code path.
     """
 
-    async def dependency(
+    async def run(
         session_id: UUID,
-        user: CurrentUserDep,
-        session: SessionDep,
+        user: dict[str, Any],
+        session: AsyncSession,
         request: Request,
-        payload: SessionTransitionWrite | None = None,
+        payload: SessionTransitionWrite | None,
     ) -> None:
         await transition(
             session,
@@ -1473,7 +1474,30 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
             await release_meeting(session, session_id, calendar=_calendar(request))
         await session.commit()
 
-    return dependency
+    # **Two signatures over one body**, because the annotation is the contract.
+    # FastAPI reads it to build the request schema, so cancelling can only ask
+    # its extra question by being annotated differently — and `accept` must not
+    # inherit a field it would have to ignore. The body stays in one place; only
+    # the shape the client sends differs.
+    async def cancelling(
+        session_id: UUID,
+        user: CurrentUserDep,
+        session: SessionDep,
+        request: Request,
+        payload: SessionCancellationWrite | None = None,
+    ) -> None:
+        await run(session_id, user, session, request, payload)
+
+    async def ending(
+        session_id: UUID,
+        user: CurrentUserDep,
+        session: SessionDep,
+        request: Request,
+        payload: SessionTransitionWrite | None = None,
+    ) -> None:
+        await run(session_id, user, session, request, payload)
+
+    return cancelling if action == "cancel" else ending
 
 
 AcceptedSessionDep = Annotated[None, Depends(transitions("accept"))]

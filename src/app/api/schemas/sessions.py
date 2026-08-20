@@ -378,3 +378,32 @@ class SessionTransitionWrite(BaseModel):
         max_length=2000,
         description="What you want the other party to read. Visible to both of you.",
     )
+
+
+class SessionCancellationWrite(SessionTransitionWrite):
+    """Cancelling, which asks the mentor one extra thing.
+
+    **Its own model rather than a field on the shared one.** All four
+    transitions bind `SessionTransitionWrite`, and `accept` deliberately takes
+    no body at all — putting `release_slot` there would give agreeing a field
+    to send that policy then has to ignore, which that docstring names as the
+    thing to avoid. Only cancelling asks, so only cancelling carries it.
+    """
+
+    release_slot: bool = Field(
+        default=True,
+        description=(
+            "**Mentors only — a mentee's cancellation always frees the hour.** "
+            "Whether you are still free at this time.\n\n"
+            "`true` puts the hour back on your grid, which is the default "
+            "because the two ways of being wrong are not equally visible: an "
+            "hour offered when you are busy shows up as a booking you can "
+            "decline, where an hour withheld when you are free shows up as "
+            "nothing at all.\n\n"
+            "`false` records an **availability exception** on your calendar for "
+            "that time — a normal one, which you can see and remove alongside "
+            "any other, and which applies to every offering rather than this "
+            "one. It is not a hold: it says you are unavailable, not that the "
+            "time is reserved for somebody."
+        ),
+    )
