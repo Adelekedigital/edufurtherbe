@@ -17,6 +17,17 @@ event can state one fact — and no CHECK ties them. A `pending` mentor who is
 `listed` is therefore a legal row, and gating on listing alone would publish an
 unvetted mentor's calendar to anyone who asked.
 
+**Two kinds of busy, subtracted as one.** Sessions this platform booked come
+from the database; a connected mentor's other commitments come from Google, read
+at the moment of asking and never stored (ADR 0004). By the time `bookable` sees
+them they are both just intervals, which is deliberate — a commitment is a
+commitment regardless of who knew about it first.
+
+The Google half is **advisory and fails open**: unreachable means it contributed
+nothing and the grid is whatever the mentor declared, which is exactly what every
+mentor without a connection gets. `sessions_no_mentor_double_booking` remains the
+thing that actually prevents a double booking; this only stops one being offered.
+
 **A session's window comes from `session_window()`, not from Python.** The same
 function backs `sessions_no_mentor_double_booking`, so the slots this returns
 and the constraint that would refuse a booking are computing from one
@@ -28,7 +39,7 @@ that is taken.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -45,6 +56,7 @@ from app.domain.availability import (
     bookable,
 )
 from app.domain.enums import AvailabilityExceptionType
+from app.infra.db.calendar_store import NullFreeBusy
 from app.infra.db.models.availability import (
     AvailabilityException,
     AvailabilityRule,
@@ -61,6 +73,19 @@ from app.infra.db.models.user import User
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 
 __all__ = ["list_slots"]
+
+
+class FreeBusyReader(Protocol):
+    """What `list_slots` needs of a calendar: busy intervals, or nothing.
+
+    Structural rather than inherited, following the room and calendar adapters
+    beside it — the null implementation and the real one share no base class and
+    do not need one.
+    """
+
+    async def busy(
+        self, session: AsyncSession, user_id: UUID, start: dt.datetime, end: dt.datetime
+    ) -> tuple[UtcInterval, ...]: ...
 
 
 def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
@@ -148,6 +173,7 @@ async def list_slots(
     start: dt.date | None,
     end: dt.date | None,
     now: dt.datetime,
+    external_busy: FreeBusyReader | None = None,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
 
@@ -172,6 +198,7 @@ async def list_slots(
     still ahead of them, and a UTC "today" would skip it. Being wrong the other
     way costs nothing, because a day already past yields no slots anyway.
     """
+    external_busy = external_busy or NullFreeBusy()
     offering = (
         (await session.execute(_publicly_bookable(user_id, session_type_id))).mappings().first()
     )
@@ -260,15 +287,25 @@ async def list_slots(
     # instants. Days are the mentor's, but a session is an instant either way,
     # and asking one day wide on each side would only add rows `bookable`
     # discards.
-    busy = (
-        await session.execute(
-            _busy(
-                user_id,
-                dt.datetime.combine(start, dt.time.min, tzinfo=dt.UTC) - dt.timedelta(days=1),
-                dt.datetime.combine(end, dt.time.min, tzinfo=dt.UTC) + dt.timedelta(days=1),
-            )
-        )
-    ).mappings()
+    span_start = dt.datetime.combine(start, dt.time.min, tzinfo=dt.UTC) - dt.timedelta(days=1)
+    span_end = dt.datetime.combine(end, dt.time.min, tzinfo=dt.UTC) + dt.timedelta(days=1)
+    busy = (await session.execute(_busy(user_id, span_start, span_end))).mappings()
+
+    # **The mentor's own calendar, subtracted over the same span.** One request
+    # for the whole range rather than one per day, and none at all unless this
+    # mentor has connected — which most have not.
+    #
+    # It arrives as intervals because that is all `bookable` accepts and all the
+    # scope grants, so the two halves of `busy` are indistinguishable by the
+    # time they are subtracted. That is the point: a commitment is a commitment
+    # whether we booked it or Google knows about it.
+    #
+    # **Advisory, and it fails open** (ADR 0004). `external_busy` returns `()`
+    # when Google cannot be reached, so an outage degrades this to declared
+    # availability alone rather than emptying every connected mentor's calendar.
+    # The exclusion constraint remains the thing that actually prevents a double
+    # booking; this only stops one being offered.
+    elsewhere = await external_busy.busy(session, user_id, span_start, span_end)
 
     return list(
         bookable(
@@ -292,7 +329,7 @@ async def list_slots(
                 )
                 for row in exceptions
             ],
-            busy=[UtcInterval(row["start"], row["end"]) for row in busy],
+            busy=[UtcInterval(row["start"], row["end"]) for row in busy] + list(elsewhere),
             duration_minutes=offering["duration_minutes"],
             min_notice_minutes=offering["min_notice_minutes"],
             now=now,

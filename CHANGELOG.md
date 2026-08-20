@@ -12,6 +12,31 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor's own calendar is subtracted from what a mentee may book.** If they
+  have connected one, their Google busy periods are removed from `/slots`
+  alongside the sessions this platform booked — the two are indistinguishable by
+  the time they are subtracted, which is the point.
+
+  **The check runs again inside the booking transaction.** Free/busy is
+  eventually consistent, so a slot grid built seconds ago can miss a conflict
+  written since; booking already asks `list_slots` for legality rather than
+  re-deriving it, so the last look before the write came free.
+
+  **It fails open, and ADR 0004's own words decide that** — free/busy is
+  advisory and "must never be treated as the mechanism that prevents double
+  booking". Google unreachable means slots are unchanged and the booking
+  proceeds on declared availability alone. The exclusion constraint remains the
+  thing that actually prevents a double booking. That record's open question is
+  resolved and amended in place.
+
+  **Unconnected mentors cost nothing** — no grant, no call — which is most of
+  them. One request covers the whole span rather than one per day, so a 56-day
+  grid is a single round trip.
+
+  A revoked grant is recorded rather than retried forever: `invalid_grant`
+  marks the connection `error` and clears the token, so the calls stop. A
+  timeout or a rate limit does none of that.
+
 - **A mentor can connect the calendar the platform reads their busy hours
   from.** `GET /api/v1/me/calendar` says whether one is connected,
   `GET /api/v1/me/calendar/connect` hands back the Google consent URL, and

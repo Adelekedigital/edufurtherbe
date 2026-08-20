@@ -183,10 +183,10 @@ starts before any implementation work.
 knowingly; trigger 2 above is the exit.
 
 **The free/busy read sits in the booking request path.** It adds latency to slot
-rendering and makes booking dependent on Composio and Google being reachable. The
-degraded behaviour when the read fails — refuse the booking, or fall back to
-declared availability alone — is **not decided here** and must be settled when
-the endpoint is built.
+rendering and makes booking dependent on Google being reachable. The degraded
+behaviour when the read fails — refuse the booking, or fall back to declared
+availability alone — was **not decided here**. It is now: see the amendment
+below.
 
 **This is not the overbooking control.** The guardrail requiring overbooking to
 be prevented by a database constraint rather than an application-level
@@ -220,11 +220,42 @@ Partially mechanical, and the gaps are the interesting part.
   connection-health check is unbuilt and should be, or the same failure recurs
   silently.
 
+### Amendment, 2026-08-19 — the read fails open
+
+Recorded here rather than as a new ADR because this record named the question,
+said it "must be settled when the endpoint is built", and the answer follows from
+this record's own reasoning rather than overturning any of it.
+
+**A failed free/busy read subtracts nothing, and the booking proceeds.**
+
+The argument is one line of this document: free/busy is *advisory*, and "must
+never be treated as the mechanism that prevents double booking" — the exclusion
+constraint is. An advisory check that refuses a booking when Google is slow has
+been promoted to authoritative, which contradicts the paragraph above it. It
+would also make a third party's outage an outage here, on a public endpoint,
+for the 44 mentors who have connected nothing as much as for those who have.
+
+**The cost is stated rather than hidden.** For the length of an outage a mentee
+can book over a real conflict in a mentor's external calendar, and the mentor
+resolves it by cancelling. That is strictly better than nobody being able to
+book at all, and it is the same position every unconnected mentor is in
+permanently.
+
+**Two failures, not one.** A timeout, a 503 or a rate limit is transient: logged
+and otherwise ignored, because writing anything would turn a blip into a
+re-consent. `invalid_grant` on the token exchange, or a per-calendar `errors`
+array inside a `200` body, means the grant is dead and every future call fails
+identically — that marks the connection `error`, clears the token, and thereby
+stops both the calls and any further writes. It is the closest thing yet to the
+connection-health check the Confirmation section calls a live gap, though it is
+reactive rather than proactive and does not close it.
+
 ### Open questions
 
 - **Meta's conversation rates are irrelevant here, but Composio's real call
   volume is not.** The 1,000–2,000 calls/month estimate is derived, not measured.
   Re-derive once the booking endpoint exists.
-- **Degraded behaviour when the free/busy read fails** is undecided, as above.
+- ~~**Degraded behaviour when the free/busy read fails** is undecided, as
+  above.~~ **Resolved 2026-08-19, when the read was built.**
 - **Microsoft Calendar** is not covered by this record. Whether it goes through
   Composio, Nango or directly is a separate decision.

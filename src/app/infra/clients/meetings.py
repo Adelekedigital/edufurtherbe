@@ -4,9 +4,12 @@ Two adapters and a null one apiece, following ``hipolabs`` and the notification
 clients beside this file: a concrete class per source, structurally
 interchangeable, no ``Protocol`` declared.
 
-**What ships is the shape.** The orchestration above these — which provider,
-whether to ask for a conference, which columns to write — is ours and is tested
-against the null adapters. The calls themselves are the integration phase.
+**The Google side is now wired; the Daily side is the shape only.** Events are
+written and removed against the platform's account, a mentor's consent is
+exchanged and their free/busy read, and each is tested by asserting the
+*request* rather than a stubbed return — which is where every defect in this
+file has actually been. `DailyRooms` still ships as a shape whose orchestration
+is tested against the null adapters.
 
 **Two Google grants, and they are not the same grant.** Writing a session's
 event uses **EduFurther's own account** — one stored refresh token in
@@ -49,11 +52,14 @@ from urllib.parse import urlencode
 import httpx
 
 from app.core.errors import UpstreamError
+from app.domain.availability import UtcInterval
 from app.domain.enums import ConferencingProvider
 
 __all__ = [
     "FREEBUSY_SCOPE",
     "GOOGLE_CALENDAR_API",
+    "MENTOR_CALENDAR",
+    "CalendarAccessRevokedError",
     "CalendarEvent",
     "DailyRooms",
     "GoogleCalendar",
@@ -61,8 +67,10 @@ __all__ = [
     "NullCalendar",
     "NullRooms",
     "VenueUnavailableError",
+    "access_token",
     "consent_url",
     "exchange_code",
+    "free_busy",
 ]
 
 logger = logging.getLogger(__name__)
@@ -434,23 +442,13 @@ class GoogleCalendar:
         if self._token and self._token_expires and now < self._token_expires:
             return self._token
 
-        try:
-            response = self._client.post(
-                GOOGLE_TOKEN_URL,
-                data={
-                    "client_id": self._client_id,
-                    "client_secret": self._client_secret,
-                    "refresh_token": self._refresh_token,
-                    "grant_type": "refresh_token",
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise VenueUnavailableError(f"google token refresh failed: {exc}") from exc
-
-        self._token = str(payload["access_token"])
-        self._token_expires = now + dt.timedelta(seconds=int(payload.get("expires_in", 3600)) - 60)
+        self._token, lifetime = access_token(
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+            refresh_token=self._refresh_token,
+            client=self._client,
+        )
+        self._token_expires = now + dt.timedelta(seconds=lifetime - 60)
         return self._token
 
     def _call(
@@ -485,6 +483,61 @@ class GoogleCalendar:
         if not isinstance(payload, dict):
             raise VenueUnavailableError(f"google {path} returned {type(payload).__name__}")
         return payload
+
+
+class CalendarAccessRevokedError(UpstreamError):
+    """The mentor's grant is dead, and retrying will not revive it.
+
+    **Separated from every other upstream failure because the response differs.**
+    A timeout, a 503 or a rate limit means *ask again later* and the connection
+    is fine; `invalid_grant` means the mentor revoked us in their Google
+    settings, or the token aged out unused, and every future call fails
+    identically. Treating the two alike would either re-consent a mentor over a
+    blip, or leave a dead connection retrying silently forever.
+
+    Google says this the same way in both cases — a `400` carrying
+    ``"error": "invalid_grant"`` — so the distinction is made here, at the one
+    place that can see the body.
+    """
+
+
+def access_token(
+    *, client_id: str, client_secret: str, refresh_token: str, client: httpx.Client
+) -> tuple[str, int]:
+    """Exchange a refresh token for an access token and its lifetime.
+
+    **One implementation, two callers**: the platform's own calendar refreshes
+    its single configured token, and a mentor's free/busy read refreshes theirs.
+    Non-negotiable #8 — a second copy of this is a second place for the grant
+    type or the parameter names to be wrong, and the copy that drifts is the one
+    nobody exercises.
+
+    Raises :class:`CalendarAccessRevokedError` for `invalid_grant`, so a caller can
+    tell a dead grant from a bad afternoon.
+    """
+    try:
+        response = client.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+    except httpx.HTTPError as exc:
+        raise VenueUnavailableError(f"google token refresh failed: {exc}") from exc
+
+    if response.status_code == httpx.codes.BAD_REQUEST and "invalid_grant" in response.text:
+        raise CalendarAccessRevokedError("the grant was revoked or has expired")
+
+    try:
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise VenueUnavailableError(f"google token refresh failed: {exc}") from exc
+
+    return str(payload["access_token"]), int(payload.get("expires_in", 3600))
 
 
 #: The one scope a mentor is asked for. ADR 0012 narrowed the ask to this
@@ -523,6 +576,80 @@ def consent_url(*, client_id: str, redirect_uri: str, state: str) -> str:
         }
     )
     return f"{GOOGLE_AUTH_URL}?{query}"
+
+
+#: The mentor's own calendar, always. **Never `google_calendar_id`** — that
+#: setting names a calendar on *EduFurther's* account, and pointing a mentor's
+#: free/busy read at it would subtract the platform's own bookings from every
+#: mentor's availability. The two settings look interchangeable and are not.
+MENTOR_CALENDAR = "primary"
+
+
+def free_busy(
+    *,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    start: dt.datetime,
+    end: dt.datetime,
+    client: httpx.Client | None = None,
+) -> tuple[UtcInterval, ...]:
+    """When this mentor is busy in their own calendar, over ``[start, end)``.
+
+    **One request for the whole span, not one per day.** `freeBusy` takes a
+    range, and a call per day would turn a 56-day grid render into 56 round
+    trips against a third party on an endpoint that takes no token.
+
+    **Times, never contents.** The scope grants exactly this: the response is
+    opaque intervals, so nothing here can learn what a mentor is doing — which
+    is what made the narrow ask defensible to them in the first place.
+
+    Returns intervals for :func:`app.domain.availability.bookable` to subtract.
+    An empty tuple means *free*, and is not the same as a failed read — the
+    caller distinguishes those, because this raises rather than returning empty
+    on failure.
+    """
+    http = client or httpx.Client(timeout=TIMEOUT)
+    token, _ = access_token(
+        client_id=client_id,
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+        client=http,
+    )
+    try:
+        response = http.post(
+            f"{GOOGLE_CALENDAR_API}/freeBusy",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "timeMin": start.isoformat(),
+                "timeMax": end.isoformat(),
+                "items": [{"id": MENTOR_CALENDAR}],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise VenueUnavailableError(f"google freeBusy failed: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise VenueUnavailableError(f"google freeBusy returned {type(payload).__name__}")
+
+    calendar = payload.get("calendars", {}).get(MENTOR_CALENDAR, {})
+    # **A per-calendar error is a failure, not an empty calendar.** `freeBusy`
+    # answers 200 with the trouble reported inside the body — a revoked grant
+    # arrives here as `{"errors": [{"reason": "notFound"}]}` rather than as a
+    # status code, and reading past it would report a mentor with a full diary
+    # as completely free.
+    if calendar.get("errors"):
+        raise VenueUnavailableError(f"google freeBusy refused the calendar: {calendar['errors']}")
+
+    return tuple(
+        UtcInterval(
+            dt.datetime.fromisoformat(period["start"]).astimezone(dt.UTC),
+            dt.datetime.fromisoformat(period["end"]).astimezone(dt.UTC),
+        )
+        for period in calendar.get("busy", [])
+    )
 
 
 def exchange_code(
