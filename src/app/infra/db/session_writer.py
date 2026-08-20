@@ -197,6 +197,7 @@ async def book_session(
     now: dt.datetime,
     scheduler: Any = None,
     callback_url: str | None = None,
+    external_busy: Any = None,
 ) -> UUID:
     """Book ``starts_at`` on an offering, and return the new session's id.
 
@@ -209,6 +210,14 @@ async def book_session(
     **Does not commit.** The caller owns the transaction, because the
     idempotency reservation and this row are one unit — see the module
     docstring.
+
+    ``external_busy`` is handed straight to :func:`list_slots` and is why the
+    mentor's own calendar is checked **inside the booking transaction** rather
+    than only when the grid was rendered. Google free/busy is eventually
+    consistent, so a slot list built seconds ago can miss a conflict; asking
+    again here is the last look before the write. It costs one request on a path
+    that already makes several, and it needs no second code path because
+    legality was already asked of `list_slots` rather than re-derived.
     """
     starts_at: dt.datetime = payload["starts_at"]
     mentor_id = await _whose(session, payload["session_type_id"])
@@ -236,6 +245,7 @@ async def book_session(
         start=day - dt.timedelta(days=SPAN_DAYS),
         end=day + dt.timedelta(days=SPAN_DAYS + 1),
         now=now,
+        external_busy=external_busy,
     )
     if not slots or not any(slot.start == starts_at for slot in slots):
         # Deliberately not distinguished. "Too soon", "outside your hours",

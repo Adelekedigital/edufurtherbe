@@ -106,7 +106,13 @@ from app.infra.db.availability_writer import (
     delete_rule,
     update_rule,
 )
-from app.infra.db.calendar_store import active_connection, connect, disconnect
+from app.infra.db.calendar_store import (
+    MentorFreeBusy,
+    NullFreeBusy,
+    active_connection,
+    connect,
+    disconnect,
+)
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
@@ -1153,6 +1159,7 @@ async def booked_session(
         now=dt.datetime.now(dt.UTC),
         scheduler=_scheduler(request),
         callback_url=_reminder_callback_url(request),
+        external_busy=_free_busy(request),
     )
     # **In the booking's own transaction**, so a session cannot be committed
     # without whatever venue it was going to get. It no-ops unless the session
@@ -1284,6 +1291,39 @@ def _calendar_oauth(request: Request) -> tuple[str, str, str, str]:
         settings.google_calendar_client_secret.get_secret_value(),
         f"{base.rstrip('/')}{CALENDAR_REDIRECT_PATH}",
         settings.calendar_token_key.get_secret_value(),
+    )
+
+
+def _free_busy(request: Request) -> Any:
+    """The mentor's external calendar, or a reader that subtracts nothing.
+
+    **Null unless all three settings are present**, which is the same shape
+    `_calendar` uses and for the same reason: a deployment part-way through
+    being configured should behave like one that has not started, not fail every
+    slot render with an OAuth error. Unconnected mentors are unaffected either
+    way — the reader checks for a grant before it calls anything.
+
+    Read off `app.state` first so a test can wire a fake, following `_rooms`.
+    """
+    wired = getattr(request.app.state, "free_busy", None)
+    if wired is not None:
+        return wired
+    settings = _configured(request)
+    if not (
+        settings.google_calendar_client_id
+        and settings.google_calendar_client_secret
+        and settings.calendar_token_key
+    ):
+        return NullFreeBusy()
+    return MentorFreeBusy(
+        client_id=settings.google_calendar_client_id,
+        client_secret=settings.google_calendar_client_secret.get_secret_value(),
+        key=settings.calendar_token_key.get_secret_value(),
+        # **Its own session for the one write it makes.** A dead grant has to be
+        # recorded whether the surrounding read commits or the surrounding
+        # booking rolls back, and it must never commit either of them.
+        session_factory=getattr(request.app.state, "session_factory", None)
+        or get_session_factory(),
     )
 
 
@@ -1511,6 +1551,7 @@ JoinedSessionDep = Annotated[str | None, Depends(joined_session)]
 
 
 async def mentor_slots(
+    request: Request,
     user_id: UUID,
     session: SessionDep,
     session_type_id: Annotated[UUID, Query(description="Which offering to price the slots for.")],
@@ -1554,6 +1595,7 @@ async def mentor_slots(
         start=start,
         end=end,
         now=dt.datetime.now(dt.UTC),
+        external_busy=_free_busy(request),
     )
     if slots is None:
         raise NotFoundError("no such bookable session type")
