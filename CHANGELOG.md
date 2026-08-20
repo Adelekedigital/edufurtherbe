@@ -12,6 +12,65 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor can connect the calendar the platform reads their busy hours
+  from.** `GET /api/v1/me/calendar` says whether one is connected,
+  `GET /api/v1/me/calendar/connect` hands back the Google consent URL, and
+  `DELETE /api/v1/me/calendar` disconnects.
+
+  **Not the calendar the platform writes to.** ADR 0012 splits the two grants:
+  `calendar.app.created` is given once by EduFurther's own account and creates
+  every session's event — configuration, needing no table and no consent from
+  anybody. `calendar.freebusy` is given by each mentor, reads only *when* they
+  are busy, and is what `calendar_connections` holds.
+
+  **The consent asks for one thing.** `calendar.freebusy` alone, so the screen
+  a mentor sees says *"View your availability in your calendars."*
+  `include_granted_scopes` is deliberately absent — it would let an earlier
+  grant widen this one.
+
+  **The refresh token is encrypted at rest** with Fernet, and the column is
+  named `refresh_token_encrypted` so a reader who writes a plaintext one has
+  made a mistake the name objects to. Disconnecting **destroys** the
+  credential rather than only flipping a status; the row survives, marked
+  revoked, so *that they once connected* stays answerable.
+
+  **The OAuth `state` is sealed and expires in ten minutes**, which is the CSRF
+  control: Google redirects a browser to the callback, so there is no bearer
+  token on it and the mentor's identity has to travel in the `state` we issued.
+  Without the seal an attacker could complete their own consent against a
+  victim's session and attach **their** calendar to somebody else's account.
+
+  **Reading a mentor's busy hours is not built yet** — that is the free/busy
+  subtraction in `slot_store`, and it lands next against these rows. This is
+  the grant, deliberately shipped on its own: reviewing a consent flow
+  alongside a change to the most-tested query in the codebase means reviewing
+  neither carefully.
+
+  Set `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET`,
+  `CALENDAR_TOKEN_KEY` and `PUBLIC_BASE_URL`. All four or none — a partial
+  configuration refuses with a `500` rather than failing further downstream
+  with a message about whichever piece it reached first.
+
+### Changed
+
+- **A third party failing is now a `502` rather than a `500`.**
+  `VenueUnavailableError` was deliberately left unmapped, with its docstring
+  reserving the decision for "the release that wires this" — the consent
+  callback is the first path that lets one escape to a client, so this is that
+  release.
+
+  It moved to `core.UpstreamError` to be mappable at all: `api` may not import
+  `infra`, so while the class lived beside the adapters the transport layer
+  could not name it and every escape fell through to the unmapped-error `500`.
+  `AuthenticationError` moved for the identical reason. The old name is kept as
+  an alias, because "the venue is unavailable" is what a room provider failing
+  actually means at the call sites.
+
+  **502, not 503**: the fault is always upstream. `503` would claim *this*
+  service is unavailable and invite a retry against a request that fails the
+  same way. Booking is unaffected — it still catches the error and continues
+  without a link.
+
 - **A confirmed session gets a calendar event, and a Meet link when that is its
   venue.** `GoogleCalendar` creates the event on the platform's **own** Google
   account and invites both parties as guests — neither completes an OAuth flow.

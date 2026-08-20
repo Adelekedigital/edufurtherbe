@@ -13,6 +13,7 @@ from app.api.routes import (
     availability,
     catalogue,
     health,
+    me_calendar,
     me_intake,
     me_session_types,
     mentors,
@@ -128,6 +129,26 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "callbacks",
+        "description": (
+            "Endpoints a machine or a redirected browser lands on. **There is "
+            "no bearer token on a request here, by design rather than by "
+            "mistake**, which is why they are grouped apart: one of these "
+            "sitting among the authenticated routes is how somebody later "
+            "assumes a caller is present.\n\n"
+            "Each carries its own proof instead. A scheduler signs its "
+            "callbacks; an OAuth redirect carries a sealed, short-lived "
+            "`state` naming the user who started the flow. Neither is a "
+            "credential the caller chose, and both are refused when absent.\n\n"
+            "Every callback re-reads the state it is about before acting, so "
+            "one that arrives for something already settled does nothing and "
+            "says so. That is what lets work be scheduled ahead without "
+            "anything ever having to cancel it, and it is what makes these "
+            "safe to call twice — the schedulers that drive them retry by "
+            "design."
+        ),
+    },
+    {
         "name": "catalog",
         "description": (
             "Public reference data, readable without a token: the mirrored "
@@ -196,6 +217,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # `allow_credentials=True`, Starlette refuses `*` for origins, methods *and*
     # headers. The frontend sends an `Authorization` header (ADR 0009), so
     # credentials are on and the wildcards are therefore unavailable.
+    # **The app carries its own settings**, the way it already carries its
+    # session factory and token verifier. Without this a dependency calling
+    # `get_settings()` reads the process-wide cache, so an app built for a test
+    # — or a second app in one process — silently runs on somebody else's
+    # configuration. Found by a callback suite whose signing key was configured
+    # on the app and ignored by the verifier.
+    application.state.settings = resolved
+
     if resolved.cors_origins:
         application.add_middleware(
             CORSMiddleware,
@@ -216,6 +245,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(slots.router)
     application.include_router(session_types.router)
     application.include_router(me_session_types.router)
+    application.include_router(me_calendar.router)
+    application.include_router(me_calendar.callback_router)
     application.include_router(me_intake.router)
     application.include_router(sessions.router)
     application.include_router(admin.router)

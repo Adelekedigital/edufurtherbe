@@ -316,3 +316,84 @@ class SessionTypeSchedulingWindow(TimestampMixin, Base):
             postgresql_where=text("is_active AND deleted_at IS NULL"),
         ),
     )
+
+
+class CalendarConnection(TimestampMixin, Base):
+    """A mentor's grant to read when they are busy. One per provider, per mentor.
+
+    **Not the calendar the platform writes to.** ADR 0012 splits the two grants:
+    ``calendar.app.created`` is given once by EduFurther's own account and
+    creates every session's event — that is configuration, and it needs no table
+    at all. ``calendar.freebusy`` is given by each mentor, reads only *when* they
+    are busy, and is what this row holds. An earlier docstring claimed the event
+    writer needed this table; it never did, and conflating the two is how that
+    happened.
+
+    **Deferred since M1 and arriving with its consumer** (#21). Two earlier
+    migrations recorded its absence on purpose; what needed it is free/busy
+    conflict detection.
+
+    **The token is encrypted, and the column name says so.** A reader who sees
+    ``refresh_token`` and writes a plaintext one has made a mistake nothing can
+    catch — a string is a string. This is the only credential the service stores
+    on somebody else's behalf, and the only reason it is in the database rather
+    than in configuration is that it arrives per mentor at a moment nobody
+    chooses.
+
+    **A disconnect revokes rather than deletes.** *That they once connected*
+    stays answerable, which is what a mentor asking why their calendar stopped
+    being consulted actually needs. The unique index is partial on ``active`` so
+    a revoked row never blocks a reconnection — which is the ordinary case, not
+    the exception.
+    """
+
+    __tablename__ = "calendar_connections"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    #: Straight to `users`, not `mentor_profiles`. Only mentors connect today,
+    #: but the grant is a fact about a Google account rather than about a
+    #: mentoring profile — and a mentor who later loses their profile has not
+    #: withdrawn their consent.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+    #: `text` + `CHECK`, not an enum type (#100). One value today; the CHECK is
+    #: what stops a typo becoming a connection nothing can read.
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Which Google account consented. **Null on every row today**, and that
+    #: is the narrow ask rather than an omission: the value would come from an
+    #: `id_token`, which Google issues only when `openid` is among the scopes,
+    #: and ADR 0012 asks for `calendar.freebusy` alone. The column is carried
+    #: because it is in the canonical package and because the day the ask
+    #: widens it is what gets filled.
+    external_account_id: Mapped[str | None] = mapped_column(Text)
+
+    refresh_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
+    last_synced_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: Why it stopped working, in Google's words. Shown to the mentor, because
+    #: "your calendar is disconnected" without a reason is a support ticket.
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    connected_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        CheckConstraint("provider IN ('google')", name="provider_is_known"),
+        CheckConstraint("status IN ('active', 'revoked', 'error')", name="status_is_known"),
+        # One live grant per provider per mentor, verbatim from the canonical
+        # package. Partial, so reconnecting after a disconnect is not refused by
+        # the row recording the disconnect.
+        Index(
+            "uq_calendar_connections_active",
+            "user_id",
+            "provider",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )

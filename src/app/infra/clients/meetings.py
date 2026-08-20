@@ -8,12 +8,17 @@ interchangeable, no ``Protocol`` declared.
 whether to ask for a conference, which columns to write — is ours and is tested
 against the null adapters. The calls themselves are the integration phase.
 
-**The Google side is blocked on something that does not exist**:
-``calendar_connections`` was deferred under settled decisions #21 and #26, and
-ADR 0012 has not settled the OAuth arrangement its columns would encode. So
-there is nowhere to read a mentor's token from, and no calendar event can be
-created for anybody until that lands. The null adapter is not a placeholder for
-laziness; it is the honest state of the system.
+**Two Google grants, and they are not the same grant.** Writing a session's
+event uses **EduFurther's own account** — one stored refresh token in
+configuration, no table, no consent from anybody (ADR 0012). Reading a mentor's
+busy hours uses **that mentor's** ``calendar.freebusy`` grant, which is a row in
+``calendar_connections`` and the consent flow beside it.
+
+An earlier version of this docstring claimed the event writer was blocked on
+that table. It never was, and acting on the belief would have meant building a
+table to unblock something that needed nothing from it. The two are recorded
+apart here because conflating them is a mistake this file has already made
+once.
 
 **The Daily side was blocked on a measurement, and most of it is now answered.**
 `docs/daily-spike-guide.md` has the run. The record carries per-participant
@@ -39,13 +44,15 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
-from app.core.errors import AppError
+from app.core.errors import UpstreamError
 from app.domain.enums import ConferencingProvider
 
 __all__ = [
+    "FREEBUSY_SCOPE",
     "GOOGLE_CALENDAR_API",
     "CalendarEvent",
     "DailyRooms",
@@ -54,6 +61,8 @@ __all__ = [
     "NullCalendar",
     "NullRooms",
     "VenueUnavailableError",
+    "consent_url",
+    "exchange_code",
 ]
 
 logger = logging.getLogger(__name__)
@@ -71,14 +80,19 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105
 TIMEOUT = httpx.Timeout(15.0)
 
 
-class VenueUnavailableError(AppError):
-    """A room or an event could not be created.
-
-    Deliberately **not** mapped to a status code yet. A booking that succeeds
-    without a link is recoverable — the link can be minted later and the session
-    still exists — where a booking refused because a third party was slow is
-    not. Which of those we want is a decision for the release that wires this.
-    """
+#: A room or an event could not be created.
+#:
+#: **Now `core.UpstreamError`**, which is what makes it mappable: `api` may not
+#: import `infra`, so while this class was defined here the transport layer
+#: could not name it and every escape became a 500. The old name stays because
+#: it reads better at the call sites — "the venue is unavailable" is what a room
+#: provider failing actually means.
+#:
+#: The status is **502**, decided by the release that wired the consent
+#: callback, which is the first path that lets one reach a client. Booking still
+#: catches it and continues without a link: a session with no link is
+#: recoverable, and refusing the booking because a third party was slow is not.
+VenueUnavailableError = UpstreamError
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,6 +485,84 @@ class GoogleCalendar:
         if not isinstance(payload, dict):
             raise VenueUnavailableError(f"google {path} returned {type(payload).__name__}")
         return payload
+
+
+#: The one scope a mentor is asked for. ADR 0012 narrowed the ask to this
+#: deliberately: it is the least Google offers, and the consent screen then says
+#: exactly one thing — *"View your availability in your calendars."*
+#:
+#: **Not `calendar.app.created`**, which is the platform account's own grant and
+#: is configuration rather than consent. Conflating the two is what made an
+#: earlier docstring claim the event writer needed a per-mentor table.
+FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.freebusy"
+
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+
+
+def consent_url(*, client_id: str, redirect_uri: str, state: str) -> str:
+    """Where to send a mentor to grant free/busy access.
+
+    ``access_type=offline`` with ``prompt=consent`` because we need a **refresh**
+    token and Google issues one only on a fresh grant — a mentor who has
+    consented before otherwise comes back with an access token that dies in an
+    hour, and the connection appears to work until it silently does not.
+
+    ``include_granted_scopes`` is deliberately absent: it would let a previous
+    grant widen this one, and the whole point of the narrow ask is that the
+    consent screen says exactly what it says.
+    """
+    query = urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": FREEBUSY_SCOPE,
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state,
+        }
+    )
+    return f"{GOOGLE_AUTH_URL}?{query}"
+
+
+def exchange_code(
+    *,
+    code: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Turn a consent code into a refresh token, or raise.
+
+    **Refuses a response with no refresh token**, which is the failure that
+    otherwise ships silently: Google returns 200 with only an access token when
+    the grant was not fresh, and storing that gives a connection that works for
+    an hour and then stops with no error anybody saw.
+    """
+    http = client or httpx.Client(timeout=TIMEOUT)
+    try:
+        response = http.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise VenueUnavailableError(f"google refused the consent code: {exc}") from exc
+
+    if not isinstance(payload, dict) or not payload.get("refresh_token"):
+        raise VenueUnavailableError(
+            "Google returned no refresh token — the grant was not fresh, so "
+            "access_type=offline and prompt=consent are both required"
+        )
+    return payload
 
 
 def room_name(session_id: str, provider: ConferencingProvider) -> str:

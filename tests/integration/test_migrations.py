@@ -112,6 +112,9 @@ EXPECTED_TABLES = [
     # that first needs it. See the M3 migration's docstring.
     "availability_exceptions",
     "availability_rules",
+    # Deferred since M1 by two migrations that each said so, and arriving with
+    # the free/busy read that needs it.
+    "calendar_connections",
     # M4 — per-offering windows, which replace general availability for the
     # offering that has them. Listed with M4 rather than M3 because they are
     # a property of an offering.

@@ -16,6 +16,7 @@ from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.availability import (
     AvailabilityException,
     AvailabilityRule,
+    CalendarConnection,
     SessionTypeSchedulingWindow,
 )
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
@@ -59,6 +60,7 @@ __all__ = [
     "AuthIdentity",
     "AvailabilityException",
     "AvailabilityRule",
+    "CalendarConnection",
     "Country",
     "DegreeLevel",
     "EducationEntry",
