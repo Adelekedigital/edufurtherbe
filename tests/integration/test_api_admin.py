@@ -245,6 +245,143 @@ async def test_mentor_approval_may_decide(
 
 
 # --------------------------------------------------------------------------
+# Telling the applicant
+# --------------------------------------------------------------------------
+
+
+async def queued_for(engine: AsyncEngine, user_id: UUID) -> list[tuple[str, Any]]:
+    async with engine.begin() as conn:
+        return [
+            # `enqueue` flattens variables into the payload beside the
+            # recipient rather than nesting them, so the extras are what is left
+            # once the recipient is removed.
+            (
+                str(row["event_type"]),
+                {k: v for k, v in row["payload"].items() if k != "recipient_id"},
+            )
+            for row in (
+                await conn.execute(
+                    text(
+                        "SELECT event_type, payload FROM outbox_events "
+                        "WHERE payload ->> 'recipient_id' = :u ORDER BY created_at"
+                    ),
+                    {"u": str(user_id)},
+                )
+            ).mappings()
+        ]
+
+
+async def an_admin_and_an_applicant(engine: AsyncEngine, tag: str) -> tuple[UUID, UUID]:
+    auth_id = uuid4()
+    await make_user(engine, auth_id, f"admin-{tag}@example.com", role="mentor_approval")
+    target = await make_user(engine, uuid4(), f"applicant-{tag}@example.com")
+    await add_mentor(engine, target)
+    return auth_id, target
+
+
+async def test_an_approved_mentor_is_told(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**They used to find out by logging in and noticing.** The decision made
+    them live in search and said nothing to them at all."""
+    auth_id, target = await an_admin_and_an_applicant(db_engine, "approved")
+
+    response = await api_client.post(
+        f"{ADMIN}/mentors/{target}/decision", json={}, headers=bearer(api_token(auth_id))
+    )
+
+    assert response.status_code == 200
+    assert await queued_for(db_engine, target) == [("mentor_approved", {})]
+
+
+async def test_a_declined_mentor_is_told_why(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The reason the admin gave, carried to the person it is about."""
+    auth_id, target = await an_admin_and_an_applicant(db_engine, "declined")
+
+    await api_client.post(
+        f"{ADMIN}/mentors/{target}/decision?approve=false",
+        json={"reason": "not enough detail on your background"},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert await queued_for(db_engine, target) == [
+        ("mentor_declined", {"reason": "not enough detail on your background"})
+    ]
+
+
+async def test_an_approval_carries_no_reason(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**A decline reason must not ride an approval.** The status event already
+    withholds it for the same reason: there is no such thing as a reason for
+    being approved, and somebody else's words in that message would be worse
+    than none."""
+    auth_id, target = await an_admin_and_an_applicant(db_engine, "no-reason")
+
+    await api_client.post(
+        f"{ADMIN}/mentors/{target}/decision",
+        json={"reason": "this belongs to a decline"},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert await queued_for(db_engine, target) == [("mentor_approved", {})]
+
+
+async def test_deciding_twice_tells_them_once(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**An admin double-clicking must not send a second email.**
+
+    The endpoint does not refuse a second decision, and should not: the status
+    log is an append-only record of what admins did, and approving an
+    already-approved mentor is a thing that happened. But the *mentor* has no
+    news, so the message is gated on the approval actually changing.
+    """
+    auth_id, target = await an_admin_and_an_applicant(db_engine, "twice")
+    url = f"{ADMIN}/mentors/{target}/decision"
+
+    await api_client.post(url, json={}, headers=bearer(api_token(auth_id)))
+    await api_client.post(url, json={}, headers=bearer(api_token(auth_id)))
+
+    assert await queued_for(db_engine, target) == [("mentor_approved", {})]
+
+
+async def test_changing_the_decision_tells_them_again(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The other side of the same gate — an admin who reverses themselves has
+    given the mentor genuine news, and silence there would be the worse bug."""
+    auth_id, target = await an_admin_and_an_applicant(db_engine, "reversed")
+    url = f"{ADMIN}/mentors/{target}/decision"
+
+    await api_client.post(url, json={}, headers=bearer(api_token(auth_id)))
+    await api_client.post(f"{url}?approve=false", json={}, headers=bearer(api_token(auth_id)))
+
+    assert [name for name, _ in await queued_for(db_engine, target)] == [
+        "mentor_approved",
+        "mentor_declined",
+    ]
+
+
+async def test_a_decision_on_no_application_tells_nobody(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A 404 that queued a message would be a message about nothing."""
+    auth_id = uuid4()
+    await make_user(db_engine, auth_id, "admin-none@example.com", role="mentor_approval")
+    nobody = await make_user(db_engine, uuid4(), "no-application@example.com")
+
+    response = await api_client.post(
+        f"{ADMIN}/mentors/{nobody}/decision", json={}, headers=bearer(api_token(auth_id))
+    )
+
+    assert response.status_code == 404
+    assert await queued_for(db_engine, nobody) == []
+
+
+# --------------------------------------------------------------------------
 # The institution queue
 # --------------------------------------------------------------------------
 
