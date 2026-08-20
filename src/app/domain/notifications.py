@@ -26,16 +26,19 @@ the thing most likely to be mistaken for an oversight.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Iterable
 from enum import StrEnum
 from uuid import UUID
 
 __all__ = [
     "AUDIENCE",
+    "REMINDER_OFFSETS",
     "Audience",
     "Channel",
     "Notification",
     "recipients",
+    "reminders_for",
 ]
 
 
@@ -179,3 +182,40 @@ def unique(ids: Iterable[UUID]) -> tuple[UUID, ...]:
     for value in ids:
         seen.setdefault(value, None)
     return tuple(seen)
+
+
+#: How long before the deadline each reminder fires, keyed by a name that goes
+#: on the wire and into the outbox row.
+#:
+#: **Measured back from `respond_by`, not forward from the booking**, and that is
+#: the only well-formed reading: the minimum gap from booking to deadline is
+#: eighteen hours, so a reminder twenty-four hours *after* booking would fire
+#: after the deadline had already passed on every minimum-notice request.
+#:
+#: `on_booking` is absent because it is not scheduled — it is enqueued directly
+#: by the booking that causes it, which needs no scheduler and cannot be missed.
+REMINDER_OFFSETS: dict[str, dt.timedelta] = {
+    "t24": dt.timedelta(hours=24),
+    "t12": dt.timedelta(hours=12),
+}
+
+
+def reminders_for(
+    respond_by: dt.datetime, *, now: dt.datetime
+) -> tuple[tuple[str, dt.datetime], ...]:
+    """Which reminders are still ahead, and when each fires.
+
+    **A reminder whose moment has already passed is dropped rather than fired
+    immediately.** At the 24-hour booking floor the deadline is eighteen hours
+    away, so `t24` is already behind — sending it the instant the booking is
+    made would be a second copy of the on-booking message, thirty seconds later,
+    saying the same thing.
+
+    Returns pairs rather than a mapping so the order is the order they fire in,
+    which is what a reader checking a schedule wants to see.
+    """
+    return tuple(
+        (kind, respond_by - offset)
+        for kind, offset in REMINDER_OFFSETS.items()
+        if respond_by - offset > now
+    )

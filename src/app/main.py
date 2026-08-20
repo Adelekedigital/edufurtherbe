@@ -11,6 +11,7 @@ from app.api.limits import BodyLimitMiddleware
 from app.api.routes import (
     admin,
     availability,
+    callbacks,
     catalogue,
     health,
     me_intake,
@@ -128,6 +129,21 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "callbacks",
+        "description": (
+            "Endpoints a machine calls, authenticated by **signature** rather "
+            "than by a bearer token. There is no user behind a request here, "
+            "which is why they are grouped apart: a token is absent by design, "
+            "not by mistake.\n\n"
+            "Every callback re-reads the state it is about before acting, so "
+            "one that arrives for something already settled does nothing and "
+            "says so. That is what lets work be scheduled ahead without "
+            "anything ever having to cancel it.\n\n"
+            "Safe to call twice — the schedulers that drive these retry by "
+            "design, and a duplicate is a no-op rather than a second effect."
+        ),
+    },
+    {
         "name": "catalog",
         "description": (
             "Public reference data, readable without a token: the mirrored "
@@ -196,6 +212,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # `allow_credentials=True`, Starlette refuses `*` for origins, methods *and*
     # headers. The frontend sends an `Authorization` header (ADR 0009), so
     # credentials are on and the wildcards are therefore unavailable.
+    # **The app carries its own settings**, the way it already carries its
+    # session factory and token verifier. Without this a dependency calling
+    # `get_settings()` reads the process-wide cache, so an app built for a test
+    # — or a second app in one process — silently runs on somebody else's
+    # configuration. Found by a callback suite whose signing key was configured
+    # on the app and ignored by the verifier.
+    application.state.settings = resolved
+
     if resolved.cors_origins:
         application.add_middleware(
             CORSMiddleware,
@@ -217,6 +241,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(session_types.router)
     application.include_router(me_session_types.router)
     application.include_router(me_intake.router)
+    application.include_router(callbacks.router)
     application.include_router(sessions.router)
     application.include_router(admin.router)
     return application
