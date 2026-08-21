@@ -6,7 +6,7 @@
     # report what would move, touching nothing
     uv run python scripts/settle_sessions.py --dry-run
 
-**Three sweeps, one job.** An unanswered *request* past ``respond_by`` becomes
+**Four sweeps, one job.** An unanswered *request* past ``respond_by`` becomes
 ``expired``; a *confirmed* session past its join window becomes ``completed`` or
 ``no_show``; and whatever either of them queued gets sent. The first two act on
 disjoint statuses so their order does not matter, and the drain runs **last**
@@ -52,8 +52,9 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import get_settings
-from app.infra.clients.meetings import GoogleCalendar, NullCalendar
+from app.infra.clients.meetings import GoogleCalendar, NullCalendar, free_busy
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier
+from app.infra.db.calendar_store import check_connections
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.db.outbox import drain
 from app.infra.db.session_writer import expire_requests, settle_attendance
@@ -95,6 +96,27 @@ def _calendar() -> GoogleCalendar | NullCalendar:
     )
 
 
+def _calendar_health() -> dict[str, str] | None:
+    """The mentor-facing OAuth client, or ``None`` when it is not configured.
+
+    All three or none, matching `_calendar` above and `_free_busy` in `deps`:
+    a deployment part-way through being set up should behave like one that has
+    not started, rather than failing a sweep that has three other jobs to do.
+    """
+    settings = get_settings()
+    if not (
+        settings.google_calendar_client_id
+        and settings.google_calendar_client_secret
+        and settings.calendar_token_key
+    ):
+        return None
+    return {
+        "client_id": settings.google_calendar_client_id,
+        "client_secret": settings.google_calendar_client_secret.get_secret_value(),
+        "key": settings.calendar_token_key.get_secret_value(),
+    }
+
+
 async def run(args: argparse.Namespace) -> int:
     engine = create_async_engine(resolve_async_dsn(get_settings()))
     try:
@@ -104,6 +126,17 @@ async def run(args: argparse.Namespace) -> int:
             # sit exactly on a boundary and be judged by two different instants.
             expired = await expire_requests(session, now=now, calendar=_calendar())
             settled = await settle_attendance(session, now=now)
+            # **Third, and before the drain**, so a mentor whose calendar died
+            # is told in this run rather than an hour later. It is the only
+            # sweep here that talks to a third party to decide anything, which
+            # is why it counts unreachable separately from disconnected: one is
+            # a fact about a grant, the other about an afternoon.
+            oauth = _calendar_health()
+            health = (
+                {"checked": 0, "healthy": 0, "disconnected": 0, "unreachable": 0}
+                if oauth is None
+                else await check_connections(session, now=now, reader=free_busy, **oauth)
+            )
             # **The null notifier on a dry run, always.** A dry run rolls the
             # database back and cannot roll back an email, so sending for real
             # and then pretending nothing happened would be the one irreversible
@@ -119,12 +152,14 @@ async def run(args: argparse.Namespace) -> int:
                 await session.rollback()
                 print(
                     f"would expire {expired} request(s), settle {settled} session(s), "
+                    f"disconnect {health['disconnected']} calendar(s), "
                     f"send {sum(sent.values())} message(s)"
                 )
             else:
                 await session.commit()
                 print(
-                    f"expired {expired} request(s), settled {settled} session(s), messages {sent}"
+                    f"expired {expired} request(s), settled {settled} session(s), "
+                    f"calendars {health}, messages {sent}"
                 )
     finally:
         await engine.dispose()

@@ -207,15 +207,31 @@ class CalendarConnectionRead(BaseModel):
     for `calendar.freebusy` alone. A field that is null on every row reads as a
     bug in the fill rather than as a decision about the ask.
 
+    **A broken connection is shown rather than hidden.** It used to read as
+    *never connected*, which left a mentor with nothing to act on and is the gap
+    ADR 0004 calls out. `status` says which it is; a client should not have to
+    infer it from `last_error` being set.
+
     `last_error` is Google's words rather than ours. "Your calendar is
     disconnected" with no reason is a support ticket; the provider's own message
     is usually enough for a mentor to fix it themselves.
     """
 
     connected_at: dt.datetime
+    status: str = Field(
+        description=(
+            "`active` while it works, `error` once it stopped. A connection you "
+            "disconnected yourself is not returned at all — this endpoint "
+            "answers `null` for that, because you already know."
+        ),
+    )
     last_synced_at: dt.datetime | None = Field(
         default=None,
-        description="When the platform last read your busy hours. Null until it has.",
+        description=(
+            "When the health check last confirmed this connection works. Null "
+            "until it has run — it is a scheduled sweep, not something a page "
+            "view triggers."
+        ),
     )
     last_error: str | None = Field(
         default=None,
@@ -226,6 +242,7 @@ class CalendarConnectionRead(BaseModel):
     def from_row(cls, row: dict[str, object]) -> CalendarConnectionRead:
         return cls(
             connected_at=row["connected_at"],  # type: ignore[arg-type]
+            status=str(row["status"]),
             last_synced_at=row.get("last_synced_at"),  # type: ignore[arg-type]
             last_error=str(row["last_error"]) if row.get("last_error") else None,
         )

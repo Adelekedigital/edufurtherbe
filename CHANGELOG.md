@@ -10,6 +10,40 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Added
+
+- **A mentor finds out when their calendar stops working.** `settle_sessions`
+  gains a fourth sweep: it probes every calendar grant nobody has confirmed
+  working in the last twelve hours, records the ones Google has revoked, and
+  queues a message to the mentor.
+
+  **This closes the gap ADR 0004 names in its own Confirmation section** —
+  *"nothing currently alerts when connected accounts are revoked. That is
+  precisely how this situation went unnoticed."* Revocation is silent, so the
+  only way to find out is to ask.
+
+  Reactive detection already existed, but it needed somebody to render that
+  mentor's slots. A mentor nobody browses was a mentor whose calendar quietly
+  stopped being consulted.
+
+  **A bad afternoon is not a dead grant.** A timeout or a rate limit changes
+  nothing — not marked, not stamped, not counted as checked — so the next run
+  tries again. Only `invalid_grant` and a credential that cannot be opened are
+  treated as fatal, and each mentor is told once however often the sweep runs.
+
+  **`last_synced_at` finally has a writer.** It was described in the API as
+  "when the platform last read your busy hours" and was null forever; it now
+  means when the health check last confirmed the connection works, which is also
+  what lets the sweep skip everything it checked recently.
+
+### Changed
+
+- **`GET /api/v1/me/calendar` shows a connection that broke**, with a `status`
+  field and the provider's own reason. It used to read `null`, which a mentor
+  could not tell apart from never having connected. A connection they
+  disconnected themselves still reads `null` — they already know.
+
+
 ### Fixed
 
 - **A cancelled session now tells the mentee it was cancelled.** The invitation

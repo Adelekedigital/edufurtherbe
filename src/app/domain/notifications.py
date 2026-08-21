@@ -74,6 +74,17 @@ class Notification(StrEnum):
     #: does not reach it — see `recipients`.
     MENTOR_APPROVED = "mentor_approved"
 
+    #: A mentor's connected calendar stopped working — revoked in Google's own
+    #: settings, or a token that aged out unused. **Not a session either**, so
+    #: `AUDIENCE` does not reach it: there is one recipient and no other party
+    #: to choose between.
+    #:
+    #: Sent once, when the connection moves to `error`. The sweep that finds
+    #: these runs hourly and would otherwise say the same thing every hour —
+    #: `record_failure` only matches an `active` row, so the second attempt
+    #: writes nothing and tells nobody.
+    CALENDAR_DISCONNECTED = "calendar_disconnected"
+
     #: And declined, carrying whatever reason the reviewer gave.
     MENTOR_DECLINED = "mentor_declined"
 

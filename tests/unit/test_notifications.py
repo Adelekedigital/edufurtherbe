@@ -113,7 +113,15 @@ def test_every_session_message_has_an_audience() -> None:
         member
         for member in Notification
         if member not in AUDIENCE
-        and member not in {Notification.MENTOR_APPROVED, Notification.MENTOR_DECLINED}
+        and member
+        not in {
+            # The three that are not about a session, so there is no mentor and
+            # mentee for `recipients` to choose between. Each is enqueued with
+            # its one recipient named directly.
+            Notification.MENTOR_APPROVED,
+            Notification.MENTOR_DECLINED,
+            Notification.CALENDAR_DISCONNECTED,
+        }
     }
 
     assert unmapped == set()
