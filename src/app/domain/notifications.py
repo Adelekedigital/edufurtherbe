@@ -104,6 +104,15 @@ class Notification(StrEnum):
     #: asking how a session went when nobody attended is worse than silence.
     SESSION_FEEDBACK = "session_feedback"
 
+    #: Somebody applied to be a mentor. **To the admins, not to a party of a
+    #: session**, so `AUDIENCE` does not reach it — the recipients are a *set*
+    #: resolved from live grants rather than one person named on a row, which is
+    #: the first message here with that shape.
+    #:
+    #: Without it an application is found by somebody thinking to look, which is
+    #: how a queue grows quietly.
+    MENTOR_APPLICATION_RECEIVED = "mentor_application_received"
+
     #: And declined, carrying whatever reason the reviewer gave.
     MENTOR_DECLINED = "mentor_declined"
 
