@@ -10,6 +10,50 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Added
+
+- **A confirmed session reminds both parties, 24 hours and 1 hour before.**
+  The only reminder this platform had chased a mentor to *answer a request*,
+  measured back from `respond_by`. Nothing reminded anybody about the session
+  itself — which the legacy application does, so its absence was a regression
+  against the app being replaced rather than a missing extra.
+
+  Published at **both** points a session becomes real: at booking for an
+  offering that confirms itself, and at `/accept` for one that waits. A pending
+  request publishes none — telling both parties their session is tomorrow, for
+  something nobody has agreed to, is worse than telling them nothing.
+
+  **Nothing is ever cancelled.** The callback re-reads, so a reminder for a
+  session since called off does nothing. A reminder whose moment has already
+  passed is dropped rather than fired: at the 24-hour booking floor that is the
+  24-hour one, and sending it would repeat the confirmation message.
+
+- **A completed session asks both parties how it went.** Queued by the
+  settlement sweep rather than scheduled ahead, because that sweep already runs
+  hourly and already decides the outcome — so nothing is published, nothing is
+  verified on the way back, and it cannot fire for a session that never ran.
+
+  **Never after a `no_show`.** "How was your session?" about one nobody attended
+  reads as a platform that did not notice, to the party who did turn up.
+
+### Fixed
+
+- **A reminder to two people queued one message, not two.**
+  `uq_outbox_events_reminder` was `(entity_id, event_type, kind)`, which is
+  correct for a message with one recipient and wrong for one with two: the
+  second row conflicted and `ON CONFLICT DO NOTHING` dropped it in silence — one
+  party reminded, the other not, nothing saying so.
+
+  It was right when written, because the only reminder then went to the mentor
+  alone. The index now includes the recipient, and a test reads the live
+  definition — `alembic check` skips expression indexes, so nothing else could
+  catch model and migration drifting apart.
+
+- **The scheduler can now be wired on `app.state`**, which `_rooms`,
+  `_calendar` and `_free_busy` all allow and it did not. The inconsistency was
+  invisible until something needed to assert that a reminder was *published*.
+
+
 ### Fixed
 
 - **Emails now carry their contents.** Every message went out with

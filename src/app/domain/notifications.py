@@ -28,17 +28,22 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Iterable
+from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
 __all__ = [
     "AUDIENCE",
     "REMINDER_OFFSETS",
+    "SESSION_REMINDERS",
+    "SESSION_REMINDER_KINDS",
     "Audience",
     "Channel",
     "Notification",
+    "SessionReminder",
     "recipients",
     "reminders_for",
+    "session_reminders_for",
 ]
 
 
@@ -85,6 +90,20 @@ class Notification(StrEnum):
     #: writes nothing and tells nobody.
     CALENDAR_DISCONNECTED = "calendar_disconnected"
 
+    #: A confirmed session is coming up. **Both parties**, because either can
+    #: forget, and the legacy application sends this — not having it would be a
+    #: regression against the app being replaced rather than a missing extra.
+    SESSION_REMINDER = "session_reminder"
+
+    #: The same, close enough that there is no time to rearrange. A separate
+    #: member rather than the one above with a different interval, because the
+    #: templates differ: this one is about turning up, that one about preparing.
+    SESSION_LAST_REMINDER = "session_last_reminder"
+
+    #: After a session that actually happened. **Never after a `no_show`** —
+    #: asking how a session went when nobody attended is worse than silence.
+    SESSION_FEEDBACK = "session_feedback"
+
     #: And declined, carrying whatever reason the reviewer gave.
     MENTOR_DECLINED = "mentor_declined"
 
@@ -122,6 +141,9 @@ AUDIENCE: dict[Notification, Audience] = {
     Notification.SESSION_CANCELLED: Audience.OTHER_PARTY,
     Notification.REQUEST_EXPIRED: Audience.BOTH,
     Notification.MENTOR_RESPONSE_REMINDER: Audience.MENTOR,
+    Notification.SESSION_REMINDER: Audience.BOTH,
+    Notification.SESSION_LAST_REMINDER: Audience.BOTH,
+    Notification.SESSION_FEEDBACK: Audience.BOTH,
 }
 
 
@@ -209,6 +231,58 @@ REMINDER_OFFSETS: dict[str, dt.timedelta] = {
     "t24": dt.timedelta(hours=24),
     "t12": dt.timedelta(hours=12),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class SessionReminder:
+    """One nudge before a session: when it fires, and what it says it is."""
+
+    #: What the callback carries, and what the outbox dedups on. Prefixed `s`
+    #: so a session reminder can never be mistaken for a response reminder —
+    #: the two mean different things and require different statuses.
+    kind: str
+    notification: Notification
+    before: dt.timedelta
+    #: The words the template renders for `intervaltime`. Here rather than in a
+    #: resolver because it is a property of the schedule: change the offset and
+    #: the wording has to move with it, and separating them is how a message
+    #: ends up saying "24 hours" an hour before.
+    interval: str
+
+
+#: When a confirmed session is nudged. **Twenty-four hours and one hour.**
+#:
+#: The first is far enough out to prepare or to rearrange; the second is close
+#: enough that it is about turning up. The booking floor is also 24 hours, so a
+#: session booked at the minimum notice has its 24-hour reminder already behind
+#: it — dropped rather than fired, for the reason :func:`reminders_for` gives.
+SESSION_REMINDERS: tuple[SessionReminder, ...] = (
+    SessionReminder("s24", Notification.SESSION_REMINDER, dt.timedelta(hours=24), "24 hours"),
+    SessionReminder("s1", Notification.SESSION_LAST_REMINDER, dt.timedelta(hours=1), "1 hour"),
+)
+
+#: The kinds a callback may carry, and what each one is about. Looked up rather
+#: than parsed, so a kind nobody defined is refused at the door instead of
+#: reaching a handler that has to guess.
+SESSION_REMINDER_KINDS = {reminder.kind: reminder for reminder in SESSION_REMINDERS}
+
+
+def session_reminders_for(
+    starts_at: dt.datetime, *, now: dt.datetime
+) -> tuple[tuple[SessionReminder, dt.datetime], ...]:
+    """Which session reminders are still ahead, and when each fires.
+
+    Same rule as :func:`reminders_for`: one whose moment has passed is dropped
+    rather than fired immediately. At the 24-hour booking floor that is the
+    24-hour reminder, and sending it on confirmation would be the confirmation
+    message again, saying the session is tomorrow when the mentee just booked it
+    for tomorrow.
+    """
+    return tuple(
+        (reminder, starts_at - reminder.before)
+        for reminder in SESSION_REMINDERS
+        if starts_at - reminder.before > now
+    )
 
 
 def reminders_for(

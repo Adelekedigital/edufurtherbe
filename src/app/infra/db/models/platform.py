@@ -202,7 +202,8 @@ class OutboxEvent(TimestampMixin, Base):
             "created_at",
             postgresql_where=text("status = 'pending'"),
         ),
-        # **At most one reminder per session per kind, whatever QStash does.**
+        # **At most one reminder per session per kind per recipient, whatever
+        # QStash does.**
         # A retried callback would otherwise queue an identical second email;
         # nothing else in this table stops it, because two rows differing only
         # by id are exactly what it is normally for. ADR 0015 prescribes this
@@ -216,6 +217,12 @@ class OutboxEvent(TimestampMixin, Base):
             "entity_id",
             "event_type",
             text("(payload ->> 'kind')"),
+            # **The recipient, and it was missing until a reminder went to two
+            # people.** The outbox writes one row per person so a send failing
+            # for one is retried for that one; without this the second row
+            # conflicts with the first and is dropped in silence — one party
+            # reminded, the other not, nothing saying so.
+            text("(payload ->> 'recipient_id')"),
             unique=True,
             postgresql_where=text("payload ? 'kind'"),
         ),

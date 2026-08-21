@@ -74,7 +74,7 @@ from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
 from app.domain.enums import AdminRole, MeetingProvider, MentorStatusType
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES, process
-from app.domain.notifications import REMINDER_OFFSETS
+from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.clients.meetings import (
     DailyRooms,
@@ -179,7 +179,9 @@ from app.infra.db.session_writer import (
     provision_meeting,
     record_arrival,
     release_meeting,
+    remind_before_session,
     remind_if_still_waiting,
+    schedule_session_reminders,
     transition,
 )
 from app.infra.db.slot_store import list_slots
@@ -1202,7 +1204,15 @@ def _scheduler(request: Request) -> Any:
     added to the environment takes effect on the next deploy without a wiring
     change, and a test that sets none gets the null adapter without unsetting
     anything.
+
+    **Read off `app.state` first**, which `_rooms`, `_calendar` and `_free_busy`
+    all do and this did not. The inconsistency was invisible until something
+    needed to assert *that a reminder was published* rather than what happened
+    when one was: there was no seam to put a fake in.
     """
+    wired = getattr(request.app.state, "scheduler", None)
+    if wired is not None:
+        return wired
     token = _configured(request).qstash_token
     return QStashScheduler(token.get_secret_value()) if token else NullScheduler()
 
@@ -1255,10 +1265,18 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     payload = json.loads(body or b"{}")
     session_id = payload.get("session_id")
     kind = payload.get("kind")
-    if not session_id or kind not in REMINDER_OFFSETS:
+    if not session_id or (kind not in REMINDER_OFFSETS and kind not in SESSION_REMINDER_KINDS):
         raise ValidationError("not a reminder callback")
 
-    queued = await remind_if_still_waiting(session, UUID(str(session_id)), str(kind))
+    # **Two kinds of reminder, one callback.** They differ in what they
+    # require: a response reminder is only sent while the request is still
+    # unanswered, a session reminder only while the session is still going
+    # ahead. Dispatching on the kind keeps that in one place rather than in two
+    # endpoints that would drift.
+    if kind in SESSION_REMINDER_KINDS:
+        queued = await remind_before_session(session, UUID(str(session_id)), str(kind))
+    else:
+        queued = await remind_if_still_waiting(session, UUID(str(session_id)), str(kind))
     await session.commit()
     return queued
 
@@ -1466,6 +1484,21 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
             await provision_meeting(
                 session, session_id, rooms=_rooms(request), calendar=_calendar(request)
             )
+            # **The second place a session becomes real**, and therefore the
+            # second place its reminders are published. Booking covers the
+            # offering that confirms itself; this covers the one that waited.
+            # Missing it would leave every confirmation-required session
+            # silently unreminded — which is exactly the shape of gap that made
+            # `release_meeting` necessary.
+            row = await get_session_row(session, session_id, user["id"])
+            if row is not None:
+                schedule_session_reminders(
+                    session_id,
+                    row["starts_at"],
+                    scheduler=_scheduler(request),
+                    callback_url=_reminder_callback_url(request) or "",
+                    now=dt.datetime.now(dt.UTC),
+                )
         else:
             # **Every other transition ends the session**, and an ended session
             # must not leave a live event in either calendar. Decline, withdraw
