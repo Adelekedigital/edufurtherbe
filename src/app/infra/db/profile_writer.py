@@ -33,6 +33,8 @@ from uuid import UUID
 from sqlalchemy import CursorResult, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.notifications import Notification
+from app.infra.db.admin_store import admins_who_can_decide
 from app.infra.db.models.mentoring import (
     MenteeGoal,
     MenteeGoalCountry,
@@ -42,6 +44,7 @@ from app.infra.db.models.mentoring import (
 )
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.user import User, UserLanguage, UserProfile
+from app.infra.db.outbox import enqueue
 
 GOAL_COLUMNS = ("degree_goal_id", "degree_goal_raw", "target_start_term", "notes")
 AWARD_COLUMNS = ("title", "institution", "scholarship_program_id", "year", "evidence_url")
@@ -250,6 +253,26 @@ async def create_mentor_profile(
     )
     await session.execute(update(User).where(User.id == user_id).values(primary_role="mentor"))
     await _write_offerings(session, user_id, payload)
+
+    # **Tell the admins who can act.** Without this an application is found by
+    # somebody thinking to look, which is how a queue grows quietly — and this
+    # endpoint's own description used to say applications simply accumulate.
+    #
+    # In the same transaction as the profile: no alert about a row that failed
+    # to write, and no row nobody was told about.
+    #
+    # **Not the applicant, even if they are an admin.** Being told to review
+    # your own application is noise; that the decision endpoint *permits*
+    # deciding your own is a different question from being nudged about it.
+    reviewers = tuple(admin for admin in await admins_who_can_decide(session) if admin != user_id)
+    if reviewers:
+        await enqueue(
+            session,
+            Notification.MENTOR_APPLICATION_RECEIVED,
+            entity_type="mentor_profile",
+            entity_id=user_id,
+            recipient_ids=reviewers,
+        )
     return result.scalar_one()
 
 

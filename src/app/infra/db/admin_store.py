@@ -42,7 +42,8 @@ from sqlalchemy import CursorResult, and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
-from app.domain.enums import ApprovalStatus, LookupStatus
+from app.domain.enums import AdminRole, ApprovalStatus, LookupStatus
+from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
@@ -81,6 +82,46 @@ async def pending_institutions(session: AsyncSession, *, limit: int) -> list[dic
         .limit(limit)
     )
     return [dict(row) for row in (await session.execute(statement)).mappings()]
+
+
+#: The grants that can act on a mentor application.
+#:
+#: **`limited_access` is deliberately absent.** It may look and not act — the
+#: suite asserts exactly that — so telling it about a queue it cannot clear is a
+#: message whose only possible response is to find somebody else.
+DECIDING_ROLES = (AdminRole.SUPER_ADMIN, AdminRole.MENTOR_APPROVAL)
+
+
+async def admins_who_can_decide(session: AsyncSession) -> tuple[UUID, ...]:
+    """Everyone holding a live grant that can act on an application.
+
+    **A live grant, not a role on a user row.** `admin_users` records who
+    granted it and allows it to be revoked, and `revoked_at IS NULL` is what
+    makes revocation mean anything — an alert reaching a revoked admin would be
+    the first place that stopped being true.
+
+    Returns a tuple so the caller enqueues one row per person: the outbox stores
+    messages that way so a send failing for one is retried for that one.
+
+    **Empty is a legitimate answer.** A deployment with no admins yet still
+    accepts applications; refusing one because nobody could be told would be the
+    wrong way round.
+    """
+    return tuple(
+        (
+            await session.execute(
+                select(AdminUser.user_id)
+                .where(
+                    AdminUser.admin_role.in_(DECIDING_ROLES),
+                    AdminUser.revoked_at.is_(None),
+                )
+                .distinct()
+                .order_by(AdminUser.user_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
 
 async def approve_institution(session: AsyncSession, institution_id: UUID) -> bool:
