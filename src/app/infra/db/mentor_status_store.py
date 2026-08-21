@@ -23,8 +23,10 @@ from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import ApprovalStatus, MentorStatusType, UnlistedReason
+from app.domain.notifications import Notification
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
+from app.infra.db.outbox import enqueue
 
 
 async def _mentor_exists(session: AsyncSession, user_id: UUID) -> bool:
@@ -34,6 +36,29 @@ async def _mentor_exists(session: AsyncSession, user_id: UUID) -> bool:
         )
     )
     return found.first() is not None
+
+
+async def _approval_before(session: AsyncSession, user_id: UUID) -> str | None:
+    """This mentor's current approval status, or ``None`` if there is no profile.
+
+    **Read before the decision is recorded**, because that is the only moment
+    the previous state is still knowable: `trg_apply_mentor_status` projects
+    each event onto the column, so by the time `record` returns the column
+    already says what was just decided.
+
+    It is what makes deciding twice quiet. The endpoint does not refuse a second
+    decision — the event log is an append-only record of what admins did, and an
+    admin approving an already-approved mentor genuinely did that — but the
+    *mentor* has no news, and telling them again is the failure an admin who
+    double-clicks would cause.
+    """
+    return (
+        await session.execute(
+            select(MentorProfile.approval_status).where(
+                MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def record(
@@ -79,7 +104,8 @@ async def decide(
     concurrent transitions record a state that never existed. Writing them as
     two facts costs one insert and keeps every row true on its own.
     """
-    if not await _mentor_exists(session, user_id):
+    before = await _approval_before(session, user_id)
+    if before is None:
         return False
 
     await record(
@@ -96,6 +122,30 @@ async def decide(
         created_by=admin_id,
         reason=None if approved else UnlistedReason.NEVER_APPROVED.value,
     )
+
+    # **After the decision, and only when it is news.** After, because a message
+    # about a write that failed is worse than silence — they are one transaction,
+    # so neither can happen without the other. Only when it changed, because the
+    # endpoint permits a second decision and an admin who double-clicks must not
+    # send a second email.
+    #
+    # `recipients` is not used and cannot be: it answers *which party to a
+    # session*, and raises for a message that is not about one. There is a single
+    # recipient here and it is the applicant.
+    decided = ApprovalStatus.APPROVED if approved else ApprovalStatus.DECLINED
+    if before != decided.value:
+        await enqueue(
+            session,
+            Notification.MENTOR_APPROVED if approved else Notification.MENTOR_DECLINED,
+            entity_type="mentor_profile",
+            entity_id=user_id,
+            recipient_ids=(user_id,),
+            # **Nothing on an approval.** `reason` is already withheld from the
+            # approval event above for the same reason: there is no such thing as
+            # a reason for being approved, and a decline reason arriving on an
+            # approval would be somebody else's words in the wrong message.
+            variables=None if approved else {"reason": reason or ""},
+        )
     return True
 
 

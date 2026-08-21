@@ -42,6 +42,27 @@ released. A tag with no matching section here fails the release job.
   field and the provider's own reason. It used to read `null`, which a mentor
   could not tell apart from never having connected. A connection they
   disconnected themselves still reads `null` — they already know.
+- **A mentor is told whether their application was approved or declined.**
+  `POST /admin/mentors/{user_id}/decision` already wrote the decision and made
+  an approved mentor live in search — and said nothing to them. They found out
+  by logging in and noticing. `MENTOR_APPROVED` and `MENTOR_DECLINED` existed as
+  message types with their audience rules settled; only the wiring was missing.
+
+  A decline carries the admin's reason. An approval carries none — the status
+  event already withholds it for the same reason, and somebody else's words in
+  that message would be worse than no words.
+
+  **Deciding twice tells them once.** The endpoint still permits a second
+  decision, because the status log is an append-only record of what admins did;
+  but the message is gated on the approval actually changing, so an admin who
+  double-clicks sends one email. Reversing a decision does tell them again —
+  that is genuine news.
+
+### Fixed
+
+- **`POST /users/{id}/mentor-profile` no longer tells clients that nothing can
+  approve an application.** The admin decision endpoint shipped; that
+  description did not catch up, and it is published in the OpenAPI spec.
 
 
 ### Fixed
