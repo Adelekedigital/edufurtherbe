@@ -1,6 +1,7 @@
 # Handoff — the review build (M5a)
 
-**Status:** planned, nothing built. Six PRs, one ADR.
+**Status:** PR 1 is built — the table, its constraints and its indexes. Five PRs
+and one ADR remain.
 **Written:** 2026-08-20, from `FE-ui-guide/reviewUI/` measured against the codebase,
 `docs/edufurther-migration/` and the dev Bubble app.
 **Companion:** `handoff-session-build.md`, whose sequence this follows.
@@ -82,7 +83,8 @@ disagree, the measurement wins — the package is a brain dump (ADR 0007), and d
    the same fact twice (non-negotiable #8), and unlike decision #10's
    snapshotted rate it is not a mutable value.
 
-5. **Migrated rows take `session_id = NULL` and `reviewed_role = 'mentor'`** —
+5. **Migrated rows take `session_id = NULL` and `reviewed_for_role = 'mentor'`**
+   (renamed by decision 17) —
    the legacy table is "storing mentors reviews". Fabricating a link from
    `reviewedBy` + `reviewedFor` + proximity is irreversible; a later backfill is
    additive.
@@ -163,18 +165,122 @@ disagree, the measurement wins — the package is a brain dump (ADR 0007), and d
     #104 — a column with a server default, additive whenever it is wanted. Not
     an env var.
 
+### Settled while building, 2026-08-22
+
+Four decisions the plan did not carry. They are recorded here rather than
+argued again in each PR that acts on them.
+
+14. **The discovery card carries `review_count` and `session_value`, and
+    nothing else.** `session_value` is the mean of `valuable_rating`, over 5 —
+    the figure the profile already shows as `5/5 Session Value`. Not the four
+    ordinals, which only read as percentages, and not the NPS, which is a
+    likelihood rather than a quality score.
+
+    Legacy carried `countReviewReceived` on *Mentor (front search)* and no
+    rating, so the count is restored and the rating is new. **Lands in PR 3.**
+
+15. **A rating never enters the keyset sort.** Browse pages on
+    `mentor_profiles.id` (ADR 0016's base case), so ordering by rating would
+    invalidate the cursor — equal ratings swap between pages, showing one mentor
+    twice and hiding another.
+
+    **And no sort-by-rating control is wanted.** A raw rating order puts one
+    5/5 above two hundred reviews averaging 4.8, which needs a weighted score to
+    be honest at all. If rating ever influences ordering it joins `_ranked()`'s
+    formula on the **offset** path, which that docstring already anticipates by
+    name. A `?min_rating=` *filter* is additive and can arrive whenever it is
+    wanted — `ix_reviews_mentor_valuable` is already there to serve it.
+    **Lands in PR 3.**
+
+16. **The form's required-ness is the schema's.** Measured from the three
+    screens in `FE-ui-guide/reviewUI/` — note the file names invert the order,
+    `reviewquestion3.png` is step 1:
+
+    | Step | Field | Required |
+    |---|---|---|
+    | 1 | the four mentor ratings, `Not great / Great / Excellent` | all four |
+    | 2 | `valuable` 1–5, `recommend` **1–10**, **Public review** | all three |
+    | 3 | **Improvement Feedback** | **no — the only optional field** |
+
+    So every column is `NOT NULL` except `private_review`. The canonical DDL
+    leaves `public_review` nullable and the screen overrules it. Whether all 53
+    legacy rows carry one is unverified until the export; the constraint is
+    deliberately what will say so, loudly, at rehearsal.
+
+    This also confirms finding #3 at the control rather than by inference: the
+    recommend row renders ten buttons starting at one, so **nothing can produce
+    a `0`**.
+
+17. **`reviewed_for_role`, not the package's `reviewed_role`, and `deleted_at`
+    ships with the table.**
+
+    The name is the explicit form of what the column is: `reviewed_for` names a
+    *user*, and a user is a mentor to one person and a mentee to another. The
+    role is the capacity they were reviewed in. It is **not** the same fact
+    twice — unlike decision 4's offering, it cannot be reached by a join, because
+    the 53 migrated rows have no session to join to. It reuses `SessionRole`
+    rather than inventing a vocabulary, so #21 does not apply.
+
+    `deleted_at` is in the canonical DDL and had no equivalent in this plan.
+    `sessions` deliberately carries none — a cancelled session is still a
+    session — but published review text is the one thing here that will need
+    moderation, and hard-deleting evidence contradicts decision 6's ledger
+    argument as directly as an overwrite would.
+
+    **The rename is a divergence from a canonical document, so it will drift if
+    it is not looked for.** `02_FIELD_MAPPING.md` §6 says `reviewed_role`, and
+    that file is never edited here (ADR 0007). Whoever writes PR 5 will read the
+    mapping and the table side by side; this row is the only thing that
+    reconciles them. The package's own reason for the column — *"dual roles
+    shouldn't blend reputations"* — is the same one kept here.
+
+18. **Withdrawal removes a review from what is *published*, not from what
+    *happened*.** The three rules therefore treat `deleted_at` differently, on
+    purpose:
+
+    | Rule | Excludes withdrawn? | Why |
+    |---|---|---|
+    | The card and profile aggregates | **yes** | A moderated review must not move a mentor's average |
+    | The 30-day window | **no** | Otherwise moderation hands the author a fresh review slot immediately — the incentive exactly inverted |
+    | One review per session per author | **no** | The slot was used. A withdrawn review is still a record that the session was reviewed |
+
+    So `ix_reviews_mentor_valuable` carries `deleted_at IS NULL` and the other
+    two carry no such predicate, and
+    `test_the_eligibility_index_orders_by_recency` asserts the **absence**
+    — which is what stops the next reader adding it for symmetry.
+
+    The cost of getting it wrong was measured, not assumed: adding
+    `AND deleted_at IS NULL` to the eligibility query drops it from an Index
+    Only Scan with zero heap fetches to an Index Scan with a heap filter.
+
+    **A debt PR 3 has to pay.** `reviews` is in `EXEMPT_UNTIL_READ` in
+    `test_profile_store_soft_deletes.py`, because the table ships one PR before
+    anything reads it. `test_the_unread_exemption_expires_when_a_reader_appears`
+    fails the moment `review_stats` names the table, and the fix is a real case
+    in `CASES` asserting the aggregates skip withdrawn rows — not a wider
+    exemption.
+
 ---
 
 ## Register — what is still open
 
 | # | Question | Blocks |
 |---|---|---|
-| 1 | **The 53 production reviews, as a Data-tab export.** Confirms every rating is one of `1.67/3.34/5` and that no NPS is `0`. No deploy needed | PR 1's `CHECK` bounds |
-| 2 | Does "Not great" render **0%** (ordinal) or **33%** (scaled)? Decides whether the read publishes the ordinal or the percentage | PR 3 |
+| 1 | **The 53 production reviews, as a Data-tab export.** Confirms every rating is one of `1.67/3.34/5`, that no NPS is `0`, and that every row carries public text. No deploy needed | PR 5's **rehearsal**, no longer PR 1 |
 
 The `CHECK` is the safety net for question 1: shipping `1..3` means an
 unexpected production value fails the load **loudly at rehearsal**, which is the
-desired failure mode rather than a risk.
+desired failure mode rather than a risk. It no longer blocks the loader either —
+the transform is built and tested against the one dev row plus synthetic fixtures
+for the cases it does not contain, and the export becomes the gate before the
+real load rather than before the code.
+
+**Closed 2026-08-22:** "Not great" renders **33%**, not 0%. The display shows
+`97% Recommended` over three reviews, which no promoter fraction can produce —
+three people yield 0/33/67/100 — and which a normalised `(v-1)/9` would render
+as 96%. The app scales `mean/max`, so the floor of a three-point scale is 33%.
+The read publishes `count`, `average` **and** `percent`, derived server-side and
+pinned by a test, because the alternative is the client owning the mapping.
 
 **Closed 2026-08-20:** the 30-day window refuses the write as well as suppressing
 the request (decision 7), and the edit window is 10 minutes (decision 12). Both
@@ -186,16 +292,48 @@ are domain constants rather than configuration (decision 13).
 
 | # | PR | Migration | Tier |
 |---|---|---|---|
-| 1 | `reviews` — the table, corrected scales, eligibility indexes | yes | 1 |
+| 1 | `reviews` — the table, corrected scales, eligibility and card indexes, **ADR 0026** ✅ | yes | 1 |
 | 2 | `POST` and `PATCH /reviews` — session-scoped, 30-day rule in the query | no | 2 |
 | 3 | Mentor reviews read — aggregates and the dated list | no | 2 |
 | 4 | `REVIEW_REQUESTED` + `REVIEW_REMINDER` producers | no | 2 |
-| 5 | The reviews loader — 53 rows | no | 1 |
-| 6 | ADR — the scale decision, the append rule, the 30-day window | no | 3 |
+| 5 | The reviews loader — built on the dev row, rehearsed on the 53 | no | 1 |
+| ~~6~~ | ~~ADR~~ — **moved into PR 1 as ADR 0026** ✅ | — | — |
 
 One ADR, not three. Only the scale decision clears rule 3's bar on its own —
 expensive to reverse *and* surprising — and the append rule and 30-day window are
 the behaviour it exists to support, so they belong in the same record.
+
+**It is no longer last, and sequencing it last was a mistake this document
+made.** Two rules put it in PR 1:
+
+- **ADR 0007**: *"Where a later decision supersedes part of it, that is a new ADR
+  and the package text stays as it was received."* Unqualified — there is no
+  carve-out for a package that cannot hold its own data, and only one of PR 1's
+  four divergences is even forced by that. ADR 0021 and ADR 0022 are the
+  precedent, each opening with the same "diverges from `docs/edufurther-migration/`"
+  formula.
+- **How-we-work rule 2**: *"An ADR lands `Accepted` in the PR that implements
+  it."* The scale is implemented by the migration.
+
+The consequence was concrete rather than procedural: with the ADR five pull
+requests away, **PR 1 could merge on its own and leave `main` carrying a
+canonical supersession with nothing recording it** — the exact gap ADR 0007
+exists to close.
+
+---
+
+## For the FE
+
+Three things found while measuring `reviewUI/`, none of them backend work.
+
+| # | What | Where |
+|---|---|---|
+| 1 | **The recommend question's scale labels are wrong.** "How likely are you to recommend this mentor to others?" renders `Not valuable at all` / `Extremely valuable`, copied from the question directly above it. It should read `Not at all likely` / `Extremely likely`. The scale itself is right — `1..10`, no zero | step 2 |
+| 2 | **The percentage belongs to the API, not the client.** The read publishes `count`, `average` and `percent` together, derived server-side and pinned by a test. A client that recomputes `percent` from `average` creates the second copy of one mapping that non-negotiable #8 calls a defect | profile Reviews tab |
+| 3 | **The screenshot file names invert the order** — `reviewquestion3.png` is step 1 and `reviewquestion1.png` is step 3. A reading hazard, not a product bug | `FE-ui-guide/reviewUI/` |
+
+Item 2 is the one that matters: without it the FE will reasonably assume the
+percentage is theirs to compute.
 
 ---
 

@@ -10,6 +10,26 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Added
+
+- **The `reviews` table, on the scale the mentee actually chose.** The four
+  mentor ratings are `smallint CHECK (BETWEEN 1 AND 3)` — `1 = Not great`,
+  `2 = Great`, `3 = Excellent` — where the migration package declares them
+  `int CHECK (BETWEEN 1 AND 5)`. Bubble stores those three choices as
+  `1.67 / 3.34 / 5`, so the package's column cannot hold its own data.
+
+  `nps_recommend_score` is `1..10` where the package permits `0`, because the
+  form renders ten buttons starting at one. Every column is `NOT NULL` except
+  `session_id`, `private_review`, `deleted_at` and `legacy_bubble_id` — measured
+  from the three review screens, where only "Improvement Feedback" is optional.
+
+  `session_id` is nullable because the 53 legacy reviews have no session to
+  point at, and the uniqueness rule is partial on `session_id IS NOT NULL` so
+  they are not collapsed into one another.
+
+  No writer yet: the endpoints, the aggregates and the loader follow. See
+  `handoff-review-build.md`.
+
 ### Removed
 
 - **The post-session feedback request, withdrawn before it ever sent.** It

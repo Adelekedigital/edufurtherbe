@@ -134,7 +134,15 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # writes yet — see the enum for why shipping it early is now cheap.
     QuestionType: frozenset({"ck_session_type_questions_question_type_is_known"}),
     IntakeStatus: frozenset({"ck_intake_submissions_status_is_known"}),
-    SessionRole: frozenset({"ck_session_participants_role_is_known"}),
+    # The second table to carry this vocabulary. `reviews.reviewed_for_role` is
+    # the capacity a user was reviewed in, which `reviewed_for` cannot say on its
+    # own and the migrated rows have no session to derive.
+    SessionRole: frozenset(
+        {
+            "ck_session_participants_role_is_known",
+            "ck_reviews_reviewed_for_role_is_known",
+        }
+    ),
     AttendanceStatus: frozenset({"ck_session_participants_attendance_status_is_known"}),
     # Step 7 — neither has an index dependency; `ix_session_events_reason` is
     # partial on `reason_code IS NOT NULL`, which names no enum literal.

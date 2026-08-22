@@ -94,6 +94,7 @@ EXPECTED_TABLES = [
     # M2 — the four lookups the profile tables reference
     "degree_levels",
     "institutions",
+    "reviews",
     "scholarship_programs",
     "service_offerings",
     # M2 — the profile tables themselves. `user_scholarship_experience` is
