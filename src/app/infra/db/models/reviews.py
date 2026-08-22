@@ -87,32 +87,14 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import SessionRole
+from app.domain.reviews import (
+    MENTOR_RATINGS,
+    ORDINAL_SCALE,
+    RECOMMEND_SCALE,
+    VALUABLE_SCALE,
+)
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
-
-#: The four questions step 1 of the form asks, all on the same three-point
-#: scale. Named as a group because the bound below is rendered from it: four
-#: hand-written ``BETWEEN 1 AND 3`` constraints are the same rule in four places,
-#: which non-negotiable #8 calls a defect rather than a style question.
-MENTOR_RATINGS = (
-    "communication_rating",
-    "knowledge_rating",
-    "practicality_rating",
-    "support_rating",
-)
-
-#: ``1 = Not great``, ``2 = Great``, ``3 = Excellent`` — the ordinal chosen, not
-#: Bubble's ``1.67 / 3.34 / 5`` rendering of it.
-ORDINAL_SCALE = (1, 3)
-
-#: "How valuable was this session…", rendered ``1..5``. A genuine point scale,
-#: unlike the four above, and the figure a mentor's card shows as ``X/5``.
-VALUABLE_SCALE = (1, 5)
-
-#: "How likely are you to recommend this mentor…", rendered ``1..10``. **The
-#: package permits ``0`` and the control has no zero button**, so nothing can
-#: produce one; the bound is tightened to what the form can emit.
-RECOMMEND_SCALE = (1, 10)
 
 
 def _within(column: str, bounds: tuple[int, int]) -> CheckConstraint:

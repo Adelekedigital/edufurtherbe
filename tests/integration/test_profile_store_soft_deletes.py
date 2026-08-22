@@ -32,6 +32,7 @@ from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.base import Base
 from app.infra.db.intake_store import list_questions
 from app.infra.db.profile_store import get_mentor_profile, list_awards, list_education
+from app.infra.db.review_reader import get_review_row
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import list_slots
 from conftest import PROJECT_ROOT
@@ -67,15 +68,13 @@ EXEMPT = {"users"}
 #: case in `CASES`. That is the whole mechanism working end to end, and the
 #: reason the set stays empty rather than being deleted.
 #:
-#: `reviews` is the next one through, and it arrived the way the comment above
-#: predicts: the table ships in M5a's first pull request and nothing reads it
-#: until the third, which is the profile aggregates and the discovery card. Both
-#: of those filter `deleted_at IS NULL` — a moderated review must not move a
-#: mentor's average — so the case that replaces this entry already knows what it
-#: has to assert. **It is not exempt from the rule, only from a test of a reader
-#: that does not exist**, and `test_the_unread_exemption_expires_when_a_reader_
-#: appears` is what collects the debt the moment `review_stats` lands.
-EXEMPT_UNTIL_READ: set[str] = {"reviews"}
+#: `reviews` passed through here for exactly one pull request. `review_reader`
+#: gave it a reader in the very next one — earlier than expected, because the
+#: first reader turned out to be `PATCH`'s read-back rather than the profile
+#: aggregates — the expiry test fired on the full gate, and it moved to a real
+#: case in `CASES`. That is the mechanism working end to end, twice now, and
+#: the reason the set stays empty rather than being deleted.
+EXEMPT_UNTIL_READ: set[str] = set()
 
 
 async def seed_education(conn: Any, user_id: UUID) -> None:
@@ -346,6 +345,65 @@ Case = tuple[
     list[str],
 ]
 
+
+async def seed_reviews(conn: Any, user_id: UUID) -> None:
+    """One live review and one withdrawn, both written by this user.
+
+    Two sessions rather than one, because `uq_reviews_one_per_session_author`
+    permits a single review per session per author — a fixture reusing the
+    session would fail on the constraint rather than on the rule under test.
+    """
+    mentor = (
+        await conn.execute(
+            text(
+                "INSERT INTO users (email, first_name, primary_role, timezone) "
+                "VALUES (:e, 'Mentor', 'mentor', 'Africa/Lagos') RETURNING id"
+            ),
+            {"e": f"review-mentor-{user_id}@example.test"},
+        )
+    ).scalar_one()
+    for label, withdrawn, offset in (("LIVE", False, 3), ("DELETED", True, 6)):
+        session_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO sessions (mentor_id, mentee_id, starts_at, "
+                    "duration_minutes, status) "
+                    "VALUES (:m, :u, now() - make_interval(days => :o), 45, 'completed') "
+                    "RETURNING id"
+                ),
+                {"m": mentor, "u": user_id, "o": offset},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO reviews (session_id, reviewed_by, reviewed_for, "
+                "communication_rating, knowledge_rating, practicality_rating, "
+                "support_rating, valuable_rating, nps_recommend_score, public_review, "
+                "deleted_at) "
+                "VALUES (:s, :u, :m, 3, 3, 3, 3, 5, 9, :label, "
+                "        CASE WHEN :withdrawn THEN now() ELSE NULL END)"
+            ),
+            {"s": session_id, "u": user_id, "m": mentor, "label": label, "withdrawn": withdrawn},
+        )
+
+
+async def read_reviews(session: AsyncSession, user_id: UUID) -> list[str]:
+    """Every review of this author's that `review_reader` will hand back.
+
+    The reader takes one id, so this asks it for each review the seed wrote and
+    keeps what comes back — which exercises the same `WHERE` a `PATCH` runs
+    through, rather than a query written for the test.
+    """
+    ids = (
+        await session.execute(
+            text("SELECT id FROM reviews WHERE reviewed_by = :u ORDER BY public_review"),
+            {"u": user_id},
+        )
+    ).scalars()
+    found = [await get_review_row(session, review_id, user_id) for review_id in ids]
+    return [str(row["public_review"]) for row in found if row is not None]
+
+
 CASES: list[Case] = [
     ("education_entries", seed_education, read_education, ["LIVE"]),
     ("user_awards", seed_awards, read_awards, ["LIVE"]),
@@ -376,6 +434,12 @@ CASES: list[Case] = [
         read_scheduling_windows,
         ["LIVE"],
     ),
+    # `review_reader`, and the only path where withdrawal changes an answer.
+    # **The eligibility clauses deliberately do the opposite** — they still count
+    # a withdrawn review, because it still happened and still holds its session's
+    # slot. Both are the same rule: withdrawal removes a review from what is
+    # published, not from what occurred.
+    ("reviews", seed_reviews, read_reviews, ["LIVE"]),
 ]
 
 

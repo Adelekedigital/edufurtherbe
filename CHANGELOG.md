@@ -12,6 +12,24 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentee can review a completed session.** `POST /api/v1/reviews` writes one,
+  `PATCH /api/v1/reviews/{id}` corrects it inside a ten-minute compose window, and
+  `GET /api/v1/me/reviewable-sessions` says what may be reviewed right now.
+
+  **The mentor is never sent** — it is read from the session, which is what
+  enforces the one invariant `reviews` cannot express as a constraint.
+
+  **Ratings are words on the wire and numbers in the column**: `not_great`,
+  `great`, `excellent` for the four mentor questions, and the ordinal is the
+  member's position so the mapping is declared once.
+
+  **One review per session, and one per offering per 30 days.** A second session
+  with the same mentor on a *different* offering may be reviewed straight away —
+  a mentor strong at CV review and weak at interview prep is two facts.
+
+  The two `409`s carry a machine-readable `type`, which is the condition settled
+  decision #110 named when it shipped a `409` without one.
+
 - **The `reviews` table, on the scale the mentee actually chose.** The four
   mentor ratings are `smallint CHECK (BETWEEN 1 AND 3)` — `1 = Not great`,
   `2 = Great`, `3 = Excellent` — where the migration package declares them

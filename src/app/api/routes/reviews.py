@@ -1,0 +1,124 @@
+"""Writing and correcting a review, and finding out what may be reviewed.
+
+Transport only. Every rule this surface enforces is in `domain/reviews.py` or
+`review_eligibility.py`, which is what lets the same rules serve the request
+producer in the phase after this one without a request to hang them on.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, status
+
+from app.api.deps import EditedReviewDep, ReviewableSessionsDep, WrittenReviewDep
+from app.api.schemas.reviews import ReviewableSessionRead, ReviewRead
+
+router = APIRouter(prefix="/api/v1", tags=["reviews"])
+
+#: Named once rather than repeated per route: `POST` and `PATCH` refuse for the
+#: same reasons and a client handles them the same way.
+REVIEW_RESPONSES: dict[int | str, dict[str, str]] = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "description": "The bearer token is absent, malformed, expired or wrongly signed."
+    },
+    status.HTTP_404_NOT_FOUND: {
+        "description": (
+            "No such session or review, **or it is not yours** — one answer for "
+            "all of them. Distinguishing *absent* from *not yours* tells anyone "
+            "who can enumerate ids which ones are real."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "The request is well formed and the rule refuses it. **Branch on "
+            "`type`, not on the message:**\n\n"
+            "- `/problems/review-already-exists` — this session already carries "
+            "your review. Terminal; never retry.\n"
+            "- `/problems/review-interval-not-elapsed` — you reviewed this "
+            "offering recently. Retry once the window passes.\n\n"
+            "`PATCH` also answers `409` once the ten-minute edit window has "
+            "shut, which carries no type: there is only one way for an edit to "
+            "be refused."
+        )
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": "The body failed validation — a rating off its scale, or empty public text."
+    },
+}
+
+
+@router.get(
+    "/me/reviewable-sessions",
+    response_model=list[ReviewableSessionRead],
+    summary="Sessions you may review right now",
+    description=(
+        "Completed sessions of yours that you have not reviewed and are not "
+        "inside the interval for, newest first.\n\n"
+        "**This is what makes a `409` from `POST /reviews` exceptional rather "
+        "than routine.** Ask here first: an empty list means there is nothing "
+        "to review, one entry means write straight away, and more than one "
+        "means show the mentee which session they mean.\n\n"
+        "Pass `mentor_id` to narrow it to one mentor, which is what a profile's "
+        "Reviews tab wants."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The bearer token is absent, malformed, expired or wrongly signed."
+        }
+    },
+)
+async def list_reviewable_sessions(
+    sessions: ReviewableSessionsDep,
+) -> list[ReviewableSessionRead]:
+    return [ReviewableSessionRead.model_validate(row) for row in sessions]
+
+
+@router.post(
+    "/reviews",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ReviewRead,
+    summary="Review a completed session",
+    description=(
+        "Reviews one completed session of yours. **The mentor follows from the "
+        "session** — you do not send them, and cannot review somebody who never "
+        "mentored you.\n\n"
+        "**One review per session, and one per offering per interval.** A "
+        "second session with the same mentor for a *different* offering may be "
+        "reviewed straight away: a mentor strong at CV review and weak at "
+        "interview prep is two facts, and one window over both would keep "
+        "whichever was booked first.\n\n"
+        "**No `Idempotency-Key`.** The uniqueness rule is the guard: a retry "
+        "that already succeeded comes back `409` with "
+        "`/problems/review-already-exists`, which is a true answer rather than "
+        "a second row. Booking needs a key because a replay must return the "
+        "same session; here the second attempt has nothing new to say.\n\n"
+        "**Ratings are words, not numbers.** `not_great`, `great`, `excellent` "
+        "for the four mentor questions; `valuable_rating` is `1..5` and "
+        "`nps_recommend_score` is `1..10`, both genuine point scales."
+    ),
+    responses=REVIEW_RESPONSES,
+)
+async def write(review: WrittenReviewDep) -> ReviewRead:
+    return ReviewRead.from_row(review)
+
+
+@router.patch(
+    "/reviews/{review_id}",
+    response_model=ReviewRead,
+    summary="Correct a review you just wrote",
+    description=(
+        "**A compose grace period, not an amendment.** Ten minutes from when "
+        "the review was written, after which it stands — a mentor's profile is "
+        "a dated list, and a review that can be rewritten later is a history "
+        "that rewrites itself.\n\n"
+        "Author only. Every content field may be corrected; **`session_id` "
+        "cannot** — it is what the review is *about*, and changing it would "
+        "step around the eligibility rules rather than fix a typo.\n\n"
+        "The interval always runs from when the review was first written, so "
+        "an edit never postpones the next one.\n\n"
+        "Send only the fields you are changing. Sending `private_review: null` "
+        "clears it; leaving it out keeps it."
+    ),
+    responses=REVIEW_RESPONSES,
+)
+async def edit(review: EditedReviewDep) -> ReviewRead:
+    return ReviewRead.from_row(review)
