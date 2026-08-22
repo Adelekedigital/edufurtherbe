@@ -54,7 +54,13 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.domain.meetings import plan_for
-from app.domain.notifications import Notification, recipients, reminders_for
+from app.domain.notifications import (
+    SESSION_REMINDER_KINDS,
+    Notification,
+    recipients,
+    reminders_for,
+    session_reminders_for,
+)
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
@@ -88,7 +94,9 @@ __all__ = [
     "provision_meeting",
     "record_arrival",
     "release_meeting",
+    "remind_before_session",
     "remind_if_still_waiting",
+    "schedule_session_reminders",
     "settle_attendance",
     "transition",
 ]
@@ -353,6 +361,19 @@ async def book_session(
     # arrives on its own. Refusing the booking because a scheduler was slow
     # would lose something that cannot be recovered to protect something that
     # can.
+    # **A session confirmed outright is real now**, so its own reminders are
+    # published here. One that waits is not: telling both parties their session
+    # is tomorrow, for a request nobody has accepted, is the bug this branch
+    # exists to avoid. That one is scheduled at `/accept` instead.
+    if not requires_confirmation:
+        schedule_session_reminders(
+            session_id,
+            starts_at,
+            scheduler=scheduler,
+            callback_url=callback_url or "",
+            now=now,
+        )
+
     deadline = respond_by(starts_at, requires_confirmation=requires_confirmation)
     if deadline is not None and scheduler is not None and callback_url:
         for kind, at in reminders_for(deadline, now=now):
@@ -717,6 +738,11 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
                 .returning(
                     Session.id,
                     Session.status,
+                    # Carried so the feedback request below knows who to ask.
+                    # A second statement to fetch them would be a second read of
+                    # rows this one already has in hand.
+                    Session.mentor_id,
+                    Session.mentee_id,
                     mentor_came.label("mentor_came"),
                     mentee_came.label("mentee_came"),
                 )
@@ -765,6 +791,37 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
             for row in settled
         ],
     )
+
+    # 4. **Ask how it went — but only about a session that happened.**
+    #
+    #    `no_show` is deliberately excluded. "How was your session?" about one
+    #    nobody attended is worse than saying nothing: it reads as a platform
+    #    that did not notice, to the party who did turn up.
+    #
+    #    Queued here rather than scheduled ahead, which the pre-session
+    #    reminders need and this does not: the sweep already runs hourly and
+    #    already decides the outcome, so the moment a session becomes
+    #    `completed` is a moment this code is already in. Nothing to publish,
+    #    nothing to verify on the way back, and it cannot fire for a session
+    #    that never ran.
+    #
+    #    **Once, not once per sweep.** The update matches only `confirmed`
+    #    rows, so a settled session is never selected again — the same guard
+    #    that stops the event log growing a duplicate.
+    for row in settled:
+        if SessionStatus(row["status"]) is not SessionStatus.COMPLETED:
+            continue
+        await enqueue(
+            session,
+            Notification.SESSION_FEEDBACK,
+            entity_type="session",
+            entity_id=row["id"],
+            recipient_ids=recipients(
+                Notification.SESSION_FEEDBACK,
+                mentor_id=row["mentor_id"],
+                mentee_id=row["mentee_id"],
+            ),
+        )
     return len(settled)
 
 
@@ -1051,6 +1108,103 @@ async def release_meeting(session: AsyncSession, session_id: UUID, *, calendar: 
     await session.execute(
         update(Session).where(Session.id == session_id).values(external_calendar_event_id=None)
     )
+
+
+def schedule_session_reminders(
+    session_id: UUID,
+    starts_at: dt.datetime,
+    *,
+    scheduler: Any,
+    callback_url: str,
+    now: dt.datetime,
+) -> int:
+    """Publish the nudges for a session that is now real. Returns how many.
+
+    **Called from both confirmation points, because there are two.** An
+    auto-confirming offering is real at booking; one that waits is real at
+    `/accept`. Scheduling only at booking would leave every
+    confirmation-required session silently unreminded, and scheduling for a
+    *pending* request would tell both parties their session is tomorrow when
+    nobody has agreed to it yet.
+
+    **A scheduling failure does not fail the thing that caused it**, for the
+    reason booking already gives: the session exists and holds its slot, and the
+    parties are simply not nudged. Refusing a confirmation because a scheduler
+    was slow would lose something unrecoverable to protect something that is
+    not.
+
+    Not a coroutine: it touches no database. It is here rather than in `domain`
+    because publishing is I/O, and here rather than in the route because both
+    call sites would otherwise have to remember the same four arguments.
+    """
+    if scheduler is None or not callback_url:
+        return 0
+    published = 0
+    for reminder, at in session_reminders_for(starts_at, now=now):
+        try:
+            scheduler.schedule(
+                url=callback_url,
+                body={"session_id": str(session_id), "kind": reminder.kind},
+                at=at,
+            )
+        except (SchedulerError, NotImplementedError) as exc:
+            logger.info(
+                "session reminder %s for %s not scheduled: %s", reminder.kind, session_id, exc
+            )
+        else:
+            published += 1
+    return published
+
+
+async def remind_before_session(session: AsyncSession, session_id: UUID, kind: str) -> bool:
+    """Queue a pre-session nudge, unless the session is no longer happening.
+
+    **The same re-read as the response reminder, for the same reason.** Nothing
+    is ever cancelled: a callback for a session since cancelled, declined or
+    withdrawn finds a status that is not `confirmed` and does nothing. Making
+    four transitions responsible for unscheduling is how a reminder ends up
+    arriving for a session that was called off through the one path somebody
+    forgot.
+
+    **Both parties**, unlike the response reminder — either can forget, and the
+    message is about turning up rather than about answering.
+
+    Idempotent through the partial unique index rather than through this read.
+    QStash retries by design, so two callbacks arriving together would both see
+    a confirmed session and the second insert is the one that no-ops.
+    """
+    reminder = SESSION_REMINDER_KINDS.get(kind)
+    if reminder is None:  # pragma: no cover - the route checks first
+        return False
+
+    row = (
+        (
+            await session.execute(
+                select(Session.status, Session.mentor_id, Session.mentee_id).where(
+                    Session.id == session_id
+                )
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or SessionStatus(row["status"]) is not SessionStatus.CONFIRMED:
+        return False
+
+    await enqueue(
+        session,
+        reminder.notification,
+        entity_type="session",
+        entity_id=session_id,
+        recipient_ids=recipients(
+            reminder.notification, mentor_id=row["mentor_id"], mentee_id=row["mentee_id"]
+        ),
+        # The words the template renders for `intervaltime`. They travel with
+        # the schedule rather than being derived at send time, so changing the
+        # offset moves the wording with it.
+        variables={"kind": reminder.kind, "interval": reminder.interval},
+    )
+    return True
 
 
 async def remind_if_still_waiting(session: AsyncSession, session_id: UUID, kind: str) -> bool:
