@@ -275,8 +275,13 @@ TRANSITION_RESPONSES: dict[int | str, dict[str, str]] = {
         "confirmed something has been told something untrue.\n\n"
         "**No body.** Agreeing explains itself, and a reason field here would "
         "be one more thing to send and for policy to have to ignore.\n\n"
-        "`meeting_url` is still null. It is generated per session, and the "
-        "surface that generates it is not built."
+        "**`meeting_url` is filled in by this call**, for a venue the platform mints "
+        "— a Daily room or a Meet link on the calendar event. It was null while "
+        "nothing created one, which this description went on claiming after that "
+        "stopped being true.\n\n"
+        "It is **not** returned to either party before the join window. The link "
+        "is handed over by `/join`, five minutes before the start, so that a "
+        "press of Join is something the platform can record."
     ),
     responses=TRANSITION_RESPONSES,
 )

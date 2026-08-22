@@ -10,6 +10,42 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Three shipped claims that had stopped being true.** Each was written
+  accurately and made false by later work that nobody went back to check.
+
+  `POST /sessions/{id}/accept` told clients *"`meeting_url` is still null...
+  the surface that generates it is not built"* — it is built, and that call
+  fills it in. That one is published in the OpenAPI spec, so a client reading
+  the contract was told the opposite of what happens.
+
+  `RESPONSE_WINDOW` said its reminder schedule *"is settled and unbuilt; it
+  needs a notification channel that does not exist"* — both exist and all three
+  reminders fire.
+
+  `meetings.py` recorded the Daily spike's Q1 and Q2 as open. They are answered.
+
+### Changed
+
+- **The Daily spike's last two questions are answered**, measured in a browser
+  rather than assumed:
+
+  A private room refuses a visitor holding the URL and no token — *"You are not
+  allowed to join this meeting"*. So *"nobody can join without the link we gave
+  you"* is a promise this platform can make rather than hope for.
+
+  `nbf` is **enforced at the door**, not merely recorded — *"This meeting is not
+  ready yet"*. Two different refusals, which is how the run is known to have
+  tested two things rather than one twice.
+
+  That settles the fork the spike existed for: early joining is **impossible**
+  on Daily and only **discouraged** on Meet, so the two venues are not
+  equivalent and their copy cannot be either. A Daily session has two layers —
+  link withheld until the window, and the door shut. A Meet session has one,
+  because a Meet link admits anybody holding it at any time.
+
+
 ### Added
 
 - **An admin is told when somebody applies to be a mentor.** Applications used
