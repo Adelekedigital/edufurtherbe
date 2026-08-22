@@ -738,11 +738,6 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
                 .returning(
                     Session.id,
                     Session.status,
-                    # Carried so the feedback request below knows who to ask.
-                    # A second statement to fetch them would be a second read of
-                    # rows this one already has in hand.
-                    Session.mentor_id,
-                    Session.mentee_id,
                     mentor_came.label("mentor_came"),
                     mentee_came.label("mentee_came"),
                 )
@@ -792,36 +787,6 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
         ],
     )
 
-    # 4. **Ask how it went — but only about a session that happened.**
-    #
-    #    `no_show` is deliberately excluded. "How was your session?" about one
-    #    nobody attended is worse than saying nothing: it reads as a platform
-    #    that did not notice, to the party who did turn up.
-    #
-    #    Queued here rather than scheduled ahead, which the pre-session
-    #    reminders need and this does not: the sweep already runs hourly and
-    #    already decides the outcome, so the moment a session becomes
-    #    `completed` is a moment this code is already in. Nothing to publish,
-    #    nothing to verify on the way back, and it cannot fire for a session
-    #    that never ran.
-    #
-    #    **Once, not once per sweep.** The update matches only `confirmed`
-    #    rows, so a settled session is never selected again — the same guard
-    #    that stops the event log growing a duplicate.
-    for row in settled:
-        if SessionStatus(row["status"]) is not SessionStatus.COMPLETED:
-            continue
-        await enqueue(
-            session,
-            Notification.SESSION_FEEDBACK,
-            entity_type="session",
-            entity_id=row["id"],
-            recipient_ids=recipients(
-                Notification.SESSION_FEEDBACK,
-                mentor_id=row["mentor_id"],
-                mentee_id=row["mentee_id"],
-            ),
-        )
     return len(settled)
 
 

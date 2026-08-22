@@ -57,11 +57,15 @@ somebody:
 **book** → answer (accept · decline · withdraw · cancel) → **deadline**
 (`respond_by`, reminders, expiry sweep) → **venue** (Daily room or Meet link,
 calendar event) → **before** (reminders at 24h and 1h) → **join** (tokenised URL
-in a −5/+15 window) → **settle** (completed or no-show) → **after** (feedback,
-completed only).
+in a −5/+15 window) → **settle** (completed or no-show).
 
 Availability underneath it: declared weekly rules, dated exceptions,
 per-offering scheduling windows, and the mentor's own Google free/busy.
+
+**Asking afterwards is not here, deliberately.** A feedback request was built
+and withdrawn: it conflated a platform survey to both parties with a mentor
+review from the mentee, and only the second is wanted. That one is
+`REVIEW_REQUESTED` in `handoff-review-build.md`, mentee-only, and belongs to M5a.
 
 **What is not session work:** the Daily webhook, self-signup, onboarding,
 payments.

@@ -10,6 +10,27 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Removed
+
+- **The post-session feedback request, withdrawn before it ever sent.** It
+  conflated two different asks that happen at the same moment: a **platform
+  survey** to both parties about their experience of the product, and a **mentor
+  review** from the mentee about the session itself.
+
+  Only the second is wanted now. It belongs to the review phase — see
+  `handoff-review-build.md`, where it is `REVIEW_REQUESTED` — and it is
+  `Audience.MENTEE`, not `BOTH`: a mentee reviews a mentor, so asking the mentor
+  too tells one person too many.
+
+  Gone rather than left unproduced, because settled decision #21 is explicit
+  that a vocabulary does not carry a member for a feature nobody is building.
+  `feedbackUrl` and its alias go with it; the note in `domain/notifications.py`
+  records why there is no post-session message, so the next person does not
+  re-add one without deciding which of the two it is.
+
+  The pre-session reminders are unaffected.
+
+
 ### Fixed
 
 - **Two more claims that had stopped being true**, found by a deliberate sweep
