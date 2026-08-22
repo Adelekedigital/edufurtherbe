@@ -25,8 +25,11 @@ from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings, get_settings
+from app.domain.messages import MessageContext
 from app.domain.notifications import Channel, Notification
 from app.infra.db.models.platform import OutboxEvent
+from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
 
 __all__ = ["MAX_ATTEMPTS", "drain", "enqueue"]
@@ -93,7 +96,13 @@ async def enqueue(
     await session.execute(statement.on_conflict_do_nothing(index_where=text("payload ? 'kind'")))
 
 
-async def drain(session: AsyncSession, *, notifier: Any, now: dt.datetime) -> dict[str, int]:
+async def drain(
+    session: AsyncSession,
+    *,
+    notifier: Any,
+    now: dt.datetime,
+    settings: Settings | None = None,
+) -> dict[str, int]:
     """Send what is pending. Returns counts by outcome. Does not commit.
 
     **Each row is attempted once per sweep and its outcome recorded**, so a
@@ -117,6 +126,11 @@ async def drain(session: AsyncSession, *, notifier: Any, now: dt.datetime) -> di
                     OutboxEvent.destination,
                     OutboxEvent.payload,
                     OutboxEvent.attempts,
+                    # **Needed to load the context the variables come from.**
+                    # A message is about something, and until now the drain did
+                    # not have to know what.
+                    OutboxEvent.entity_type,
+                    OutboxEvent.entity_id,
                 )
                 .where(
                     OutboxEvent.status == "pending",
@@ -136,6 +150,8 @@ async def drain(session: AsyncSession, *, notifier: Any, now: dt.datetime) -> di
         .all()
     )
 
+    settings = settings or get_settings()
+
     counts = {"sent": 0, "failed": 0, "skipped": 0}
     for row in pending:
         recipient = UUID(str(row["payload"]["recipient_id"]))
@@ -149,11 +165,11 @@ async def drain(session: AsyncSession, *, notifier: Any, now: dt.datetime) -> di
                 notification=Notification(str(row["event_type"])),
                 channel=Channel(str(row["destination"])),
                 to=address,
-                variables={
-                    key: value
-                    for key, value in dict(row["payload"]).items()
-                    if key != "recipient_id"
-                },
+                # **The context, not the values.** Which template this message
+                # uses is a fact about the channel, so what it declares is too —
+                # and a notifier with no templates must not need one looked up
+                # on its behalf. The adapter builds what it asked for.
+                context=await _context_for(session, row, recipient, settings),
                 # **The row's own id is the idempotency key.** It is a UUID that
                 # exists exactly once per message per recipient, so a retry
                 # after a timeout replays the provider's answer rather than
@@ -196,6 +212,101 @@ async def _finish(
             sent_at=sent_at,
         )
     )
+
+
+async def _context_for(
+    session: AsyncSession, row: Any, recipient: UUID, settings: Settings
+) -> MessageContext:
+    """Everything the resolvers may read, loaded by what the message is about.
+
+    **Keyed on `entity_type`.** A session message loads a session and both
+    parties; a message about a mentor's application or their calendar has no
+    session at all, and asking for `sessionDate` on one of those is a template
+    pointed at the wrong message — which `build_variables` refuses by name.
+    """
+    people = await _names_for(session, (recipient,))
+    extras = {
+        str(key): str(value) for key, value in dict(row["payload"]).items() if key != "recipient_id"
+    }
+    base = {
+        "recipient_name": people.get(recipient, ("", "UTC"))[0],
+        "recipient_timezone": people.get(recipient, ("", "UTC"))[1],
+        "app_base_url": settings.app_base_url or "",
+        "extras": extras,
+    }
+
+    if str(row["entity_type"]) != "session":
+        return MessageContext(mentor_name="", mentee_name="", **base)  # type: ignore[arg-type]
+
+    found = (
+        (
+            await session.execute(
+                select(
+                    Session.id,
+                    Session.mentor_id,
+                    Session.mentee_id,
+                    Session.starts_at,
+                    Session.topic,
+                    Session.booking_message,
+                    Session.meeting_provider,
+                    Session.respond_by,
+                ).where(Session.id == row["entity_id"])
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if found is None:  # pragma: no cover - the row is written with the session
+        return MessageContext(mentor_name="", mentee_name="", **base)  # type: ignore[arg-type]
+
+    parties = await _names_for(session, (found["mentor_id"], found["mentee_id"], recipient))
+    return MessageContext(
+        recipient_name=parties.get(recipient, ("", "UTC"))[0],
+        recipient_timezone=parties.get(recipient, ("", "UTC"))[1],
+        mentor_name=parties.get(found["mentor_id"], ("", "UTC"))[0],
+        mentee_name=parties.get(found["mentee_id"], ("", "UTC"))[0],
+        starts_at=found["starts_at"],
+        topic=found["topic"],
+        detail=found["booking_message"],
+        venue=VENUE_LABELS.get(str(found["meeting_provider"] or "")),
+        respond_by=found["respond_by"],
+        session_id=str(found["id"]),
+        app_base_url=settings.app_base_url or "",
+        extras=extras,
+    )
+
+
+#: What a mentee reads where the column says `google_meet`.
+#:
+#: **A label, never a URL.** `location` in a template is where the session
+#: happens, and putting the meeting link there would hand the room out days
+#: early — which the join window exists to prevent.
+VENUE_LABELS = {
+    "google_meet": "Google Meet",
+    "daily": "Daily",
+    "zoom": "Zoom",
+    "custom": "A link your mentor will share",
+}
+
+
+async def _names_for(
+    session: AsyncSession, user_ids: tuple[UUID, ...]
+) -> dict[UUID, tuple[str, str]]:
+    """Display name and timezone for each person, in one statement."""
+    rows = (
+        await session.execute(
+            select(User.id, User.first_name, User.last_name, User.timezone).where(
+                User.id.in_(set(user_ids))
+            )
+        )
+    ).mappings()
+    return {
+        row["id"]: (
+            " ".join(part for part in (row["first_name"], row["last_name"]) if part).strip(),
+            str(row["timezone"] or "UTC"),
+        )
+        for row in rows
+    }
 
 
 async def _address_for(session: AsyncSession, user_id: UUID, channel: Channel) -> str | None:

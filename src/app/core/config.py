@@ -356,6 +356,17 @@ class Settings(BaseSettings):
     #: authorised redirect on the mentor-facing Cloud client.
     public_base_url: str | None = Field(default=None, validation_alias=env_key("public_base_url"))
 
+    #: Where the **front-end** lives, for links inside messages.
+    #:
+    #: **Not `public_base_url`**, which is this service's own origin — Google's
+    #: redirect and QStash's callback destination. A link in an email built from
+    #: that one would send a mentor to the API. The two look interchangeable and
+    #: are not, which is why they are documented against each other.
+    #:
+    #: Unset means any message declaring a link fails rather than sending a
+    #: broken one, which is the same bargain every other value here strikes.
+    app_base_url: str | None = Field(default=None, validation_alias=env_key("app_base_url"))
+
     # Where re-hosted profile images live. A plain name, not a secret: it appears
     # in every public image URL. The bucket is created once by an operator in the
     # dashboard, not by the migration script — see `infra/storage/supabase.py`.

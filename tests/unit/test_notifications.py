@@ -21,6 +21,7 @@ import pytest
 
 from app.core.config import Settings
 from app.core.errors import ConfigurationError
+from app.domain.messages import MessageContext
 from app.domain.notifications import AUDIENCE, Channel, Notification, recipients
 from app.infra.clients.notifications import (
     DeliveryError,
@@ -29,6 +30,7 @@ from app.infra.clients.notifications import (
     ZernioNotifier,
     template_for,
 )
+from app.infra.clients.templates import StaticTemplates
 
 MENTOR = UUID("00000000-0000-4000-8000-00000000000a")
 MENTEE = UUID("00000000-0000-4000-8000-00000000000b")
@@ -201,7 +203,19 @@ def loops(handler: Any) -> tuple[LoopsNotifier, list[httpx.Request]]:
 
     client = httpx.Client(transport=httpx.MockTransport(record))
     configured = settings(email_templates={str(REMINDER): "loops:tmpl_abc"})
-    return LoopsNotifier("key", client=client).with_settings(configured), seen
+    # The template declares what it wants; the adapter resolves it. Wired
+    # statically here so the suite needs no network.
+    declared = StaticTemplates({"tmpl_abc": frozenset({"recipientName"})})
+    notifier = LoopsNotifier("key", client=client).with_settings(configured)
+    return notifier.with_templates(declared), seen
+
+
+CONTEXT = MessageContext(
+    recipient_name="Ada",
+    recipient_timezone="Africa/Lagos",
+    mentor_name="Ada",
+    mentee_name="Bo",
+)
 
 
 def send(notifier: LoopsNotifier, key: str = "outbox-row-id") -> None:
@@ -209,7 +223,7 @@ def send(notifier: LoopsNotifier, key: str = "outbox-row-id") -> None:
         notification=REMINDER,
         channel=Channel.EMAIL,
         to="mentor@example.test",
-        variables={"first_name": "Ada"},
+        context=CONTEXT,
         idempotency_key=key,
     )
 
@@ -223,7 +237,12 @@ def test_a_send_carries_the_template_the_recipient_and_the_variables() -> None:
     body = json.loads(request.content)
     assert body["transactionalId"] == "tmpl_abc"
     assert body["email"] == "mentor@example.test"
-    assert body["dataVariables"] == {"first_name": "Ada"}
+    # **Built from what the template declared, not from what the caller passed.**
+    # The adapter asks the template which merge fields it wants and resolves
+    # exactly those — so a template gaining a field is honoured without a
+    # deploy, and one asking for something unresolvable fails by name rather
+    # than arriving with a blank in it.
+    assert body["dataVariables"] == {"recipientName": "Ada"}
 
 
 def test_the_outbox_row_id_is_the_idempotency_key() -> None:
@@ -294,7 +313,7 @@ def test_loops_refuses_a_channel_it_does_not_carry() -> None:
             notification=REMINDER,
             channel=Channel.WHATSAPP,
             to="+2348000000000",
-            variables={},
+            context=CONTEXT,
             idempotency_key=str(uuid4()),
         )
 
@@ -309,7 +328,7 @@ def test_the_default_notifier_delivers_nothing_and_raises_nothing() -> None:
             notification=REMINDER,
             channel=Channel.EMAIL,
             to="somebody@example.test",
-            variables={},
+            context=CONTEXT,
             idempotency_key="k",
         )
         is None
@@ -327,6 +346,6 @@ def test_the_whatsapp_adapter_refuses_rather_than_reporting_success() -> None:
             notification=REMINDER,
             channel=Channel.WHATSAPP,
             to="+2348000000000",
-            variables={},
+            context=CONTEXT,
             idempotency_key="k",
         )

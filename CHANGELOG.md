@@ -10,6 +10,36 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Emails now carry their contents.** Every message went out with
+  `dataVariables` almost empty — `session_booked` sent `{}` — while the Loops
+  templates expect eight or nine merge fields each. Configured, Loops would have
+  delivered real emails reading *"Hi , your session on "*: no error, no failed
+  row, just a bad email.
+
+  **The template declares what it needs and the code supplies it.** Loops
+  publishes each template's merge fields, so no list of required fields is
+  duplicated here. What the repository holds is one resolver per variable
+  *name* — nine templates share about twenty distinct names.
+
+  **Nothing has to be renamed in Loops first.** The templates are two
+  generations that disagree, and aliases carry both onto the same resolvers, so
+  the rename is housekeeping rather than a blocking pass.
+
+  **A name nothing can resolve fails the row naming it**, which is the whole
+  point: a blank merge field is invisible and a failed row is not.
+
+  Rendered **per recipient** — a mentor in Lagos and a mentee in Toronto are
+  told the same instant in two different local times, which is why
+  `sessionTimezone` travels with it.
+
+### Added
+
+- **`APP_BASE_URL`**, for links inside messages. Not `PUBLIC_BASE_URL`, which is
+  this service's own origin and would send a mentor to the API.
+
+
 ### Added
 
 - **A mentor finds out when their calendar stops working.** `settle_sessions`

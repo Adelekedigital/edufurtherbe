@@ -275,6 +275,50 @@ async def test_draining_sends_and_marks_the_row(
     assert row["status"] == "sent"
 
 
+async def test_the_context_carries_the_real_session(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The end of the gap this work exists to close.**
+
+    Before it, `session_booked` was queued with no variables at all and the
+    drain passed the empty payload straight through — so a configured Loops
+    would have delivered a real email reading "Hi , your session on ". The
+    context now arrives loaded from the session and both parties.
+    """
+    booking = await a_booking(db_engine, api_client, "nf-context")
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    (message,) = [m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED]
+    context = message["context"]
+    assert context.session_id == str(booking["id"])
+    assert context.starts_at is not None
+    assert context.mentor_name and context.mentee_name
+    # Rendered in the *recipient's* zone, so the recipient's is what travels.
+    assert context.recipient_timezone
+    assert context.recipient_name in (context.mentor_name, context.mentee_name)
+
+
+async def test_each_recipient_gets_their_own_context(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """One row per recipient is what makes per-recipient rendering possible.
+
+    A request tells the mentor and an expiry tells both; whichever it is, each
+    copy carries the name and zone of the person receiving it rather than of
+    whoever the message is nominally about.
+    """
+    await a_booking(db_engine, api_client, "nf-percopy")
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    for message in recorder.sent:
+        context = message["context"]
+        assert context.recipient_name, "a copy with no recipient cannot be addressed"
+
+
 async def test_a_second_drain_sends_nothing_again(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

@@ -54,6 +54,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.core.config import get_settings
 from app.infra.clients.meetings import GoogleCalendar, NullCalendar, free_busy
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier
+from app.infra.clients.templates import LoopsTemplates
 from app.infra.db.calendar_store import check_connections
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.db.outbox import drain
@@ -72,7 +73,15 @@ def _notifier() -> LoopsNotifier | NullNotifier:
     key = settings.loops_api_key
     if key is None:
         return NullNotifier()
-    return LoopsNotifier(key.get_secret_value()).with_settings(settings)
+    # **Discovery is wired here and nowhere on the booking path.** Asking Loops
+    # what a template declares is a network call; on a sweep that already runs
+    # on a schedule it is free, and on `POST /sessions` it would mean a booking
+    # cannot be made while Loops is slow.
+    return (
+        LoopsNotifier(key.get_secret_value())
+        .with_settings(settings)
+        .with_templates(LoopsTemplates(key.get_secret_value()))
+    )
 
 
 def _calendar() -> GoogleCalendar | NullCalendar:

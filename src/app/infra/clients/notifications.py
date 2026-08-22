@@ -36,7 +36,9 @@ import httpx
 
 from app.core.config import Settings
 from app.core.errors import AppError, ConfigurationError
+from app.domain.messages import MessageContext, build_variables
 from app.domain.notifications import Channel, Notification
+from app.infra.clients.templates import StaticTemplates, TemplateVariables
 
 __all__ = [
     "DeliveryError",
@@ -104,10 +106,10 @@ class NullNotifier:
         notification: Notification,
         channel: Channel,
         to: str,
-        variables: dict[str, Any],
+        context: MessageContext,
         idempotency_key: str,
     ) -> None:
-        del variables, idempotency_key
+        del context, idempotency_key
         logger.info(
             "notification not sent (no provider configured): %s to %s over %s",
             notification,
@@ -135,9 +137,26 @@ class LoopsNotifier:
 
     def __init__(self, api_key: str, client: httpx.Client | None = None) -> None:
         self._settings: Settings | None = None
+        # **An empty static map by default, which refuses rather than sends.**
+        # It declares no variables for any template, and `build_variables`
+        # treats an empty declaration as *unpublished* rather than *needs none*
+        # — so an adapter nobody wired discovery into produces failed rows
+        # naming the problem, never blank emails.
+        self._templates: TemplateVariables = StaticTemplates()
         self._client = client or httpx.Client(
             headers={"Authorization": f"Bearer {api_key}"}, timeout=TIMEOUT
         )
+
+    def with_templates(self, templates: TemplateVariables) -> LoopsNotifier:
+        """Wire what tells this adapter which merge fields each template wants.
+
+        Separate from `with_settings` because they answer different questions —
+        that one supplies *which* template, this one *what it declares* — and
+        because a deployment may pin the declarations while still reading the
+        ids from configuration.
+        """
+        self._templates = templates
+        return self
 
     def with_settings(self, settings: Settings) -> LoopsNotifier:
         """Bind the template map. Separate from construction because the key and
@@ -152,7 +171,7 @@ class LoopsNotifier:
         notification: Notification,
         channel: Channel,
         to: str,
-        variables: dict[str, Any],
+        context: MessageContext,
         idempotency_key: str,
     ) -> None:
         if channel is not Channel.EMAIL:
@@ -160,13 +179,21 @@ class LoopsNotifier:
         if self._settings is None:  # pragma: no cover - wiring error, not a runtime one
             raise ConfigurationError("the Loops notifier has no template map")
 
+        template = template_for(self._settings, notification, channel)
+        # **The template says what it needs and this supplies it.** Loops
+        # accepts a missing key and renders it as nothing, so a name nobody can
+        # resolve is otherwise invisible — a delivered email reading "Hi , your
+        # session on ". `build_variables` refuses instead, and the drain records
+        # a failed row naming the variable.
+        variables = build_variables(self._templates.declared(template), context)
+
         try:
             response = self._client.post(
                 LOOPS_API,
                 headers={"Idempotency-Key": idempotency_key},
                 json={
                     "email": to,
-                    "transactionalId": template_for(self._settings, notification, channel),
+                    "transactionalId": template,
                     # See the class docstring: true would make every recipient a
                     # contact and move the account onto a paid plan.
                     "addToAudience": False,
@@ -211,10 +238,10 @@ class ZernioNotifier:
         notification: Notification,
         channel: Channel,
         to: str,
-        variables: dict[str, Any],
+        context: MessageContext,
         idempotency_key: str,
     ) -> None:
-        del to, variables, idempotency_key
+        del to, context, idempotency_key
         template_for(self._settings, notification, channel)
         raise NotImplementedError(
             "the Zernio adapter is not built — it needs the phone_* columns, an "
