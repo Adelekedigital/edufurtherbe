@@ -12,6 +12,38 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **An admin is told when somebody applies to be a mentor.** Applications used
+  to be found by somebody thinking to look, which is how a queue grows quietly.
+
+  **The first message whose recipients are a set.** Every other one resolves a
+  person from a row; this asks who currently holds a live grant that can act, so
+  it does not go through the session `AUDIENCE` table. One outbox row per admin,
+  the way the outbox already stores messages.
+
+  `limited_access` is not told — it may look and not act, so a message about a
+  queue it cannot clear has no possible response but to find somebody else.
+  Neither is a revoked grant, nor the applicant themselves when they happen to
+  be an admin.
+
+  A deployment with no admins still accepts applications. Refusing one because
+  nobody could be told would be the wrong way round.
+
+### Fixed
+
+- **`.env.example` no longer defines three keys twice.** `EMAIL_TEMPLATES`,
+  `WHATSAPP_TEMPLATES` and `PUBLIC_BASE_URL` each appeared in two blocks —
+  parallel branches adding their own in different regions, so nothing conflicted
+  and everything merged.
+
+  **The last assignment wins and the last was empty**, so filling in the first
+  quietly did nothing and every message then failed with "no template
+  configured", which reads exactly like never having configured it. Measured
+  rather than assumed. Each pair is merged keeping the superset of its
+  reasoning.
+
+
+### Added
+
 - **A confirmed session reminds both parties, 24 hours and 1 hour before.**
   The only reminder this platform had chased a mentor to *answer a request*,
   measured back from `respond_by`. Nothing reminded anybody about the session

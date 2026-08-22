@@ -123,6 +123,7 @@ def test_every_session_message_has_an_audience() -> None:
             Notification.MENTOR_APPROVED,
             Notification.MENTOR_DECLINED,
             Notification.CALENDAR_DISCONNECTED,
+            Notification.MENTOR_APPLICATION_RECEIVED,
         }
     }
 
