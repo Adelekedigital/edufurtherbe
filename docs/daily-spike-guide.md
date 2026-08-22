@@ -115,30 +115,37 @@ That is the producer `left_early` was kept off the droppable list for.
 **The token's `user_id` must be our `users.id`.** It round-trips verbatim, so
 attendance is attributable without a lookup table.
 
-## Still unanswered, and one of them is load-bearing
+## Answered 2026-08-21, in a browser
 
-**Every session room is created private, and that is settled** — it is not a
-per-session judgement and there is no case for a public one. Q1 therefore stops
-being a design fork: if `privacy: private` did not refuse an untokened visitor,
-that would be a defect in Daily rather than a choice we would have made
-differently, and the response would be to raise it with them rather than to
-publish links.
+| question | result | Daily's words |
+|---|---|---|
+| **Q1** — bare room URL, no `?t=` | **not admitted** | *"You are not allowed to join this meeting"* |
+| **Q2** — mentor URL, token and all, before `nbf` | **refused for being early** | *"This meeting is not ready yet"* |
 
-It is still worth thirty seconds to confirm, because *how* we describe the
-guarantee to a mentor depends on it — "nobody can join without the link we give
-you" is a promise, and a promise nobody checked is the kind that surfaces in a
-complaint. The run had two participants and no third, but nobody recorded trying
-the untokened URL, and an absence of evidence is not the measurement.
+**Two different refusals**, which is what makes this two measurements rather
+than one repeated. *No token* and *too early* are distinct gates and both hold.
 
-**Q2 is the one that is genuinely still a fork.** If `nbf` is enforced at the
-door, early joining is impossible on Daily and merely discouraged on Meet. If it
-is advisory, both providers need the same UI copy and the difference between
-them narrows to attendance alone.
+**Q1 makes the promise real.** "Nobody can join without the link we gave you" is
+now something the platform can say rather than hope — and a promise nobody
+checked is the kind that surfaces in a complaint.
 
-### How to actually answer them
+**Q2 resolved toward enforced, which is the stronger branch.** Early joining is
+*impossible* on Daily and only *discouraged* on Meet, so the two venues are not
+equivalent and **their UI copy cannot be either**. A Daily session has two
+layers — the link is withheld until the window and the door is shut. A Meet
+session has one, because a Meet link admits anybody holding it at any time,
+which is why links are withheld rather than sent in advance.
+
+Both `nbf`s are set together, one on the room and one on the token, so this
+tested the pair. Which of the two refuses is unknown and does not matter while
+both are set; the guide below explains how to separate them if that ever
+changes.
+
+### How they were answered, and how to repeat it
 
 Both are browser observations the script cannot make, and **two minutes was too
-short** — which is why they went unanswered the first time. Give yourself room:
+short** — which is why they went unanswered on the first run. Give yourself
+room:
 
 ```bash
 uv run python scripts/daily_spike.py --opens-in 10

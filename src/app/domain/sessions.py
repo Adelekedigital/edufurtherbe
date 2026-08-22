@@ -69,10 +69,9 @@ CANCELLATION_CUTOFF = dt.timedelta(minutes=10)
 #: **Reminders fire at fixed distances from the deadline** — on booking, 24
 #: hours before, and 12 hours before — and the first of those three is the only
 #: one that always fires: 18 hours is the minimum gap, so the 24-hour reminder
-#: is reachable only when the mentee booked at least 30 hours out. That schedule
-#: is settled and unbuilt; it needs a notification channel that does not exist,
-#: and the deadline ships without it because freeing the slot is the half that
-#: does not depend on being able to tell anybody.
+#: is reachable only when the mentee booked at least 30 hours out. **All three
+#: are built**; this note said they were not, and went on saying it after the
+#: outbox and the scheduled callback both shipped.
 RESPONSE_WINDOW = dt.timedelta(hours=6)
 
 

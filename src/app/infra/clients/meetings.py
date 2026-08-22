@@ -36,9 +36,11 @@ thirty to ninety — so attendance and *co-presence* are two questions answerabl
 at two different times, and this adapter's reader has to know which it is
 serving.
 
-**Q1 and Q2 are still open**, and Q1 is load-bearing: whether ``privacy:
-private`` refuses a visitor holding the URL and no token is the whole basis for
-not publishing the link.
+**Q1 and Q2 are answered, and both the way the design assumed.** A private
+room refuses an untokened visitor — *"You are not allowed to join this
+meeting"* — and ``nbf`` is enforced at the door, not merely recorded: *"This
+meeting is not ready yet"*. Two different refusals, which is how the run is
+known to have tested two things rather than one thing twice.
 """
 
 from __future__ import annotations
@@ -157,12 +159,20 @@ class DailyRooms:
     **Every session room is private, always.** Not a per-session judgement and
     not a setting — there is no case for a public one, and the URL reaching a
     participant only through the platform is what makes the join a thing we can
-    record. Whether Daily *enforces* it is unconfirmed; if it did not, that
-    would be a defect to raise with them rather than a choice to revisit.
+    record. **Daily enforces it**, measured rather than assumed: an untokened
+    visitor holding the room URL is refused with *"You are not allowed to join
+    this meeting"*. So "nobody can join without the link we gave you" is a
+    promise this platform can make rather than merely hope for.
 
-    Still open: whether ``nbf`` is enforced at the door or merely recorded. That
-    one is a genuine fork — enforced, early joining is impossible here and only
-    discouraged on Meet; advisory, both providers need the same UI copy.
+    **``nbf`` is enforced at the door too** — *"This meeting is not ready yet"*
+    — which settles the fork the spike was run for. Early joining is
+    *impossible* on Daily and only *discouraged* on Meet, so the two venues are
+    not equivalent and their copy cannot be either.
+
+    That asymmetry is the useful part. A Daily session has two layers: the link
+    is withheld until the join window **and** the door is shut. A Meet session
+    has one, because a Meet link admits anybody holding it at any time — which
+    is exactly why links are withheld rather than emailed in advance.
 
     **A webhook belongs beside this, not instead of it.** ``GET /meetings``
     settles a finished session and the hourly sweep loses nobody, because the
@@ -184,12 +194,14 @@ class DailyRooms:
     def create(self, *, name: str, opens_at: dt.datetime, closes_at: dt.datetime) -> MeetingRoom:
         """A private room that exists between the two instants and no longer.
 
-        ``nbf`` and ``exp`` are the room's own gate. The spike confirmed Daily
-        accepts both and reflects them in ``config``; whether it *enforces*
-        ``nbf`` at the door is the one question still open, and the answer
-        decides whether "the room is shut until five minutes before" is a
-        promise or a request. Either way setting them costs nothing and is the
-        only mechanism available.
+        ``nbf`` and ``exp`` are the room's own gate, and Daily **enforces**
+        them: a tokened participant arriving early is refused with *"This
+        meeting is not ready yet"*. So "the room is shut until five minutes
+        before" is a promise rather than a request.
+
+        Both ``nbf``s are set together — one on the room, one on the token — so
+        the measurement covers the pair. Which of the two does the refusing is
+        untested and does not matter while both are set.
 
         **The returned URL is not a door.** A private room refuses anybody
         without a token, so this is the room's address and `token_for` is what
