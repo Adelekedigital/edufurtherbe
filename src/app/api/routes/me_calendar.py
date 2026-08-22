@@ -7,8 +7,14 @@ thing: *"View your availability in your calendars."* The calendar the platform
 anybody — conflating the two is what once made a docstring claim the event
 writer needed this table.
 
-**Reading a mentor's busy hours is not built yet.** That is the free/busy
-subtraction in `slot_store`, and it lands next, against these rows.
+**A connected calendar is read at slot render and again at booking.**
+`slot_store` subtracts the mentor's busy hours from what a mentee may book, and
+the read is *advisory*: unreachable means it contributed nothing and the grid is
+whatever the mentor declared (ADR 0004). The exclusion constraint remains the
+thing that actually prevents a double booking.
+
+This docstring said that subtraction was "not built yet" for as long as it took
+to build it, and then longer.
 
 The split is deliberate rather than incidental: `slot_store` holds the
 most-tested query in the codebase, and reviewing a change to it alongside a

@@ -113,6 +113,22 @@ The useful part of this log. Every one shipped-looking and quiet.
 | a dangling alias pointing at a resolver that did not exist | the invariant test written for it |
 | five shipped docstrings claiming things were unbuilt that were built | found by accident, one at a time |
 
+**The sweep is not automatable, and that is worth recording.** Grepping
+`not built`, `unbuilt`, `does not exist` and `still open` across `src/` returned
+about forty hits at roughly 1-in-20 signal: most were `"does not exist"`
+describing a **404 response**, which is the same words about something else
+entirely.
+
+Worse, one near-miss would have become a wrong "fix" if the pattern had been
+trusted. `models/sessions.py` says *"Nothing reads it yet"* of
+`SessionType.requires_booking_confirmation` — and booking *does* read a column
+of that name, on `SessionTypeBookingConfig`, a different table. Two same-named
+columns, one read and one not. The comment is correct.
+
+So there is no lint rule to add here. What the codebase gains is the habit of
+checking a claim when touching the code it describes, which is the only thing
+that would have caught any of these.
+
 **The pattern worth naming:** four of these were *guards that another guard
 already covered*, or *text that was true when written*. Neither shows up in a
 passing suite. Settled decision #157 records the first shape; the second has no
@@ -145,9 +161,8 @@ gate at all, which is the next thing worth building.
    the other looking at a lie. Unblocked; Q1 and Q2 are answered.
 3. **Onboarding.** `user_onboarding` exists from M1, written only by the ETL.
    Nothing in the application reads or writes it.
-4. **A stale-claim sweep.** Five turned up by accident; there are likely more.
-   Grep every "not built", "unbuilt", "does not exist" and "still open" in
-   shipped docstrings and check each against the code.
+4. ~~**A stale-claim sweep.**~~ **Done.** Seven found in total; the sweep
+   turned up two more beyond the five found by accident.
 
 **Deliberately not touched:** `docs/handoff-session-build.md`. A live session
 holds a worktree writing `docs/handoff-review-build.md`, and that file is very
