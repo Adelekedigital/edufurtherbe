@@ -1,11 +1,18 @@
 # Build log — M4 integrations, notifications and the session lifecycle
 
-**August 2026.** What was built, what it decided, and what it found. Written for
-whoever picks this up next: the PR titles say what shipped, and this says *why
-the shape is what it is* and *what is still missing*.
+**Status: the session lifecycle is complete.** Booking through settlement, with
+a message at every stage.
+**Written:** 2026-08-22, from the merged PRs rather than from memory.
+**Plan:** `handoff-session-build.md`, whose numbered sequence this executed.
+**Next:** `handoff-review-build.md` — M5a, reviews.
 
-Read `.claude/skills/project-conventions/SKILL.md` for the settled decisions
-themselves — this points at them rather than repeating them.
+**A record, not a plan.** The `handoff-*` documents say what is going to be
+built and why; this says what was, what it decided along the way, and what it
+found. Written for whoever picks this up next, because the PR titles say what
+shipped and nothing else says why the shape is what it is.
+
+Settled decisions live in `.claude/skills/project-conventions/SKILL.md`; this
+points at them rather than repeating them.
 
 ---
 
@@ -164,7 +171,9 @@ gate at all, which is the next thing worth building.
 4. ~~**A stale-claim sweep.**~~ **Done.** Seven found in total; the sweep
    turned up two more beyond the five found by accident.
 
-**Deliberately not touched:** `docs/handoff-session-build.md`. A live session
-holds a worktree writing `docs/handoff-review-build.md`, and that file is very
-likely being rewritten. It carries at least one stale reference — `NEVER_AGREED`,
-a constant that no longer exists.
+**`docs/handoff-session-build.md` is the plan this executed**, and its
+`NEVER_AGREED` reference is corrected here — the constant became
+`FREES_THE_HOUR` in #178. It was left alone for two rounds while a concurrent
+session held a worktree; that session wrote `handoff-review-build.md` as a new
+document and never touched the plan, so the collision that justified deferring
+it did not arise.

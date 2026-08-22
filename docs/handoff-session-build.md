@@ -61,7 +61,7 @@ These cost real time to find. None of them are guessable.
 | `session_type_is_live(user_id)` | Three predicates: ownership, `is_active IS TRUE`, `deleted_at IS NULL`. **Four callers**, including `slot_store` and `profile_writer` |
 | `_live_session_types` ordering | Orders by **`name`**, not `created_at` — deliberately, because name is unique per mentor among live rows, so the ordering is *total* rather than merely usually-stable |
 | `Page[T]` | **Cursor**-based (`encode_offset_cursor`, `MAX_SEARCH_OFFSET`), not limit/offset. And the public session-types endpoint does not paginate at all — it returns every row in a `Page` envelope |
-| `SessionStatus.EXPIRED` | ~~Exists with nothing able to produce it.~~ **The expiry sweep in `settle_sessions` produces it**, and `NEVER_AGREED` frees the slot the moment it does |
+| `SessionStatus.EXPIRED` | ~~Exists with nothing able to produce it.~~ **The expiry sweep in `settle_sessions` produces it**, and `FREES_THE_HOUR` frees the slot the moment it does |
 
 **The dangerous one is `session_type_is_live`.** The mentor's own list needs its ownership and
 soft-delete predicates but *not* `is_active`. Adding an `include_inactive` flag touches the
