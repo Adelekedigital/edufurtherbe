@@ -1,11 +1,18 @@
 # Build log — M4 integrations, notifications and the session lifecycle
 
-**August 2026.** What was built, what it decided, and what it found. Written for
-whoever picks this up next: the PR titles say what shipped, and this says *why
-the shape is what it is* and *what is still missing*.
+**Status: the session lifecycle is complete.** Booking through settlement, with
+a message at every stage.
+**Written:** 2026-08-22, from the merged PRs rather than from memory.
+**Plan:** `handoff-session-build.md`, whose numbered sequence this executed.
+**Next:** `handoff-review-build.md` — M5a, reviews.
 
-Read `.claude/skills/project-conventions/SKILL.md` for the settled decisions
-themselves — this points at them rather than repeating them.
+**A record, not a plan.** The `handoff-*` documents say what is going to be
+built and why; this says what was, what it decided along the way, and what it
+found. Written for whoever picks this up next, because the PR titles say what
+shipped and nothing else says why the shape is what it is.
+
+Settled decisions live in `.claude/skills/project-conventions/SKILL.md`; this
+points at them rather than repeating them.
 
 ---
 
@@ -113,6 +120,22 @@ The useful part of this log. Every one shipped-looking and quiet.
 | a dangling alias pointing at a resolver that did not exist | the invariant test written for it |
 | five shipped docstrings claiming things were unbuilt that were built | found by accident, one at a time |
 
+**The sweep is not automatable, and that is worth recording.** Grepping
+`not built`, `unbuilt`, `does not exist` and `still open` across `src/` returned
+about forty hits at roughly 1-in-20 signal: most were `"does not exist"`
+describing a **404 response**, which is the same words about something else
+entirely.
+
+Worse, one near-miss would have become a wrong "fix" if the pattern had been
+trusted. `models/sessions.py` says *"Nothing reads it yet"* of
+`SessionType.requires_booking_confirmation` — and booking *does* read a column
+of that name, on `SessionTypeBookingConfig`, a different table. Two same-named
+columns, one read and one not. The comment is correct.
+
+So there is no lint rule to add here. What the codebase gains is the habit of
+checking a claim when touching the code it describes, which is the only thing
+that would have caught any of these.
+
 **The pattern worth naming:** four of these were *guards that another guard
 already covered*, or *text that was true when written*. Neither shows up in a
 passing suite. Settled decision #157 records the first shape; the second has no
@@ -145,11 +168,12 @@ gate at all, which is the next thing worth building.
    the other looking at a lie. Unblocked; Q1 and Q2 are answered.
 3. **Onboarding.** `user_onboarding` exists from M1, written only by the ETL.
    Nothing in the application reads or writes it.
-4. **A stale-claim sweep.** Five turned up by accident; there are likely more.
-   Grep every "not built", "unbuilt", "does not exist" and "still open" in
-   shipped docstrings and check each against the code.
+4. ~~**A stale-claim sweep.**~~ **Done.** Seven found in total; the sweep
+   turned up two more beyond the five found by accident.
 
-**Deliberately not touched:** `docs/handoff-session-build.md`. A live session
-holds a worktree writing `docs/handoff-review-build.md`, and that file is very
-likely being rewritten. It carries at least one stale reference — `NEVER_AGREED`,
-a constant that no longer exists.
+**`docs/handoff-session-build.md` is the plan this executed**, and its
+`NEVER_AGREED` reference is corrected here — the constant became
+`FREES_THE_HOUR` in #178. It was left alone for two rounds while a concurrent
+session held a worktree; that session wrote `handoff-review-build.md` as a new
+document and never touched the plan, so the collision that justified deferring
+it did not arise.
