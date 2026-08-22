@@ -88,7 +88,6 @@ class MessageContext:
 #: would send a mentor to the API.
 SESSION_PATH = "/sessions/{session_id}"
 DASHBOARD_PATH = "/dashboard"
-FEEDBACK_PATH = "/sessions/{session_id}/feedback"
 
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
@@ -157,10 +156,6 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "reasonMessage": lambda c: _needs(c.extras.get("reason_text"), "reasonMessage"),
     "cancelInitiator": lambda c: _needs(c.extras.get("cancel_initiator"), "cancelInitiator"),
     "intervalTime": lambda c: _needs(c.extras.get("interval"), "intervalTime"),
-    "feedbackUrl": lambda c: (
-        f"{c.app_base_url.rstrip('/')}"
-        + FEEDBACK_PATH.format(session_id=_needs(c.session_id, "feedbackUrl"))
-    ),
 }
 
 
@@ -196,7 +191,6 @@ ALIASES: dict[str, str] = {
     "cancelmessage": "reasonMessage",
     "cancelinitiator": "cancelInitiator",
     "intervaltime": "intervalTime",
-    "feedbacklink": "feedbackUrl",
 }
 
 

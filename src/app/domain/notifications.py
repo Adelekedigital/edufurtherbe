@@ -100,9 +100,16 @@ class Notification(StrEnum):
     #: templates differ: this one is about turning up, that one about preparing.
     SESSION_LAST_REMINDER = "session_last_reminder"
 
-    #: After a session that actually happened. **Never after a `no_show`** —
-    #: asking how a session went when nobody attended is worse than silence.
-    SESSION_FEEDBACK = "session_feedback"
+    #: **There is deliberately no post-session message here.** One was built and
+    #: withdrawn, because it conflated two different asks: a *platform* survey
+    #: to both parties about their experience of the product, and a *mentor
+    #: review* from the mentee about the session. Only the second is wanted now,
+    #: it belongs to the review phase, and it is `Audience.MENTEE` rather than
+    #: `BOTH` — a mentee reviews a mentor, and asking a mentor to review the
+    #: session tells one person too many.
+    #:
+    #: The platform survey may come back. It is not this, and #21 says a
+    #: vocabulary does not carry a member for a feature nobody is building.
 
     #: Somebody applied to be a mentor. **To the admins, not to a party of a
     #: session**, so `AUDIENCE` does not reach it — the recipients are a *set*
@@ -152,7 +159,6 @@ AUDIENCE: dict[Notification, Audience] = {
     Notification.MENTOR_RESPONSE_REMINDER: Audience.MENTOR,
     Notification.SESSION_REMINDER: Audience.BOTH,
     Notification.SESSION_LAST_REMINDER: Audience.BOTH,
-    Notification.SESSION_FEEDBACK: Audience.BOTH,
 }
 
 

@@ -6,11 +6,10 @@ The Loops account carries *Session Reminder*, *Session Last Reminder* and
 this platform had chased a mentor to *answer a request*, measured back from
 `respond_by` — a different thing entirely.
 
-**Two mechanisms, deliberately.** A reminder has to be scheduled ahead, so it
-uses the callback path the response reminder already uses. Feedback does not:
-the settlement sweep already runs hourly and already decides `completed` against
-`no_show`, so the moment a session becomes complete is a moment that code is
-already in.
+**There is no post-session message here any more.** One was built and
+withdrawn: it conflated a *platform* survey to both parties with a *mentor
+review* from the mentee, and only the second is wanted. That one belongs to the
+review phase and is `Audience.MENTEE`.
 """
 
 from __future__ import annotations
@@ -28,11 +27,7 @@ from tests.integration.test_api_notifications import a_booking, queued
 from app.core.config import Settings
 from app.domain.notifications import SESSION_REMINDERS, Notification
 from app.infra.clients.scheduler import SchedulerError
-from app.infra.db.session_writer import (
-    remind_before_session,
-    schedule_session_reminders,
-    settle_attendance,
-)
+from app.infra.db.session_writer import remind_before_session, schedule_session_reminders
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -285,92 +280,6 @@ async def test_firing_twice_queues_one_message_each(
 
     rows = [r for r in await queued(db_engine, booking["id"]) if "reminder" in str(r["event_type"])]
     assert len(rows) == 2, "one per recipient, not two per recipient"
-
-
-# --------------------------------------------------------------------------
-# Asking afterwards
-# --------------------------------------------------------------------------
-
-
-async def settle(engine: AsyncEngine, when: dt.datetime) -> int:
-    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-        count = await settle_attendance(session, now=when)
-        await session.commit()
-    return count
-
-
-async def attended(engine: AsyncEngine, session_id: str, *, both: bool) -> None:
-    """Mark arrivals, so the sweep settles the session one way or the other."""
-    async with engine.begin() as conn:
-        parties = (
-            await conn.execute(
-                text("SELECT mentor_id, mentee_id, starts_at FROM sessions WHERE id = :i"),
-                {"i": session_id},
-            )
-        ).one()
-        present = [parties.mentor_id] + ([parties.mentee_id] if both else [])
-        for user_id in present:
-            await conn.execute(
-                text(
-                    "UPDATE session_participants SET attendance_status = 'attended', "
-                    "joined_at = :j WHERE session_id = :i AND user_id = :u"
-                ),
-                {"j": parties.starts_at, "i": session_id, "u": user_id},
-            )
-
-
-async def test_a_completed_session_asks_both_how_it_went(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    booking = await a_booking(db_engine, api_client, "sr-feedback")
-    await attended(db_engine, booking["id"], both=True)
-
-    await settle(db_engine, dt.datetime.now(dt.UTC) + dt.timedelta(days=400))
-
-    rows = [
-        r for r in await queued(db_engine, booking["id"]) if r["event_type"] == "session_feedback"
-    ]
-    assert len(rows) == 2, "one per recipient"
-
-
-async def test_a_no_show_is_never_asked_how_it_went(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """**Worse than silence.** "How was your session?" about one nobody attended
-    reads as a platform that did not notice, to the party who did turn up."""
-    booking = await a_booking(db_engine, api_client, "sr-noshow")
-    await attended(db_engine, booking["id"], both=False)
-
-    await settle(db_engine, dt.datetime.now(dt.UTC) + dt.timedelta(days=400))
-
-    async with db_engine.connect() as conn:
-        status = (
-            await conn.execute(
-                text("SELECT status FROM sessions WHERE id = :i"), {"i": booking["id"]}
-            )
-        ).scalar_one()
-    assert str(status) == "no_show"
-    assert [
-        r for r in await queued(db_engine, booking["id"]) if r["event_type"] == "session_feedback"
-    ] == []
-
-
-async def test_a_second_sweep_does_not_ask_again(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """The update matches only `confirmed` rows, so a settled session is never
-    selected again — the same guard that stops the event log duplicating."""
-    booking = await a_booking(db_engine, api_client, "sr-once")
-    await attended(db_engine, booking["id"], both=True)
-    later = dt.datetime.now(dt.UTC) + dt.timedelta(days=400)
-
-    await settle(db_engine, later)
-    await settle(db_engine, later)
-
-    rows = [
-        r for r in await queued(db_engine, booking["id"]) if r["event_type"] == "session_feedback"
-    ]
-    assert len(rows) == 2
 
 
 # --------------------------------------------------------------------------

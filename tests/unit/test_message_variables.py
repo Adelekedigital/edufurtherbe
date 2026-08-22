@@ -52,9 +52,11 @@ def context(**overrides: object) -> MessageContext:
 def test_every_alias_points_at_a_real_resolver() -> None:
     """**A dangling alias is a template that fails for no visible reason.**
 
-    Found this way: `feedbacklink` aliased to `feedbackUrl`, which had no
-    resolver because the feedback feature does not exist. It read as supported
-    and would have failed naming a variable nobody had heard of.
+    Found this way, twice. `feedbacklink` aliased to `feedbackUrl` before any
+    resolver existed; it read as supported and would have failed naming a
+    variable nobody had heard of. The alias came back with the resolver and left
+    again with it when the message was withdrawn — which is the second time this
+    test earned itself, and the reason it is not a comment.
     """
     dangling = {name: target for name, target in ALIASES.items() if target not in RESOLVERS}
 
