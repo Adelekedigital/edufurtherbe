@@ -141,7 +141,7 @@ class NullRooms:
 
 
 class DailyRooms:
-    """Daily, and it is not built.
+    """Daily, and the spike has answered every question it was run for.
 
     Rooms are created ``private`` unconditionally — see the note on the spike
     below.

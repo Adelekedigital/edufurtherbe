@@ -12,6 +12,21 @@ released. A tag with no matching section here fails the release job.
 
 ### Fixed
 
+- **Two more claims that had stopped being true**, found by a deliberate sweep
+  rather than by accident. `/me/calendar` told clients that reading a mentor's
+  busy hours was "not built yet" — it shipped, and that module is the surface a
+  mentor connects a calendar *for*. `DailyRooms` still opened with "Daily, and
+  it is not built".
+
+  Seven in total this cycle. The sweep also established that there is no
+  mechanical gate for this: grepping the obvious phrases across `src/` runs at
+  about 1-in-20 signal, because most hits are `"does not exist"` describing a
+  404, and one near-miss would have become a wrong correction if the pattern had
+  been trusted.
+
+
+### Fixed
+
 - **Three shipped claims that had stopped being true.** Each was written
   accurately and made false by later work that nobody went back to check.
 
