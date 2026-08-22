@@ -21,6 +21,7 @@ minute of runtime and no coverage.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from dataclasses import dataclass
 from typing import Any
@@ -30,10 +31,12 @@ import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_session_type, make_public_mentor
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from tests.integration.factories import add_session_type, make_public_mentor, until_blocked
 
+from app.core.errors import AlreadyReviewedError
 from app.domain.reviews import REVIEW_EDIT_WINDOW, REVIEW_INTERVAL
+from app.infra.db.review_writer import write_review
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -90,6 +93,19 @@ class World:
             json=BODY | {"session_id": session_id} | changes,
             headers=self.headers,
         )
+
+    async def offered(self, mentor: UUID | None = None) -> list[dict[str, Any]]:
+        """The `data` of the reviewable-sessions page.
+
+        Behind a helper so the envelope itself is asserted in exactly one place —
+        `test_the_list_comes_back_in_the_envelope` — rather than incidentally by
+        every test that reads the list.
+        """
+        query = f"?mentor_id={mentor}" if mentor is not None else ""
+        response = await self.client.get(
+            f"/api/v1/me/reviewable-sessions{query}", headers=self.headers
+        )
+        return list(response.json()["data"])
 
     async def age(self, review_id: str, by: dt.timedelta) -> None:
         """Move a review's `created_at` back, which is how a window is crossed.
@@ -473,18 +489,16 @@ async def test_a_withdrawn_review_cannot_be_edited_back(world: World) -> None:
 async def test_a_completed_session_is_offered(world: World) -> None:
     session_id = await world.completed(world.offering_a)
 
-    body = (await world.client.get("/api/v1/me/reviewable-sessions", headers=world.headers)).json()
+    offered = await world.offered()
 
-    assert [row["session_id"] for row in body] == [session_id]
-    assert body[0]["session_type_name"].startswith("CV review")
+    assert [row["session_id"] for row in offered] == [session_id]
+    assert offered[0]["session_type_name"].startswith("CV review")
 
 
 async def test_a_reviewed_session_stops_being_offered(world: World) -> None:
     await world.review(await world.completed(world.offering_a))
 
-    body = (await world.client.get("/api/v1/me/reviewable-sessions", headers=world.headers)).json()
-
-    assert body == []
+    assert await world.offered() == []
 
 
 async def test_the_picker_and_the_write_agree(world: World) -> None:
@@ -499,9 +513,7 @@ async def test_the_picker_and_the_write_agree(world: World) -> None:
     suppressed = await world.completed(world.offering_a, days_ago=2)
     available = await world.completed(world.offering_b, days_ago=3)
 
-    body = (await world.client.get("/api/v1/me/reviewable-sessions", headers=world.headers)).json()
-
-    offered = {row["session_id"] for row in body}
+    offered = {row["session_id"] for row in await world.offered()}
     assert available in offered
     assert suppressed not in offered
     assert (await world.review(suppressed)).status_code == 409
@@ -519,13 +531,7 @@ async def test_the_list_narrows_to_one_mentor(world: World) -> None:
             {"m": stranger, "e": world.mentee},
         )
 
-    body = (
-        await world.client.get(
-            f"/api/v1/me/reviewable-sessions?mentor_id={world.mentor}", headers=world.headers
-        )
-    ).json()
-
-    assert [row["session_id"] for row in body] == [mine]
+    assert [row["session_id"] for row in await world.offered(world.mentor)] == [mine]
 
 
 async def test_a_migrated_session_with_no_offering_is_still_reviewable(world: World) -> None:
@@ -537,7 +543,71 @@ async def test_a_migrated_session_with_no_offering_is_still_reviewable(world: Wo
     """
     session_id = await world.completed(None, days_ago=4)
 
+    assert session_id in {row["session_id"] for row in await world.offered()}
+    assert (await world.review(session_id)).status_code == 201
+
+
+async def test_the_list_comes_back_in_the_envelope(world: World) -> None:
+    """Every list endpoint returns `Page`, including one that will never page.
+
+    `schemas/common.py` states why: a bare array has nowhere to put pagination
+    metadata, so adding it later is a breaking change for every client already
+    parsing the array. This endpoint shipped one for exactly one review round,
+    and this test is what stops the next one.
+    """
+    await world.completed(world.offering_a)
+
     body = (await world.client.get("/api/v1/me/reviewable-sessions", headers=world.headers)).json()
 
-    assert session_id in {row["session_id"] for row in body}
-    assert (await world.review(session_id)).status_code == 201
+    assert set(body) == {"data", "next_cursor"}
+    assert body["next_cursor"] is None
+
+
+async def test_two_taps_produce_one_review(world: World, db_engine: AsyncEngine) -> None:
+    """**The pre-check races, and the constraint is what actually decides.**
+
+    Both writers pass `already_reviewed` while neither has committed, so the
+    check cannot be the guard on its own: the second insert blocks on
+    `uq_reviews_one_per_session_author` and fails the moment the first commits.
+    Untranslated, that `IntegrityError` leaves as a `500` — it is not an
+    `AppError`, so nothing maps it to a status.
+
+    A phone on a bad connection is exactly the caller that double-taps, which is
+    the reasoning booking gives for requiring an idempotency key. Reviews need
+    no key, because the second attempt has nothing new to say — but it still has
+    to be told so in a shape a client can branch on.
+
+    At store level rather than through two HTTP calls: the interleaving has to be
+    exact, and a `gather` of two requests would assert this on a coin flip.
+    """
+    session_id = await world.completed(world.offering_a)
+    values: dict[str, Any] = {
+        "session_id": UUID(session_id),
+        "communication_rating": 3,
+        "knowledge_rating": 3,
+        "practicality_rating": 3,
+        "support_rating": 3,
+        "valuable_rating": 5,
+        "nps_recommend_score": 9,
+        "public_review": "Twice over.",
+        "private_review": None,
+    }
+    now = dt.datetime.now(dt.UTC)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as first, factory() as second:
+        await write_review(first, world.mentee, values, now)
+        racing = asyncio.create_task(write_review(second, world.mentee, dict(values), now))
+        await until_blocked(db_engine)
+        await first.commit()
+        with pytest.raises(AlreadyReviewedError):
+            await racing
+
+    async with db_engine.begin() as conn:
+        written = (
+            await conn.execute(
+                text("SELECT count(*) FROM reviews WHERE session_id = :s"), {"s": session_id}
+            )
+        ).scalar_one()
+
+    assert written == 1

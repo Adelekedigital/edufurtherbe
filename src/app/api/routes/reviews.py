@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import EditedReviewDep, ReviewableSessionsDep, WrittenReviewDep
+from app.api.schemas.common import Page
 from app.api.schemas.reviews import ReviewableSessionRead, ReviewRead
 
 router = APIRouter(prefix="/api/v1", tags=["reviews"])
@@ -48,7 +49,7 @@ REVIEW_RESPONSES: dict[int | str, dict[str, str]] = {
 
 @router.get(
     "/me/reviewable-sessions",
-    response_model=list[ReviewableSessionRead],
+    response_model=Page[ReviewableSessionRead],
     summary="Sessions you may review right now",
     description=(
         "Completed sessions of yours that you have not reviewed and are not "
@@ -58,7 +59,11 @@ REVIEW_RESPONSES: dict[int | str, dict[str, str]] = {
         "to review, one entry means write straight away, and more than one "
         "means show the mentee which session they mean.\n\n"
         "Pass `mentor_id` to narrow it to one mentor, which is what a profile's "
-        "Reviews tab wants."
+        "Reviews tab wants.\n\n"
+        "`next_cursor` is always `null`. A mentee has a handful of unreviewed "
+        "sessions at most, so the list is returned whole; the envelope is here "
+        "because ADR 0016 puts it on every list, and a bare array has nowhere "
+        "to put pagination the day one is needed."
     ),
     responses={
         status.HTTP_401_UNAUTHORIZED: {
@@ -68,8 +73,10 @@ REVIEW_RESPONSES: dict[int | str, dict[str, str]] = {
 )
 async def list_reviewable_sessions(
     sessions: ReviewableSessionsDep,
-) -> list[ReviewableSessionRead]:
-    return [ReviewableSessionRead.model_validate(row) for row in sessions]
+) -> Page[ReviewableSessionRead]:
+    return Page(
+        data=[ReviewableSessionRead.model_validate(row) for row in sessions], next_cursor=None
+    )
 
 
 @router.post(

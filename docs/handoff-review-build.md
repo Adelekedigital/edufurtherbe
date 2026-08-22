@@ -307,6 +307,16 @@ argued again in each PR that acts on them.
 
     `GET /me/reviewable-sessions` is the other half: ask it first and a `409`
     becomes an exceptional race rather than the routine way to discover a rule.
+    It returns `Page`, like every list in this API — a bare array has nowhere to
+    put pagination the day one is needed, and adding it later breaks every
+    client already parsing the array.
+
+    **And the `409` is a real race, not only a rule.** Two taps both pass the
+    pre-check before either commits; the second insert blocks on
+    `uq_reviews_one_per_session_author` and fails when the first lands. The
+    writer catches it by constraint name and raises the same error the check
+    would have, so the two paths are indistinguishable to a client. That is
+    settled decision #169, and `book_session` is where the shape came from.
 
 ---
 

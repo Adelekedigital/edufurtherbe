@@ -30,6 +30,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import insert, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import (
@@ -44,7 +45,12 @@ from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session
 from app.infra.db.review_eligibility import already_reviewed, within_interval
 
-__all__ = ["edit_review", "write_review"]
+__all__ = ["ONE_PER_SESSION", "edit_review", "write_review"]
+
+#: The index a double-click lands on. Named rather than matched loosely, so a
+#: *different* integrity failure is re-raised instead of being reported as a
+#: duplicate review — `book_session` matches its own constraint the same way.
+ONE_PER_SESSION = "uq_reviews_one_per_session_author"
 
 
 async def write_review(
@@ -65,6 +71,12 @@ async def write_review(
     review of this session is itself a review of this offering, so once one
     exists *both* refusals are true — and reporting the retryable one would tell
     a client to come back in a month for something that will never succeed.
+
+    **The check races, so the constraint answers too.** Two taps on a bad
+    connection can both pass the `EXISTS` before either inserts; the second then
+    lands on `uq_reviews_one_per_session_author`, and an `IntegrityError` is not
+    an `AppError`, so without this it would leave as a `500`. The endpoint most
+    likely to be double-tapped is the one a phone retries.
     """
     session_id = values["session_id"]
     target = (
@@ -87,11 +99,20 @@ async def write_review(
             "you reviewed this offering recently; a further review is not open yet"
         )
 
-    written = await session.execute(
-        insert(Review)
-        .values(reviewed_by=author, reviewed_for=target.mentor_id, **values)
-        .returning(Review.id)
-    )
+    try:
+        written = await session.execute(
+            insert(Review)
+            .values(reviewed_by=author, reviewed_for=target.mentor_id, **values)
+            .returning(Review.id)
+        )
+    except IntegrityError as exc:
+        if ONE_PER_SESSION not in str(exc.orig):
+            raise
+        # **Rolled back here rather than left to the caller.** The transaction is
+        # already aborted, so the read-back the dependency does next would fail
+        # with `InFailedSQLTransaction` and bury this cause under that one.
+        await session.rollback()
+        raise AlreadyReviewedError("you have already reviewed this session") from exc
     return UUID(str(written.scalar_one()))
 
 
