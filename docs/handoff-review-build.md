@@ -292,16 +292,33 @@ are domain constants rather than configuration (decision 13).
 
 | # | PR | Migration | Tier |
 |---|---|---|---|
-| 1 | `reviews` — the table, corrected scales, eligibility and card indexes ✅ | yes | 1 |
+| 1 | `reviews` — the table, corrected scales, eligibility and card indexes, **ADR 0026** ✅ | yes | 1 |
 | 2 | `POST` and `PATCH /reviews` — session-scoped, 30-day rule in the query | no | 2 |
 | 3 | Mentor reviews read — aggregates and the dated list | no | 2 |
 | 4 | `REVIEW_REQUESTED` + `REVIEW_REMINDER` producers | no | 2 |
 | 5 | The reviews loader — built on the dev row, rehearsed on the 53 | no | 1 |
-| 6 | ADR — the scale decision, the append rule, the 30-day window | no | 3 |
+| ~~6~~ | ~~ADR~~ — **moved into PR 1 as ADR 0026** ✅ | — | — |
 
 One ADR, not three. Only the scale decision clears rule 3's bar on its own —
 expensive to reverse *and* surprising — and the append rule and 30-day window are
 the behaviour it exists to support, so they belong in the same record.
+
+**It is no longer last, and sequencing it last was a mistake this document
+made.** Two rules put it in PR 1:
+
+- **ADR 0007**: *"Where a later decision supersedes part of it, that is a new ADR
+  and the package text stays as it was received."* Unqualified — there is no
+  carve-out for a package that cannot hold its own data, and only one of PR 1's
+  four divergences is even forced by that. ADR 0021 and ADR 0022 are the
+  precedent, each opening with the same "diverges from `docs/edufurther-migration/`"
+  formula.
+- **How-we-work rule 2**: *"An ADR lands `Accepted` in the PR that implements
+  it."* The scale is implemented by the migration.
+
+The consequence was concrete rather than procedural: with the ADR five pull
+requests away, **PR 1 could merge on its own and leave `main` carrying a
+canonical supersession with nothing recording it** — the exact gap ADR 0007
+exists to close.
 
 ---
 
