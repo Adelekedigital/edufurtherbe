@@ -39,6 +39,7 @@ from app.infra.db.models.mentoring import (
 )
 from app.infra.db.models.platform import IdempotencyKey, OutboxEvent
 from app.infra.db.models.reference import Country, Language
+from app.infra.db.models.reviews import Review
 from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
 from app.infra.db.models.sessions import (
     Session,
@@ -78,6 +79,7 @@ __all__ = [
     "MentorServiceOffering",
     "MentorStatusEvent",
     "OutboxEvent",
+    "Review",
     "ScholarshipProgram",
     "ServiceOffering",
     "Session",

@@ -66,7 +66,16 @@ EXEMPT = {"users"}
 #: it one, the expiry test below fired on the full gate, and it moved to a real
 #: case in `CASES`. That is the whole mechanism working end to end, and the
 #: reason the set stays empty rather than being deleted.
-EXEMPT_UNTIL_READ: set[str] = set()
+#:
+#: `reviews` is the next one through, and it arrived the way the comment above
+#: predicts: the table ships in M5a's first pull request and nothing reads it
+#: until the third, which is the profile aggregates and the discovery card. Both
+#: of those filter `deleted_at IS NULL` — a moderated review must not move a
+#: mentor's average — so the case that replaces this entry already knows what it
+#: has to assert. **It is not exempt from the rule, only from a test of a reader
+#: that does not exist**, and `test_the_unread_exemption_expires_when_a_reader_
+#: appears` is what collects the debt the moment `review_stats` lands.
+EXEMPT_UNTIL_READ: set[str] = {"reviews"}
 
 
 async def seed_education(conn: Any, user_id: UUID) -> None:
