@@ -11,6 +11,7 @@ import datetime as dt
 import pytest
 
 from app.domain.reviews import (
+    MENTOR_RATINGS,
     ORDINAL_SCALE,
     REVIEW_EDIT_WINDOW,
     REVIEW_INTERVAL,
@@ -90,3 +91,18 @@ def test_the_two_windows_are_not_the_same_order_of_magnitude() -> None:
     assert REVIEW_EDIT_WINDOW < REVIEW_INTERVAL
     assert dt.timedelta(minutes=10) == REVIEW_EDIT_WINDOW
     assert dt.timedelta(days=30) == REVIEW_INTERVAL
+
+
+def test_the_summary_publishes_every_rating_the_database_averages() -> None:
+    """A fifth question would be averaged in SQL and dropped in silence.
+
+    `MENTOR_RATINGS` drives the column list, the `CHECK` bounds and
+    `profile_summary`, so adding one is a single edit everywhere except here —
+    and pydantic ignores an unknown key rather than raising. `extra="forbid"`
+    turns the drop into an error; this turns the *omission* into one.
+    """
+    from app.api.schemas.reviews import ReviewSummaryRead
+
+    assert set(MENTOR_RATINGS) <= set(ReviewSummaryRead.model_fields), (
+        "the summary is missing a rating the database averages"
+    )

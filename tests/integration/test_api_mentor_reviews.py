@@ -27,6 +27,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_availability, add_session_type, make_public_mentor
 
+from app.infra.db.review_stats import published
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 
@@ -165,8 +167,8 @@ async def test_a_mentor_nobody_has_reviewed_counts_zero(profile: Profile) -> Non
     assert block["count"] == 0
     assert block["session_value"] is None
     assert block["recommended_percent"] is None
-    assert block["communication"]["average"] is None
-    assert block["communication"]["percent"] is None
+    assert block["communication_rating"]["average"] is None
+    assert block["communication_rating"]["percent"] is None
 
 
 async def test_an_unreviewed_card_carries_the_same_split(profile: Profile) -> None:
@@ -198,13 +200,13 @@ async def test_the_percentage_is_the_average_scaled(profile: Profile) -> None:
     `(v-1)/(max-1)` would render 96%.
     """
     ratings = [1, 2, 3]
-    for rating in ratings:
-        await profile.reviewed(communication=rating, days_ago=ratings.index(rating) + 1)
+    for index, rating in enumerate(ratings):
+        await profile.reviewed(communication=rating, days_ago=index + 1)
 
     block = await profile.block()
 
-    assert block["communication"]["average"] == pytest.approx(2.0)
-    assert block["communication"]["percent"] == scaled(ratings, 3)
+    assert block["communication_rating"]["average"] == pytest.approx(2.0)
+    assert block["communication_rating"]["percent"] == scaled(ratings, 3)
 
 
 async def test_the_recommend_figure_is_a_percentage_of_ten(profile: Profile) -> None:
@@ -232,10 +234,10 @@ async def test_the_four_questions_are_each_their_own_figure(profile: Profile) ->
 
     block = await profile.block()
 
-    assert block["communication"]["percent"] == scaled([3], 3)
-    assert block["knowledge"]["percent"] == scaled([1], 3)
-    assert block["practicality"]["percent"] == scaled([2], 3)
-    assert block["support"]["percent"] == scaled([3], 3)
+    assert block["communication_rating"]["percent"] == scaled([3], 3)
+    assert block["knowledge_rating"]["percent"] == scaled([1], 3)
+    assert block["practicality_rating"]["percent"] == scaled([2], 3)
+    assert block["support_rating"]["percent"] == scaled([3], 3)
 
 
 async def test_the_floor_of_the_scale_is_thirty_three_percent(profile: Profile) -> None:
@@ -246,7 +248,7 @@ async def test_the_floor_of_the_scale_is_thirty_three_percent(profile: Profile) 
     """
     await profile.reviewed(communication=1)
 
-    assert (await profile.block())["communication"]["percent"] == 33
+    assert (await profile.block())["communication_rating"]["percent"] == 33
 
 
 # --------------------------------------------------------------------------
@@ -440,3 +442,150 @@ async def test_the_dates_are_what_a_client_renders(profile: Profile) -> None:
     row = (await profile.listed())["data"][0]
 
     assert dt.datetime.fromisoformat(row["created_at"])
+
+
+# --------------------------------------------------------------------------
+# The rounding, at a tie — the case the original pin could not reach
+# --------------------------------------------------------------------------
+
+
+async def test_a_tie_rounds_away_from_zero(profile: Profile) -> None:
+    """**The bug the first version of this pin was blind to.**
+
+    Eight ratings summing to 15 average `1.875`, which scales to exactly `62.5`.
+    A Python `100.0` in the expression makes the whole arithmetic `float8`, and
+    `round(float8)` is `rint()` — half **to even**, so it published `62` while
+    this module's docstring, the CHANGELOG and the drift test all promised half
+    **away from zero**, which is `63`.
+
+    The original fixture data (`[1, 2, 3]`) can never land on a tie, so the pin
+    passed against a value it did not test. This is the case that fails without
+    the `Numeric` cast.
+    """
+    ratings = [1, 1, 1, 1, 2, 3, 3, 3]
+    for index, rating in enumerate(ratings):
+        await profile.reviewed(communication=rating, days_ago=index + 1)
+
+    block = await profile.block()
+
+    assert block["communication_rating"]["average"] == pytest.approx(1.88, abs=0.01)
+    assert block["communication_rating"]["percent"] == 63, "62 means the arithmetic went float"
+
+
+async def test_the_recommend_figure_ties_the_same_way(profile: Profile) -> None:
+    """Four scores summing to 5 average `1.25`, which scales to exactly `12.5`."""
+    for index, score in enumerate([1, 1, 1, 2]):
+        await profile.reviewed(nps=score, days_ago=index + 1)
+
+    assert (await profile.block())["recommended_percent"] == 13
+
+
+# --------------------------------------------------------------------------
+# Who stays named on a public page
+# --------------------------------------------------------------------------
+
+
+async def test_a_deleted_reviewer_is_no_longer_named(profile: Profile) -> None:
+    """**A tokenless endpoint, so this is what "deleted" has to mean.**
+
+    `predicates.LIVE` exists because this rule was missed twice before, and
+    `test_predicates` walks only two stores — so nothing else here would catch a
+    third. A reviewer who deletes their account must stop being named, and their
+    words stay: the review is the mentor's record, the name is the reviewer's.
+    """
+    await profile.reviewed(author_name=("Fauziyah", "Fashola"), text_body="Still here.")
+    async with profile.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE users SET deleted_at = now() WHERE id = "
+                "(SELECT reviewed_by FROM reviews WHERE reviewed_for = :m)"
+            ),
+            {"m": profile.mentor},
+        )
+
+    body = await profile.listed()
+
+    assert body["data"] == [], "a deleted reviewer takes their attribution with them"
+
+
+async def test_an_empty_surname_yields_no_initial(profile: Profile) -> None:
+    """`left('', 1)` is `''`, not null, and a client concatenating renders
+    "Fauziyah ." — the migrated rows do not pass through the boundary that turns
+    an emptied string into null."""
+    await profile.reviewed(author_name=("Fauziyah", ""))
+
+    row = (await profile.listed())["data"][0]
+
+    assert row["author_last_initial"] is None
+
+
+# --------------------------------------------------------------------------
+# The predicate, and the index it is a second copy of
+# --------------------------------------------------------------------------
+
+
+async def test_a_mentee_directed_review_enters_no_mentor_figure(profile: Profile) -> None:
+    """`published()`'s role clause, exercised rather than assumed.
+
+    Every test above writes rows that take the column default, so removing
+    `reviewed_for_role == MENTOR` from `published()` left the whole suite green
+    while the model docstring called the clause load-bearing — *"a
+    mentee-directed one must not enter it at all"*.
+    """
+    await profile.reviewed(valuable=5)
+    review = await profile.reviewed(valuable=1, days_ago=4)
+    async with profile.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE reviews SET reviewed_for_role = 'mentee' WHERE id = :i"),
+            {"i": review},
+        )
+
+    block = await profile.block()
+
+    assert block["count"] == 1
+    assert block["session_value"] == pytest.approx(5.0)
+    assert [row["id"] for row in (await profile.listed())["data"]] != [review]
+
+
+async def test_the_predicate_and_its_index_still_agree(db_engine: AsyncEngine) -> None:
+    """**Non-negotiable #8's pin for the one copy that cannot be removed.**
+
+    `published()` and `ix_reviews_mentor_valuable`'s partial predicate are the
+    same rule in two places — a Python expression and a `WHERE` inside an index
+    definition, which no linter can bind to each other. Drift does not fail
+    anything: every query still answers, just by reading the table.
+    """
+    async with db_engine.connect() as conn:
+        definition = str(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT indexdef FROM pg_indexes "
+                        "WHERE indexname = 'ix_reviews_mentor_valuable'"
+                    )
+                )
+            ).scalar_one()
+        )
+    compiled = str(
+        published(text("'00000000-0000-0000-0000-000000000000'")).compile(
+            compile_kwargs={"literal_binds": True}
+        )
+    )
+
+    for clause in ("deleted_at IS NULL", "reviewed_for_role = 'mentor'"):
+        assert clause in definition, f"the index no longer says {clause}"
+    assert "deleted_at IS NULL" in compiled
+    assert "reviewed_for_role = 'mentor'" in compiled
+
+
+async def test_a_malformed_cursor_is_refused(profile: Profile) -> None:
+    """`422`, and it is in the OpenAPI document rather than a surprise.
+
+    Treating a bad cursor as "start again" answers a paging bug with page one
+    forever, which looks like working software and loses rows.
+    """
+    response = await profile.client.get(
+        f"/api/v1/mentors/{profile.mentor}/reviews?cursor=not-a-cursor"
+    )
+
+    assert response.status_code == 422

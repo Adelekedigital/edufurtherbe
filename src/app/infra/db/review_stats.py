@@ -20,7 +20,7 @@ differently: the card correlates against a column inside a paged query, the
 profile passes a resolved id.
 
 **A lateral rather than one scalar subquery per figure.** `_completed_sessions()`
-is a scalar subquery because it is *one* value; `_top_qualification()` is a
+is a scalar subquery because it is *one* value; `top_qualification()` is a
 lateral because it is three columns from the same rows. This is six from the
 same rows, so it is the second shape — and the difference is real work: six
 scalar subqueries would scan the same index six times per card.
@@ -62,7 +62,7 @@ from sqlalchemy import Integer, Numeric, Select, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import SessionRole
-from app.domain.reviews import MENTOR_RATINGS, ORDINAL_SCALE, RECOMMEND_SCALE, VALUABLE_SCALE
+from app.domain.reviews import MENTOR_RATINGS, ORDINAL_SCALE, RECOMMEND_SCALE
 from app.infra.db.models.reviews import Review
 
 __all__ = ["card_summary", "mentor_review_stats", "profile_summary", "published"]
@@ -73,7 +73,6 @@ __all__ = ["card_summary", "mentor_review_stats", "profile_summary", "published"
 #: promoter fraction, and a normalised `(v-1)/(max-1)` would render 96%.
 _ORDINAL_MAX = ORDINAL_SCALE[1]
 _RECOMMEND_MAX = RECOMMEND_SCALE[1]
-_VALUABLE_MAX = VALUABLE_SCALE[1]
 
 
 def published(mentor: Any) -> Any:
@@ -113,15 +112,37 @@ def _average(column: Any) -> Any:
 def _percent(column: Any, high: int) -> Any:
     """A whole-number percentage of the scale's top, or ``NULL`` over no rows.
 
-    `NULL` propagates through `avg()` on its own, so no `CASE` is needed to
-    produce it — an average over nothing is already unknown, and dividing it
-    keeps it unknown.
+    **The arithmetic is `numeric`, and a float anywhere in it is the bug this
+    function shipped with.** A Python `100.0` binds as `float8`; `float8 *
+    numeric` resolves to `float8`; and `round(float8)` is `rint()`, which rounds
+    ties **half to even** — the exact opposite of the half-away-from-zero rule
+    this module's docstring states and `test_the_percentage_is_the_average_scaled`
+    asserts.
+
+    It is reachable on ordinary data, not a corner: eight reviews averaging
+    `1.875` give `62.5`, which the float path published as `62` while the pin
+    computed `63`. The pin passed only because its fixture never landed on a tie.
+
+    `NULL` propagates through `avg()` on its own, so no `CASE` produces it — an
+    average over nothing is already unknown, and scaling it keeps it unknown.
     """
-    return cast(func.round(100.0 * func.avg(column) / high), Integer)
+    return cast(func.round(cast(func.avg(column), Numeric) * 100 / high), Integer)
 
 
-def card_summary(mentor: Any) -> Select[Any]:
+def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
     """The two figures a discovery card shows: how many, and how valuable.
+
+    **Two scalar subqueries rather than a lateral, and the plan position is why.**
+    A lateral joins in the `FROM`, so it is evaluated for every row that passes
+    the `WHERE` — before the sort. `_base()` feeds the *search* path too, whose
+    `ORDER BY ts_rank_cd` has to materialise every match before taking the top
+    N, so a broad `?q=` would run the aggregate once per matching mentor rather
+    than once per card. `_document()` records the shape that avoids it: the
+    completed-session count "runs *after* the page limit, `loops=21` in the
+    plan". These follow it.
+
+    The extra scan per row is the price: two index-only probes per card instead
+    of one. Twenty-one rows pay it; a thousand matches do not.
 
     **Deliberately narrower than the profile's, and the index is why.**
     `ix_reviews_mentor_valuable` covers `(reviewed_for, valuable_rating)` under
@@ -136,12 +157,11 @@ def card_summary(mentor: Any) -> Select[Any]:
     the rules actually live.
     """
     return (
-        select(
-            func.count().label("review_count"),
-            _average(Review.valuable_rating).label("session_value"),
-        )
+        select(func.count()).select_from(Review).where(published(mentor)).correlate_except(Review),
+        select(_average(Review.valuable_rating))
         .select_from(Review)
         .where(published(mentor))
+        .correlate_except(Review),
     )
 
 
@@ -150,7 +170,7 @@ def profile_summary(mentor: Any) -> Select[Any]:
 
     Six aggregates over the same rows, which is why this is a lateral rather than
     six correlated scalar subqueries: those would scan the same rows six times.
-    `_top_qualification()` is the precedent — a lateral when several columns come
+    `top_qualification()` is the precedent — a lateral when several columns come
     from one set, a scalar subquery when it is one value.
 
     Read once per profile, so the heap fetches the four ordinals and the
@@ -159,7 +179,6 @@ def profile_summary(mentor: Any) -> Select[Any]:
     columns: list[Any] = [
         func.count().label("review_count"),
         _average(Review.valuable_rating).label("session_value"),
-        _percent(Review.valuable_rating, _VALUABLE_MAX).label("session_value_percent"),
         _percent(Review.nps_recommend_score, _RECOMMEND_MAX).label("recommended_percent"),
     ]
     for rating in MENTOR_RATINGS:
