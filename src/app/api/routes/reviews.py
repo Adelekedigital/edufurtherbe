@@ -7,7 +7,7 @@ producer in the phase after this one without a request to hang them on.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
 from app.api.deps import EditedReviewDep, ReviewableSessionsDep, WrittenReviewDep
 from app.api.schemas.common import Page
@@ -132,7 +132,8 @@ async def list_reviewable_sessions(
     ),
     responses=WRITE_RESPONSES,
 )
-async def write(review: WrittenReviewDep) -> ReviewRead:
+async def write(review: WrittenReviewDep, response: Response) -> ReviewRead:
+    response.headers["Location"] = f"/api/v1/reviews/{review['id']}"
     return ReviewRead.from_row(review)
 
 

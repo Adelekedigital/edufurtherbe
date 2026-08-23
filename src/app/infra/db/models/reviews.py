@@ -205,12 +205,19 @@ class Review(Base, TimestampMixin):
             "valuable_rating",
             postgresql_where=text("deleted_at IS NULL AND reviewed_for_role = 'mentor'"),
         ),
-        # The 30-day window: *has this mentee reviewed this mentor recently*, which
-        # is answered by the newest row for the pair and nothing else.
+        # The interval window: *has this mentee reviewed this offering recently*.
+        # The offering is reached by joining `sessions`, so what this table is
+        # asked for is the author and the date — `reviewed_for` was in here for a
+        # mentor-scoped window that no longer exists.
+        #
+        # **Dropping it is about size, not about the plan.** Measured on 25,073
+        # reviews, both shapes give an Index Only Scan with zero heap fetches and
+        # both carry `created_at` in the `Index Cond`; the three-column form is
+        # simply 31% larger (1448 kB against 1000 kB) and maintains that width on
+        # every insert, for a column no predicate reads.
         Index(
-            "ix_reviews_author_subject_created",
+            "ix_reviews_author_created",
             "reviewed_by",
-            "reviewed_for",
             text("created_at DESC"),
         ),
     )

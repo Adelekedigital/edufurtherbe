@@ -77,7 +77,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Integer, and_, case, cast, func, select
+from sqlalchemy import Integer, Numeric, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -161,10 +161,20 @@ def attendance_rate(user: Any, side: Any) -> Any:
     return (
         # Cast in SQL, not in Python: `round()` returns numeric, so the value
         # arrives as "100.0" and `int()` refuses it. Fixing it at the boundary
-        # would leave the column's type a lie for every other reader.
+        # would leave the column's type a lie for every other reader — and the
+        # rounding mode has to be settled in SQL too, for the reason below.
         select(
             case(
-                (due > 0, cast(func.round(100.0 * came / due), Integer)),
+                # **`Numeric`, not a Python float, and the difference is which way
+                # a tie goes.** `100.0` binds as `float8`, `float8 / bigint`
+                # resolves to `float8`, and `round(float8)` is `rint()` — half to
+                # **even**. Three of eight sessions attended is `37.5`, published
+                # as `38` here and as `37` before this line changed.
+                #
+                # Found by the review of the reviews percentage, which had the
+                # identical shape and an explicit docstring promising the
+                # opposite. One rounding, in one place, both times.
+                (due > 0, cast(func.round(cast(came, Numeric) * 100 / due), Integer)),
                 else_=None,
             )
         )

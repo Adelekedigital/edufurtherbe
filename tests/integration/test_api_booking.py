@@ -152,6 +152,7 @@ async def test_a_slot_the_grid_offers_becomes_a_session(
 
     assert created.status_code == 201, created.text
     session = created.json()
+    assert created.headers["Location"] == f"/api/v1/sessions/{session['id']}"
     assert session["mentor_id"] == str(mentor)
     assert session["mentee_id"] == str(mentee)
     assert session["session_type_id"] == str(session_type)
