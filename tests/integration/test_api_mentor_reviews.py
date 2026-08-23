@@ -589,3 +589,50 @@ async def test_a_malformed_cursor_is_refused(profile: Profile) -> None:
     )
 
     assert response.status_code == 422
+
+
+async def test_a_migrated_review_sorts_by_when_it_was_written(profile: Profile) -> None:
+    """**The inversion PR 5 would otherwise ship, pinned before it can.**
+
+    The loader mints `uuid_generate_v7()` at load time and backfills `created_at`
+    from Bubble, so a legacy review gets a *new* id and an *old* date. Ordered on
+    the id — tempting, because a UUIDv7 is time-ordered — it would sit at the top
+    of "newest first" with a three-year-old date beside it.
+
+    This test writes exactly that shape: the migrated row is inserted last, so it
+    holds the highest id, and carries the oldest `created_at`.
+    """
+    await profile.reviewed(text_body="Written last week.")
+    migrated = await profile.reviewed(text_body="Migrated from Bubble.", days_ago=9)
+    async with profile.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE reviews SET created_at = now() - interval '3 years' WHERE id = :i"),
+            {"i": migrated},
+        )
+
+    rows = (await profile.listed())["data"]
+
+    assert [row["public_review"] for row in rows] == [
+        "Written last week.",
+        "Migrated from Bubble.",
+    ], "the list is ordered by when the review was written, not by when the row was inserted"
+
+
+async def test_paging_follows_the_same_order(profile: Profile) -> None:
+    """The cursor is the two-part form, so it has to page on the same key it sorts on.
+
+    A one-part id cursor against a `created_at` sort skips or repeats rows the
+    moment the two disagree — which is precisely what the migrated rows do.
+    """
+    for index in range(3):
+        await profile.reviewed(text_body=f"Number {index}.", days_ago=index + 1)
+
+    first = await profile.listed("?limit=2")
+    second = await profile.listed(f"?limit=2&cursor={first['next_cursor']}")
+
+    seen = [row["public_review"] for row in first["data"] + second["data"]]
+
+    # Newest *written* first, so insertion order reversed — `days_ago` moves the
+    # session, not the review, which is the distinction this whole ordering is about.
+    assert seen == ["Number 2.", "Number 1.", "Number 0."]
+    assert second["next_cursor"] is None

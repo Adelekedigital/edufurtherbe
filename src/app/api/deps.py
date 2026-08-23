@@ -39,6 +39,7 @@ from app.api.schemas.common import (
     decode_cursor,
     decode_id_cursor,
     decode_offset_cursor,
+    encode_cursor,
     encode_id_cursor,
     next_offset_cursor,
 )
@@ -1993,18 +1994,20 @@ async def mentor_reviews_page(
     mentor = await get_public_mentor_id(session, handle)
     if mentor is None:
         raise NotFoundError("no such mentor")
-    # `decode_id_cursor`, not `decode_cursor`: this list orders by the id, so the
-    # token is the one-part form `encode_id_cursor` issues. Pairing it with the
-    # two-part decoder rejects every cursor the endpoint hands out — a paging bug
-    # that only shows on page two.
+    # The **two-part** codec, because the list sorts on `created_at` rather than
+    # on the id. Mispairing the two forms is a paging bug that only shows on page
+    # two, which this endpoint has already had once.
     rows, has_more = await list_mentor_reviews(
-        session, mentor, limit=clamp_limit(limit), after=decode_id_cursor(cursor)
+        session, mentor, limit=clamp_limit(limit), after=decode_cursor(cursor)
     )
     # **Minted here, beside the decode.** `mentor_page` states the rule: the token
     # is issued where the sort key is known, because deriving it again in the
     # route is one rule in two places — and the two halves drifting apart is
     # exactly the defect that made every cursor this endpoint issued invalid.
-    return rows, encode_id_cursor(rows[-1]["id"]) if has_more and rows else None
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_cursor(last["created_at"].isoformat(), last["id"])
 
 
 MentorReviewsDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(mentor_reviews_page)]
