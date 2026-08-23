@@ -1,7 +1,7 @@
 # Handoff — the review build (M5a)
 
-**Status:** PR 1 is built — the table, its constraints and its indexes. Five PRs
-and one ADR remain.
+**Status:** PRs 1 and 2 are built — the table, and the write surface with the
+rules that guard it. Four PRs and one ADR remain.
 **Written:** 2026-08-20, from `FE-ui-guide/reviewUI/` measured against the codebase,
 `docs/edufurther-migration/` and the dev Bubble app.
 **Companion:** `handoff-session-build.md`, whose sequence this follows.
@@ -107,8 +107,21 @@ disagree, the measurement wins — the package is a brain dump (ADR 0007), and d
    problem. Cap or recency-weight in the aggregate; do not destroy rows.
 
 7. **The 30-day window suppresses the request *and* refuses the write.** If this
-   mentee reviewed this mentor less than 30 days ago, no request is sent and a
-   `POST` is refused. Past the window, a new booking earns a fresh request.
+   mentee reviewed this **offering** less than 30 days ago, no request is sent
+   and a `POST` is refused. Past the window, a new booking earns a fresh request.
+
+   **Scoped to the offering, not the mentor — narrowed 2026-08-22, and the
+   original scope was a real defect rather than a preference.** Per mentor, this
+   rule collides with decision 6: two sessions inside a month yield *one*
+   review, and the second is never even asked for, because the request producer
+   suppresses on this same predicate. A mentor strong at CV review and weak at
+   interview prep is two facts, and a mentor-wide window keeps whichever was
+   booked first and silently discards the other.
+
+   The protection that mattered survives: *one review per session* still caps a
+   single mentee at one review per hour they actually attended, and sessions
+   cost credits. What is given up is the case of one mentee reviewing the same
+   offering repeatedly — which is what the window was always really about.
 
    *One rule, not two.* Suppressing only the request would leave the profile
    picker free to accept what the producer declined, which is two
@@ -116,10 +129,18 @@ disagree, the measurement wins — the package is a brain dump (ADR 0007), and d
    the legacy behaviour was protecting: the mentee reviews a given mentor at most
    once per 30 days, by any path.
 
-8. **One eligibility predicate, written once and reused** by the request
-   producer and the profile picker: *completed · with this mentor · not already
-   reviewed · no review of this mentor inside 30 days*. Two rules for the same
-   question would eventually disagree (#8).
+8. **One eligibility predicate, written once and reused** by the write, the
+   picker and the request producer: *completed · the caller's own · this session
+   not already reviewed · this offering not reviewed inside 30 days*. Two rules
+   for the same question would eventually disagree (#8), and the disagreement
+   would be a mentee invited to review a session the write then refuses —
+   `test_the_picker_and_the_write_agree` is what pins them together.
+
+   **A session with no offering escapes the interval clause**, which is correct
+   rather than a hole: `sessions.session_type_id` is nullable for migrated rows,
+   so there is nothing to compare, and the one-per-session rule still caps them
+   at one apiece. Refusing them instead would make every migrated session
+   permanently unreviewable.
 
 9. **`session_id` reaches the write by one of two paths**, and both supply it:
 
@@ -253,12 +274,49 @@ argued again in each PR that acts on them.
     `AND deleted_at IS NULL` to the eligibility query drops it from an Index
     Only Scan with zero heap fetches to an Index Scan with a heap filter.
 
-    **A debt PR 3 has to pay.** `reviews` is in `EXEMPT_UNTIL_READ` in
-    `test_profile_store_soft_deletes.py`, because the table ships one PR before
-    anything reads it. `test_the_unread_exemption_expires_when_a_reader_appears`
-    fails the moment `review_stats` names the table, and the fix is a real case
-    in `CASES` asserting the aggregates skip withdrawn rows — not a wider
-    exemption.
+    ~~**A debt PR 3 has to pay.**~~ **Paid in PR 2, and this row named the wrong
+    pull request.** The expiry test globs `src/app/infra/db/*.py`, so the moment
+    *any* store module names `reviews` the exemption lapses — and PR 2's
+    `review_reader` did it one pull request earlier than "the aggregates land"
+    predicted. It fired on the full gate exactly as designed and named its own
+    fix.
+
+    The case it took is `PATCH`'s read-back rather than an aggregate, which is
+    the more useful one: it is the only path where withdrawal changes an answer,
+    because a review taken down by moderation is not editable back into
+    existence.
+
+19. **The two `409`s on `POST /reviews` carry a machine-readable `type`, and
+    settled decision #110 is where that was already decided.** That row shipped a
+    `409` without one because there was a single refusal to distinguish, and
+    recorded the condition for revisiting: *"A second refusal exists. Then the
+    409 needs a machine-readable reason and the `type` slot in the RFC 9457
+    envelope is where it goes — additive, so nothing shipped here blocks it."*
+
+    This surface is that condition, twice over:
+
+    | `type` | Means | What a client does |
+    |---|---|---|
+    | `/problems/review-already-exists` | this session already carries your review | never retry |
+    | `/problems/review-interval-not-elapsed` | you reviewed this offering recently | retry after the window |
+
+    Without them the two are one status code and two English sentences, and a
+    client either retries forever or abandons a review it could have written next
+    month. **Relative URIs**, because an absolute one names either a host that
+    differs per environment or a documentation site that has to exist.
+
+    `GET /me/reviewable-sessions` is the other half: ask it first and a `409`
+    becomes an exceptional race rather than the routine way to discover a rule.
+    It returns `Page`, like every list in this API — a bare array has nowhere to
+    put pagination the day one is needed, and adding it later breaks every
+    client already parsing the array.
+
+    **And the `409` is a real race, not only a rule.** Two taps both pass the
+    pre-check before either commits; the second insert blocks on
+    `uq_reviews_one_per_session_author` and fails when the first lands. The
+    writer catches it by constraint name and raises the same error the check
+    would have, so the two paths are indistinguishable to a client. That is
+    settled decision #169, and `book_session` is where the shape came from.
 
 ---
 
@@ -293,7 +351,7 @@ are domain constants rather than configuration (decision 13).
 | # | PR | Migration | Tier |
 |---|---|---|---|
 | 1 | `reviews` — the table, corrected scales, eligibility and card indexes, **ADR 0026** ✅ | yes | 1 |
-| 2 | `POST` and `PATCH /reviews` — session-scoped, 30-day rule in the query | no | 2 |
+| 2 | `POST` and `PATCH /reviews`, and `/me/reviewable-sessions` — the interval in the query ✅ | no | 2 |
 | 3 | Mentor reviews read — aggregates and the dated list | no | 2 |
 | 4 | `REVIEW_REQUESTED` + `REVIEW_REMINDER` producers | no | 2 |
 | 5 | The reviews loader — built on the dev row, rehearsed on the 53 | no | 1 |

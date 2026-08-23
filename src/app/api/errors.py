@@ -23,11 +23,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.errors import (
+    AlreadyReviewedError,
     AppError,
     AuthenticationError,
     ConfigurationError,
     ConflictError,
     NotFoundError,
+    ReviewIntervalError,
     UpstreamError,
 )
 from app.core.errors import ValidationError as DomainValidationError
@@ -51,6 +53,32 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     UpstreamError: status.HTTP_502_BAD_GATEWAY,
 }
 
+# The `type` slot, used for the first time here.
+#
+# **Settled decision #110 left this open and named the condition.** It shipped a
+# `409` with no machine-readable reason because there was exactly one refusal to
+# distinguish, and recorded: *"A second refusal exists. Then the 409 needs a
+# machine-readable reason and the `type` slot in the RFC 9457 envelope is where
+# it goes — additive, so nothing shipped here blocks it."* `POST /reviews` is
+# that second refusal, twice over: one terminal, one that resolves with time,
+# and a client that cannot tell them apart either retries forever or gives up
+# on a review it could have written next month.
+#
+# **Relative URIs, resolved against the API root.** RFC 9457 permits them and
+# they stay correct across environments, where an absolute URL would either
+# name a host that differs per deployment or a documentation site that has to
+# exist. The strings are a published contract: a client branches on them, so
+# they are stable in the way a status code is.
+#
+# **Mapped here rather than raised with the error**, because this module is
+# where transport concerns live — `core/errors.py` names conditions and knows
+# nothing about problem documents, the same split that keeps `domain/` testable
+# without a request.
+TYPE_BY_ERROR: dict[type[AppError], str] = {
+    AlreadyReviewedError: "/problems/review-already-exists",
+    ReviewIntervalError: "/problems/review-interval-not-elapsed",
+}
+
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx
 # would tell the caller to fix their request when nothing about it is wrong.
 OPERATOR_ERROR = status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -64,6 +92,20 @@ def problem(
     if detail:
         body["detail"] = detail
     return JSONResponse(status_code=status_code, content=body, media_type=CONTENT_TYPE)
+
+
+def _problem_type(exc: Exception) -> str:
+    """The problem type for a refusal, or the default when it has none.
+
+    Most errors have none and should not: a type is a promise that a client may
+    branch on the value, and inventing one per error would publish a vocabulary
+    nobody maintains. Only a refusal a caller must respond to *differently* earns
+    one.
+    """
+    for error_type, uri in TYPE_BY_ERROR.items():
+        if isinstance(exc, error_type):
+            return uri
+    return "about:blank"
 
 
 async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001
@@ -88,7 +130,16 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
             # the class name would say as much as a message would.
             if code == status.HTTP_401_UNAUTHORIZED:
                 return problem(status_code=code, title="Unauthorized")
-            return problem(status_code=code, title=error_type.__name__, detail=str(exc) or None)
+            # **The exception's own name, not the key it matched.** They are the
+            # same for every error with no subclass, and different for exactly the
+            # two the `type` slot exists to tell apart — which would otherwise
+            # both render `ConflictError` in the one field a human reads.
+            return problem(
+                status_code=code,
+                title=type(exc).__name__,
+                detail=str(exc) or None,
+                type_=_problem_type(exc),
+            )
 
     # An `AppError` subclass nobody mapped. 500 rather than a guessed 4xx: an
     # unmapped error is a gap in this table, and reporting it as the caller's

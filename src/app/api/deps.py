@@ -53,6 +53,7 @@ from app.api.schemas.profile import (
     UserLanguagesWrite,
     UserProfileWrite,
 )
+from app.api.schemas.reviews import ReviewEdit, ReviewWrite
 from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionTypeWrite
 from app.api.schemas.sessions import (
     SessionBookingWrite,
@@ -153,6 +154,9 @@ from app.infra.db.profile_writer import (
     upsert_goal,
     upsert_profile,
 )
+from app.infra.db.review_eligibility import reviewable_sessions
+from app.infra.db.review_reader import get_review_row
+from app.infra.db.review_writer import edit_review, write_review
 from app.infra.db.session_stats import mentor_stats
 
 # `get_session` is aliased: this module already has one, and it is the **database
@@ -1903,3 +1907,68 @@ DeletedOwnQuestionDep = Annotated[bool, Depends(deleted_own_question)]
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
 SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events)]
+
+
+# --------------------------------------------------------------------------
+# Reviews
+#
+# `now` is taken once per request and threaded through, rather than each layer
+# calling the clock. Two reads of `datetime.now()` inside one write can land
+# either side of a window's edge, and the test that pins the boundary needs a
+# clock it can set.
+# --------------------------------------------------------------------------
+
+
+async def written_review(
+    payload: ReviewWrite, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
+    """Write the review and read it back, in one transaction.
+
+    Read back through a `SELECT` rather than assembled from the insert's own
+    values, following `booked_session`: the response is the shape every other
+    review read returns, built by the same code, so the two cannot drift.
+    """
+    review_id = await write_review(
+        session, user["id"], payload.to_columns(), now=dt.datetime.now(dt.UTC)
+    )
+    row = await get_review_row(session, review_id, user["id"])
+    if row is None:  # pragma: no cover - written in this transaction
+        raise NotFoundError("no such review of yours")
+    await session.commit()
+    return row
+
+
+async def edited_review(
+    review_id: UUID, payload: ReviewEdit, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
+    """Apply the edit and return the review as it now stands."""
+    now = dt.datetime.now(dt.UTC)
+    await edit_review(session, user["id"], review_id, payload.to_columns(), now=now)
+    row = await get_review_row(session, review_id, user["id"])
+    if row is None:  # pragma: no cover - `edit_review` already refused if absent
+        raise NotFoundError("no such review of yours")
+    await session.commit()
+    return row
+
+
+async def own_reviewable_sessions(
+    user: CurrentUserDep,
+    session: SessionDep,
+    mentor_id: Annotated[
+        UUID | None,
+        Query(description="Narrow to one mentor's sessions, which is what a profile tab wants."),
+    ] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+) -> list[dict[str, Any]]:
+    """What the caller may review right now, newest first."""
+    result = await session.execute(
+        reviewable_sessions(
+            user["id"], dt.datetime.now(dt.UTC), mentor_id, limit=clamp_limit(limit)
+        )
+    )
+    return [dict(row) for row in result.mappings()]
+
+
+WrittenReviewDep = Annotated[dict[str, Any], Depends(written_review)]
+EditedReviewDep = Annotated[dict[str, Any], Depends(edited_review)]
+ReviewableSessionsDep = Annotated[list[dict[str, Any]], Depends(own_reviewable_sessions)]

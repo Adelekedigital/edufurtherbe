@@ -23,7 +23,12 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from tests.integration.factories import add_availability, add_session_type, make_public_mentor
+from tests.integration.factories import (
+    add_availability,
+    add_session_type,
+    make_public_mentor,
+    until_blocked,
+)
 
 from conftest import api_token, bearer
 
@@ -597,38 +602,12 @@ async def test_the_exclusion_constraint_refuses_a_genuine_race(
         # therefore invisible, so it passes the same pre-check the winner did —
         # then blocks on the exclusion constraint until the winner commits.
         racing = asyncio.create_task(book_session(second, loser, payload, now=now))
-        await _until_blocked(db_engine)
+        await until_blocked(db_engine)
         await first.commit()
         with pytest.raises(ConflictError):
             await racing
 
     assert await count_sessions(db_engine, mentor) == 1
-
-
-async def _until_blocked(engine: AsyncEngine) -> None:
-    """Wait for the loser to actually be waiting on a lock.
-
-    **Rather than sleeping for a plausible interval**, which would make this
-    test pass or fail on how busy the machine is. Polling an observable state
-    is what makes the interleaving deterministic; a fixed wait would leave the
-    loser still reading the grid on a slow run, and it would then see the
-    committed session and be refused with a `422` — the test would go green for
-    the wrong reason, which is worse than flaking.
-    """
-    for _ in range(300):
-        await asyncio.sleep(0.01)
-        async with engine.connect() as conn:
-            waiting = (
-                await conn.execute(
-                    text(
-                        "SELECT count(*) FROM pg_stat_activity "
-                        "WHERE datname = current_database() AND wait_event_type = 'Lock'"
-                    )
-                )
-            ).scalar_one()
-        if waiting:
-            return
-    raise AssertionError("the second booking never blocked, so nothing raced")
 
 
 async def test_a_refused_booking_leaves_no_reservation_behind(

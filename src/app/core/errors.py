@@ -21,6 +21,24 @@ class ConflictError(AppError):
     """The request cannot be applied to the current state of the resource."""
 
 
+class AlreadyReviewedError(ConflictError):
+    """This session already carries a review by this author.
+
+    Terminal: no amount of waiting makes it succeed. Separate from
+    :class:`ReviewIntervalError` because a client's response to the two differs,
+    which is precisely the condition settled decision #110 named as the trigger
+    for a machine-readable problem type.
+    """
+
+
+class ReviewIntervalError(ConflictError):
+    """This author reviewed the same offering inside ``REVIEW_INTERVAL``.
+
+    Retryable, once the window passes — the opposite of the error above, and
+    indistinguishable from it without a type.
+    """
+
+
 class ValidationError(AppError):
     """Input violated a domain rule, as opposed to failing a schema check."""
 

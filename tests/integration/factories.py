@@ -19,6 +19,7 @@ those care.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from uuid import UUID, uuid4
 
@@ -372,3 +373,33 @@ async def add_block(engine: AsyncEngine, mentor: UUID, day: object) -> None:
             ),
             {"u": mentor, "d": day, "e": day + _dt.timedelta(days=1), "z": LAGOS},
         )
+
+
+async def until_blocked(engine: AsyncEngine) -> None:
+    """Wait for a second writer to actually be waiting on a lock.
+
+    **Rather than sleeping for a plausible interval**, which would make this
+    test pass or fail on how busy the machine is. Polling an observable state
+    is what makes the interleaving deterministic; a fixed wait would leave the
+    second writer still doing its pre-check on a slow run, where it would see
+    the committed row and be refused by the *check* instead of the constraint —
+    the test would go green for the wrong reason, which is worse than flaking.
+
+    Extracted here when reviews needed the same interleaving. It was private to
+    the booking test until a second caller existed, which is the shape
+    non-negotiable #8 asks for rather than a copy.
+    """
+    for _ in range(300):
+        await asyncio.sleep(0.01)
+        async with engine.connect() as conn:
+            waiting = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                    )
+                )
+            ).scalar_one()
+        if waiting:
+            return
+    raise AssertionError("the second writer never blocked, so nothing raced")

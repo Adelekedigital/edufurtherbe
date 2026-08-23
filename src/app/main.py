@@ -18,6 +18,7 @@ from app.api.routes import (
     me_intake,
     me_session_types,
     mentors,
+    reviews,
     session_types,
     sessions,
     slots,
@@ -37,6 +38,18 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "fails when the database is slow causes a restart of a process that "
             "was fine. Readiness is a separate concern, added when there is a "
             "dependency worth reporting on."
+        ),
+    },
+    {
+        "name": "reviews",
+        "description": (
+            "What a mentee says about a session, and what may be said next.\n\n"
+            "**One review per session, appended and never overwritten.** A "
+            "mentor's profile is a dated list, which shows a trajectory under "
+            "append and silently rewrites history under edit, so a ten-minute "
+            "correction window exists and an amendment does not.\n\n"
+            "The four mentor questions are a three-point scale published as "
+            "words, not numbers: `not_great`, `great`, `excellent`."
         ),
     },
     {
@@ -251,6 +264,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_intake.router)
     application.include_router(callbacks.router)
     application.include_router(sessions.router)
+    application.include_router(reviews.router)
     application.include_router(admin.router)
     return application
 
