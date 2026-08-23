@@ -34,6 +34,23 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A mentor's reviews add up to something.** `GET /mentors/{handle}/reviews`
+  lists them, newest first, paged on the id — ADR 0016's base case, since a
+  UUIDv7 is time-ordered. The public profile gains a `reviews` block: a count, a
+  session value out of five, a recommendation percentage and the four mentor
+  questions as averages **and** percentages.
+
+  **Both figures are published**, derived server-side and pinned to each other
+  by a test, so no client owns the mapping. Rounded in SQL — PostgreSQL rounds
+  halves away from zero and Python rounds them to even, and one rounding in one
+  place is the only way the pair agrees.
+
+  The discovery card carries `review_count` and `session_value`, restoring the
+  legacy `countReviewReceived` and adding the rating legacy never had.
+
+  **Attribution is a first name and an initial.** The surname is computed away
+  in SQL, so it never reaches the application at all.
+
 - **A mentee can review a completed session.** `POST /api/v1/reviews` writes one,
   `PATCH /api/v1/reviews/{id}` corrects it inside a ten-minute compose window, and
   `GET /api/v1/me/reviewable-sessions` says what may be reviewed right now.

@@ -30,6 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 
 
@@ -90,6 +91,14 @@ class MentorSummaryRead(BaseModel):
     #: and "none yet" indistinguishable on the card.
     completed_sessions: int = 0
 
+    #: How many published reviews this mentor has. **Never null**, for the
+    #: same reason as the count above.
+    review_count: int = 0
+    #: Mean `valuable_rating`, `1..5`, rendered `X/5`. **Null** when nobody
+    #: has reviewed them — a ratio over no rows is unknown, where zero would
+    #: read as *rated badly*.
+    session_value: float | None = None
+
     offerings: list[ServiceOfferingRead] = Field(default_factory=list)
 
     @classmethod
@@ -107,6 +116,10 @@ class MentorSummaryRead(BaseModel):
             study_course=_text(row["study_course"]),
             institution=_text(row["institution"]),
             completed_sessions=int(str(row["completed_sessions"] or 0)),
+            review_count=int(str(row["review_count"] or 0)),
+            session_value=(
+                None if row["session_value"] is None else float(str(row["session_value"]))
+            ),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
         )
 
@@ -269,6 +282,12 @@ class MentorPublicRead(BaseModel):
     #: say "never shows up" where null says "no data yet".
     attendance_rate: int | None = None
 
+    #: What this mentor's reviews add up to. Derived every request, like
+    #: the figures above — D56 bans a stored average as firmly as a stored
+    #: count, and for a sharper reason: an average is a property of the
+    #: *set*, so any sibling added or withdrawn invalidates a cached one.
+    reviews: ReviewSummaryRead = Field(default_factory=ReviewSummaryRead)
+
     languages: list[LanguageRead] = Field(
         default_factory=list,
         description=(
@@ -287,6 +306,7 @@ class MentorPublicRead(BaseModel):
         scholarships: list[dict[str, object]],
         languages: list[dict[str, object]],
         stats: dict[str, object],
+        reviews: dict[str, Any],
     ) -> MentorPublicRead:
         return cls(
             id=str(row["user_id"]),
@@ -315,6 +335,7 @@ class MentorPublicRead(BaseModel):
             attendance_rate=(
                 int(str(stats["attendance_rate"])) if stats["attendance_rate"] is not None else None
             ),
+            reviews=ReviewSummaryRead.from_row(reviews),
         )
 
 

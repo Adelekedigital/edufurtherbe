@@ -42,6 +42,8 @@ from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.offerings import offerings_for
 from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
+from app.infra.db.qualifications import top_qualification
+from app.infra.db.review_stats import card_summary
 from app.infra.db.session_stats import delivered
 
 __all__ = ["search_mentors"]
@@ -204,53 +206,6 @@ def _matches(term: str) -> Any:
     )
 
 
-def _top_qualification() -> Any:
-    """The one education entry a card shows, as a lateral.
-
-    **Highest level first, then the later end date, then the id.** Not
-    `is_most_recent`, which the schema offers and the data does not: the column
-    is blank on all 21 rows of the dev export, so `BOOLEANS[""]` makes it `False`
-    everywhere and a card keyed on it renders nothing for anybody. Legacy owned
-    that flag, had write paths for it, and still never set it — which is what a
-    stored value derived from *other rows* does. It is a property of the set, not
-    of the row, so anything that adds, edits or deletes a sibling invalidates it
-    (D56: derived at query time, never stored).
-
-    **Level outranks recency** because the card is a credibility signal. A mentor
-    who takes a second bachelor's after a doctorate is still a doctor, and
-    ordering by date alone would quietly demote them.
-
-    A lateral rather than a join with a `DISTINCT ON`: this returns exactly one
-    row by construction, so it cannot multiply the page however many entries a
-    user has, and the limit is visible at the point it applies.
-    """
-    return (
-        select(
-            func.coalesce(EducationEntry.degree_abbreviation, _DEGREE_LEVEL.c.short_name).label(
-                "degree"
-            ),
-            EducationEntry.study_course.label("study_course"),
-            # ADR 0008 point 5: the registry is allowed to be incomplete, so what
-            # the user typed is always kept and the link is opportunistic.
-            func.coalesce(Institution.name, EducationEntry.school_name_raw).label("institution"),
-        )
-        .select_from(EducationEntry)
-        .outerjoin(Institution, Institution.id == EducationEntry.institution_id)
-        .outerjoin(_DEGREE_LEVEL, _DEGREE_LEVEL.c.id == EducationEntry.degree_level_id)
-        .where(
-            EducationEntry.user_id == MentorProfile.user_id,
-            EducationEntry.deleted_at.is_(None),
-        )
-        .order_by(
-            _DEGREE_LEVEL.c.sort_order.desc().nullslast(),
-            EducationEntry.date_end.desc().nullslast(),
-            EducationEntry.id.desc(),
-        )
-        .limit(1)
-        .lateral("top_qualification")
-    )
-
-
 def _completed_sessions() -> Any:
     """How many sessions this mentor has delivered.
 
@@ -288,7 +243,12 @@ def _base() -> Select[Any]:
     a clause added to one would silently not apply to the other — and the one
     with a text box in front of it is the worse half to forget.
     """
-    qualification = _top_qualification()
+    qualification = top_qualification(MentorProfile.user_id)
+    # Two columns from one set of rows, so a lateral rather than two scalar
+    # subqueries — the same call `_top_qualification` makes, for the same
+    # reason. Narrow on purpose: `ix_reviews_mentor_valuable` covers exactly
+    # these two under `published()`, so the card stays an index-only scan.
+    reviews = card_summary(MentorProfile.user_id).lateral("review_summary")
     return (
         select(
             User.id.label("user_id"),
@@ -304,6 +264,8 @@ def _base() -> Select[Any]:
             qualification.c.study_course,
             qualification.c.institution,
             _completed_sessions().label("completed_sessions"),
+            reviews.c.review_count,
+            reviews.c.session_value,
         )
         .select_from(MentorProfile)
         .join(User, User.id == MentorProfile.user_id)
@@ -321,6 +283,9 @@ def _base() -> Select[Any]:
         # *displays*, and a mentor without one is a worse card, not a hidden
         # mentor. Bookability is what decides who appears, and it is above.
         .outerjoin(qualification, true())
+        # Outer for the same reason as the qualification: a mentor nobody has
+        # reviewed is a card with no rating, not a hidden mentor.
+        .outerjoin(reviews, true())
         .where(*mentor_is_public(), *mentor_is_bookable())
     )
 

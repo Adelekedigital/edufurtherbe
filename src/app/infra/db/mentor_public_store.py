@@ -29,7 +29,7 @@ from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.public_visibility import mentor_is_public
 
-__all__ = ["get_public_mentor"]
+__all__ = ["get_public_mentor", "get_public_mentor_id"]
 
 _STUDY_COUNTRY = Country.__table__.alias("study_country")
 _ORIGIN_COUNTRY = Country.__table__.alias("origin_country")
@@ -108,3 +108,27 @@ async def get_public_mentor(session: AsyncSession, handle: str) -> dict[str, Any
     """
     row = (await session.execute(_public_profile(handle))).mappings().first()
     return dict(row) if row else None
+
+
+async def get_public_mentor_id(session: AsyncSession, handle: str) -> UUID | None:
+    """The user id behind a public handle, or ``None``.
+
+    For readers that need to *scope* to a mentor rather than render one — the
+    reviews list is the first. Loading the whole profile to learn one id would
+    read six joins to throw five of them away.
+
+    **The same `_by_handle` and the same `mentor_is_public()`**, so a mentor who
+    is paused or unapproved is absent here exactly as they are absent from their
+    profile. A second visibility clause is the shape this module's own docstring
+    warns about — *"the second lookup path is where a visibility clause goes
+    missing"* — which is why this composes the existing pair rather than
+    restating it.
+    """
+    return (
+        await session.execute(
+            select(User.id)
+            .select_from(MentorProfile)
+            .join(User, User.id == MentorProfile.user_id)
+            .where(_by_handle(handle), *mentor_is_public())
+        )
+    ).scalar_one_or_none()
