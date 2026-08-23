@@ -19,12 +19,14 @@ fetched and then refused, which is what lets the route answer `404` without a
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, select, true
+from sqlalchemy import and_, func, literal, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ValidationError
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
@@ -71,27 +73,46 @@ async def get_review_row(
     return dict(found) if found is not None else None
 
 
+def _after(cursor: tuple[str, UUID]) -> Any:
+    """The keyset position, as a comparison on ``(created_at, id)``.
+
+    The same shape `session_store._after` uses, and for the same reason: the sort
+    key is a timestamp rendered as text, so it is parsed back, and a token that
+    survives base64 but holds something that is not a timestamp is a **client**
+    error. Raising here rather than letting `fromisoformat` escape turns a 500
+    into the 422 the envelope documents.
+    """
+    raw, after_id = cursor
+    try:
+        after = dt.datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+    # Descending, so the page moves *backwards* through time.
+    return tuple_(Review.created_at, Review.id) < tuple_(literal(after), literal(after_id))
+
+
 async def list_mentor_reviews(
     session: AsyncSession,
     mentor: UUID,
     *,
     limit: int,
-    after: UUID | None = None,
+    after: tuple[str, UUID] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of a mentor's published reviews, newest first.
 
-    **The id is the cursor**, which is ADR 0016's base case rather than a
-    shortcut: `reviews.id` is a UUIDv7, so id order *is* creation order, and a
-    separate sort key would be the same fact twice.
+    **Ordered on `created_at`, with the id breaking ties** — ADR 0016's amended
+    form, *"the cursor is the sort column plus the id"*.
 
-    **That premise holds only for rows this product wrote, and the loader will
-    break it.** The 53 migrated reviews take `uuid_generate_v7()` at *load* time
-    and carry `created_at` backfilled from Bubble, so a 2023 review will sort
-    above one written last week with a three-year-old date rendered beside it.
-    The fix belongs with the loader, which is the only thing that knows the real
-    instant: either mint the id from `created_at` or order this list on
-    `created_at` and make the cursor the two-part form. Stated here rather than
-    discovered there.
+    **Not the id alone, though a UUIDv7 would make that tempting.** Id order is
+    creation order only for rows this product wrote. The 53 migrated reviews take
+    `uuid_generate_v7()` at *load* time while carrying `created_at` backfilled
+    from Bubble, so an id-ordered list would put a 2023 review at the top of
+    "newest first" with a three-year-old date rendered beside it. Sorting on the
+    column the client actually displays cannot be inverted by when a row happened
+    to be inserted.
+
+    Fixed before the loader rather than after, because reordering a list somebody
+    has already paged through is the expensive half.
 
     **The surname never leaves the database.** `left(last_name, 1)` is computed
     in SQL, so the column is not selected at all — a review is public and
@@ -131,8 +152,8 @@ async def list_mentor_reviews(
         # would have caught a third.
         .join(User, and_(User.id == Review.reviewed_by, LIVE))
         .outerjoin(author, true())
-        .where(published(mentor), *([Review.id < after] if after is not None else []))
-        .order_by(Review.id.desc())
+        .where(published(mentor), *([_after(after)] if after is not None else []))
+        .order_by(Review.created_at.desc(), Review.id.desc())
         .limit(limit + 1)
     )
     rows = [dict(row) for row in (await session.execute(statement)).mappings()]
