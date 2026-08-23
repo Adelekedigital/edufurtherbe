@@ -82,6 +82,11 @@ class MentorRating(StrEnum):
     EXCELLENT = "excellent"
 
 
+#: The scale as a sequence, built once. `to_ordinal` and `from_ordinal` run four
+#: times per review on every read and every write, and rebuilding the member
+#: list each time is work with no reader.
+_POINTS: tuple[MentorRating, ...] = tuple(MentorRating)
+
 #: The four questions that use the scale above, in the order the form asks them.
 #: Named here rather than in the model because the *boundary* iterates it too,
 #: and the model's copy is a list of column names for rendering CHECKs.
@@ -95,7 +100,7 @@ MENTOR_RATINGS = (
 
 def to_ordinal(rating: MentorRating) -> int:
     """The number the column stores, derived from position rather than declared."""
-    return list(MentorRating).index(rating) + 1
+    return _POINTS.index(rating) + 1
 
 
 def from_ordinal(value: int) -> MentorRating:
@@ -105,11 +110,10 @@ def from_ordinal(value: int) -> MentorRating:
     default. A row holding `4` is a database that disagrees with this module,
     and answering `"excellent"` to it would publish a guess as a fact.
     """
-    members = list(MentorRating)
-    if not 1 <= value <= len(members):
-        message = f"{value} is not a point on the {len(members)}-point mentor scale"
+    if not 1 <= value <= len(_POINTS):
+        message = f"{value} is not a point on the {len(_POINTS)}-point mentor scale"
         raise ValueError(message)
-    return members[value - 1]
+    return _POINTS[value - 1]
 
 
 def edit_window_open(created_at: dt.datetime, now: dt.datetime) -> bool:

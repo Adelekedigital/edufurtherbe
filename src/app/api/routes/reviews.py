@@ -15,9 +15,11 @@ from app.api.schemas.reviews import ReviewableSessionRead, ReviewRead
 
 router = APIRouter(prefix="/api/v1", tags=["reviews"])
 
-#: Named once rather than repeated per route: `POST` and `PATCH` refuse for the
-#: same reasons and a client handles them the same way.
-REVIEW_RESPONSES: dict[int | str, dict[str, str]] = {
+#: `POST`'s refusals. **Not shared with `PATCH`**, which can return neither of
+#: the two problem types below — advertising a `type` a route cannot emit tells
+#: a client to write a branch that never runs, and the generated documentation
+#: is where they would read it.
+WRITE_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
         "description": "The bearer token is absent, malformed, expired or wrongly signed."
     },
@@ -43,6 +45,32 @@ REVIEW_RESPONSES: dict[int | str, dict[str, str]] = {
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": "The body failed validation — a rating off its scale, or empty public text."
+    },
+}
+
+
+#: `PATCH`'s refusals, which are a different set. There is exactly one way for an
+#: edit to be refused on state — the window has shut — so it carries no problem
+#: type: a type is a promise a client may branch on the value, and one value is
+#: not a branch.
+EDIT_RESPONSES: dict[int | str, dict[str, str]] = {
+    status.HTTP_401_UNAUTHORIZED: WRITE_RESPONSES[status.HTTP_401_UNAUTHORIZED],
+    status.HTTP_404_NOT_FOUND: {
+        "description": (
+            "No such review, **or it is not yours**, **or it has been withdrawn** "
+            "— one answer for all three, because distinguishing them tells anyone "
+            "who can enumerate ids which ones are real."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": "The ten-minute edit window has shut. The review stands as written."
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": (
+            "A rating off its scale, or a field emptied that the column cannot "
+            "empty — every field may be *omitted*, but only `private_review` may "
+            "be sent as `null`."
+        )
     },
 }
 
@@ -102,7 +130,7 @@ async def list_reviewable_sessions(
         "for the four mentor questions; `valuable_rating` is `1..5` and "
         "`nps_recommend_score` is `1..10`, both genuine point scales."
     ),
-    responses=REVIEW_RESPONSES,
+    responses=WRITE_RESPONSES,
 )
 async def write(review: WrittenReviewDep) -> ReviewRead:
     return ReviewRead.from_row(review)
@@ -125,7 +153,7 @@ async def write(review: WrittenReviewDep) -> ReviewRead:
         "Send only the fields you are changing. Sending `private_review: null` "
         "clears it; leaving it out keeps it."
     ),
-    responses=REVIEW_RESPONSES,
+    responses=EDIT_RESPONSES,
 )
 async def edit(review: EditedReviewDep) -> ReviewRead:
     return ReviewRead.from_row(review)

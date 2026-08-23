@@ -155,4 +155,23 @@ async def edit_review(
     if not changes:
         return
 
-    await session.execute(update(Review).where(Review.id == review_id).values(**changes))
+    # **Scoped again here, not only in the SELECT above.** Non-negotiable #5 is
+    # "scoped in the query, on every read *and* write path — never checked after
+    # fetching", and an `UPDATE` keyed on the id alone is the after-fetching
+    # shape. `intake_store` carries the owner in its `UPDATE` for the same
+    # reason, and says why: scoping on the child id alone "would let any mentor
+    # edit any question by guessing an id".
+    #
+    # It is also a live race rather than a formality: under READ COMMITTED a
+    # withdrawal landing between the two statements would let this edit reach a
+    # review that is no longer editable — the case
+    # `test_a_withdrawn_review_cannot_be_edited_back` exists to prevent.
+    await session.execute(
+        update(Review)
+        .where(
+            Review.id == review_id,
+            Review.reviewed_by == author,
+            Review.deleted_at.is_(None),
+        )
+        .values(**changes)
+    )

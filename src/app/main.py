@@ -32,6 +32,15 @@ from app.core.config import Settings, get_settings
 # it deliberately is not, without opening a route module.
 OPENAPI_TAGS: list[dict[str, str]] = [
     {
+        "name": "health",
+        "description": (
+            "Liveness. Deliberately touches no dependency — a health check that "
+            "fails when the database is slow causes a restart of a process that "
+            "was fine. Readiness is a separate concern, added when there is a "
+            "dependency worth reporting on."
+        ),
+    },
+    {
         "name": "reviews",
         "description": (
             "What a mentee says about a session, and what may be said next.\n\n"
@@ -41,15 +50,6 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "correction window exists and an amendment does not.\n\n"
             "The four mentor questions are a three-point scale published as "
             "words, not numbers: `not_great`, `great`, `excellent`."
-        ),
-    },
-    {
-        "name": "health",
-        "description": (
-            "Liveness. Deliberately touches no dependency — a health check that "
-            "fails when the database is slow causes a restart of a process that "
-            "was fine. Readiness is a separate concern, added when there is a "
-            "dependency worth reporting on."
         ),
     },
     {

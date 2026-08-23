@@ -82,13 +82,27 @@ def within_interval(author: Any, session_type_id: Any, now: dt.datetime) -> Any:
         and_(
             Review.session_id == _PRIOR.c.id,
             Review.reviewed_by == author,
+            # **Both halves, and the second is not redundant.** This function is
+            # handed a *column* by the picker and a *value* by the writer, and
+            # SQLAlchemy renders `== None` as `IS NULL` while rendering
+            # `col == col` as an equality that is never true for two NULLs.
+            # Without the guard the two callers disagree on exactly one
+            # population — the migrated sessions, which have no offering — so
+            # the picker offers a session the writer refuses.
+            #
+            # Stating it as *the prior review had an offering* makes the rule
+            # one sentence on both paths: a review of a session with no
+            # offering suppresses nothing, there being no offering to suppress.
+            _PRIOR.c.session_type_id.is_not(None),
             _PRIOR.c.session_type_id == session_type_id,
             Review.created_at > now - REVIEW_INTERVAL,
         )
     )
 
 
-def reviewable_sessions(author: UUID, now: dt.datetime, mentor: UUID | None = None) -> Select[Any]:
+def reviewable_sessions(
+    author: UUID, now: dt.datetime, mentor: UUID | None = None, *, limit: int | None = None
+) -> Select[Any]:
     """The sessions this mentee may review right now, newest first.
 
     What the profile's Reviews tab needs in order to ask the right question:
@@ -116,5 +130,14 @@ def reviewable_sessions(author: UUID, now: dt.datetime, mentor: UUID | None = No
             ~within_interval(author, Session.session_type_id, now),
             *([Session.mentor_id == mentor] if mentor is not None else []),
         )
-        .order_by(Session.starts_at.desc())
+        # **`id` breaks the tie, and it is not decoration.** Two sessions can
+        # start at the same instant for one mentee — different mentors, or a
+        # migrated pair — and an unstable order under a `Page` contract shows
+        # one row twice and hides another. The same reason `_ranked` orders by
+        # rank *then* id.
+        .order_by(Session.starts_at.desc(), Session.id.desc())
+        # Bounded, because the envelope promises a page. A mentee carrying a
+        # long migrated history would otherwise get every row of it in one
+        # response that says `next_cursor: null`.
+        .limit(limit)
     )

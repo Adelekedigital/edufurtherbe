@@ -34,9 +34,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import add_session_type, make_public_mentor, until_blocked
 
-from app.core.errors import AlreadyReviewedError
+from app.core.errors import AlreadyReviewedError, NotFoundError
 from app.domain.reviews import REVIEW_EDIT_WINDOW, REVIEW_INTERVAL
-from app.infra.db.review_writer import write_review
+from app.infra.db.review_writer import edit_review, write_review
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -454,14 +454,31 @@ async def test_an_edit_cannot_move_a_review_to_another_session(world: World) -> 
 
 
 async def test_somebody_elses_review_cannot_be_edited(world: World) -> None:
+    """A **real** second user, and exactly `404`.
+
+    A token minted for an `auth_id` with no `users` row is refused by
+    `get_current_user` before `edit_review` is ever reached, so asserting
+    `in {401, 404}` would pass on authentication and prove nothing about the
+    scope — it would still pass with `reviewed_by` removed from the query.
+    """
     review = (await world.review(await world.completed(world.offering_a))).json()
-    intruder = bearer(api_token(uuid4()))
+    intruder_auth = uuid4()
+    async with world.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
+                "VALUES (:e, :a, 'Nosy', 'mentee', 'Africa/Lagos')"
+            ),
+            {"e": f"intruder-{uuid4().hex[:8]}@example.test", "a": intruder_auth},
+        )
 
     response = await world.client.patch(
-        f"/api/v1/reviews/{review['id']}", json={"public_review": "Mine now."}, headers=intruder
+        f"/api/v1/reviews/{review['id']}",
+        json={"public_review": "Mine now."},
+        headers=bearer(api_token(intruder_auth)),
     )
 
-    assert response.status_code in {401, 404}
+    assert response.status_code == 404
 
 
 async def test_a_withdrawn_review_cannot_be_edited_back(world: World) -> None:
@@ -611,3 +628,113 @@ async def test_two_taps_produce_one_review(world: World, db_engine: AsyncEngine)
         ).scalar_one()
 
     assert written == 1
+
+
+async def test_a_migrated_review_suppresses_no_other_migrated_session(world: World) -> None:
+    """**The picker and the writer must agree about NULL, and this is the pin.**
+
+    `within_interval` is handed a *column* by the picker and a *value* by the
+    writer. `col == col` is never true for two nulls; `col == None` renders
+    `IS NULL` and matches every offering-less prior review. Left alone, the
+    second migrated session is offered by the list and refused by the write with
+    `review-interval-not-elapsed` — and the population that happens to is the
+    migrated sessions, the ones with no offering to have a window about.
+
+    Two sessions, not one: with a single offering-less session there is nothing
+    for the first review to suppress and the divergence is invisible.
+    """
+    first = await world.completed(None, days_ago=4)
+    second = await world.completed(None, days_ago=6)
+    assert (await world.review(first)).status_code == 201
+
+    offered = {row["session_id"] for row in await world.offered()}
+    response = await world.review(second)
+
+    assert second in offered, "the picker offers it"
+    assert response.status_code == 201, "so the writer must accept it"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("public_review", None),
+        ("public_review", "   "),
+        ("valuable_rating", None),
+        ("nps_recommend_score", None),
+        ("communication_rating", None),
+    ],
+)
+async def test_an_edit_may_omit_a_field_but_not_empty_it(
+    world: World, field: str, value: Any
+) -> None:
+    """`422` at the boundary, where the alternative is a `500` from the column.
+
+    Every one of these is `NOT NULL`, so a null reaching the `UPDATE` raises
+    `NotNullViolationError` — not an `AppError`, so nothing maps it and the
+    caller gets a `500` for a request with a clean answer. Whitespace is the same
+    case: `Normalised` trims it to null before validation, and `min_length`
+    guards only the `str` branch of `str | None`.
+    """
+    review = (await world.review(await world.completed(world.offering_a))).json()
+
+    response = await world.client.patch(
+        f"/api/v1/reviews/{review['id']}", json={field: value}, headers=world.headers
+    )
+
+    assert response.status_code == 422
+
+
+async def test_clearing_the_optional_feedback_is_still_allowed(world: World) -> None:
+    """The counter-case, without which the guard above could refuse everything.
+
+    `private_review` is the one genuinely nullable column, and clearing it is
+    what the route means by "sending null clears it".
+    """
+    review = (
+        await world.review(await world.completed(world.offering_a), private_review="Too long.")
+    ).json()
+
+    response = await world.client.patch(
+        f"/api/v1/reviews/{review['id']}", json={"private_review": None}, headers=world.headers
+    )
+
+    assert response.status_code == 200
+
+
+async def test_a_withdrawal_landing_mid_edit_wins(world: World, db_engine: AsyncEngine) -> None:
+    """**The scope belongs in the UPDATE, not only in the SELECT before it.**
+
+    Under READ COMMITTED a withdrawal can commit between the two statements, so
+    an `UPDATE` keyed on the id alone would write to a review that is no longer
+    editable — the row `test_a_withdrawn_review_cannot_be_edited_back` proves is
+    unreachable through the normal path.
+
+    Non-negotiable #5 puts the scope in the query on every write path, and this
+    is the case that shows why that is not a formality.
+    """
+    review = (await world.review(await world.completed(world.offering_a))).json()
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as editor:
+        await editor.execute(text("SELECT id FROM reviews WHERE id = :i"), {"i": review["id"]})
+        async with db_engine.begin() as moderator:
+            await moderator.execute(
+                text("UPDATE reviews SET deleted_at = now() WHERE id = :i"), {"i": review["id"]}
+            )
+        with pytest.raises(NotFoundError):
+            await edit_review(
+                editor,
+                world.mentee,
+                UUID(review["id"]),
+                {"public_review": "Snuck in."},
+                dt.datetime.now(dt.UTC),
+            )
+
+    async with db_engine.begin() as conn:
+        stored = (
+            await conn.execute(
+                text("SELECT public_review FROM reviews WHERE id = :i"), {"i": review["id"]}
+            )
+        ).scalar_one()
+
+    assert stored != "Snuck in."

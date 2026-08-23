@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.api.schemas.common import Normalised
 from app.domain.reviews import (
@@ -120,6 +120,18 @@ class ReviewWrite(Normalised):
         return values
 
 
+#: The fields an edit may *omit* but may not *empty*. Every one of them is
+#: `NOT NULL` on the table, so a `null` reaching the `UPDATE` is a
+#: `NotNullViolationError` — which is not an `AppError`, so it leaves as a `500`
+#: for a request the product has a clean `422` to give.
+#:
+#: `private_review` is deliberately absent: it is the one genuinely nullable
+#: column, and clearing it is what the route means by "sending null clears it".
+NOT_NULLABLE = frozenset(
+    {*MENTOR_RATINGS, "valuable_rating", "nps_recommend_score", "public_review"}
+)
+
+
 class ReviewEdit(Normalised):
     """A correction inside the ten-minute compose window. Every field optional.
 
@@ -137,6 +149,27 @@ class ReviewEdit(Normalised):
     nps_recommend_score: int | None = Field(default=None, ge=RECOMMEND_MIN, le=RECOMMEND_MAX)
     public_review: str | None = Field(default=None, min_length=1, max_length=MAX_REVIEW_LENGTH)
     private_review: str | None = Field(default=None, max_length=MAX_REVIEW_LENGTH)
+
+    @model_validator(mode="after")
+    def _no_emptied_columns(self) -> ReviewEdit:
+        """Refuse an explicit `null` where the column cannot hold one.
+
+        **Absent and null are different things here**, which is why the types
+        stay `| None`: not sending a field leaves it alone, and `exclude_unset`
+        is what tells the two apart. What this refuses is the *sent* null.
+
+        `"   "` arrives here as `None` too — `Normalised` trims it and turns an
+        emptied string into null before validation, and `min_length` guards only
+        the `str` branch of `str | None`. So whitespace and an explicit null are
+        one case, and they get one answer.
+        """
+        emptied = sorted(
+            field for field in self.model_fields_set & NOT_NULLABLE if getattr(self, field) is None
+        )
+        if emptied:
+            message = f"these fields may be omitted but not emptied: {', '.join(emptied)}"
+            raise ValueError(message)
+        return self
 
     def to_columns(self) -> dict[str, Any]:
         """Only what was actually sent.

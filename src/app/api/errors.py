@@ -130,9 +130,13 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
             # the class name would say as much as a message would.
             if code == status.HTTP_401_UNAUTHORIZED:
                 return problem(status_code=code, title="Unauthorized")
+            # **The exception's own name, not the key it matched.** They are the
+            # same for every error with no subclass, and different for exactly the
+            # two the `type` slot exists to tell apart — which would otherwise
+            # both render `ConflictError` in the one field a human reads.
             return problem(
                 status_code=code,
-                title=error_type.__name__,
+                title=type(exc).__name__,
                 detail=str(exc) or None,
                 type_=_problem_type(exc),
             )

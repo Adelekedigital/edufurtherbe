@@ -1958,10 +1958,13 @@ async def own_reviewable_sessions(
         UUID | None,
         Query(description="Narrow to one mentor's sessions, which is what a profile tab wants."),
     ] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
 ) -> list[dict[str, Any]]:
     """What the caller may review right now, newest first."""
     result = await session.execute(
-        reviewable_sessions(user["id"], dt.datetime.now(dt.UTC), mentor_id)
+        reviewable_sessions(
+            user["id"], dt.datetime.now(dt.UTC), mentor_id, limit=clamp_limit(limit)
+        )
     )
     return [dict(row) for row in result.mappings()]
 
