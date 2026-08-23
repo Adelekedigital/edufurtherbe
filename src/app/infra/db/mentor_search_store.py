@@ -35,7 +35,7 @@ from uuid import UUID
 from sqlalchemy import Select, func, literal, literal_column, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
+from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
@@ -54,10 +54,6 @@ SIMPLE = "simple"
 ENGLISH = "english"
 
 _STUDY_COUNTRY = Country.__table__.alias("study_country")
-
-#: Aliased so the lateral can name its columns without colliding with any
-#: future join to the same catalogue in the outer query.
-_DEGREE_LEVEL = DegreeLevel.__table__.alias("degree_level")
 
 
 #: The mentor's origin country, aliased separately from where they studied.
@@ -244,11 +240,11 @@ def _base() -> Select[Any]:
     with a text box in front of it is the worse half to forget.
     """
     qualification = top_qualification(MentorProfile.user_id)
-    # Two columns from one set of rows, so a lateral rather than two scalar
-    # subqueries — the same call `_top_qualification` makes, for the same
-    # reason. Narrow on purpose: `ix_reviews_mentor_valuable` covers exactly
-    # these two under `published()`, so the card stays an index-only scan.
-    reviews = card_summary(MentorProfile.user_id).lateral("review_summary")
+    # **Scalar subqueries, not a lateral.** They run per output row, after the
+    # page limit, which is the property `_document()` records for the
+    # completed-session count. A lateral would join in the FROM and run once
+    # per *match* on the search path, where the rank sort materialises them all.
+    review_count, session_value = card_summary(MentorProfile.user_id)
     return (
         select(
             User.id.label("user_id"),
@@ -264,8 +260,8 @@ def _base() -> Select[Any]:
             qualification.c.study_course,
             qualification.c.institution,
             _completed_sessions().label("completed_sessions"),
-            reviews.c.review_count,
-            reviews.c.session_value,
+            review_count.scalar_subquery().label("review_count"),
+            session_value.scalar_subquery().label("session_value"),
         )
         .select_from(MentorProfile)
         .join(User, User.id == MentorProfile.user_id)
@@ -283,9 +279,6 @@ def _base() -> Select[Any]:
         # *displays*, and a mentor without one is a worse card, not a hidden
         # mentor. Bookability is what decides who appears, and it is above.
         .outerjoin(qualification, true())
-        # Outer for the same reason as the qualification: a mentor nobody has
-        # reviewed is a card with no rating, not a hidden mentor.
-        .outerjoin(reviews, true())
         .where(*mentor_is_public(), *mentor_is_bookable())
     )
 

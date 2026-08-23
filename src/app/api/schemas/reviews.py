@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.schemas.common import Normalised
 from app.domain.reviews import (
@@ -274,7 +274,16 @@ class ReviewSummaryRead(BaseModel):
 
     Mirrors the screen: a total, a recommendation figure, a session value out of
     five, and the four questions as percentages.
+
+    **The four fields are named for `MENTOR_RATINGS` and pinned to it.** Pydantic
+    ignores unknown keys by default, so a fifth question — which the column, the
+    `CHECK` and `profile_summary` would all pick up on their own — would be
+    averaged in SQL and then dropped here in silence.
+    `test_the_summary_publishes_every_rating_the_database_averages` is what turns
+    that into a failure.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     #: **Never null** — a count over no rows is nought, and a nullable count
     #: makes every client write the same coalesce while leaving "no data" and
@@ -286,10 +295,15 @@ class ReviewSummaryRead(BaseModel):
     #: Mean recommend score as a percentage of ten. `97%` on the profile.
     recommended_percent: int | None = None
 
-    communication: RatingAggregate = Field(default_factory=RatingAggregate)
-    knowledge: RatingAggregate = Field(default_factory=RatingAggregate)
-    practicality: RatingAggregate = Field(default_factory=RatingAggregate)
-    support: RatingAggregate = Field(default_factory=RatingAggregate)
+    #: **Named exactly as `ReviewRead` names them**, and as the columns do. One
+    #: API spelling the same four questions two ways — `communication_rating` on a
+    #: review, `communication` on the summary — puts the mapping between them in
+    #: every client that reads both, which is the argument `RatingAggregate` makes
+    #: for publishing `percent` beside `average`, applied against itself.
+    communication_rating: RatingAggregate = Field(default_factory=RatingAggregate)
+    knowledge_rating: RatingAggregate = Field(default_factory=RatingAggregate)
+    practicality_rating: RatingAggregate = Field(default_factory=RatingAggregate)
+    support_rating: RatingAggregate = Field(default_factory=RatingAggregate)
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> ReviewSummaryRead:
@@ -299,10 +313,7 @@ class ReviewSummaryRead(BaseModel):
             count=int(row["review_count"] or 0),
             session_value=None if value is None else float(value),
             recommended_percent=None if recommended is None else int(recommended),
-            **{
-                rating.removesuffix("_rating"): RatingAggregate.of(row, rating)
-                for rating in MENTOR_RATINGS
-            },
+            **{rating: RatingAggregate.of(row, rating) for rating in MENTOR_RATINGS},
         )
 
 

@@ -22,7 +22,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import MentorPageDep, MentorReviewsDep, PublicMentorDep
-from app.api.schemas.common import Page, encode_id_cursor
+from app.api.schemas.common import Page
 from app.api.schemas.mentors import MentorPublicRead, MentorSummaryRead
 from app.api.schemas.reviews import MentorReviewRead
 
@@ -134,12 +134,12 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
     responses={
         status.HTTP_404_NOT_FOUND: {
             "description": "No such mentor, or they are not publicly visible."
-        }
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "The `cursor` was not one this endpoint issued."
+        },
     },
 )
 async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
-    rows, has_more = page
-    return Page(
-        data=[MentorReviewRead.from_row(row) for row in rows],
-        next_cursor=encode_id_cursor(rows[-1]["id"]) if has_more and rows else None,
-    )
+    rows, next_cursor = page
+    return Page(data=[MentorReviewRead.from_row(row) for row in rows], next_cursor=next_cursor)

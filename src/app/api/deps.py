@@ -1981,7 +1981,7 @@ async def mentor_reviews_page(
     session: SessionDep,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[dict[str, Any]], str | None]:
     """One page of a mentor's published reviews.
 
     The handle resolves through the same predicate and the same visibility pair
@@ -1997,9 +1997,14 @@ async def mentor_reviews_page(
     # token is the one-part form `encode_id_cursor` issues. Pairing it with the
     # two-part decoder rejects every cursor the endpoint hands out — a paging bug
     # that only shows on page two.
-    return await list_mentor_reviews(
+    rows, has_more = await list_mentor_reviews(
         session, mentor, limit=clamp_limit(limit), after=decode_id_cursor(cursor)
     )
+    # **Minted here, beside the decode.** `mentor_page` states the rule: the token
+    # is issued where the sort key is known, because deriving it again in the
+    # route is one rule in two places — and the two halves drifting apart is
+    # exactly the defect that made every cursor this endpoint issued invalid.
+    return rows, encode_id_cursor(rows[-1]["id"]) if has_more and rows else None
 
 
-MentorReviewsDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(mentor_reviews_page)]
+MentorReviewsDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(mentor_reviews_page)]

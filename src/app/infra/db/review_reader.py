@@ -22,11 +22,12 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, true
+from sqlalchemy import and_, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import published
 
@@ -83,6 +84,15 @@ async def list_mentor_reviews(
     shortcut: `reviews.id` is a UUIDv7, so id order *is* creation order, and a
     separate sort key would be the same fact twice.
 
+    **That premise holds only for rows this product wrote, and the loader will
+    break it.** The 53 migrated reviews take `uuid_generate_v7()` at *load* time
+    and carry `created_at` backfilled from Bubble, so a 2023 review will sort
+    above one written last week with a three-year-old date rendered beside it.
+    The fix belongs with the loader, which is the only thing that knows the real
+    instant: either mint the id from `created_at` or order this list on
+    `created_at` and make the cursor the two-part form. Stated here rather than
+    discovered there.
+
     **The surname never leaves the database.** `left(last_name, 1)` is computed
     in SQL, so the column is not selected at all — a review is public and
     attributed, and "Fauziyah F." is the attribution the product chose. A read
@@ -105,11 +115,21 @@ async def list_mentor_reviews(
             Review.public_review,
             Review.valuable_rating,
             User.first_name.label("author_first_name"),
-            func.left(User.last_name, 1).label("author_last_initial"),
+            # `nullif`, because `left('', 1)` is `''` rather than null and a client
+            # concatenating renders "Fauziyah .". Both name columns are nullable,
+            # and the migrated rows do not go through the boundary that turns an
+            # emptied string into null.
+            func.nullif(func.left(User.last_name, 1), "").label("author_last_initial"),
             author.c.institution.label("author_institution"),
         )
         .select_from(Review)
-        .join(User, User.id == Review.reviewed_by)
+        # **`LIVE`, and this endpoint needs no token.** A reviewer who deletes
+        # their account must stop being named on a public page; without it their
+        # first name, initial and institution stay published for good.
+        # `predicates.LIVE` exists because this rule has been missed twice
+        # already, and `test_predicates` walks only two stores, so nothing here
+        # would have caught a third.
+        .join(User, and_(User.id == Review.reviewed_by, LIVE))
         .outerjoin(author, true())
         .where(published(mentor), *([Review.id < after] if after is not None else []))
         .order_by(Review.id.desc())
