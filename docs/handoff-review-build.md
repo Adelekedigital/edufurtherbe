@@ -1,7 +1,8 @@
 # Handoff — the review build (M5a)
 
-**Status:** PRs 1 and 2 are built — the table, and the write surface with the
-rules that guard it. Four PRs and one ADR remain.
+**Status:** PRs 1, 2 and 3 are built — the table, the write surface, and what a
+mentor's reviews add up to. Two PRs remain: the notification producers and the
+loader.
 **Written:** 2026-08-20, from `FE-ui-guide/reviewUI/` measured against the codebase,
 `docs/edufurther-migration/` and the dev Bubble app.
 **Companion:** `handoff-session-build.md`, whose sequence this follows.
@@ -198,7 +199,16 @@ argued again in each PR that acts on them.
     likelihood rather than a quality score.
 
     Legacy carried `countReviewReceived` on *Mentor (front search)* and no
-    rating, so the count is restored and the rating is new. **Lands in PR 3.**
+    rating, so the count is restored and the rating is new. **Landed in PR 3.**
+
+    **The card's query is narrower than the profile's, and that is measured
+    rather than tidy.** `ix_reviews_mentor_valuable` covers exactly
+    `(reviewed_for, valuable_rating)`, so those two figures plan as an Index Only
+    Scan with zero heap fetches. Reusing the profile's wider summary here — the
+    obviously tidier code — drops the same query to a Bitmap Heap Scan touching
+    279 heap blocks per page of 21, on the page a mentee lands on. Settled
+    decision #170 records the rule; what the two share is `published()` and the
+    rounding helpers, which is where the rules actually live.
 
 15. **A rating never enters the keyset sort.** Browse pages on
     `mentor_profiles.id` (ADR 0016's base case), so ordering by rating would
@@ -211,7 +221,7 @@ argued again in each PR that acts on them.
     formula on the **offset** path, which that docstring already anticipates by
     name. A `?min_rating=` *filter* is additive and can arrive whenever it is
     wanted — `ix_reviews_mentor_valuable` is already there to serve it.
-    **Lands in PR 3.**
+    **Landed in PR 3**, and no rating sort was built.
 
 16. **The form's required-ness is the schema's.** Measured from the three
     screens in `FE-ui-guide/reviewUI/` — note the file names invert the order,
@@ -352,7 +362,7 @@ are domain constants rather than configuration (decision 13).
 |---|---|---|---|
 | 1 | `reviews` — the table, corrected scales, eligibility and card indexes, **ADR 0026** ✅ | yes | 1 |
 | 2 | `POST` and `PATCH /reviews`, and `/me/reviewable-sessions` — the interval in the query ✅ | no | 2 |
-| 3 | Mentor reviews read — aggregates and the dated list | no | 2 |
+| 3 | Mentor reviews read — aggregates, the dated list, the card ✅ | no | 2 |
 | 4 | `REVIEW_REQUESTED` + `REVIEW_REMINDER` producers | no | 2 |
 | 5 | The reviews loader — built on the dev row, rehearsed on the 53 | no | 1 |
 | ~~6~~ | ~~ADR~~ — **moved into PR 1 as ADR 0026** ✅ | — | — |

@@ -21,9 +21,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.api.deps import MentorPageDep, PublicMentorDep
-from app.api.schemas.common import Page
+from app.api.deps import MentorPageDep, MentorReviewsDep, PublicMentorDep
+from app.api.schemas.common import Page, encode_id_cursor
 from app.api.schemas.mentors import MentorPublicRead, MentorSummaryRead
+from app.api.schemas.reviews import MentorReviewRead
 
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
 
@@ -109,4 +110,36 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
         mentor["scholarships"],
         mentor["languages"],
         mentor["stats"],
+        mentor["reviews"],
+    )
+
+
+@router.get(
+    "/{handle}/reviews",
+    response_model=Page[MentorReviewRead],
+    summary="What mentees said about this mentor",
+    description=(
+        "One page of published reviews, newest first.\n\n"
+        "**Public**, like the profile it belongs to, and scoped the same way: a "
+        "mentor who is paused or unapproved answers `404` here exactly as they "
+        "do there.\n\n"
+        "**Attribution is a first name and an initial.** The surname is never "
+        "sent.\n\n"
+        "`session_value` on a row is that review's own answer to *how valuable "
+        "was this session*, `1..5` — the badge beside it. The mentor's overall "
+        "figures are on the profile, not repeated per row.\n\n"
+        "Withdrawn reviews are absent, which is the whole point of withdrawing "
+        "one."
+    ),
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "No such mentor, or they are not publicly visible."
+        }
+    },
+)
+async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
+    rows, has_more = page
+    return Page(
+        data=[MentorReviewRead.from_row(row) for row in rows],
+        next_cursor=encode_id_cursor(rows[-1]["id"]) if has_more and rows else None,
     )
