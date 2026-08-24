@@ -171,6 +171,8 @@ async def test_a_mentee_reviews_a_completed_session(world: World) -> None:
 
     assert response.status_code == 201
     assert response.json()["session_id"] == session_id
+    # The header points at the thing just made, like every other creating route.
+    assert response.headers["Location"] == f"/api/v1/reviews/{response.json()['id']}"
 
 
 async def test_the_answers_come_back_as_words(world: World) -> None:

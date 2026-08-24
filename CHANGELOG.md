@@ -10,6 +10,28 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Percentages rounded ties the wrong way, in two places.** A Python `100.0`
+  binds as `float8`, so the whole expression became float and `round(float8)`
+  rounds halves *to even* — `62.5` published as `62` where both the reviews
+  module and every reasonable reading said `63`. `attendance_rate` had the
+  identical shape. Both compute in `numeric` now, and both have a tie case
+  pinned. Settled decision #171.
+
+- **The interval's index carried a column nothing reads.**
+  `ix_reviews_author_subject_created` was shaped for a mentor-scoped window; the
+  window is per offering, reached by joining `sessions`, so `reviewed_for` had no
+  reader. Measured on 25,073 reviews: the plan was unaffected — both shapes give
+  an index-only scan — but the three-column form is 31% larger and maintains that
+  width on every insert. Now `ix_reviews_author_created`.
+
+### Added
+
+- **`POST /reviews` and `POST /sessions` send `Location`**, like the other seven
+  creating routes always did. A source-walking test now asserts the rule across
+  every `201` handler, so the tenth cannot drift.
+
 ### Added
 
 - **A mentee can review a completed session.** `POST /api/v1/reviews` writes one,

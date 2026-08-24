@@ -229,6 +229,10 @@ async def book(booked: BookedSessionDep, response: Response) -> SessionRead:
     response.status_code = status_code
     if replayed:
         response.headers[REPLAYED_HEADER] = "true"
+    # **Set on a replay too.** The header names where the session is, and a retry
+    # that replayed the original answer is pointing at the same one — withholding
+    # it would make the second response less useful than the first for no reason.
+    response.headers["Location"] = f"/api/v1/sessions/{body['id']}"
     return SessionRead.model_validate(body)
 
 

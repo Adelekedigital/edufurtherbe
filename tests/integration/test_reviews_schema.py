@@ -441,10 +441,12 @@ async def test_the_card_index_covers_live_mentor_reviews_only(db_engine: AsyncEn
 
 
 async def test_the_eligibility_index_orders_by_recency(db_engine: AsyncEngine) -> None:
-    """The 30-day window's index — decision 7's predicate, served.
+    """The interval window's index — decision 7's predicate, served.
 
-    *Has this mentee reviewed this mentor inside 30 days* is answered by the
-    newest row for the pair, so the index descends on `created_at`.
+    *Has this mentee reviewed this offering recently* reaches the offering by
+    joining `sessions`, so what this table is asked for is the author and the
+    date. `reviewed_for` was here for a mentor-scoped window that no longer
+    exists, and it left in `c9e4b1f78d02`.
 
     **It carries no `deleted_at` predicate, and that is decision 18 rather than
     an omission.** Withdrawing a review removes it from what is *published*, not
@@ -458,13 +460,17 @@ async def test_the_eligibility_index_orders_by_recency(db_engine: AsyncEngine) -
     what stops somebody adding it for symmetry with the card index, whose
     exclusion of withdrawn rows is the deliberate opposite.
     """
-    definition = await index_definition(db_engine, "ix_reviews_author_subject_created")
+    definition = await index_definition(db_engine, "ix_reviews_author_created")
 
     assert "reviewed_by" in definition
-    assert "reviewed_for" in definition
     assert "created_at DESC" in definition
+    assert "reviewed_for" not in definition, (
+        "the interval is scoped to the offering, reached by joining `sessions`, so "
+        "nothing filters `reviewed_for` here — a third column costs 31% index size "
+        "and every insert maintains it for no reader"
+    )
     assert "deleted_at" not in definition, (
-        "a withdrawn review still suppresses the 30-day window (decision 18); "
+        "a withdrawn review still suppresses the interval (decision 18); "
         "excluding it here would let moderation hand back a fresh review slot"
     )
 

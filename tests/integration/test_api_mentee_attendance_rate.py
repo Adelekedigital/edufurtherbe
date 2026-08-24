@@ -365,3 +365,29 @@ async def test_the_mentee_sees_their_own_rate(
     mine = await api_client.get(f"/api/v1/sessions/{current}", headers=pair["mentee_headers"])
 
     assert mine.json()["mentee_attendance_rate"] == await rate(api_client, pair, current)
+
+
+async def test_a_tie_rounds_away_from_zero(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Five of eight is exactly 62.5%, and which way it goes was an accident.**
+
+    The expression multiplied by a Python `100.0`, which binds as `float8`. That
+    makes the whole arithmetic float, and `round(float8)` is `rint()` — half to
+    **even** — so `62.5` published as `62`. Nothing said it should be either way
+    until the reviews percentage shipped the identical bug with a docstring
+    promising the opposite.
+
+    One rounding, in one place, both times: `Numeric` arithmetic, half away from
+    zero. `62` here means the cast went missing again.
+    """
+    pair = await a_pair(db_engine, "rate-tie")
+    attendance = ["attended"] * 5 + ["no_show"] * 3
+    latest = None
+    for day, attended in enumerate(attendance, start=2):
+        latest = await add_session(
+            db_engine, pair, status="completed", mentee_attended=attended, days_ago=day
+        )
+
+    assert latest is not None
+    assert await rate(api_client, pair, latest) == 63
