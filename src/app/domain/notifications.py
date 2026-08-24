@@ -35,6 +35,9 @@ from uuid import UUID
 __all__ = [
     "AUDIENCE",
     "REMINDER_OFFSETS",
+    "REVIEW_REMINDER_AFTER",
+    "REVIEW_REMINDER_KIND",
+    "REVIEW_REMINDER_KINDS",
     "SESSION_REMINDERS",
     "SESSION_REMINDER_KINDS",
     "Audience",
@@ -100,16 +103,29 @@ class Notification(StrEnum):
     #: templates differ: this one is about turning up, that one about preparing.
     SESSION_LAST_REMINDER = "session_last_reminder"
 
-    #: **There is deliberately no post-session message here.** One was built and
-    #: withdrawn, because it conflated two different asks: a *platform* survey
-    #: to both parties about their experience of the product, and a *mentor
-    #: review* from the mentee about the session. Only the second is wanted now,
-    #: it belongs to the review phase, and it is `Audience.MENTEE` rather than
-    #: `BOTH` — a mentee reviews a mentor, and asking a mentor to review the
-    #: session tells one person too many.
+    #: **The mentee is asked how the session went.** Fired by the transition into
+    #: `completed`, not by a clock: `settle_attendance` decides `completed`
+    #: against `no_show` from attendance, so a session nobody turned up to is
+    #: structurally incapable of asking for a review. A timer set to "end plus
+    #: ten minutes" would race that sweep and sometimes win.
     #:
-    #: The platform survey may come back. It is not this, and #21 says a
-    #: vocabulary does not carry a member for a feature nobody is building.
+    #: `Audience.MENTEE`, and that is the whole reason the message this replaces
+    #: was withdrawn: it conflated a *platform* survey to both parties with a
+    #: *mentor review* from the mentee, and shipping it would have asked a mentor
+    #: to review the session they gave.
+    #:
+    #: **The platform survey is still not built.** It may come back; it is not
+    #: this, and #21 says a vocabulary does not carry a member for a feature
+    #: nobody is building.
+    REVIEW_REQUESTED = "review_requested"
+
+    #: One nudge, a day later, and only while it is still owed. Not cancelled
+    #: when the review arrives — **checked at fire time**, which is what the
+    #: callback module means by "scheduling ahead safe without ever cancelling
+    #: anything" (ADR 0025). Cancelling would make the write path responsible
+    #: for unscheduling, and the bug is the reminder that fires for a review
+    #: written through the one path somebody forgot.
+    REVIEW_REMINDER = "review_reminder"
 
     #: Somebody applied to be a mentor. **To the admins, not to a party of a
     #: session**, so `AUDIENCE` does not reach it — the recipients are a *set*
@@ -158,6 +174,11 @@ AUDIENCE: dict[Notification, Audience] = {
     Notification.REQUEST_EXPIRED: Audience.BOTH,
     Notification.MENTOR_RESPONSE_REMINDER: Audience.MENTOR,
     Notification.SESSION_REMINDER: Audience.BOTH,
+    #: **Both to the mentee, and neither to the mentor.** A review is one
+    #: party's account of the other's work; telling the subject it has been
+    #: requested is a different message that nobody has asked for.
+    Notification.REVIEW_REQUESTED: Audience.MENTEE,
+    Notification.REVIEW_REMINDER: Audience.MENTEE,
     Notification.SESSION_LAST_REMINDER: Audience.BOTH,
 }
 
@@ -280,6 +301,26 @@ SESSION_REMINDERS: tuple[SessionReminder, ...] = (
 #: than parsed, so a kind nobody defined is refused at the door instead of
 #: reaching a handler that has to guess.
 SESSION_REMINDER_KINDS = {reminder.kind: reminder for reminder in SESSION_REMINDERS}
+
+#: How long after the request the mentee is nudged once.
+#:
+#: **A day, and only one.** Long enough that the session is behind them and
+#: short enough that they remember it; a second nudge for an unpaid, optional
+#: favour is the shape people mute a sender over.
+REVIEW_REMINDER_AFTER = dt.timedelta(hours=24)
+
+#: What the review reminder's callback carries.
+#:
+#: **Prefixed `r`, for the reason `s` exists.** `t24` is a response reminder
+#: and `s24` a session reminder, and the three mean different things with
+#: different conditions for still being owed. A bare `24` would let one
+#: callback fire another's rule.
+REVIEW_REMINDER_KIND = "r24"
+
+#: A set of one, mirroring `SESSION_REMINDER_KINDS`. A registry rather than an
+#: equality check, so a second review reminder joins it instead of adding a
+#: branch to the callback that dispatches on it.
+REVIEW_REMINDER_KINDS = frozenset({REVIEW_REMINDER_KIND})
 
 
 def session_reminders_for(

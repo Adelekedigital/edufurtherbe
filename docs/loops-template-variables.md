@@ -203,20 +203,37 @@ With aliases registered, **none of these needs editing in Loops to work**.
 | Withdrawn Request | `cmc4umpfe0a5y5e0in8n13flj` | `request_withdrawn` |
 | Session Canceled | `clyvhvwru002hm392q9y8qeje` | `session_cancelled` |
 | Session Request Reminder | `cmbxjqtne3nt1wu0i5sk5kr2h` | `mentor_response_reminder` |
-| Session Reminder | `clyao8wx60024h2stw3o2ejh8` | **no producer** |
-| Session Last Reminder | `clyaoph2m00xzs2yecm330s2u` | **no producer** |
-| Session Feedback | `clyarw8rp01mezrlmid7xay2i` | **no producer** |
+| Session Reminder | `clyao8wx60024h2stw3o2ejh8` | `session_reminder` |
+| Session Last Reminder | `clyaoph2m00xzs2yecm330s2u` | `session_last_reminder` |
+| Session Feedback | `clyarw8rp01mezrlmid7xay2i` | **withdrawn — see below** |
 
 `request_accepted` sharing Session Confirmation stops being a decision worth
 agonising over: both resolve the same names, so sharing costs nothing and
 splitting later is a config change.
 
-The three with no producer are features — a pre-session reminder and a feedback
-request — not wiring. Their message types do not exist in `Notification`.
+**Two of those three gained producers and one lost its message.** The
+pre-session reminders ship and fire; the feedback request was *withdrawn*
+before it ever sent, because it conflated a platform survey to both parties
+with a mentor review from the mentee.
+
+So **Session Feedback is a template with no message**. Whether
+`review_requested` reuses that id or gets its own is an operator decision in
+Loops, not a code one — the mapping is configuration, which is the whole
+point of `EMAIL_TEMPLATES`. What the copy has to change either way is the
+audience: the withdrawn message addressed both parties, and a review request
+addresses the mentee alone.
 
 ### Messages with no template
 
-`request_expired`, `calendar_disconnected`, `mentor_approved`, `mentor_declined`.
+`request_expired`, `calendar_disconnected`, `mentor_approved`, `mentor_declined`,
+**`review_requested`**, **`review_reminder`**.
+
+**The last two are the operationally urgent ones**, and this list is where an
+operator would look. `template_for()` raises `ConfigurationError` rather than
+falling back — *"sending the wrong message is worse than sending none"* — so
+until both are mapped in `EMAIL_TEMPLATES`, a settled session queues a review
+request that fails at the drain rather than at the enqueue. Nothing is lost,
+because the outbox retains the row; nothing is sent either.
 
 The last three are not *session* messages: they resolve the name fields and
 nothing else, because there is no session to describe. A resolver registry is
