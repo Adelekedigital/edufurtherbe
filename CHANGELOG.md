@@ -28,6 +28,32 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **A finished session asks the mentee how it went.** `REVIEW_REQUESTED` is
+  produced by the transition into `completed` — by `settle_attendance`, the sweep
+  that decides `completed` against `no_show` from attendance — so a session
+  nobody turned up to is *structurally incapable* of asking for a review. A timer
+  would have raced that sweep and sometimes won.
+
+  **Both messages go to the mentee alone.** That is the whole reason the
+  post-session feedback request was withdrawn: it asked the mentor to review the
+  session they gave.
+
+  `REVIEW_REMINDER` follows a day later, as a **sweep rather than a scheduled
+  callback**. Scheduling one QStash message per settled session measured 2,000
+  sequential HTTP calls over 2,000 sessions; a query costs one round trip at any
+  volume and cannot leave a message scheduled for a review since written.
+
+  It reads the request rather than the settlement, so a session whose request was
+  suppressed is never nudged about one nobody asked it.
+
+  The request is suppressed by the same predicate `POST /reviews` refuses on, so
+  a mentee is never asked for something the endpoint would then decline.
+
+  **Neither message has a Loops template yet.** `template_for()` raises rather
+  than falling back, so until `EMAIL_TEMPLATES` maps both, a settled session
+  queues a request that fails at the drain — the outbox keeps the row and nothing
+  is sent. See `loops-template-variables.md`.
+
 - **`POST /reviews` and `POST /sessions` send `Location`**, like the other seven
   creating routes always did. A source-walking test now asserts the rule across
   every `201` handler, so the tenth cannot drift.

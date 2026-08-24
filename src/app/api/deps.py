@@ -1279,6 +1279,14 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     # unanswered, a session reminder only while the session is still going
     # ahead. Dispatching on the kind keeps that in one place rather than in two
     # endpoints that would drift.
+    # **Two kinds, one callback.** They differ in what they require: a response
+    # reminder is only sent while the request is still unanswered, a session
+    # reminder only while the session is still going ahead. Dispatching on the
+    # kind keeps that in one place rather than in two endpoints that would drift.
+    #
+    # **The review reminder is deliberately not here.** It is a sweep, not a
+    # scheduled callback — see `remind_unreviewed`, and the measurement that put
+    # it there.
     if kind in SESSION_REMINDER_KINDS:
         queued = await remind_before_session(session, UUID(str(session_id)), str(kind))
     else:

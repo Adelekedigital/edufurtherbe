@@ -55,6 +55,8 @@ from app.domain.enums import (
 )
 from app.domain.meetings import plan_for
 from app.domain.notifications import (
+    REVIEW_REMINDER_AFTER,
+    REVIEW_REMINDER_KIND,
     SESSION_REMINDER_KINDS,
     Notification,
     recipients,
@@ -72,6 +74,7 @@ from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.availability_writer import block_session_window
 from app.infra.db.models.mentoring import MentorProfile
+from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import (
     Session,
     SessionEvent,
@@ -82,6 +85,7 @@ from app.infra.db.models.sessions import (
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
+from app.infra.db.review_eligibility import already_reviewed, within_interval
 from app.infra.db.session_type_store import resolve_venue
 from app.infra.db.slot_store import list_slots
 
@@ -738,6 +742,10 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
                 .returning(
                     Session.id,
                     Session.status,
+                    # Carried out with the outcome so the review request can be
+                    # addressed without a second read of rows this statement has
+                    # already touched.
+                    Session.mentee_id,
                     mentor_came.label("mentor_came"),
                     mentee_came.label("mentee_came"),
                 )
@@ -787,7 +795,63 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
         ],
     )
 
+    await _request_reviews(
+        session,
+        [row["id"] for row in settled if row["status"] == SessionStatus.COMPLETED],
+        now=now,
+    )
+
     return len(settled)
+
+
+async def _request_reviews(
+    session: AsyncSession, completed: list[UUID], *, now: dt.datetime
+) -> None:
+    """Ask each mentee how the session went, unless the interval says not to.
+
+    **Fired by the transition, which is the whole of decision 10.** A clock set
+    to "end plus ten minutes" races this sweep and can ask about a session
+    nobody attended; a session that settles as `no_show` never reaches this list
+    at all, so the wrong message is unreachable rather than merely unlikely.
+
+    **Suppressed by the predicate the write refuses on**, not by a second copy
+    of the rule. `within_interval` already takes its arguments as columns — the
+    profile picker passes them that way — so the set-based question here needs
+    no reshaping of it. Two rules for "is a review wanted" would eventually
+    disagree, and the disagreement is a mentee asked for something the endpoint
+    then refuses (#8, and decision 8 by name).
+
+    **One extra statement, not one per session.** The sweep settles about a
+    thousand rows in three statements and a log; a per-session suppression check
+    would add a round trip each for a question one `WHERE` can answer.
+
+    Does not commit. The enqueue is in the settling transaction, so a message
+    about a settlement that rolled back cannot exist.
+    """
+    if not completed:
+        return
+
+    wanted = (
+        (
+            await session.execute(
+                select(Session.id, Session.mentee_id).where(
+                    Session.id.in_(completed),
+                    ~within_interval(Session.mentee_id, Session.session_type_id, now),
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    for row in wanted:
+        await enqueue(
+            session,
+            Notification.REVIEW_REQUESTED,
+            entity_type="session",
+            entity_id=row["id"],
+            recipient_ids=(row["mentee_id"],),
+        )
 
 
 def _absence_code(*, mentor_came: bool, mentee_came: bool) -> SessionReasonCode | None:
@@ -1170,6 +1234,68 @@ async def remind_before_session(session: AsyncSession, session_id: UUID, kind: s
         variables={"kind": reminder.kind, "interval": reminder.interval},
     )
     return True
+
+
+async def remind_unreviewed(session: AsyncSession, *, now: dt.datetime) -> int:
+    """Nudge every mentee still owing a review a day after being asked. Returns the count.
+
+    **A sweep rather than a scheduled message, and that was measured.** The first
+    version scheduled one QStash callback per settled session, following the
+    shape `book_session` uses for pre-session reminders. That shape is built for
+    *one* message on *one* request; this runs in a batch. Over 2,000 settled
+    sessions it made 2,000 sequential HTTP calls, turning a 4-second sweep into a
+    two-minute one, and the `Scheduler` port has no batch call to fix it with.
+
+    A query costs one round trip whatever the volume, needs no QStash token in a
+    batch job, and cannot leave a scheduled message behind for a review that has
+    since been written — the condition *is* the query.
+
+    **Anchored on the request, not on the settlement.** The outbox row for
+    `REVIEW_REQUESTED` is the record that we asked, so "a day after we asked" is
+    exactly what this reads — and it inherits the suppression for free: a session
+    whose request the interval suppressed has no row here, so it is never nudged
+    about something it was never asked for. Anchoring on `session_events` would
+    have needed that rule restated.
+
+    **Idempotent through the partial unique index**, which is why the enqueue
+    carries a `kind`: `uq_outbox_events_reminder` is partial on
+    ``payload ? 'kind'``, so a message without one sits outside it and a second
+    sweep would send a second identical email.
+
+    Does not commit.
+    """
+    asked = OutboxEvent.__table__.alias("asked")
+    due = (
+        (
+            await session.execute(
+                select(
+                    asked.c.entity_id.label("session_id"),
+                    Session.mentee_id,
+                )
+                .select_from(asked)
+                .join(Session, Session.id == asked.c.entity_id)
+                .where(
+                    asked.c.event_type == Notification.REVIEW_REQUESTED,
+                    asked.c.created_at <= now - REVIEW_REMINDER_AFTER,
+                    Session.status == SessionStatus.COMPLETED,
+                    ~already_reviewed(Session.id, Session.mentee_id),
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+    for row in due:
+        await enqueue(
+            session,
+            Notification.REVIEW_REMINDER,
+            entity_type="session",
+            entity_id=row["session_id"],
+            recipient_ids=(row["mentee_id"],),
+            variables={"kind": REVIEW_REMINDER_KIND},
+        )
+    return len(due)
 
 
 async def remind_if_still_waiting(session: AsyncSession, session_id: UUID, kind: str) -> bool:

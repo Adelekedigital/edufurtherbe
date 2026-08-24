@@ -58,7 +58,7 @@ from app.infra.clients.templates import LoopsTemplates
 from app.infra.db.calendar_store import check_connections
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.db.outbox import drain
-from app.infra.db.session_writer import expire_requests, settle_attendance
+from app.infra.db.session_writer import expire_requests, remind_unreviewed, settle_attendance
 from app.infra.etl.cli import EXIT_OK, configure_streams
 
 
@@ -135,6 +135,11 @@ async def run(args: argparse.Namespace) -> int:
             # sit exactly on a boundary and be judged by two different instants.
             expired = await expire_requests(session, now=now, calendar=_calendar())
             settled = await settle_attendance(session, now=now)
+            # **Fourth, and after the settlement**, so a session that finished a
+            # day ago and was settled in an earlier run is nudged here. It reads
+            # the request rather than the settlement, so a suppressed request is
+            # never nudged about.
+            nudged = await remind_unreviewed(session, now=now)
             # **Third, and before the drain**, so a mentor whose calendar died
             # is told in this run rather than an hour later. It is the only
             # sweep here that talks to a third party to decide anything, which
@@ -161,6 +166,7 @@ async def run(args: argparse.Namespace) -> int:
                 await session.rollback()
                 print(
                     f"would expire {expired} request(s), settle {settled} session(s), "
+                    f"nudge {nudged} review(s), "
                     f"disconnect {health['disconnected']} calendar(s), "
                     f"send {sum(sent.values())} message(s)"
                 )
@@ -168,7 +174,7 @@ async def run(args: argparse.Namespace) -> int:
                 await session.commit()
                 print(
                     f"expired {expired} request(s), settled {settled} session(s), "
-                    f"calendars {health}, messages {sent}"
+                    f"nudged {nudged} review(s), calendars {health}, messages {sent}"
                 )
     finally:
         await engine.dispose()

@@ -1,8 +1,8 @@
 # Handoff — the review build (M5a)
 
-**Status:** PRs 1, 2 and 3 are built — the table, the write surface, and what a
-mentor's reviews add up to. Two PRs remain: the notification producers and the
-loader.
+**Status:** PRs 1–4 are built — the table, the write surface, the read, and the
+two messages that ask for a review. **Only the loader remains**, and only its
+rehearsal is blocked, on the 53-row export.
 **Written:** 2026-08-20, from `FE-ui-guide/reviewUI/` measured against the codebase,
 `docs/edufurther-migration/` and the dev Bubble app.
 **Companion:** `handoff-session-build.md`, whose sequence this follows.
@@ -159,6 +159,37 @@ disagree, the measurement wins — the package is a brain dump (ADR 0007), and d
 11. **Two notification members, both `Audience.MENTEE`:** `REVIEW_REQUESTED` and
     `REVIEW_REMINDER` at 24 hours, cancelled by the review existing. This retires
     the note in `domain/notifications.py` saying reviews have no producer.
+
+    **"Cancelled by the review existing" turned out to name an existing pattern
+    rather than new work.** The callbacks module already states it: *"a callback
+    for a request that has since been answered does nothing at all… that is what
+    makes scheduling ahead safe without ever cancelling anything"* (ADR 0025).
+    So nothing is unscheduled — the nudge re-reads and no-ops, which is the third
+    reminder on this codebase to work that way. Actively cancelling would put
+    every write path in charge of unscheduling, and the bug is the nudge that
+    fires for a review written through the path somebody forgot.
+
+    **Two conditions at read time, not one**: the session must still be
+    `completed` *and* still unreviewed. A settlement can be corrected, and a
+    reminder about a session that is no longer finished is a message about
+    nothing.
+
+    **The reminder is a sweep, not a scheduled callback — measured, not
+    preferred.** The first build followed the house pattern and scheduled one
+    QStash message per settled session, the shape `book_session` uses. That
+    shape is built for *one* message on *one* request; this runs in a batch.
+    Over 2,000 settled sessions it made 2,000 sequential HTTP calls, turning a
+    4-second sweep into a two-minute one, and the `Scheduler` port has no batch
+    call to fix it with.
+
+    A query costs one round trip whatever the volume, needs no QStash token in a
+    batch job, and cannot leave a scheduled message behind for a review since
+    written — the condition *is* the query.
+
+    **Anchored on the request, not the settlement**, which is what makes the
+    suppression free: a session whose request the interval suppressed has no
+    `REVIEW_REQUESTED` row, so it is never nudged about something nobody asked
+    it. Anchoring on `session_events` would have needed decision 7 restated.
 
 12. **`PATCH /reviews/{id}` inside a 10-minute edit window.** Author only, all
     fields editable — it is a compose grace period, not an amendment, so no
@@ -363,7 +394,7 @@ are domain constants rather than configuration (decision 13).
 | 1 | `reviews` — the table, corrected scales, eligibility and card indexes, **ADR 0026** ✅ | yes | 1 |
 | 2 | `POST` and `PATCH /reviews`, and `/me/reviewable-sessions` — the interval in the query ✅ | no | 2 |
 | 3 | Mentor reviews read — aggregates, the dated list, the card ✅ | no | 2 |
-| 4 | `REVIEW_REQUESTED` + `REVIEW_REMINDER` producers | no | 2 |
+| 4 | `REVIEW_REQUESTED` + `REVIEW_REMINDER` producers ✅ | no | 2 |
 | 5 | The reviews loader — built on the dev row, rehearsed on the 53 | no | 1 |
 | ~~6~~ | ~~ADR~~ — **moved into PR 1 as ADR 0026** ✅ | — | — |
 
