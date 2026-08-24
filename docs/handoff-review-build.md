@@ -1,8 +1,9 @@
 # Handoff — the review build (M5a)
 
-**Status:** PRs 1–4 are built — the table, the write surface, the read, and the
-two messages that ask for a review. **Only the loader remains**, and only its
-rehearsal is blocked, on the 53-row export.
+**Status: every PR in this phase is built.** The table, the write surface, the
+read, the two messages, and the loader. **Nothing is blocked except the
+loader's rehearsal**, which needs the 53-row export — the code runs against the
+one dev row today.
 **Written:** 2026-08-20, from `FE-ui-guide/reviewUI/` measured against the codebase,
 `docs/edufurther-migration/` and the dev Bubble app.
 **Companion:** `handoff-session-build.md`, whose sequence this follows.
@@ -365,7 +366,7 @@ argued again in each PR that acts on them.
 
 | # | Question | Blocks |
 |---|---|---|
-| 1 | **The 53 production reviews, as a Data-tab export.** Confirms every rating is one of `1.67/3.34/5`, that no NPS is `0`, and that every row carries public text. No deploy needed | PR 5's **rehearsal**, no longer PR 1 |
+| 1 | **The 53 production reviews, as a Data-tab export.** Confirms every rating is one of `1.67/3.34/5`, that no NPS is `0`, and that every row carries public text. No deploy needed | **PR 5's rehearsal only — the loader is built.** Confirmed 2026-08-24 that all 53 carry public text; if any turn out empty the answer is to relax the column, not to quarantine, because they are real reviews |
 
 The `CHECK` is the safety net for question 1: shipping `1..3` means an
 unexpected production value fails the load **loudly at rehearsal**, which is the
@@ -395,7 +396,7 @@ are domain constants rather than configuration (decision 13).
 | 2 | `POST` and `PATCH /reviews`, and `/me/reviewable-sessions` — the interval in the query ✅ | no | 2 |
 | 3 | Mentor reviews read — aggregates, the dated list, the card ✅ | no | 2 |
 | 4 | `REVIEW_REQUESTED` + `REVIEW_REMINDER` producers ✅ | no | 2 |
-| 5 | The reviews loader — built on the dev row, rehearsed on the 53 | no | 1 |
+| 5 | The reviews loader — built on the dev row, rehearsed on the 53 ✅ | no | 1 |
 | ~~6~~ | ~~ADR~~ — **moved into PR 1 as ADR 0026** ✅ | — | — |
 
 One ADR, not three. Only the scale decision clears rule 3's bar on its own —
