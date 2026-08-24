@@ -14,6 +14,7 @@ the normal path rather than an edge case.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -221,3 +222,70 @@ async def test_a_quarantined_row_is_not_written(
 
     assert len(await stored(db_engine)) == 1
     assert result.ok
+
+
+# --------------------------------------------------------------------------
+# Reconciliation has to be able to fail
+# --------------------------------------------------------------------------
+
+
+async def test_a_row_that_never_landed_is_named(
+    db_engine: AsyncEngine, users: dict[str, UUID]
+) -> None:
+    """**The negative case, and its absence is why the dead check shipped.**
+
+    Every earlier assertion here was `result.ok`. Replace the body of
+    `reconcile_reviews` with one returning empty checks and all of them still
+    pass — so the only assertion that could catch a reconciliation which cannot
+    fail is one that expects it to.
+    """
+    plan = plan_reviews([record()], timezone=NEW_YORK)
+    async with db_engine.begin() as conn:
+        await ReviewLoader(conn).load(users=users, plan=plan)
+        await conn.execute(text("DELETE FROM reviews"))
+        result = await reconcile_reviews(conn, plan)
+
+    assert not result.ok
+    assert result.checks[0].missing == (plan.reviews[0].legacy_bubble_id,)
+
+
+async def test_a_row_stamped_by_the_importer_is_named(
+    db_engine: AsyncEngine, users: dict[str, UUID]
+) -> None:
+    """The other way a load can be wrong without being short a row.
+
+    Timestamps are compared to the microsecond for exactly this: a load that ran
+    with the trigger enabled produces values within a second or two of `now()`,
+    so a tolerant comparison passes the failure it exists to catch.
+    """
+    plan = plan_reviews([record()], timezone=NEW_YORK)
+    async with db_engine.begin() as conn:
+        await ReviewLoader(conn).load(users=users, plan=plan)
+        await conn.execute(text("UPDATE reviews SET updated_at = now()"))
+        result = await reconcile_reviews(conn, plan)
+
+    assert not result.ok
+    assert result.checks[0].wrong_timestamps == (plan.reviews[0].legacy_bubble_id,)
+
+
+async def test_a_source_row_the_transform_forgot_is_named(
+    db_engine: AsyncEngine, users: dict[str, UUID]
+) -> None:
+    """**The check that could never fire, now able to.**
+
+    The first version filtered the *plan's own* anchors for falsy ones — every
+    anchor is non-empty, so it returned `()` always — and both sides came from
+    the plan, which agrees with itself. Reconciliation needs a source list to be
+    missing from, which is the defect `reconcile.py` records shipping once
+    before.
+    """
+    plan = plan_reviews([record()], timezone=NEW_YORK)
+    forgotten = replace(plan, source_anchors=(*plan.source_anchors, "a-row-nobody-accounted-for"))
+
+    async with db_engine.begin() as conn:
+        await ReviewLoader(conn).load(users=users, plan=plan)
+        result = await reconcile_reviews(conn, forgotten)
+
+    assert not result.ok
+    assert result.unaccounted == ("a-row-nobody-accounted-for",)
+    assert "a-row-nobody-accounted-for" in result.report()

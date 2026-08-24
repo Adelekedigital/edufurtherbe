@@ -39,6 +39,7 @@ from app.domain.transform.reviews import ReviewPlan, plan_reviews
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.etl.cli import (
     EXIT_OK,
+    EXIT_REFUSED,
     EXIT_UNRESOLVED,
     ReconciliationError,
     configure_streams,
@@ -87,22 +88,31 @@ def main() -> int:
     plan = build_plan(args.from_export)
     print(plan.report())
 
+    # **A run that leaves something for a human is not a clean run.** A
+    # quarantined review is a mentee's words that did not migrate, and a
+    # `Creator` disagreement is two source fields contradicting each other about
+    # who wrote one. Returning 0 would let either scroll past in a cutover.
+    unresolved = bool(plan.quarantined or plan.creator_mismatches)
+
+    # **Computed before the dry-run branch, and that is the point.** The dry run
+    # *is* the rehearsal for the 53 rows, run before the freeze while Bubble is
+    # still writable — so it is the one moment the signal has to be trustworthy.
+    # Returning 0 here regardless would report success on a run that quarantined
+    # every row. Both sibling loaders return on this same expression.
     if args.dry_run:
-        return EXIT_OK
+        return EXIT_UNRESOLVED if unresolved else EXIT_OK
 
     try:
         asyncio.run(load(plan))
     except ReconciliationError as exc:
+        # `EXIT_REFUSED`, not `EXIT_UNRESOLVED`: the reconciliation raises inside
+        # the transaction, so nothing committed and the database is untouched —
+        # which is exactly what 1 means and 2 does not. Both sibling loaders
+        # return it from the identical handler.
         print(f"\n{exc}", file=sys.stderr)
-        return EXIT_UNRESOLVED
+        return EXIT_REFUSED
 
-    # **A run that loaded cleanly but left something for a human is not a clean
-    # run.** A quarantined review is a mentee's words that did not migrate, and a
-    # `Creator` disagreement is two source fields contradicting each other about
-    # who wrote one. Returning 0 would let both scroll past in a cutover.
-    if plan.quarantined or plan.creator_mismatches:
-        return EXIT_UNRESOLVED
-    return EXIT_OK
+    return EXIT_UNRESOLVED if unresolved else EXIT_OK
 
 
 if __name__ == "__main__":

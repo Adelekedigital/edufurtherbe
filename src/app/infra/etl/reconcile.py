@@ -610,8 +610,10 @@ class ReviewReconciliation:
         for check in self.checks:
             lines += [f"  MISSING {anchor}" for anchor in check.missing]
             lines += [f"  STAMPED BY IMPORTER {anchor}" for anchor in check.wrong_timestamps]
-        if self.unaccounted:
-            lines.append(f"FAIL unaccounted source rows: {len(self.unaccounted)}")
+        # **By name, never by count** — `cli.py` states the rule: "the next
+        # action is always to decide an alias or widen a seed, and a number
+        # supports neither".
+        lines += [f"  UNACCOUNTED {anchor}" for anchor in self.unaccounted]
         return "\n".join(lines)
 
 
@@ -632,6 +634,12 @@ async def reconcile_reviews(connection: AsyncConnection, plan: ReviewPlan) -> Re
     result = await connection.execute(text(STAMPED.format("reviews")))
     actual = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in result.mappings()}
 
+    # **Against the source list, not against the plan.** The first version
+    # filtered `accounted` for falsy anchors — every anchor is non-empty, so it
+    # could never fire — and both sides came from the same plan, which agrees
+    # with itself by construction. This file already records that exact defect
+    # shipping once: *"Every test passed, because none of them gave the plan a
+    # source list to be missing from."*
     accounted = {row.legacy_bubble_id for row in plan.reviews} | {
         row.legacy_bubble_id for row in plan.quarantined
     }
@@ -651,5 +659,5 @@ async def reconcile_reviews(connection: AsyncConnection, plan: ReviewPlan) -> Re
                 ),
             ),
         ),
-        unaccounted=tuple(sorted(a for a in accounted if not a)),
+        unaccounted=_unaccounted_of(plan.source_anchors, tuple(accounted)),
     )

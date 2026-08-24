@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.domain.reviews import RECOMMEND_SCALE
 from app.domain.transform.reviews import MENTOR_SCALE, plan_reviews
 
 LAGOS = ZoneInfo("Africa/Lagos")
@@ -162,7 +163,7 @@ def test_a_creator_that_disagrees_is_reported_rather_than_absorbed() -> None:
     plan = plan_reviews([record(Creator="somebody-else")], timezone=LAGOS)
 
     assert plan.reviews[0].reviewed_by == "1734288518855x324438210652363800"
-    assert plan.creator_mismatches[0].ignored == "somebody-else"
+    assert "somebody-else" in plan.creator_mismatches[0].detail
 
 
 def test_the_export_zone_decides_the_instant() -> None:
@@ -206,8 +207,18 @@ def test_a_canonicalised_record_reads_the_same_as_a_raw_one() -> None:
     assert raw == canonical
 
 
+@pytest.mark.skipif(
+    not DEV_EXPORT.is_file(),
+    reason=f"no dev export at {DEV_EXPORT}; script-data-dev/ is gitignored",
+)
 def test_the_real_dev_export_maps_as_measured() -> None:
     """The one row that exists, through the whole transform.
+
+    **Skipped rather than failed when the export is absent.** `script-data-dev/`
+    is gitignored, so a fresh clone, CI or a worktree has no copy — and a hard
+    failure there turns somebody else's gate red over an artefact they were never
+    given. The database tests take the same line for the same reason: a missing
+    `TEST_DATABASE_URL` skips with a reason rather than erroring.
 
     Its four ratings are `5 / 3.34 / 5 / 3.34`, which is the only real evidence
     that the scaling is what the handoff says it is — and it exercises two of the
@@ -223,3 +234,92 @@ def test_the_real_dev_export_maps_as_measured() -> None:
     assert (row.communication_rating, row.knowledge_rating) == (3, 2)
     assert (row.practicality_rating, row.support_rating) == (3, 2)
     assert (row.valuable_rating, row.nps_recommend_score) == (4, 8)
+
+
+def test_ratings_are_paired_by_name_not_by_position() -> None:
+    """**A positional zip would swap two ratings silently.**
+
+    The first version zipped the source names against `MENTOR_RATINGS`, whose own
+    docstring calls it "the order the form asks them" — a UI ordering with
+    nothing saying the ETL depends on it. Reordering it for a form change passes
+    `strict=True`, passes all four CHECKs, and moves every migrated review's
+    answers. The single dev row (`3 / 2 / 3 / 2`) cannot see the two likeliest
+    swaps, which is why this asserts the pairing rather than a loaded row.
+    """
+    plan = plan_reviews(
+        [
+            record(
+                communicationRating="1.67",
+                knowledgeRating="3.34",
+                practicalityRating="5",
+                supportRating="1.67",
+            )
+        ],
+        timezone=LAGOS,
+    )
+
+    row = plan.reviews[0]
+    assert (row.communication_rating, row.knowledge_rating) == (1, 2)
+    assert (row.practicality_rating, row.support_rating) == (3, 1)
+
+
+def test_an_unreadable_modified_date_is_quarantined_not_absorbed() -> None:
+    """**Absent may fall back; unreadable may not.**
+
+    A row Bubble never stamped can honestly take its creation time. A row Bubble
+    stamped with something unparseable is a fact about the export, and
+    substituting `created_at` fabricates a value it never sent — which
+    reconciliation then *confirms*, because it compares the table against this
+    same plan.
+    """
+    plan = plan_reviews([record(**{"Modified Date": "not a date"})], timezone=LAGOS)
+
+    assert plan.reviews == ()
+    assert "Modified Date" in plan.quarantined[0].reason
+
+
+def test_an_absent_modified_date_falls_back_to_creation() -> None:
+    """The accepting half — without it the rule above could refuse everything."""
+    plan = plan_reviews([record(**{"Modified Date": ""})], timezone=LAGOS)
+
+    assert plan.reviews[0].updated_at == plan.reviews[0].created_at
+
+
+def test_a_repeated_anchor_is_quarantined_rather_than_collapsed() -> None:
+    """**Otherwise it disappears twice over.** The upsert collapses a repeated
+    anchor into one row and reconciliation keys `expected` on the same value, so
+    a review the operator was told would load silently does not, with every check
+    green."""
+    plan = plan_reviews([record(), record()], timezone=LAGOS)
+
+    assert len(plan.reviews) == 1
+    assert "repeats this unique id" in plan.quarantined[0].reason
+    assert plan.source_rows == 2
+
+
+def test_a_quarantined_row_records_no_creator_disagreement() -> None:
+    """The note is taken only once the row is certain to exist.
+
+    Recorded earlier, a row that was then quarantined still counted as a
+    mismatch — so two identical rows were accounted for differently, and because
+    a mismatch forces a non-zero exit it also changed the run's verdict.
+    """
+    plan = plan_reviews(
+        [record(Creator="somebody-else", communicationRating="2.5")], timezone=LAGOS
+    )
+
+    assert plan.reviews == ()
+    assert plan.creator_mismatches == ()
+
+
+def test_the_point_scales_take_their_bounds_from_the_shared_constants() -> None:
+    """`VALUABLE_SCALE` and `RECOMMEND_SCALE` are what the column renders its
+    CHECKs from. Retyping `1..10` here would be the rule in two places — and the
+    register still asks whether any of the 53 rows carries NPS `0`, so relaxing
+    that bound must not leave the loader quarantining every row it just made
+    legal."""
+    low, high = RECOMMEND_SCALE
+
+    assert plan_reviews([record(npsRecommendScore=str(low))], timezone=LAGOS).reviews
+    assert plan_reviews([record(npsRecommendScore=str(high))], timezone=LAGOS).reviews
+    assert plan_reviews([record(npsRecommendScore=str(high + 1))], timezone=LAGOS).reviews == ()

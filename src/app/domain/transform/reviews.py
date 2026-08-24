@@ -45,7 +45,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.domain.bubble import blank_to_none, legacy_anchor, parse_timestamp
-from app.domain.reviews import MENTOR_RATINGS
+from app.domain.reviews import RECOMMEND_SCALE, VALUABLE_SCALE
+from app.domain.transform.sessions import Disagreement
 
 __all__ = [
     "MENTOR_SCALE",
@@ -63,16 +64,29 @@ __all__ = [
 #: is the behaviour the 53 unseen production rows need.
 MENTOR_SCALE: dict[str, int] = {"1.67": 1, "3.34": 2, "5": 3}
 
-#: The two point scales that need no mapping — they are stored as chosen.
-POINT_SCALES = ("likertValuableRating", "npsRecommendScore")
+#: The two genuine point scales, with the field each is bounded by. **Named
+#: rather than retyped at the point of use**, and the bound comes from
+#: `domain/reviews.py` — the same constants the model renders its CHECKs from, so
+#: the transform and the column cannot disagree about what is legal (#8).
+POINT_COLUMNS: dict[str, tuple[str, tuple[int, int]]] = {
+    "likertValuableRating": ("valuable_rating", VALUABLE_SCALE),
+    "npsRecommendScore": ("nps_recommend_score", RECOMMEND_SCALE),
+}
 
-#: Legacy field names, in the order the table's columns appear.
-SOURCE_RATINGS = (
-    "communicationRating",
-    "knowledgeRating",
-    "practicalityRating",
-    "supportRating",
-)
+#: Legacy field name to column, **paired by name rather than by position**.
+#:
+#: The first version zipped this against `MENTOR_RATINGS`, whose own docstring
+#: calls it *"the four questions… in the order the form asks them"* — a **UI**
+#: ordering, with nothing anywhere saying the ETL depends on it. Reordering it
+#: for a form change would silently swap two ratings on every migrated review:
+#: `strict=True` still passes, all four CHECKs still pass, and the single dev row
+#: (`3 / 2 / 3 / 2`) cannot see the two likeliest swaps.
+RATING_COLUMNS: dict[str, str] = {
+    "communicationRating": "communication_rating",
+    "knowledgeRating": "knowledge_rating",
+    "practicalityRating": "practicality_rating",
+    "supportRating": "support_rating",
+}
 
 
 def _text(value: Any) -> str | None:
@@ -119,20 +133,17 @@ class QuarantinedReview:
 
 
 @dataclass(frozen=True, slots=True)
-class Disagreement:
-    """Two source fields stating different things, and which one won."""
-
-    legacy_bubble_id: str
-    field: str
-    kept: str
-    ignored: str
-
-
-@dataclass(frozen=True, slots=True)
 class ReviewPlan:
     """Everything one extract turns into, before any of it is written."""
 
     reviews: tuple[ReviewRow, ...]
+
+    #: Every anchor the export offered, in order. **Reconciliation needs a
+    #: source list to be missing from**: comparing the plan against itself
+    #: agrees with itself and proves nothing, which is the defect
+    #: `reconcile.py` records shipping once before — *"every test passed,
+    #: because none of them gave the plan a source list to be missing from"*.
+    source_anchors: tuple[str, ...] = ()
 
     #: Source rows that cannot be written. Reported so the count adds up.
     quarantined: tuple[QuarantinedReview, ...] = ()
@@ -145,19 +156,14 @@ class ReviewPlan:
     @property
     def source_rows(self) -> int:
         """Every row the export offered, however it was accounted for."""
-        return len(self.reviews) + len(self.quarantined)
+        return len(self.source_anchors)
 
-    @property
-    def ok(self) -> bool:
-        """Whether the load may proceed at all.
-
-        **A quarantine is not an error**, which is the distinction the other
-        transforms draw too: a row nobody can attribute is a fact about the
-        export, and refusing the whole load over it would hold 52 good reviews
-        hostage to one bad one. What makes a run *not clean* is reported
-        separately, and `load_reviews.py` exits non-zero for it.
-        """
-        return True
+    #: **There is deliberately no `ok`.** The sibling transforms carry one
+    #: because they have failure modes distinct from a quarantine — an
+    #: overlapping window aborts the load outright. This one does not: every way
+    #: a source row can fail is a quarantine, and a quarantine is not a reason to
+    #: refuse 52 good reviews. A property returning a literal `True` would read
+    #: like a gate and be none.
 
     def report(self) -> str:
         """The operator-facing account of one run.
@@ -177,10 +183,7 @@ class ReviewPlan:
             f"Creator disagreed with reviewedBy: {len(self.creator_mismatches)}",
         ]
         lines += [f"  QUARANTINED {row.legacy_bubble_id}: {row.reason}" for row in self.quarantined]
-        lines += [
-            f"  CREATOR {row.legacy_bubble_id}: kept {row.kept}, ignored {row.ignored}"
-            for row in self.creator_mismatches
-        ]
+        lines += [f"  CREATOR {row}" for row in self.creator_mismatches]
         return "\n".join(lines)
 
 
@@ -194,21 +197,29 @@ def _ordinal(raw: str | None, *, field: str) -> tuple[int | None, str | None]:
     return ordinal, None
 
 
-def _point(raw: str | None, *, field: str, high: int) -> tuple[int | None, str | None]:
+def _point(
+    raw: str | None, *, field: str, bounds: tuple[int, int]
+) -> tuple[int | None, str | None]:
     """A genuine point scale, parsed and bounded.
 
     Bounded here as well as by the column, because the transform is where a
     reason can be written down. The `CHECK` would refuse the row with a message
     about a constraint; this refuses it with a message about a field.
+
+    **The bound is the same constant the column renders its CHECK from.** Typing
+    `1..10` here would be the rule in two places, and the register already asks
+    whether any of the 53 rows carries NPS `0` — relaxing that bound would move
+    the column and leave this quarantining every row it just made legal (#8).
     """
+    low, high = bounds
     if raw is None:
         return None, f"{field} is absent"
     try:
         value = int(raw)
     except ValueError:
         return None, f"{field} is {raw!r}, which is not a whole number"
-    if not 1 <= value <= high:
-        return None, f"{field} is {value}, outside 1..{high}"
+    if not low <= value <= high:
+        return None, f"{field} is {value}, outside {low}..{high}"
     return value, None
 
 
@@ -226,8 +237,13 @@ def _either(record: dict[str, Any], canonical: str, raw: str) -> Any:
     return value if value is not None else record.get(raw)
 
 
-def _stamp(value: Any, *, timezone: dt.tzinfo) -> dt.datetime | None:
-    """One export timestamp, or ``None`` if it is absent or unreadable.
+def _stamp(value: Any, *, timezone: dt.tzinfo) -> tuple[dt.datetime | None, str | None]:
+    """One export timestamp, and which of the two ways it can be missing.
+
+    **Absent and unreadable are different facts.** Collapsing them let an
+    unparseable `Modified Date` silently become `created_at`, which is a value
+    Bubble never sent — and reconciliation cannot catch it, because it compares
+    the table against the plan that invented it.
 
     **The zone is supplied rather than assumed**, because the export renders
     local times with no offset at all — `parse_timestamp` raises rather than
@@ -237,11 +253,11 @@ def _stamp(value: Any, *, timezone: dt.tzinfo) -> dt.datetime | None:
     """
     raw = _text(value)
     if raw is None:
-        return None
+        return None, "is absent"
     try:
-        return parse_timestamp(raw, assume=timezone)
+        return parse_timestamp(raw, assume=timezone), None
     except ValueError:
-        return None
+        return None, f"is {raw!r}, which is not a timestamp this export writes"
 
 
 def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> ReviewPlan:
@@ -254,9 +270,13 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
     rows: list[ReviewRow] = []
     quarantined: list[QuarantinedReview] = []
     mismatches: list[Disagreement] = []
+    seen: set[str] = set()
+
+    source_anchors: list[str] = []
 
     for record in records:
         anchor = legacy_anchor(record)
+        source_anchors.append(anchor or "<no id>")
         author = _text(record.get("reviewedBy"))
         subject = _text(record.get("reviewedFor"))
         public = _text(record.get("publicReview"))
@@ -264,6 +284,14 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
         if not anchor:
             quarantined.append(QuarantinedReview("<no id>", "the row carries no unique id"))
             continue
+        if anchor in seen:
+            # **Otherwise it disappears twice over.** The upsert collapses a
+            # repeated anchor into one row and `reconcile_reviews` keys `expected`
+            # on the same value, so a review the operator was told would load
+            # silently does not, with every check green.
+            quarantined.append(QuarantinedReview(anchor, "the export repeats this unique id"))
+            continue
+        seen.add(anchor)
         if not author or not subject:
             quarantined.append(QuarantinedReview(anchor, "reviewedBy or reviewedFor is absent"))
             continue
@@ -278,7 +306,7 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
 
         values: dict[str, int] = {}
         reason: str | None = None
-        for source, column in zip(SOURCE_RATINGS, MENTOR_RATINGS, strict=True):
+        for source, column in RATING_COLUMNS.items():
             ordinal, reason = _ordinal(_text(record.get(source)), field=source)
             if ordinal is None:
                 break
@@ -287,47 +315,57 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
             quarantined.append(QuarantinedReview(anchor, reason))
             continue
 
-        valuable, reason = _point(
-            _text(record.get("likertValuableRating")), field="likertValuableRating", high=5
-        )
-        if valuable is None:
-            quarantined.append(QuarantinedReview(anchor, reason or "likertValuableRating"))
-            continue
-        nps, reason = _point(
-            _text(record.get("npsRecommendScore")), field="npsRecommendScore", high=10
-        )
-        if nps is None:
-            quarantined.append(QuarantinedReview(anchor, reason or "npsRecommendScore"))
+        for source, (column, bounds) in POINT_COLUMNS.items():
+            point, reason = _point(_text(record.get(source)), field=source, bounds=bounds)
+            if point is None:
+                break
+            values[column] = point
+        if reason is not None:
+            quarantined.append(QuarantinedReview(anchor, reason))
             continue
 
+        created, reason = _stamp(_either(record, "created_at", "Creation Date"), timezone=timezone)
+        if created is None:
+            quarantined.append(QuarantinedReview(anchor, f"Creation Date {reason}"))
+            continue
+        modified, reason = _stamp(
+            _either(record, "modified_at", "Modified Date"), timezone=timezone
+        )
+        if modified is None and reason != "is absent":
+            # **Absent may fall back; unreadable may not.** A row Bubble never
+            # stamped can honestly take its creation time. A row Bubble stamped
+            # with something this cannot read is a fact about the export, and
+            # substituting `created_at` fabricates a value it never sent — which
+            # reconciliation then confirms, because it compares the table against
+            # this same plan.
+            quarantined.append(QuarantinedReview(anchor, f"Modified Date {reason}"))
+            continue
+        # **Recorded only once the row is certain to exist.** Noting it earlier
+        # counted a disagreement on a row that was then quarantined, so two
+        # identical rows were accounted for differently — and a mismatch forces
+        # a non-zero exit, so it also changed the run's verdict.
         creator = _text(record.get("Creator"))
         if creator is not None and creator != author:
-            mismatches.append(Disagreement(anchor, "Creator", kept=author, ignored=creator))
+            mismatches.append(
+                Disagreement(anchor, f"Creator is {creator}, kept reviewedBy {author}")
+            )
 
-        created = _stamp(_either(record, "created_at", "Creation Date"), timezone=timezone)
-        if created is None:
-            quarantined.append(QuarantinedReview(anchor, "Creation Date is absent or unparseable"))
-            continue
         rows.append(
             ReviewRow(
                 legacy_bubble_id=anchor,
                 reviewed_by=author,
                 reviewed_for=subject,
-                valuable_rating=valuable,
-                nps_recommend_score=nps,
                 public_review=public,
                 private_review=_text(record.get("privateReview")),
                 created_at=created,
-                updated_at=_stamp(
-                    _either(record, "modified_at", "Modified Date"), timezone=timezone
-                )
-                or created,
+                updated_at=modified or created,
                 **values,
             )
         )
 
     return ReviewPlan(
         reviews=tuple(rows),
+        source_anchors=tuple(source_anchors),
         quarantined=tuple(quarantined),
         creator_mismatches=tuple(mismatches),
     )
