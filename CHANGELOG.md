@@ -28,6 +28,22 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **The reviews loader.** `scripts/load_reviews.py`, with the transform in
+  `domain/transform/reviews.py` and the write in `infra/etl/reviews.py`.
+
+  **The scale is a dictionary, never a cast.** `1.67 → 1`, `3.34 → 2`, `5 → 3`,
+  keyed on the string the export renders. A cast would look like it worked:
+  `3.34::smallint` rounds to `3` and *passes* `CHECK (1..3)`, storing *Excellent*
+  where the mentee chose *Great*. A lookup refuses what it has never seen, which
+  is the behaviour 53 unseen rows need.
+
+  Every migrated row takes `session_id = NULL`. The runbook says to link by
+  `reviewedBy` + `reviewedFor` + proximity; that has no anchor, and a fabricated
+  link is irreversible where a later backfill is additive.
+
+  Re-runnable: `ON CONFLICT (legacy_bubble_id)`, with `trg_set_updated_at` held
+  off so a second load does not stamp every migrated row with the import clock.
+
 - **A finished session asks the mentee how it went.** `REVIEW_REQUESTED` is
   produced by the transition into `completed` — by `settle_attendance`, the sweep
   that decides `completed` against `no_show` from attendance — so a session

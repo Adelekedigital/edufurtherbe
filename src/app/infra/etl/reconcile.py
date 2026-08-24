@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.domain.transform import UserRow
 from app.domain.transform.availability import AvailabilityPlan
 from app.domain.transform.profiles import ProfilePlan
+from app.domain.transform.reviews import ReviewPlan
 from app.domain.transform.sessions import SessionPlan
 from app.infra.etl.profiles import ProfileCounts
 
@@ -573,3 +574,90 @@ def _unaccounted_of(source: Sequence[str], accounted: Sequence[str]) -> tuple[st
     """
     decided = set(accounted)
     return tuple(sorted(anchor for anchor in source if anchor not in decided))
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewReconciliation:
+    """One table, and the identity that has to hold for a phase this small.
+
+    **Every source row is accounted for**, which is the same identity
+    `reconcile_availability` settled on and for a related reason: rows can be
+    quarantined on purpose, so `source == loaded` is the wrong assertion and the
+    fix somebody reaches for is a loosened comparison that checks nothing.
+
+    Here the accounting is exact rather than fanned out — one review becomes one
+    row or one quarantine — so an unaccounted anchor is a bug rather than a
+    shape.
+    """
+
+    checks: tuple[TableCheck, ...]
+
+    #: Source anchors that became neither a row nor a stated quarantine.
+    unaccounted: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.unaccounted and all(check.ok for check in self.checks)
+
+    def report(self) -> str:
+        lines = [
+            f"{'ok' if check.ok else 'FAIL':4} {check.table:30} "
+            f"expected {check.expected:5}  loaded {check.loaded:5}  "
+            f"missing {len(check.missing):3}  stamped-by-importer "
+            f"{len(check.wrong_timestamps):3}"
+            for check in self.checks
+        ]
+        for check in self.checks:
+            lines += [f"  MISSING {anchor}" for anchor in check.missing]
+            lines += [f"  STAMPED BY IMPORTER {anchor}" for anchor in check.wrong_timestamps]
+        # **By name, never by count** — `cli.py` states the rule: "the next
+        # action is always to decide an alias or widen a seed, and a number
+        # supports neither".
+        lines += [f"  UNACCOUNTED {anchor}" for anchor in self.unaccounted]
+        return "\n".join(lines)
+
+
+async def reconcile_reviews(connection: AsyncConnection, plan: ReviewPlan) -> ReviewReconciliation:
+    """Compare the reviews table against the plan that produced it.
+
+    Expected comes from the plan; actual comes from the database. Neither
+    re-derives the other — a check whose two sides come from the same place
+    agrees with itself and proves nothing, which is also why `ReviewLoader`
+    returns no counts.
+
+    Timestamps are compared **to the microsecond**, for the reason
+    `reconcile_users` gives: a load that ran with `trg_set_updated_at` enabled
+    produces values within a second or two of `now()`, so a tolerant comparison
+    passes exactly the failure this exists to catch.
+    """
+    expected = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in plan.reviews}
+    result = await connection.execute(text(STAMPED.format("reviews")))
+    actual = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in result.mappings()}
+
+    # **Against the source list, not against the plan.** The first version
+    # filtered `accounted` for falsy anchors — every anchor is non-empty, so it
+    # could never fire — and both sides came from the same plan, which agrees
+    # with itself by construction. This file already records that exact defect
+    # shipping once: *"Every test passed, because none of them gave the plan a
+    # source list to be missing from."*
+    accounted = {row.legacy_bubble_id for row in plan.reviews} | {
+        row.legacy_bubble_id for row in plan.quarantined
+    }
+    return ReviewReconciliation(
+        checks=(
+            TableCheck(
+                table="reviews",
+                expected=len(expected),
+                loaded=len(actual),
+                missing=tuple(sorted(set(expected) - set(actual))),
+                wrong_timestamps=tuple(
+                    sorted(
+                        anchor
+                        for anchor, stamps in expected.items()
+                        if anchor in actual and actual[anchor] != stamps
+                    )
+                ),
+            ),
+        ),
+        unaccounted=_unaccounted_of(plan.source_anchors, tuple(accounted)),
+    )
