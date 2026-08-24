@@ -39,6 +39,7 @@ from app.api.schemas.common import (
     decode_cursor,
     decode_id_cursor,
     decode_offset_cursor,
+    encode_cursor,
     encode_id_cursor,
     next_offset_cursor,
 )
@@ -125,7 +126,7 @@ from app.infra.db.intake_store import (
     list_questions,
     update_question,
 )
-from app.infra.db.mentor_public_store import get_public_mentor
+from app.infra.db.mentor_public_store import get_public_mentor, get_public_mentor_id
 from app.infra.db.mentor_search_store import search_mentors
 from app.infra.db.mentor_status_store import (
     decide,
@@ -155,7 +156,8 @@ from app.infra.db.profile_writer import (
     upsert_profile,
 )
 from app.infra.db.review_eligibility import reviewable_sessions
-from app.infra.db.review_reader import get_review_row
+from app.infra.db.review_reader import get_review_row, list_mentor_reviews
+from app.infra.db.review_stats import mentor_review_stats
 from app.infra.db.review_writer import edit_review, write_review
 from app.infra.db.session_stats import mentor_stats
 
@@ -1701,6 +1703,7 @@ async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
         "scholarships": await list_awards(session, user_id),
         "languages": await list_languages(session, user_id),
         "stats": await mentor_stats(session, user_id),
+        "reviews": await mentor_review_stats(session, user_id),
     }
 
 
@@ -1972,3 +1975,39 @@ async def own_reviewable_sessions(
 WrittenReviewDep = Annotated[dict[str, Any], Depends(written_review)]
 EditedReviewDep = Annotated[dict[str, Any], Depends(edited_review)]
 ReviewableSessionsDep = Annotated[list[dict[str, Any]], Depends(own_reviewable_sessions)]
+
+
+async def mentor_reviews_page(
+    handle: str,
+    session: SessionDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """One page of a mentor's published reviews.
+
+    The handle resolves through the same predicate and the same visibility pair
+    the profile uses, so a paused mentor's reviews are absent exactly as their
+    profile is. `404` rather than an empty page: no such mentor is a different
+    answer from a mentor with nothing to show, and a client renders them
+    differently.
+    """
+    mentor = await get_public_mentor_id(session, handle)
+    if mentor is None:
+        raise NotFoundError("no such mentor")
+    # The **two-part** codec, because the list sorts on `created_at` rather than
+    # on the id. Mispairing the two forms is a paging bug that only shows on page
+    # two, which this endpoint has already had once.
+    rows, has_more = await list_mentor_reviews(
+        session, mentor, limit=clamp_limit(limit), after=decode_cursor(cursor)
+    )
+    # **Minted here, beside the decode.** `mentor_page` states the rule: the token
+    # is issued where the sort key is known, because deriving it again in the
+    # route is one rule in two places — and the two halves drifting apart is
+    # exactly the defect that made every cursor this endpoint issued invalid.
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_cursor(last["created_at"].isoformat(), last["id"])
+
+
+MentorReviewsDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(mentor_reviews_page)]

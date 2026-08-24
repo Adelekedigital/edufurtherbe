@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.schemas.common import Normalised
 from app.domain.reviews import (
@@ -236,3 +236,115 @@ class ReviewableSessionRead(BaseModel):
     session_type_name: str | None = Field(
         default=None, description="What the mentee booked, for a picker to label the row."
     )
+
+
+class RatingAggregate(BaseModel):
+    """One of the four mentor questions, averaged.
+
+    **Both the ordinal mean and the percentage**, derived server-side and pinned
+    to each other by a test. Publishing only the average puts the mapping in
+    every client that renders it — the second copy of one rule that
+    non-negotiable #8 calls a defect. Publishing only the percentage throws away
+    the ordinal a future display might want.
+
+    Null rather than zero over no reviews: zero percent says *rated badly* where
+    null says *nobody has rated them*, which is the distinction
+    `attendance_rate` already draws.
+    """
+
+    average: float | None = Field(
+        default=None, description="Mean of the three-point scale, to two places."
+    )
+    percent: int | None = Field(
+        default=None, description="`round(100 * average / 3)`, computed in SQL."
+    )
+
+    @classmethod
+    def of(cls, row: dict[str, Any], rating: str) -> RatingAggregate:
+        average = row[f"{rating}_average"]
+        percent = row[f"{rating}_percent"]
+        return cls(
+            average=None if average is None else float(average),
+            percent=None if percent is None else int(percent),
+        )
+
+
+class ReviewSummaryRead(BaseModel):
+    """What a mentor's reviews add up to, as the profile renders it.
+
+    Mirrors the screen: a total, a recommendation figure, a session value out of
+    five, and the four questions as percentages.
+
+    **The four fields are named for `MENTOR_RATINGS` and pinned to it.** Pydantic
+    ignores unknown keys by default, so a fifth question — which the column, the
+    `CHECK` and `profile_summary` would all pick up on their own — would be
+    averaged in SQL and then dropped here in silence.
+    `test_the_summary_publishes_every_rating_the_database_averages` is what turns
+    that into a failure.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: **Never null** — a count over no rows is nought, and a nullable count
+    #: makes every client write the same coalesce while leaving "no data" and
+    #: "none yet" indistinguishable. The same call `completed_sessions` makes.
+    count: int = 0
+    #: Mean `valuable_rating`, `1..5`. The figure shown as `X/5`, and the one the
+    #: discovery card carries.
+    session_value: float | None = None
+    #: Mean recommend score as a percentage of ten. `97%` on the profile.
+    recommended_percent: int | None = None
+
+    #: **Named exactly as `ReviewRead` names them**, and as the columns do. One
+    #: API spelling the same four questions two ways — `communication_rating` on a
+    #: review, `communication` on the summary — puts the mapping between them in
+    #: every client that reads both, which is the argument `RatingAggregate` makes
+    #: for publishing `percent` beside `average`, applied against itself.
+    communication_rating: RatingAggregate = Field(default_factory=RatingAggregate)
+    knowledge_rating: RatingAggregate = Field(default_factory=RatingAggregate)
+    practicality_rating: RatingAggregate = Field(default_factory=RatingAggregate)
+    support_rating: RatingAggregate = Field(default_factory=RatingAggregate)
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> ReviewSummaryRead:
+        value = row["session_value"]
+        recommended = row["recommended_percent"]
+        return cls(
+            count=int(row["review_count"] or 0),
+            session_value=None if value is None else float(value),
+            recommended_percent=None if recommended is None else int(recommended),
+            **{rating: RatingAggregate.of(row, rating) for rating in MENTOR_RATINGS},
+        )
+
+
+class MentorReviewRead(BaseModel):
+    """One review on a mentor's public profile.
+
+    **The author is a first name and an initial**, never a surname — the
+    attribution the product chose, and the surname is not selected at all rather
+    than dropped here.
+
+    `private_review` is absent, as it is from every read model: it is feedback
+    about the platform and the mentor never sees it.
+    """
+
+    id: UUID
+    created_at: datetime
+    public_review: str
+    #: This review's own `valuable_rating`, shown as the `X/5` badge beside it.
+    session_value: int
+    author_first_name: str | None = None
+    author_last_initial: str | None = None
+    author_institution: str | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> MentorReviewRead:
+        return cls(
+            id=row["id"],
+            created_at=row["created_at"],
+            public_review=str(row["public_review"]),
+            session_value=int(row["valuable_rating"]),
+            author_first_name=row["author_first_name"],
+            author_last_initial=row["author_last_initial"],
+            author_institution=row["author_institution"],
+        )
