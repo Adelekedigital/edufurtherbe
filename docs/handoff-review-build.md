@@ -428,11 +428,63 @@ Three things found while measuring `reviewUI/`, none of them backend work.
 | # | What | Where |
 |---|---|---|
 | 1 | **The recommend question's scale labels are wrong.** "How likely are you to recommend this mentor to others?" renders `Not valuable at all` / `Extremely valuable`, copied from the question directly above it. It should read `Not at all likely` / `Extremely likely`. The scale itself is right — `1..10`, no zero | step 2 |
-| 2 | **The percentage belongs to the API, not the client.** The read publishes `count`, `average` and `percent` together, derived server-side and pinned by a test. A client that recomputes `percent` from `average` creates the second copy of one mapping that non-negotiable #8 calls a defect | profile Reviews tab |
+| 2 | **The percentage belongs to the API, not the client.** Both `average` and `percent` are published, derived server-side and pinned by a test. A client that recomputes `percent` from `average` creates the second copy of one mapping that non-negotiable #8 calls a defect. **The shape is below** — this row described a draft, and what shipped nests the four questions | profile Reviews tab |
 | 3 | **The screenshot file names invert the order** — `reviewquestion3.png` is step 1 and `reviewquestion1.png` is step 3. A reading hazard, not a product bug | `FE-ui-guide/reviewUI/` |
 
 Item 2 is the one that matters: without it the FE will reasonably assume the
 percentage is theirs to compute.
+
+### What the read actually returns
+
+**Corrected 2026-08-24.** The row above originally described `count`, `average`
+and `percent` at the top level. That was the draft; PR 3 shipped the four
+questions *nested*, and named for their columns rather than stripped — one API
+spelling the same question two ways puts the mapping between them in every
+client that reads both.
+
+`GET /api/v1/mentors/{handle}` — the `reviews` block:
+
+```json
+{
+  "count": 3,
+  "session_value": 4.67,
+  "recommended_percent": 97,
+  "communication_rating": { "average": 2.67, "percent": 89 },
+  "knowledge_rating":     { "average": 3.0,  "percent": 100 },
+  "practicality_rating":  { "average": 3.0,  "percent": 100 },
+  "support_rating":       { "average": 3.0,  "percent": 100 }
+}
+```
+
+`count` is **`0`** for a mentor nobody has reviewed; every average and percentage
+is **`null`**. That split is deliberate: a count over no rows is nought, a ratio
+over no rows is unknown, and rendering a new mentor as nought out of five is a
+lie the card cannot take back.
+
+`session_value` is the figure the screen shows as `X/5` — the mean of the
+five-point *valuable* question, not one of the four. The four are a three-point
+scale, which is why `percent` is `average / 3`, and why "Not great" is **33%**
+rather than 0%.
+
+`GET /api/v1/mentors/{handle}/reviews` — one row of the dated list:
+
+```json
+{
+  "id": "…", "created_at": "…", "public_review": "…",
+  "session_value": 4,
+  "author_first_name": "Fauziyah",
+  "author_last_initial": "F",
+  "author_institution": "York St John university"
+}
+```
+
+`session_value` on a row is **that review's** answer, not the mentor's average.
+The surname is never sent — it is computed away in SQL, so it does not reach the
+application at all. `private_review` is on no read model: it is feedback about
+the platform and the mentor never sees it.
+
+The list is a `Page` with an opaque `next_cursor`; ordered by when the review was
+*written*, which is not the same as the id once the 53 migrated rows land.
 
 ---
 
