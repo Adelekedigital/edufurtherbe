@@ -40,6 +40,8 @@ from app.domain.enums import (
     AuthProvider,
     AvailabilityExceptionType,
     ConferencingProvider,
+    CreditReason,
+    CreditSource,
     IntakeStatus,
     LanguageProficiency,
     LegalDocumentType,
@@ -160,6 +162,13 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
             "ck_session_events_to_status_is_known",
         }
     ),
+    # M5b — the first vocabularies declared *after* #100 finished, so they are
+    # born as `text` + `CHECK` rather than converted into it. Both are closed
+    # and both are deliberately short: the canonical DDL declares seven sources
+    # and a sixth reason, and #21 names `credit_source` as its own cautionary
+    # example. A member with no producer is the defect, not the omission.
+    CreditSource: frozenset({"ck_credit_lots_source_is_known"}),
+    CreditReason: frozenset({"ck_credit_transactions_reason_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.

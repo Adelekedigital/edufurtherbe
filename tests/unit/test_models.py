@@ -28,6 +28,8 @@ from conftest import PROJECT_ROOT
 # from a silently smaller test run into a failure.
 EXPECTED_MODELS = {
     "Country",
+    "CreditLot",
+    "CreditTransaction",
     "Language",
     # M1 identity
     "User",
@@ -110,7 +112,12 @@ TIMESTAMP_COLUMNS = ("created_at", "updated_at")
 #: column nothing could ever move — the same emptiness `usage_count` was deleted
 #: for. Listing the exemption makes it a decision somebody made, and a new model
 #: that quietly drops `updated_at` still fails.
-APPEND_ONLY = frozenset({"MentorStatusEvent", "SessionEvent"})
+#: Tables whose rows state what happened at a moment. A fact that can be
+#: edited is not a log, so these carry `created_at` alone — no `updated_at`
+#: column and no `trg_set_updated_at`. `CreditTransaction` joins them under
+#: M5b decision 8; the canonical DDL gives it the column while calling the
+#: table append-only a few lines above.
+APPEND_ONLY = frozenset({"MentorStatusEvent", "SessionEvent", "CreditTransaction"})
 
 
 def mapped_classes() -> list[type]:
