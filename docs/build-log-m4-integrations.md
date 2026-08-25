@@ -4,7 +4,8 @@
 a message at every stage.
 **Written:** 2026-08-22, from the merged PRs rather than from memory.
 **Plan:** `handoff-session-build.md`, whose numbered sequence this executed.
-**Next:** `handoff-review-build.md` — M5a, reviews.
+**Next:** `handoff-review-build.md` — M5a, reviews. **Built and merged**; its
+own record is `build-log-m5a-reviews.md`.
 
 **A record, not a plan.** The `handoff-*` documents say what is going to be
 built and why; this says what was, what it decided along the way, and what it

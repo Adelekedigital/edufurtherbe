@@ -7,6 +7,9 @@ one dev row today.
 **Written:** 2026-08-20, from `FE-ui-guide/reviewUI/` measured against the codebase,
 `docs/edufurther-migration/` and the dev Bubble app.
 **Companion:** `handoff-session-build.md`, whose sequence this follows.
+**Record:** `build-log-m5a-reviews.md` — what was actually built, what it
+decided along the way, and what it found. This document is the plan; that one
+is the account.
 
 Read this before opening the UI files. It is the record of what was decided and
 why, so the decisions do not get re-derived, re-argued, or silently reversed.
