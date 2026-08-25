@@ -27,7 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tests.integration.factories import add_session_type, make_public_mentor
 
 from app.domain.attendance import JOIN_CLOSES
-from app.domain.notifications import REVIEW_REMINDER_AFTER, REVIEW_REMINDER_KIND, Notification
+from app.domain.notifications import (
+    REVIEW_REMINDER_AFTER,
+    REVIEW_REMINDER_INTERVAL,
+    REVIEW_REMINDER_KIND,
+    Notification,
+)
 from app.infra.db.session_writer import remind_unreviewed, settle_attendance
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -258,8 +263,9 @@ async def test_the_nudge_fires_while_the_review_is_still_owed(world: World) -> N
 
     nudged = await world.nudge()
 
+    queued = await world.queued(Notification.REVIEW_REQUESTED)
     assert nudged == 1
-    assert len(await world.queued(Notification.REVIEW_REMINDER)) == 1
+    assert [row["payload"].get("kind") for row in queued] == [None, REVIEW_REMINDER_KIND]
 
 
 async def test_a_written_review_makes_the_nudge_a_no_op(world: World) -> None:
@@ -275,8 +281,9 @@ async def test_a_written_review_makes_the_nudge_a_no_op(world: World) -> None:
 
     nudged = await world.nudge()
 
+    queued = await world.queued(Notification.REVIEW_REQUESTED)
     assert nudged == 0
-    assert await world.queued(Notification.REVIEW_REMINDER) == []
+    assert [row["payload"].get("kind") for row in queued] == [None]
 
 
 async def test_the_nudge_carries_its_kind(world: World) -> None:
@@ -292,9 +299,9 @@ async def test_the_nudge_carries_its_kind(world: World) -> None:
 
     await world.nudge()
 
-    assert (await world.queued(Notification.REVIEW_REMINDER))[0]["payload"]["kind"] == (
-        REVIEW_REMINDER_KIND
-    )
+    repeat = (await world.queued(Notification.REVIEW_REQUESTED))[1]["payload"]
+    assert repeat["kind"] == REVIEW_REMINDER_KIND
+    assert repeat["interval"] == REVIEW_REMINDER_INTERVAL
 
 
 async def test_two_deliveries_of_the_same_nudge_send_once(world: World) -> None:
@@ -306,7 +313,8 @@ async def test_two_deliveries_of_the_same_nudge_send_once(world: World) -> None:
     await world.nudge()
     await world.nudge()
 
-    assert len(await world.queued(Notification.REVIEW_REMINDER)) == 1
+    queued = await world.queued(Notification.REVIEW_REQUESTED)
+    assert [row["payload"].get("kind") for row in queued] == [None, REVIEW_REMINDER_KIND]
 
 
 async def test_a_session_never_asked_about_is_never_nudged(world: World) -> None:
@@ -364,3 +372,34 @@ async def test_the_request_and_the_settlement_share_a_transaction(
         await db.rollback()
 
     assert await world.queued(Notification.REVIEW_REQUESTED) == []
+
+
+async def test_the_nudge_does_not_nudge_itself(world: World) -> None:
+    """**The loop the anchor exists to prevent.**
+
+    The repeat is a `REVIEW_REQUESTED` row like the first ask, so a sweep reading
+    *every* row of that type would find its own nudge a day later and ask again —
+    and again, for as long as the review went unwritten. It anchors on the row
+    with **no** `kind`, which is the original by construction.
+    """
+    await world.confirmed()
+    await world.settle()
+
+    first = await world.nudge()
+    again = await world.nudge()
+    third = await world.nudge()
+
+    assert (first, again, third) == (1, 0, 0)
+    assert len(await world.queued(Notification.REVIEW_REQUESTED)) == 2
+
+
+async def test_the_first_ask_carries_no_interval(world: World) -> None:
+    """**Absence is what marks it**, so the template branches on that rather than
+    on a second message type. One template, asked twice."""
+    await world.confirmed()
+
+    await world.settle()
+
+    payload = (await world.queued(Notification.REVIEW_REQUESTED))[0]["payload"]
+    assert "interval" not in payload
+    assert "kind" not in payload

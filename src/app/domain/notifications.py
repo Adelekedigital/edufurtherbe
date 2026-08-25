@@ -36,8 +36,8 @@ __all__ = [
     "AUDIENCE",
     "REMINDER_OFFSETS",
     "REVIEW_REMINDER_AFTER",
+    "REVIEW_REMINDER_INTERVAL",
     "REVIEW_REMINDER_KIND",
-    "REVIEW_REMINDER_KINDS",
     "SESSION_REMINDERS",
     "SESSION_REMINDER_KINDS",
     "Audience",
@@ -119,13 +119,32 @@ class Notification(StrEnum):
     #: nobody is building.
     REVIEW_REQUESTED = "review_requested"
 
-    #: One nudge, a day later, and only while it is still owed. Not cancelled
-    #: when the review arrives — **checked at fire time**, which is what the
-    #: callback module means by "scheduling ahead safe without ever cancelling
-    #: anything" (ADR 0025). Cancelling would make the write path responsible
-    #: for unscheduling, and the bug is the reminder that fires for a review
-    #: written through the one path somebody forgot.
-    REVIEW_REMINDER = "review_reminder"
+    #: **The mentor is told a review landed.** The first review message that is
+    #: not addressed to the mentee, and a different thing from the request:
+    #: decision 11's reasoning against telling the mentor was about the *ask* —
+    #: "telling the subject it has been requested" — where this is about the
+    #: result, which is a change to their own public record.
+    #:
+    #: **Written once, on the write, and not again on an edit.** The author has
+    #: ten minutes to correct a typo, so the message links rather than quoting:
+    #: an email carrying the text would be stale the moment it was fixed, and
+    #: `sessionUrl` already settles that shape — the link is where the content
+    #: lives.
+    #:
+    #: The loader does not reach this. Migrated reviews are written in SQL by
+    #: `ReviewLoader`, not through `write_review`, so cutover does not send 53
+    #: mentors an email about a review from 2025.
+    REVIEW_RECEIVED = "review_received"
+
+    #: **There is deliberately no separate reminder member.** The nudge a day
+    #: later is the *same message asked again*, carrying `interval` so the
+    #: template can say so — one template exists (`sessionReviewRequest`) and a
+    #: second member would need a second one nobody wrote.
+    #:
+    #: #21 governs: a vocabulary does not carry a member for a message nobody has
+    #: written, and `template_for()` raises rather than falling back — so an
+    #: unmapped member is a send that fails at the drain rather than a message
+    #: that goes out sounding like a first ask.
 
     #: Somebody applied to be a mentor. **To the admins, not to a party of a
     #: session**, so `AUDIENCE` does not reach it — the recipients are a *set*
@@ -178,7 +197,10 @@ AUDIENCE: dict[Notification, Audience] = {
     #: party's account of the other's work; telling the subject it has been
     #: requested is a different message that nobody has asked for.
     Notification.REVIEW_REQUESTED: Audience.MENTEE,
-    Notification.REVIEW_REMINDER: Audience.MENTEE,
+    #: **The one review message that is not the mentee's.** A review is one
+    #: party's account of the other's work; the subject is told it exists
+    #: because it is now on their profile, which is a fact about them.
+    Notification.REVIEW_RECEIVED: Audience.MENTOR,
     Notification.SESSION_LAST_REMINDER: Audience.BOTH,
 }
 
@@ -309,18 +331,25 @@ SESSION_REMINDER_KINDS = {reminder.kind: reminder for reminder in SESSION_REMIND
 #: favour is the shape people mute a sender over.
 REVIEW_REMINDER_AFTER = dt.timedelta(hours=24)
 
-#: What the review reminder's callback carries.
+#: What marks a review request as the repeat rather than the first ask.
 #:
-#: **Prefixed `r`, for the reason `s` exists.** `t24` is a response reminder
-#: and `s24` a session reminder, and the three mean different things with
-#: different conditions for still being owed. A bare `24` would let one
-#: callback fire another's rule.
+#: **It is also the dedup key.** `uq_outbox_events_reminder` is partial on
+#: `payload ? 'kind'`, so the first ask — which carries no kind — sits outside
+#: the index and is free to exist alongside the nudge, while a second sweep's
+#: nudge conflicts with the first and does nothing. Two rows, one message type,
+#: and the index tells them apart.
+#:
+#: Prefixed `r` for the reason `s` exists: `t24` is a response reminder and `s24`
+#: a session reminder, and a bare `24` would let one rule fire another's.
 REVIEW_REMINDER_KIND = "r24"
 
-#: A set of one, mirroring `SESSION_REMINDER_KINDS`. A registry rather than an
-#: equality check, so a second review reminder joins it instead of adding a
-#: branch to the callback that dispatches on it.
-REVIEW_REMINDER_KINDS = frozenset({REVIEW_REMINDER_KIND})
+#: What the reminder's template renders to say the ask is a repeat.
+#:
+#: Carried the way `SessionReminder.interval` is: the words travel with the
+#: schedule rather than being derived at send time, so changing the offset moves
+#: the wording with it. Its **absence** is what marks the first ask — the
+#: template branches on that.
+REVIEW_REMINDER_INTERVAL = "a day"
 
 
 def session_reminders_for(
