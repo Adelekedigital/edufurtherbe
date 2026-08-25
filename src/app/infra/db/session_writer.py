@@ -33,7 +33,7 @@ import logging
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, insert, or_, select, text, update
+from sqlalchemy import and_, case, exists, func, insert, or_, select, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +56,7 @@ from app.domain.enums import (
 from app.domain.meetings import plan_for
 from app.domain.notifications import (
     REVIEW_REMINDER_AFTER,
+    REVIEW_REMINDER_INTERVAL,
     REVIEW_REMINDER_KIND,
     SESSION_REMINDER_KINDS,
     Notification,
@@ -1237,7 +1238,13 @@ async def remind_before_session(session: AsyncSession, session_id: UUID, kind: s
 
 
 async def remind_unreviewed(session: AsyncSession, *, now: dt.datetime) -> int:
-    """Nudge every mentee still owing a review a day after being asked. Returns the count.
+    """Ask again, a day on, wherever the review is still owed. Returns the count.
+
+    **The same message, not a second one.** There is one template — a separate
+    `REVIEW_REMINDER` member would need a second nobody wrote, and an unmapped
+    member fails at the drain. The repeat carries `interval`, whose *absence*
+    marks the first ask, so the template can say "we asked you a day ago" without
+    the platform owning two vocabularies for one thing.
 
     **A sweep rather than a scheduled message, and that was measured.** The first
     version scheduled one QStash callback per settled session, following the
@@ -1250,21 +1257,35 @@ async def remind_unreviewed(session: AsyncSession, *, now: dt.datetime) -> int:
     batch job, and cannot leave a scheduled message behind for a review that has
     since been written — the condition *is* the query.
 
-    **Anchored on the request, not on the settlement.** The outbox row for
-    `REVIEW_REQUESTED` is the record that we asked, so "a day after we asked" is
-    exactly what this reads — and it inherits the suppression for free: a session
-    whose request the interval suppressed has no row here, so it is never nudged
-    about something it was never asked for. Anchoring on `session_events` would
-    have needed that rule restated.
+    **Anchored on the first ask specifically.** The outbox row for
+    `REVIEW_REQUESTED` *without* a `kind` is the original; the repeat carries one.
+    Reading every `REVIEW_REQUESTED` row would make this nudge its own nudge, a
+    day at a time, for as long as the review went unwritten.
 
-    **Idempotent through the partial unique index**, which is why the enqueue
-    carries a `kind`: `uq_outbox_events_reminder` is partial on
-    ``payload ? 'kind'``, so a message without one sits outside it and a second
-    sweep would send a second identical email.
+    It inherits the suppression for free: a session whose request the interval
+    suppressed has no row here, so it is never asked again about something it was
+    never asked about. Anchoring on `session_events` would have needed that rule
+    restated.
+
+    **The query asks whether a nudge is owed, not merely whether one is due**,
+    and the difference is what the count means. Reading only "asked a day ago and
+    still unreviewed" finds the same session on every subsequent run: the index
+    makes the second insert a no-op, so one email goes out — but the sweep
+    reports a nudge every night, forever, for a review nobody ever writes. An
+    operator reading `nudged 1` would have no way to tell a fresh nudge from a
+    permanent one.
+
+    So the repeat's own row is part of the predicate. The partial unique index is
+    then a **backstop** rather than the mechanism — settled decision #169's
+    shape, where a pre-check races and the constraint answers too. It is still
+    load-bearing: `uq_outbox_events_reminder` is partial on ``payload ? 'kind'``,
+    so the first ask sits outside it and the repeat inside, which is what lets
+    two rows of one message type coexist.
 
     Does not commit.
     """
     asked = OutboxEvent.__table__.alias("asked")
+    nudged = OutboxEvent.__table__.alias("nudged")
     due = (
         (
             await session.execute(
@@ -1276,9 +1297,17 @@ async def remind_unreviewed(session: AsyncSession, *, now: dt.datetime) -> int:
                 .join(Session, Session.id == asked.c.entity_id)
                 .where(
                     asked.c.event_type == Notification.REVIEW_REQUESTED,
+                    ~asked.c.payload.has_key("kind"),
                     asked.c.created_at <= now - REVIEW_REMINDER_AFTER,
                     Session.status == SessionStatus.COMPLETED,
                     ~already_reviewed(Session.id, Session.mentee_id),
+                    ~exists(
+                        select(nudged.c.id).where(
+                            nudged.c.entity_id == asked.c.entity_id,
+                            nudged.c.event_type == Notification.REVIEW_REQUESTED,
+                            nudged.c.payload["kind"].astext == REVIEW_REMINDER_KIND,
+                        )
+                    ),
                 )
             )
         )
@@ -1289,11 +1318,11 @@ async def remind_unreviewed(session: AsyncSession, *, now: dt.datetime) -> int:
     for row in due:
         await enqueue(
             session,
-            Notification.REVIEW_REMINDER,
+            Notification.REVIEW_REQUESTED,
             entity_type="session",
             entity_id=row["session_id"],
             recipient_ids=(row["mentee_id"],),
-            variables={"kind": REVIEW_REMINDER_KIND},
+            variables={"kind": REVIEW_REMINDER_KIND, "interval": REVIEW_REMINDER_INTERVAL},
         )
     return len(due)
 

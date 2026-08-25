@@ -157,9 +157,29 @@ disagree, the measurement wins — the package is a brain dump (ADR 0007), and d
     attended. Firing on the transition makes the delay automatic and makes a
     `missed` session structurally incapable of triggering a request.
 
-11. **Two notification members, both `Audience.MENTEE`:** `REVIEW_REQUESTED` and
-    `REVIEW_REMINDER` at 24 hours, cancelled by the review existing. This retires
-    the note in `domain/notifications.py` saying reviews have no producer.
+11. **One notification member, `Audience.MENTEE`:** `REVIEW_REQUESTED`, asked
+    on settlement and again a day later while the review is still owed. This
+    retires the note in `domain/notifications.py` saying reviews have no producer.
+
+    **Narrowed from two members to one, 2026-08-24, on a fact about the
+    templates.** The plan called for a separate `REVIEW_REMINDER`; only one
+    template exists — `sessionReviewRequest` — and `template_for()` raises rather
+    than falling back, so a second member would be a send that fails at the drain.
+    The repeat carries `interval`, whose *absence* marks the first ask, so one
+    template renders both and #21 is satisfied: no member for a message nobody
+    wrote.
+
+    **And a second member arrived from the same fact.** `reviewUpdateToMentors`
+    exists as a template with no producer — so `REVIEW_RECEIVED`,
+    `Audience.MENTOR`, enqueued by `write_review` in the writing transaction.
+    Decision 11's original reasoning against telling the mentor was about the
+    *ask*; this is the *result*, which is a change to their own public record.
+
+    Not sent on an edit: the author has ten minutes to correct a typo, and a
+    second email for a fixed comma is worse than a slightly early first one — the
+    same reason the message links rather than quoting. The loader does not reach
+    it, so cutover does not tell 53 mentors about a review from 2025, and a test
+    asserts that.
 
     **"Cancelled by the review existing" turned out to name an existing pattern
     rather than new work.** The callbacks module already states it: *"a callback

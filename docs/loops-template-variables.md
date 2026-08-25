@@ -226,10 +226,19 @@ addresses the mentee alone.
 ### Messages with no template
 
 `request_expired`, `calendar_disconnected`, `mentor_approved`, `mentor_declined`,
-**`review_requested`**, **`review_reminder`**.
+**`review_requested`**, **`review_received`**.
 
 **The last two are the operationally urgent ones**, and this list is where an
-operator would look. `template_for()` raises `ConfigurationError` rather than
+operator would look.
+
+`review_requested` maps to `sessionReviewRequest` and covers the nudge a day
+later as well as the first ask — the repeat carries `interval`, whose absence
+marks the original, so one template renders both.
+
+`review_received` maps to `reviewUpdateToMentors` and is the only review
+message addressed to a mentor. It should **link rather than quote**: the
+author has ten minutes to correct a typo, which `sessionUrl` already settles —
+the link is where the content lives. `template_for()` raises `ConfigurationError` rather than
 falling back — *"sending the wrong message is worse than sending none"* — so
 until both are mapped in `EMAIL_TEMPLATES`, a settled session queues a review
 request that fails at the drain rather than at the enqueue. Nothing is lost,

@@ -289,3 +289,21 @@ async def test_a_source_row_the_transform_forgot_is_named(
     assert not result.ok
     assert result.unaccounted == ("a-row-nobody-accounted-for",)
     assert "a-row-nobody-accounted-for" in result.report()
+
+
+async def test_the_loader_tells_no_mentor_anything(
+    db_engine: AsyncEngine, users: dict[str, UUID]
+) -> None:
+    """**Cutover must not send 53 mentors an email about a review from 2025.**
+
+    `REVIEW_RECEIVED` is produced by `write_review`, the API path. The loader
+    writes SQL directly, which is what keeps a migration silent — but that is a
+    property of two code paths staying separate, and nothing else would notice if
+    they stopped.
+    """
+    await load(db_engine, users, [record()])
+
+    async with db_engine.begin() as conn:
+        queued = (await conn.execute(text("SELECT count(*) FROM outbox_events"))).scalar_one()
+
+    assert queued == 0

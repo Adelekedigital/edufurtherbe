@@ -40,9 +40,11 @@ from app.core.errors import (
     ReviewIntervalError,
 )
 from app.domain.enums import SessionStatus
+from app.domain.notifications import Notification
 from app.domain.reviews import edit_window_open
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session
+from app.infra.db.outbox import enqueue
 from app.infra.db.review_eligibility import already_reviewed, within_interval
 
 __all__ = ["ONE_PER_SESSION", "edit_review", "write_review"]
@@ -66,6 +68,10 @@ async def write_review(
     `409`s and both carry a problem type, because a client responds to them
     differently: the first is terminal, the second resolves when the window
     passes.
+
+    **The mentor is told, in this same transaction.** Not on the `PATCH`: the
+    author has ten minutes to correct a typo, and a second email for a fixed
+    comma is worse than a slightly early first one.
 
     **Already-reviewed is checked first, and the order is load-bearing.** A
     review of this session is itself a review of this offering, so once one
@@ -113,7 +119,21 @@ async def write_review(
         # with `InFailedSQLTransaction` and bury this cause under that one.
         await session.rollback()
         raise AlreadyReviewedError("you have already reviewed this session") from exc
-    return UUID(str(written.scalar_one()))
+    review_id = UUID(str(written.scalar_one()))
+
+    # **In the writing transaction**, so a message about a review that rolled
+    # back cannot exist — the same rule `settle_attendance` follows for the
+    # request. `entity_id` is the session, not the review: every other message
+    # here is about a session, and `_context_for` keys on `entity_type` to decide
+    # what to load.
+    await enqueue(
+        session,
+        Notification.REVIEW_RECEIVED,
+        entity_type="session",
+        entity_id=session_id,
+        recipient_ids=(target.mentor_id,),
+    )
+    return review_id
 
 
 async def edit_review(

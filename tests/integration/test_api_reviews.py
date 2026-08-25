@@ -740,3 +740,69 @@ async def test_a_withdrawal_landing_mid_edit_wins(world: World, db_engine: Async
         ).scalar_one()
 
     assert stored != "Snuck in."
+
+
+async def test_the_mentor_is_told_a_review_landed(world: World) -> None:
+    """**The one review message that is not the mentee's.**
+
+    Decision 11's reasoning against telling the mentor was about the *ask* —
+    "telling the subject it has been requested". This is the result, which is a
+    change to their own public record, and they have a template for it.
+    """
+    session_id = await world.completed(world.offering_a)
+
+    await world.review(session_id)
+
+    async with world.engine.begin() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT entity_id, payload FROM outbox_events WHERE event_type = 'review_received'"
+            )
+        )
+        queued = [dict(row) for row in rows.mappings()]
+
+    assert [row["entity_id"] for row in queued] == [UUID(session_id)]
+    assert queued[0]["payload"]["recipient_id"] == str(world.mentor)
+
+
+async def test_an_edit_does_not_tell_the_mentor_again(world: World) -> None:
+    """A second email for a fixed comma is worse than a slightly early first one.
+
+    The author has ten minutes to correct a typo, which is also why the message
+    links rather than quoting: an email carrying the text would be stale the
+    moment it was fixed.
+    """
+    review = (await world.review(await world.completed(world.offering_a))).json()
+
+    await world.client.patch(
+        f"/api/v1/reviews/{review['id']}",
+        json={"public_review": "Fixed a typo."},
+        headers=world.headers,
+    )
+
+    async with world.engine.begin() as conn:
+        count = (
+            await conn.execute(
+                text("SELECT count(*) FROM outbox_events WHERE event_type = 'review_received'")
+            )
+        ).scalar_one()
+
+    assert count == 1
+
+
+async def test_a_refused_review_tells_nobody(world: World) -> None:
+    """The enqueue is in the writing transaction, so a review that never existed
+    cannot have been announced."""
+    session_id = await world.completed(world.offering_a)
+    await world.review(session_id)
+    before = await world.review(session_id)
+
+    async with world.engine.begin() as conn:
+        count = (
+            await conn.execute(
+                text("SELECT count(*) FROM outbox_events WHERE event_type = 'review_received'")
+            )
+        ).scalar_one()
+
+    assert before.status_code == 409
+    assert count == 1
