@@ -446,6 +446,11 @@ def test_the_natural_keys_survive_as_unique_constraints(migrated_database: str) 
         # person on one session, and two booking configs for one session type,
         # both become legal and nothing surfaces it.
         ("session_participants", "(session_id, user_id)"),
+        # ADR 0027 section 8: the package made `user_id` the primary key, and
+        # non-negotiable #10 admits no natural keys. The invariant it carried —
+        # one unlock per user, ever — survives as this unique constraint, and
+        # naming it here is what stops the demotion being silently undone.
+        ("referral_unlocks", "(user_id)"),
         ("session_type_booking_configs", "(session_type_id)"),
     }
 
@@ -501,6 +506,11 @@ RETAINED_ON_USER_DELETE = frozenset(
         # four reasons for it existing.
         "credit_lots",
         "credit_transactions",
+        # An unlock is an entitlement and its referral is the evidence
+        # for it. Cascading either would silently remove the record of
+        # why somebody receives a recurring grant.
+        "referrals",
+        "referral_unlocks",
     }
 )
 
