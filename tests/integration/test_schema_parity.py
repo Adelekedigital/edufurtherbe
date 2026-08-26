@@ -490,7 +490,18 @@ def test_the_models_package_is_what_this_file_inspects() -> None:
 # through a retained table. Attendance is part of the session record rather than
 # an independent claim about a person.
 RETAINED_ON_USER_DELETE = frozenset(
-    {"admin_users", "user_legal_consents", "sessions", "session_events"}
+    {
+        "admin_users",
+        "user_legal_consents",
+        "sessions",
+        "session_events",
+        # The ledger is financial evidence (ADR 0013, M5b decision 7). A
+        # ledger whose rows vanish with the account cannot answer "I was
+        # charged for a session that never ran", which is the first of D8's
+        # four reasons for it existing.
+        "credit_lots",
+        "credit_transactions",
+    }
 )
 
 CASCADE_EDGES = """

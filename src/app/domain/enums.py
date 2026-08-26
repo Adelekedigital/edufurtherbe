@@ -534,3 +534,81 @@ class ActorType(StrEnum):
     ADMIN = "admin"
     SYSTEM = "system"
     API = "api"
+
+
+class CreditSource(StrEnum):
+    """Where a lot came from. One origin, one expiry — that is what a lot is.
+
+    **Five members, and every one has a producer in M5b.** The canonical DDL
+    declares seven; settled decision #21 names this exact enum as its cautionary
+    example, because `credit_source` "contains `purchase` while payments are out
+    of scope by decision #8". A vocabulary is not a wish list — a shipped member
+    invites a writer, and the reason to defer `purchase`, `promotional` and
+    `admin_grant` is that nothing writes one.
+
+    Declared here rather than beside `domain/credits.py`'s rules because
+    `test_every_domain_enum_is_registered_exactly_once` partitions *this
+    module's* namespace against the two `infra` registries. A vocabulary defined
+    elsewhere is registered-but-not-declared, and the assertion is two-way.
+    """
+
+    #: Onboarding finished. **One, and it never expires**, because it exists so
+    #: somebody gets a feel for the platform and an expiring one makes that
+    #: reward depend on the day they happened to finish: complete on the 28th
+    #: and it lives three days. A partial unique index makes a second one
+    #: impossible rather than merely unlikely.
+    PROFILE_COMPLETED = "profile_completed"
+
+    #: The first qualifying invite. Two, on top of the starter, and it is the
+    #: **once-only gate** — the same event writes `referral_unlocks`, which is
+    #: what opens the monthly grant. Granting it twice would open a floor that
+    #: is already open.
+    REFERRAL_UNLOCK = "referral_unlock"
+
+    #: The monthly grant, for users who have unlocked it. Three.
+    MONTHLY_FREE = "monthly_free"
+
+    #: A credit handed back because a mentor missed the session or called it off
+    #: as unavailable. **A fresh lot, not a return to the original** — both
+    #: triggers are settled after the session, so the lot that paid for it may
+    #: already be dead, and returning a credit to a dead lot refunds nothing.
+    REFUND = "refund"
+
+    #: What a user carried out of Bubble. Not `monthly_free`: the legacy renewal
+    #: was a per-user scheduled workflow rather than a monthly grant — the dates
+    #: land on thirteen different days of the month — so calling it monthly
+    #: would assert a cadence the source never had.
+    OPENING_BALANCE = "opening_balance"
+
+
+class CreditReason(StrEnum):
+    """Why a row moved a balance. Every entry in the ledger names one.
+
+    **No `session_no_show_forfeit`**, which the canonical DDL carries. It reads
+    as a transaction and is not one: the credit left the balance when the
+    session was booked, and a mentee who does not turn up simply gets nothing
+    back. The absence of a row is the whole record. A member for it would
+    eventually be written by somebody reading the name as an instruction, and
+    the balance would be debited twice for one session.
+    """
+
+    #: A lot was created and its quantity credited. Pairs with every source.
+    GRANT = "grant"
+
+    #: A session was booked. The only debit this phase writes.
+    SESSION_BOOKED = "session_booked"
+
+    #: The mentor called it off with `MENTOR_UNAVAILABLE`. **Already assumed by
+    #: shipped code**: `SessionReasonCode` restricts reason codes per actor
+    #: precisely because this one refunds and `MENTEE_NO_LONGER_NEEDED` does
+    #: not, so leaving it unbuilt would make that restriction guard nothing.
+    SESSION_CANCELLED_REFUND = "session_cancelled_refund"
+
+    #: The mentor did not attend and the mentee did. The predicate reads
+    #: `session_participants`, because `sessions.status` collapses both parties
+    #: into one `no_show` and cannot say who missed.
+    SESSION_NO_SHOW_REFUND = "session_no_show_refund"
+
+    #: The sweep found a lot past its date. Written so a balance never drops
+    #: without a row saying why — which is the whole of D8's argument.
+    LOT_EXPIRED = "lot_expired"

@@ -19,6 +19,7 @@ from app.infra.db.models.availability import (
     CalendarConnection,
     SessionTypeSchedulingWindow,
 )
+from app.infra.db.models.credits import CreditLot, CreditTransaction
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.intake import (
     IntakeAnswer,
@@ -63,6 +64,8 @@ __all__ = [
     "AvailabilityRule",
     "CalendarConnection",
     "Country",
+    "CreditLot",
+    "CreditTransaction",
     "DegreeLevel",
     "EducationEntry",
     "IdempotencyKey",
