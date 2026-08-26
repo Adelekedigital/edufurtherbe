@@ -175,6 +175,50 @@ boundary already holds — and it was the only object in the chain whose behavio
 on Supabase was unverified. A lowercase `CHECK` fails loudly where the type
 would have silently accepted.
 
+### 11. Onboarding completion is a route this project had to invent
+
+**Not a divergence — a gap.** The earning model's first rung reads
+`user_onboarding.completed_at`, and before PR 4 that column had exactly one
+writer: `infra/etl/satellites.py`. There was no onboarding-completion flow in
+the API at all, so the starter credit had nothing to fire it.
+
+`POST /api/v1/me/onboarding/completion` is that producer. A sub-resource rather
+than a flag, because `PATCH {"completed": false}` is a transition that does not
+exist and a route which appears to allow it is one somebody eventually calls.
+
+**The bar is row existence, and that is deliberately temporary.** The starter is
+granted for finishing a profile rather than for signing up — signing up is free,
+finishing one is work — and that asymmetry is the whole anti-farming property.
+But `user_profiles` and `mentee_goals` have **no required columns**: everything
+but `user_id` is nullable, so "complete" cannot mean "filled in" today without
+this route inventing a field policy the rest of the codebase does not have.
+
+It means a profile row plus a role-appropriate profile — a mentee goal or a
+mentor profile. Role-appropriate rather than mentee-only, because gating on the
+goal alone refuses a mentor who did the mentor half first.
+
+This is the same shape settled decision 20 takes for a qualifying invite, and it
+is recorded the same way: **tightening it is a predicate change in
+`domain/onboarding.py`, not a migration.** When the onboarding flow gains a
+defined set of required steps, that function is the one place that learns them.
+
+The accepted risk, named rather than waved at: an attacker can post two
+nearly-empty rows and collect one non-expiring credit — once, per account that
+also passes email verification. Against the referral unlock, which opens a
+*recurring* grant, which is why that gate is the stricter of the two.
+
+**The grant is idempotent by construction.** `grant_starter` inserts with
+`ON CONFLICT DO NOTHING` against the partial unique index rather than reading
+first. A read-then-write is a check-time-of-use race — two concurrent
+completions both see no starter and both insert — and letting the database
+arbitrate means the loser learns it lost. Watched failing: with the conflict
+clause removed, a second call raises instead of answering 200.
+
+**201 and 200 are drawn from whether a lot was created**, not from whether the
+onboarding row already existed. A migrated user whose completion the ETL wrote
+but who never received a credit gets both the credit and a 201, which is the
+honest answer; keying off the row would answer 200 and silently skip the grant.
+
 ### Confirmation
 
 How you would know this is being honoured, and what nothing checks.
@@ -197,6 +241,11 @@ How you would know this is being honoured, and what nothing checks.
 | nobody refers themselves | `test_nobody_may_refer_themselves`, with `test_a_referral_may_name_a_real_invitee` as the accepting half |
 | qualifying implies signing up | `test_qualifying_requires_having_signed_up`, plus both legal orderings |
 | one unlock per user, ever | `test_a_user_unlocks_once_ever` — the `UNIQUE` carrying what the package's natural key carried |
+| the starter cannot be farmed by signing up | `test_a_bare_account_is_refused` at the boundary, plus every incomplete combination enumerated in `test_onboarding_domain.py` — a predicate written with `or` where it meant `and` passes all three positive cases |
+| a refusal grants nothing | `test_a_refusal_grants_nothing` asserts the empty ledger, not just the 409 |
+| **a retry pays nothing** | `test_a_second_call_grants_nothing`, asserted on the *balance* rather than the status code — a route answering 200 while quietly inserting a second lot passes a status assertion. Watched failing with the conflict clause removed |
+| a grant always writes its ledger row | `test_the_grant_writes_a_ledger_row` — a writer that created the lot and forgot the entry passes every balance assertion in that file |
+| a migrated completion still pays | `test_a_user_the_etl_completed_still_gets_their_credit` |
 | **the append-only table has no trigger** | `test_the_ledger_carries_no_updated_at_trigger`, paired with `test_the_lots_table_does_carry_one`. Nothing else can see this: `CREATE TRIGGER` does not validate the function body, `alembic check` is blind to triggers, and no test issues an `UPDATE` here |
 | quantities cannot go incoherent | four CHECK tests, each with its accepting boundary — `granted == remaining` and `remaining == 0` are both legal states |
 

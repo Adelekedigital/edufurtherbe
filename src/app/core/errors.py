@@ -21,6 +21,19 @@ class ConflictError(AppError):
     """The request cannot be applied to the current state of the resource."""
 
 
+class OnboardingIncompleteError(ConflictError):
+    """The profile does not yet meet the bar for finishing onboarding.
+
+    A conflict rather than a validation failure: nothing about the *request* is
+    wrong, and the caller sent no body at all. What is wrong is the state of the
+    resource, which is exactly what 409 says.
+
+    Carries a problem type, because the client's response differs from every
+    other refusal on this route — send the user back to the profile form, never
+    retry. That is the bar settled decision #110 set for earning one.
+    """
+
+
 class AlreadyReviewedError(ConflictError):
     """This session already carries a review by this author.
 
