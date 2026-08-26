@@ -29,10 +29,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import OnboardingIncompleteError
+from app.domain.notifications import Notification
 from app.domain.onboarding import ProfileEvidence, may_complete_onboarding
 from app.infra.db.credit_writer import grant_starter
 from app.infra.db.models.mentoring import MenteeGoal, MentorProfile
 from app.infra.db.models.user import UserOnboarding, UserProfile
+from app.infra.db.outbox import enqueue
 from app.infra.db.referral_writer import qualify_invitee
 
 __all__ = ["OnboardingResult", "complete_onboarding"]
@@ -105,6 +107,22 @@ async def complete_onboarding(session: AsyncSession, user_id: UUID) -> Onboardin
     ).one()
 
     granted = await grant_starter(session, user_id) is not None
+
+    if granted:
+        # **In the granting transaction**, so a message about a credit that
+        # rolled back cannot exist — the same rule `write_review` follows for
+        # the mentor's notice.
+        #
+        # Guarded on `granted` rather than sent unconditionally: a retried
+        # completion creates no lot, and telling somebody twice that their first
+        # credit arrived is worse than a slightly late first telling.
+        await enqueue(
+            session,
+            Notification.CREDITS_GRANTED,
+            entity_type="user",
+            entity_id=user_id,
+            recipient_ids=(user_id,),
+        )
 
     # **The referrer's half, in this transaction.** Finishing a profile is what
     # qualifies the invite that named this user — the same signal as the starter

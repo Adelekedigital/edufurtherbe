@@ -369,3 +369,75 @@ async def test_a_legacy_row_with_no_completion_date_is_readable(
 
     assert response.status_code == 200
     assert response.json() == {"completed_at": None, "last_step": "4"}
+
+
+async def test_the_starter_credit_is_announced(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**Fired where the credit is granted, not where the account was made.**
+
+    The template is addressed to a new user, but the credit arrives on profile
+    completion — a message sent at signup would tell somebody they have a
+    credit before the lot exists.
+    """
+    auth_id = uuid4()
+    user_id = await seed(db_engine, auth_id)
+
+    await api_client.post(PATH, headers=bearer(api_token(auth_id)))
+
+    async with db_engine.begin() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT entity_type, payload FROM outbox_events "
+                "WHERE event_type = 'credits_granted'"
+            )
+        )
+        queued = [dict(row) for row in rows.mappings()]
+
+    assert [row["entity_type"] for row in queued] == ["user"]
+    assert queued[0]["payload"]["recipient_id"] == str(user_id)
+
+
+async def test_a_retried_completion_announces_nothing(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**Guarded on whether a lot was created, not on the request succeeding.**
+
+    A retry grants nothing, so it says nothing — telling somebody twice that
+    their first credit arrived is worse than a slightly late first telling.
+    """
+    auth_id = uuid4()
+    await seed(db_engine, auth_id)
+    token = bearer(api_token(auth_id))
+
+    await api_client.post(PATH, headers=token)
+    await api_client.post(PATH, headers=token)
+
+    async with db_engine.begin() as conn:
+        count = (
+            await conn.execute(
+                text("SELECT count(*) FROM outbox_events WHERE event_type = 'credits_granted'")
+            )
+        ).scalar_one()
+
+    assert count == 1
+
+
+async def test_a_refused_completion_announces_nothing(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The enqueue is in the granting transaction, so a credit that never
+    existed cannot have been announced."""
+    auth_id = uuid4()
+    await seed(db_engine, auth_id, profile=False, goal=False)
+
+    await api_client.post(PATH, headers=bearer(api_token(auth_id)))
+
+    async with db_engine.begin() as conn:
+        count = (
+            await conn.execute(
+                text("SELECT count(*) FROM outbox_events WHERE event_type = 'credits_granted'")
+            )
+        ).scalar_one()
+
+    assert count == 0
