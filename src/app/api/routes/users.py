@@ -6,7 +6,8 @@ from fastapi import APIRouter, status
 
 from app.api.deps import CurrentUserDep, OwnAttributesDep
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
-from app.api.schemas.user import UserProfileRead, UserRead
+from app.api.schemas.user import CreditsRead, UserProfileRead, UserRead
+from app.domain.credits import STEADY_STATE
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
@@ -42,6 +43,16 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "authorization claim — permissions come from whether the relevant profile "
         "row exists, never from this field. `is_admin` reflects a live, unrevoked "
         "grant in `admin_users`.\n\n"
+        "`credits` is the dashboard card's block and is **null unless the caller "
+        "has a mentee goal** — the same predicate the monthly grant uses, and "
+        'deliberately not "is not a mentor", since a dual-role user is both. '
+        "It carries `balance`, `allowance`, `state` and `next_reset_at`; the "
+        "client draws the progress bar, so no percentage is published. "
+        f"`allowance` is `max({STEADY_STATE}, balance)` — the steady-state "
+        "ceiling rather than the monthly grant, so the bar moves when a "
+        "credit is spent, and it rises above that when a migrated balance "
+        "or a late refund exceeds it. `next_reset_at` is exclusive — the 1st of "
+        "the next month at midnight UTC.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -50,13 +61,22 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
 async def read_me(user: CurrentUserDep, attributes: OwnAttributesDep) -> UserRead:
     profile = UserProfileRead(**user) if user["has_profile"] else None
     mentor_profile = attributes["mentor_profile"]
+    # Bound before the call rather than walrused inside it: `credits` reads it
+    # too, and a keyword argument that depends on an earlier argument's
+    # side effect breaks silently the first time somebody reorders them.
+    goal = attributes["goal"]
     return UserRead(
         **user,
         profile=profile,
         education=[EducationRead.from_row(row) for row in attributes["education"]],
-        goal=(GoalRead.from_row(goal) if (goal := attributes["goal"]) is not None else None),
+        goal=(GoalRead.from_row(goal) if goal is not None else None),
         awards=[AwardRead.from_row(row) for row in attributes["awards"]],
         mentor_profile=(
             MentorProfileRead.from_row(mentor_profile) if mentor_profile is not None else None
         ),
+        # The card belongs to a mentee. The predicate is *having a mentee goal*,
+        # not *not being a mentor* — authorization here is profile existence, so
+        # a dual-role user is both, and a negative predicate would hide the card
+        # from somebody who can book.
+        credits=(CreditsRead.model_validate(attributes["credits"]) if goal is not None else None),
     )

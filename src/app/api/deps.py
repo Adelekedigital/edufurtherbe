@@ -117,6 +117,7 @@ from app.infra.db.calendar_store import (
     disconnect,
 )
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
+from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.idempotency import Held, Mismatched, Replayed, record_response, reserve
@@ -502,6 +503,11 @@ async def own_attributes(user: CurrentUserDep, session: SessionDep) -> dict[str,
         "goal": await get_goal(session, user_id),
         "awards": await list_awards(session, user_id),
         "mentor_profile": await get_mentor_profile(session, user_id),
+        # Fetched unconditionally and rendered conditionally. The predicate is
+        # "has a mentee goal", which the `goal` fetch above already answers, so
+        # branching here would mean ordering these two against each other for
+        # one `SUM` against an indexed column.
+        "credits": await get_credit_summary(session, user_id),
     }
 
 

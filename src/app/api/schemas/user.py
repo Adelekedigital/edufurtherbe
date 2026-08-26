@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
-from app.domain.enums import PrimaryRole
+from app.domain.enums import CreditState, PrimaryRole
 
 
 class NormalisedEmail(BaseModel):
@@ -40,6 +40,34 @@ class UserProfileRead(BaseModel):
     social_linkedin: str | None = None
     social_twitter: str | None = None
     social_youtube: str | None = None
+
+
+class CreditsRead(BaseModel):
+    """The dashboard card's credit block.
+
+    **Four fields, and no percentage.** The card draws a bar whose filled
+    position is the balance; the server publishes the two numbers and the band,
+    and the client draws. A percentage computed here would be a third
+    representation of the same fact.
+
+    ``allowance`` is ``max(MONTHLY_ALLOWANCE, balance)`` rather than the
+    allowance alone — a refund landing after the monthly grant leaves a balance
+    above it, and the card would otherwise read "4 credits left" beside a bar
+    with three positions.
+
+    ``state`` is a name, never a colour or a sentence: the copy and the palette
+    belong to the front end, which knows the viewer's language.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    balance: int
+    allowance: int
+    state: CreditState
+    #: The 1st of the next month, midnight UTC — **exclusive**. A lot granted in
+    #: August survives all of 31 August and dies as September opens, which is
+    #: what makes the card's "Next reset date" literally true.
+    next_reset_at: datetime
 
 
 class UserRead(NormalisedEmail):
@@ -81,3 +109,10 @@ class UserRead(NormalisedEmail):
     awards: list[AwardRead] = []
     #: Null for the great majority of users, who are not mentors.
     mentor_profile: MentorProfileRead | None = None
+
+    #: **Null unless the caller has a mentee goal**, which is the same predicate
+    #: the monthly grant uses. Deliberately not "is not a mentor": authorization
+    #: here is profile existence, so a dual-role user is both a mentor and a
+    #: mentee, and a negative predicate would hide the card from somebody who
+    #: can book.
+    credits: CreditsRead | None = None

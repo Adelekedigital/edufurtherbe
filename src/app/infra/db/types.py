@@ -42,6 +42,7 @@ from app.domain.enums import (
     ConferencingProvider,
     CreditReason,
     CreditSource,
+    CreditState,
     IntakeStatus,
     LanguageProficiency,
     LegalDocumentType,
@@ -192,6 +193,11 @@ UNCONSTRAINED_ENUMS: dict[type[StrEnum], str] = {
     # `reason_code` / `reason_text` split `SessionReasonCode` already documents,
     # which is a schema change and a separate decision.
     UnlistedReason: "mentor_status_events.reason is free text carrying a sentinel",
+    # Derived at read time from a `SUM` over live lots. No column holds it,
+    # and one would be a second representation of a number the ledger
+    # already answers — it would also go stale the moment a lot expired,
+    # since expiry is a date passing rather than anything writing a row.
+    CreditState: "credit_state is banded from a balance at read time; no column holds it",
 }
 
 

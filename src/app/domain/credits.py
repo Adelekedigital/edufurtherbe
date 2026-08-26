@@ -43,18 +43,22 @@ from __future__ import annotations
 
 import datetime as dt
 
-from app.domain.enums import CreditReason, CreditSource
+from app.domain.enums import CreditReason, CreditSource, CreditState
 
 __all__ = [
     "MONTHLY_ALLOWANCE",
     "NON_EXPIRING",
     "STARTER_GRANT",
+    "STEADY_STATE",
     "UNLOCK_GRANT",
     "CreditReason",
     "CreditSource",
+    "CreditState",
+    "allowance_for",
     "end_of_month",
     "expiry_for",
     "refund_expiry",
+    "state_for",
 ]
 
 
@@ -71,6 +75,20 @@ UNLOCK_GRANT = 2
 #: except when a late refund pushes a balance above it, which is why the read
 #: publishes ``max(allowance, balance)`` rather than this number alone.
 MONTHLY_ALLOWANCE = 3
+
+#: What the card's progress bar divides by — **the ceiling, not the grant**.
+#:
+#: The non-expiring starter plus the monthly three, which is where a settled,
+#: unlocked mentee sits on the 1st. The bar is a position marker whose filled
+#: segment is the balance, so the denominator has to be a *fixed* ceiling: with
+#: `max(MONTHLY_ALLOWANCE, balance)` the denominator tracked the numerator and
+#: `balance == allowance` for every balance at or above three — a four-segment
+#: bar full at four, then a three-segment bar still full at three. **The bar did
+#: not move when a credit was spent.** Found by code review.
+#:
+#: Migrated users arrive at five (29 of 43 in the dev export), which is why
+#: `allowance_for` still raises this rather than clamping to it.
+STEADY_STATE = STARTER_GRANT + MONTHLY_ALLOWANCE
 
 
 def end_of_month(moment: dt.datetime) -> dt.datetime:
@@ -136,3 +154,50 @@ def refund_expiry(original: dt.datetime | None, *, now: dt.datetime) -> dt.datet
     way now means the payments work adds a source rather than revisiting this.
     """
     return None if original is None else end_of_month(now)
+
+
+def state_for(balance: int) -> CreditState:
+    """Which band a balance falls in.
+
+    **The top band is open-ended** — four *or more*. A late refund can land a
+    credit after the monthly grant, so a table written as ``4..5`` leaves six
+    unclassified, and an unclassified balance renders as an empty card rather
+    than a full one.
+
+    A negative balance is refused rather than banded. The database makes it
+    unrepresentable — ``quantity_remaining >= 0`` — so reaching here means a
+    real defect upstream, and quietly calling it ``exhausted`` would let it
+    render as an ordinary empty card and never be noticed.
+    """
+    if balance < 0:
+        raise ValueError(f"a balance cannot be negative: {balance}")
+    if balance == 0:
+        return CreditState.EXHAUSTED
+    if balance == 1:
+        return CreditState.LOW
+    if balance <= 3:
+        return CreditState.MODERATE
+    return CreditState.ON_TRACK
+
+
+def allowance_for(balance: int) -> int:
+    """What the card divides by — the denominator its progress bar draws.
+
+    ``max(STEADY_STATE, balance)`` — the **ceiling**, not the monthly grant.
+
+    A fixed denominator is what makes the bar move. Dividing by
+    ``MONTHLY_ALLOWANCE`` made ``balance == allowance`` for every balance at or
+    above three, so a mentee at the steady state of four saw a full four-segment
+    bar, spent a credit, and saw a full *three*-segment bar. The number changed
+    and the picture did not.
+
+    It still raises rather than clamps, because **the bar cannot draw more
+    segments than it has**: migrated users arrive at five, and a refund landing
+    after the monthly grant can push a balance past four. Clamping would read
+    "5 credits left" beside a bar with four positions.
+
+    The server publishes ``balance`` and ``allowance`` and never a percentage —
+    the client draws, and a third representation of one fact is the first to
+    drift.
+    """
+    return max(STEADY_STATE, balance)
