@@ -612,3 +612,30 @@ class CreditReason(StrEnum):
     #: The sweep found a lot past its date. Written so a balance never drops
     #: without a row saying why — which is the whole of D8's argument.
     LOT_EXPIRED = "lot_expired"
+
+
+class CreditState(StrEnum):
+    """How a mentee's balance is doing, as a name rather than a colour.
+
+    **The band, not the copy.** The card renders words and a colour; both belong
+    to the front end, which knows the user's language and the design system.
+    What the server owes is the *classification*, so that "low" means the same
+    thing on every surface that shows it.
+
+    **Registered in ``UNCONSTRAINED_ENUMS``, and it is not a waiting room
+    entry.** No column holds this: a balance is a ``SUM`` over live lots and the
+    band is derived from it at read time. Storing it would be a second
+    representation of a number the ledger already answers — non-negotiable #8 —
+    and it would go stale the instant a lot expired without anything writing.
+    """
+
+    #: Four or more, and **open-ended at the top**. A late refund can push a
+    #: balance past the steady state of four; a band written as `4..5` would
+    #: leave six unclassified.
+    ON_TRACK = "on_track"
+    MODERATE = "moderate"
+    LOW = "low"
+    #: Zero. The card's call to action is dead here and the server refuses a
+    #: booking — the two must agree, which is why this is a named state rather
+    #: than the client testing `balance == 0` for itself.
+    EXHAUSTED = "exhausted"
