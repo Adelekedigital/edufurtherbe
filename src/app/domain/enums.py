@@ -651,3 +651,46 @@ class CreditState(StrEnum):
     #: booking — the two must agree, which is why this is a named state rather
     #: than the client testing `balance == 0` for itself.
     EXHAUSTED = "exhausted"
+
+
+class ReviewReportReason(StrEnum):
+    """Why the subject of a review is asking somebody to look at it.
+
+    **The subject reports; an admin decides.** A mentor cannot remove a review
+    they dislike — if they could, a rating would mean nothing and a mentee
+    reading a five-star profile would be misled, which is the whole value of the
+    system. So this vocabulary is a *request for adjudication*, never an action.
+
+    Four members, each with a producer: the reporter picks one, and the admin
+    queue reads it to decide what evidence the complaint needs. They are not
+    interchangeable — "this is about a session I never had" is checkable against
+    `session_id`, where "this is abusive" is a judgement.
+    """
+
+    #: The review states something untrue about what happened.
+    FACTUALLY_INACCURATE = "factually_inaccurate"
+    #: Personal abuse, slurs, or threats rather than an account of the session.
+    ABUSIVE = "abusive"
+    #: The review describes a session the subject did not have. Checkable
+    #: against `reviews.session_id`, which is why it is its own member.
+    NOT_THIS_SESSION = "not_this_session"
+    #: Advertising, a link farm, or nothing to do with mentoring.
+    SPAM = "spam"
+
+
+class ReviewReportOutcome(StrEnum):
+    """What an admin decided about a report.
+
+    **Not derivable from a timestamp**, which is why this is a column rather
+    than a `resolved_at` alone: "somebody looked" and "they agreed" are
+    different facts, and the referral tables dropped their `status` column
+    precisely because *there* the timestamps carried everything.
+    """
+
+    #: The complaint stands. The review is soft-deleted — `deleted_at` is set,
+    #: which the profile's partial index already honours, so it leaves both the
+    #: public list and the aggregate.
+    UPHELD = "upheld"
+    #: The review stays. Recorded rather than deleted, so a second report of the
+    #: same review by the same person has a prior answer to point at.
+    DISMISSED = "dismissed"

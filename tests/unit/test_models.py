@@ -49,6 +49,7 @@ EXPECTED_MODELS = {
     "Referral",
     "ReferralUnlock",
     "Review",
+    "ReviewReport",
     "ScholarshipProgram",
     # M2 profiles. `user_scholarship_experience` is deliberately absent — the
     # legacy field behind it has no option set and no values, so there is

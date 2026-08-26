@@ -52,6 +52,8 @@ from app.domain.enums import (
     MentorStatusType,
     PrimaryRole,
     QuestionType,
+    ReviewReportOutcome,
+    ReviewReportReason,
     SessionReasonCode,
     SessionRole,
     SessionStatus,
@@ -168,6 +170,10 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # and both are deliberately short: the canonical DDL declares seven sources
     # and a sixth reason, and #21 names `credit_source` as its own cautionary
     # example. A member with no producer is the defect, not the omission.
+    # M6 — review moderation. The subject reports, an admin decides; both
+    # vocabularies are closed because both are read to drive a decision.
+    ReviewReportReason: frozenset({"ck_review_reports_reason_is_known"}),
+    ReviewReportOutcome: frozenset({"ck_review_reports_outcome_is_known"}),
     CreditSource: frozenset({"ck_credit_lots_source_is_known"}),
     CreditReason: frozenset({"ck_credit_transactions_reason_is_known"}),
 }
