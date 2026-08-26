@@ -58,7 +58,21 @@ from app.infra.db.types import check_is_known, str_enum
 #: The migration spells the same pair out as a literal, because no migration
 #: imports from ``app``; `test_every_converted_enum_has_a_check_naming_its_values`
 #: is what keeps the two honest.
-REFUND_REASONS = (CreditReason.SESSION_CANCELLED_REFUND, CreditReason.SESSION_NO_SHOW_REFUND)
+REFUND_REASONS = (
+    CreditReason.SESSION_CANCELLED_REFUND,
+    CreditReason.SESSION_NO_SHOW_REFUND,
+    CreditReason.REQUEST_UNFULFILLED,
+)
+
+#: Reasons that describe something that happened *to a session*. Rendered from
+#: the enum for the same reason the refund set is: a member added without being
+#: classified here would silently become one that may carry no session.
+SESSION_BEARING = (
+    CreditReason.SESSION_BOOKED,
+    *REFUND_REASONS,
+)
+
+_SESSION_BEARING = ", ".join(f"'{reason.value}'" for reason in SESSION_BEARING)
 
 _REFUND_PREDICATE = "reason IN ({})".format(
     ", ".join(f"'{reason.value}'" for reason in REFUND_REASONS)
@@ -239,6 +253,18 @@ class CreditTransaction(Base):
         ),
         CheckConstraint("delta <> 0", name="delta_is_not_zero"),
         CheckConstraint(check_is_known("reason", CreditReason), name="reason_is_known"),
+        # **A NULL `session_id` bypasses the refund index entirely**, because
+        # PostgreSQL treats nulls as distinct — so two refunds with no session
+        # both insert and the sweep's guarantee evaporates. The same hole lets a
+        # `session_booked` debit name nothing, which makes D8's first question
+        # unanswerable.
+        #
+        # An equivalence, so it cuts both ways: a grant or an expiry sweep
+        # belongs to no session and may not name one.
+        CheckConstraint(
+            f"(reason IN ({_SESSION_BEARING})) = (session_id IS NOT NULL)",
+            name="session_matches_reason",
+        ),
         # **The one subtlety that would pass every rejecting test.** The sweep
         # commits per batch and is scheduled, so a cancel followed by a sweep —
         # or a sweep that runs twice — would otherwise pay twice for one session.

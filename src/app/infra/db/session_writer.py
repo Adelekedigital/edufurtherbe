@@ -48,6 +48,7 @@ from app.domain.attendance import (
 from app.domain.enums import (
     ActorType,
     AttendanceStatus,
+    CreditReason,
     MeetingProvider,
     SessionReasonCode,
     SessionRole,
@@ -74,7 +75,7 @@ from app.domain.sessions import (
 from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.availability_writer import block_session_window
-from app.infra.db.credit_writer import spend_credit
+from app.infra.db.credit_writer import refund_credit, spend_credit
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import (
@@ -425,6 +426,16 @@ async def book_session(
     return session_id
 
 
+#: Terminal statuses that mean the session was never delivered, so the credit
+#: taken at booking comes back. **Not `cancelled`** — cancelling a confirmed
+#: session carries a real policy (`MENTOR_UNAVAILABLE` refunds,
+#: `MENTEE_NO_LONGER_NEEDED` does not) and belongs with the no-show sweep, where
+#: both triggers can be reasoned about together.
+REFUNDS_THE_REQUEST = frozenset(
+    {SessionStatus.DECLINED, SessionStatus.WITHDRAWN, SessionStatus.EXPIRED}
+)
+
+
 async def transition(
     session: AsyncSession,
     session_id: UUID,
@@ -540,6 +551,27 @@ async def transition(
             reason_text=payload.get("reason_text"),
         )
     )
+
+    # **A request that never became a session hands the credit back.** The
+    # mentor declined or the mentee withdrew: nothing was delivered, so nothing
+    # was owed, and the debit taken at booking has to be reversed.
+    #
+    # Not the cancel path. Cancelling a *confirmed* session is a different
+    # question with a real policy behind it — `MENTOR_UNAVAILABLE` refunds and
+    # `MENTEE_NO_LONGER_NEEDED` does not — and that belongs with the no-show
+    # sweep in M5b-ii, where the two triggers live together.
+    #
+    # In this transaction, so the status and the refund commit together. A
+    # session marked declined with no credit returned is the state a retry
+    # cannot fix, because the transition already happened.
+    if rule.to in REFUNDS_THE_REQUEST:
+        await refund_credit(
+            session,
+            row["mentee_id"],
+            session_id,
+            reason=CreditReason.REQUEST_UNFULFILLED,
+            now=dt.datetime.now(dt.UTC),
+        )
 
     # **The party who did not act.** `cancel` is the only action either of them
     # may take, which is why `recipients` needs the actor at all — for the other
@@ -957,6 +989,19 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime, calendar: 
             for row in expired
         ],
     )
+
+    # **The same refund, for the request nobody answered.** `refund_credit` is
+    # once-per-session at the database, so this sweep re-running — which it does
+    # every hour, and which its own docstring calls idempotent — pays each
+    # request back exactly once.
+    for row in expired:
+        await refund_credit(
+            session,
+            row["mentee_id"],
+            row["id"],
+            reason=CreditReason.REQUEST_UNFULFILLED,
+            now=now,
+        )
 
     # **Both parties, and this is the rule's one exception.** Nobody acted, so
     # neither of them already knows — the mentor let it lapse and the mentee has

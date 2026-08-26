@@ -609,6 +609,18 @@ class CreditReason(StrEnum):
     #: into one `no_show` and cannot say who missed.
     SESSION_NO_SHOW_REFUND = "session_no_show_refund"
 
+    #: The session never happened and never will: the mentor declined, the
+    #: mentee withdrew, or the request expired unanswered.
+    #:
+    #: **One member for three transitions, deliberately.** The other two refund
+    #: reasons are separate because their *policy* differs — a mentor
+    #: cancelling refunds where a mentee cancelling does not. These three do
+    #: not: a request that was never fulfilled always returns the credit,
+    #: whoever ended it. Which of the three it was is recorded precisely by
+    #: `session_events.reason_code`, and a second copy of that vocabulary here
+    #: is what non-negotiable #8 calls a defect.
+    REQUEST_UNFULFILLED = "request_unfulfilled"
+
     #: The sweep found a lot past its date. Written so a balance never drops
     #: without a row saying why — which is the whole of D8's argument.
     LOT_EXPIRED = "lot_expired"

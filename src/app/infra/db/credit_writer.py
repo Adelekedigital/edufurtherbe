@@ -36,12 +36,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InsufficientCreditError
-from app.domain.credits import STARTER_GRANT, expiry_for
+from app.domain.credits import STARTER_GRANT, expiry_for, refund_expiry
 from app.domain.enums import CreditReason, CreditSource
 from app.infra.db.credit_store import spendable_now
-from app.infra.db.models.credits import CreditLot, CreditTransaction
+from app.infra.db.models.credits import _REFUND_PREDICATE, CreditLot, CreditTransaction
 
-__all__ = ["InsufficientCreditError", "grant", "grant_starter", "spend_credit"]
+__all__ = ["grant", "grant_starter", "refund_credit", "spend_credit"]
 
 
 async def _record(session: AsyncSession, user_id: UUID, lot_id: UUID, quantity: int) -> None:
@@ -253,5 +253,92 @@ async def spend_credit(
             session_id=session_id,
         )
     )
+
+    return UUID(str(lot_id))
+
+
+async def refund_credit(
+    session: AsyncSession,
+    user_id: UUID,
+    session_id: UUID,
+    *,
+    reason: CreditReason,
+    now: dt.datetime,
+) -> UUID | None:
+    """Hand a credit back for a session that will not happen. Does not commit.
+
+    Returns the new lot, or ``None`` when this session was already refunded.
+
+    **A fresh lot, not a return to the original** (decision 11). The original
+    may already be dead — an expiry sweep on 2 September refunds a request made
+    in August — and returning a credit to a dead lot refunds nothing. Its
+    *semantics* carry over, never its date: never-expiring in, never-expiring
+    out, otherwise end of the current month (decision 12).
+
+    **Once per session, and the database says so.** `uq_credit_transactions_one_
+    refund_per_session` is partial on the refund reasons, so a second refund for
+    the same session is refused rather than paid — which matters because the
+    expiry sweep is scheduled and re-runs, and because a mentor could decline a
+    request the sweep has already expired. `ON CONFLICT DO NOTHING` reports that
+    as `None` rather than raising, since a second attempt is an ordinary
+    outcome here rather than an error.
+
+    The original lot is found through the debit that paid for this session. If
+    there is no debit — a session booked before credits existed, or one an
+    admin created — there is nothing to refund and this is a no-op.
+    """
+    original = (
+        await session.execute(
+            text(
+                "SELECT l.expires_at FROM credit_transactions t "
+                "JOIN credit_lots l ON l.id = t.credit_lot_id "
+                "WHERE t.session_id = :session AND t.reason = :booked "
+                "LIMIT 1"
+            ),
+            {"session": session_id, "booked": CreditReason.SESSION_BOOKED.value},
+        )
+    ).one_or_none()
+
+    if original is None:
+        return None
+
+    lot_id = (
+        await session.execute(
+            pg_insert(CreditLot)
+            .values(
+                user_id=user_id,
+                source=CreditSource.REFUND,
+                quantity_granted=1,
+                quantity_remaining=1,
+                expires_at=refund_expiry(original.expires_at, now=now),
+            )
+            .returning(CreditLot.id)
+        )
+    ).scalar_one()
+
+    recorded = (
+        await session.execute(
+            pg_insert(CreditTransaction)
+            .values(
+                user_id=user_id,
+                credit_lot_id=lot_id,
+                delta=1,
+                reason=reason,
+                session_id=session_id,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["session_id"],
+                index_where=text(_REFUND_PREDICATE),
+            )
+            .returning(CreditTransaction.id)
+        )
+    ).scalar_one_or_none()
+
+    if recorded is None:
+        # The ledger refused, so the lot must go too — otherwise the balance
+        # rises with nothing saying why, which is the state D8 chose a ledger
+        # over a counter to prevent.
+        await session.execute(text("DELETE FROM credit_lots WHERE id = :lot"), {"lot": lot_id})
+        return None
 
     return UUID(str(lot_id))
