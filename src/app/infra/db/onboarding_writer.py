@@ -33,6 +33,7 @@ from app.domain.onboarding import ProfileEvidence, may_complete_onboarding
 from app.infra.db.credit_writer import grant_starter
 from app.infra.db.models.mentoring import MenteeGoal, MentorProfile
 from app.infra.db.models.user import UserOnboarding, UserProfile
+from app.infra.db.referral_writer import qualify_invitee
 
 __all__ = ["OnboardingResult", "complete_onboarding"]
 
@@ -104,5 +105,14 @@ async def complete_onboarding(session: AsyncSession, user_id: UUID) -> Onboardin
     ).one()
 
     granted = await grant_starter(session, user_id) is not None
+
+    # **The referrer's half, in this transaction.** Finishing a profile is what
+    # qualifies the invite that named this user — the same signal as the starter
+    # credit, and the target settled decision 20 always pointed at.
+    #
+    # Not a separate call after the commit: that leaves a state where the
+    # invitee is complete, so a retry is a no-op, and the referrer's credits are
+    # missing with nothing that would ever revisit it.
+    await qualify_invitee(session, user_id)
 
     return OnboardingResult(completed_at=row.completed_at, last_step=row.last_step, granted=granted)

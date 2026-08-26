@@ -219,6 +219,63 @@ onboarding row already existed. A migrated user whose completion the ETL wrote
 but who never received a credit gets both the credit and a 201, which is the
 honest answer; keying off the row would answer 200 and silently skip the grant.
 
+### 12. A qualifying invite is the invitee finishing their profile
+
+**Amends settled decision 20**, which said "signup plus a verified email" and
+recorded itself as deliberately temporary, naming *invitee completes their
+profile* as the target.
+
+It could not have shipped as written. `users.email_verified_at` is written by
+exactly one thing — `domain/transform/identity.py`, the ETL, for migrated users
+— and `TokenClaims` extracts only `subject` and `email` from the Supabase token,
+never `email_verified`. For any new user that column stays null forever, so
+`qualified_at` would never be set and **the unlock gate could never open**: a
+recurring benefit gated behind a condition nothing in the system can satisfy.
+
+Three ways out were weighed — read `email_verified` from the token and write the
+column; drop the verification half; or move to onboarding completion. The third
+was chosen, and it is barely a departure: it is the target decision 20 already
+named, and PR 4 built the producer that made it cheap. It is also **strictly
+stronger** than what it replaces, since finishing a profile is work and clicking
+a verification link is not.
+
+Confirmed by the owner on 2026-08-25 rather than taken locally, because it
+changes when somebody earns a *recurring* benefit.
+
+### 13. `signed_up_at` records the claim, not the signup
+
+**This service cannot observe a signup.** `users` rows are created by
+`provisioning_store` (the provisioning CLI) and by the ETL; there is no
+registration endpoint here to notice an arrival. So the invitee presents their
+code once authenticated — `POST /api/v1/me/referrals/claim` — and that is the
+moment recorded.
+
+The package's column name is kept, because a later Supabase webhook would fill
+exactly this column with exactly this meaning. But the gap between the name and
+what the service actually witnessed is real, and it is written into the model
+docstring so nobody reasons about signup funnels from it.
+
+### 14. The invite code is unique per referral, and is a bearer token
+
+The package indexes `code` non-uniquely, which implies a code per *referrer*. A
+per-referrer code cannot tell an arrival which invite it answered, and
+`invitee_email` cannot stand in because a shared link has no addressee — so
+`uq_referrals_code` makes it one row per invite.
+
+Generated with `secrets.token_urlsafe(16)`: 128 bits, URL-safe because it
+travels in a link. **Anybody holding a code can attach themselves to the invite
+it names**, so being infeasible to guess is its only protection. `secrets`
+rather than `random`, which is seeded predictably and documented as unsuitable.
+
+`referrer_id <> invitee_user_id` **is** a rule the package does not have, and it
+is here because this gate opens a *recurring* grant rather than a one-off: the
+cheapest possible farm is one address referring itself.
+
+`UNIQUE (referrer_id, invitee_email)` is **not** — it is the package's own rule
+at `05_credits_reviews.sql:137`, carried unchanged. An earlier draft of this
+record claimed it as a departure, which was simply wrong; the scoping argument
+for it stands, but the credit belongs to the package.
+
 ### Confirmation
 
 How you would know this is being honoured, and what nothing checks.
@@ -246,6 +303,12 @@ How you would know this is being honoured, and what nothing checks.
 | **a retry pays nothing** | `test_a_second_call_grants_nothing`, asserted on the *balance* rather than the status code — a route answering 200 while quietly inserting a second lot passes a status assertion. Watched failing with the conflict clause removed |
 | a grant always writes its ledger row | `test_the_grant_writes_a_ledger_row` — a writer that created the lot and forgot the entry passes every balance assertion in that file |
 | a migrated completion still pays | `test_a_user_the_etl_completed_still_gets_their_credit` |
+| an invite pays nothing until the invitee finishes | `test_claiming_alone_pays_nothing`, with `test_finishing_onboarding_pays_the_referrer` as the accepting half — the separation is the abuse boundary |
+| **a second qualifying invitee pays nothing more** | `test_a_second_qualifying_invitee_pays_nothing_more`, enforced by `uq_referral_unlocks_user_id` rather than a read-then-write, which two invitees finishing at once would lose |
+| the second invite is still recorded as qualified | `test_the_second_invite_is_still_marked_qualified` — it genuinely qualified, even though the floor it would have opened is already open |
+| **a repeat does not move `qualified_at`** | `test_the_invitee_finishing_twice_does_not_move_qualified_at`. An earlier version asserted the *balance* and passed with the predicate removed — the unlock's `UNIQUE` refuses the second row either way. Only the date assertion reaches the rule |
+| nobody claims their own invite | `test_claiming_your_own_invite_is_refused` — the CHECK is the guarantee, this is what makes it a 409 rather than a 500 |
+| a claim is idempotent | `test_claiming_twice_yourself_is_idempotent`; the front end holds the code across sign-up and a retry must not read as an error |
 | **the append-only table has no trigger** | `test_the_ledger_carries_no_updated_at_trigger`, paired with `test_the_lots_table_does_carry_one`. Nothing else can see this: `CREATE TRIGGER` does not validate the function body, `alembic check` is blind to triggers, and no test issues an `UPDATE` here |
 | quantities cannot go incoherent | four CHECK tests, each with its accepting boundary — `granted == remaining` and `remaining == 0` are both legal states |
 

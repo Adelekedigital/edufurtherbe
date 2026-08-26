@@ -17,6 +17,7 @@ from app.api.routes import (
     me_calendar,
     me_intake,
     me_onboarding,
+    me_referrals,
     me_session_types,
     mentors,
     reviews,
@@ -141,6 +142,25 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "have switched off is absent there and present here, and while your "
             "profile is unlisted that endpoint answers `404` for you as well as "
             "for everybody else."
+        ),
+    },
+    {
+        "name": "referrals",
+        "description": (
+            "Inviting somebody, and the recurring grant one qualifying invite "
+            "opens.\n\n"
+            "**The gate is the point, not the invite.** A qualifying invite pays "
+            "two credits once — but what it really does is open the monthly "
+            "grant, which arrives every month thereafter. That asymmetry is why "
+            "the bar is the invitee *finishing their profile* rather than "
+            "signing up: somebody who signs up and vanishes unlocks nothing, "
+            "and without that separation ten throwaway addresses farm a "
+            "recurring benefit forever.\n\n"
+            "Uniqueness is scoped to the referrer and the address, not the "
+            "address alone — two people may invite the same person, and "
+            "refusing the second would make this a race to invite.\n\n"
+            "**No invite UI exists yet.** These endpoints are reachable and "
+            "correct; the screens have not caught up."
         ),
     },
     {
@@ -281,6 +301,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_calendar.callback_router)
     application.include_router(me_intake.router)
     application.include_router(me_onboarding.router)
+    application.include_router(me_referrals.router)
     application.include_router(callbacks.router)
     application.include_router(sessions.router)
     application.include_router(reviews.router)
