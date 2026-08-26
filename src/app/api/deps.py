@@ -55,6 +55,7 @@ from app.api.schemas.profile import (
     UserProfileWrite,
 )
 from app.api.schemas.referrals import ReferralClaim, ReferralWrite
+from app.api.schemas.review_reports import ReviewReportWrite
 from app.api.schemas.reviews import ReviewEdit, ReviewWrite
 from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionTypeWrite
 from app.api.schemas.sessions import (
@@ -141,6 +142,7 @@ from app.infra.db.mentor_status_store import (
 from app.infra.db.offerings import offerings_for
 from app.infra.db.onboarding_store import get_onboarding
 from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
+from app.infra.db.own_review_reader import list_reviews_about
 from app.infra.db.profile_store import (
     get_goal,
     get_mentor_profile,
@@ -163,6 +165,7 @@ from app.infra.db.referral_store import list_referrals
 from app.infra.db.referral_writer import claim_referral, create_referral
 from app.infra.db.review_eligibility import reviewable_sessions
 from app.infra.db.review_reader import get_review_row, list_mentor_reviews
+from app.infra.db.review_report_writer import report_review
 from app.infra.db.review_stats import mentor_review_stats
 from app.infra.db.review_writer import edit_review, write_review
 from app.infra.db.session_stats import mentor_stats
@@ -2103,3 +2106,58 @@ async def mentor_reviews_page(
 
 
 MentorReviewsDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(mentor_reviews_page)]
+
+
+async def own_reviews_page(
+    user: CurrentUserDep,
+    session: SessionDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """One page of the reviews written *about* the caller.
+
+    No authorization argument and no handle: `CurrentUserDep` is the subject, so
+    there is no target to check and nothing a caller could name that is not
+    theirs.
+
+    The same two-part codec the public list uses, minted here beside the decode
+    for the reason `mentor_page` records — deriving the token again in the route
+    is one rule in two places, and the two halves drifting is what once made
+    every cursor that endpoint issued invalid.
+    """
+    rows, has_more = await list_reviews_about(
+        session, user["id"], limit=clamp_limit(limit), after=decode_cursor(cursor)
+    )
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_cursor(last["created_at"].isoformat(), last["id"])
+
+
+OwnReviewsDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(own_reviews_page)]
+
+
+async def reported_review(
+    review_id: UUID,
+    payload: ReviewReportWrite,
+    user: CurrentUserDep,
+    session: SessionDep,
+) -> Any:
+    """File a report against a review of the caller.
+
+    The composite key is the guarantee; `report_review` scopes the lookup so a
+    review about somebody else is **404 rather than 403** — confirming it exists
+    would turn an authorization answer into an enumeration oracle.
+    """
+    filed = await report_review(
+        session,
+        user["id"],
+        review_id,
+        reason=payload.reason,
+        detail=payload.detail,
+    )
+    await session.commit()
+    return filed
+
+
+ReportedReviewDep = Annotated[Any, Depends(reported_review)]

@@ -18,6 +18,7 @@ from app.api.routes import (
     me_intake,
     me_onboarding,
     me_referrals,
+    me_reviews,
     me_session_types,
     mentors,
     reviews,
@@ -142,6 +143,24 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "have switched off is absent there and present here, and while your "
             "profile is unlisted that endpoint answers `404` for you as well as "
             "for everybody else."
+        ),
+    },
+    {
+        "name": "review-moderation",
+        "description": (
+            "Reviews written about you, and asking somebody to look at one.\n\n"
+            "**Reporting hides nothing, and that is the design.** A mentor who "
+            "could remove reviews they dislike would make the rating meaningless "
+            "and mislead every mentee reading the profile — which is what the "
+            "review system exists to prevent. The subject reports; an admin "
+            "decides; only an upheld report removes anything.\n\n"
+            "The review stays visible while a report is pending. Hiding on "
+            "report is the same power under another name, exercised one "
+            "complaint at a time.\n\n"
+            "**Separate from `reviews`**, which is the *author's* surface "
+            "— writing one, correcting a typo inside ten minutes, and finding "
+            "sessions still owed. The two have opposite ideas of whose text is "
+            "whose, and settled decision #64 gives a domain its own name."
         ),
     },
     {
@@ -302,6 +321,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_intake.router)
     application.include_router(me_onboarding.router)
     application.include_router(me_referrals.router)
+    application.include_router(me_reviews.router)
     application.include_router(callbacks.router)
     application.include_router(sessions.router)
     application.include_router(reviews.router)
