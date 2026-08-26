@@ -28,6 +28,7 @@ from app.core.errors import (
     AuthenticationError,
     ConfigurationError,
     ConflictError,
+    InsufficientCreditError,
     NotFoundError,
     OnboardingIncompleteError,
     ReviewIntervalError,
@@ -76,6 +77,7 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
 # nothing about problem documents, the same split that keeps `domain/` testable
 # without a request.
 TYPE_BY_ERROR: dict[type[AppError], str] = {
+    InsufficientCreditError: "/problems/insufficient-credit",
     OnboardingIncompleteError: "/problems/onboarding-incomplete",
     AlreadyReviewedError: "/problems/review-already-exists",
     ReviewIntervalError: "/problems/review-interval-not-elapsed",

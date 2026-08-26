@@ -36,14 +36,32 @@ import datetime as dt
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.credits import allowance_for, end_of_month, state_for
 from app.domain.enums import CreditState
 from app.infra.db.models.credits import CreditLot
 
-__all__ = ["CreditSummary", "get_credit_summary"]
+__all__ = ["CreditSummary", "get_credit_summary", "spendable_now"]
+
+
+def spendable_now(moment: dt.datetime) -> ColumnElement[bool]:
+    """Whether a lot can be spent at ``moment``.
+
+    **The one copy.** This module's docstring names the three consumers it
+    exists to keep honest — the card, the booking gate, and the monthly grant —
+    and the booking gate was hand-rolling its own version of this clause. That
+    is the second representation non-negotiable #8 names, and it is the kind
+    that drifts silently: a spend disagreeing with the balance lets somebody
+    book with a credit the card already stopped showing them.
+
+    An expression rather than a SQL string, deliberately. A string has to be
+    interpolated into the statement, which is the f-string-into-SQL shape the
+    security checklist names by name — and a suppression there would be one
+    more rule nobody reads.
+    """
+    return or_(CreditLot.expires_at.is_(None), CreditLot.expires_at > moment)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +112,7 @@ async def get_credit_summary(
             CreditLot.user_id == user_id,
             # See the module docstring. The job does not decide what is
             # spendable; this does.
-            or_(CreditLot.expires_at.is_(None), CreditLot.expires_at > moment),
+            spendable_now(moment),
         )
     )
 

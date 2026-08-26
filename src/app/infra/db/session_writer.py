@@ -74,6 +74,7 @@ from app.domain.sessions import (
 from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.availability_writer import block_session_window
+from app.infra.db.credit_writer import spend_credit
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import (
@@ -317,6 +318,21 @@ async def book_session(
         # `InFailedSQLTransaction` and bury this cause under that one.
         await session.rollback()
         raise ConflictError("that time was taken while you were booking it") from exc
+
+    # **The debit, in the same transaction as the session.** A session that
+    # exists without its debit is a free booking; a debit without its session is
+    # a credit taken for nothing. They commit together or not at all.
+    #
+    # After the insert rather than before it, so the ledger row can name the
+    # session it paid for — which is the first of D8's four reasons the ledger
+    # exists: *"I was charged for a session that never ran"* is only answerable
+    # if the charge names the session.
+    #
+    # `spend_credit` takes an advisory lock on the mentee before reading their
+    # balance, so two bookings arriving together serialise rather than both
+    # passing a check-time-of-use test. A double-click cannot buy two sessions
+    # with one credit.
+    await spend_credit(session, mentee_id, session_id, now=now)
 
     # **The participant rows, in the same transaction as the session**, which
     # is what `SessionParticipant`'s own docstring promises: written together,
