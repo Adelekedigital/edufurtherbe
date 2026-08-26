@@ -57,6 +57,12 @@ class TestVocabularies:
             "session_booked",
             "session_cancelled_refund",
             "session_no_show_refund",
+            # Three producers, one member: `transition()` on decline and on
+            # withdraw, and `expire_requests()` on the sweep. They share a
+            # member because they share a *policy* — a request that never
+            # became a session always returns the credit — while the two above
+            # are separate precisely because theirs differ.
+            "request_unfulfilled",
             "lot_expired",
         }
 

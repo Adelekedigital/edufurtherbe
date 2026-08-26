@@ -434,3 +434,36 @@ async def test_the_opening_balance_index_does_not_constrain_other_sources(
 
     assert await ledger.lot(source="monthly_free")
     assert await ledger.lot(source="monthly_free")
+
+
+async def test_a_session_bearing_reason_must_name_a_session(ledger: Ledger) -> None:
+    """**A NULL bypasses the one-refund-per-session index entirely.**
+
+    PostgreSQL treats nulls as distinct, so two refunds with no session both
+    insert and the guarantee the scheduled sweep leans on evaporates. The same
+    hole lets a `session_booked` debit name nothing, which makes D8's first
+    question — *"I was charged for a session that never ran"* — unanswerable.
+    """
+    lot = await ledger.lot()
+
+    with pytest.raises(IntegrityError, match="session_matches_reason"):
+        await ledger.transaction(lot, delta=-1, reason="session_booked", session=None)
+
+
+async def test_a_grant_may_not_name_a_session(ledger: Ledger) -> None:
+    """The equivalence cuts both ways: a grant belongs to no session, so
+    claiming one would attribute a credit to a booking that did not produce
+    it."""
+    lot = await ledger.lot()
+
+    with pytest.raises(IntegrityError, match="session_matches_reason"):
+        await ledger.transaction(lot, delta=3, reason="grant")
+
+
+async def test_both_halves_are_still_accepted(ledger: Ledger) -> None:
+    """The accepting case. An equivalence written the wrong way round rejects
+    the two above just as loudly and rejects these too."""
+    lot = await ledger.lot()
+
+    assert await ledger.transaction(lot, delta=3, reason="grant", session=None)
+    assert await ledger.transaction(lot, delta=-1, reason="session_booked")
