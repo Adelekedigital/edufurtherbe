@@ -217,11 +217,19 @@ async def test_a_user_gets_one_starter_ever(ledger: Ledger) -> None:
 
 async def test_the_starter_index_does_not_constrain_other_sources(ledger: Ledger) -> None:
     """**The predicate is the point.** A unique index on `user_id` alone would
-    stop a user ever receiving a second monthly grant."""
+    stop a user ever receiving a second monthly grant.
+
+    **The two monthly lots carry different expiries, and that is not incidental.**
+    A second monthly grant *is* a second month — `uq_credit_lots_one_monthly_
+    grant_per_period` refuses two sharing an expiry, because that would be the
+    scheduled job paying twice for one month. Written with one expiry this test
+    asserted something the schema now makes impossible, and it was ambiguous
+    before the period guard existed to disambiguate it.
+    """
     await ledger.lot(source="profile_completed", granted=1, expires=None)
 
-    assert await ledger.lot(source="monthly_free")
-    assert await ledger.lot(source="monthly_free")
+    assert await ledger.lot(source="monthly_free", expires=datetime(2026, 10, 1, tzinfo=UTC))
+    assert await ledger.lot(source="monthly_free", expires=datetime(2026, 11, 1, tzinfo=UTC))
 
 
 # --------------------------------------------------------------------------
@@ -429,11 +437,15 @@ async def test_the_opening_balance_index_does_not_constrain_other_sources(
     ledger: Ledger,
 ) -> None:
     """The predicate is the point, exactly as it is for the starter: on
-    `user_id` alone a migrated user could never receive a monthly grant."""
+    `user_id` alone a migrated user could never receive a monthly grant.
+
+    Two months rather than two grants in one — see the starter's twin above for
+    why the distinction is load-bearing.
+    """
     await ledger.lot(source="opening_balance", granted=5, expires=None)
 
-    assert await ledger.lot(source="monthly_free")
-    assert await ledger.lot(source="monthly_free")
+    assert await ledger.lot(source="monthly_free", expires=datetime(2026, 10, 1, tzinfo=UTC))
+    assert await ledger.lot(source="monthly_free", expires=datetime(2026, 11, 1, tzinfo=UTC))
 
 
 async def test_a_session_bearing_reason_must_name_a_session(ledger: Ledger) -> None:
@@ -467,3 +479,31 @@ async def test_both_halves_are_still_accepted(ledger: Ledger) -> None:
 
     assert await ledger.transaction(lot, delta=3, reason="grant", session=None)
     assert await ledger.transaction(lot, delta=-1, reason="session_booked")
+
+
+async def test_one_monthly_grant_per_period(ledger: Ledger) -> None:
+    """**The scheduled job runs twice, and must pay once.**
+
+    A retry, a manual trigger beside the cron, an operator checking it works.
+    Granting again would hand every unlocked mentee six credits — and nothing
+    downstream would notice, because the balance is a `SUM` that would simply
+    be right about the wrong number.
+
+    Keyed on the expiry, which is the month's end rather than the day the job
+    ran, so a run on the 3rd still collides with one on the 1st.
+    """
+    await ledger.lot(source="monthly_free", expires=datetime(2026, 10, 1, tzinfo=UTC))
+
+    with pytest.raises(IntegrityError, match="one_monthly_grant_per_period"):
+        await ledger.lot(source="monthly_free", expires=datetime(2026, 10, 1, tzinfo=UTC))
+
+
+async def test_the_period_guard_does_not_constrain_other_sources(ledger: Ledger) -> None:
+    """The accepting half. A refund and a monthly grant that happened to share
+    an expiry must coexist — on `(user_id, expires_at)` without the source
+    predicate, a user would silently lose one."""
+    when = datetime(2026, 10, 1, tzinfo=UTC)
+    await ledger.lot(source="monthly_free", expires=when)
+
+    assert await ledger.lot(source="refund", granted=1, expires=when)
+    assert await ledger.lot(source="referral_unlock", granted=2, expires=when)

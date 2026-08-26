@@ -166,6 +166,24 @@ class CreditLot(Base, TimestampMixin):
             unique=True,
             postgresql_where=text(f"source = '{CreditSource.OPENING_BALANCE.value}'"),
         ),
+        # **One monthly grant per user per period.** A scheduled job runs
+        # twice — a retry, a manual trigger beside the cron — and the second
+        # run would hand every unlocked mentee another three credits, which
+        # nothing downstream would notice because the balance is a `SUM` that
+        # would simply be right about the wrong number.
+        #
+        # Keyed on the expiry because every monthly lot granted in one month
+        # shares one, so the pair *is* the period — and a job that fires late
+        # on the 3rd still collides with the one that fired on the 1st.
+        # `date_trunc` on a `timestamptz` is only STABLE, so PostgreSQL would
+        # refuse it here; this column carries the same fact.
+        Index(
+            "uq_credit_lots_one_monthly_grant_per_period",
+            "user_id",
+            "expires_at",
+            unique=True,
+            postgresql_where=text(f"source = '{CreditSource.MONTHLY_FREE.value}'"),
+        ),
         # The balance read: this user's live lots, oldest expiry first, which is
         # also the order a spend consumes them in.
         Index("ix_credit_lots_user_expiry", "user_id", "expires_at"),
