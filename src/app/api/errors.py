@@ -29,6 +29,7 @@ from app.core.errors import (
     ConfigurationError,
     ConflictError,
     NotFoundError,
+    OnboardingIncompleteError,
     ReviewIntervalError,
     UpstreamError,
 )
@@ -75,6 +76,7 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
 # nothing about problem documents, the same split that keeps `domain/` testable
 # without a request.
 TYPE_BY_ERROR: dict[type[AppError], str] = {
+    OnboardingIncompleteError: "/problems/onboarding-incomplete",
     AlreadyReviewedError: "/problems/review-already-exists",
     ReviewIntervalError: "/problems/review-interval-not-elapsed",
 }

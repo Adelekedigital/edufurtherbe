@@ -138,6 +138,8 @@ from app.infra.db.mentor_status_store import (
     set_listing,
 )
 from app.infra.db.offerings import offerings_for
+from app.infra.db.onboarding_store import get_onboarding
+from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
 from app.infra.db.profile_store import (
     get_goal,
     get_mentor_profile,
@@ -523,6 +525,41 @@ OwnAttributesDep = Annotated[dict[str, Any], Depends(own_attributes)]
 # nothing. Putting the commit beside the write leaves no second place to forget
 # it — and for education, the institution and the entry are both written before
 # that commit, which is what makes them one transaction.
+
+
+async def own_onboarding(user: CurrentUserDep, session: SessionDep) -> Any:
+    """The caller's onboarding record, or 404.
+
+    No authorization argument: `CurrentUserDep` *is* the caller, so there is no
+    target to check.
+    """
+    row = await get_onboarding(session, user["id"])
+    if row is None:
+        raise NotFoundError("onboarding has not been started")
+    return row
+
+
+OwnOnboardingDep = Annotated[Any, Depends(own_onboarding)]
+
+
+async def completed_onboarding(user: CurrentUserDep, session: SessionDep) -> OnboardingResult:
+    """Mark the caller's onboarding finished and pay the starter credit.
+
+    **One transaction, and the commit is here.** The completion and the grant
+    are two facts that must not be separable: split across two transactions
+    there is a state where somebody is marked complete and holds no credit, and
+    nothing would revisit it — completion is recorded, so a retry is a no-op,
+    and the credit is missing forever.
+
+    No authorization argument: `CurrentUserDep` *is* the caller, so there is no
+    target to check.
+    """
+    result = await complete_onboarding(session, user["id"])
+    await session.commit()
+    return result
+
+
+CompletedOnboardingDep = Annotated[OnboardingResult, Depends(completed_onboarding)]
 
 
 async def created_education(

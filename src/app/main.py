@@ -16,6 +16,7 @@ from app.api.routes import (
     health,
     me_calendar,
     me_intake,
+    me_onboarding,
     me_session_types,
     mentors,
     reviews,
@@ -143,6 +144,23 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "onboarding",
+        "description": (
+            "Finishing onboarding, and the starter credit that goes with it.\n\n"
+            "**Its own tag rather than `users`**, per settled decision #64: this "
+            "is a transition in a user's lifecycle that pays a credit, not a "
+            "field on their record.\n\n"
+            "The starter is granted for **finishing a profile**, never for "
+            "signing up — signing up is free and finishing one is work, which is "
+            "the whole of the anti-farming property. Completion is therefore "
+            "refused with `409` and the problem type "
+            "`/problems/onboarding-incomplete` until the caller has a profile "
+            "and a role-appropriate profile beside it.\n\n"
+            "The credit itself is one, it never expires, and it appears under "
+            "`credits` on `GET /api/v1/me`."
+        ),
+    },
+    {
         "name": "callbacks",
         "description": (
             "Endpoints a machine or a redirected browser lands on. **There is "
@@ -262,6 +280,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_calendar.router)
     application.include_router(me_calendar.callback_router)
     application.include_router(me_intake.router)
+    application.include_router(me_onboarding.router)
     application.include_router(callbacks.router)
     application.include_router(sessions.router)
     application.include_router(reviews.router)
