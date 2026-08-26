@@ -29,10 +29,14 @@ the timestamps genuinely cannot derive.
 **`qualified_at` is deliberately separate from `signed_up_at`.** Inviting
 somebody who signs up and vanishes must not unlock credits; without that
 separation, ten throwaway addresses farm a recurring grant forever. What counts
-as qualifying is signup plus a verified email today, and that is **recorded as
-temporary** — the target is the invitee completing their profile, which is the
-same signal as the starter credit. Tightening it is a predicate change rather
-than a migration, which is exactly why the two timestamps are separate columns.
+as qualifying is **the invitee finishing their profile** — the same signal as
+the starter credit, and the target settled decision 20 always named. It said
+"signup plus a verified email" until 2026-08-25, when that turned out to be
+unsatisfiable: `users.email_verified_at` is written only by the ETL, so for any
+new user the column stays null and the gate could never open. See ADR 0027 §12.
+
+Keeping the two timestamps separate is what makes the bar a predicate change
+rather than a migration, whichever way it moves next.
 """
 
 import datetime
@@ -94,7 +98,7 @@ class Referral(Base, TimestampMixin):
     signed_up_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     #: **The abuse boundary.** Separate from `signed_up_at` on purpose; see the
-    #: module docstring. Today: signup plus a verified email, and temporary.
+    #: module docstring. Set when the invitee finishes their profile.
     qualified_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     __table_args__ = (
@@ -125,11 +129,24 @@ class Referral(Base, TimestampMixin):
         ),
         # This referrer's invites, newest first — the invite list on screen.
         Index("ix_referrals_referrer_invited", "referrer_id", text("invited_at DESC")),
-        # Attribution: who invited this arrival. Partial, because the column is
-        # null until somebody actually shows up and most rows never fill it.
+        # Attribution: who invited this arrival — and **at most one invite per
+        # arrival**, which is the rule rather than an optimisation.
+        #
+        # Without the uniqueness, a person who clicked two invite links claimed
+        # both, and `qualify_invitee`'s `.one_or_none()` then raised
+        # `MultipleResultsFound` on their next completion. That is not an
+        # `AppError`, so it became a 500 that rolled the transaction back and
+        # recurred on every retry: onboarding could never be finished, the
+        # starter credit never arrived, and there was no way to un-claim.
+        #
+        # Partial because an unclaimed invite has no invitee and any number of
+        # those coexist. Nulls are distinct in PostgreSQL so the predicate is
+        # not strictly needed, and it is written anyway to state what the index
+        # is for.
         Index(
-            "ix_referrals_invitee",
+            "uq_referrals_invitee",
             "invitee_user_id",
+            unique=True,
             postgresql_where=text("invitee_user_id IS NOT NULL"),
         ),
     )

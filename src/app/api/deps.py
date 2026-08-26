@@ -11,7 +11,7 @@ import datetime as dt
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import suppress
 from functools import lru_cache
 from typing import Annotated, Any
@@ -54,6 +54,7 @@ from app.api.schemas.profile import (
     UserLanguagesWrite,
     UserProfileWrite,
 )
+from app.api.schemas.referrals import ReferralClaim, ReferralWrite
 from app.api.schemas.reviews import ReviewEdit, ReviewWrite
 from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionTypeWrite
 from app.api.schemas.sessions import (
@@ -158,6 +159,8 @@ from app.infra.db.profile_writer import (
     upsert_goal,
     upsert_profile,
 )
+from app.infra.db.referral_store import list_referrals
+from app.infra.db.referral_writer import claim_referral, create_referral
 from app.infra.db.review_eligibility import reviewable_sessions
 from app.infra.db.review_reader import get_review_row, list_mentor_reviews
 from app.infra.db.review_stats import mentor_review_stats
@@ -525,6 +528,44 @@ OwnAttributesDep = Annotated[dict[str, Any], Depends(own_attributes)]
 # nothing. Putting the commit beside the write leaves no second place to forget
 # it — and for education, the institution and the entry are both written before
 # that commit, which is what makes them one transaction.
+
+
+async def own_referrals(user: CurrentUserDep, session: SessionDep) -> Sequence[Any]:
+    """The caller's own invites. No authorization argument — `CurrentUserDep`
+    *is* the caller, so there is no target to check."""
+    return await list_referrals(session, user["id"])
+
+
+OwnReferralsDep = Annotated[Sequence[Any], Depends(own_referrals)]
+
+
+async def created_referral(
+    payload: ReferralWrite, user: CurrentUserDep, session: SessionDep
+) -> Any:
+    referral = await create_referral(session, user["id"], payload.invitee_email)
+    await session.commit()
+    return referral
+
+
+CreatedReferralDep = Annotated[Any, Depends(created_referral)]
+
+
+async def claimed_referral(
+    payload: ReferralClaim, user: CurrentUserDep, session: SessionDep
+) -> Any:
+    """Attach the caller to an invite.
+
+    **The claim does not qualify it.** Qualification happens when the invitee
+    finishes onboarding, which is a different transaction and deliberately so:
+    claiming is the invitee saying who invited them, and finishing is the work
+    that earns the referrer anything.
+    """
+    referral = await claim_referral(session, user["id"], payload.code)
+    await session.commit()
+    return referral
+
+
+ClaimedReferralDep = Annotated[Any, Depends(claimed_referral)]
 
 
 async def own_onboarding(user: CurrentUserDep, session: SessionDep) -> Any:
