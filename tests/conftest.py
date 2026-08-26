@@ -816,3 +816,69 @@ def live_probe_server() -> Iterator[LiveServer]:
     application, with a token, is covered in `tests/integration/`.
     """
     yield from serve(BodyLimitMiddleware(_drain))
+
+
+#: What a test mentee is funded with. Generous on purpose: a test asserting a
+#: booking should fail on the thing it is about, never on running out of
+#: credits three bookings in.
+TEST_CREDITS = 20
+
+
+async def fund(conn: Any, user_id: Any, quantity: int = TEST_CREDITS) -> None:
+    """Give a mentee credits so their bookings can be paid for.
+
+    **Explicit at every call site rather than an autouse fixture.** Funding
+    every user automatically would make `test_booking_without_credits_is_refused`
+    pass for the wrong reason — it would be asserting against a mentee who was
+    silently topped up, and the refusal it exists to prove would never be
+    reached.
+
+    Takes a connection rather than an engine because every caller already has
+    one open inside the transaction that just created the user, and funding in a
+    second transaction would leave a window where the user exists unfunded.
+
+    Never expires: the lot is `opening_balance`, which is the migration's source
+    and the only one whose quantity is arbitrary. Using `monthly_free` would tie
+    every test to `MONTHLY_ALLOWANCE` and make raising it a test-wide edit.
+    """
+    lot_id = (
+        await conn.execute(
+            text(
+                "INSERT INTO credit_lots "
+                "(user_id, source, quantity_granted, quantity_remaining, expires_at) "
+                "VALUES (:u, 'opening_balance', :q, :q, NULL) RETURNING id"
+            ),
+            {"u": user_id, "q": quantity},
+        )
+    ).scalar_one()
+
+    # **The ledger row too.** A lot without one is a balance that rose with
+    # nothing saying why — the state D8 chose a ledger over a counter to
+    # prevent — and every test that reconciles the two would be reconciling
+    # against a fixture that had already broken the rule.
+    await conn.execute(
+        text(
+            "INSERT INTO credit_transactions "
+            "(user_id, credit_lot_id, delta, reason, session_id) "
+            "VALUES (:u, :lot, :q, 'grant', NULL)"
+        ),
+        {"u": user_id, "lot": lot_id, "q": quantity},
+    )
+
+
+async def fund_by_auth(conn: Any, auth_id: Any, quantity: int = TEST_CREDITS) -> None:
+    """:func:`fund`, for a caller that has the Supabase id rather than ours.
+
+    Several booking tests insert their mentee without capturing the returned
+    id. Selecting it back inside the insert keeps this a one-line change at
+    those call sites — restructuring their inserts to capture an id they never
+    otherwise use would be a larger edit for no gain.
+    """
+    await conn.execute(
+        text(
+            "INSERT INTO credit_lots "
+            "(user_id, source, quantity_granted, quantity_remaining, expires_at) "
+            "SELECT id, 'opening_balance', :q, :q, NULL FROM users WHERE auth_id = :a"
+        ),
+        {"a": auth_id, "q": quantity},
+    )

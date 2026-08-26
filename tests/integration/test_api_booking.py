@@ -30,7 +30,7 @@ from tests.integration.factories import (
     until_blocked,
 )
 
-from conftest import api_token, bearer
+from conftest import api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -55,6 +55,9 @@ async def a_mentee(engine: AsyncEngine, tag: str) -> tuple[UUID, dict[str, str]]
                 {"e": f"mentee-{tag}@example.test", "a": auth_id},
             )
         ).scalar_one()
+        # Booking spends a credit from PR 6 onward, so a test mentee has to
+        # be able to pay for the sessions the test makes.
+        await fund(conn, mentee)
     return mentee, bearer(api_token(auth_id))
 
 

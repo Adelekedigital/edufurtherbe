@@ -436,6 +436,11 @@ class Session(TimestampMixin, Base):
     legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
 
     __table_args__ = (
+        # Redundant against the primary key, and its only job is to be
+        # referenceable: `credit_transactions` points a composite key at
+        # `(mentee_id, id)` so a ledger movement cannot name somebody
+        # else's session. Non-negotiable #10's second sentence.
+        UniqueConstraint("mentee_id", "id", name="uq_sessions_mentee_id_id"),
         CheckConstraint("mentor_id <> mentee_id", name="no_self_booking"),
         # Settled decision #100, and the last vocabulary to convert. `status` is
         # named by all three partial indexes below **and** by the exclusion

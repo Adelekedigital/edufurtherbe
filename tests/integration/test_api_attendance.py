@@ -27,7 +27,7 @@ from tests.integration.factories import add_availability, add_session_type, make
 from app.domain.attendance import JOIN_CLOSES, JOIN_OPENS, outcome
 from app.domain.enums import SessionStatus
 from app.infra.db.session_writer import settle_attendance
-from conftest import api_token, bearer
+from conftest import api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -59,6 +59,9 @@ async def a_confirmed_session(
                 {"e": f"mentee-{tag}@example.test", "a": mentee_auth},
             )
         ).scalar_one()
+        # Booking spends a credit from PR 6 onward, so a test mentee has to
+        # be able to pay for the sessions the test makes.
+        await fund(conn, mentee)
 
     slots = await client.get(
         f"/api/v1/users/{mentor}/availability/slots",

@@ -159,7 +159,11 @@ BOOKING_RESPONSES: dict[int | str, dict[str, str]] = {
             "The mentor was booked into that hour while you were booking it, "
             "**or** a request carrying this `Idempotency-Key` is still in "
             "flight. Both are states that pass on their own — re-read `/slots` "
-            "and try again."
+            "and try again.\n\n"
+            "**Insufficient credit is a third, and it does not pass.** It "
+            "carries the problem type `/problems/insufficient-credit`, and the "
+            "answer is to wait for the monthly grant or invite somebody — never "
+            "to retry the same request."
         )
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {

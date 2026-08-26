@@ -28,7 +28,7 @@ from app.domain.notifications import Notification
 from app.infra.auth.supabase import SupabaseTokenVerifier
 from app.infra.db.engine import create_session_factory
 from app.main import create_app
-from conftest import SECRET, api_token, bearer
+from conftest import SECRET, api_token, bearer, fund_by_auth
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -92,6 +92,9 @@ async def a_pending_request(
             ),
             {"e": f"mentee-{tag}@example.test", "a": mentee_auth},
         )
+        # Booking spends a credit from PR 6 onward; this mentee has to be
+        # able to pay for the sessions the test makes.
+        await fund_by_auth(conn, mentee_auth)
         await conn.execute(
             text(
                 "UPDATE mentor_profiles SET requires_booking_confirmation = true WHERE user_id = :u"

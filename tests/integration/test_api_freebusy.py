@@ -30,7 +30,7 @@ from app.core.config import Settings
 from app.domain.availability import UtcInterval
 from app.infra.clients.meetings import CalendarAccessRevokedError, VenueUnavailableError
 from app.infra.clients.secrets import seal
-from conftest import api_token, bearer
+from conftest import api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -331,6 +331,8 @@ async def a_mentee_for(engine: AsyncEngine, tag: str) -> UUID:
         await conn.execute(
             text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentee}
         )
+        # Booking spends a credit from PR 6 onward.
+        await fund(conn, mentee)
     return auth_id
 
 

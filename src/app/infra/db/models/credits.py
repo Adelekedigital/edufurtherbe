@@ -222,6 +222,21 @@ class CreditTransaction(Base):
             name="fk_credit_transactions_lot_belongs_to_user",
             ondelete="RESTRICT",
         ),
+        # The same guard for the *session* half. A movement that names a session
+        # must name one the spender was the mentee of — otherwise a debit can be
+        # recorded against somebody else's booking, and a per-user ledger and a
+        # per-session ledger disagree while both look correctly filtered.
+        #
+        # `MATCH SIMPLE` is what keeps grants and expiries legal: they carry a
+        # null `session_id`, and a composite key with any null column is not
+        # checked. Raised as a MEDIUM by `security-checker` against PR 1 and
+        # closed here, where the writer that could exploit it lands.
+        ForeignKeyConstraint(
+            ["user_id", "session_id"],
+            ["sessions.mentee_id", "sessions.id"],
+            name="fk_credit_transactions_session_belongs_to_user",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("delta <> 0", name="delta_is_not_zero"),
         CheckConstraint(check_is_known("reason", CreditReason), name="reason_is_known"),
         # **The one subtlety that would pass every rejecting test.** The sweep

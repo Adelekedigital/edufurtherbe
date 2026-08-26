@@ -21,6 +21,19 @@ class ConflictError(AppError):
     """The request cannot be applied to the current state of the resource."""
 
 
+class InsufficientCreditError(ConflictError):
+    """The caller has no spendable credit left.
+
+    A conflict rather than a validation failure: the request is well formed and
+    the offering is real — what is wrong is the caller's balance, which is state.
+
+    Carries a problem type, because the client's response is unlike every other
+    refusal on the booking path: not "pick another time", but "you are out of
+    credits", which is a different screen. Settled decision #110's bar for
+    earning one.
+    """
+
+
 class OnboardingIncompleteError(ConflictError):
     """The profile does not yet meet the bar for finishing onboarding.
 

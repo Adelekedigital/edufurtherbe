@@ -22,7 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_availability, add_session_type, make_public_mentor
 
-from conftest import api_token, bearer
+from conftest import api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -54,6 +54,9 @@ async def a_booking(
                 {"e": f"mentee-{tag}@example.test", "a": mentee_auth},
             )
         ).scalar_one()
+        # Booking spends a credit from PR 6 onward, so a test mentee has to
+        # be able to pay for the sessions the test makes.
+        await fund(conn, mentee)
         if not confirmed:
             await conn.execute(
                 text(
