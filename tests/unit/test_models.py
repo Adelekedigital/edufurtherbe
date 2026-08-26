@@ -46,6 +46,8 @@ EXPECTED_MODELS = {
     "Institution",
     "DegreeLevel",
     "ServiceOffering",
+    "Referral",
+    "ReferralUnlock",
     "Review",
     "ScholarshipProgram",
     # M2 profiles. `user_scholarship_experience` is deliberately absent — the

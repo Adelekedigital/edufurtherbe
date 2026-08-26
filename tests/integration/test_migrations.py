@@ -150,6 +150,9 @@ EXPECTED_TABLES = [
     # anything can depend on them.
     "credit_lots",
     "credit_transactions",
+    # M5b PR 2 — the invite and the once-only gate it opens.
+    "referrals",
+    "referral_unlocks",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

@@ -128,6 +128,53 @@ default".
 Found by `security-checker` before any writer existed, which is why it is two
 lines rather than a backfill and a validate.
 
+### 7. `referrals` carries no `status` column
+
+The canonical DDL declares `referral_status` — `sent`, `signed_up`,
+`qualified`, `expired`, `rejected` — and a column holding it **beside**
+`signed_up_at` and `qualified_at`.
+
+Status is entirely derivable from those two timestamps. There is no state it can
+express that they cannot, so carrying both is one rule in two representations —
+non-negotiable #8, which this project calls a defect rather than a style
+question. The drift it invites is concrete: a row reading `qualified` beside a
+null `qualified_at`, and nothing to say which is right.
+
+Two of the five values have no producer either (#21). No type is created, so
+none has to be dropped later. Revocation, if it ships, is a nullable
+`revoked_at` — additive, and genuinely underivable.
+
+### 8. `referral_unlocks` gets a surrogate id
+
+The package makes `user_id` the primary key. ADR 0015 and non-negotiable #10
+admit no natural keys — and #10 says what to do instead: *"an invariant a
+natural or composite key would have carried is re-declared as `UNIQUE`."* The
+package's own argument for the natural key, that it makes double-unlocking
+structurally impossible, is preserved exactly by `UNIQUE (user_id)`.
+
+That rule was overridden twice before with every gate green, which is why
+`test_every_table_has_a_generated_surrogate_primary_key` walks the live schema
+rather than a list somebody maintains.
+
+### 9. `unlocked_by_referral_id` is nullable
+
+The package makes it `NOT NULL REFERENCES referrals(id)`. ~1,200 migrated users
+are grandfathered as unlocked and none of them ever invited anybody. The two
+alternatives were a synthetic referral row per user — inventing an invite that
+never happened, in a table whose entire purpose is evidence — or letting every
+migrated mentee's balance fall to zero at the first month end, which is a
+migration that silently switches off a benefit people currently have.
+
+This is the #82 shape: unlocked, and the reason may be absent.
+
+### 10. `invitee_email` is `text`, not `citext`
+
+`users.email` settled this. `citext` was adopted there first and reversed,
+because a case-insensitive type is a second mechanism for an invariant the
+boundary already holds — and it was the only object in the chain whose behaviour
+on Supabase was unverified. A lowercase `CHECK` fails loudly where the type
+would have silently accepted.
+
 ### Confirmation
 
 How you would know this is being honoured, and what nothing checks.
@@ -145,6 +192,11 @@ How you would know this is being honoured, and what nothing checks.
 | the ledger survives a user delete | `test_a_user_holding_credits_cannot_be_hard_deleted`, against a holder who owns a lot **and nothing else** — the fixture's mentee is referenced by `sessions`, so deleting them reports on the session FK while appearing to test this one |
 | no future cascade reaches the ledger | both tables are in `RETAINED_ON_USER_DELETE`, and the check walks the transitive closure rather than one edge |
 | **a movement cannot name someone else's lot** | `test_a_movement_cannot_name_a_lot_belonging_to_someone_else`, with `test_a_movement_against_your_own_lot_is_accepted` as the accepting half. Watched failing against a single-column key before the composite landed — a transposed composite rejects both cases just as loudly, so the accepting half is what distinguishes a working constraint from one that refuses everything |
+| an unlock may name no referral | `test_an_unlock_may_name_no_referral` — the accepting case the migration depends on; a `NOT NULL` here passes every rejecting test and makes cutover impossible |
+| two referrers may invite one person | `test_two_referrers_may_invite_the_same_person`. Scoped to `invitee_email` alone the programme becomes a race to invite, and the rejecting test passes either way |
+| nobody refers themselves | `test_nobody_may_refer_themselves`, with `test_a_referral_may_name_a_real_invitee` as the accepting half |
+| qualifying implies signing up | `test_qualifying_requires_having_signed_up`, plus both legal orderings |
+| one unlock per user, ever | `test_a_user_unlocks_once_ever` — the `UNIQUE` carrying what the package's natural key carried |
 | **the append-only table has no trigger** | `test_the_ledger_carries_no_updated_at_trigger`, paired with `test_the_lots_table_does_carry_one`. Nothing else can see this: `CREATE TRIGGER` does not validate the function body, `alembic check` is blind to triggers, and no test issues an `UPDATE` here |
 | quantities cannot go incoherent | four CHECK tests, each with its accepting boundary — `granted == remaining` and `remaining == 0` are both legal states |
 
