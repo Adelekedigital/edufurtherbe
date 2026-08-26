@@ -55,7 +55,7 @@ from app.api.schemas.profile import (
     UserProfileWrite,
 )
 from app.api.schemas.referrals import ReferralClaim, ReferralWrite
-from app.api.schemas.review_reports import ReviewReportWrite
+from app.api.schemas.review_reports import ReportDecisionWrite, ReviewReportWrite
 from app.api.schemas.reviews import ReviewEdit, ReviewWrite
 from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionTypeWrite
 from app.api.schemas.sessions import (
@@ -164,6 +164,7 @@ from app.infra.db.profile_writer import (
 from app.infra.db.referral_store import list_referrals
 from app.infra.db.referral_writer import claim_referral, create_referral
 from app.infra.db.review_eligibility import reviewable_sessions
+from app.infra.db.review_moderation import decide_report, list_reviews_for_moderation
 from app.infra.db.review_reader import get_review_row, list_mentor_reviews
 from app.infra.db.review_report_writer import report_review
 from app.infra.db.review_stats import mentor_review_stats
@@ -2161,3 +2162,55 @@ async def reported_review(
 
 
 ReportedReviewDep = Annotated[Any, Depends(reported_review)]
+
+
+async def moderation_queue_page(
+    _: QueueViewerDep,
+    session: SessionDep,
+    reported: Annotated[bool, Query()] = False,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """One page of reviews for a moderator.
+
+    `QueueViewerDep` rather than the acting grant: every live admin may look,
+    which is the split `pending_institution_rows` and the mentor queue already
+    use. Deciding is narrower — see below.
+    """
+    rows, has_more = await list_reviews_for_moderation(
+        session,
+        limit=clamp_limit(limit),
+        after=decode_cursor(cursor),
+        reported_only=reported,
+    )
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_cursor(last["created_at"].isoformat(), last["id"])
+
+
+ModerationQueueDep = Annotated[
+    tuple[list[dict[str, Any]], str | None], Depends(moderation_queue_page)
+]
+
+
+async def decided_report(
+    report_id: UUID,
+    payload: ReportDecisionWrite,
+    admin_id: CatalogueAdminDep,
+    session: SessionDep,
+) -> Any:
+    """Rule on a report, and remove the review if it is upheld.
+
+    **`CatalogueAdminDep` — super_admin only.** Every live grant may *look* at
+    the queue; removing somebody's review from a public profile is the same
+    weight as curating the catalogue, and `AdminRole` has no moderation grant to
+    name. Adding one without anything to grant it would make the enum
+    decorative, which settled decision #21 refuses.
+    """
+    decision = await decide_report(session, admin_id, report_id, payload.outcome)
+    await session.commit()
+    return decision
+
+
+DecidedReportDep = Annotated[Any, Depends(decided_report)]

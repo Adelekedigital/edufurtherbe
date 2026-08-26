@@ -24,9 +24,11 @@ from fastapi import APIRouter, status
 from app.api.deps import (
     ApprovedInstitutionDep,
     DecidedMentorDep,
+    DecidedReportDep,
     ListedMentorDep,
     MentorHistoryDep,
     MergedInstitutionDep,
+    ModerationQueueDep,
     PendingInstitutionsDep,
     PendingMentorsDep,
 )
@@ -36,6 +38,7 @@ from app.api.schemas.admin import (
     StatusEventRead,
 )
 from app.api.schemas.common import Page
+from app.api.schemas.review_reports import ModeratedReportRead, ModeratedReviewRead
 from app.core.errors import NotFoundError
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -196,3 +199,55 @@ async def set_mentor_listing(changed: ListedMentorDep) -> dict[str, bool]:
 )
 async def mentor_status_history(rows: MentorHistoryDep) -> Page[StatusEventRead]:
     return Page(data=[StatusEventRead(**row) for row in rows])
+
+
+@router.get(
+    "/reviews",
+    response_model=Page[ModeratedReviewRead],
+    summary="Reviews, for moderation",
+    description=(
+        "Every review, newest first — **not only the reported ones**. A "
+        "moderator judging a complaint needs the surrounding record; one review "
+        "in isolation says nothing about whether an author is a pattern. Pass "
+        "`reported=true` to narrow it to reviews carrying a report.\n\n"
+        "Withdrawn reviews are included, including ones this queue withdrew. "
+        "Hiding them would make the only view of a moderation decision the one "
+        "that cannot show its result.\n\n"
+        "Carries `private_review`, which no other read model does: it is "
+        "feedback about the platform and the mentor never sees it, but a "
+        "complaint about text the moderator cannot read is unanswerable.\n\n"
+        "Every live admin grant may look. Deciding is `super_admin` only."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def read_moderation_queue(page: ModerationQueueDep) -> Page[ModeratedReviewRead]:
+    rows, cursor = page
+    return Page(data=[ModeratedReviewRead.from_row(row) for row in rows], next_cursor=cursor)
+
+
+@router.post(
+    "/review-reports/{report_id}/decision",
+    response_model=ModeratedReportRead,
+    summary="Rule on a report",
+    description=(
+        "**Upholding removes the review from the profile and the average**, by "
+        "setting `deleted_at` — the column that already exists for moderation, "
+        "and which the profile's partial index already honours. Dismissing "
+        "changes nothing about the review and records that somebody looked.\n\n"
+        "The decision and its effect are one transaction: an upheld report "
+        "whose review is still on the profile would be a moderator being told "
+        "they acted when they did not.\n\n"
+        "Deciding twice answers `409`. A second decision would rewrite the "
+        "first, and the record of who decided what would be whatever the last "
+        "admin clicked."
+    ),
+    responses={
+        **ADMIN_RESPONSES,
+        status.HTTP_404_NOT_FOUND: {"description": "No report carries that id."},
+        status.HTTP_409_CONFLICT: {"description": "That report has already been decided."},
+    },
+)
+async def decide_review_report(decision: DecidedReportDep) -> ModeratedReportRead:
+    """No 201: this creates nothing. It resolves a row that already existed,
+    which is an update however it reads."""
+    return ModeratedReportRead.model_validate(decision)
