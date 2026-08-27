@@ -81,6 +81,7 @@ from sqlalchemy import (
     Index,
     SmallInteger,
     Text,
+    UniqueConstraint,
     Uuid,
     text,
 )
@@ -181,6 +182,11 @@ class Review(Base, TimestampMixin):
             name="reviewed_for_role_is_known",
         ),
         CheckConstraint("reviewed_by <> reviewed_for", name="no_self_review"),
+        # Redundant against the primary key, and its only job is to be
+        # referenceable: `review_reports` points a composite key at
+        # `(id, reviewed_for)` so only the subject of a review can report
+        # it. Non-negotiable #10's second sentence.
+        UniqueConstraint("id", "reviewed_for", name="uq_reviews_id_reviewed_for"),
         # **Partial, and the predicate is the point.** A plain UNIQUE would admit
         # the migrated rows too, because PostgreSQL treats NULLs as distinct —
         # but it would do so by accident of a default, where this says which rows

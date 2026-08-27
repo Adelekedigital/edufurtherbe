@@ -150,6 +150,8 @@ EXPECTED_TABLES = [
     # anything can depend on them.
     "credit_lots",
     "credit_transactions",
+    # M6 — review moderation.
+    "review_reports",
     # M5b PR 2 — the invite and the once-only gate it opens.
     "referrals",
     "referral_unlocks",

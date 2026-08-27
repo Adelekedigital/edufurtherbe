@@ -41,6 +41,7 @@ from app.infra.db.models.mentoring import (
 from app.infra.db.models.platform import IdempotencyKey, OutboxEvent
 from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.referrals import Referral, ReferralUnlock
+from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
 from app.infra.db.models.sessions import (
@@ -86,6 +87,7 @@ __all__ = [
     "Referral",
     "ReferralUnlock",
     "Review",
+    "ReviewReport",
     "ScholarshipProgram",
     "ServiceOffering",
     "Session",
