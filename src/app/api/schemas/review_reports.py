@@ -105,3 +105,84 @@ class OwnReviewRead(BaseModel):
             author_institution=row.get("author_institution"),
             report=report,
         )
+
+
+class ReportDecisionWrite(BaseModel):
+    """An admin's ruling on a report.
+
+    No free-text note. A moderator's reasoning is either shown to the reporter —
+    which is a product decision nobody has taken — or it is a private field that
+    accumulates opinions about named users with no retention rule. The outcome
+    is the record.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: ReviewReportOutcome
+
+
+class ModeratedReportRead(BaseModel):
+    """A report as a moderator sees it — including the reporter's own words."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    reason: ReviewReportReason
+    #: What the reporter wrote. Absent from every other read model: it is
+    #: addressed to whoever adjudicates and to nobody else.
+    detail: str | None = None
+    created_at: datetime
+    resolved_at: datetime | None = None
+    outcome: ReviewReportOutcome | None = None
+
+
+class ModeratedReviewRead(BaseModel):
+    """One review in the moderation queue.
+
+    **Carries `private_review`, which no other read model does.** That field is
+    feedback about the *platform* and the mentor never sees it — but a moderator
+    judging whether a review is abusive is judging the whole submission, and a
+    complaint about text they cannot read is unanswerable.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    created_at: datetime
+    public_review: str
+    private_review: str | None = None
+    session_value: int
+    subject_id: UUID
+    withdrawn: bool
+    author_first_name: str | None = None
+    author_last_initial: str | None = None
+    author_institution: str | None = None
+    report: ModeratedReportRead | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> ModeratedReviewRead:
+        report = (
+            ModeratedReportRead(
+                id=row["report_id"],
+                reason=row["report_reason"],
+                detail=row["report_detail"],
+                created_at=row["report_created_at"],
+                resolved_at=row["report_resolved_at"],
+                outcome=row["report_outcome"],
+            )
+            if row.get("report_id") is not None
+            else None
+        )
+        return cls(
+            id=row["id"],
+            created_at=row["created_at"],
+            public_review=row["public_review"],
+            private_review=row.get("private_review"),
+            session_value=row["valuable_rating"],
+            subject_id=row["reviewed_for"],
+            withdrawn=row["withdrawn"],
+            author_first_name=row.get("author_first_name"),
+            author_last_initial=row.get("author_last_initial"),
+            author_institution=row.get("author_institution"),
+            report=report,
+        )
