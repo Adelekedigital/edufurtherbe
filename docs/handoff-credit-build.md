@@ -336,16 +336,45 @@ deferred cost columns. ADR 0026 took the same shape for the review scale.
 |---|---|---|
 | 1 | **No invite UI.** The mechanism the earning model turns on has no screen | reachability, not PR 5 |
 | 2 | Production `bookingCredit` values as a Data-tab export — the same gate M5a's reviews had | PR 10's **rehearsal**, not its build. The loader is written and tested against the dev export: 43 rows, 36 lots carrying 158 credits, 4 starters, 2 spent down, 1 unfinished, 0 quarantined |
-| **5** | **What happens to migrated credits on the first 1st after cutover?** See below — this one needs a decision before the cutover date is set | the cutover, not any PR |
+| ~~5~~ | ~~What happens to migrated credits on the first 1st after cutover?~~ **Resolved 2026-08-27**: every migrated user active or signed up within twelve months is grandfathered into the grant. Built in #223; the window is the one number still worth a second look | closed |
 | ~~3~~ | ~~Does the expiry job's first run sweep migrated lots, or grandfather them?~~ **Answered 2026-08-26: no grandfather clause.** The sweep takes whatever the read already refuses. Grandfathering in the *job* would leave `quantity_remaining` standing on a lot the balance has already stopped counting, and the ledger would never explain the drop — the one thing D8 built it to prevent. If an opening-balance lot should outlive cutover, PR 10 writes the expiry it means | closed |
 | 4 | Ships as one phase or splits after PR 6? | sequencing |
 
 ---
 
-## Register 5 — the cutover credit cliff
+## Register 5 — the cutover credit cliff. **Resolved 2026-08-27, built in #223.**
 
-**Not a defect, and not something a build can decide.** Three shipped decisions
-compose into an outcome nobody has explicitly chosen:
+**And my framing of it was wrong**, which is worth recording because the
+correction is the useful part. I wrote that three decisions "compose into an
+outcome nobody chose". The outcome *was* chosen against, in PR 1 —
+`ReferralUnlock` made `unlocked_by_referral_id` nullable precisely for this, and
+said so: *"~1,200 migrated users are grandfathered as unlocked and none of them
+ever invited anybody … letting every migrated mentee's balance fall to zero at
+the first month end … silently switches off a benefit people currently have."*
+
+The schema was ready and the **writer was missing**. That is a different kind of
+gap from an undecided question, and it is the kind a register entry is good at
+catching: nothing in any single diff shows a row that is never written.
+
+**What the owner decided**: every migrated user is grandfathered into the
+recurring grant — stepping from the legacy five a month to `MONTHLY_ALLOWANCE`
+of three — restricted to those **active or newly signed up** within
+`ACTIVE_WITHIN`, defaulted to twelve months.
+
+The legacy balance is deliberately *not* a condition. Measured finding 4 says the
+legacy app granted monthly credits unconditionally, so `bookingCredit` records
+when somebody joined rather than what they are owed; gating on it would cut off
+every recent signup who had not yet been granted anything.
+
+**Six versus twelve months is still a live number.** On the dev export the ends
+are 15 grandfathered and 1. It is one constant and the dry run prints the count,
+so the production export settles it before the freeze.
+
+---
+
+### What the entry said before it was resolved
+
+Three shipped decisions composed into an outcome nobody had explicitly chosen:
 
 1. A migrated lot expires **end of the cutover month** (the earning ladder).
 2. The expiry sweep has **no grandfather clause** (register 3, closed 2026-08-26).
