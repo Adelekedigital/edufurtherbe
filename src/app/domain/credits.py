@@ -16,13 +16,17 @@ directions**, so a vocabulary defined in this module would register as
 
 WHAT IS NOT IN THEM
 ===================
-**No ``purchase``, no ``promotional``, no ``admin_grant``.** The canonical DDL
-declares seven sources; settled decision #21 names this exact enum as its
-cautionary example, because `credit_source` "contains `purchase` while payments
-are out of scope by decision #8". A vocabulary is not a wish list: PostgreSQL
-cannot remove a value from a native enum at all, and while #100 moved these to
-``text`` + ``CHECK`` — which *is* freely alterable — a shipped member still
-invites a writer, and the reason to defer is that nothing writes one.
+**No ``purchase`` and no ``promotional``.** The canonical DDL declares seven
+sources; settled decision #21 names this exact enum as its cautionary example,
+because `credit_source` "contains `purchase` while payments are out of scope by
+decision #8". A vocabulary is not a wish list: PostgreSQL cannot remove a value
+from a native enum at all, and while #100 moved these to ``text`` + ``CHECK`` —
+which *is* freely alterable — a shipped member still invites a writer, and the
+reason to defer is that nothing writes one.
+
+``admin_grant`` was deferred on the same argument and now ships, because support
+needs a way to make somebody whole and direct SQL against production is the wrong
+tool for it.
 
 **No ``session_no_show_forfeit``.** It reads as a transaction and is not one.
 The credit left the balance when the session was booked; a mentee who does not

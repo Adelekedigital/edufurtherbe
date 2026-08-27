@@ -19,7 +19,7 @@ from app.infra.db.models.availability import (
     CalendarConnection,
     SessionTypeSchedulingWindow,
 )
-from app.infra.db.models.credits import CreditLot, CreditTransaction
+from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTransaction
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.intake import (
     IntakeAnswer,
@@ -60,6 +60,7 @@ from app.infra.db.models.user import (
 )
 
 __all__ = [
+    "AdminCreditGrant",
     "AdminUser",
     "AuthIdentity",
     "AvailabilityException",

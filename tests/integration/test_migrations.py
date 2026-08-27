@@ -148,6 +148,7 @@ EXPECTED_TABLES = [
     # M5b — the credit ledger. Two tables, no writer yet: PR 1 lands the shape
     # so the vocabularies and the two partial indexes are settled before
     # anything can depend on them.
+    "admin_credit_grants",
     "credit_lots",
     "credit_transactions",
     # M6 — review moderation.

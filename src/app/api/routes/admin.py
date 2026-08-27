@@ -19,9 +19,12 @@ admitted everywhere without being named at each one.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from typing import Any
+
+from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
+    AdminCreditGrantDep,
     ApprovedInstitutionDep,
     DecidedMentorDep,
     DecidedReportDep,
@@ -37,6 +40,7 @@ from app.api.schemas.admin import (
     PendingMentorRead,
     StatusEventRead,
 )
+from app.api.schemas.admin_credits import AdminCreditGrantRead
 from app.api.schemas.common import Page
 from app.api.schemas.review_reports import ModeratedReportRead, ModeratedReviewRead
 from app.core.errors import NotFoundError
@@ -251,3 +255,54 @@ async def decide_review_report(decision: DecidedReportDep) -> ModeratedReportRea
     """No 201: this creates nothing. It resolves a row that already existed,
     which is an update however it reads."""
     return ModeratedReportRead.model_validate(decision)
+
+
+@router.post(
+    "/credits",
+    response_model=AdminCreditGrantRead,
+    summary="Give credits to one or more users",
+    description=(
+        "**Support's way to make somebody whole.** Every other credit on the "
+        "platform is automatic — onboarding, a qualifying invite, the monthly "
+        "grant, a refund, the migration — so this is the only path that does "
+        "not require a database console.\n\n"
+        "**Every live admin grant may use it.** Crediting somebody is support "
+        "work that whoever is on shift has to be able to do, which is a "
+        "deliberate widening from the `super_admin` gate on moderation.\n\n"
+        "**Bulk, because the real case is bulk.** An outage costs a cohort, not "
+        "a person. Ids that name nobody — or a deleted account — come back in "
+        "`unresolved` rather than failing the request: an admin correcting six "
+        "people should not lose five because one id was stale. A repeated id is "
+        "credited once.\n\n"
+        "**The credit expires like any other**, at the end of the month. Only "
+        "the onboarding starter never expires, and that is because of what it "
+        "is for rather than because grants are permanent.\n\n"
+        "`quantity` is capped at the configured monthly grant, and an over-cap "
+        "request is refused rather than clamped — an admin who typed a larger "
+        "number meant it, and quietly granting less would leave them believing "
+        "otherwise.\n\n"
+        "**Answers `200`, not `201`.** A bulk grant creates one lot per "
+        "recipient, in as many places, so there is no single `Location` to "
+        "point at — and the body is a report of what landed rather than a "
+        "representation of one created thing.\n\n"
+        "**`Idempotency-Key` is required.** Retries must reuse it: a "
+        "double-submitted grant is not something an admin can notice and undo, "
+        "because the credits are spendable the moment they land."
+    ),
+    responses={
+        **ADMIN_RESPONSES,
+        status.HTTP_409_CONFLICT: {
+            "description": "A request with this `Idempotency-Key` is still in flight."
+        },
+    },
+)
+async def grant_credits_to_users(
+    granted: AdminCreditGrantDep, response: Response
+) -> dict[str, Any]:
+    body, status_code, replayed = granted
+    response.status_code = status_code
+    # **Says so on a replay**, the way booking does: an admin retrying after a
+    # timeout needs to know whether this attempt created the credits or merely
+    # found them, because the difference decides whether they grant again.
+    response.headers["Idempotent-Replay"] = "true" if replayed else "false"
+    return body

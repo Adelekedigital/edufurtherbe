@@ -504,6 +504,7 @@ RETAINED_ON_USER_DELETE = frozenset(
         # ledger whose rows vanish with the account cannot answer "I was
         # charged for a session that never ran", which is the first of D8's
         # four reasons for it existing.
+        "admin_credit_grants",
         "credit_lots",
         "credit_transactions",
         # An unlock is an entitlement and its referral is the evidence

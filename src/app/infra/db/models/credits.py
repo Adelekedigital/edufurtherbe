@@ -41,6 +41,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     SmallInteger,
+    Text,
     UniqueConstraint,
     Uuid,
     text,
@@ -300,4 +301,74 @@ class CreditTransaction(Base):
         ),
         # This user's ledger, newest first — the order a statement renders in.
         Index("ix_credit_transactions_user_created", "user_id", text("created_at DESC")),
+    )
+
+
+class AdminCreditGrant(Base):
+    """Who authorised an ``admin_grant`` lot, and why if they said.
+
+    **A table beside the ledger rather than columns on it**, the way
+    `review_reports` sits beside `reviews`. `credit_transactions` records
+    *movements*; who authorised one is metadata about a single kind of movement,
+    and two nullable columns used by one source in six would be dead weight on
+    every other row.
+
+    It also keeps the ledger's shape honest. A ``granted_by`` on
+    `credit_transactions` could only be constrained by the *lot's* source, which
+    lives in another table — so the column would be nullable with nothing
+    stopping a booking debit carrying one.
+
+    **Append-only, like the ledger.** No ``updated_at`` and no trigger: a row
+    states who authorised what at a moment, and an authorisation that can be
+    edited is not one.
+    """
+
+    __tablename__ = "admin_credit_grants"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+
+    #: **No single-column foreign key.** The composite below does the work.
+    credit_lot_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+
+    #: The recipient, denormalised from the lot so the composite key has both
+    #: halves — the same shape, and the same reason, as `credit_transactions`.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    #: The admin who did it. **``NOT NULL`` although the note is optional**: a
+    #: record that cannot say who is not a record, which is the rule
+    #: `review_reports.resolved_by` already states for a moderation decision.
+    granted_by: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    #: Why, in the admin's own words, or nothing. Optional deliberately: an admin
+    #: may grant credits nobody asked for — a goodwill gesture after an outage
+    #: reaches people who never complained — and requiring prose for that is how
+    #: a field fills with "goodwill".
+    note: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        # **The guard no single-column key gives.** On `credit_lots.id` alone,
+        # this row could name user A while pointing at user B's lot — and a
+        # per-user audit and a per-lot audit would each look correctly filtered
+        # and disagree. Sixth time this shape has been the right answer here.
+        ForeignKeyConstraint(
+            ["user_id", "credit_lot_id"],
+            ["credit_lots.user_id", "credit_lots.id"],
+            name="fk_admin_credit_grants_lot_belongs_to_user",
+            ondelete="RESTRICT",
+        ),
+        # One authorisation per lot. Two would mean two admins each believing
+        # they granted it, and the audit could not say which.
+        UniqueConstraint("credit_lot_id", name="uq_admin_credit_grants_credit_lot_id"),
+        # Every grant one admin made, newest first — the question an audit asks.
+        Index("ix_admin_credit_grants_granted_by", "granted_by", text("created_at DESC")),
     )

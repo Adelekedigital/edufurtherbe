@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
 from app.api.schemas.admin import DeclineRequest, MergeRequest
+from app.api.schemas.admin_credits import AdminCreditGrantWrite
 from app.api.schemas.availability import (
     AvailabilityExceptionWrite,
     AvailabilityRulePatch,
@@ -96,6 +97,7 @@ from app.infra.clients.scheduler import (
     verify_callback,
 )
 from app.infra.clients.secrets import SealError, seal, sealed_value, unsealed_value
+from app.infra.db.admin_credits import grant_credits
 from app.infra.db.admin_store import (
     approve_institution,
     merge_institution,
@@ -763,6 +765,22 @@ def require_admin(*roles: AdminRole) -> Callable[[dict[str, Any]], uuid.UUID]:
 #: Curating the catalogue — institutions. `limited_access` may look, not act.
 CatalogueAdminDep = Annotated[uuid.UUID, Depends(require_admin())]
 
+#: Putting credits into somebody's balance. **Every live grant may do it**, which
+#: is a deliberate widening from the `super_admin` split #220 uses for moderation:
+#: removing a review from a public profile is curation, where crediting somebody
+#: is support work that whoever is on shift has to be able to do.
+#:
+#: **Every role listed, which is what "any platform admin" costs here.**
+#: `require_admin()` with no arguments admits `super_admin` *only* — the empty
+#: call reads like "any admin" and is the narrowest possible gate, which is how
+#: the first version of this dependency shipped documented as one thing and
+#: behaving as its opposite. The integration test for `limited_access` is what
+#: caught it.
+CreditAdminDep = Annotated[
+    uuid.UUID,
+    Depends(require_admin(AdminRole.MENTOR_APPROVAL, AdminRole.LIMITED_ACCESS)),
+]
+
 #: Approving mentors, which is what the `mentor_approval` grant is named for.
 MentorAdminDep = Annotated[uuid.UUID, Depends(require_admin(AdminRole.MENTOR_APPROVAL))]
 
@@ -771,6 +789,67 @@ QueueViewerDep = Annotated[
     uuid.UUID,
     Depends(require_admin(AdminRole.MENTOR_APPROVAL, AdminRole.LIMITED_ACCESS)),
 ]
+
+
+async def granted_admin_credits(
+    payload: AdminCreditGrantWrite,
+    admin_id: CreditAdminDep,
+    session: SessionDep,
+    idempotency_key: Annotated[
+        str,
+        Header(
+            alias="Idempotency-Key",
+            min_length=1,
+            max_length=255,
+            description="A value unique to this grant attempt. Retries must reuse it.",
+        ),
+    ],
+) -> tuple[dict[str, Any], int, bool]:
+    """Reserve the key, write the lots, store the answer — one transaction.
+
+    **Required rather than optional, for the reason booking gives**: this is
+    money, and an optional header makes the guarantee opt-in for exactly the
+    caller who most needs it. A double-submitted grant is not recoverable by
+    the admin noticing — the credits are already spendable.
+
+    **The key and the write commit together**, so a stored `201` for lots that
+    were never inserted cannot replay ids of nothing.
+    """
+    reservation = await reserve(
+        session,
+        key=idempotency_key,
+        user_id=admin_id,
+        endpoint=ENDPOINT_ADMIN_CREDITS,
+        request_hash=request_fingerprint(ENDPOINT_ADMIN_CREDITS, payload.model_dump(mode="json")),
+    )
+    if isinstance(reservation, Replayed):
+        return reservation.body, reservation.status_code, True
+    if isinstance(reservation, Mismatched):
+        raise ValidationError(
+            "this Idempotency-Key was already used for a different request; "
+            "use a new key, or resend the original body"
+        )
+    if not isinstance(reservation, Held):
+        raise ConflictError("a request with this Idempotency-Key is still in flight")
+
+    result = await grant_credits(
+        session,
+        admin_id=admin_id,
+        user_ids=tuple(payload.user_ids),
+        quantity=payload.quantity,
+        note=payload.note,
+        now=dt.datetime.now(dt.UTC),
+    )
+    body = {
+        "granted": [str(user_id) for user_id in result.granted],
+        "unresolved": [str(user_id) for user_id in result.unresolved],
+        "quantity": payload.quantity,
+    }
+    # The answer and the lots commit together, so a stored response cannot
+    # survive a crash that lost the credits it describes.
+    await record_response(session, reservation, status_code=GRANTED, body=body)
+    await session.commit()
+    return body, GRANTED, False
 
 
 async def pending_institution_rows(
@@ -1190,6 +1269,28 @@ REMINDER_CALLBACK_PATH = "/api/v1/callbacks/reminders"
 
 ENDPOINT_BOOKING = "POST /api/v1/sessions"
 
+#: The second endpoint with an idempotency key, and the second that moves
+#: something like money. Kept beside the first so the two fingerprints are
+#: obviously distinct — a shared endpoint string would let a booking key replay
+#: a credit grant.
+ENDPOINT_ADMIN_CREDITS = "POST /api/v1/admin/credits"
+
+#: **200, not 201, and that is a decision rather than an oversight.**
+#:
+#: `test_a_creating_route_sends_a_location` requires every `201` route to set
+#: `Location`, and it is right to: *"a client that has to guess the URL of what
+#: it just made is being told less than the response could tell it."*
+#:
+#: A bulk grant has no single URL to give. It creates one lot per recipient, in
+#: as many places, and the body is a *report* — what landed, what did not — not a
+#: representation of one created thing. Setting `Location: /api/v1/admin/credits`
+#: would satisfy the letter of the rule by pointing at a collection that cannot
+#: be read, which is worse than not pointing at all.
+#:
+#: So the status says what actually happened rather than the header lying about
+#: it. The rule keeps its full force for routes that create one thing.
+GRANTED = status.HTTP_200_OK
+
 #: The one success code booking has. Stored on the key so a replay returns the
 #: same status as the original, rather than a `200` this endpoint never issues.
 CREATED = status.HTTP_201_CREATED
@@ -1276,6 +1377,8 @@ async def booked_session(
 
 
 BookedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(booked_session)]
+
+AdminCreditGrantDep = Annotated[tuple[dict[str, Any], int, bool], Depends(granted_admin_credits)]
 
 
 def _configured(request: Request) -> Settings:

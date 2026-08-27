@@ -40,6 +40,9 @@ class TestVocabularies:
             "monthly_free",
             "refund",
             "opening_balance",
+            # Deferred at PR 1 under #21 because nothing wrote one; ships with
+            # the admin endpoint that does.
+            "admin_grant",
         }
 
     def test_purchase_and_promotional_are_absent(self) -> None:
@@ -51,7 +54,17 @@ class TestVocabularies:
         values = {source.value for source in CreditSource}
         assert "purchase" not in values
         assert "promotional" not in values
-        assert "admin_grant" not in values
+
+    def test_admin_grant_shipped_only_once_it_had_a_writer(self) -> None:
+        """**#21 working, not being overridden.** The member was deferred at PR 1
+        on the argument that nothing wrote one; it arrives in the same change as
+        the endpoint that does.
+
+        Asserted alongside the two that are still absent, so the file records the
+        difference between "deferred" and "never" rather than leaving a reader to
+        infer it from an omission.
+        """
+        assert "admin_grant" in {source.value for source in CreditSource}
 
     def test_every_reason_shipped_has_a_producer_in_this_phase(self) -> None:
         assert {reason.value for reason in CreditReason} == {
