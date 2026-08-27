@@ -40,6 +40,19 @@ account. Skipping them would leave un-swept lots behind a restored account whose
 ledger could never explain the gap — and the ledger keeps a deleted user's rows
 precisely because it is evidence (ADR 0013).
 
+WHAT IT DOES NOT DO YET
+=======================
+**No batching and no supporting index.** Every dead lot is locked in one
+transaction and every id goes into one ``IN`` list, which PostgreSQL's
+bind-parameter ceiling caps at 32767 — roughly twenty-seven months of backlog at
+today's ~1,200 monthly lots. Both are correct and cheap at this size; both are
+the wrong shape at ten times it, and the fix is a ``LIMIT`` with a commit per
+batch plus a partial index on ``expires_at WHERE quantity_remaining > 0``.
+
+Named here rather than left to be discovered, because the failure is not
+gradual: below the ceiling it works, above it the statement raises and the
+ledger simply stops catching up.
+
 WHY IT LOCKS
 ============
 The rows it touches are, by construction, ones no live spend can reach:
@@ -73,19 +86,38 @@ def _dead(moment: dt.datetime) -> tuple[ColumnElement[bool], ...]:
     Two clauses, and the second is the idempotency guard rather than an
     optimisation: a lot already at zero — spent down, or swept last month —
     has nothing to expire, and a row with ``delta = 0`` is refused by
-    ``ck_credit_transactions_delta_is_not_zero`` anyway. Zeroing is therefore
-    self-terminating, which is why this job needs no partial index of its own
-    where the monthly grant needed one.
+    ``ck_credit_transactions_delta_is_not_zero`` anyway. Zeroing is
+    self-terminating, so this job needs **no unique index** to make a second run
+    safe, where the monthly grant needed one to stop a second run paying twice.
+
+    That is a claim about *idempotency* and not about access paths, which is a
+    different question with a different answer: nothing indexes this predicate.
+    ``ix_credit_lots_user_expiry`` leads on ``user_id``, which is absent here, so
+    PostgreSQL scans. Correct and cheap at this size, and a partial index on
+    ``expires_at WHERE quantity_remaining > 0`` is the shape to add when it is
+    not — see the module docstring.
+
+    **A naive ``moment`` is refused rather than assumed to be UTC.** asyncpg
+    binds a ``timestamptz`` by calling ``astimezone``, which on a naive
+    datetime resolves against the *host's* local zone — so an operator on
+    UTC+1 running this by hand would shift the boundary an hour and sweep the
+    wrong set, silently and with a successful exit code. ``end_of_month``
+    refuses the same input for the same reason; this is the other entry point
+    into the same rule, and it was the one still guessing.
     """
+    if moment.tzinfo is None:
+        raise ValueError("the expiry sweep needs an aware datetime; a naive one hides its offset")
     return (not_(spendable_now(moment)), CreditLot.quantity_remaining > 0)
 
 
 async def expire_credits(session: AsyncSession, *, now: dt.datetime) -> int:
     """Retire every dead lot, recording what each one lost. Returns the count.
 
-    Does not commit — the caller owns the transaction, which is what lets the
-    script offer a dry run that rolls back and reports on the same predicate the
-    real run uses.
+    Does not commit: the caller owns the transaction, as everywhere else here.
+    The script's dry run does *not* go through this and roll back — it calls
+    :func:`expirable_credit_count`, which writes nothing at all, so there is no
+    transaction to undo. (`grant_monthly_credits` claims otherwise about its own
+    dry run and is wrong in the same way; the sentence was copied from it.)
 
     **Three statements and one transaction**, not one clever statement. An
     ``UPDATE … RETURNING`` hands back the *new* value of ``quantity_remaining``,
@@ -147,7 +179,10 @@ async def expirable_credit_count(session: AsyncSession, *, now: dt.datetime) -> 
     The same ``_dead`` the sweep uses rather than a second predicate that could
     drift — a dry run answering a different question from the real run is worse
     than no dry run, which is the note `unlocked_mentee_count` already carries.
+
+    **Lots, not credits**, which is what the name says and what the script
+    prints. An aggregate ``count()`` with no ``GROUP BY`` always returns a row,
+    so there is no ``None`` to coalesce — `unlocked_mentee_count` guards against
+    one anyway, and copying that would be a guard against nothing.
     """
-    return int(
-        await session.scalar(select(func.count()).select_from(CreditLot).where(*_dead(now))) or 0
-    )
+    return int(await session.scalar(select(func.count()).select_from(CreditLot).where(*_dead(now))))
