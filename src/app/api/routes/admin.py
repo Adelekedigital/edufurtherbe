@@ -25,6 +25,7 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
     AdminCreditGrantDep,
+    AdminGrantHistoryDep,
     ApprovedInstitutionDep,
     DecidedMentorDep,
     DecidedReportDep,
@@ -40,7 +41,7 @@ from app.api.schemas.admin import (
     PendingMentorRead,
     StatusEventRead,
 )
-from app.api.schemas.admin_credits import AdminCreditGrantRead
+from app.api.schemas.admin_credits import AdminCreditGrantRead, AdminGrantHistoryRead
 from app.api.schemas.common import Page
 from app.api.schemas.review_reports import ModeratedReportRead, ModeratedReviewRead
 from app.core.errors import NotFoundError
@@ -306,3 +307,30 @@ async def grant_credits_to_users(
     # found them, because the difference decides whether they grant again.
     response.headers["Idempotent-Replay"] = "true" if replayed else "false"
     return body
+
+
+@router.get(
+    "/credits",
+    response_model=Page[AdminGrantHistoryRead],
+    summary="Every credit an admin has granted",
+    description=(
+        "Newest first. **The record `POST /credits` exists to leave** — credits "
+        "that appear in somebody's balance with nobody accountable for them are "
+        "the state the table was added to prevent.\n\n"
+        "**Granted and remaining are both here**, because they answer different "
+        "questions. *We gave them three* and *they still have three* are not the "
+        "same fact, and a history showing only the first cannot say whether a "
+        "goodwill gesture reached anybody — or whether it expired unspent.\n\n"
+        "Every admin sees every grant, their own and each other's: an audit only "
+        "one person can read is not an audit. `granted_by` narrows to one admin "
+        "for whoever wants to check their own.\n\n"
+        "**Recipients who have since closed their account are still listed.** A "
+        "credit granted to somebody now gone is exactly what an audit is for, "
+        "and hiding them would quietly shorten the history rather than answer "
+        "the question asked of it."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def admin_credit_history(page: AdminGrantHistoryDep) -> Page[AdminGrantHistoryRead]:
+    rows, cursor = page
+    return Page(data=[AdminGrantHistoryRead.from_row(row) for row in rows], next_cursor=cursor)

@@ -97,7 +97,7 @@ from app.infra.clients.scheduler import (
     verify_callback,
 )
 from app.infra.clients.secrets import SealError, seal, sealed_value, unsealed_value
-from app.infra.db.admin_credits import grant_credits
+from app.infra.db.admin_credits import grant_credits, list_admin_grants
 from app.infra.db.admin_store import (
     approve_institution,
     merge_institution,
@@ -850,6 +850,47 @@ async def granted_admin_credits(
     await record_response(session, reservation, status_code=GRANTED, body=body)
     await session.commit()
     return body, GRANTED, False
+
+
+async def admin_grant_history(
+    _: CreditAdminDep,
+    session: SessionDep,
+    limit: Annotated[int | None, Query(ge=1, le=200)] = None,
+    cursor: Annotated[str | None, Query(description="From a previous `next_cursor`.")] = None,
+    granted_by: Annotated[
+        uuid.UUID | None,
+        Query(description="Narrow to one admin's grants."),
+    ] = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """The history of admin credit grants, newest first.
+
+    **Every admin sees every grant, including their own and each other's.** An
+    audit only one person can read is not an audit — and the `granted_by` filter
+    exists so somebody can narrow to their own without that being the default.
+
+    Read by the same gate that writes: whoever may hand out credits may see what
+    has been handed out, and splitting the two would let an admin create rows
+    they cannot then review.
+    """
+    rows, has_more = await list_admin_grants(
+        session,
+        limit=clamp_limit(limit),
+        after=decode_cursor(cursor),
+        granted_by=granted_by,
+    )
+    # **Minted beside the decode**, the rule `mentor_page` states: issuing the
+    # token where the sort key is known keeps the two halves of the codec from
+    # drifting, which is the defect that once invalidated every cursor an
+    # endpoint handed out.
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_cursor(last["created_at"].isoformat(), last["id"])
+
+
+AdminGrantHistoryDep = Annotated[
+    tuple[list[dict[str, Any]], str | None], Depends(admin_grant_history)
+]
 
 
 async def pending_institution_rows(

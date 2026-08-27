@@ -419,3 +419,133 @@ async def test_the_key_is_required(db_engine: AsyncEngine, api_client: httpx.Asy
 
     assert response.status_code == 422
     assert await lots_of(db_engine, target) == []
+
+
+# --------------------------------------------------------------------------
+# The history — the record the write path exists to leave
+# --------------------------------------------------------------------------
+
+
+async def history(client: httpx.AsyncClient, auth_id: UUID, **params: Any) -> dict[str, Any]:
+    response = await client.get(CREDITS, params=params, headers=bearer(api_token(auth_id)))
+    assert response.status_code == 200, response.text
+    return dict(response.json())
+
+
+async def test_a_grant_appears_in_the_history_with_both_parties_named(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """`granted_by` is the whole point of the table; the recipient's name is what
+    makes a page of ids readable at all."""
+    auth = uuid4()
+    admin = await a_user(db_engine, auth, role="super_admin")
+    target = await a_user(db_engine)
+    await grant(api_client, auth, [target], quantity=2, note="outage on the 3rd")
+
+    row = (await history(api_client, auth))["data"][0]
+
+    assert row["user_id"] == str(target)
+    assert row["granted_by"] == str(admin)
+    assert row["note"] == "outage on the 3rd"
+    assert row["recipient_name"] and row["granted_by_name"]
+
+
+async def test_the_history_shows_granted_and_remaining_separately(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**The two answer different questions.** A history showing only the amount
+    granted cannot say whether a goodwill gesture reached anybody, or whether it
+    expired unspent — which is the outcome most worth knowing."""
+    auth = uuid4()
+    await a_user(db_engine, auth, role="super_admin")
+    target = await a_user(db_engine)
+    await grant(api_client, auth, [target], quantity=3)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE credit_lots SET quantity_remaining = 1 "
+                "WHERE user_id = :u AND source = 'admin_grant'"
+            ),
+            {"u": target},
+        )
+
+    row = (await history(api_client, auth))["data"][0]
+
+    assert (row["quantity_granted"], row["quantity_remaining"]) == (3, 1)
+
+
+async def test_every_admin_sees_every_grant(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**An audit only one person can read is not an audit.** The second admin
+    never granted anything and must still see what the first did."""
+    first_auth, second_auth = uuid4(), uuid4()
+    await a_user(db_engine, first_auth, role="super_admin")
+    await a_user(db_engine, second_auth, role="limited_access")
+    target = await a_user(db_engine)
+    await grant(api_client, first_auth, [target])
+
+    assert len((await history(api_client, second_auth))["data"]) == 1
+
+
+async def test_granted_by_narrows_to_one_admin(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """*What did I hand out* — the second question this table gets asked, and the
+    one somebody asks about themselves."""
+    first_auth, second_auth = uuid4(), uuid4()
+    first = await a_user(db_engine, first_auth, role="super_admin")
+    await a_user(db_engine, second_auth, role="super_admin")
+    a, b = await a_user(db_engine), await a_user(db_engine)
+    await grant(api_client, first_auth, [a], key="k1")
+    await grant(api_client, second_auth, [b], key="k2")
+
+    mine = await history(api_client, first_auth, granted_by=str(first))
+
+    assert [row["granted_by"] for row in mine["data"]] == [str(first)]
+
+
+async def test_a_recipient_who_closed_their_account_is_still_listed(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**Exactly what an audit is for.** Filtering `LIVE` would quietly shorten
+    the history rather than answer the question asked of it."""
+    auth = uuid4()
+    await a_user(db_engine, auth, role="super_admin")
+    target = await a_user(db_engine)
+    await grant(api_client, auth, [target])
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": target})
+
+    assert [row["user_id"] for row in (await history(api_client, auth))["data"]] == [str(target)]
+
+
+async def test_the_history_pages_and_does_not_repeat_a_row(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**A bulk grant writes every row in one transaction**, so they share a
+    `created_at` to the microsecond. Keyed on that alone the cursor would skip
+    or repeat — which is why the keyset is `(created_at, id)`."""
+    auth = uuid4()
+    await a_user(db_engine, auth, role="super_admin")
+    targets = [await a_user(db_engine) for _ in range(5)]
+    await grant(api_client, auth, targets)
+
+    first = await history(api_client, auth, limit=2)
+    second = await history(api_client, auth, limit=2, cursor=first["next_cursor"])
+    third = await history(api_client, auth, limit=2, cursor=second["next_cursor"])
+
+    seen = [row["id"] for page in (first, second, third) for row in page["data"]]
+    assert len(seen) == 5
+    assert len(set(seen)) == 5
+
+
+async def test_a_caller_with_no_grant_cannot_read_the_history(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    auth = uuid4()
+    await a_user(db_engine, auth)
+
+    response = await api_client.get(CREDITS, headers=bearer(api_token(auth)))
+
+    assert response.status_code == 404

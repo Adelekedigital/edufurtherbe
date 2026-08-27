@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
@@ -42,7 +43,7 @@ from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTrans
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
 
-__all__ = ["AdminGrantResult", "grant_credits"]
+__all__ = ["AdminGrantResult", "grant_credits", "list_admin_grants"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,3 +165,82 @@ async def grant_credits(
     )
 
     return AdminGrantResult(granted=tuple(lot["user_id"] for lot in lots), unresolved=unresolved)
+
+
+#: **Both names, and the grant's own outcome.** An audit asks three things of a
+#: row: who was credited, who did it, and whether the credits are still there.
+#: The last is why `quantity_remaining` and `expires_at` are joined in rather
+#: than only the amount granted — "we gave them three" and "they still have
+#: three" are different facts, and a history that shows only the first cannot
+#: answer whether a goodwill gesture ever reached anybody.
+LISTED_GRANTS = """
+SELECT a.id,
+       a.created_at,
+       a.note,
+       a.user_id,
+       recipient.first_name AS recipient_first_name,
+       recipient.last_name  AS recipient_last_name,
+       a.granted_by,
+       admin.first_name     AS granted_by_first_name,
+       admin.last_name      AS granted_by_last_name,
+       l.quantity_granted,
+       l.quantity_remaining,
+       l.expires_at
+FROM admin_credit_grants a
+JOIN credit_lots l ON l.id = a.credit_lot_id
+JOIN users recipient ON recipient.id = a.user_id
+JOIN users admin ON admin.id = a.granted_by
+"""
+
+
+async def list_admin_grants(
+    session: AsyncSession,
+    *,
+    limit: int,
+    after: tuple[str, UUID] | None = None,
+    granted_by: UUID | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """One page of admin credit grants, newest first.
+
+    **Inner joins on both users, deliberately.** `granted_by` and `user_id` are
+    both `RESTRICT`, so neither party can be hard-deleted while a row exists —
+    an outer join would be guarding against a state the schema forbids, and
+    would read as though the history could name somebody who is gone.
+
+    **Soft-deleted recipients are shown.** A credit granted to somebody who has
+    since closed their account is exactly the kind of thing an audit is for, and
+    filtering `LIVE` here would quietly shorten the history rather than
+    answering the question asked of it.
+
+    ``granted_by`` narrows to one admin — *"what did I hand out"*, which is the
+    second question this table gets asked and the one a person asks about
+    themselves.
+    """
+    clauses = []
+    params: dict[str, Any] = {"limit": limit + 1}
+    if granted_by is not None:
+        clauses.append("a.granted_by = :granted_by")
+        params["granted_by"] = granted_by
+    if after is not None:
+        # Keyset on `(created_at, id)`, the shape ADR 0016 settled and every
+        # other list here uses. Both halves, because `created_at` alone is not
+        # unique — a bulk grant writes every row in one transaction and they
+        # share a timestamp to the microsecond.
+        clauses.append("(a.created_at, a.id) < (:after_at, :after_id)")
+        # **Parsed, not bound raw.** The cursor carries the timestamp as an ISO
+        # string and asyncpg binds `timestamptz` from a `datetime` only — passing
+        # the string through raises `DataError` on page *two*, which is the shape
+        # of paging bug `mentor_reviews_page` records having shipped once.
+        try:
+            params["after_at"] = dt.datetime.fromisoformat(after[0])
+        except ValueError as exc:
+            raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+        params["after_id"] = after[1]
+
+    statement = LISTED_GRANTS
+    if clauses:
+        statement += " WHERE " + " AND ".join(clauses)
+    statement += " ORDER BY a.created_at DESC, a.id DESC LIMIT :limit"
+
+    rows = [dict(row) for row in (await session.execute(text(statement), params)).mappings()]
+    return rows[:limit], len(rows) > limit
