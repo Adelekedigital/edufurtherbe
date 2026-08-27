@@ -50,10 +50,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.credits import MONTHLY_ALLOWANCE, expiry_for
 from app.domain.enums import CreditReason, CreditSource
+from app.domain.notifications import Notification
 from app.infra.db.models.credits import CreditLot, CreditTransaction
 from app.infra.db.models.mentoring import MenteeGoal
 from app.infra.db.models.referrals import ReferralUnlock
 from app.infra.db.models.user import User
+from app.infra.db.outbox import enqueue
 from app.infra.db.predicates import LIVE
 
 __all__ = ["grant_monthly_credits"]
@@ -127,6 +129,31 @@ async def grant_monthly_credits(session: AsyncSession, *, now: dt.datetime) -> i
             for row in granted
         ],
     )
+
+    # **Told in the same transaction, and only the people actually paid.**
+    # Derived from the same `RETURNING` as the ledger rows for the same reason:
+    # the eligible set and the granted set differ by exactly whoever the period
+    # guard skipped, and telling them their credits renewed when no lot was
+    # created is a message about something that did not happen.
+    #
+    # It follows that a second run in one month sends nothing — the guard
+    # refuses the lots, `granted` is empty, and the email is refused with them.
+    #
+    # **A call per user rather than one carrying every recipient**, because
+    # `entity_id` differs per row and `enqueue` takes one. Passing the whole set
+    # with a single entity would write ~1,200 rows all claiming to be about one
+    # arbitrary user. `_context_for` never reads `entity_id` for a non-session
+    # message, so nothing would render wrong today — which is exactly why it
+    # would go unnoticed until somebody read the outbox to answer a question
+    # about who was told what.
+    for row in granted:
+        await enqueue(
+            session,
+            Notification.CREDITS_RENEWED,
+            entity_type="user",
+            entity_id=row["user_id"],
+            recipient_ids=(row["user_id"],),
+        )
 
     return len(granted)
 

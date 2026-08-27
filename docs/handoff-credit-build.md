@@ -276,19 +276,29 @@ Ordered so nothing builds on a producer that does not exist, and so each step
 leaves the system coherent. All Tier 1: migrations, ETL, a booking-path change,
 and something that behaves like money.
 
-| # | PR | Migration |
-|---|---|---|
-| 1 | `credit_lots` + `credit_transactions`, both vocabularies | yes |
-| 2 | `referrals` + `referral_unlocks`, nullable unlock reason | yes |
-| 3 | Balance on `/me` — balance, allowance, next reset, state | no |
-| 4 | **Onboarding completion producer** + the `profile_completed` grant | no |
-| 5 | Invite endpoints + the `referral_unlock` grant | no |
-| 6 | Consumption — spends, refuses at zero, advisory lock, **and the funded-mentee fixture** | no |
-| 7 | Refunds — mentor cancel and mentor no-show | yes |
-| 8 | Monthly grant job, 1st, mentees only | no |
-| 9 | Expiry job, plus the read filter and the test pinning them | no |
-| 10 | Opening-balance ETL | no |
-| 11 | ADR — the divergences, in one record | no |
+| # | PR | Migration | Landed as |
+|---|---|---|---|
+| 1 | `credit_lots` + `credit_transactions`, both vocabularies | yes | #209 |
+| 2 | `referrals` + `referral_unlocks`, nullable unlock reason | yes | #210 |
+| 3 | Balance on `/me` — balance, allowance, next reset, state | no | #211 |
+| 4 | **Onboarding completion producer** + the `profile_completed` grant | no | #212 |
+| 5 | Invite endpoints + the `referral_unlock` grant | no | #213 |
+| 6 | Consumption — spends, refuses at zero, advisory lock, **and the funded-mentee fixture** | no | #214 |
+| 7 | Refunds — pulled forward from M5b-ii | yes | #215 |
+| 8 | Monthly grant job, 1st, mentees only | no | #216 |
+| 9 | Expiry job, plus the read filter and the test pinning them | no | #221 |
+| 10 | Opening-balance ETL | no | open |
+| ~~11~~ | ~~ADR — the divergences, in one record~~ | — | **#209** |
+
+**PR 11 was never a PR.** ADR 0027 landed `Accepted` in #209 and says so itself:
+*"The credit handoff's sequence put this record at PR 11; that was wrong against
+the project's own practice"* — how-we-work rule 2, and five of the seven
+divergences are implemented by the tables that PR creates.
+
+**Two additions, neither in the original eleven.** The three credit email
+templates arrived from the owner on 2026-08-26, after this sequence was written.
+`credits_granted` shipped in #217; `credits_renewed` and `credits_expiring`
+follow, the second as a daily sweep at fourteen and seven days before an expiry.
 
 **Eleven PRs against M5a's six.** Worth deciding whether it ships as one phase or
 splits after PR 6.
@@ -325,9 +335,73 @@ deferred cost columns. ADR 0026 took the same shape for the review scale.
 | # | Question | Blocks |
 |---|---|---|
 | 1 | **No invite UI.** The mechanism the earning model turns on has no screen | reachability, not PR 5 |
-| 2 | Production `bookingCredit` values as a Data-tab export — the same gate M5a's reviews had | PR 10's rehearsal |
+| 2 | Production `bookingCredit` values as a Data-tab export — the same gate M5a's reviews had | PR 10's **rehearsal**, not its build. The loader is written and tested against the dev export: 43 rows, 36 lots carrying 158 credits, 4 starters, 2 spent down, 1 unfinished, 0 quarantined |
+| ~~5~~ | ~~What happens to migrated credits on the first 1st after cutover?~~ **Resolved 2026-08-27**: every migrated user active or signed up within twelve months is grandfathered into the grant. Built in #223; the window is the one number still worth a second look | closed |
 | ~~3~~ | ~~Does the expiry job's first run sweep migrated lots, or grandfather them?~~ **Answered 2026-08-26: no grandfather clause.** The sweep takes whatever the read already refuses. Grandfathering in the *job* would leave `quantity_remaining` standing on a lot the balance has already stopped counting, and the ledger would never explain the drop — the one thing D8 built it to prevent. If an opening-balance lot should outlive cutover, PR 10 writes the expiry it means | closed |
 | 4 | Ships as one phase or splits after PR 6? | sequencing |
+
+---
+
+## Register 5 — the cutover credit cliff. **Resolved 2026-08-27, built in #223.**
+
+**And my framing of it was wrong**, which is worth recording because the
+correction is the useful part. I wrote that three decisions "compose into an
+outcome nobody chose". The outcome *was* chosen against, in PR 1 —
+`ReferralUnlock` made `unlocked_by_referral_id` nullable precisely for this, and
+said so: *"~1,200 migrated users are grandfathered as unlocked and none of them
+ever invited anybody … letting every migrated mentee's balance fall to zero at
+the first month end … silently switches off a benefit people currently have."*
+
+The schema was ready and the **writer was missing**. That is a different kind of
+gap from an undecided question, and it is the kind a register entry is good at
+catching: nothing in any single diff shows a row that is never written.
+
+**What the owner decided**: every migrated user is grandfathered into the
+recurring grant — stepping from the legacy five a month to `MONTHLY_ALLOWANCE`
+of three — restricted to those **active or newly signed up** within
+`ACTIVE_WITHIN`, defaulted to twelve months.
+
+The legacy balance is deliberately *not* a condition. Measured finding 4 says the
+legacy app granted monthly credits unconditionally, so `bookingCredit` records
+when somebody joined rather than what they are owed; gating on it would cut off
+every recent signup who had not yet been granted anything.
+
+**Six versus twelve months is still a live number.** On the dev export the ends
+are 15 grandfathered and 1. It is one constant and the dry run prints the count,
+so the production export settles it before the freeze.
+
+---
+
+### What the entry said before it was resolved
+
+Three shipped decisions composed into an outcome nobody had explicitly chosen:
+
+1. A migrated lot expires **end of the cutover month** (the earning ladder).
+2. The expiry sweep has **no grandfather clause** (register 3, closed 2026-08-26).
+3. The monthly grant requires a **referral unlock**, and *no migrated user has
+   one* — measured finding 4: referrals do not exist in the legacy app.
+
+So on the first 1st after cutover, the 158 dev credits (~1,200 in production)
+expire, and the monthly grant replaces none of them, because nobody is unlocked.
+Every migrated user drops to zero except the four holding a never-expiring
+starter. The card will say `exhausted` and the server will refuse bookings.
+
+Each step is individually right. Together they are a product decision — *the
+legacy balance is a one-month carry-over, and the referral programme is how you
+earn more* — which may well be intended, but is nowhere recorded as intended.
+
+**Three ways out, in ascending cost:**
+
+| Option | What it means |
+|---|---|
+| Grandfather the migrated cohort into the monthly grant | Write a `referral_unlock` row per migrated user at cutover. One statement in the ETL; makes finding 4's "legacy granted monthly credits unconditionally" continue to hold for the people it held for |
+| Give migrated lots a longer expiry | A knob in the transform. Delays the cliff rather than removing it |
+| Accept it, and say so | Cheapest, and only acceptable if the front end warns people before the date rather than after |
+
+**Nothing is blocked by this** — PR 10 builds and rehearses either way, and the
+cliff arrives at the first month boundary *after* a cutover that has no date yet.
+It is recorded here because it is invisible in any single PR's diff and stops
+being cheap the moment real balances are loaded.
 
 ---
 

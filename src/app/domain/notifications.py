@@ -34,6 +34,7 @@ from uuid import UUID
 
 __all__ = [
     "AUDIENCE",
+    "CREDIT_REMINDERS",
     "REMINDER_OFFSETS",
     "REVIEW_REMINDER_AFTER",
     "REVIEW_REMINDER_INTERVAL",
@@ -42,8 +43,10 @@ __all__ = [
     "SESSION_REMINDER_KINDS",
     "Audience",
     "Channel",
+    "CreditReminder",
     "Notification",
     "SessionReminder",
+    "credit_reminder_kind",
     "recipients",
     "reminders_for",
     "session_reminders_for",
@@ -162,6 +165,29 @@ class Notification(StrEnum):
     #: *user* rather than a party to a session, so the producer names its
     #: recipient rather than deriving one.
     CREDITS_GRANTED = "credits_granted"
+
+    #: **The month turned and three more arrived.** Enqueued by
+    #: `grant_monthly_credits` for the users it actually paid, derived from the
+    #: same `RETURNING` the ledger rows come from — so a run that granted
+    #: nothing tells nobody, and the period guard refusing a second run in one
+    #: month refuses the second email with it.
+    #:
+    #: Not in `AUDIENCE`: about a *user* rather than a party to a session.
+    CREDITS_RENEWED = "credits_renewed"
+
+    #: **Credits about to expire, unused.** The one message here that is not
+    #: about something that already happened — it exists to change what somebody
+    #: does before the month ends.
+    #:
+    #: Sent only to people who hold credits that are actually expiring. A user
+    #: whose only lot is the never-expiring starter has nothing running out, and
+    #: telling them otherwise is the false urgency people mute a sender over.
+    #:
+    #: **Its `kind` carries the period**, unlike every other reminder here. The
+    #: rest fire once for one session and their dedup key needs no date; this
+    #: one recurs every month for the same user, so a bare `c14` would deliver
+    #: it once in their lifetime — see `CREDIT_REMINDERS`.
+    CREDITS_EXPIRING = "credits_expiring"
 
     #: Somebody applied to be a mentor. **To the admins, not to a party of a
     #: session**, so `AUDIENCE` does not reach it — the recipients are a *set*
@@ -323,6 +349,52 @@ class SessionReminder:
     #: the wording has to move with it, and separating them is how a message
     #: ends up saying "24 hours" an hour before.
     interval: str
+
+
+@dataclass(frozen=True, slots=True)
+class CreditReminder:
+    """One nudge before credits expire: how far out, and what it says it is."""
+
+    #: The dedup key's stable half. Prefixed `c` for the reason `s` and `t` and
+    #: `r` exist — four kinds of reminder now share one column, and a bare `14`
+    #: would let one rule fire another's.
+    kind: str
+    before: dt.timedelta
+    #: The words the template renders. Beside the offset rather than derived at
+    #: send time, so changing one moves the other — the note `SessionReminder`
+    #: already carries, and the reason a message cannot end up saying "two
+    #: weeks" seven days out.
+    interval: str
+
+
+#: When somebody sitting on unused credits is nudged. **Two weeks, then one.**
+#:
+#: The first is far enough out to book something; the second is the last
+#: realistic chance, since the booking floor is 24 hours and a mentor may not
+#: answer immediately. Both are relative to the expiry itself rather than to the
+#: month, so a lot with an unusual expiry is nudged correctly without this
+#: knowing anything about the calendar.
+CREDIT_REMINDERS: tuple[CreditReminder, ...] = (
+    CreditReminder("c14", dt.timedelta(days=14), "two weeks"),
+    CreditReminder("c7", dt.timedelta(days=7), "one week"),
+)
+
+
+def credit_reminder_kind(reminder: CreditReminder, expires_at: dt.datetime) -> str:
+    """The dedup key for one nudge about one expiry.
+
+    **The period is in the key, and this is the only reminder that needs it.**
+    Every other one fires once for one session, so `uq_outbox_events_reminder`
+    on `(entity_id, event_type, kind, recipient)` is already unique per event.
+    This message recurs monthly for the same user, and `entity_id` is that user
+    — so a bare `c14` would be unique across their whole lifetime and they would
+    be nudged exactly once, ever.
+
+    Rendered to the month rather than the day: every lot granted in one month
+    shares one expiry, which is the same fact
+    `uq_credit_lots_one_monthly_grant_per_period` keys on.
+    """
+    return f"{reminder.kind}:{expires_at:%Y-%m}"
 
 
 #: When a confirmed session is nudged. **Twenty-four hours and one hour.**
