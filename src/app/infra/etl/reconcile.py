@@ -689,6 +689,12 @@ class CreditReconciliation:
     legacy_credit_total: int = 0
     loaded_credit_total: int = 0
 
+    #: Migrated users who should keep receiving the monthly grant and did not
+    #: get their unlock. **Reported by anchor**, because the consequence lands a
+    #: month later and silently: their balance simply stops renewing, and there
+    #: is no error anywhere saying why.
+    missing_unlocks: tuple[str, ...] = ()
+
     #: Lots that landed with no `grant` row to explain them. **Always empty in a
     #: healthy run**, and reported by anchor rather than counted, because a
     #: balance nothing explains is exactly what the ledger exists to make
@@ -708,6 +714,7 @@ class CreditReconciliation:
         return (
             not self.unaccounted
             and not self.unexplained
+            and not self.missing_unlocks
             and self.totals_agree
             and all(check.ok for check in self.checks)
         )
@@ -726,6 +733,11 @@ class CreditReconciliation:
         )
         for check in self.checks:
             lines += [f"  MISSING {anchor}" for anchor in check.missing]
+        lines.append(
+            f"{'ok' if not self.missing_unlocks else 'FAIL':4} "
+            f"{'grandfathered unlocks':30} missing {len(self.missing_unlocks):3}"
+        )
+        lines += [f"  NO UNLOCK {anchor}" for anchor in self.missing_unlocks]
         lines += [f"  UNEXPLAINED LOT {anchor}" for anchor in self.unexplained]
         lines += [f"  UNACCOUNTED {anchor}" for anchor in self.unaccounted]
         return "\n".join(lines)
@@ -772,6 +784,14 @@ async def reconcile_credits(connection: AsyncConnection, plan: CreditPlan) -> Cr
     opening = [(row.anchor, row.quantity, row.explained) for row in result.mappings()]
     actual = {anchor: quantity for anchor, quantity, _ in opening}
 
+    unlocked = await connection.execute(
+        text(
+            "SELECT u.legacy_bubble_id AS anchor FROM referral_unlocks r "
+            "JOIN users u ON u.id = r.user_id WHERE u.legacy_bubble_id IS NOT NULL"
+        )
+    )
+    holds_unlock = {row.anchor for row in unlocked}
+
     starters = await connection.execute(text(LOADED_LOTS), {"source": "profile_completed"})
     starter_lots = [(row.anchor, row.explained) for row in starters.mappings()]
     starter_rows = {anchor for anchor, _ in starter_lots}
@@ -804,6 +824,7 @@ async def reconcile_credits(connection: AsyncConnection, plan: CreditPlan) -> Cr
                 missing=tuple(sorted(expected_starters - starter_rows)),
             ),
         ),
+        missing_unlocks=tuple(sorted(set(plan.grandfathered) - holds_unlock)),
         legacy_credit_total=plan.legacy_credit_total,
         loaded_credit_total=sum(actual.values()),
         # **A list of both kinds, not a dict merged by anchor.** One user can

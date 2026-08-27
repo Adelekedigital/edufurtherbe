@@ -43,6 +43,7 @@ in two places is how the two come to disagree.
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import TYPE_CHECKING
 
 from sqlalchemy import text
@@ -54,7 +55,7 @@ from app.domain.transform.credits import CreditPlan
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncConnection
 
-__all__ = ["CreditLoader", "finished_onboarding"]
+__all__ = ["CreditLoader", "finished_onboarding", "recently_active"]
 
 
 #: **The starter's own condition, read from the table its producer keys on.**
@@ -71,6 +72,30 @@ FROM users u
 JOIN user_onboarding o ON o.user_id = u.id
 WHERE u.legacy_bubble_id IS NOT NULL AND o.completed_at IS NOT NULL
 """
+
+
+#: **Read from the column, not from the export's ``Last Active``.**
+#: ``users.last_active_at`` is what every other "is this person around" question
+#: in this codebase uses, and `load_identity` has already written it by the time
+#: this runs. Deriving it a second way here is how the two come to disagree.
+RECENTLY_ACTIVE_ANCHORS = """
+SELECT u.legacy_bubble_id AS anchor
+FROM users u
+WHERE u.legacy_bubble_id IS NOT NULL AND u.last_active_at >= :since
+"""
+
+
+async def recently_active(connection: AsyncConnection, *, since: dt.datetime) -> frozenset[str]:
+    """Anchors whose last activity falls on or after ``since``.
+
+    **A null ``last_active_at`` does not qualify**, and that is the safe
+    direction rather than an oversight: it means the column was never written
+    for them, which is not evidence of activity. A comparison against ``NULL``
+    is false, so they are excluded without a clause saying so — the same
+    structural exclusion `credit_reminders` documents for a null expiry.
+    """
+    result = await connection.execute(text(RECENTLY_ACTIVE_ANCHORS), {"since": since})
+    return frozenset(row.anchor for row in result)
 
 
 async def finished_onboarding(connection: AsyncConnection) -> frozenset[str]:
@@ -137,6 +162,29 @@ WHERE l.source IN ('opening_balance', 'profile_completed')
   )
 """
 
+#: **The grandfather, and the row `ReferralUnlock` was made nullable for.**
+#:
+#: #209's model docstring states the intent and the alternative it rejected:
+#: *"~1,200 migrated users are grandfathered as unlocked and none of them ever
+#: invited anybody … letting every migrated mentee's balance fall to zero at the
+#: first month end … silently switches off a benefit people currently have."*
+#: The schema was ready; this is the writer it was waiting for.
+#:
+#: ``unlocked_by_referral_id`` is ``NULL`` — the reason is *absent* rather than
+#: invented. A synthetic referral row per user would put an invite that never
+#: happened into a table whose whole purpose is evidence.
+#:
+#: ``ON CONFLICT DO NOTHING`` against ``uq_referral_unlocks_user_id``, so a
+#: rehearsal followed by a cutover writes one row, and so a migrated user who
+#: has since earned an unlock the ordinary way keeps the one they earned.
+INSERT_GRANDFATHER_UNLOCK = """
+INSERT INTO referral_unlocks (user_id, unlocked_by_referral_id)
+SELECT u.id, NULL
+FROM users u
+WHERE u.legacy_bubble_id = :anchor
+ON CONFLICT (user_id) DO NOTHING
+"""
+
 #: The literals above, as the members they must name. The pinning test walks
 #: this rather than re-reading the SQL, so adding a statement means adding its
 #: vocabulary here — which is the moment somebody notices.
@@ -186,6 +234,12 @@ class CreditLoader:
                     {"anchor": row.user_bubble_id, "quantity": STARTER_GRANT}
                     for row in plan.starters
                 ],
+            )
+
+        if plan.grandfathered:
+            await self._connection.execute(
+                text(INSERT_GRANDFATHER_UNLOCK),
+                [{"anchor": anchor} for anchor in plan.grandfathered],
             )
 
         await self._connection.execute(text(INSERT_MISSING_GRANTS))

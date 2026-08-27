@@ -20,8 +20,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.domain.transform.credits import plan_opening_balances
-from app.infra.etl.credits import CreditLoader, finished_onboarding
+from app.domain.transform.credits import ACTIVE_WITHIN, plan_opening_balances
+from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_active
 from app.infra.etl.reconcile import reconcile_credits
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -34,7 +34,9 @@ def record(anchor: str, credit: str) -> dict[str, Any]:
     return {"unique id": anchor, "bookingCredit": credit}
 
 
-async def a_migrated_user(engine: AsyncEngine, anchor: str, *, finished: bool = True) -> None:
+async def a_migrated_user(
+    engine: AsyncEngine, anchor: str, *, finished: bool = True, active: bool = True
+) -> None:
     """A user as `load_identity` would leave them, with their onboarding row.
 
     Written straight to the tables rather than through the identity loader: this
@@ -45,10 +47,18 @@ async def a_migrated_user(engine: AsyncEngine, anchor: str, *, finished: bool = 
         user_id = (
             await conn.execute(
                 text(
-                    "INSERT INTO users (email, legacy_bubble_id, primary_role, timezone) "
-                    "VALUES (:e, :a, 'mentee', 'Africa/Lagos') RETURNING id"
+                    "INSERT INTO users (email, legacy_bubble_id, primary_role, timezone, "
+                    "last_active_at) VALUES (:e, :a, 'mentee', 'Africa/Lagos', :la) "
+                    "RETURNING id"
                 ),
-                {"e": f"{anchor}@example.com", "a": anchor},
+                {
+                    "e": f"{anchor}@example.com",
+                    "a": anchor,
+                    # Inside the window by a month, or well outside it.
+                    "la": (CUTOVER - dt.timedelta(days=30))
+                    if active
+                    else (CUTOVER - ACTIVE_WITHIN - dt.timedelta(days=30)),
+                },
             )
         ).scalar_one()
         await conn.execute(
@@ -90,7 +100,8 @@ async def run_load(engine: AsyncEngine, records: list[dict[str, Any]]) -> Any:
     """Plan and load in one transaction, returning the reconciliation."""
     async with engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        plan = plan_opening_balances(records, cutover=CUTOVER, finished=finished)
+        active = await recently_active(conn, since=CUTOVER - ACTIVE_WITHIN)
+        plan = plan_opening_balances(records, cutover=CUTOVER, finished=finished, active=active)
         await CreditLoader(conn).load(plan)
         return await reconcile_credits(conn, plan)
 
@@ -500,3 +511,144 @@ async def test_every_source_row_is_accounted_for(db_engine: AsyncEngine) -> None
     )
 
     assert result.unaccounted == ()
+
+
+# --------------------------------------------------------------------------
+# The grandfather — the writer #209's schema was waiting for
+# --------------------------------------------------------------------------
+
+
+async def unlocks_for(engine: AsyncEngine, anchor: str) -> list[Any]:
+    async with engine.begin() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT r.unlocked_by_referral_id FROM referral_unlocks r "
+                "JOIN users u ON u.id = r.user_id WHERE u.legacy_bubble_id = :a"
+            ),
+            {"a": anchor},
+        )
+        return [r[0] for r in rows]
+
+
+async def test_an_active_holder_gets_an_unlock_with_no_referral_behind_it(
+    db_engine: AsyncEngine,
+) -> None:
+    """**`unlocked_by_referral_id` is NULL, and that is why the column is nullable.**
+
+    #209: *"~1,200 migrated users are grandfathered as unlocked and none of them
+    ever invited anybody."* A synthetic referral row would put an invite that
+    never happened into a table whose whole purpose is evidence.
+    """
+    await a_migrated_user(db_engine, "holder")
+
+    result = await run_load(db_engine, [record("holder", "5")])
+
+    assert await unlocks_for(db_engine, "holder") == [None]
+    assert result.missing_unlocks == ()
+    assert result.ok
+
+
+async def test_a_dormant_holder_gets_no_unlock(db_engine: AsyncEngine) -> None:
+    """The owner's condition. They keep the balance they had — the lot still
+    loads — but the recurring grant does not follow them."""
+    await a_migrated_user(db_engine, "dormant", active=False)
+
+    result = await run_load(db_engine, [record("dormant", "5")])
+
+    assert await unlocks_for(db_engine, "dormant") == []
+    assert await lots_of(db_engine, "dormant") == [("opening_balance", 5, 5, EXPIRY)]
+    assert result.ok
+
+
+async def test_a_spent_down_user_is_still_unlocked(db_engine: AsyncEngine) -> None:
+    """Zero means they were in the credit system and reached it. Keyed off the
+    lots instead, this person would be cut off for the accident of having spent
+    their last credit before cutover day."""
+    await a_migrated_user(db_engine, "spent")
+
+    result = await run_load(db_engine, [record("spent", "0")])
+
+    assert await unlocks_for(db_engine, "spent") == [None]
+    assert await lots_of(db_engine, "spent") == []
+    assert result.ok
+
+
+async def test_somebody_who_never_entered_credits_gets_no_unlock(
+    db_engine: AsyncEngine,
+) -> None:
+    """They were not receiving monthly credits in Bubble, so there is nothing to
+    maintain — they earn the unlock the ordinary way, by inviting somebody."""
+    await a_migrated_user(db_engine, "never")
+
+    result = await run_load(db_engine, [record("never", "")])
+
+    assert await unlocks_for(db_engine, "never") == []
+    assert result.ok
+
+
+async def test_a_second_run_writes_one_unlock(db_engine: AsyncEngine) -> None:
+    """`uq_referral_unlocks_user_id` makes the rehearsal-then-cutover path a
+    no-op, the same property every other write in this loader has."""
+    await a_migrated_user(db_engine, "holder")
+    await run_load(db_engine, [record("holder", "5")])
+
+    await run_load(db_engine, [record("holder", "5")])
+
+    assert await unlocks_for(db_engine, "holder") == [None]
+
+
+async def test_an_unlock_earned_the_ordinary_way_is_not_overwritten(
+    db_engine: AsyncEngine,
+) -> None:
+    """A migrated user who invited somebody between the rehearsal and the cutover
+    keeps the unlock they earned, with its referral intact. `DO NOTHING` rather
+    than `DO UPDATE` is what preserves the evidence."""
+    await a_migrated_user(db_engine, "inviter")
+    async with db_engine.begin() as conn:
+        referral = (
+            await conn.execute(
+                text(
+                    "INSERT INTO referrals (referrer_id, code, invitee_email, "
+                    "signed_up_at, qualified_at) "
+                    "SELECT id, 'INVITER1', 'friend@example.com', now(), now() FROM users "
+                    "WHERE legacy_bubble_id = 'inviter' RETURNING id"
+                )
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO referral_unlocks (user_id, unlocked_by_referral_id) "
+                "SELECT id, :r FROM users WHERE legacy_bubble_id = 'inviter'"
+            ),
+            {"r": referral},
+        )
+
+    await run_load(db_engine, [record("inviter", "5")])
+
+    assert await unlocks_for(db_engine, "inviter") == [referral]
+
+
+async def test_a_missing_unlock_is_reported_by_name(db_engine: AsyncEngine) -> None:
+    """The consequence lands a month later and silently — the balance simply
+    stops renewing. So the reconciliation names them rather than counting them,
+    and refuses to commit."""
+    await a_migrated_user(db_engine, "holder")
+    await run_load(db_engine, [record("holder", "5")])
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "DELETE FROM referral_unlocks r USING users u "
+                "WHERE r.user_id = u.id AND u.legacy_bubble_id = 'holder'"
+            )
+        )
+
+    async with db_engine.begin() as conn:
+        finished = await finished_onboarding(conn)
+        active = await recently_active(conn, since=CUTOVER - ACTIVE_WITHIN)
+        plan = plan_opening_balances(
+            [record("holder", "5")], cutover=CUTOVER, finished=finished, active=active
+        )
+        result = await reconcile_credits(conn, plan)
+
+    assert result.missing_unlocks == ("holder",)
+    assert not result.ok

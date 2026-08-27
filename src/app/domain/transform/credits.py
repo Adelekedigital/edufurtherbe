@@ -54,6 +54,7 @@ from app.domain.bubble import blank_to_none, legacy_anchor
 from app.domain.credits import end_of_month
 
 __all__ = [
+    "ACTIVE_WITHIN",
     "CREDIT_FIELD",
     "PLAUSIBLE_CEILING",
     "RENEW_DATE_FIELD",
@@ -74,6 +75,22 @@ RENEW_DATE_FIELD = "bookingCreditRenewDate"
 #: Above this, a value is reported rather than loaded. See the module docstring —
 #: this is a tripwire chosen from the dev maximum of 5, not a product rule.
 PLAUSIBLE_CEILING = 10
+
+#: How recently somebody must have used the platform to be grandfathered into
+#: the recurring grant. **Twelve months, and this is the number to change.**
+#:
+#: The owner asked for "six to twelve"; the two ends are not close together. On
+#: the dev export — stale test data, so indicative of shape rather than of
+#: production — six months qualifies 1 user of 43 and twelve qualifies 17. The
+#: generous end is the default because the two errors are not symmetric:
+#: grandfathering somebody dormant costs three credits a month that nobody
+#: spends, while missing somebody active silently switches off a benefit they
+#: have today, which is the exact failure `ReferralUnlock` was made nullable to
+#: avoid.
+#:
+#: The dry run prints how many qualify, so the production number is visible
+#: before the freeze rather than after it.
+ACTIVE_WITHIN = dt.timedelta(days=365)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +144,20 @@ class CreditPlan:
     spent_down: tuple[str, ...] = ()
     unfinished: tuple[str, ...] = ()
 
+    #: Migrated users who keep receiving the monthly grant. **Anyone who was in
+    #: the legacy credit system and has used the platform recently** — which
+    #: includes the spent-down, because `'0'` means they were in it and reached
+    #: zero, not that they were never in it.
+    #:
+    #: `ReferralUnlock` was made nullable in #209 for exactly these rows: *"~1,200
+    #: migrated users are grandfathered as unlocked and none of them ever invited
+    #: anybody"*. The schema was ready; this is the writer it was waiting for.
+    #:
+    #: **They step from five to three.** The legacy grant was five a month,
+    #: unconditionally; the new one is `MONTHLY_ALLOWANCE`. Nothing here changes
+    #: the amount — it is simply what the grant gives.
+    grandfathered: tuple[str, ...] = ()
+
     #: Every anchor the export offered. **Reconciliation needs a source list to
     #: be missing from**: comparing the plan against itself agrees with itself,
     #: which `reconcile.py` records shipping once.
@@ -169,6 +200,7 @@ class CreditPlan:
             f"{self.legacy_credit_total} credit(s)",
             f"starters to grant: {len(self.starters)}",
             f"spent down, nothing owed: {len(self.spent_down)}",
+            f"grandfathered into the monthly grant: {len(self.grandfathered)}",
             f"never entered credits and unfinished: {len(self.unfinished)}",
             f"quarantined: {len(self.quarantined)}",
         ]
@@ -192,6 +224,7 @@ def plan_opening_balances(
     *,
     cutover: dt.datetime,
     finished: frozenset[str],
+    active: frozenset[str] = frozenset(),
 ) -> CreditPlan:
     """Every balance the export offers, as a lot, a starter, or a reason.
 
@@ -207,11 +240,22 @@ def plan_opening_balances(
     Re-reading the raw field here would be a second representation of "has this
     person finished", and the two would disagree the first time that derivation
     changed.
+
+    ``active`` is the same shape and there for the same reason: anchors whose
+    ``users.last_active_at`` falls inside :data:`ACTIVE_WITHIN` of the cutover.
+    Read from the column rather than from the export's ``Last Active``, because
+    the column is what every other "is this person around" question in the
+    codebase uses.
+
+    **Defaulted to empty, which grandfathers nobody.** A caller that forgets to
+    pass it writes no unlocks — the cliff, not a silent over-grant. Handing out
+    a recurring benefit is the error that is expensive to undo.
     """
     expires_at = end_of_month(cutover)
 
     lots: list[OpeningLotRow] = []
     starters: list[StarterRow] = []
+    grandfathered: list[str] = []
     spent_down: list[str] = []
     unfinished: list[str] = []
     quarantined: list[QuarantinedBalance] = []
@@ -265,7 +309,14 @@ def plan_opening_balances(
             # the whole record — a lot of zero would fail
             # `ck_credit_lots_quantity_granted_positive` and would be a row
             # saying nothing happened.
+            #
+            # **Still grandfathered**, and that is the point of doing it here
+            # rather than off `lots`: `'0'` means they were in the credit system
+            # and reached zero. `''` means they never entered it. Only the second
+            # is a reason not to keep granting.
             spent_down.append(anchor)
+            if anchor in active:
+                grandfathered.append(anchor)
             continue
         if quantity > PLAUSIBLE_CEILING:
             quarantined.append(
@@ -278,10 +329,13 @@ def plan_opening_balances(
             continue
 
         lots.append(OpeningLotRow(anchor, quantity, expires_at))
+        if anchor in active:
+            grandfathered.append(anchor)
 
     return CreditPlan(
         lots=tuple(lots),
         starters=tuple(starters),
+        grandfathered=tuple(grandfathered),
         spent_down=tuple(spent_down),
         unfinished=tuple(unfinished),
         source_anchors=tuple(source_anchors),

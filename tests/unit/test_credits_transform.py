@@ -16,6 +16,7 @@ import pytest
 
 from app.domain.credits import STARTER_GRANT
 from app.domain.transform.credits import (
+    ACTIVE_WITHIN,
     CREDIT_FIELD,
     PLAUSIBLE_CEILING,
     RENEW_DATE_FIELD,
@@ -31,8 +32,12 @@ def a_record(anchor: str, credit: object, **extra: object) -> dict[str, object]:
     return {"unique id": anchor, CREDIT_FIELD: credit, **extra}
 
 
-def plan(*records: dict[str, object], finished: frozenset[str] = frozenset()):
-    return plan_opening_balances(list(records), cutover=CUTOVER, finished=finished)
+def plan(
+    *records: dict[str, object],
+    finished: frozenset[str] = frozenset(),
+    active: frozenset[str] = frozenset(),
+):
+    return plan_opening_balances(list(records), cutover=CUTOVER, finished=finished, active=active)
 
 
 # --------------------------------------------------------------------------
@@ -232,3 +237,88 @@ def test_the_report_names_every_quarantine() -> None:
     result = plan(a_record("odd", "five"))
 
     assert "QUARANTINED odd" in result.report()
+
+
+# --------------------------------------------------------------------------
+# The grandfather — who keeps receiving the monthly grant
+# --------------------------------------------------------------------------
+
+
+def test_an_active_holder_is_grandfathered() -> None:
+    """`ReferralUnlock` was made nullable in #209 for exactly this row. The
+    schema was ready and the writer was missing, which is the whole of what
+    register 5 turned out to be."""
+    result = plan(a_record("holder", "5"), active=frozenset({"holder"}))
+
+    assert result.grandfathered == ("holder",)
+
+
+def test_a_spent_down_user_is_grandfathered_too() -> None:
+    """**The distinction that makes this different from keying off `lots`.**
+
+    `'0'` means they were in the credit system and reached zero; `''` means they
+    were never in it. Only the second is a reason to stop granting — and a
+    grandfather written as "everybody who gets a lot" would quietly cut off the
+    people whose balance happens to be empty on cutover day.
+    """
+    result = plan(a_record("spent", "0"), active=frozenset({"spent"}))
+
+    assert result.grandfathered == ("spent",)
+    assert result.lots == ()
+
+
+def test_somebody_who_never_entered_credits_is_not_grandfathered() -> None:
+    """They were not receiving monthly credits in Bubble, so there is nothing to
+    maintain. They get the starter and earn an unlock the ordinary way."""
+    result = plan(
+        a_record("never", ""),
+        finished=frozenset({"never"}),
+        active=frozenset({"never"}),
+    )
+
+    assert result.grandfathered == ()
+    assert len(result.starters) == 1
+
+
+def test_a_dormant_holder_is_not_grandfathered() -> None:
+    """The owner's condition: only users active recently. A migrated balance is
+    still loaded — they keep what they had — but the recurring grant does not
+    follow them."""
+    result = plan(a_record("dormant", "5"), active=frozenset())
+
+    assert result.grandfathered == ()
+    assert len(result.lots) == 1
+
+
+def test_a_quarantined_row_is_never_grandfathered() -> None:
+    """A balance nobody could read is not evidence of anything, least of all of
+    an entitlement that recurs every month."""
+    result = plan(a_record("odd", "five"), active=frozenset({"odd"}))
+
+    assert result.grandfathered == ()
+    assert len(result.quarantined) == 1
+
+
+def test_grandfathering_defaults_to_nobody() -> None:
+    """**The safe direction on a forgetful caller.** Omitting `active` writes no
+    unlocks — the cliff, which is visible and fixable — rather than handing every
+    migrated user a recurring benefit, which is the error that is expensive to
+    undo."""
+    result = plan(a_record("holder", "5"))
+
+    assert result.grandfathered == ()
+
+
+def test_the_window_is_twelve_months() -> None:
+    """Named rather than left implicit, because the owner asked for "six to
+    twelve" and the two ends are not close: on the dev export six qualifies one
+    user of 43 and twelve qualifies seventeen. This is the line to change."""
+    assert ACTIVE_WITHIN.days == 365
+
+
+def test_the_report_counts_the_grandfathered() -> None:
+    """An operator reading the cutover report needs this number, because it is
+    the one that decides whether ~1,200 people keep receiving credits."""
+    result = plan(a_record("holder", "5"), active=frozenset({"holder"}))
+
+    assert "grandfathered into the monthly grant: 1" in result.report()
