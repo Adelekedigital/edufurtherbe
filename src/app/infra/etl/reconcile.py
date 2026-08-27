@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.transform import UserRow
 from app.domain.transform.availability import AvailabilityPlan
+from app.domain.transform.credits import CreditPlan
 from app.domain.transform.profiles import ProfilePlan
 from app.domain.transform.reviews import ReviewPlan
 from app.domain.transform.sessions import SessionPlan
@@ -658,6 +659,185 @@ async def reconcile_reviews(connection: AsyncConnection, plan: ReviewPlan) -> Re
                     )
                 ),
             ),
+        ),
+        unaccounted=_unaccounted_of(plan.source_anchors, tuple(accounted)),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CreditReconciliation:
+    """Opening balances, against what the legacy field said they were.
+
+    **Two identities, and the second is the one the Definition of Done names.**
+    Row counts agreeing is the ordinary check every phase does; *the lot sum
+    equals the legacy sum* is the one that catches a transform which loaded the
+    right number of users at the wrong quantities — a `'5'` read as `5` on 35
+    rows and as `1` on the thirty-sixth passes a count check and shorts one
+    person four credits.
+
+    **Starters are counted separately and are not in the credit total.** They are
+    not a migrated balance: the user held nothing in Bubble and arrives with what
+    a new user earns. Folding them in would make the sums agree only if the
+    legacy total were wrong by exactly the number of starters.
+    """
+
+    checks: tuple[TableCheck, ...]
+
+    #: What the export said, and what the table holds. Compared as one number
+    #: rather than per user, because that is the identity the runbook states —
+    #: the per-user check is `checks`, which reports a missing anchor by name.
+    legacy_credit_total: int = 0
+    loaded_credit_total: int = 0
+
+    #: Migrated users who should keep receiving the monthly grant and did not
+    #: get their unlock. **Reported by anchor**, because the consequence lands a
+    #: month later and silently: their balance simply stops renewing, and there
+    #: is no error anywhere saying why.
+    missing_unlocks: tuple[str, ...] = ()
+
+    #: Lots that landed with no `grant` row to explain them. **Always empty in a
+    #: healthy run**, and reported by anchor rather than counted, because a
+    #: balance nothing explains is exactly what the ledger exists to make
+    #: impossible.
+    unexplained: tuple[str, ...] = ()
+
+    #: Source anchors that became neither a lot, a starter, a stated skip, nor a
+    #: quarantine.
+    unaccounted: tuple[str, ...] = ()
+
+    @property
+    def totals_agree(self) -> bool:
+        return self.legacy_credit_total == self.loaded_credit_total
+
+    @property
+    def ok(self) -> bool:
+        return (
+            not self.unaccounted
+            and not self.unexplained
+            and not self.missing_unlocks
+            and self.totals_agree
+            and all(check.ok for check in self.checks)
+        )
+
+    def report(self) -> str:
+        lines = [
+            f"{'ok' if check.ok else 'FAIL':4} {check.table:30} "
+            f"expected {check.expected:5}  loaded {check.loaded:5}  "
+            f"missing {len(check.missing):3}"
+            for check in self.checks
+        ]
+        lines.append(
+            f"{'ok' if self.totals_agree else 'FAIL':4} "
+            f"{'credit total':30} legacy {self.legacy_credit_total:5}  "
+            f"loaded {self.loaded_credit_total:5}"
+        )
+        for check in self.checks:
+            lines += [f"  MISSING {anchor}" for anchor in check.missing]
+        lines.append(
+            f"{'ok' if not self.missing_unlocks else 'FAIL':4} "
+            f"{'grandfathered unlocks':30} missing {len(self.missing_unlocks):3}"
+        )
+        lines += [f"  NO UNLOCK {anchor}" for anchor in self.missing_unlocks]
+        lines += [f"  UNEXPLAINED LOT {anchor}" for anchor in self.unexplained]
+        lines += [f"  UNACCOUNTED {anchor}" for anchor in self.unaccounted]
+        return "\n".join(lines)
+
+
+#: Read back by the anchor the plan speaks in, so the two sides of every
+#: comparison are the *export's* identity rather than ours. Joining through
+#: `users` is what makes an unresolved anchor show up as missing.
+LOADED_LOTS = """
+SELECT u.legacy_bubble_id AS anchor,
+       l.quantity_granted AS quantity,
+       EXISTS (
+           SELECT 1 FROM credit_transactions t
+           WHERE t.credit_lot_id = l.id AND t.reason = 'grant'
+       ) AS explained
+FROM credit_lots l
+JOIN users u ON u.id = l.user_id
+WHERE l.source = :source
+"""
+
+
+async def reconcile_credits(connection: AsyncConnection, plan: CreditPlan) -> CreditReconciliation:
+    """Compare the credit tables against the plan that produced them.
+
+    Expected comes from the plan; actual comes from the database. Neither
+    re-derives the other — a check whose two sides come from the same place
+    agrees with itself and proves nothing, which is also why `CreditLoader`
+    returns no counts.
+
+    **`quantity_granted`, not `quantity_remaining`.** They are equal the moment
+    the loader writes them, so either passes at cutover — but only the former
+    stays true afterwards. `quantity_granted` is history and never moves, so
+    *the lot sum equals the legacy sum* is an identity that holds for the life of
+    the row; read against the column that falls with every booking, the same
+    check would start failing on a correctly migrated database the first time
+    somebody spent a credit.
+
+    An earlier draft had this backwards and argued for the moving column. It
+    passes at cutover either way, which is exactly why the argument survived
+    being written down.
+    """
+    expected = {row.user_bubble_id: row.quantity for row in plan.lots}
+    result = await connection.execute(text(LOADED_LOTS), {"source": "opening_balance"})
+    opening = [(row.anchor, row.quantity, row.explained) for row in result.mappings()]
+    actual = {anchor: quantity for anchor, quantity, _ in opening}
+
+    unlocked = await connection.execute(
+        text(
+            "SELECT u.legacy_bubble_id AS anchor FROM referral_unlocks r "
+            "JOIN users u ON u.id = r.user_id WHERE u.legacy_bubble_id IS NOT NULL"
+        )
+    )
+    holds_unlock = {row.anchor for row in unlocked}
+
+    starters = await connection.execute(text(LOADED_LOTS), {"source": "profile_completed"})
+    starter_lots = [(row.anchor, row.explained) for row in starters.mappings()]
+    starter_rows = {anchor for anchor, _ in starter_lots}
+    expected_starters = {row.user_bubble_id for row in plan.starters}
+
+    accounted = (
+        set(expected)
+        | expected_starters
+        | set(plan.spent_down)
+        | set(plan.unfinished)
+        | {row.user_bubble_id for row in plan.quarantined}
+    )
+
+    return CreditReconciliation(
+        checks=(
+            TableCheck(
+                table="credit_lots (opening_balance)",
+                expected=len(expected),
+                loaded=len(actual),
+                missing=tuple(sorted(set(expected) - set(actual))),
+            ),
+            TableCheck(
+                table="credit_lots (starter)",
+                expected=len(expected_starters),
+                # **Narrowed to the anchors this plan named.** A starter granted
+                # through the API by somebody who signed up after the extract is
+                # a correct row this phase did not write, and counting every
+                # `profile_completed` lot would report it as a surplus.
+                loaded=len(expected_starters & starter_rows),
+                missing=tuple(sorted(expected_starters - starter_rows)),
+            ),
+        ),
+        missing_unlocks=tuple(sorted(set(plan.grandfathered) - holds_unlock)),
+        legacy_credit_total=plan.legacy_credit_total,
+        loaded_credit_total=sum(actual.values()),
+        # **A list of both kinds, not a dict merged by anchor.** One user can
+        # hold an `opening_balance` lot *and* a starter — the loader never gives
+        # both, but the API grants a starter to anybody who completes onboarding
+        # after the extract. Merging on the anchor kept one row and dropped the
+        # other, so an unexplained balance could hide behind an explained
+        # starter belonging to the same person.
+        unexplained=tuple(
+            sorted(
+                {anchor for anchor, _, explained in opening if not explained}
+                | {anchor for anchor, explained in starter_lots if not explained}
+            )
         ),
         unaccounted=_unaccounted_of(plan.source_anchors, tuple(accounted)),
     )

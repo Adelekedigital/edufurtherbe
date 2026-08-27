@@ -241,3 +241,65 @@ async def test_the_block_carries_exactly_four_fields(
         "state",
         "next_reset_at",
     }
+
+
+# --------------------------------------------------------------------------
+# The migrated user, which is who the card renders for on day one
+# --------------------------------------------------------------------------
+
+
+async def test_a_migrated_balance_renders_on_the_card(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**The ETL's Definition of Done, asserted through the screen it is for.**
+
+    Every other test here grants a lot the API itself would write. This one
+    writes what `CreditLoader` writes — source `opening_balance`, expiring end of
+    the cutover month — and checks the card can render it, because the loader
+    landing correct rows in a table nobody reads correctly is not the same as the
+    migration working.
+
+    Five is the legacy maximum and 29 of 43 dev users hold it, so it is also the
+    case that decides whether `allowance_for` raises: `STEADY_STATE` is four, and
+    a migrated user arrives *above* it.
+    """
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    end_of_cutover_month = datetime(2026, 10, 1, tzinfo=UTC)
+    await grant(
+        db_engine,
+        user_id,
+        quantity=5,
+        source="opening_balance",
+        expires=end_of_cutover_month,
+    )
+
+    block = await credits_of(api_client, auth_id)
+
+    assert block["balance"] == 5
+    # **The bar has to be able to draw five.** Clamping to the steady state of
+    # four would render "5 credits left" beside four positions — which is why
+    # `allowance_for` publishes `max(STEADY_STATE, balance)`.
+    assert block["allowance"] == 5
+    assert block["state"] == "on_track"
+
+
+async def test_a_migrated_balance_disappears_when_its_month_ends(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**Register 5, made visible.** Not a bug — the composition of three
+    decisions that are each correct — but the card is where a mentee meets it,
+    and the number it shows the morning after cutover month ends is zero.
+
+    Asserted so the behaviour is recorded rather than discovered. If the cliff is
+    resolved by grandfathering migrated users into the monthly grant, this test
+    is the one that should change, and it should change deliberately.
+    """
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    await grant(db_engine, user_id, quantity=5, source="opening_balance", expires=LONG_PAST)
+
+    block = await credits_of(api_client, auth_id)
+
+    assert block["balance"] == 0
+    assert block["state"] == "exhausted"
