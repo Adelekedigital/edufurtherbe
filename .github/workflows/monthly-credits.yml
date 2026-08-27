@@ -10,10 +10,20 @@ name: Monthly credits
 # WHY GITHUB ACTIONS AND NOT A QUEUE VENDOR. `migrate.yml` already reaches the
 # database from a runner, so the mechanism and the credential exist, and settled
 # decision #13 keeps the FastAPI Cloud -> Railway exit real by using no
-# platform-native cron. QStash is the other option and is wrong here: it is
-# per-message scheduling, so this would be ~1,200 callbacks a month against one
-# cron run, and its "nothing is ever cancelled" design is right for a reminder
-# that no-ops and wrong for a grant that must not double-write.
+# platform-native cron.
+#
+# **An earlier version of this note dismissed QStash too broadly, and the
+# correction is worth keeping.** What is wrong here is QStash *Messages* —
+# per-user scheduled callbacks, which for this job would be ~1,200 a month
+# against one cron run, and whose "nothing is ever cancelled" design suits a
+# reminder that no-ops rather than a grant that must not double-write.
+#
+# QStash *Schedules* are a different feature: one recurring schedule calling one
+# URL, which is the same shape as this cron. That would work. It costs an
+# authenticated internal endpoint on a path that mutates credits — new HTTP
+# surface where today there is none — which is the reason not to, not a
+# limitation of QStash. Recorded so the next person weighing it starts from the
+# real trade rather than from a blanket "QStash is wrong here".
 #
 # WHY LATE IS SAFE AND EARLY IS NOT. Actions schedules are documented as
 # delayable under load, so this will sometimes fire hours after midnight. That
