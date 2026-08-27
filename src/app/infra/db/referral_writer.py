@@ -36,7 +36,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
-from app.domain.credits import UNLOCK_GRANT
+from app.domain.credits import credit_ladder
 from app.domain.enums import CreditSource
 from app.domain.referrals import make_code, may_qualify
 from app.infra.db.credit_writer import grant
@@ -211,7 +211,7 @@ async def qualify_invitee(session: AsyncSession, invitee_id: UUID) -> bool:
         session,
         referral.referrer_id,
         source=CreditSource.REFERRAL_UNLOCK,
-        quantity=UNLOCK_GRANT,
+        quantity=credit_ladder().unlock,
         # App clock, matching `credit_store`'s read. Mixing the two would put
         # the boundary a lot expires on in a different frame from the filter
         # that decides whether it is spendable.

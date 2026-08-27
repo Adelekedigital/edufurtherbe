@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
-from app.domain.credits import STARTER_GRANT
+from app.domain.credits import credit_ladder
 from app.domain.enums import CreditReason, CreditSource
 from app.domain.transform.credits import CreditPlan
 
@@ -136,7 +136,7 @@ WHERE u.legacy_bubble_id = :anchor
 ON CONFLICT (user_id) WHERE source = 'opening_balance' DO NOTHING
 """
 
-#: The quantity is bound rather than written, so `STARTER_GRANT` stays the one
+#: The quantity is bound rather than written, so the ladder stays the one
 #: place the starter's size is decided.
 INSERT_STARTER_LOT = """
 INSERT INTO credit_lots (user_id, source, quantity_granted, quantity_remaining, expires_at)
@@ -238,7 +238,7 @@ class CreditLoader:
             await self._connection.execute(
                 text(INSERT_STARTER_LOT),
                 [
-                    {"anchor": row.user_bubble_id, "quantity": STARTER_GRANT}
+                    {"anchor": row.user_bubble_id, "quantity": credit_ladder().starter}
                     for row in plan.starters
                 ],
             )

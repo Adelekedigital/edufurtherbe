@@ -839,7 +839,7 @@ async def fund(conn: Any, user_id: Any, quantity: int = TEST_CREDITS) -> None:
 
     Never expires: the lot is `opening_balance`, which is the migration's source
     and the only one whose quantity is arbitrary. Using `monthly_free` would tie
-    every test to `MONTHLY_ALLOWANCE` and make raising it a test-wide edit.
+    every test to the monthly grant and make raising it a test-wide edit.
     """
     lot_id = (
         await conn.execute(

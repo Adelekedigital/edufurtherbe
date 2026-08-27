@@ -36,7 +36,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InsufficientCreditError
-from app.domain.credits import STARTER_GRANT, expiry_for, refund_expiry
+from app.domain.credits import credit_ladder, expiry_for, refund_expiry
 from app.domain.enums import CreditReason, CreditSource
 from app.infra.db.credit_store import spendable_now
 from app.infra.db.models.credits import _REFUND_PREDICATE, CreditLot, CreditTransaction
@@ -114,14 +114,15 @@ async def grant_starter(session: AsyncSession, user_id: UUID) -> UUID | None:
     ``PROFILE_COMPLETED`` and it is asserted there, so this passes ``None``
     rather than restating the rule.
     """
+    starter = credit_ladder().starter
     lot_id = (
         await session.execute(
             pg_insert(CreditLot)
             .values(
                 user_id=user_id,
                 source=CreditSource.PROFILE_COMPLETED,
-                quantity_granted=STARTER_GRANT,
-                quantity_remaining=STARTER_GRANT,
+                quantity_granted=starter,
+                quantity_remaining=starter,
                 expires_at=None,
             )
             .on_conflict_do_nothing(
@@ -139,7 +140,7 @@ async def grant_starter(session: AsyncSession, user_id: UUID) -> UUID | None:
     if lot_id is None:
         return None
 
-    await _record(session, user_id, UUID(str(lot_id)), STARTER_GRANT)
+    await _record(session, user_id, UUID(str(lot_id)), starter)
     return UUID(str(lot_id))
 
 

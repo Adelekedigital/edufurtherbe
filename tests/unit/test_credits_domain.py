@@ -12,16 +12,18 @@ predicate in four places is non-negotiable #8 rather than four call sites being
 explicit.
 """
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
+from app.core.config import get_settings
 from app.domain.credits import (
-    MONTHLY_ALLOWANCE,
-    STARTER_GRANT,
-    UNLOCK_GRANT,
     CreditReason,
     CreditSource,
+    allowance_for,
+    credit_ladder,
     end_of_month,
     expiry_for,
     refund_expiry,
@@ -81,16 +83,17 @@ class TestQuantities:
     def test_the_earning_ladder(self) -> None:
         """Three independent quantities, asserted independently **on purpose**.
 
-        They happen to satisfy ``STARTER_GRANT + UNLOCK_GRANT ==
-        MONTHLY_ALLOWANCE`` today, and chaining them that way would assert a
+        They happen to satisfy ``starter + unlock == monthly`` today, and
+        chaining them that way would assert a
         relationship the design does not claim: the unlock is a one-off on top
         of the starter, the allowance is what arrives every month, and nothing
         holds them equal. Raise the allowance to four and a chained assertion
         goes red for a reason that is not the bug.
         """
-        assert STARTER_GRANT == 1
-        assert UNLOCK_GRANT == 2
-        assert MONTHLY_ALLOWANCE == 3
+        ladder = credit_ladder()
+        assert ladder.starter == 1
+        assert ladder.unlock == 2
+        assert ladder.monthly == 3
 
     def test_steady_state_is_four_not_three(self) -> None:
         """The non-expiring starter plus the monthly three.
@@ -99,7 +102,8 @@ class TestQuantities:
         the allowance alone — the card would otherwise show "4 credits left"
         beside a bar that cannot draw four.
         """
-        assert STARTER_GRANT + MONTHLY_ALLOWANCE == 4
+        ladder = credit_ladder()
+        assert ladder.starter + ladder.monthly == ladder.steady_state == 4
 
 
 class TestEndOfMonth:
@@ -213,3 +217,88 @@ class TestEndOfMonthNormalises:
         reason every timestamp column here is `timestamptz`."""
         with pytest.raises(ValueError, match="aware"):
             end_of_month(datetime(2026, 8, 15, 12, 0))
+
+
+@pytest.fixture
+def fresh_settings() -> Iterator[None]:
+    """Clear the settings cache on the way in **and on the way out**.
+
+    `get_settings` is `lru_cache(maxsize=1)`, so a test that overrides an
+    environment variable and clears the cache leaves the overridden `Settings`
+    in it. `monkeypatch` restores the variable at teardown; nothing restores the
+    cache, so the next test to read the ladder gets the previous test's numbers
+    and the suite starts passing or failing on execution order.
+
+    Both sides, because either alone is a trap: without the entry clear the
+    override is never seen, and without the exit clear it is never forgotten.
+
+    The exit half was watched failing rather than assumed. Dropping it and
+    running the whole class still passed — the last test in it raises
+    `ValidationError`, and `lru_cache` does not cache exceptions, so the cache
+    happened to be empty afterwards. Running only
+    `test_an_override_moves_the_grant` and then `test_credit_state.py` is the
+    ordering that exposes it: two allowance tests go red against a leaked
+    monthly grant of five.
+    """
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.mark.usefixtures("fresh_settings")
+class TestTheLadderIsConfigured:
+    """The sizes come from the environment; the rules do not.
+
+    **What is configurable and what is not is the point of this class.** How much
+    a starter is worth can move; that it never expires cannot, because
+    `NON_EXPIRING` is a statement about what the credit is *for* rather than
+    about its size.
+    """
+
+    def test_the_defaults_are_what_shipped(self) -> None:
+        """An unset environment behaves exactly as before this became
+        configuration — which is what makes the change safe to deploy ahead of
+        deciding any new numbers."""
+        ladder = credit_ladder()
+
+        assert (ladder.starter, ladder.unlock, ladder.monthly) == (1, 2, 3)
+
+    def test_an_override_moves_the_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The whole reason for the change. `get_settings` is `lru_cache`d, so a
+        test that sets the variable without clearing the cache reads the value
+        from whichever test ran first — which is the failure this clears for."""
+        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "5")
+        monkeypatch.setenv("CREDIT_STARTER_GRANT", "2")
+        get_settings.cache_clear()
+
+        ladder = credit_ladder()
+
+        assert (ladder.starter, ladder.monthly) == (2, 5)
+
+    def test_the_steady_state_follows_the_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """**The relationship, not the number.** The card's denominator is the
+        starter plus the monthly grant, so raising either has to move the bar —
+        otherwise a mentee sits above a ceiling that never grew."""
+        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "5")
+        get_settings.cache_clear()
+
+        assert credit_ladder().steady_state == 1 + 5
+        assert allowance_for(4) == 6
+
+    def test_a_grant_of_zero_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`ck_credit_lots_quantity_granted_positive` would refuse the lot at the
+        database; refusing it at startup names the setting instead of the
+        constraint, and fails before anybody is granted nothing."""
+        monkeypatch.setenv("CREDIT_STARTER_GRANT", "0")
+        get_settings.cache_clear()
+
+        with pytest.raises(ValidationError):
+            credit_ladder()
+
+    def test_a_negative_grant_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A debit wearing a grant's name."""
+        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "-3")
+        get_settings.cache_clear()
+
+        with pytest.raises(ValidationError):
+            credit_ladder()

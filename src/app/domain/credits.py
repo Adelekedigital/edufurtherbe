@@ -42,19 +42,19 @@ the boundary is shared.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 
+from app.core.config import get_settings
 from app.domain.enums import CreditReason, CreditSource, CreditState
 
 __all__ = [
-    "MONTHLY_ALLOWANCE",
     "NON_EXPIRING",
-    "STARTER_GRANT",
-    "STEADY_STATE",
-    "UNLOCK_GRANT",
+    "CreditLadder",
     "CreditReason",
     "CreditSource",
     "CreditState",
     "allowance_for",
+    "credit_ladder",
     "end_of_month",
     "expiry_for",
     "refund_expiry",
@@ -67,28 +67,64 @@ __all__ = [
 #: ``is PROFILE_COMPLETED`` comparison at the two call sites.
 NON_EXPIRING: frozenset[CreditSource] = frozenset({CreditSource.PROFILE_COMPLETED})
 
-#: Finishing onboarding.
-STARTER_GRANT = 1
-#: Added by the first qualifying invite, on top of the starter.
-UNLOCK_GRANT = 2
-#: Granted on the 1st to every unlocked mentee, and the card's denominator —
-#: except when a late refund pushes a balance above it, which is why the read
-#: publishes ``max(allowance, balance)`` rather than this number alone.
-MONTHLY_ALLOWANCE = 3
 
-#: What the card's progress bar divides by — **the ceiling, not the grant**.
-#:
-#: The non-expiring starter plus the monthly three, which is where a settled,
-#: unlocked mentee sits on the 1st. The bar is a position marker whose filled
-#: segment is the balance, so the denominator has to be a *fixed* ceiling: with
-#: `max(MONTHLY_ALLOWANCE, balance)` the denominator tracked the numerator and
-#: `balance == allowance` for every balance at or above three — a four-segment
-#: bar full at four, then a three-segment bar still full at three. **The bar did
-#: not move when a credit was spent.** Found by code review.
-#:
-#: Migrated users arrive at five (29 of 43 in the dev export), which is why
-#: `allowance_for` still raises this rather than clamping to it.
-STEADY_STATE = STARTER_GRANT + MONTHLY_ALLOWANCE
+@dataclass(frozen=True, slots=True)
+class CreditLadder:
+    """How much each rung of the earning ladder is worth.
+
+    **One object rather than three loose numbers**, because the three are only
+    meaningful together: `steady_state` is a relationship between two of them,
+    and a caller holding one without the others cannot compute it.
+    """
+
+    #: Finishing onboarding.
+    starter: int
+    #: Added by the first qualifying invite, on top of the starter.
+    unlock: int
+    #: Granted on the 1st to every unlocked mentee, and the cap on what a
+    #: migrated user may carry in.
+    monthly: int
+
+    @property
+    def steady_state(self) -> int:
+        """What the card's progress bar divides by — **the ceiling, not the grant**.
+
+        The non-expiring starter plus the monthly grant, which is where a
+        settled, unlocked mentee sits on the 1st. The bar is a position marker
+        whose filled segment is the balance, so the denominator has to be a
+        *fixed* ceiling: with `max(monthly, balance)` the denominator tracked the
+        numerator and `balance == allowance` for every balance at or above the
+        monthly grant — a four-segment bar full at four, then a three-segment bar
+        still full at three. **The bar did not move when a credit was spent.**
+        Found by code review.
+        """
+        return self.starter + self.monthly
+
+
+def credit_ladder() -> CreditLadder:
+    """The configured ladder. **The one reader of these three settings.**
+
+    Configuration because the economics are still moving, not because the rules
+    are: what each grant *means* — the starter never expiring, the unlock being
+    once-only, the monthly one needing a referral — stays here in `domain`, and
+    only the sizes come from the environment.
+
+    `get_settings()` is `lru_cache(maxsize=1)`, so this is a dict lookup after
+    the first call and safe on the read path. `domain` may import `core` and
+    nothing else, which `scripts/check_layers.py` states as
+    ``domain = ["core"]`` — so this is the sanctioned direction rather than a
+    boundary being bent.
+
+    **A function, not a module constant.** Read once at import, the value would
+    freeze before a test could set an environment variable, and every override
+    test would pass or fail on import order.
+    """
+    settings = get_settings()
+    return CreditLadder(
+        starter=settings.credit_starter_grant,
+        unlock=settings.credit_referral_unlock_grant,
+        monthly=settings.credit_monthly_allowance,
+    )
 
 
 def end_of_month(moment: dt.datetime) -> dt.datetime:
@@ -183,10 +219,10 @@ def state_for(balance: int) -> CreditState:
 def allowance_for(balance: int) -> int:
     """What the card divides by — the denominator its progress bar draws.
 
-    ``max(STEADY_STATE, balance)`` — the **ceiling**, not the monthly grant.
+    ``max(ladder.steady_state, balance)`` — the **ceiling**, not the monthly grant.
 
     A fixed denominator is what makes the bar move. Dividing by
-    ``MONTHLY_ALLOWANCE`` made ``balance == allowance`` for every balance at or
+    the monthly grant made ``balance == allowance`` for every balance at or
     above three, so a mentee at the steady state of four saw a full four-segment
     bar, spent a credit, and saw a full *three*-segment bar. The number changed
     and the picture did not.
@@ -200,4 +236,4 @@ def allowance_for(balance: int) -> int:
     the client draws, and a third representation of one fact is the first to
     drift.
     """
-    return max(STEADY_STATE, balance)
+    return max(credit_ladder().steady_state, balance)

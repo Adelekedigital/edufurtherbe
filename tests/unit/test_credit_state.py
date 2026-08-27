@@ -8,11 +8,9 @@ renders is derived from it.
 import pytest
 
 from app.domain.credits import (
-    MONTHLY_ALLOWANCE,
-    STARTER_GRANT,
-    STEADY_STATE,
     CreditState,
     allowance_for,
+    credit_ladder,
     state_for,
 )
 
@@ -54,12 +52,12 @@ class TestStateFor:
 class TestAllowanceFor:
     def test_the_ordinary_case_is_the_steady_state_ceiling(self) -> None:
         for balance in (0, 1, 2, 3, 4):
-            assert allowance_for(balance) == STEADY_STATE
+            assert allowance_for(balance) == credit_ladder().steady_state
 
     def test_the_bar_moves_when_a_credit_is_spent(self) -> None:
         """**The defect this replaced, stated as a test.**
 
-        Dividing by `MONTHLY_ALLOWANCE` made `balance == allowance` for every
+        Dividing by `credit_ladder().monthly` made `balance == allowance` for every
         balance at or above three: a mentee at the steady state of four saw a
         full four-segment bar, spent one, and saw a full *three*-segment bar.
         The number changed and the picture did not.
@@ -69,7 +67,7 @@ class TestAllowanceFor:
         """
         spending = [allowance_for(b) for b in (4, 3, 2, 1, 0)]
 
-        assert spending == [STEADY_STATE] * 5
+        assert spending == [credit_ladder().steady_state] * 5
 
     def test_a_balance_above_the_ceiling_raises_it(self) -> None:
         """It raises rather than clamps: migrated users arrive at five, and a
@@ -79,7 +77,9 @@ class TestAllowanceFor:
         assert allowance_for(7) == 7
 
     def test_the_boundary_is_not_off_by_one(self) -> None:
-        assert allowance_for(STEADY_STATE) == STEADY_STATE
+        assert allowance_for(credit_ladder().steady_state) == credit_ladder().steady_state
 
     def test_the_ceiling_is_the_starter_plus_the_month(self) -> None:
-        assert STEADY_STATE == STARTER_GRANT + MONTHLY_ALLOWANCE == 4
+        assert (
+            credit_ladder().steady_state == credit_ladder().starter + credit_ladder().monthly == 4
+        )

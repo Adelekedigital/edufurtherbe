@@ -14,7 +14,7 @@ import datetime as dt
 
 import pytest
 
-from app.domain.credits import MONTHLY_ALLOWANCE, STARTER_GRANT
+from app.domain.credits import credit_ladder
 from app.domain.transform.credits import (
     ACTIVE_WITHIN,
     CREDIT_FIELD,
@@ -114,8 +114,8 @@ def test_nobody_arrives_above_the_monthly_allowance() -> None:
     )
 
     assert {row.user_bubble_id: row.quantity for row in result.lots} == {
-        "five": MONTHLY_ALLOWANCE,
-        "four": MONTHLY_ALLOWANCE,
+        "five": credit_ladder().monthly,
+        "four": credit_ladder().monthly,
         "three": 3,
         "two": 2,
     }
@@ -124,9 +124,9 @@ def test_nobody_arrives_above_the_monthly_allowance() -> None:
 def test_the_cap_follows_the_allowance_rather_than_a_literal() -> None:
     """Written against the constant, so raising the monthly grant raises what a
     migrated user may carry — including if the allowance becomes configuration."""
-    result = plan(a_record("holder", str(MONTHLY_ALLOWANCE + 4)))
+    result = plan(a_record("holder", str(credit_ladder().monthly + 4)))
 
-    assert result.lots[0].quantity == MONTHLY_ALLOWANCE
+    assert result.lots[0].quantity == credit_ladder().monthly
 
 
 def test_every_lot_shares_one_expiry() -> None:
@@ -172,9 +172,9 @@ def test_the_legacy_total_sums_what_is_loaded_not_what_bubble_said() -> None:
         finished=frozenset({"c"}),
     )
 
-    assert result.legacy_credit_total == MONTHLY_ALLOWANCE + 2
+    assert result.legacy_credit_total == credit_ladder().monthly + 2
     assert len(result.starters) == 1
-    assert STARTER_GRANT == 1
+    assert credit_ladder().starter == 1
 
 
 # --------------------------------------------------------------------------
@@ -216,7 +216,7 @@ def test_an_implausible_balance_is_reported_and_still_loaded() -> None:
     )
 
     assert {row.user_bubble_id for row in result.lots} == {"absurd", "at-the-line"}
-    assert all(row.quantity == MONTHLY_ALLOWANCE for row in result.lots)
+    assert all(row.quantity == credit_ladder().monthly for row in result.lots)
     assert result.implausible == ("absurd",)
     assert result.quarantined == ()
 

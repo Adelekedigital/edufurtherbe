@@ -33,7 +33,8 @@ the entitlement.
 
 NOBODY ARRIVES ABOVE THE MONTHLY ALLOWANCE
 ==========================================
-**A migrated balance is capped at** :data:`~app.domain.credits.MONTHLY_ALLOWANCE`.
+**A migrated balance is capped at** the configured monthly grant
+(:func:`~app.domain.credits.credit_ladder`).
 The legacy grant was five a month; the new one is three, and somebody carrying
 five into a platform that grants three would sit above the ceiling the card can
 draw until they spent the difference.
@@ -67,7 +68,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.domain.bubble import blank_to_none, legacy_anchor
-from app.domain.credits import MONTHLY_ALLOWANCE, end_of_month
+from app.domain.credits import credit_ladder, end_of_month
 
 __all__ = [
     "ACTIVE_WITHIN",
@@ -180,7 +181,7 @@ class CreditPlan:
     #: anybody"*. The schema was ready; this is the writer it was waiting for.
     #:
     #: **They step from five to three.** The legacy grant was five a month,
-    #: unconditionally; the new one is `MONTHLY_ALLOWANCE`. Nothing here changes
+    #: unconditionally; the new one is the configured monthly grant. Nothing changes
     #: the amount — it is simply what the grant gives.
     #:
     #: **Mentee-ness is not checked here.** `grant_monthly_credits` already
@@ -240,7 +241,7 @@ class CreditPlan:
         lines += [f"  QUARANTINED {row.user_bubble_id}: {row.reason}" for row in self.quarantined]
         lines += [
             f"  IMPLAUSIBLE {anchor}: above {PLAUSIBLE_CEILING}, capped to "
-            f"{MONTHLY_ALLOWANCE} and loaded"
+            f"{credit_ladder().monthly} and loaded"
             for anchor in self.implausible
         ]
         return "\n".join(lines)
@@ -288,6 +289,7 @@ def plan_opening_balances(
     pass it writes no unlocks — the cliff, not a silent over-grant. Handing out
     a recurring benefit is the error that is expensive to undo.
     """
+    monthly = credit_ladder().monthly
     expires_at = end_of_month(cutover)
 
     lots: list[OpeningLotRow] = []
@@ -373,7 +375,7 @@ def plan_opening_balances(
             implausible.append(anchor)
 
         # **The cap.** Nobody arrives holding more than a month's grant.
-        lots.append(OpeningLotRow(anchor, min(quantity, MONTHLY_ALLOWANCE), expires_at))
+        lots.append(OpeningLotRow(anchor, min(quantity, monthly), expires_at))
 
     return CreditPlan(
         lots=tuple(lots),
