@@ -14,7 +14,7 @@ import datetime as dt
 
 import pytest
 
-from app.domain.credits import STARTER_GRANT
+from app.domain.credits import MONTHLY_ALLOWANCE, STARTER_GRANT
 from app.domain.transform.credits import (
     ACTIVE_WITHIN,
     CREDIT_FIELD,
@@ -90,11 +90,43 @@ def test_an_unfinished_user_gets_nothing_yet() -> None:
 
 
 def test_a_balance_becomes_a_lot_expiring_end_of_the_cutover_month() -> None:
-    result = plan(a_record("holder", "5"))
+    result = plan(a_record("holder", "2"))
 
     assert len(result.lots) == 1
     lot = result.lots[0]
-    assert (lot.user_bubble_id, lot.quantity, lot.expires_at) == ("holder", 5, EXPIRY)
+    assert (lot.user_bubble_id, lot.quantity, lot.expires_at) == ("holder", 2, EXPIRY)
+
+
+def test_nobody_arrives_above_the_monthly_allowance() -> None:
+    """**The cap.** The legacy grant was five a month and the new one is three;
+    somebody carrying five into a platform that grants three would sit above the
+    ceiling the card can draw until they spent the difference.
+
+    Four is in here deliberately. The instruction named "five or greater", but
+    "four keeps four while five drops to three" is a rule with no reason behind
+    it — so this is a cap, and four is the case that says so.
+    """
+    result = plan(
+        a_record("five", "5"),
+        a_record("four", "4"),
+        a_record("three", "3"),
+        a_record("two", "2"),
+    )
+
+    assert {row.user_bubble_id: row.quantity for row in result.lots} == {
+        "five": MONTHLY_ALLOWANCE,
+        "four": MONTHLY_ALLOWANCE,
+        "three": 3,
+        "two": 2,
+    }
+
+
+def test_the_cap_follows_the_allowance_rather_than_a_literal() -> None:
+    """Written against the constant, so raising the monthly grant raises what a
+    migrated user may carry — including if the allowance becomes configuration."""
+    result = plan(a_record("holder", str(MONTHLY_ALLOWANCE + 4)))
+
+    assert result.lots[0].quantity == MONTHLY_ALLOWANCE
 
 
 def test_every_lot_shares_one_expiry() -> None:
@@ -126,10 +158,13 @@ def test_the_renew_date_reaches_no_field_at_all() -> None:
     assert result.quarantined == ()
 
 
-def test_the_legacy_total_sums_only_the_lots() -> None:
-    """**Starters are not a migrated balance.** Folding them in would make the
-    reconciliation agree only if the legacy sum were wrong by exactly the number
-    of starters."""
+def test_the_legacy_total_sums_what_is_loaded_not_what_bubble_said() -> None:
+    """**Post-cap, and that is what makes the reconciliation hold.**
+
+    The lot sum must equal this number, and the lots are capped — so a total
+    taken from the raw `bookingCredit` would disagree with the table by exactly
+    the amount the cap removed, on every run.
+    """
     result = plan(
         a_record("a", "5"),
         a_record("b", "2"),
@@ -137,7 +172,7 @@ def test_the_legacy_total_sums_only_the_lots() -> None:
         finished=frozenset({"c"}),
     )
 
-    assert result.legacy_credit_total == 7
+    assert result.legacy_credit_total == MONTHLY_ALLOWANCE + 2
     assert len(result.starters) == 1
     assert STARTER_GRANT == 1
 
@@ -167,20 +202,23 @@ def test_a_negative_balance_is_quarantined() -> None:
     assert "negative" in result.quarantined[0].reason
 
 
-def test_a_value_above_the_ceiling_is_quarantined_and_the_ceiling_itself_is_not() -> None:
-    """The tripwire, and its accepting edge.
+def test_an_implausible_balance_is_reported_and_still_loaded() -> None:
+    """**The ceiling stopped being a guard when the cap landed.**
 
-    Asserted as a pair because an off-by-one here is invisible: a transform
-    written `>=` would quarantine a legitimate balance exactly at the ceiling,
-    and the rejecting test alone would still pass.
+    Before it, a corrupt `'500'` would have loaded as five hundred credits. Now
+    it loads as three, like everyone else — so refusing the row would deny
+    somebody their credits over a data problem they did not create. It is
+    reported instead, and the operator looks while Bubble is still writable.
     """
     result = plan(
         a_record("absurd", str(PLAUSIBLE_CEILING + 1)),
         a_record("at-the-line", str(PLAUSIBLE_CEILING)),
     )
 
-    assert [row.user_bubble_id for row in result.lots] == ["at-the-line"]
-    assert [row.user_bubble_id for row in result.quarantined] == ["absurd"]
+    assert {row.user_bubble_id for row in result.lots} == {"absurd", "at-the-line"}
+    assert all(row.quantity == MONTHLY_ALLOWANCE for row in result.lots)
+    assert result.implausible == ("absurd",)
+    assert result.quarantined == ()
 
 
 def test_a_row_with_no_anchor_is_quarantined() -> None:
@@ -194,10 +232,12 @@ def test_a_repeated_anchor_is_quarantined() -> None:
     """The partial unique index would collapse the second into nothing, and the
     reconciliation keys on the same anchor — so it would agree that one lot was
     expected and one landed, for two source rows."""
-    result = plan(a_record("twice", "5"), a_record("twice", "2"))
+    result = plan(a_record("twice", "2"), a_record("twice", "1"))
 
     assert len(result.lots) == 1
-    assert result.lots[0].quantity == 5
+    # The first occurrence wins — under the cap, values below it are the only
+    # ones that can still tell the two apart.
+    assert result.lots[0].quantity == 2
     assert "repeats" in result.quarantined[0].reason
 
 

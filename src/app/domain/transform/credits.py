@@ -31,17 +31,33 @@ what the earning ladder specifies and what the card can truthfully render.
 **``bookingCredit-WFCode`` itself is dropped**, being the artifact rather than
 the entitlement.
 
-THE CEILING IS A TRIPWIRE, NOT A PRODUCT RULE
-=============================================
-:data:`PLAUSIBLE_CEILING` is not something the product says; it is the point past
-which a value is more likely to be corruption than an entitlement. The dev
-maximum is 5 and the steady state is 4, so ten leaves generous headroom while
-still refusing ``'500'``.
+NOBODY ARRIVES ABOVE THE MONTHLY ALLOWANCE
+==========================================
+**A migrated balance is capped at** :data:`~app.domain.credits.MONTHLY_ALLOWANCE`.
+The legacy grant was five a month; the new one is three, and somebody carrying
+five into a platform that grants three would sit above the ceiling the card can
+draw until they spent the difference.
 
-A quarantine here is not a refusal to migrate somebody — it is a row an operator
-looks at *while Bubble is still writable*, which is the whole reason the dry run
-exists. If production legitimately holds a larger balance, the answer is to raise
-this constant deliberately, not to have loaded it silently.
+So five becomes three, and so does anything above five. **Four also becomes
+three**, which the instruction did not name explicitly — the rule is stated as a
+cap rather than as "five or more", because "four keeps four while five drops to
+three" is a rule with no reason behind it. One dev user is affected. Say the word
+and it becomes ``if quantity >= 5`` instead.
+
+Written against the constant rather than a literal ``3``, so a change to the
+allowance moves the cap with it — including if the allowance later becomes
+configuration.
+
+WHAT THE CEILING IS NOW FOR
+===========================
+:data:`PLAUSIBLE_CEILING` was a safety guard: before the cap, a corrupt ``'500'``
+would have loaded as five hundred credits. The cap removes that danger entirely,
+so **it no longer quarantines** — a user whose balance is unreadable-high still
+gets their three, like everyone else, and the anomaly is *reported* so somebody
+can look at the source row while Bubble is still writable.
+
+Refusing them a lot over a data problem they did not create would have been the
+wrong trade once the value could no longer hurt anything.
 """
 
 from __future__ import annotations
@@ -51,7 +67,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.domain.bubble import blank_to_none, legacy_anchor
-from app.domain.credits import end_of_month
+from app.domain.credits import MONTHLY_ALLOWANCE, end_of_month
 
 __all__ = [
     "ACTIVE_WITHIN",
@@ -72,8 +88,9 @@ CREDIT_FIELD = "bookingCredit"
 #: finds the reason it is unused rather than nothing at all.
 RENEW_DATE_FIELD = "bookingCreditRenewDate"
 
-#: Above this, a value is reported rather than loaded. See the module docstring —
-#: this is a tripwire chosen from the dev maximum of 5, not a product rule.
+#: Above this, a value is **reported but still loaded** — capped like every other
+#: balance. Not a product rule: a tripwire chosen from the dev maximum of 5, kept
+#: only so a corrupt export is visible. See the module docstring.
 PLAUSIBLE_CEILING = 10
 
 #: How recently somebody must have used the platform to be grandfathered into
@@ -135,6 +152,10 @@ class CreditPlan:
 
     lots: tuple[OpeningLotRow, ...] = ()
     starters: tuple[StarterRow, ...] = ()
+
+    #: Balances above :data:`PLAUSIBLE_CEILING`. **Loaded anyway**, capped like
+    #: the rest — this is a data-quality signal for the operator, not a refusal.
+    implausible: tuple[str, ...] = ()
 
     #: Users the transform deliberately gives nothing, split by *why*. Two
     #: separate counts rather than one "skipped", because they are different
@@ -212,10 +233,16 @@ class CreditPlan:
             f"starters to grant: {len(self.starters)}",
             f"spent down, nothing owed: {len(self.spent_down)}",
             f"grandfathered into the monthly grant: {len(self.grandfathered)}",
+            f"implausibly large, capped and loaded: {len(self.implausible)}",
             f"never entered credits and unfinished: {len(self.unfinished)}",
             f"quarantined: {len(self.quarantined)}",
         ]
         lines += [f"  QUARANTINED {row.user_bubble_id}: {row.reason}" for row in self.quarantined]
+        lines += [
+            f"  IMPLAUSIBLE {anchor}: above {PLAUSIBLE_CEILING}, capped to "
+            f"{MONTHLY_ALLOWANCE} and loaded"
+            for anchor in self.implausible
+        ]
         return "\n".join(lines)
 
 
@@ -268,6 +295,7 @@ def plan_opening_balances(
     grandfathered: list[str] = []
     spent_down: list[str] = []
     unfinished: list[str] = []
+    implausible: list[str] = []
     quarantined: list[QuarantinedBalance] = []
     source_anchors: list[str] = []
     decided: set[str] = set()
@@ -339,21 +367,19 @@ def plan_opening_balances(
             spent_down.append(anchor)
             continue
         if quantity > PLAUSIBLE_CEILING:
-            quarantined.append(
-                QuarantinedBalance(
-                    anchor,
-                    f"{CREDIT_FIELD} is {quantity}, above the plausible ceiling of "
-                    f"{PLAUSIBLE_CEILING} — look at the source row before raising it",
-                )
-            )
-            continue
+            # Reported, not refused. The cap below makes the value harmless, and
+            # denying somebody their credits over a data problem they did not
+            # create would be the wrong trade.
+            implausible.append(anchor)
 
-        lots.append(OpeningLotRow(anchor, quantity, expires_at))
+        # **The cap.** Nobody arrives holding more than a month's grant.
+        lots.append(OpeningLotRow(anchor, min(quantity, MONTHLY_ALLOWANCE), expires_at))
 
     return CreditPlan(
         lots=tuple(lots),
         starters=tuple(starters),
         grandfathered=tuple(grandfathered),
+        implausible=tuple(implausible),
         spent_down=tuple(spent_down),
         unfinished=tuple(unfinished),
         source_anchors=tuple(source_anchors),

@@ -130,10 +130,10 @@ async def test_a_balance_becomes_a_lot_and_the_row_that_explains_it(
 ) -> None:
     await a_migrated_user(db_engine, "holder")
 
-    result = await run_load(db_engine, [record("holder", "5")])
+    result = await run_load(db_engine, [record("holder", "3")])
 
-    assert await lots_of(db_engine, "holder") == [("opening_balance", 5, 5, EXPIRY)]
-    assert await ledger_of(db_engine, "holder") == [(5, "grant")]
+    assert await lots_of(db_engine, "holder") == [("opening_balance", 3, 3, EXPIRY)]
+    assert await ledger_of(db_engine, "holder") == [(3, "grant")]
     assert result.ok
 
 
@@ -189,7 +189,7 @@ async def test_a_second_run_produces_identical_rows(db_engine: AsyncEngine) -> N
     """
     await a_migrated_user(db_engine, "holder")
     await a_migrated_user(db_engine, "never")
-    records = [record("holder", "5"), record("never", "")]
+    records = [record("holder", "3"), record("never", "")]
     await run_load(db_engine, records)
     before = (await lots_of(db_engine, "holder"), await ledger_of(db_engine, "holder"))
 
@@ -204,9 +204,9 @@ async def test_a_second_run_does_not_double_the_balance(db_engine: AsyncEngine) 
     """The failure the partial index exists to make impossible, asserted on the
     number a user would see rather than on a row count."""
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
 
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
 
     async with db_engine.begin() as conn:
         balance = (
@@ -218,7 +218,7 @@ async def test_a_second_run_does_not_double_the_balance(db_engine: AsyncEngine) 
             )
         ).scalar_one()
 
-    assert balance == 5
+    assert balance == 3
 
 
 async def test_a_rehearsal_that_died_before_the_ledger_is_repaired(
@@ -232,7 +232,7 @@ async def test_a_rehearsal_that_died_before_the_ledger_is_repaired(
     those balances would stay unexplained forever.
     """
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
@@ -242,9 +242,9 @@ async def test_a_rehearsal_that_died_before_the_ledger_is_repaired(
         )
     assert await ledger_of(db_engine, "holder") == []
 
-    result = await run_load(db_engine, [record("holder", "5")])
+    result = await run_load(db_engine, [record("holder", "3")])
 
-    assert await ledger_of(db_engine, "holder") == [(5, "grant")]
+    assert await ledger_of(db_engine, "holder") == [(3, "grant")]
     assert result.unexplained == ()
     assert result.ok
 
@@ -265,7 +265,7 @@ async def test_a_lot_swept_before_its_grant_was_written_is_still_repaired(
     broken narrowing and proved nothing.
     """
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
     async with db_engine.begin() as conn:
         # Erase the grant, then sweep — the interrupted-rehearsal state.
         await conn.execute(
@@ -277,7 +277,7 @@ async def test_a_lot_swept_before_its_grant_was_written_is_still_repaired(
         await conn.execute(
             text(
                 "INSERT INTO credit_transactions (user_id, credit_lot_id, delta, reason) "
-                "SELECT l.user_id, l.id, -5, 'lot_expired' FROM credit_lots l "
+                "SELECT l.user_id, l.id, -3, 'lot_expired' FROM credit_lots l "
                 "JOIN users u ON u.id = l.user_id WHERE u.legacy_bubble_id = 'holder'"
             )
         )
@@ -288,9 +288,9 @@ async def test_a_lot_swept_before_its_grant_was_written_is_still_repaired(
             )
         )
 
-    result = await run_load(db_engine, [record("holder", "5")])
+    result = await run_load(db_engine, [record("holder", "3")])
 
-    assert await ledger_of(db_engine, "holder") == [(-5, "lot_expired"), (5, "grant")]
+    assert await ledger_of(db_engine, "holder") == [(-3, "lot_expired"), (3, "grant")]
     assert result.unexplained == ()
 
 
@@ -301,12 +301,12 @@ async def test_a_lot_that_already_has_its_grant_gets_no_second_one(
     grant on every run — which would inflate the ledger without moving a
     balance, so no `SUM` anywhere would notice."""
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
 
-    await run_load(db_engine, [record("holder", "5")])
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
+    await run_load(db_engine, [record("holder", "3")])
 
-    assert await ledger_of(db_engine, "holder") == [(5, "grant")]
+    assert await ledger_of(db_engine, "holder") == [(3, "grant")]
 
 
 # --------------------------------------------------------------------------
@@ -326,10 +326,10 @@ async def test_the_credit_totals_are_compared_not_just_the_row_counts(
     for anchor in ("a", "b", "c"):
         await a_migrated_user(db_engine, anchor)
 
-    result = await run_load(db_engine, [record("a", "5"), record("b", "2"), record("c", "1")])
+    result = await run_load(db_engine, [record("a", "3"), record("b", "2"), record("c", "1")])
 
-    assert result.legacy_credit_total == 8
-    assert result.loaded_credit_total == 8
+    assert result.legacy_credit_total == 6
+    assert result.loaded_credit_total == 6
     assert result.totals_agree
     assert result.ok
 
@@ -343,7 +343,7 @@ async def test_the_totals_catch_what_the_counts_cannot(db_engine: AsyncEngine) -
     not merely all the checks.
     """
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
@@ -354,13 +354,13 @@ async def test_the_totals_catch_what_the_counts_cannot(db_engine: AsyncEngine) -
 
     async with db_engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        plan = plan_opening_balances([record("holder", "5")], cutover=CUTOVER, finished=finished)
+        plan = plan_opening_balances([record("holder", "3")], cutover=CUTOVER, finished=finished)
         result = await reconcile_credits(conn, plan)
 
     assert all(check.ok for check in result.checks)
     assert result.unexplained == ()
     assert result.unaccounted == ()
-    assert (result.legacy_credit_total, result.loaded_credit_total) == (5, 1)
+    assert (result.legacy_credit_total, result.loaded_credit_total) == (3, 1)
     assert not result.totals_agree
     assert not result.ok
 
@@ -376,18 +376,18 @@ async def test_a_spent_credit_does_not_break_the_reconciliation(
     broken, every time, from the first booking onward.
     """
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
-                "UPDATE credit_lots l SET quantity_remaining = 3 "
+                "UPDATE credit_lots l SET quantity_remaining = 2 "
                 "FROM users u WHERE u.id = l.user_id AND u.legacy_bubble_id = 'holder'"
             )
         )
 
-    result = await run_load(db_engine, [record("holder", "5")])
+    result = await run_load(db_engine, [record("holder", "3")])
 
-    assert (result.legacy_credit_total, result.loaded_credit_total) == (5, 5)
+    assert (result.legacy_credit_total, result.loaded_credit_total) == (3, 3)
     assert result.ok
 
 
@@ -399,12 +399,12 @@ async def test_an_anchor_with_no_user_is_reported_missing_rather_than_raising(
     operator needs, where an exception would only say the load failed."""
     await a_migrated_user(db_engine, "present")
 
-    result = await run_load(db_engine, [record("present", "5"), record("orphan", "3")])
+    result = await run_load(db_engine, [record("present", "3"), record("orphan", "3")])
 
     assert not result.ok
     assert result.checks[0].missing == ("orphan",)
-    assert result.legacy_credit_total == 8
-    assert result.loaded_credit_total == 5
+    assert result.legacy_credit_total == 6
+    assert result.loaded_credit_total == 3
 
 
 async def test_a_lot_with_no_grant_row_is_reported_unexplained(
@@ -414,7 +414,7 @@ async def test_a_lot_with_no_grant_row_is_reported_unexplained(
     run rather than a hope. Asserted by breaking it directly, because a healthy
     load can never produce this state."""
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
@@ -425,7 +425,7 @@ async def test_a_lot_with_no_grant_row_is_reported_unexplained(
 
     async with db_engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        plan = plan_opening_balances([record("holder", "5")], cutover=CUTOVER, finished=finished)
+        plan = plan_opening_balances([record("holder", "3")], cutover=CUTOVER, finished=finished)
         result = await reconcile_credits(conn, plan)
 
     assert result.unexplained == ("holder",)
@@ -478,7 +478,7 @@ async def test_an_unexplained_lot_is_not_hidden_by_a_starter_for_the_same_user(
     unexplained lot was reported as fine.
     """
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
     async with db_engine.begin() as conn:
         # The starter the API would grant, with its ledger row — explained.
         await conn.execute(
@@ -508,7 +508,7 @@ async def test_an_unexplained_lot_is_not_hidden_by_a_starter_for_the_same_user(
 
     async with db_engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        plan = plan_opening_balances([record("holder", "5")], cutover=CUTOVER, finished=finished)
+        plan = plan_opening_balances([record("holder", "3")], cutover=CUTOVER, finished=finished)
         result = await reconcile_credits(conn, plan)
 
     assert result.unexplained == ("holder",)
@@ -521,7 +521,7 @@ async def test_every_source_row_is_accounted_for(db_engine: AsyncEngine) -> None
 
     result = await run_load(
         db_engine,
-        [record("holder", "5"), record("spent", "0"), record("never", ""), record("x", "five")],
+        [record("holder", "3"), record("spent", "0"), record("never", ""), record("x", "five")],
     )
 
     assert result.unaccounted == ()
@@ -555,7 +555,7 @@ async def test_an_active_holder_gets_an_unlock_with_no_referral_behind_it(
     """
     await a_migrated_user(db_engine, "holder")
 
-    result = await run_load(db_engine, [record("holder", "5")])
+    result = await run_load(db_engine, [record("holder", "3")])
 
     assert await unlocks_for(db_engine, "holder") == [None]
     assert result.missing_unlocks == ()
@@ -572,10 +572,10 @@ async def test_a_dormant_holder_gets_no_unlock(db_engine: AsyncEngine) -> None:
     """
     await a_migrated_user(db_engine, "dormant", active=False)
 
-    result = await run_load(db_engine, [record("dormant", "5")])
+    result = await run_load(db_engine, [record("dormant", "3")])
 
     assert await unlocks_for(db_engine, "dormant") == []
-    assert await lots_of(db_engine, "dormant") == [("opening_balance", 5, 5, EXPIRY)]
+    assert await lots_of(db_engine, "dormant") == [("opening_balance", 3, 3, EXPIRY)]
     assert result.ok
 
 
@@ -631,9 +631,9 @@ async def test_a_second_run_writes_one_unlock(db_engine: AsyncEngine) -> None:
     """`uq_referral_unlocks_user_id` makes the rehearsal-then-cutover path a
     no-op, the same property every other write in this loader has."""
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
 
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
 
     assert await unlocks_for(db_engine, "holder") == [None]
 
@@ -664,7 +664,7 @@ async def test_an_unlock_earned_the_ordinary_way_is_not_overwritten(
             {"r": referral},
         )
 
-    await run_load(db_engine, [record("inviter", "5")])
+    await run_load(db_engine, [record("inviter", "3")])
 
     assert await unlocks_for(db_engine, "inviter") == [referral]
 
@@ -674,7 +674,7 @@ async def test_a_missing_unlock_is_reported_by_name(db_engine: AsyncEngine) -> N
     stops renewing. So the reconciliation names them rather than counting them,
     and refuses to commit."""
     await a_migrated_user(db_engine, "holder")
-    await run_load(db_engine, [record("holder", "5")])
+    await run_load(db_engine, [record("holder", "3")])
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
@@ -687,9 +687,27 @@ async def test_a_missing_unlock_is_reported_by_name(db_engine: AsyncEngine) -> N
         finished = await finished_onboarding(conn)
         seen = await recently_seen(conn, since=CUTOVER - ACTIVE_WITHIN)
         plan = plan_opening_balances(
-            [record("holder", "5")], cutover=CUTOVER, finished=finished, seen=seen
+            [record("holder", "3")], cutover=CUTOVER, finished=finished, seen=seen
         )
         result = await reconcile_credits(conn, plan)
 
     assert result.missing_unlocks == ("holder",)
     assert not result.ok
+
+
+async def test_a_legacy_five_arrives_as_three(db_engine: AsyncEngine) -> None:
+    """**The cap, end to end.** The legacy grant was five a month and the new one
+    is three; 29 of 43 dev users sit at five, so this is the modal migrated user.
+
+    Asserted on the lot *and* the ledger row, because the two have to agree: a
+    cap applied to the lot but not to the `grant` that explains it would leave
+    every migrated balance failing its own reconciliation.
+    """
+    await a_migrated_user(db_engine, "legacy")
+
+    result = await run_load(db_engine, [record("legacy", "5")])
+
+    assert await lots_of(db_engine, "legacy") == [("opening_balance", 3, 3, EXPIRY)]
+    assert await ledger_of(db_engine, "legacy") == [(3, "grant")]
+    assert result.legacy_credit_total == 3
+    assert result.ok
