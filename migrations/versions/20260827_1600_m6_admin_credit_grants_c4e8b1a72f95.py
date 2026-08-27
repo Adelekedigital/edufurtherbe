@@ -34,7 +34,11 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c4e8b1a72f95"
-down_revision: str | Sequence[str] | None = "a91e37c4d820"
+# Re-pointed when #218 merged. That stack and this one both branched from
+# `a91e37c4d820`; the review moderation table landed first, so this one fixes its
+# `down_revision` in merge order — Alembic's chain is linear and two heads make
+# `alembic upgrade head` fail outright (how-we-work rule 1).
+down_revision: str | Sequence[str] | None = "b8d4f26a91c3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
