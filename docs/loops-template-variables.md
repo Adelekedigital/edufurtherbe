@@ -206,6 +206,9 @@ With aliases registered, **none of these needs editing in Loops to work**.
 | Session Reminder | `clyao8wx60024h2stw3o2ejh8` | `session_reminder` |
 | Session Last Reminder | `clyaoph2m00xzs2yecm330s2u` | `session_last_reminder` |
 | Session Feedback | `clyarw8rp01mezrlmid7xay2i` | **withdrawn — see below** |
+| Credit: New users update | `cmbn678u30iwz4x0ixz20yfod` | `credits_granted` |
+| Credit renewal | `cmbk0mv700e4yzn0i6ho1h75s` | *(awaiting `credits_renewed`)* |
+| Unused credit | `cmbk13nzg0iv4xw0i90uq1j5s` | *(awaiting `credits_expiring`)* |
 
 `request_accepted` sharing Session Confirmation stops being a decision worth
 agonising over: both resolve the same names, so sharing costs nothing and
@@ -259,3 +262,45 @@ what makes that free rather than three more field lists.
   — fetch the single template — but a template whose variables *changed* rather
   than appeared produces no miss, so something has to re-read it eventually. A
   sweep beside the others in `settle_sessions` is the obvious home.
+
+
+## The credit messages
+
+Three templates, given by the owner on 2026-08-26. Only the first has a producer
+today, and settled decision #21 is why the other two are not yet members: a
+vocabulary does not carry a name for a message nothing sends, and an unmapped
+member is a send that fails at the drain.
+
+**`Credit: New users update` → `credits_granted`.** Fires on **profile
+completion**, not on signup, and that is a correction rather than a preference.
+The starter credit is *granted* on completion — deliberately, because signing up
+is free and finishing a profile is work, which is the whole anti-farming
+property. Sent at signup the message would tell somebody they hold a credit
+before the lot exists.
+
+The copy therefore has to say the credit *has arrived*, not that it is waiting.
+If the intent is instead to prompt a new signup to finish their profile, that is
+a second, different message and it has no producer.
+
+**`Credit renewal` → `credits_renewed`.** The producer is the monthly grant in
+#216, which is open. The member lands with it or after it, never before.
+
+**`Unused credit` → `credits_expiring`.** No producer at all: the reminder job
+is not built. When it is, one hazard is already known — **the starter never
+expires**, so the query must filter `expires_at IS NOT NULL` or it will warn
+people about a credit that is not going anywhere.
+
+## Paste-ready
+
+Everything with a producer today, as one value. `EMAIL_TEMPLATES` **replaces
+wholly** — there is no merge, so adding a message means re-stating them all:
+
+```
+EMAIL_TEMPLATES={"session_booked":"clyamujcw008npblz54cv0oxw","request_accepted":"clyamujcw008npblz54cv0oxw","session_requested":"cmbxizcr3bcvrvs0idfrh81yo","request_declined":"cmbxk5mzj1ldovu0iw608gzga","request_withdrawn":"cmc4umpfe0a5y5e0in8n13flj","session_cancelled":"clyvhvwru002hm392q9y8qeje","mentor_response_reminder":"cmbxjqtne3nt1wu0i5sk5kr2h","session_reminder":"clyao8wx60024h2stw3o2ejh8","session_last_reminder":"clyaoph2m00xzs2yecm330s2u","credits_granted":"cmbn678u30iwz4x0ixz20yfod"}
+```
+
+Still absent, and both have producers already shipped: `review_requested`
+(`sessionReviewRequest`) and `review_received` (`reviewUpdateToMentors`). Only
+their names are recorded anywhere — the ids have never been written down, and
+until they are, a settled session queues a review request that fails at the
+drain.

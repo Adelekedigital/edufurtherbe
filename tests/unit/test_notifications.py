@@ -117,13 +117,19 @@ def test_every_session_message_has_an_audience() -> None:
         if member not in AUDIENCE
         and member
         not in {
-            # The three that are not about a session, so there is no mentor and
+            # The ones that are not about a session, so there is no mentor and
             # mentee for `recipients` to choose between. Each is enqueued with
             # its one recipient named directly.
+            #
+            # Counted rather than described: the comment said "three" while
+            # listing four, which is the shape of a list nobody re-reads.
             Notification.MENTOR_APPROVED,
             Notification.MENTOR_DECLINED,
             Notification.CALENDAR_DISCONNECTED,
             Notification.MENTOR_APPLICATION_RECEIVED,
+            # A credit is granted to a *user*. There is no session it belongs
+            # to and no second party with a stake in it.
+            Notification.CREDITS_GRANTED,
         }
     }
 

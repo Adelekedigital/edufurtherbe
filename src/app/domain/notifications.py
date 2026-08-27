@@ -146,6 +146,23 @@ class Notification(StrEnum):
     #: unmapped member is a send that fails at the drain rather than a message
     #: that goes out sounding like a first ask.
 
+    #: **The starter credit landed.** One credit, and it never expires.
+    #:
+    #: **Fired on profile completion, not on signup**, and that is the whole
+    #: point rather than a scheduling detail: the credit is *granted* on
+    #: completion, so a message sent at signup would tell somebody they have a
+    #: credit before the lot exists. Signing up is free and finishing a profile
+    #: is work — the message has to arrive where the work did.
+    #:
+    #: Only on the call that actually created the lot. A retried completion
+    #: grants nothing, so it says nothing: `grant_starter` returning `None` is
+    #: what the producer branches on.
+    #:
+    #: Not in `AUDIENCE` — like the mentor decisions below, this is about a
+    #: *user* rather than a party to a session, so the producer names its
+    #: recipient rather than deriving one.
+    CREDITS_GRANTED = "credits_granted"
+
     #: Somebody applied to be a mentor. **To the admins, not to a party of a
     #: session**, so `AUDIENCE` does not reach it — the recipients are a *set*
     #: resolved from live grants rather than one person named on a row, which is
