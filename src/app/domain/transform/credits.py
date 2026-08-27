@@ -143,9 +143,15 @@ class CreditPlan:
         """What Bubble said these users held, added up.
 
         The left-hand side of the reconciliation the Definition of Done asks
-        for: this must equal the sum of `quantity_remaining` over the loaded
-        `opening_balance` lots. Starters are deliberately not in it — they are
-        not a migrated balance.
+        for: this must equal the sum of `quantity_granted` over the loaded
+        `opening_balance` lots. **Granted, not remaining** — the two are equal at
+        cutover, but only the former stays true once somebody spends a credit,
+        and a check that starts failing on a correctly migrated database is worse
+        than no check.
+
+        Starters are deliberately not in it: they are not a migrated balance, and
+        folding them in would make the two sides agree only if the legacy total
+        were wrong by exactly the number of starters.
         """
         return sum(row.quantity for row in self.lots)
 
