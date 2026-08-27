@@ -438,6 +438,58 @@ async def test_a_starter_granted_outside_this_phase_is_not_a_surplus(
     assert result.ok
 
 
+async def test_an_unexplained_lot_is_not_hidden_by_a_starter_for_the_same_user(
+    db_engine: AsyncEngine,
+) -> None:
+    """**One user, two lots, and only one of them explained.**
+
+    The loader never gives somebody both — `''` becomes a starter and a number
+    becomes an opening balance, and the two are disjoint. But the API grants a
+    starter to anybody who completes onboarding after the extract, so a migrated
+    user with credits can hold both by the time this runs.
+
+    Built by merging the two reads into one dict keyed on the anchor, this was
+    invisible: the starter's row overwrote the opening balance's and the
+    unexplained lot was reported as fine.
+    """
+    await a_migrated_user(db_engine, "holder")
+    await run_load(db_engine, [record("holder", "5")])
+    async with db_engine.begin() as conn:
+        # The starter the API would grant, with its ledger row — explained.
+        await conn.execute(
+            text(
+                "INSERT INTO credit_lots "
+                "(user_id, source, quantity_granted, quantity_remaining, expires_at) "
+                "SELECT id, 'profile_completed', 1, 1, NULL FROM users "
+                "WHERE legacy_bubble_id = 'holder'"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO credit_transactions (user_id, credit_lot_id, delta, reason) "
+                "SELECT l.user_id, l.id, 1, 'grant' FROM credit_lots l JOIN users u "
+                "ON u.id = l.user_id WHERE u.legacy_bubble_id = 'holder' "
+                "AND l.source = 'profile_completed'"
+            )
+        )
+        # Now break the opening balance's explanation only.
+        await conn.execute(
+            text(
+                "DELETE FROM credit_transactions t USING credit_lots l, users u "
+                "WHERE t.credit_lot_id = l.id AND l.user_id = u.id "
+                "AND u.legacy_bubble_id = 'holder' AND l.source = 'opening_balance'"
+            )
+        )
+
+    async with db_engine.begin() as conn:
+        finished = await finished_onboarding(conn)
+        plan = plan_opening_balances([record("holder", "5")], cutover=CUTOVER, finished=finished)
+        result = await reconcile_credits(conn, plan)
+
+    assert result.unexplained == ("holder",)
+    assert not result.ok
+
+
 async def test_every_source_row_is_accounted_for(db_engine: AsyncEngine) -> None:
     for anchor in ("holder", "spent", "never"):
         await a_migrated_user(db_engine, anchor)

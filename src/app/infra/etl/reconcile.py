@@ -769,10 +769,12 @@ async def reconcile_credits(connection: AsyncConnection, plan: CreditPlan) -> Cr
     """
     expected = {row.user_bubble_id: row.quantity for row in plan.lots}
     result = await connection.execute(text(LOADED_LOTS), {"source": "opening_balance"})
-    actual = {row.anchor: (row.quantity, row.explained) for row in result.mappings()}
+    opening = [(row.anchor, row.quantity, row.explained) for row in result.mappings()]
+    actual = {anchor: quantity for anchor, quantity, _ in opening}
 
     starters = await connection.execute(text(LOADED_LOTS), {"source": "profile_completed"})
-    starter_rows = {row.anchor: (row.quantity, row.explained) for row in starters.mappings()}
+    starter_lots = [(row.anchor, row.explained) for row in starters.mappings()]
+    starter_rows = {anchor for anchor, _ in starter_lots}
     expected_starters = {row.user_bubble_id for row in plan.starters}
 
     accounted = (
@@ -798,17 +800,22 @@ async def reconcile_credits(connection: AsyncConnection, plan: CreditPlan) -> Cr
                 # through the API by somebody who signed up after the extract is
                 # a correct row this phase did not write, and counting every
                 # `profile_completed` lot would report it as a surplus.
-                loaded=len(expected_starters & set(starter_rows)),
-                missing=tuple(sorted(expected_starters - set(starter_rows))),
+                loaded=len(expected_starters & starter_rows),
+                missing=tuple(sorted(expected_starters - starter_rows)),
             ),
         ),
         legacy_credit_total=plan.legacy_credit_total,
-        loaded_credit_total=sum(quantity for quantity, _ in actual.values()),
+        loaded_credit_total=sum(actual.values()),
+        # **A list of both kinds, not a dict merged by anchor.** One user can
+        # hold an `opening_balance` lot *and* a starter — the loader never gives
+        # both, but the API grants a starter to anybody who completes onboarding
+        # after the extract. Merging on the anchor kept one row and dropped the
+        # other, so an unexplained balance could hide behind an explained
+        # starter belonging to the same person.
         unexplained=tuple(
             sorted(
-                anchor
-                for anchor, (_, explained) in {**actual, **starter_rows}.items()
-                if not explained
+                {anchor for anchor, _, explained in opening if not explained}
+                | {anchor for anchor, explained in starter_lots if not explained}
             )
         ),
         unaccounted=_unaccounted_of(plan.source_anchors, tuple(accounted)),
