@@ -781,6 +781,27 @@ CatalogueAdminDep = Annotated[uuid.UUID, Depends(require_admin())]
 #: the first version of this dependency shipped documented as one thing and
 #: behaving as its opposite. The integration test for `limited_access` is what
 #: caught it.
+#:
+#: **The asymmetry with review moderation is deliberate, and worth stating
+#: because the two shipped a day apart.** Deciding a report is `super_admin`
+#: only; crediting somebody is not. Three things separate them:
+#:
+#: *Reversibility.* Upholding a report sets `reviews.deleted_at` and takes
+#: somebody's words off a public profile — the author is not told and cannot
+#: undo it. A credit is a lot with an expiry, visible on the recipient's own
+#: card, and every one is in `admin_credit_grants` with a name against it.
+#:
+#: *Who it lands on.* A moderation decision affects a third party — the mentor
+#: being reviewed — who did not ask for it. A credit affects the person
+#: receiving it, in their favour.
+#:
+#: *When it is needed.* Support work happens at whatever hour somebody is stuck;
+#: a report can wait for the person whose judgement it is. Gating credits on one
+#: role means a mentee wrongly charged waits for that person to wake up.
+#:
+#: Bounded rather than trusted: capped at the monthly grant per action,
+#: soft-deleted recipients refused, and the whole history readable by every
+#: admin — so a grant nobody can justify is one anybody can find.
 CreditAdminDep = Annotated[
     uuid.UUID,
     Depends(require_admin(AdminRole.MENTOR_APPROVAL, AdminRole.LIMITED_ACCESS)),

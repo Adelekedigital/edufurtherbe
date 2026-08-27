@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings, get_settings
+from app.core.config import CREDIT_CEILING, Settings, get_settings
 from app.domain.credits import (
     CreditReason,
     CreditSource,
@@ -360,6 +360,49 @@ class TestTheLadderIsConfigured:
 
         with pytest.raises(ValidationError, match="CREDIT_STARTER_GRANT"):
             Settings(_env_file=None)
+
+    def test_a_value_the_column_cannot_hold_is_refused_at_startup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """**The bound the `gt=0` had no partner for.**
+
+        These settings flow into `credit_lots.quantity_granted`, a `smallint`.
+        Unbounded, `CREDIT_MONTHLY_ALLOWANCE=40000` passed startup and then every
+        monthly grant failed at *insert* — a configuration mistake surfacing on
+        the 1st, inside a scheduled job nobody watches, as a database range error
+        rather than at boot where it belongs.
+
+        The same value caps what an admin may hand out in one action, so
+        unbounded here was unbounded authority too.
+        """
+        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "40000")
+
+        with pytest.raises(ValidationError, match="CREDIT_MONTHLY_ALLOWANCE"):
+            Settings(_env_file=None)
+
+    def test_the_ceiling_itself_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The accepting edge, asserted as a pair with the one above because an
+        off-by-one here is invisible: written `lt` rather than `le`, the
+        rejecting test still passes and a legitimate value at the ceiling is
+        refused."""
+        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", str(CREDIT_CEILING))
+
+        assert Settings(_env_file=None).credit_monthly_allowance == CREDIT_CEILING
+
+    def test_every_rung_is_bounded_not_just_the_monthly_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """All three reach the same `smallint`. Bounding one and not the others
+        would leave the hole open on the two nobody thought about."""
+        for key in (
+            "CREDIT_STARTER_GRANT",
+            "CREDIT_REFERRAL_UNLOCK_GRANT",
+            "CREDIT_MONTHLY_ALLOWANCE",
+        ):
+            monkeypatch.setenv(key, str(CREDIT_CEILING + 1))
+            with pytest.raises(ValidationError, match=key):
+                Settings(_env_file=None)
+            monkeypatch.delenv(key)
 
     def test_a_negative_grant_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A debit wearing a grant's name."""
