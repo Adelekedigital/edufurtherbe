@@ -14,6 +14,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.api.schemas.common import Normalised
+
 __all__ = ["AdminCreditGrantRead", "AdminCreditGrantWrite", "AdminGrantHistoryRead"]
 
 #: How many people one request may credit.
@@ -25,7 +27,7 @@ __all__ = ["AdminCreditGrantRead", "AdminCreditGrantWrite", "AdminGrantHistoryRe
 MAX_RECIPIENTS = 500
 
 
-class AdminCreditGrantWrite(BaseModel):
+class AdminCreditGrantWrite(Normalised):
     """One admin action: this many credits, to these people, optionally why."""
 
     model_config = ConfigDict(extra="forbid")

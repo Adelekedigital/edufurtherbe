@@ -24,13 +24,15 @@ import asyncio
 import datetime as dt
 
 from app.core.config import get_settings
+from app.domain.credits import credit_ladder
 from app.infra.db.credit_grants import grant_monthly_credits, unlocked_mentee_count
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.etl.cli import EXIT_OK, configure_streams
 
 
 async def run(args: argparse.Namespace) -> int:
-    engine = create_database_engine(get_settings())
+    settings = get_settings()
+    engine = create_database_engine(settings)
     try:
         factory = create_session_factory(engine)
         async with factory() as session:
@@ -44,7 +46,10 @@ async def run(args: argparse.Namespace) -> int:
                 print(f"would grant {eligible} unlocked mentee(s)")
                 return EXIT_OK
 
-            granted = await grant_monthly_credits(session, now=now)
+            # The ladder from *these* settings, not from the process cache —
+            # `scripts/` is a composition root, so this is where the choice
+            # belongs (settled decision #44).
+            granted = await grant_monthly_credits(session, now=now, ladder=credit_ladder(settings))
             await session.commit()
             print(f"granted {granted} mentee(s)")
     finally:

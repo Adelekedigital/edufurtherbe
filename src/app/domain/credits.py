@@ -48,7 +48,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.domain.enums import CreditReason, CreditSource, CreditState
 
 __all__ = [
@@ -105,25 +105,30 @@ class CreditLadder:
         return self.starter + self.monthly
 
 
-def credit_ladder() -> CreditLadder:
-    """The configured ladder. **The one reader of these three settings.**
+def credit_ladder(settings: Settings) -> CreditLadder:
+    """The configured ladder, from settings the caller already holds.
 
     Configuration because the economics are still moving, not because the rules
     are: what each grant *means* — the starter never expiring, the unlock being
     once-only, the monthly one needing a referral — stays here in `domain`, and
-    only the sizes come from the environment.
+    only the sizes come from it.
 
-    `get_settings()` is `lru_cache(maxsize=1)`, so this is a dict lookup after
-    the first call and safe on the read path. `domain` may import `core` and
-    nothing else, which `scripts/check_layers.py` states as
-    ``domain = ["core"]`` — so this is the sanctioned direction rather than a
-    boundary being bent.
+    **``settings`` is required, and an earlier version called `get_settings()`
+    itself.** That was wrong twice over. `deps._configured` states the rule:
+    *"`get_settings()` is an `lru_cache` over the environment, so calling it
+    directly means an app built with explicit settings — which is how every test
+    builds one — runs on whatever the process happens to hold instead."* The
+    ladder was the one thing in the credit model that ignored `app.state.settings`,
+    so there was no way to configure it per app.
 
-    **A function, not a module constant.** Read once at import, the value would
-    freeze before a test could set an environment variable, and every override
-    test would pass or fail on import order.
+    And it made `domain` read the environment and open a dotenv file, which is
+    what CLAUDE.md's layout rule means by *"pure Python, no I/O"*.
+    `check_layers` permits the import direction, so no gate would have seen it.
+
+    Taking the object instead puts the decision in the composition roots — the
+    request dependency, the scripts, the ETL — which is where every other piece
+    of configuration in this codebase is already resolved.
     """
-    settings = get_settings()
     return CreditLadder(
         starter=settings.credit_starter_grant,
         unlock=settings.credit_referral_unlock_grant,
@@ -196,13 +201,25 @@ def refund_expiry(original: dt.datetime | None, *, now: dt.datetime) -> dt.datet
     return None if original is None else end_of_month(now)
 
 
-def state_for(balance: int) -> CreditState:
+def state_for(balance: int, ladder: CreditLadder) -> CreditState:
     """Which band a balance falls in.
 
-    **The top band is open-ended** — four *or more*. A late refund can land a
-    credit after the monthly grant, so a table written as ``4..5`` leaves six
-    unclassified, and an unclassified balance renders as an empty card rather
-    than a full one.
+    **The top band is open-ended** — at or above the steady state. A late refund
+    can land a credit after the monthly grant, so a table written as ``4..5``
+    leaves six unclassified, and an unclassified balance renders as an empty card
+    rather than a full one.
+
+    **The bands follow the ladder, and an earlier version hardcoded them.** With
+    ``0 / 1 / <= 3 / > 3`` written as literals they were exactly right while the
+    monthly grant was three and the steady state four — and silently wrong the
+    moment either moved. At a monthly grant of two the steady state is three,
+    `allowance_for` returns a full card at three, and `ON_TRACK` became
+    unreachable in normal operation: the two derived values on the same card
+    disagreed about the same balance.
+
+    Zero and one stay absolute. They are not proportions — *nothing left* and
+    *one left* mean the same thing whatever the grant is, and a "low" band that
+    scaled would call three credits low on a generous ladder.
 
     A negative balance is refused rather than banded. The database makes it
     unrepresentable — ``quantity_remaining >= 0`` — so reaching here means a
@@ -215,12 +232,12 @@ def state_for(balance: int) -> CreditState:
         return CreditState.EXHAUSTED
     if balance == 1:
         return CreditState.LOW
-    if balance <= 3:
+    if balance < ladder.steady_state:
         return CreditState.MODERATE
     return CreditState.ON_TRACK
 
 
-def allowance_for(balance: int) -> int:
+def allowance_for(balance: int, ladder: CreditLadder) -> int:
     """What the card divides by — the denominator its progress bar draws.
 
     ``max(ladder.steady_state, balance)`` — the **ceiling**, not the monthly grant.
@@ -240,4 +257,4 @@ def allowance_for(balance: int) -> int:
     the client draws, and a third representation of one fact is the first to
     drift.
     """
-    return max(credit_ladder().steady_state, balance)
+    return max(ladder.steady_state, balance)

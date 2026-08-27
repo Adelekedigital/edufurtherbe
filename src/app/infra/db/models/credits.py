@@ -369,6 +369,18 @@ class AdminCreditGrant(Base):
         # One authorisation per lot. Two would mean two admins each believing
         # they granted it, and the audit could not say which.
         UniqueConstraint("credit_lot_id", name="uq_admin_credit_grants_credit_lot_id"),
-        # Every grant one admin made, newest first — the question an audit asks.
+        # Every grant one admin made, newest first — the question an audit asks
+        # *second*.
         Index("ix_admin_credit_grants_granted_by", "granted_by", text("created_at DESC")),
+        # **The question it asks first**, and the one the endpoint documents as
+        # its default: every grant, newest first. The index above cannot serve
+        # it — `granted_by` leads, and it omits `id`, so the keyset predicate
+        # `(created_at, id) < (...)` has nothing to seek on. Without this the
+        # unfiltered page seq-scans and sorts an append-only table that only
+        # ever grows, on every request including every cursor continuation.
+        Index(
+            "ix_admin_credit_grants_created",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
     )

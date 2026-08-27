@@ -36,7 +36,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InsufficientCreditError
-from app.domain.credits import credit_ladder, expiry_for, refund_expiry
+from app.domain.credits import CreditLadder, expiry_for, refund_expiry
 from app.domain.enums import CreditReason, CreditSource
 from app.infra.db.credit_store import spendable_now
 from app.infra.db.models.credits import _REFUND_PREDICATE, CreditLot, CreditTransaction
@@ -97,7 +97,9 @@ async def grant(
     return UUID(str(lot_id))
 
 
-async def grant_starter(session: AsyncSession, user_id: UUID) -> UUID | None:
+async def grant_starter(
+    session: AsyncSession, user_id: UUID, *, ladder: CreditLadder
+) -> UUID | None:
     """The onboarding credit. ``None`` when the user already had one.
 
     **Idempotent by construction, not by checking.** The guarantee is
@@ -114,7 +116,7 @@ async def grant_starter(session: AsyncSession, user_id: UUID) -> UUID | None:
     ``PROFILE_COMPLETED`` and it is asserted there, so this passes ``None``
     rather than restating the rule.
     """
-    starter = credit_ladder().starter
+    starter = ladder.starter
     lot_id = (
         await session.execute(
             pg_insert(CreditLot)

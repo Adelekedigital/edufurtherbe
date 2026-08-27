@@ -23,9 +23,16 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.core.config import Settings
+from app.domain.credits import credit_ladder
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
 from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.engine import create_session_factory
+
+#: Built from explicit settings, so this suite is about the code rather than
+#: about the environment the machine happens to hold.
+LADDER = credit_ladder(Settings(_env_file=None))
+
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -197,7 +204,7 @@ async def run_sweep(engine: AsyncEngine, *, now: dt.datetime) -> int:
 async def balance_at(engine: AsyncEngine, user_id: UUID, *, now: dt.datetime) -> int:
     factory = create_session_factory(engine)
     async with factory() as db:
-        return (await get_credit_summary(db, user_id, now=now)).balance
+        return (await get_credit_summary(db, user_id, now=now, ladder=LADDER)).balance
 
 
 # --------------------------------------------------------------------------

@@ -76,6 +76,7 @@ from app.core.errors import (
 from app.domain.assets import AssetKind, object_path
 from app.domain.attendance import join_window
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
+from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole, MeetingProvider, MentorStatusType
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES, process
@@ -497,7 +498,9 @@ AwardsDep = Annotated[list[dict[str, Any]], Depends(target_awards)]
 MentorProfileDep = Annotated[dict[str, Any] | None, Depends(target_mentor_profile)]
 
 
-async def own_attributes(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
+async def own_attributes(
+    user: CurrentUserDep, session: SessionDep, ladder: LadderDep
+) -> dict[str, Any]:
     """The caller's own four collections, for the one-call profile render.
 
     **The same store functions the `/users/{id}/...` dependencies above call.**
@@ -518,7 +521,7 @@ async def own_attributes(user: CurrentUserDep, session: SessionDep) -> dict[str,
         # "has a mentee goal", which the `goal` fetch above already answers, so
         # branching here would mean ordering these two against each other for
         # one `SUM` against an indexed column.
-        "credits": await get_credit_summary(session, user_id),
+        "credits": await get_credit_summary(session, user_id, ladder=ladder),
     }
 
 
@@ -557,7 +560,7 @@ CreatedReferralDep = Annotated[Any, Depends(created_referral)]
 
 
 async def claimed_referral(
-    payload: ReferralClaim, user: CurrentUserDep, session: SessionDep
+    payload: ReferralClaim, user: CurrentUserDep, session: SessionDep, ladder: LadderDep
 ) -> Any:
     """Attach the caller to an invite.
 
@@ -566,7 +569,7 @@ async def claimed_referral(
     claiming is the invitee saying who invited them, and finishing is the work
     that earns the referrer anything.
     """
-    referral = await claim_referral(session, user["id"], payload.code)
+    referral = await claim_referral(session, user["id"], payload.code, ladder=ladder)
     await session.commit()
     return referral
 
@@ -589,7 +592,9 @@ async def own_onboarding(user: CurrentUserDep, session: SessionDep) -> Any:
 OwnOnboardingDep = Annotated[Any, Depends(own_onboarding)]
 
 
-async def completed_onboarding(user: CurrentUserDep, session: SessionDep) -> OnboardingResult:
+async def completed_onboarding(
+    user: CurrentUserDep, session: SessionDep, ladder: LadderDep
+) -> OnboardingResult:
     """Mark the caller's onboarding finished and pay the starter credit.
 
     **One transaction, and the commit is here.** The completion and the grant
@@ -601,7 +606,7 @@ async def completed_onboarding(user: CurrentUserDep, session: SessionDep) -> Onb
     No authorization argument: `CurrentUserDep` *is* the caller, so there is no
     target to check.
     """
-    result = await complete_onboarding(session, user["id"])
+    result = await complete_onboarding(session, user["id"], ladder=ladder)
     await session.commit()
     return result
 
@@ -791,10 +796,23 @@ QueueViewerDep = Annotated[
 ]
 
 
+def _canonical_grant(payload: AdminCreditGrantWrite) -> dict[str, Any]:
+    """The request as the endpoint actually treats it.
+
+    Recipients sorted and deduplicated, because `grant_credits` does both and
+    says so in the OpenAPI description. The fingerprint has to agree with the
+    behaviour, or a legitimate retry looks like a new request.
+    """
+    body = payload.model_dump(mode="json")
+    body["user_ids"] = sorted({str(user_id) for user_id in payload.user_ids})
+    return body
+
+
 async def granted_admin_credits(
     payload: AdminCreditGrantWrite,
     admin_id: CreditAdminDep,
     session: SessionDep,
+    ladder: LadderDep,
     idempotency_key: Annotated[
         str,
         Header(
@@ -820,7 +838,14 @@ async def granted_admin_credits(
         key=idempotency_key,
         user_id=admin_id,
         endpoint=ENDPOINT_ADMIN_CREDITS,
-        request_hash=request_fingerprint(ENDPOINT_ADMIN_CREDITS, payload.model_dump(mode="json")),
+        # **Canonicalised, because the endpoint promises duplicates and order
+        # do not matter.** `request_fingerprint` sorts object keys but leaves
+        # list order alone, so a retry that deduped or reordered its
+        # recipients — which the description tells clients is harmless —
+        # hashes differently and is refused as a *different* request. The
+        # admin then has no way to learn whether the first attempt landed,
+        # which is the one question a retry is asking.
+        request_hash=request_fingerprint(ENDPOINT_ADMIN_CREDITS, _canonical_grant(payload)),
     )
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
@@ -838,6 +863,7 @@ async def granted_admin_credits(
         user_ids=tuple(payload.user_ids),
         quantity=payload.quantity,
         note=payload.note,
+        ladder=ladder,
         now=dt.datetime.now(dt.UTC),
     )
     body = {
@@ -855,7 +881,10 @@ async def granted_admin_credits(
 async def admin_grant_history(
     _: CreditAdminDep,
     session: SessionDep,
-    limit: Annotated[int | None, Query(ge=1, le=200)] = None,
+    # `le=MAX_PAGE_SIZE`, not the `le=200` the offset-paged admin queues use:
+    # this one goes through `clamp_limit`, which caps at 50, so publishing 200
+    # would advertise a bound the endpoint never satisfies.
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
     cursor: Annotated[str | None, Query(description="From a previous `next_cursor`.")] = None,
     granted_by: Annotated[
         uuid.UUID | None,
@@ -1420,6 +1449,21 @@ async def booked_session(
 BookedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(booked_session)]
 
 AdminCreditGrantDep = Annotated[tuple[dict[str, Any], int, bool], Depends(granted_admin_credits)]
+
+
+def _ladder(request: Request) -> CreditLadder:
+    """This app's credit ladder, resolved through the settings seam.
+
+    **One dependency rather than three call sites reaching for configuration.**
+    `credit_ladder` takes a `Settings` precisely so the choice of *which*
+    settings is made here — in the composition root — and `_configured` is the
+    rule for that: an app built with explicit settings must not silently run on
+    the process-wide environment cache.
+    """
+    return credit_ladder(_configured(request))
+
+
+LadderDep = Annotated[CreditLadder, Depends(_ladder)]
 
 
 def _configured(request: Request) -> Settings:

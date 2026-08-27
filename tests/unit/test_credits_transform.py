@@ -14,14 +14,21 @@ import datetime as dt
 
 import pytest
 
+from app.core.config import Settings
 from app.domain.credits import credit_ladder
 from app.domain.transform.credits import (
     ACTIVE_WITHIN,
     CREDIT_FIELD,
-    PLAUSIBLE_CEILING,
     RENEW_DATE_FIELD,
+    implausible_above,
     plan_opening_balances,
 )
+
+#: **Built from explicit settings, not the environment.** These assertions are
+#: about the code; reading the ambient environment and the dotenv file would make
+#: them about the machine the suite runs on — which is how
+#: `test_the_defaults_are_what_shipped` came to assert something it never checked.
+LADDER = credit_ladder(Settings(_env_file=None))
 
 #: Mid-month, so end-of-month is unambiguous and nothing rides on the boundary.
 CUTOVER = dt.datetime(2026, 9, 15, 12, 0, tzinfo=dt.UTC)
@@ -37,7 +44,9 @@ def plan(
     finished: frozenset[str] = frozenset(),
     seen: frozenset[str] = frozenset(),
 ):
-    return plan_opening_balances(list(records), cutover=CUTOVER, finished=finished, seen=seen)
+    return plan_opening_balances(
+        list(records), cutover=CUTOVER, ladder=LADDER, finished=finished, seen=seen
+    )
 
 
 # --------------------------------------------------------------------------
@@ -114,8 +123,8 @@ def test_nobody_arrives_above_the_monthly_allowance() -> None:
     )
 
     assert {row.user_bubble_id: row.quantity for row in result.lots} == {
-        "five": credit_ladder().monthly,
-        "four": credit_ladder().monthly,
+        "five": LADDER.monthly,
+        "four": LADDER.monthly,
         "three": 3,
         "two": 2,
     }
@@ -124,9 +133,9 @@ def test_nobody_arrives_above_the_monthly_allowance() -> None:
 def test_the_cap_follows_the_allowance_rather_than_a_literal() -> None:
     """Written against the constant, so raising the monthly grant raises what a
     migrated user may carry — including if the allowance becomes configuration."""
-    result = plan(a_record("holder", str(credit_ladder().monthly + 4)))
+    result = plan(a_record("holder", str(LADDER.monthly + 4)))
 
-    assert result.lots[0].quantity == credit_ladder().monthly
+    assert result.lots[0].quantity == LADDER.monthly
 
 
 def test_every_lot_shares_one_expiry() -> None:
@@ -172,9 +181,9 @@ def test_the_legacy_total_sums_what_is_loaded_not_what_bubble_said() -> None:
         finished=frozenset({"c"}),
     )
 
-    assert result.legacy_credit_total == credit_ladder().monthly + 2
+    assert result.legacy_credit_total == LADDER.monthly + 2
     assert len(result.starters) == 1
-    assert credit_ladder().starter == 1
+    assert LADDER.starter == 1
 
 
 # --------------------------------------------------------------------------
@@ -211,12 +220,12 @@ def test_an_implausible_balance_is_reported_and_still_loaded() -> None:
     reported instead, and the operator looks while Bubble is still writable.
     """
     result = plan(
-        a_record("absurd", str(PLAUSIBLE_CEILING + 1)),
-        a_record("at-the-line", str(PLAUSIBLE_CEILING)),
+        a_record("absurd", str(implausible_above(LADDER) + 1)),
+        a_record("at-the-line", str(implausible_above(LADDER))),
     )
 
     assert {row.user_bubble_id for row in result.lots} == {"absurd", "at-the-line"}
-    assert all(row.quantity == credit_ladder().monthly for row in result.lots)
+    assert all(row.quantity == LADDER.monthly for row in result.lots)
     assert result.implausible == ("absurd",)
     assert result.quarantined == ()
 

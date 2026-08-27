@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
-from app.domain.credits import credit_ladder
+from app.domain.credits import CreditLadder
 from app.domain.enums import CreditReason, CreditSource
 from app.domain.transform.credits import CreditPlan
 
@@ -210,8 +210,9 @@ class CreditLoader:
     the note `ReviewLoader` already carries.
     """
 
-    def __init__(self, connection: AsyncConnection) -> None:
+    def __init__(self, connection: AsyncConnection, *, ladder: CreditLadder) -> None:
         self._connection = connection
+        self._ladder = ladder
 
     async def load(self, plan: CreditPlan) -> None:
         """Write every lot the plan calls for, then explain each one.
@@ -238,7 +239,7 @@ class CreditLoader:
             await self._connection.execute(
                 text(INSERT_STARTER_LOT),
                 [
-                    {"anchor": row.user_bubble_id, "quantity": credit_ladder().starter}
+                    {"anchor": row.user_bubble_id, "quantity": self._ladder.starter}
                     for row in plan.starters
                 ],
             )

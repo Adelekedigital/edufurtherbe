@@ -37,7 +37,7 @@ from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
-from app.domain.credits import credit_ladder, expiry_for
+from app.domain.credits import CreditLadder, expiry_for
 from app.domain.enums import CreditReason, CreditSource
 from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTransaction
 from app.infra.db.models.user import User
@@ -58,10 +58,6 @@ class AdminGrantResult:
     granted: tuple[UUID, ...]
     unresolved: tuple[UUID, ...]
 
-    @property
-    def quantity_granted(self) -> int:
-        return len(self.granted)
-
 
 async def grant_credits(
     session: AsyncSession,
@@ -71,6 +67,7 @@ async def grant_credits(
     quantity: int,
     note: str | None,
     now: dt.datetime,
+    ladder: CreditLadder,
 ) -> AdminGrantResult:
     """Give ``quantity`` credits to each live user named. Does not commit.
 
@@ -87,7 +84,15 @@ async def grant_credits(
     if now.tzinfo is None:
         raise ValueError("an admin grant needs an aware datetime; a naive one hides its offset")
 
-    ceiling = credit_ladder().monthly
+    if quantity < 1:
+        # The schema's `ge=1` stops this from the API, but the docstring above
+        # positions this function as the rule's home — and a script calling it
+        # with zero would otherwise get
+        # `ck_credit_lots_quantity_granted_positive`, a database error naming a
+        # constraint rather than the argument.
+        raise ValidationError(f"an admin grant must be at least 1 credit; asked for {quantity}")
+
+    ceiling = ladder.monthly
     if quantity > ceiling:
         raise ValidationError(
             f"an admin grant is capped at {ceiling} credits; asked for {quantity}"
@@ -101,8 +106,9 @@ async def grant_credits(
     # inserting blind would raise on the foreign key and lose the whole batch.
     found = set((await session.scalars(select(User.id).where(User.id.in_(user_ids), LIVE))).all())
     # Ordered by the caller's list rather than by the set, so the answer reads
-    # in the order they asked — and so two identical requests produce identical
-    # responses, which is what makes the idempotent replay comparable.
+    # in the order they asked. **Not for the replay** — an earlier comment here
+    # claimed that, and it was wrong: a replay returns the body stored in
+    # `idempotency_keys` verbatim, so ordering plays no part in it.
     resolved = tuple(user_id for user_id in dict.fromkeys(user_ids) if user_id in found)
     unresolved = tuple(user_id for user_id in dict.fromkeys(user_ids) if user_id not in found)
 
@@ -114,7 +120,16 @@ async def grant_credits(
     lots = (
         (
             await session.execute(
-                insert(CreditLot).returning(CreditLot.id, CreditLot.user_id),
+                insert(CreditLot).returning(
+                    CreditLot.id,
+                    CreditLot.user_id,
+                    # **Not decoration.** SQLAlchemy's `insertmanyvalues` does
+                    # not guarantee RETURNING rows correspond to input order
+                    # without this, and the response lists recipients from
+                    # these rows — so an admin could be told they credited a
+                    # different set from the one they asked for.
+                    sort_by_parameter_order=True,
+                ),
                 [
                     {
                         "user_id": user_id,

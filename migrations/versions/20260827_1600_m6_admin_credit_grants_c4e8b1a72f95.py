@@ -105,11 +105,20 @@ def upgrade() -> None:
         sa.UniqueConstraint("credit_lot_id", name=op.f("uq_admin_credit_grants_credit_lot_id")),
     )
 
-    # Every grant one admin made, newest first — the question an audit asks.
+    # Every grant one admin made, newest first — the question an audit asks
+    # *second*.
     op.create_index(
         "ix_admin_credit_grants_granted_by",
         TABLE,
         ["granted_by", sa.text("created_at DESC")],
+    )
+    # **The one it asks first.** The index above leads on `granted_by` and
+    # omits `id`, so the unfiltered page — the endpoint's documented default —
+    # has nothing to seek on and would sort the whole table every request.
+    op.create_index(
+        "ix_admin_credit_grants_created",
+        TABLE,
+        [sa.text("created_at DESC"), sa.text("id DESC")],
     )
 
     # **No `trg_set_updated_at`.** The table is append-only and carries no
@@ -126,6 +135,7 @@ def downgrade() -> None:
     but an unhelpful one: the operator would be told a constraint is violated
     rather than that real grants are in the way.
     """
+    op.drop_index("ix_admin_credit_grants_created", table_name=TABLE)
     op.drop_index("ix_admin_credit_grants_granted_by", table_name=TABLE)
     op.drop_table(TABLE)
 

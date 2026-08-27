@@ -7,7 +7,6 @@ from fastapi import APIRouter, status
 from app.api.deps import CurrentUserDep, OwnAttributesDep
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import CreditsRead, UserProfileRead, UserRead
-from app.domain.credits import credit_ladder
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
@@ -48,7 +47,7 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         'deliberately not "is not a mentor", since a dual-role user is both. '
         "It carries `balance`, `allowance`, `state` and `next_reset_at`; the "
         "client draws the progress bar, so no percentage is published. "
-        f"`allowance` is `max({credit_ladder().steady_state}, balance)` — the steady-state "
+        "`allowance` is `max(steady_state, balance)` — the steady-state "
         "ceiling rather than the monthly grant, so the bar moves when a "
         "credit is spent, and it rises above that when a migrated balance "
         "or a late refund exceeds it. `next_reset_at` is exclusive — the 1st of "

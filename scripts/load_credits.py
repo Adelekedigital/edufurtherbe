@@ -42,6 +42,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import get_settings
+from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.transform.credits import ACTIVE_WITHIN, CreditPlan, plan_opening_balances
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.etl.cli import (
@@ -56,7 +57,9 @@ from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_se
 from app.infra.etl.reconcile import reconcile_credits
 
 
-async def build_plan(directory: Path, *, thing: str, cutover: dt.datetime) -> CreditPlan:
+async def build_plan(
+    directory: Path, *, thing: str, cutover: dt.datetime, ladder: CreditLadder
+) -> CreditPlan:
     """Read the export and the onboarding state, and decide.
 
     The connection is opened read-only in effect — `finished_onboarding` issues
@@ -75,15 +78,15 @@ async def build_plan(directory: Path, *, thing: str, cutover: dt.datetime) -> Cr
         await engine.dispose()
 
     return plan_opening_balances(
-        list(source.read(thing)), cutover=cutover, finished=finished, seen=seen
+        list(source.read(thing)), cutover=cutover, ladder=ladder, finished=finished, seen=seen
     )
 
 
-async def load(plan: CreditPlan) -> None:
+async def load(plan: CreditPlan, *, ladder: CreditLadder) -> None:
     engine = create_async_engine(resolve_async_dsn(get_settings()))
     try:
         async with engine.begin() as connection:
-            await CreditLoader(connection).load(plan)
+            await CreditLoader(connection, ladder=ladder).load(plan)
             # **Inside the transaction, and it raises.** Reconciling after a
             # commit reports a problem it is no longer able to undo.
             result = await reconcile_credits(connection, plan)
@@ -115,7 +118,12 @@ def main() -> int:
     # migration rather than a knob, and is why the runbook schedules the load
     # rather than leaving it to whoever is awake.
     cutover = dt.datetime.now(dt.UTC)
-    plan = asyncio.run(build_plan(args.from_export, thing=args.thing, cutover=cutover))
+    # Resolved once, here, and handed down — `scripts/` is a composition root
+    # and the ladder is configuration, so this is where the choice belongs.
+    ladder = credit_ladder(get_settings())
+    plan = asyncio.run(
+        build_plan(args.from_export, thing=args.thing, cutover=cutover, ladder=ladder)
+    )
     print(plan.report())
 
     # **A run that leaves something for a human is not a clean run.** A
@@ -131,7 +139,7 @@ def main() -> int:
         return EXIT_UNRESOLVED if unresolved else EXIT_OK
 
     try:
-        asyncio.run(load(plan))
+        asyncio.run(load(plan, ladder=ladder))
     except ReconciliationError as exc:
         # `EXIT_REFUSED`, not `EXIT_UNRESOLVED`: the reconciliation raises inside
         # the transaction, so nothing committed and the database is untouched —

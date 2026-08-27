@@ -68,17 +68,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.domain.bubble import blank_to_none, legacy_anchor
-from app.domain.credits import credit_ladder, end_of_month
+from app.domain.credits import CreditLadder, end_of_month
 
 __all__ = [
     "ACTIVE_WITHIN",
     "CREDIT_FIELD",
-    "PLAUSIBLE_CEILING",
+    "IMPLAUSIBLE_MULTIPLE",
     "RENEW_DATE_FIELD",
     "CreditPlan",
     "OpeningLotRow",
     "QuarantinedBalance",
     "StarterRow",
+    "implausible_above",
     "plan_opening_balances",
 ]
 
@@ -89,10 +90,29 @@ CREDIT_FIELD = "bookingCredit"
 #: finds the reason it is unused rather than nothing at all.
 RENEW_DATE_FIELD = "bookingCreditRenewDate"
 
-#: Above this, a value is **reported but still loaded** — capped like every other
-#: balance. Not a product rule: a tripwire chosen from the dev maximum of 5, kept
-#: only so a corrupt export is visible. See the module docstring.
-PLAUSIBLE_CEILING = 10
+#: How many times the monthly grant a legacy balance may be before it is worth
+#: somebody looking at it. **Relative to the ladder, and it used to be a literal
+#: 10.**
+#:
+#: That literal was chosen when the monthly grant was fixed at three, and it
+#: stopped meaning anything once the grant became configuration: at a grant of
+#: twelve every balance between eleven and twelve was reported as implausible
+#: *and* loaded uncapped, a report line contradicting itself; at a grant of one
+#: the two were an order of magnitude apart and the signal was noise.
+#:
+#: Three, so the default is nine — near the ten it replaces, and still well above
+#: the dev maximum of five.
+IMPLAUSIBLE_MULTIPLE = 3
+
+
+def implausible_above(ladder: CreditLadder) -> int:
+    """The point past which a legacy balance is reported.
+
+    Not a refusal: the cap makes a large value harmless, so this only decides
+    what an operator is told to go and look at.
+    """
+    return ladder.monthly * IMPLAUSIBLE_MULTIPLE
+
 
 #: How recently somebody must have used the platform to be grandfathered into
 #: the recurring grant. **Twelve months, and this is the number to change.**
@@ -198,6 +218,14 @@ class CreditPlan:
 
     quarantined: tuple[QuarantinedBalance, ...] = ()
 
+    #: What an over-cap balance was reduced to, carried so `report()` can say so
+    #: without reaching for configuration a plan has no business holding.
+    capped_to: int = 0
+
+    #: The threshold that classified them, carried for the same reason as
+    #: `capped_to`: a plan reports on itself without reaching for configuration.
+    implausible_above: int = 0
+
     @property
     def source_rows(self) -> int:
         return len(self.source_anchors)
@@ -240,8 +268,8 @@ class CreditPlan:
         ]
         lines += [f"  QUARANTINED {row.user_bubble_id}: {row.reason}" for row in self.quarantined]
         lines += [
-            f"  IMPLAUSIBLE {anchor}: above {PLAUSIBLE_CEILING}, capped to "
-            f"{credit_ladder().monthly} and loaded"
+            f"  IMPLAUSIBLE {anchor}: above {self.implausible_above}, capped to "
+            f"{self.capped_to} and loaded"
             for anchor in self.implausible
         ]
         return "\n".join(lines)
@@ -262,6 +290,7 @@ def plan_opening_balances(
     records: list[dict[str, Any]],
     *,
     cutover: dt.datetime,
+    ladder: CreditLadder,
     finished: frozenset[str],
     seen: frozenset[str] = frozenset(),
 ) -> CreditPlan:
@@ -289,7 +318,7 @@ def plan_opening_balances(
     pass it writes no unlocks — the cliff, not a silent over-grant. Handing out
     a recurring benefit is the error that is expensive to undo.
     """
-    monthly = credit_ladder().monthly
+    monthly = ladder.monthly
     expires_at = end_of_month(cutover)
 
     lots: list[OpeningLotRow] = []
@@ -368,7 +397,7 @@ def plan_opening_balances(
             # is a reason not to keep granting.
             spent_down.append(anchor)
             continue
-        if quantity > PLAUSIBLE_CEILING:
+        if quantity > implausible_above(ladder):
             # Reported, not refused. The cap below makes the value harmless, and
             # denying somebody their credits over a data problem they did not
             # create would be the wrong trade.
@@ -385,5 +414,7 @@ def plan_opening_balances(
         spent_down=tuple(spent_down),
         unfinished=tuple(unfinished),
         source_anchors=tuple(source_anchors),
+        capped_to=monthly,
+        implausible_above=implausible_above(ladder),
         quarantined=tuple(quarantined),
     )

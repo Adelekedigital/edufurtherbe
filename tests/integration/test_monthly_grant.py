@@ -16,8 +16,15 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.core.config import Settings
+from app.domain.credits import credit_ladder
 from app.infra.db.credit_grants import grant_monthly_credits
 from app.infra.db.engine import create_session_factory
+
+#: Built from explicit settings, so this suite is about the code rather than
+#: about the environment the machine happens to hold.
+LADDER = credit_ladder(Settings(_env_file=None))
+
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -93,7 +100,7 @@ async def ledger_of(engine: AsyncEngine, user_id: UUID) -> list[tuple[int, str]]
 async def run_grant(engine: AsyncEngine, *, now: dt.datetime) -> int:
     factory = create_session_factory(engine)
     async with factory() as db:
-        granted = await grant_monthly_credits(db, now=now)
+        granted = await grant_monthly_credits(db, now=now, ladder=LADDER)
         await db.commit()
         return granted
 

@@ -29,6 +29,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import OnboardingIncompleteError
+from app.domain.credits import CreditLadder
 from app.domain.notifications import Notification
 from app.domain.onboarding import ProfileEvidence, may_complete_onboarding
 from app.infra.db.credit_writer import grant_starter
@@ -80,7 +81,9 @@ async def _evidence(session: AsyncSession, user_id: UUID) -> ProfileEvidence:
     )
 
 
-async def complete_onboarding(session: AsyncSession, user_id: UUID) -> OnboardingResult:
+async def complete_onboarding(
+    session: AsyncSession, user_id: UUID, *, ladder: CreditLadder
+) -> OnboardingResult:
     """Mark onboarding finished and grant the starter. Does not commit.
 
     Raises :class:`OnboardingIncompleteError` when the profile does not meet the
@@ -106,7 +109,7 @@ async def complete_onboarding(session: AsyncSession, user_id: UUID) -> Onboardin
         )
     ).one()
 
-    granted = await grant_starter(session, user_id) is not None
+    granted = await grant_starter(session, user_id, ladder=ladder) is not None
 
     if granted:
         # **In the granting transaction**, so a message about a credit that
@@ -131,6 +134,6 @@ async def complete_onboarding(session: AsyncSession, user_id: UUID) -> Onboardin
     # Not a separate call after the commit: that leaves a state where the
     # invitee is complete, so a retry is a no-op, and the referrer's credits are
     # missing with nothing that would ever revisit it.
-    await qualify_invitee(session, user_id)
+    await qualify_invitee(session, user_id, ladder=ladder)
 
     return OnboardingResult(completed_at=row.completed_at, last_step=row.last_step, granted=granted)

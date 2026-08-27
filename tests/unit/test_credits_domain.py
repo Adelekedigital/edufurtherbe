@@ -18,16 +18,22 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.domain.credits import (
     CreditReason,
     CreditSource,
+    CreditState,
     allowance_for,
     credit_ladder,
     end_of_month,
     expiry_for,
     refund_expiry,
+    state_for,
 )
+
+#: Built from explicit settings, so these assertions are about the code rather
+#: than about the machine the suite runs on.
+LADDER = credit_ladder(Settings(_env_file=None))
 
 
 class TestVocabularies:
@@ -103,7 +109,7 @@ class TestQuantities:
         holds them equal. Raise the allowance to four and a chained assertion
         goes red for a reason that is not the bug.
         """
-        ladder = credit_ladder()
+        ladder = LADDER
         assert ladder.starter == 1
         assert ladder.unlock == 2
         assert ladder.monthly == 3
@@ -115,7 +121,7 @@ class TestQuantities:
         the allowance alone — the card would otherwise show "4 credits left"
         beside a bar that cannot draw four.
         """
-        ladder = credit_ladder()
+        ladder = LADDER
         assert ladder.starter + ladder.monthly == ladder.steady_state == 4
 
 
@@ -260,58 +266,104 @@ def fresh_settings() -> Iterator[None]:
 
 @pytest.mark.usefixtures("fresh_settings")
 class TestTheLadderIsConfigured:
-    """The sizes come from the environment; the rules do not.
+    """The sizes come from settings; the rules do not.
 
     **What is configurable and what is not is the point of this class.** How much
     a starter is worth can move; that it never expires cannot, because
     `NON_EXPIRING` is a statement about what the credit is *for* rather than
     about its size.
+
+    Every test here builds `Settings` directly. `credit_ladder` takes the object
+    precisely so this is possible — an earlier version called `get_settings()`
+    itself, and these tests had to monkeypatch the environment and clear an
+    `lru_cache` to say anything at all. `_env_file=None` isolates them from the
+    dotenv file, which is the same isolation the test app uses; environment
+    variables are still read, so the `CREDIT_*` aliases are genuinely exercised.
     """
 
-    def test_the_defaults_are_what_shipped(self) -> None:
+    def test_the_defaults_are_what_shipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An unset environment behaves exactly as before this became
-        configuration — which is what makes the change safe to deploy ahead of
-        deciding any new numbers."""
-        ladder = credit_ladder()
+        configuration — which is what makes it safe to deploy ahead of deciding
+        any new numbers.
+
+        **The keys are unset rather than merely unmentioned.** An earlier version
+        asserted this while reading the ambient environment and the dotenv file,
+        so it was a statement about the machine: green on CI, red on a developer
+        box holding `CREDIT_MONTHLY_ALLOWANCE=5`, and never once exercising the
+        defaults it names.
+        """
+        for key in (
+            "CREDIT_STARTER_GRANT",
+            "CREDIT_REFERRAL_UNLOCK_GRANT",
+            "CREDIT_MONTHLY_ALLOWANCE",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        ladder = credit_ladder(Settings(_env_file=None))
 
         assert (ladder.starter, ladder.unlock, ladder.monthly) == (1, 2, 3)
 
     def test_an_override_moves_the_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The whole reason for the change. `get_settings` is `lru_cache`d, so a
-        test that sets the variable without clearing the cache reads the value
-        from whichever test ran first — which is the failure this clears for."""
+        """The whole reason for the change, and it exercises the `CREDIT_*`
+        aliases rather than the field names."""
         monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "5")
         monkeypatch.setenv("CREDIT_STARTER_GRANT", "2")
-        get_settings.cache_clear()
 
-        ladder = credit_ladder()
+        ladder = credit_ladder(Settings(_env_file=None))
 
         assert (ladder.starter, ladder.monthly) == (2, 5)
 
-    def test_the_steady_state_follows_the_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """**The relationship, not the number.** The card's denominator is the
-        starter plus the monthly grant, so raising either has to move the bar —
-        otherwise a mentee sits above a ceiling that never grew."""
-        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "5")
-        get_settings.cache_clear()
+    def test_the_steady_state_and_the_bands_follow_the_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """**The relationship, not the number**, and both derived values together.
 
-        assert credit_ladder().steady_state == 1 + 5
-        assert allowance_for(4) == 6
+        The card shows an allowance and a state for one balance. With the bands
+        hardcoded at `<= 3` they agreed only while the monthly grant was three:
+        at a grant of two the steady state is three, `allowance_for(3)` returns a
+        full card, and `state_for(3)` said `moderate` — the same balance
+        described as full and as middling.
+        """
+        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "5")
+        ladder = credit_ladder(Settings(_env_file=None))
+
+        assert ladder.steady_state == 1 + 5
+        assert allowance_for(4, ladder) == 6
+        # Four is below the steady state of six, so it is no longer the top band.
+        assert state_for(4, ladder) is CreditState.MODERATE
+        assert state_for(6, ladder) is CreditState.ON_TRACK
+
+    def test_zero_and_one_stay_absolute(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """They are not proportions. *Nothing left* and *one left* mean the same
+        thing whatever the grant is, and a `low` band that scaled would call
+        three credits low on a generous ladder."""
+        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "10")
+        ladder = credit_ladder(Settings(_env_file=None))
+
+        assert state_for(0, ladder) is CreditState.EXHAUSTED
+        assert state_for(1, ladder) is CreditState.LOW
 
     def test_a_grant_of_zero_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`ck_credit_lots_quantity_granted_positive` would refuse the lot at the
-        database; refusing it at startup names the setting instead of the
-        constraint, and fails before anybody is granted nothing."""
-        monkeypatch.setenv("CREDIT_STARTER_GRANT", "0")
-        get_settings.cache_clear()
+        database; refusing it here names the setting instead of the constraint,
+        and fails before anybody is granted nothing.
 
-        with pytest.raises(ValidationError):
-            credit_ladder()
+        **`match=` is the point.** Without it any Settings validator satisfies
+        this — including the two unrelated ones that fire on a stale
+        `EDUFURTHER_*` variable or mismatched Supabase credentials — so the test
+        would pass with `gt=0` deleted from all three fields.
+
+        Matched on the **alias**, `CREDIT_STARTER_GRANT`, because that is the
+        name pydantic puts in the message and the one an operator actually sets.
+        """
+        monkeypatch.setenv("CREDIT_STARTER_GRANT", "0")
+
+        with pytest.raises(ValidationError, match="CREDIT_STARTER_GRANT"):
+            Settings(_env_file=None)
 
     def test_a_negative_grant_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A debit wearing a grant's name."""
         monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "-3")
-        get_settings.cache_clear()
 
-        with pytest.raises(ValidationError):
-            credit_ladder()
+        with pytest.raises(ValidationError, match="CREDIT_MONTHLY_ALLOWANCE"):
+            Settings(_env_file=None)

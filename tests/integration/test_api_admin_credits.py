@@ -21,9 +21,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.domain.credits import credit_ladder
-from conftest import api_token, bearer
+from conftest import api_token, bearer, build_api_app
+
+#: Built from explicit settings, so these assertions are about the code
+#: rather than about the machine the suite runs on.
+LADDER = credit_ladder(Settings(_env_file=None))
+
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -340,30 +345,39 @@ async def test_an_over_cap_quantity_is_refused_not_clamped(
     await a_user(db_engine, auth, role="super_admin")
     target = await a_user(db_engine)
 
-    response = await grant(api_client, auth, [target], quantity=credit_ladder().monthly + 1)
+    response = await grant(api_client, auth, [target], quantity=LADDER.monthly + 1)
 
     assert response.status_code == 422
     assert await lots_of(db_engine, target) == []
 
 
 async def test_the_cap_is_the_configured_monthly_grant(
-    db_engine: AsyncEngine, api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    db_engine: AsyncEngine, api_storage: Any
 ) -> None:
     """**Follows the ladder rather than a literal.** Raising the monthly grant
-    raises what an admin may hand out in one action, and the two cannot drift."""
-    monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "9")
-    get_settings.cache_clear()
-    try:
+    raises what an admin may hand out in one action, and the two cannot drift.
+
+    **Builds its own app**, because that is now the only way to change what a
+    running app believes. `_configured` resolves through `app.state.settings`, so
+    setting an environment variable no longer reaches it — which is the seam
+    working correctly, and is the whole reason `credit_ladder` takes a `Settings`
+    rather than fetching one. An earlier version monkeypatched the environment
+    and cleared an `lru_cache`, and only worked because the ladder was reaching
+    around the app.
+    """
+    app = build_api_app(
+        db_engine, api_storage, Settings(_env_file=None, credit_monthly_allowance=9)
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         auth = uuid4()
         await a_user(db_engine, auth, role="super_admin")
         target = await a_user(db_engine)
 
-        response = await grant(api_client, auth, [target], quantity=9)
+        response = await grant(client, auth, [target], quantity=9)
 
         assert response.status_code == 200
         assert (await lots_of(db_engine, target))[0][1] == 9
-    finally:
-        get_settings.cache_clear()
 
 
 async def test_a_replayed_key_grants_once(

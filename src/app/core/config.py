@@ -112,7 +112,7 @@ class Settings(BaseSettings):
     #
     # **Configuration because the economics are still moving**, not because the
     # rules are. What each grant *means* stays in `domain/credits.py`; these are
-    # only the sizes, and `credit_ladder()` there is the single reader.
+    # only the sizes, and `credit_ladder(settings)` there is the single reader.
     #
     # Named `CREDIT_*` in the environment rather than a bare `MONTHLY_ALLOWANCE`:
     # these sit beside a platform's worth of other variables, and a name that
