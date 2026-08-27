@@ -127,9 +127,12 @@ def test_every_session_message_has_an_audience() -> None:
             Notification.MENTOR_DECLINED,
             Notification.CALENDAR_DISCONNECTED,
             Notification.MENTOR_APPLICATION_RECEIVED,
-            # A credit is granted to a *user*. There is no session it belongs
-            # to and no second party with a stake in it.
+            # A credit belongs to a *user*. There is no session it hangs off
+            # and no second party with a stake in it, so each of these is
+            # enqueued with its one recipient named directly.
             Notification.CREDITS_GRANTED,
+            Notification.CREDITS_RENEWED,
+            Notification.CREDITS_EXPIRING,
         }
     }
 
