@@ -6,21 +6,24 @@ card, the booking gate in PR 6, and the monthly grant in PR 8 all need "what is
 this user's spendable balance right now", and three hand-rolled `SUM`s with
 three hand-rolled expiry predicates is the duplication non-negotiable #8 names.
 
-THE EXPIRY PREDICATE LIVES IN TWO PLACES ON PURPOSE
-===================================================
-``expires_at IS NULL OR expires_at > now()`` is here, and the expiry job in
-PR 9 writes a ``lot_expired`` row for the same lots. **Both, deliberately.**
+TWO MECHANISMS, ONE PREDICATE
+=============================
+``expires_at IS NULL OR expires_at > now()`` is here, and ``credit_expiry``
+writes a ``lot_expired`` row for the same lots. **Both mechanisms, deliberately.**
 
-If only the job decided, a night it did not run would leave dead credits
+If only the sweep decided, a night it did not run would leave dead credits
 spendable — the balance would be *wrong*, and a user could book a session with a
 credit that expired last week. If only the read decided, a balance would drop
 with no ledger row saying why, which is the whole of D8's argument against a
 counter.
 
-Two representations of one rule is #8, so this is a real cost and it is paid
-knowingly: the exception is that the two answer *different questions* — what is
-spendable now, and what happened. PR 9 owes a test pinning them together, and
-until that test exists this comment is the only thing holding them.
+**They are not two representations of the rule, though**, which is what this
+docstring used to promise a test for. The sweep asks for
+``not_(spendable_now(moment))`` — this expression object, negated — so the
+boundary exists once and the two cannot drift apart over it. Non-negotiable #8
+prefers extraction to pinned copies; this is the extraction, and the pinning
+test in ``test_credit_expiry.py`` now asserts the *behaviour* rather than
+guarding a second copy.
 
 NULL IS NOT ZERO, AND ``SUM`` RETURNS NULL
 ==========================================
@@ -49,12 +52,21 @@ __all__ = ["CreditSummary", "get_credit_summary", "spendable_now"]
 def spendable_now(moment: dt.datetime) -> ColumnElement[bool]:
     """Whether a lot can be spent at ``moment``.
 
-    **The one copy.** This module's docstring names the three consumers it
-    exists to keep honest — the card, the booking gate, and the monthly grant —
-    and the booking gate was hand-rolling its own version of this clause. That
-    is the second representation non-negotiable #8 names, and it is the kind
-    that drifts silently: a spend disagreeing with the balance lets somebody
-    book with a credit the card already stopped showing them.
+    **The one copy**, and now four consumers rather than three — the card, the
+    booking gate, the monthly grant, and the expiry sweep, which takes this
+    negated. The booking gate was hand-rolling its own version of this clause.
+    That is the second representation non-negotiable #8 names, and it is the
+    kind that drifts silently: a spend disagreeing with the balance lets
+    somebody book with a credit the card already stopped showing them.
+
+    **The sweep is why the ``IS NULL`` disjunct has to come first and stay a
+    disjunct.** ``NOT (expires_at IS NULL OR expires_at > moment)`` is ``FALSE``
+    for a never-expiring lot, so the sweep cannot touch one. Rewritten as the
+    equivalent-looking ``coalesce(expires_at, 'infinity') > moment`` it would
+    still read correctly here and still behave correctly negated — but written
+    as a bare ``expires_at > moment`` with the null case "handled elsewhere",
+    the negation becomes ``expires_at <= moment``, which is ``NULL`` for the
+    starter and therefore false *by accident* rather than by construction.
 
     An expression rather than a SQL string, deliberately. A string has to be
     interpolated into the statement, which is the f-string-into-SQL shape the

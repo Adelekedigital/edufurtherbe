@@ -168,6 +168,33 @@ onboarding — complete on the 28th and it lives three days.
     balance wrong. Two representations of one rule is #8, so the pin is not
     optional.
 
+    **Built 2026-08-26, and the #8 cost was not paid after all.** The sweep asks
+    for `not_(spendable_now(moment))` — the balance read's own expression,
+    negated — so there is one boundary rather than two copies of it, which is
+    the resolution #8 actually prefers. The pinning test remains and now asserts
+    the *behaviour*: at `23:59:59.999999` the card shows the credit and the
+    sweep leaves it; at midnight the card shows zero and the sweep takes it.
+
+    Two things the negation buys that a hand-written `expires_at <= now()` does
+    not. `NOT (expires_at IS NULL OR expires_at > moment)` is `FALSE` for a
+    never-expiring lot, so a starter is unreachable *by construction*; written
+    the obvious way it is `NULL`, which a `WHERE` treats as false — correct by
+    accident, and one `NOT` away from expiring every starter on the platform.
+    And it makes the schedule's direction safe: running on 31 August finds
+    nothing, because the sweep asks the same question the card does.
+
+    **It does not filter `LIVE`, where the monthly grant does.** Granting to
+    somebody who is gone is a favour to nobody; expiry is a fact about a lot and
+    is true either way. Skipping them would leave un-swept lots behind a
+    restored account whose ledger could never explain the gap (ADR 0013).
+
+    **`FOR UPDATE` before the read**, which is not defensive. Readers do not
+    block on writers under MVCC, so the sweep would read `quantity_remaining = 3`
+    from a snapshot while another transaction held the row at 2, then block on
+    its own `UPDATE`, succeed, and append a row claiming three credits expired
+    when two did — a ledger that no longer reconciles against the lot it
+    describes, with nothing failing and nothing logged.
+
 18. **`/me` carries `balance`, `allowance`, `next_reset_at` and `state`.**
     `allowance` is `max(MONTHLY_ALLOWANCE, balance)` — a late refund can push a
     balance above the allowance, and the card would otherwise show "4 credits
@@ -284,7 +311,8 @@ deferred cost columns. ADR 0026 took the same shape for the review scale.
 - **The ETL is idempotent** — a second run produces identical rows
 - Reconciliation: one opening lot per user with a non-zero `bookingCredit`, and
   the lot sum equals the legacy sum
-- The `expires_at` read filter and the expiry job agree, pinned by a test (#8)
+- ~~The `expires_at` read filter and the expiry job agree, pinned by a test (#8)~~
+  **Met, and better than asked:** one predicate rather than two pinned copies
 - A migrated user's `/me` shows a balance and a `next_reset_at` that agree with
   the card
 - Watch every test fail first · no threshold lowered · `security-checker` run,
@@ -298,7 +326,7 @@ deferred cost columns. ADR 0026 took the same shape for the review scale.
 |---|---|---|
 | 1 | **No invite UI.** The mechanism the earning model turns on has no screen | reachability, not PR 5 |
 | 2 | Production `bookingCredit` values as a Data-tab export — the same gate M5a's reviews had | PR 10's rehearsal |
-| 3 | Does the expiry job's first run sweep migrated lots, or grandfather them? Carried from 2026-08-18 | PR 9 |
+| ~~3~~ | ~~Does the expiry job's first run sweep migrated lots, or grandfather them?~~ **Answered 2026-08-26: no grandfather clause.** The sweep takes whatever the read already refuses. Grandfathering in the *job* would leave `quantity_remaining` standing on a lot the balance has already stopped counting, and the ledger would never explain the drop — the one thing D8 built it to prevent. If an opening-balance lot should outlive cutover, PR 10 writes the expiry it means | closed |
 | 4 | Ships as one phase or splits after PR 6? | sequencing |
 
 ---
