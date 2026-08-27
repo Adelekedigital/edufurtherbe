@@ -21,12 +21,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.domain.transform.credits import ACTIVE_WITHIN, plan_opening_balances
-from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_active
+from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_seen
 from app.infra.etl.reconcile import reconcile_credits
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 CUTOVER = dt.datetime(2026, 9, 15, 12, 0, tzinfo=dt.UTC)
+#: When a migrated user registered in Bubble — long before any window.
+ANCIENT = dt.datetime(2024, 1, 1, tzinfo=dt.UTC)
 EXPIRY = dt.datetime(2026, 10, 1, tzinfo=dt.UTC)
 
 
@@ -35,7 +37,7 @@ def record(anchor: str, credit: str) -> dict[str, Any]:
 
 
 async def a_migrated_user(
-    engine: AsyncEngine, anchor: str, *, finished: bool = True, active: bool = True
+    engine: AsyncEngine, anchor: str, *, finished: bool = True, active: bool | None = True
 ) -> None:
     """A user as `load_identity` would leave them, with their onboarding row.
 
@@ -48,16 +50,28 @@ async def a_migrated_user(
             await conn.execute(
                 text(
                     "INSERT INTO users (email, legacy_bubble_id, primary_role, timezone, "
-                    "last_active_at) VALUES (:e, :a, 'mentee', 'Africa/Lagos', :la) "
-                    "RETURNING id"
+                    "last_active_at, created_at) "
+                    "VALUES (:e, :a, 'mentee', 'Africa/Lagos', :la, :ca) RETURNING id"
                 ),
                 {
                     "e": f"{anchor}@example.com",
                     "a": anchor,
-                    # Inside the window by a month, or well outside it.
-                    "la": (CUTOVER - dt.timedelta(days=30))
-                    if active
-                    else (CUTOVER - ACTIVE_WITHIN - dt.timedelta(days=30)),
+                    # True: active inside the window. False: long dormant.
+                    # None: never active at all — the signup-only case.
+                    "la": None
+                    if active is None
+                    else (
+                        (CUTOVER - dt.timedelta(days=30))
+                        if active
+                        else (CUTOVER - ACTIVE_WITHIN - dt.timedelta(days=30))
+                    ),
+                    # **Written explicitly, and the dormant case is why.**
+                    # `created_at` defaults to `now()`, which is inside every
+                    # window — so a fixture that leaves it alone makes each
+                    # user look like a fresh signup and the second half of the
+                    # disjunction rescues everybody. A migrated user registered
+                    # in Bubble years ago; only the newcomer is recent.
+                    "ca": ANCIENT if active is not None else CUTOVER - dt.timedelta(days=21),
                 },
             )
         ).scalar_one()
@@ -100,8 +114,8 @@ async def run_load(engine: AsyncEngine, records: list[dict[str, Any]]) -> Any:
     """Plan and load in one transaction, returning the reconciliation."""
     async with engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        active = await recently_active(conn, since=CUTOVER - ACTIVE_WITHIN)
-        plan = plan_opening_balances(records, cutover=CUTOVER, finished=finished, active=active)
+        seen = await recently_seen(conn, since=CUTOVER - ACTIVE_WITHIN)
+        plan = plan_opening_balances(records, cutover=CUTOVER, finished=finished, seen=seen)
         await CreditLoader(conn).load(plan)
         return await reconcile_credits(conn, plan)
 
@@ -549,8 +563,13 @@ async def test_an_active_holder_gets_an_unlock_with_no_referral_behind_it(
 
 
 async def test_a_dormant_holder_gets_no_unlock(db_engine: AsyncEngine) -> None:
-    """The owner's condition. They keep the balance they had — the lot still
-    loads — but the recurring grant does not follow them."""
+    """The owner's condition, and the only thing that stops this grandfathering
+    everybody.
+
+    Both halves of the disjunction must miss: last active outside the window
+    *and* registered outside it. They keep the balance they had — the lot still
+    loads — but the recurring grant does not follow them.
+    """
     await a_migrated_user(db_engine, "dormant", active=False)
 
     result = await run_load(db_engine, [record("dormant", "5")])
@@ -561,9 +580,9 @@ async def test_a_dormant_holder_gets_no_unlock(db_engine: AsyncEngine) -> None:
 
 
 async def test_a_spent_down_user_is_still_unlocked(db_engine: AsyncEngine) -> None:
-    """Zero means they were in the credit system and reached it. Keyed off the
-    lots instead, this person would be cut off for the accident of having spent
-    their last credit before cutover day."""
+    """Zero means they reached zero, not that they are owed nothing. Keyed off
+    the lots instead, this person would be cut off for the accident of having
+    spent their last credit before cutover day."""
     await a_migrated_user(db_engine, "spent")
 
     result = await run_load(db_engine, [record("spent", "0")])
@@ -573,16 +592,38 @@ async def test_a_spent_down_user_is_still_unlocked(db_engine: AsyncEngine) -> No
     assert result.ok
 
 
-async def test_somebody_who_never_entered_credits_gets_no_unlock(
+async def test_somebody_who_never_entered_credits_is_still_unlocked(
     db_engine: AsyncEngine,
 ) -> None:
-    """They were not receiving monthly credits in Bubble, so there is nothing to
-    maintain — they earn the unlock the ordinary way, by inviting somebody."""
+    """**Every migrated user the platform has seen recently**, balance or not.
+
+    The legacy app granted monthly credits unconditionally, so an empty
+    `bookingCredit` says they joined recently rather than that they are owed
+    nothing. They get the starter *and* the recurring grant.
+    """
     await a_migrated_user(db_engine, "never")
 
     result = await run_load(db_engine, [record("never", "")])
 
-    assert await unlocks_for(db_engine, "never") == []
+    assert await unlocks_for(db_engine, "never") == [None]
+    assert await lots_of(db_engine, "never") == [("profile_completed", 1, 1, None)]
+    assert result.ok
+
+
+async def test_a_signup_with_no_activity_is_still_unlocked(
+    db_engine: AsyncEngine,
+) -> None:
+    """**The disjunction, and the case an activity-only filter loses.**
+
+    `last_active_at` is null — they registered and never came back — but
+    `created_at` falls inside the window. An activity-only filter would cut off
+    exactly the new joiner the platform is trying to keep.
+    """
+    await a_migrated_user(db_engine, "newcomer", active=None)
+
+    result = await run_load(db_engine, [record("newcomer", "2")])
+
+    assert await unlocks_for(db_engine, "newcomer") == [None]
     assert result.ok
 
 
@@ -644,9 +685,9 @@ async def test_a_missing_unlock_is_reported_by_name(db_engine: AsyncEngine) -> N
 
     async with db_engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        active = await recently_active(conn, since=CUTOVER - ACTIVE_WITHIN)
+        seen = await recently_seen(conn, since=CUTOVER - ACTIVE_WITHIN)
         plan = plan_opening_balances(
-            [record("holder", "5")], cutover=CUTOVER, finished=finished, active=active
+            [record("holder", "5")], cutover=CUTOVER, finished=finished, seen=seen
         )
         result = await reconcile_credits(conn, plan)
 

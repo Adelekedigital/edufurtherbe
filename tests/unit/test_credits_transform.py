@@ -35,9 +35,9 @@ def a_record(anchor: str, credit: object, **extra: object) -> dict[str, object]:
 def plan(
     *records: dict[str, object],
     finished: frozenset[str] = frozenset(),
-    active: frozenset[str] = frozenset(),
+    seen: frozenset[str] = frozenset(),
 ):
-    return plan_opening_balances(list(records), cutover=CUTOVER, finished=finished, active=active)
+    return plan_opening_balances(list(records), cutover=CUTOVER, finished=finished, seen=seen)
 
 
 # --------------------------------------------------------------------------
@@ -248,35 +248,47 @@ def test_an_active_holder_is_grandfathered() -> None:
     """`ReferralUnlock` was made nullable in #209 for exactly this row. The
     schema was ready and the writer was missing, which is the whole of what
     register 5 turned out to be."""
-    result = plan(a_record("holder", "5"), active=frozenset({"holder"}))
+    result = plan(a_record("holder", "5"), seen=frozenset({"holder"}))
 
     assert result.grandfathered == ("holder",)
 
 
-def test_a_spent_down_user_is_grandfathered_too() -> None:
-    """**The distinction that makes this different from keying off `lots`.**
+def test_the_legacy_balance_is_not_a_condition() -> None:
+    """**Every migrated user the platform has seen recently**, whatever their
+    balance said — a holder, somebody spent down to zero, and somebody who never
+    entered the credit system at all.
 
-    `'0'` means they were in the credit system and reached zero; `''` means they
-    were never in it. Only the second is a reason to stop granting — and a
-    grandfather written as "everybody who gets a lot" would quietly cut off the
-    people whose balance happens to be empty on cutover day.
+    The legacy app granted monthly credits unconditionally (measured finding 4),
+    so `bookingCredit` records when somebody joined rather than what they are
+    entitled to. An earlier draft gated on it, which would have cut off every
+    recent signup who had not yet been granted anything.
+
+    All three in one test because the bug is the *set* being narrowed; three
+    separate tests would each pass against a transform that kept only one.
     """
-    result = plan(a_record("spent", "0"), active=frozenset({"spent"}))
-
-    assert result.grandfathered == ("spent",)
-    assert result.lots == ()
-
-
-def test_somebody_who_never_entered_credits_is_not_grandfathered() -> None:
-    """They were not receiving monthly credits in Bubble, so there is nothing to
-    maintain. They get the starter and earn an unlock the ordinary way."""
     result = plan(
+        a_record("holder", "5"),
+        a_record("spent", "0"),
         a_record("never", ""),
         finished=frozenset({"never"}),
-        active=frozenset({"never"}),
+        seen=frozenset({"holder", "spent", "never"}),
     )
 
-    assert result.grandfathered == ()
+    assert set(result.grandfathered) == {"holder", "spent", "never"}
+
+
+def test_a_recent_signup_who_never_used_the_platform_is_grandfathered() -> None:
+    """**The case an activity-only filter loses.** Somebody who registered three
+    weeks ago and has not returned has a recent `created_at` and possibly no
+    `last_active_at` at all — exactly the new joiner the platform is trying to
+    keep. `recently_seen` is a disjunction for this reason."""
+    result = plan(
+        a_record("newcomer", ""),
+        finished=frozenset({"newcomer"}),
+        seen=frozenset({"newcomer"}),
+    )
+
+    assert result.grandfathered == ("newcomer",)
     assert len(result.starters) == 1
 
 
@@ -284,19 +296,25 @@ def test_a_dormant_holder_is_not_grandfathered() -> None:
     """The owner's condition: only users active recently. A migrated balance is
     still loaded — they keep what they had — but the recurring grant does not
     follow them."""
-    result = plan(a_record("dormant", "5"), active=frozenset())
+    result = plan(a_record("dormant", "5"), seen=frozenset())
 
     assert result.grandfathered == ()
     assert len(result.lots) == 1
 
 
-def test_a_quarantined_row_is_never_grandfathered() -> None:
-    """A balance nobody could read is not evidence of anything, least of all of
-    an entitlement that recurs every month."""
-    result = plan(a_record("odd", "five"), active=frozenset({"odd"}))
+def test_a_quarantined_balance_does_not_cost_somebody_their_entitlement() -> None:
+    """**The grandfather is decided before the balance is read.**
 
-    assert result.grandfathered == ()
+    A `bookingCredit` nobody can parse costs this user their *lot* — which is
+    what the operator looks at — not their place in the recurring grant. The two
+    are independent facts, and coupling them would punish somebody for a data
+    problem they did not create.
+    """
+    result = plan(a_record("odd", "five"), seen=frozenset({"odd"}))
+
+    assert result.grandfathered == ("odd",)
     assert len(result.quarantined) == 1
+    assert result.lots == ()
 
 
 def test_grandfathering_defaults_to_nobody() -> None:
@@ -309,6 +327,15 @@ def test_grandfathering_defaults_to_nobody() -> None:
     assert result.grandfathered == ()
 
 
+def test_a_duplicate_anchor_is_grandfathered_once() -> None:
+    """The second occurrence is quarantined, and it must not also produce a
+    second unlock — `ON CONFLICT DO NOTHING` would absorb it, so this is the
+    test that stops the *count* in the cutover report being wrong."""
+    result = plan(a_record("twice", "5"), a_record("twice", "2"), seen=frozenset({"twice"}))
+
+    assert result.grandfathered == ("twice",)
+
+
 def test_the_window_is_twelve_months() -> None:
     """Named rather than left implicit, because the owner asked for "six to
     twelve" and the two ends are not close: on the dev export six qualifies one
@@ -319,6 +346,6 @@ def test_the_window_is_twelve_months() -> None:
 def test_the_report_counts_the_grandfathered() -> None:
     """An operator reading the cutover report needs this number, because it is
     the one that decides whether ~1,200 people keep receiving credits."""
-    result = plan(a_record("holder", "5"), active=frozenset({"holder"}))
+    result = plan(a_record("holder", "5"), seen=frozenset({"holder"}))
 
     assert "grandfathered into the monthly grant: 1" in result.report()

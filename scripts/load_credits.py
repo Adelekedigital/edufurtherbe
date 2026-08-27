@@ -52,7 +52,7 @@ from app.infra.etl.cli import (
     configure_streams,
     open_export,
 )
-from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_active
+from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_seen
 from app.infra.etl.reconcile import reconcile_credits
 
 
@@ -70,12 +70,12 @@ async def build_plan(directory: Path, *, thing: str, cutover: dt.datetime) -> Cr
             finished = await finished_onboarding(connection)
             # The grandfather window, measured back from the cutover rather than
             # from the wall clock, so a rehearsal and the real run agree.
-            active = await recently_active(connection, since=cutover - ACTIVE_WITHIN)
+            seen = await recently_seen(connection, since=cutover - ACTIVE_WITHIN)
     finally:
         await engine.dispose()
 
     return plan_opening_balances(
-        list(source.read(thing)), cutover=cutover, finished=finished, active=active
+        list(source.read(thing)), cutover=cutover, finished=finished, seen=seen
     )
 
 

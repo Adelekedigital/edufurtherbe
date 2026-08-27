@@ -144,10 +144,15 @@ class CreditPlan:
     spent_down: tuple[str, ...] = ()
     unfinished: tuple[str, ...] = ()
 
-    #: Migrated users who keep receiving the monthly grant. **Anyone who was in
-    #: the legacy credit system and has used the platform recently** — which
-    #: includes the spent-down, because `'0'` means they were in it and reached
-    #: zero, not that they were never in it.
+    #: Migrated users who keep receiving the monthly grant. **Every migrated
+    #: user the platform has seen recently**, whatever their legacy balance was
+    #: — including those who never entered the credit system at all.
+    #:
+    #: The balance is not a condition, and an earlier draft made it one. The
+    #: legacy app granted monthly credits *unconditionally* (measured finding 4),
+    #: so "was in the credit system" describes when somebody joined rather than
+    #: what they were entitled to — and gating on it would cut off every recent
+    #: signup who had not yet been granted anything.
     #:
     #: `ReferralUnlock` was made nullable in #209 for exactly these rows: *"~1,200
     #: migrated users are grandfathered as unlocked and none of them ever invited
@@ -156,6 +161,12 @@ class CreditPlan:
     #: **They step from five to three.** The legacy grant was five a month,
     #: unconditionally; the new one is `MONTHLY_ALLOWANCE`. Nothing here changes
     #: the amount — it is simply what the grant gives.
+    #:
+    #: **Mentee-ness is not checked here.** `grant_monthly_credits` already
+    #: requires a `MenteeGoal`, so a migrated mentor holding an unlock receives
+    #: nothing. Adding the predicate here as well would be one rule in two
+    #: places, and this one would be reading a table the credit loader has no
+    #: other reason to know about.
     grandfathered: tuple[str, ...] = ()
 
     #: Every anchor the export offered. **Reconciliation needs a source list to
@@ -224,7 +235,7 @@ def plan_opening_balances(
     *,
     cutover: dt.datetime,
     finished: frozenset[str],
-    active: frozenset[str] = frozenset(),
+    seen: frozenset[str] = frozenset(),
 ) -> CreditPlan:
     """Every balance the export offers, as a lot, a starter, or a reason.
 
@@ -241,11 +252,10 @@ def plan_opening_balances(
     person finished", and the two would disagree the first time that derivation
     changed.
 
-    ``active`` is the same shape and there for the same reason: anchors whose
-    ``users.last_active_at`` falls inside :data:`ACTIVE_WITHIN` of the cutover.
-    Read from the column rather than from the export's ``Last Active``, because
-    the column is what every other "is this person around" question in the
-    codebase uses.
+    ``seen`` is the same shape and there for the same reason: anchors last
+    active — **or newly signed up** — inside :data:`ACTIVE_WITHIN` of the
+    cutover. Read from the columns rather than from the export, because they are
+    what every other "is this person around" question in the codebase uses.
 
     **Defaulted to empty, which grandfathers nobody.** A caller that forgets to
     pass it writes no unlocks — the cliff, not a silent over-grant. Handing out
@@ -260,7 +270,7 @@ def plan_opening_balances(
     unfinished: list[str] = []
     quarantined: list[QuarantinedBalance] = []
     source_anchors: list[str] = []
-    seen: set[str] = set()
+    decided: set[str] = set()
 
     for record in records:
         anchor = legacy_anchor(record)
@@ -269,13 +279,25 @@ def plan_opening_balances(
         if not anchor:
             quarantined.append(QuarantinedBalance("<no id>", "the row carries no unique id"))
             continue
-        if anchor in seen:
+        if anchor in decided:
             # The lot is guarded by a partial unique index on the user, so a
             # repeated anchor would collapse into one lot silently — and the
             # reconciliation keys on the same anchor, so it would agree.
             quarantined.append(QuarantinedBalance(anchor, "the export repeats this unique id"))
             continue
-        seen.add(anchor)
+        decided.add(anchor)
+
+        # **Decided here, before the balance is read, and that is the point.**
+        # Every migrated user the platform has seen recently keeps the recurring
+        # grant. The legacy app granted monthly credits *unconditionally*
+        # (measured finding 4), so what somebody's `bookingCredit` happens to say
+        # describes when they joined rather than what they are entitled to.
+        #
+        # A quarantined balance therefore does not cost somebody their
+        # entitlement — it costs them the lot, which is the thing an operator
+        # looks at.
+        if anchor in seen:
+            grandfathered.append(anchor)
 
         raw = _text(record.get(CREDIT_FIELD))
 
@@ -315,8 +337,6 @@ def plan_opening_balances(
             # and reached zero. `''` means they never entered it. Only the second
             # is a reason not to keep granting.
             spent_down.append(anchor)
-            if anchor in active:
-                grandfathered.append(anchor)
             continue
         if quantity > PLAUSIBLE_CEILING:
             quarantined.append(
@@ -329,8 +349,6 @@ def plan_opening_balances(
             continue
 
         lots.append(OpeningLotRow(anchor, quantity, expires_at))
-        if anchor in active:
-            grandfathered.append(anchor)
 
     return CreditPlan(
         lots=tuple(lots),

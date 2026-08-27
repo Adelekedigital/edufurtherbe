@@ -55,7 +55,7 @@ from app.domain.transform.credits import CreditPlan
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncConnection
 
-__all__ = ["CreditLoader", "finished_onboarding", "recently_active"]
+__all__ = ["CreditLoader", "finished_onboarding", "recently_seen"]
 
 
 #: **The starter's own condition, read from the table its producer keys on.**
@@ -74,27 +74,34 @@ WHERE u.legacy_bubble_id IS NOT NULL AND o.completed_at IS NOT NULL
 """
 
 
-#: **Read from the column, not from the export's ``Last Active``.**
+#: **Read from the columns, not from the export's ``Last Active``.**
 #: ``users.last_active_at`` is what every other "is this person around" question
-#: in this codebase uses, and `load_identity` has already written it by the time
-#: this runs. Deriving it a second way here is how the two come to disagree.
-RECENTLY_ACTIVE_ANCHORS = """
+#: in this codebase uses, and `load_identity` has already written both of these
+#: by the time this runs. Deriving them a second way here is how the two come to
+#: disagree.
+#:
+#: **Or signed up**, which is not the same question and is why this is a
+#: disjunction. Somebody who registered three weeks ago and has not returned has
+#: a recent ``created_at`` and possibly no ``last_active_at`` at all — they are
+#: exactly the new joiner the platform is trying to keep, and an activity-only
+#: filter would cut them off at the first month end.
+RECENTLY_SEEN_ANCHORS = """
 SELECT u.legacy_bubble_id AS anchor
 FROM users u
-WHERE u.legacy_bubble_id IS NOT NULL AND u.last_active_at >= :since
+WHERE u.legacy_bubble_id IS NOT NULL
+  AND (u.last_active_at >= :since OR u.created_at >= :since)
 """
 
 
-async def recently_active(connection: AsyncConnection, *, since: dt.datetime) -> frozenset[str]:
-    """Anchors whose last activity falls on or after ``since``.
+async def recently_seen(connection: AsyncConnection, *, since: dt.datetime) -> frozenset[str]:
+    """Anchors last active — or newly signed up — on or after ``since``.
 
-    **A null ``last_active_at`` does not qualify**, and that is the safe
-    direction rather than an oversight: it means the column was never written
-    for them, which is not evidence of activity. A comparison against ``NULL``
-    is false, so they are excluded without a clause saying so — the same
-    structural exclusion `credit_reminders` documents for a null expiry.
+    **A null ``last_active_at`` is not a disqualification**, because the second
+    disjunct still answers for them: ``created_at`` is ``NOT NULL`` on every
+    row. A user who never triggered the activity column but registered inside
+    the window qualifies on their signup, which is the intent.
     """
-    result = await connection.execute(text(RECENTLY_ACTIVE_ANCHORS), {"since": since})
+    result = await connection.execute(text(RECENTLY_SEEN_ANCHORS), {"since": since})
     return frozenset(row.anchor for row in result)
 
 
