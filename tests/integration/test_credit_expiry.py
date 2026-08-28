@@ -45,6 +45,11 @@ JUST_BEFORE = MIDNIGHT - dt.timedelta(microseconds=1)
 #: When the scheduled job actually runs — five hours late, deliberately.
 SWEEP_TIME = dt.datetime(2026, 9, 1, 5, 0, tzinfo=dt.UTC)
 
+#: When the fixture's grant and its debit happened. **Distinct, deliberately** —
+#: see `a_lot`. Both well before `MIDNIGHT`, so nothing here rides on them.
+GRANTED_AT = dt.datetime(2026, 8, 1, 9, 0, tzinfo=dt.UTC)
+SPENT_AT = dt.datetime(2026, 8, 15, 9, 0, tzinfo=dt.UTC)
+
 
 async def a_user(engine: AsyncEngine, *, deleted: bool = False) -> UUID:
     tag = uuid4()
@@ -109,10 +114,18 @@ async def a_lot(
         await conn.execute(
             text(
                 "INSERT INTO credit_transactions "
-                "(user_id, credit_lot_id, delta, reason, session_id) "
-                "VALUES (:u, :lot, :q, 'grant', NULL)"
+                "(user_id, credit_lot_id, delta, reason, session_id, created_at) "
+                "VALUES (:u, :lot, :q, 'grant', NULL, :at)"
             ),
-            {"u": user_id, "lot": lot_id, "q": granted},
+            # **Explicit, and a flake without it.** PostgreSQL's `now()` is
+            # transaction-start time, so both rows this fixture writes would
+            # share a `created_at` to the microsecond — and `ledger_of` would
+            # fall through to `id`, which is `uuid_generate_v7()`: time-ordered
+            # across milliseconds, random within one. The two rows then sort
+            # either way, and `test_a_fully_spent_lot_writes_nothing` fails on
+            # roughly the runs where the dice land badly. It went green locally
+            # many times and red the first time CI ran it.
+            {"u": user_id, "lot": lot_id, "q": granted, "at": GRANTED_AT},
         )
 
         if left < granted:
@@ -123,10 +136,13 @@ async def a_lot(
             await conn.execute(
                 text(
                     "INSERT INTO credit_transactions "
-                    "(user_id, credit_lot_id, delta, reason, session_id) "
-                    "VALUES (:u, :lot, :d, 'lot_expired', NULL)"
+                    "(user_id, credit_lot_id, delta, reason, session_id, created_at) "
+                    "VALUES (:u, :lot, :d, 'lot_expired', NULL, :at)"
                 ),
-                {"u": user_id, "lot": lot_id, "d": left - granted},
+                # After the grant, because that is when it happened — which is
+                # what makes the order in `ledger_of` a fact rather than a
+                # coin toss.
+                {"u": user_id, "lot": lot_id, "d": left - granted, "at": SPENT_AT},
             )
 
         return UUID(str(lot_id))
@@ -153,11 +169,15 @@ async def ledger_of(engine: AsyncEngine, user_id: UUID) -> list[tuple[UUID, int,
     against a misaligned row list would satisfy every constraint and every
     assertion.
 
-    Ordered by `id` after `created_at`. `created_at` defaults to `now()`, which
-    is transaction time — so every row the sweep's single `executemany` writes
-    shares one value, and ordering on it alone would be non-deterministic the
-    moment a test held two dead lots. `uuid_generate_v7` is time-ordered, so it
-    breaks the tie in insertion order.
+    Ordered by `id` after `created_at`, because the sweep's single `executemany`
+    writes every row inside one transaction and `now()` is transaction-start
+    time — so ordering on `created_at` alone is undefined between them.
+
+    **The tie-break is weaker than it looks, and this comment used to overstate
+    it.** `uuid_generate_v7` is time-ordered across milliseconds and random
+    within one, so two rows written in the same instant sort either way. Where
+    order carries meaning, the fixture gives the rows distinct timestamps rather
+    than trusting the id — see `a_lot`.
     """
     async with engine.begin() as conn:
         rows = await conn.execute(
