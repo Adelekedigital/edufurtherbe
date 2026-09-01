@@ -53,6 +53,17 @@ def test_unknown_step_name_is_rejected() -> None:
     assert excinfo.value.code != 0
 
 
+def test_the_full_gate_parallelises_tests_but_the_fast_gate_does_not() -> None:
+    check = load_check()
+
+    full_tests = next(command for name, command in check.STEPS if name == "tests")
+    fast_tests = next(command for name, command in check.FAST if name == "tests-unit")
+
+    assert full_tests[1:3] == ["-n", "4"]
+    assert "--dist=worksteal" in full_tests
+    assert "-n" not in fast_tests
+
+
 def test_every_step_name_used_by_a_workflow_exists() -> None:
     check = load_check()
     known = {name for name, _ in check.STEPS}

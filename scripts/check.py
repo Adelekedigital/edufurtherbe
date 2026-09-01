@@ -32,6 +32,12 @@ STEPS: list[Step] = [
         "tests",
         [
             "pytest",
+            # Four is a measured ceiling, not a CPU guess. Database tests clone
+            # and drop PostgreSQL databases, so `auto` can turn extra cores into
+            # server contention. The fast gate below stays sequential.
+            "-n",
+            "4",
+            "--dist=worksteal",
             "--cov=src/app",
             "--cov-branch",
             "--cov-report=term-missing",

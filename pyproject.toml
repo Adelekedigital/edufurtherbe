@@ -63,7 +63,6 @@ dev = [
     "ruff==0.16.1",
     "mypy==2.3.0",
     "bandit[toml]==1.9.4",
-
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
     "pytest-randomly>=3.16.0",
@@ -84,6 +83,7 @@ dev = [
     "httpx>=0.27.0",
     "pip-audit>=2.7.0",
     "pre-commit>=4.6.1",
+    "pytest-xdist>=3.8.0",
 ]
 
 [build-system]
