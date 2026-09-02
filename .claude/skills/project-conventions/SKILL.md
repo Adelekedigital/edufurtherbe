@@ -498,3 +498,6 @@ including near-misses.
 
 It is the most valuable thing in this overlay. Generic standards encode what
 usually goes wrong; that file encodes what has actually gone wrong *here*.
+
+
+Pytest treats warnings as errors so the gate cannot accumulate a warning flood. The only exception is the narrowly scoped Starlette/httpx compatibility warning documented in the failure log; intentional warnings must be asserted with pytest.warns. Do not add a broad warning ignore—fix the source or record the specific dependency limitation and its scope.

@@ -226,7 +226,13 @@ def test_a_bitmap_over_our_ceiling_is_refused_where_pillow_would_only_warn() -> 
     from 68 bytes of request.
     """
     assert MAX_PIXELS < 8_000 * 8_000 < 2 * Image.MAX_IMAGE_PIXELS
-    with pytest.raises(ValidationError, match="too large"):
+    with (
+        pytest.warns(Image.DecompressionBombWarning),
+        pytest.raises(
+            ValidationError,
+            match="too large",
+        ),
+    ):
         process(png_claiming(8_000, 8_000), AssetKind.AVATAR)
 
 

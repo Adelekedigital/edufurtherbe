@@ -29,7 +29,7 @@ from app.domain.notifications import SESSION_REMINDERS, Notification
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.session_writer import remind_before_session, schedule_session_reminders
 
-pytestmark = [pytest.mark.db, pytest.mark.asyncio]
+pytestmark = pytest.mark.db
 
 
 class Publisher:
@@ -160,6 +160,7 @@ def wire(client: httpx.AsyncClient) -> Publisher:
     return publisher
 
 
+@pytest.mark.asyncio
 async def test_booking_an_auto_confirming_offering_publishes_its_reminders(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -172,6 +173,7 @@ async def test_booking_an_auto_confirming_offering_publishes_its_reminders(
     assert session_kinds, "an auto-confirmed session published no reminders"
 
 
+@pytest.mark.asyncio
 async def test_a_request_nobody_has_accepted_publishes_none(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -185,6 +187,7 @@ async def test_a_request_nobody_has_accepted_publishes_none(
     assert [j for j in publisher.published if j["body"]["kind"][0] == "s"] == []
 
 
+@pytest.mark.asyncio
 async def test_accepting_a_request_publishes_them_then(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -211,6 +214,7 @@ async def test_accepting_a_request_publishes_them_then(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_a_confirmed_session_nudges_both_parties(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -224,6 +228,7 @@ async def test_a_confirmed_session_nudges_both_parties(
     assert {row["payload"]["interval"] for row in rows} == {"24 hours"}
 
 
+@pytest.mark.asyncio
 async def test_the_last_nudge_is_its_own_message(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -240,6 +245,7 @@ async def test_the_last_nudge_is_its_own_message(
 
 
 @pytest.mark.parametrize("status", ["cancelled", "declined", "withdrawn", "expired"])
+@pytest.mark.asyncio
 async def test_a_session_that_is_no_longer_happening_nudges_nobody(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, status: str
 ) -> None:
@@ -257,6 +263,7 @@ async def test_a_session_that_is_no_longer_happening_nudges_nobody(
     ] == []
 
 
+@pytest.mark.asyncio
 async def test_a_pending_request_is_not_nudged_about_a_session(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -267,6 +274,7 @@ async def test_a_pending_request_is_not_nudged_about_a_session(
     assert await fire(db_engine, booking["id"], "s24") is False
 
 
+@pytest.mark.asyncio
 async def test_firing_twice_queues_one_message_each(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -287,6 +295,7 @@ async def test_firing_twice_queues_one_message_each(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_the_reminder_index_distinguishes_recipients(db_engine: AsyncEngine) -> None:
     """**Asserted against the live index, because nothing else can be.**
 

@@ -87,7 +87,7 @@ def client(settings: Settings) -> Iterator[TestClient]:
 #: Local signing key, used only to mint tokens for tests. Flagged by S105 as a
 #: hardcoded credential, which is exactly what it is — a test that verified
 #: signatures against a real key would be testing the key, not the verifier.
-SECRET = "test-signing-secret"  # noqa: S105
+SECRET = "test-signing-secret-for-local-tests"  # noqa: S105
 PROBLEM_JSON = "application/problem+json"
 
 

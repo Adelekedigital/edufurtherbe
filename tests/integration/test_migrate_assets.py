@@ -29,7 +29,7 @@ from conftest import STORAGE_BUCKET as BUCKET
 from conftest import SUPABASE_URL as SUPABASE
 from conftest import FakeStorage, image_bytes, storage_for
 
-pytestmark = [pytest.mark.db, pytest.mark.asyncio]
+pytestmark = pytest.mark.db
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BUBBLE = "https://app.edufurther.org/version-test/fileupload"
@@ -130,6 +130,7 @@ async def urls(engine: AsyncEngine, user_id: UUID) -> tuple[str | None, str | No
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_the_source_is_never_probed_with_head(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
@@ -152,6 +153,7 @@ async def test_the_source_is_never_probed_with_head(
     assert bubble.gets == ["a.jpeg"]
 
 
+@pytest.mark.asyncio
 async def test_the_stored_content_type_comes_from_the_bytes(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
@@ -181,6 +183,7 @@ async def test_the_stored_content_type_comes_from_the_bytes(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_a_bubble_image_is_rehosted_and_the_row_repointed(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
@@ -206,6 +209,7 @@ async def test_a_bubble_image_is_rehosted_and_the_row_repointed(
     assert f"users/{user_id}/banner-" in str(banner)
 
 
+@pytest.mark.asyncio
 async def test_no_bubble_url_survives(db_engine: AsyncEngine, script: ModuleType) -> None:
     """The acceptance criterion, asserted by a query — and deliberately **not**
     with ``LIKE '%bubble%'``, which would miss the eleven dev assets served from
@@ -236,6 +240,7 @@ async def test_no_bubble_url_survives(db_engine: AsyncEngine, script: ModuleType
     assert foreign == 0
 
 
+@pytest.mark.asyncio
 async def test_a_second_run_costs_nothing(db_engine: AsyncEngine, script: ModuleType) -> None:
     """Re-running is how this catches up between now and the freeze, so it has to
     be free once the work is done."""
@@ -257,6 +262,7 @@ async def test_a_second_run_costs_nothing(db_engine: AsyncEngine, script: Module
     assert await urls(db_engine, user_id) == first
 
 
+@pytest.mark.asyncio
 async def test_an_asset_the_source_refuses_is_reported_not_fatal(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
@@ -281,6 +287,7 @@ async def test_an_asset_the_source_refuses_is_reported_not_fatal(
     assert (await urls(db_engine, fine))[0] is not None
 
 
+@pytest.mark.asyncio
 async def test_profile_timestamps_are_not_rewritten(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
@@ -307,6 +314,7 @@ async def test_profile_timestamps_are_not_rewritten(
     assert stamp.year == 2023, stamp
 
 
+@pytest.mark.asyncio
 async def test_a_soft_deleted_user_is_not_migrated(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
@@ -333,6 +341,7 @@ async def test_a_soft_deleted_user_is_not_migrated(
     assert report.copied == 1
 
 
+@pytest.mark.asyncio
 async def test_a_dry_run_touches_neither_host_nor_database(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
@@ -381,6 +390,7 @@ def test_the_storage_host_is_derived_not_restated() -> None:
     assert storage_for(FakeStorage()).host == "project.supabase.co"
 
 
+@pytest.mark.asyncio
 async def test_a_migrated_photo_reaches_storage_without_its_gps(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
@@ -410,6 +420,7 @@ async def test_a_migrated_photo_reaches_storage_without_its_gps(
         assert dict(after.getexif()) == {}
 
 
+@pytest.mark.asyncio
 async def test_an_asset_the_decoder_will_not_read_is_reported_not_counted(
     db_engine: AsyncEngine, script: ModuleType
 ) -> None:
