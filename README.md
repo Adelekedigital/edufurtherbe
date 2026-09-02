@@ -144,6 +144,20 @@ export TEST_DATABASE_URL=postgresql://edufurther:edufurther@localhost:55432/eduf
 uv run pytest
 ```
 
+The full gate runs pytest with four `pytest-xdist` workers. Each worker migrates
+one session template, then every database-backed test clones its own database
+from that template and drops it afterwards. This preserves per-test isolation
+without replaying the migration chain for every test. Four workers is an
+intentional ceiling: `-n auto` can turn a machine's extra cores into PostgreSQL
+create/drop contention. A direct `uv run pytest` remains sequential, which is
+useful when diagnosing an order or concurrency failure.
+
+The synchronized Windows baseline before parallel execution was 22m36s for
+2,334 passing tests. Four workers completed the same database-backed gate in
+16m25s on that machine, a 27% wall-time reduction. Treat those as comparison
+points, not permanent budgets; the gate reports its own elapsed time on every
+run.
+
 **Without that variable they skip**, with a message saying what to set — no
 Docker required to run the rest of the suite. CI sets `REQUIRE_DB_TESTS=1`, which
 turns that skip into a failure: a skipped test and a passing test look identical

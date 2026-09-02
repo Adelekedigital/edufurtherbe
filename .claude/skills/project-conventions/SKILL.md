@@ -362,6 +362,13 @@ make check                                              # the full local gate
 uv run python scripts/check.py                          # the same gate, without make
 ```
 
+The full gate caps pytest at four `xdist` workers with work-stealing. Each
+worker owns one migrated template and every database test still gets a cloned,
+disposable database. Keep `--fast` sequential: it is the pre-commit feedback
+loop, and parallel startup would cost more than its unit tests save. Do not
+replace the fixed cap with `-n auto` without measuring PostgreSQL create/drop
+contention on both Windows and CI.
+
 Tests marked `db` read `TEST_DATABASE_URL` and **skip** without it, so the suite
 runs on a machine with no Docker. CI sets `REQUIRE_DB_TESTS=1`, which turns that
 skip into a failure.
