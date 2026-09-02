@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 import httpx
+import pytest
 
+from app.core.config import QSTASH_EU
+from app.core.errors import UpstreamError
 from app.infra.jobs.manifest import ResolvedSchedule
 from app.infra.jobs.reconcile import (
     ExistingSchedule,
@@ -107,12 +110,12 @@ def test_create_sets_every_delivery_policy_header_explicitly() -> None:
         return httpx.Response(200, json={"scheduleId": desired().id})
 
     client = httpx.Client(
-        base_url="https://qstash.upstash.io/v2",
+        base_url=f"{QSTASH_EU}/v2",
         transport=httpx.MockTransport(handle),
     )
     schedule = desired()
 
-    QStashSchedules("secret", client).put(schedule)
+    QStashSchedules("secret", QSTASH_EU, client).put(schedule)
 
     (request,) = seen
     assert request.method == "POST"
@@ -145,10 +148,59 @@ def test_list_is_sorted_and_accepts_base64_encoded_bodies() -> None:
         )
 
     client = httpx.Client(
-        base_url="https://qstash.upstash.io/v2",
+        base_url=f"{QSTASH_EU}/v2",
         transport=httpx.MockTransport(handle),
     )
 
-    (listed,) = QStashSchedules("secret", client).list()
+    (listed,) = QStashSchedules("secret", QSTASH_EU, client).list()
 
     assert listed.body == desired().canonical_body
+
+
+def test_the_reconciler_talks_to_the_configured_region() -> None:
+    """**The symmetric half of the scheduler's regional test.**
+
+    Every other case here injects its own `httpx.Client`, so the origin argument
+    goes unused and could be ignored entirely without a single test noticing.
+    This is the one that builds the client the way production does.
+
+    A trailing slash is trimmed for the same reason it is in the publisher: a
+    pasted console URL carries one, and `https://host//v2/schedules` is a `404`
+    wearing the same face as the wrong-region `404`.
+    """
+    # `httpx` normalises a `base_url` to end in a slash, which is what makes
+    # `/v2/` + `schedules` resolve; the assertion matches that rather than
+    # pretending otherwise.
+    expected = "https://qstash-us-east-1.upstash.io/v2/"
+
+    with_slash = QStashSchedules("t", "https://qstash-us-east-1.upstash.io/")
+    without = QStashSchedules("t", "https://qstash-us-east-1.upstash.io")
+
+    assert str(without.client.base_url) == expected
+    assert str(with_slash.client.base_url) == expected
+
+
+def test_a_wrong_region_explains_itself_in_the_error() -> None:
+    """**The message that cost an afternoon.**
+
+    QStash answers a wrong region with `404` and names the region in the body.
+    `httpx` renders only the status line, so the operator saw "404 Not Found"
+    against a URL spelled exactly right and went looking for a broken path — the
+    configuration being wrong is the last thing that comes to mind.
+
+    The body is the answer, so it has to travel with the error.
+    """
+    body = (
+        '{"error":"user (abc) not found in this region (eu-central-1). '
+        'Check that you are using the correct endpoint."}'
+    )
+    client = httpx.Client(
+        base_url=f"{QSTASH_EU}/v2",
+        transport=httpx.MockTransport(lambda _r: httpx.Response(404, content=body)),
+    )
+
+    with pytest.raises(UpstreamError) as raised:
+        QStashSchedules("t", QSTASH_EU, client).list()
+
+    assert "not found in this region" in str(raised.value)
+    assert "eu-central-1" in str(raised.value)

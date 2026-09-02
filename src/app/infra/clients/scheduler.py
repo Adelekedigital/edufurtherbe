@@ -37,8 +37,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-QSTASH_PUBLISH = "https://qstash.upstash.io/v2/publish"
-
 #: Long enough for a slow third party, short enough that scheduling cannot hold
 #: a booking open. A reminder that fails to schedule is recoverable; a booking
 #: that hangs on one is not.
@@ -91,7 +89,14 @@ class QStashScheduler:
     a deadline — and it survives a retry of the publish itself.
     """
 
-    def __init__(self, token: str, client: httpx.Client | None = None) -> None:
+    def __init__(self, token: str, url: str, client: httpx.Client | None = None) -> None:
+        """``url`` is the QStash **origin**, and it is region-scoped.
+
+        Passed in rather than a module constant, because the host is
+        configuration: `qstash.upstash.io` is `eu-central-1`, not a global
+        endpoint, and a token from another region answers it with `404`.
+        """
+        self._publish = f"{url.rstrip('/')}/v2/publish"
         self._client = client or httpx.Client(
             headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT
         )
@@ -105,13 +110,23 @@ class QStashScheduler:
         """
         try:
             response = self._client.post(
-                f"{QSTASH_PUBLISH}/{url}",
+                f"{self._publish}/{url}",
                 json=body,
                 headers={"Upstash-Not-Before": str(int(at.timestamp()))},
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise SchedulerError(f"qstash refused a callback for {at.isoformat()}: {exc}") from exc
+            # **QStash's own words, when it gave any.** A wrong region answers
+            # `404` and names the region in the body; `httpx` renders only the
+            # status line, so without this the operator sees a bare `404` against
+            # a correctly spelled URL (settled decision #173).
+            detail = ""
+            refusal = getattr(exc, "response", None)
+            if refusal is not None and refusal.text.strip():
+                detail = f"; QStash said: {refusal.text.strip()[:400]}"
+            raise SchedulerError(
+                f"qstash refused a callback for {at.isoformat()}: {exc}{detail}"
+            ) from exc
 
 
 def verify_callback(*, token: str, body: bytes, url: str, signing_keys: tuple[str, ...]) -> None:

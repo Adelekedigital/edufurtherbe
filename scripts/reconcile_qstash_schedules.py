@@ -43,7 +43,7 @@ def main() -> int:
     print("Resolved configuration:")
     print(json.dumps([asdict(schedule) for schedule in resolved], indent=2, sort_keys=True))
 
-    client = QStashSchedules(token.get_secret_value())
+    client = QStashSchedules(token.get_secret_value(), settings.qstash_url)
     changes = plan_reconciliation(resolved, client.list(), environment=args.environment)
     print("Diff:")
     if not changes:

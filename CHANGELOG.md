@@ -19,6 +19,19 @@ released. A tag with no matching section here fails the release job.
   Railway is the current host, while GitHub Actions retains CI, migrations,
   security, reconciliation, and exceptional recovery (ADR 0028).
 
+- **The QStash endpoint is configuration, not a constant.** `QSTASH_URL` selects
+  the region and defaults to `https://qstash.upstash.io`, which is `eu-central-1`
+  rather than a global endpoint — `us-east-1` is
+  `https://qstash-us-east-1.upstash.io`. Both the publisher and the schedule
+  reconciler previously hardcoded the EU host, so an account in another region
+  got `404` from every call, naming the region in the body.
+
+  Set `QSTASH_URL` alongside `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and
+  `PUBLIC_BASE_URL`. **All four are region-scoped and the console issues them
+  together** — changing the URL alone leaves reconciliation working and every
+  callback failing verification, which surfaces only when a job first fires.
+  Unset, an EU deployment behaves exactly as before.
+
 ### Fixed
 
 - **Percentages rounded ties the wrong way, in two places.** A Python `100.0`

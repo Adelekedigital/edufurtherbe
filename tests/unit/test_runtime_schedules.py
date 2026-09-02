@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from app.core.config import QSTASH_EU, Settings
 from app.infra.jobs.manifest import (
     ManifestError,
     load_manifest,
@@ -144,3 +144,23 @@ def test_schedule_overrides_are_one_strict_json_object() -> None:
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None, qstash_schedule_overrides='{"settle-sessions":[]}')
+
+
+def test_a_blank_qstash_url_falls_back_to_the_default_region() -> None:
+    """**Blank is how "unset" arrives**, and taking it literally breaks the EU
+    deployments this setting exists to leave alone.
+
+    A GitHub Actions `${{ vars.QSTASH_URL }}` renders as an empty string when the
+    variable does not exist, and a `.env` line left as `QSTASH_URL=` is the same.
+    Read literally, both build a *relative* URL — `/v2/publish` — which fails at
+    request time with a host error naming nothing.
+    """
+    for blank in ("", "   "):
+        assert Settings(_env_file=None, qstash_url=blank).qstash_url == QSTASH_EU
+
+
+def test_a_pasted_console_url_keeps_no_trailing_slash() -> None:
+    """A doubled slash is a `404`, indistinguishable from the wrong-region `404`."""
+    settings = Settings(_env_file=None, qstash_url="https://qstash-us-east-1.upstash.io/")
+
+    assert settings.qstash_url == "https://qstash-us-east-1.upstash.io"
