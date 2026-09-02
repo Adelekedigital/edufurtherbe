@@ -285,7 +285,9 @@ async def test_a_signature_from_the_wrong_key_is_refused(
 
     async with callback_client as client:
         refused = await client.post(
-            PATH, content=body, headers=signed_headers(body, key="somebody-elses")
+            PATH,
+            content=body,
+            headers=signed_headers(body, key="somebody-elses-signing-key-for-local-tests"),
         )
 
     assert refused.status_code == 401, refused.text

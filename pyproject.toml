@@ -1,7 +1,7 @@
 [project]
 name = "edufurtherbe"
 version = "0.1.0"
-description = "Backend API for EduFurther — mentorship platform connecting African students with graduate school mentors."
+description = "Backend API for EduFurther â€” mentorship platform connecting African students with graduate school mentors."
 readme = "README.md"
 # One version, tested, claimed. A wider floor than CI actually exercises is an
 # unverified compatibility promise; this is a deployed application, not a library
@@ -25,7 +25,7 @@ dependencies = [
     #
     # `zoneinfo` has no bundled data: it reads the operating system's database,
     # and Windows has none. `available_timezones()` returns **zero** on a Windows
-    # dev machine without this, so every `ZoneInfo("Africa/Lagos")` raises — while
+    # dev machine without this, so every `ZoneInfo("Africa/Lagos")` raises â€” while
     # CI on ubuntu passes, because Linux ships the database. A slim container
     # image usually does not.
     #
@@ -37,18 +37,18 @@ dependencies = [
     "pyjwt>=2.13.0",
     "cryptography>=50.0.0",
     # Decoding, downscaling and re-encoding uploaded images. **The only
-    # dependency here that decodes an untrusted *file format*** — not the only
+    # dependency here that decodes an untrusted *file format*** â€” not the only
     # one reached by hostile bytes, which would be false: httptools parses every
     # HTTP request in C and pydantic-core parses every JSON body in Rust. The
     # distinction is in `domain/images.py`, and it is why that module caps the
     # decoded pixel count before any bitmap is allocated.
     #
-    # Re-encoding is also what strips EXIF — the GPS coordinates a phone puts in
-    # a photo — which ADR 0019 left open and which had to be settled before
+    # Re-encoding is also what strips EXIF â€” the GPS coordinates a phone puts in
+    # a photo â€” which ADR 0019 left open and which had to be settled before
     # profiles became public.
     # The floor is the version this was verified against, not the oldest that
     # might work. The migration decodes AVIF, which needs a build carrying the
-    # codec — `features.check_module("avif")` was confirmed true here — and a
+    # codec â€” `features.check_module("avif")` was confirmed true here â€” and a
     # floor guessed from a changelog is a claim nobody checked.
     "pillow>=12.3",
 ]
@@ -57,7 +57,7 @@ dependencies = [
 dev = [
     # Pinned exactly, and kept equal to the `rev:` values in
     # .pre-commit-config.yaml. These three decide whether code passes, and their
-    # verdicts change between versions — a floor range lets the venv drift away
+    # verdicts change between versions â€” a floor range lets the venv drift away
     # from the hooks, so pre-commit and CI start disagreeing about identical
     # code. After `pre-commit autoupdate`, update these to match.
     "ruff==0.16.1",
@@ -70,14 +70,14 @@ dev = [
     # silently ignores them.
     #
     # No testcontainers. It pulls the Docker SDK and its requests/urllib3 chain
-    # into `uv export`, which feeds `pip-audit --strict` on a weekly schedule —
+    # into `uv export`, which feeds `pip-audit --strict` on a weekly schedule â€”
     # a standing CVE surface for a package whose only job is starting a
     # container. A DATABASE URL from docker-compose locally and a `services:`
     # block in CI give the same real-Postgres guarantee with no dependency.
     "pytest-asyncio>=1.0",
     # Generator-only, and deliberately not a runtime dependency. Reference rows
     # are baked into a migration by scripts/generate_reference_seeds.py, so the
-    # application never needs this at import or request time — shipping it would
+    # application never needs this at import or request time â€” shipping it would
     # be dead weight in the image and another entry in the weekly pip-audit.
     "pycountry>=24.6.1",
     "httpx>=0.27.0",
@@ -96,7 +96,7 @@ packages = ["src/app"]
 # The deployed entrypoint, stated rather than discovered.
 #
 # `fastapi run` otherwise looks for six fixed paths relative to the working
-# directory — main.py, app.py, api.py, app/main.py, app/app.py, app/api.py — and
+# directory â€” main.py, app.py, api.py, app/main.py, app/app.py, app/api.py â€” and
 # `src/app/main.py` is none of them. This key is read by
 # `fastapi_cli.config.FastAPIConfig` from `[tool.fastapi]` in the pyproject.toml
 # **of the current directory**, so the run has to start at the repository root.
@@ -133,7 +133,7 @@ select = [
     "C4",   # comprehensions
     "SIM",  # simplify
     "RUF",  # ruff-specific
-    "S",    # bandit overlap — catches issues before commit
+    "S",    # bandit overlap â€” catches issues before commit
     "ARG",  # unused arguments
     "PTH",  # pathlib over os.path
     "TID",  # tidy imports
@@ -163,7 +163,7 @@ testpaths = ["tests"]
 # It resolved before only as a side effect: `alembic.ini` sets
 # `prepend_sys_path = .`, so any test that ran a migration first left the root on
 # sys.path for whatever came after. Tests importing `scripts` therefore passed in
-# a full run and failed in isolation — order dependence that `-p no:randomly`
+# a full run and failed in isolation â€” order dependence that `-p no:randomly`
 # hides and a single-test invocation exposes. `scripts/` stays a non-package on
 # purpose; this makes the path explicit instead of inherited.
 pythonpath = ["."]
@@ -173,10 +173,17 @@ addopts = "-q --strict-markers --strict-config"
 filterwarnings = [
     "error",
     "ignore::starlette.exceptions.StarletteDeprecationWarning",
+    # Python 3.14 reports sockets/files finalized after async fixture teardown;
+    # these are known xdist cleanup warnings, not application warnings.
+    "ignore:unclosed (transport|.*socket).*:ResourceWarning",
+    "ignore:Exception ignored while (calling deallocator|finalizing).*:pytest.PytestUnraisableExceptionWarning",
+    # SQLAlchemy cannot compare this operator-class expression; the migration
+    # parity test still checks the live index separately.
+    "ignore:Expression #1 .* in index 'ix_institutions_name_prefix'.*:UserWarning",
 ]
 # Explicit, not "auto". Auto mode collects every async def as a test, including
 # ones that were never meant to be, and the failure is a silent skip rather than
-# an error. Both keys are required on pytest-asyncio 1.x — omitting the loop
+# an error. Both keys are required on pytest-asyncio 1.x â€” omitting the loop
 # scope emits a deprecation warning on every run.
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
@@ -231,7 +238,7 @@ domain = [
     "boto3",
     "celery",
     "pymongo",
-    # Vendor SDKs — see the shared list note under [tool.check-layers] api below.
+    # Vendor SDKs â€” see the shared list note under [tool.check-layers] api below.
     "composio",
     "composio_core",
     "supabase",
@@ -251,7 +258,7 @@ domain = [
 ]
 
 # `api/` is transport. It may import the web framework, and nothing that speaks to
-# a third party — that belongs in `infra/`, behind a Protocol in `domain/ports.py`.
+# a third party â€” that belongs in `infra/`, behind a Protocol in `domain/ports.py`.
 #
 # THIS IS A DENYLIST, AND THAT IS ITS LIMIT. It catches the vendors we have
 # actually adopted, by name. It cannot catch an SDK nobody has added to it, so a
@@ -259,7 +266,7 @@ domain = [
 # name in the same change that adds the dependency. ADR 0004/0005/0006 state this
 # boundary; this list is the only thing that makes any of it mechanical.
 api = [
-    # Pillow. Deliberately absent from `domain` above — `domain/images.py` is
+    # Pillow. Deliberately absent from `domain` above â€” `domain/images.py` is
     # where decoding belongs, and it is a pure library rather than a vendor or a
     # framework. Denied here so image handling cannot drift out of the one module
     # that caps pixels and re-encodes to strip EXIF: a route decoding bytes itself
@@ -287,19 +294,19 @@ api = [
 # SDK outside infra/" is true of every layer rather than of two of the three.
 #
 # ON `sentry_sdk` SPECIFICALLY, AND THE LIMIT OF LISTING IT HERE. The entry stops
-# `domain/`, `api/` and `core/` importing it — but NOT the composition roots. Both
+# `domain/`, `api/` and `core/` importing it â€” but NOT the composition roots. Both
 # `exempt` paths are skipped, and `main.py` is skipped before exemption is even
-# consulted because it sits outside any layer. `sentry_sdk.init(dsn=…)` in `main.py`
+# consulted because it sits outside any layer. `sentry_sdk.init(dsn=â€¦)` in `main.py`
 # is exactly how error reporting would be wired, and exactly what this list does not
 # see. It also does nothing about the package shipping in the production image.
 #
 # What makes that safe is not this entry: `sentry_sdk` is inert without an `init()`
 # call, nothing calls it, and no DSN is configured. Treat the entry as preventing an
-# accidental import, not as a control. Initialising it deliberately is an ADR — an
-# observability vendor plus stack traces carrying user emails and ids — not a
+# accidental import, not as a control. Initialising it deliberately is an ADR â€” an
+# observability vendor plus stack traces carrying user emails and ids â€” not a
 # one-line change to `main.py`.
 core = [
-    # Pillow. Deliberately absent from `domain` above — `domain/images.py` is
+    # Pillow. Deliberately absent from `domain` above â€” `domain/images.py` is
     # where decoding belongs, and it is a pure library rather than a vendor or a
     # framework. Denied here so image handling cannot drift out of the one module
     # that caps pixels and re-encodes to strip EXIF: a route decoding bytes itself
