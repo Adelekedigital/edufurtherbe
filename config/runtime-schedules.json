@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "timezone": "UTC",
+  "jobs": [
+    {
+      "name": "settle-sessions",
+      "handler": "/api/v1/internal/jobs/settle-sessions",
+      "cron": "30 * * * *",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "120s",
+      "retries": 3
+    },
+    {
+      "name": "credit-reminders",
+      "handler": "/api/v1/internal/jobs/credit-reminders",
+      "cron": "0 7 * * *",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "120s",
+      "retries": 3
+    },
+    {
+      "name": "monthly-credits",
+      "handler": "/api/v1/internal/jobs/monthly-credits",
+      "cron": "0 6 1 * *",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "120s",
+      "retries": 3
+    },
+    {
+      "name": "expire-credits",
+      "handler": "/api/v1/internal/jobs/expire-credits",
+      "cron": "0 5 1 * *",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "120s",
+      "retries": 3
+    },
+    {
+      "name": "sync-institutions",
+      "handler": "/api/v1/internal/jobs/sync-institutions",
+      "cron": "0 4 * * 1",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "300s",
+      "retries": 3
+    }
+  ]
+}

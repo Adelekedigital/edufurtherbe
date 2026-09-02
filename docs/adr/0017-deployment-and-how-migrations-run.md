@@ -4,7 +4,8 @@ Date: 2026-08-06
 
 ## Status
 
-Accepted
+Accepted — hosting-provider portion superseded by ADR 0028. External/manual
+migrations, no startup migrations, and the host-independent entrypoint remain.
 
 ## Context
 

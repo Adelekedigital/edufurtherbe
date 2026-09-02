@@ -1,15 +1,11 @@
 """Asking to be called back at a time, and proving the caller was us.
 
-**Why a scheduler at all**, when this codebase already has an hourly sweep: the
-sweep cannot deliver a reminder twelve hours before a deadline to within any
-useful precision, and a tighter cron is unreliable however short — GitHub
-Actions schedules are documented as delayable under load. Per-message scheduling
-is precise where polling is only as good as its interval (ADR 0025).
+QStash owns application-runtime scheduling (ADR 0028): recurring jobs use its
+Schedules API, while this adapter publishes precise per-message callbacks. Both
+arrive over signed HTTP and use the same rotating signing-key model.
 
-**QStash rather than a platform primitive.** Settled decision #13 keeps the
-FastAPI Cloud → Railway exit real by using no *platform-native* queue or cron;
-QStash is vendor-neutral HTTP, so the exit is untouched. It was already in
-``pyproject.toml``'s vendor allowlist before anything used it.
+**QStash rather than a host primitive.** Railway is the current host and QStash
+is vendor-neutral HTTP, so the application entrypoint remains portable.
 
 **Nothing is ever cancelled**, which is the design that makes this safe. A
 scheduled callback for a session that has since been answered simply does

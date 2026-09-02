@@ -6,6 +6,9 @@ Date: 2026-08-19
 
 Accepted.
 
+ADR 0028 expands QStash from precise callbacks to the default application-runtime
+scheduler and retryable asynchronous executor. This record's other decisions remain.
+
 Has **no counterpart in `docs/edufurther-migration/`** rather than contradicting
 one — the canonical package specifies no notification system at all. ADR 0007's
 authority is silent here, so this record is where the shape is decided.

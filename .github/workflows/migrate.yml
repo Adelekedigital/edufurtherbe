@@ -2,11 +2,10 @@ name: Migrate
 
 # Applies the Alembic chain to a database, on request and never otherwise.
 #
-# WHY THIS EXISTS RATHER THAN A PLATFORM RELEASE STEP (ADR 0017). FastAPI Cloud
-# has no hook between build and start, so it cannot run a migration at all. But
-# the reason this is a workflow rather than a platform feature is that it is
-# **independent of who serves traffic**: moving hosts changes nothing here, which
-# is what keeps the exit from any one platform cheap.
+# WHY THIS EXISTS RATHER THAN A PLATFORM RELEASE STEP (ADRs 0017 and 0028).
+# Railway is the current host, but migration timing remains independent of who
+# serves traffic: moving hosts changes nothing here, and startup never mutates
+# schema before a new application revision has proved healthy.
 #
 # The database is Supabase, reachable over the network, so this runs on a GitHub
 # runner and connects directly. It never touches the serving platform.

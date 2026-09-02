@@ -20,7 +20,8 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, File, Header, Path, Query, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime
+from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
@@ -204,6 +205,8 @@ from app.infra.db.session_writer import (
     transition,
 )
 from app.infra.db.slot_store import list_slots
+from app.infra.jobs.manifest import RUNTIME_JOB_NAMES, schedule_id
+from app.infra.jobs.runner import RuntimeJobs
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
 logger = logging.getLogger(__name__)
@@ -1593,6 +1596,69 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
 
 
 ReminderCallbackDep = Annotated[bool, Depends(reminder_callback)]
+
+
+class RuntimeJobRequest(BaseModel):
+    """The complete body QStash sends to a recurring job endpoint."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    job_id: str
+
+
+async def runtime_job_delivery(job_name: str, request: Request) -> dict[str, Any]:
+    """Verify raw QStash bytes, then parse and call the shared job runner."""
+    settings = _configured(request)
+    keys = tuple(
+        key.get_secret_value()
+        for key in (settings.qstash_current_signing_key, settings.qstash_next_signing_key)
+        if key is not None
+    )
+    if not keys or not settings.public_base_url:
+        raise AuthenticationError("runtime callback verification is not configured")
+
+    path = f"/api/v1/internal/jobs/{job_name}"
+    destination = f"{settings.public_base_url.rstrip('/')}{path}"
+    body = await request.body()
+    try:
+        verify_callback(
+            token=request.headers.get("Upstash-Signature", ""),
+            body=body,
+            url=destination,
+            signing_keys=keys,
+        )
+    except UntrustedCallbackError as exc:
+        raise AuthenticationError(str(exc)) from exc
+
+    if job_name not in RUNTIME_JOB_NAMES:
+        raise ValidationError("unknown runtime job")
+    try:
+        payload = RuntimeJobRequest.model_validate_json(body)
+    except PydanticValidationError as exc:
+        raise ValidationError("not a runtime job callback") from exc
+    if payload.job_id != schedule_id(settings.environment, job_name):
+        raise ValidationError("job_id does not match this environment and endpoint")
+
+    message_id = request.headers.get("Upstash-Message-Id")
+    logger.info(
+        "runtime job delivery",
+        extra={
+            "job_name": job_name,
+            "job_id": payload.job_id,
+            "upstash_message_id": message_id,
+        },
+    )
+    runner = getattr(request.app.state, "runtime_jobs", None) or RuntimeJobs(settings)
+    result = await runner.run(job_name, job_id=payload.job_id, message_id=message_id)
+    return {
+        "job": result.name,
+        "job_id": result.job_id,
+        "status": result.status,
+        "counts": result.counts,
+    }
+
+
+RuntimeJobDep = Annotated[dict[str, Any], Depends(runtime_job_delivery)]
 #: Where Google sends a mentor back. One constant, because the value is sent to
 #: Google on the consent request **and** again on the exchange, and Google
 #: refuses the pair if they differ — two strings that happen to agree would fail

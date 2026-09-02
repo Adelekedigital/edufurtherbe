@@ -1,97 +1,23 @@
-name: Monthly credits
+name: Monthly credits (manual recovery)
 
-# Grants three credits to every unlocked mentee, on the 1st.
-#
-# WHY A SCHEDULE. The same reason `settle-sessions` gives: nothing else can do
-# it. The grant depends on a *date arriving* rather than on anybody acting, so
-# there is no request to hang it off — a mentee who books nothing all month
-# generates no traffic at all, and they are exactly who this is for.
-#
-# WHY GITHUB ACTIONS AND NOT A QUEUE VENDOR. `migrate.yml` already reaches the
-# database from a runner, so the mechanism and the credential exist, and settled
-# decision #13 keeps the FastAPI Cloud -> Railway exit real by using no
-# platform-native cron.
-#
-# **An earlier version of this note dismissed QStash too broadly, and the
-# correction is worth keeping.** What is wrong here is QStash *Messages* —
-# per-user scheduled callbacks, which for this job would be ~1,200 a month
-# against one cron run, and whose "nothing is ever cancelled" design suits a
-# reminder that no-ops rather than a grant that must not double-write.
-#
-# QStash *Schedules* are a different feature: one recurring schedule calling one
-# URL, which is the same shape as this cron. That would work. It costs an
-# authenticated internal endpoint on a path that mutates credits — new HTTP
-# surface where today there is none — which is the reason not to, not a
-# limitation of QStash. Recorded so the next person weighing it starts from the
-# real trade rather than from a blanket "QStash is wrong here".
-#
-# WHY LATE IS SAFE AND EARLY IS NOT. Actions schedules are documented as
-# delayable under load, so this will sometimes fire hours after midnight. That
-# costs nothing: the period comes from the expiry the grant computes, not from
-# the day the job runs, so a run on the 3rd still belongs to that month and
-# still collides with one that already happened. Running *before* the 1st would
-# grant next month's credits early — which only the schedule prevents, and which
-# is worth knowing before somebody triggers this by hand to test it.
-#
-# SAFE TO RUN REPEATEDLY, WHICH IT WILL BE.
-# `uq_credit_lots_one_monthly_grant_per_period` makes a second run in the same
-# month insert nothing. That guard matters more here than for the hourly sweep:
-# this runs twelve times a year, so a mistake has eleven months to sit unnoticed
-# — and the retry that would expose it is the same retry that would double
-# everybody's balance without it.
-#
-# THIS JOB IS NOT SELF-ANNOUNCING. Twelve runs a year means a silent failure is
-# invisible for a month. GitHub also disables scheduled workflows after a period
-# of repository inactivity, which fails as *silence* — worth a heartbeat before
-# this is relied on, and named here rather than discovered in January.
-
-on:
-  schedule:
-    # 06:00 UTC on the 1st. Off midnight deliberately: the top of the hour is
-    # when Actions schedules are most delayed, and the grant has no reason to
-    # race the reset it is granting for.
-    - cron: "0 6 1 * *"
-  # No inputs, for the reason `sync-institutions` gives: one environment during
-  # the build and migration phase makes a one-option dropdown decoration.
-  workflow_dispatch:
+# QStash owns runtime cadence. The database uniqueness constraint still makes
+# this manual recovery safe to retry within a grant period.
+on: workflow_dispatch
 
 permissions:
-  # Read-only. This job changes a database, never the repository.
   contents: read
-
-concurrency:
-  # Two runs against one database would race on the same rows. The period guard
-  # would refuse the loser's inserts, so the outcome is correct either way —
-  # this is here so the *report* is, since two runs would each claim a count.
-  group: monthly-credits-staging
-  cancel-in-progress: false
 
 jobs:
   grant:
-    name: grant monthly credits (staging)
     runs-on: ubuntu-latest
-    # Staging only, for the reason the other scheduled jobs give: there is no
-    # production environment to hold a `DATABASE_URL`, and a schedule pointed at
-    # one that does not exist fails every month, silently enough that nobody
-    # looks.
     environment: staging
-
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      # FAIL CLOSED. No exit code is forgiven. Unlike the institution sync this
-      # job has no partial-success condition to distinguish, and unlike the
-      # hourly sweep it gets one attempt a month — so a swallowed failure is a
-      # month with no credits and nothing saying so.
-      - name: Grant
+      - run: uv sync --all-extras --dev
+      - name: Grant monthly credits
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: uv run python scripts/grant_monthly_credits.py

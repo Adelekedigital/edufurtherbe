@@ -1,73 +1,21 @@
-name: Credit reminders
+name: Credit reminders (manual recovery)
 
-# Queues a nudge for anybody sitting on credits that are about to expire.
-#
-# WHY DAILY WHERE THE OTHER CREDIT JOBS ARE MONTHLY. The grant and the expiry
-# sweep act *on* the month boundary, so they run once at it. This one acts
-# fourteen and seven days before an expiry, and the expiry it watches is a
-# property of each lot rather than of the calendar — a refund inherits an expiry
-# and a future source may not use `end_of_month` at all. Asking daily "what is
-# due now" needs no calendar arithmetic and no memory of what has fired.
-#
-# RUNNING TWICE IS FREE, AND SO IS MISSING A DAY. `uq_outbox_events_reminder`
-# refuses a second row for a nudge already queued, so a repeat writes nothing;
-# and because the window is a day wide on each side of the offset, a run that
-# slips by hours still finds the same people. A missed day costs one nudge, never
-# a duplicate.
-#
-# IT QUEUES, IT DOES NOT SEND. The outbox drain talks to Loops. A provider
-# outage delays delivery rather than losing the message, and this job's count is
-# "people owed a nudge", not "emails delivered".
-#
-# THE MESSAGE IS THE ONE THAT INVITES BEING MUTED. Every other credit email
-# reports something that happened; this one asks somebody to act. Sending it to
-# a person whose credits are not expiring — the never-expiring starter is the
-# case — is how a sender gets filtered, which is why the sweep is narrow and why
-# its exclusions carry the tests rather than its inclusions.
-
-on:
-  schedule:
-    # 07:00 UTC daily, after the monthly grant's 06:00 on the 1st so the two do
-    # not both hold rows for the same users, and early enough that a nudge lands
-    # in the morning across Lagos, Berlin and Toronto rather than overnight.
-    - cron: "0 7 * * *"
-  workflow_dispatch:
+# QStash owns runtime cadence. This remains an exceptional recovery path.
+on: workflow_dispatch
 
 permissions:
-  # Read-only. This job changes a database, never the repository.
   contents: read
-
-concurrency:
-  # Two runs would race on the same rows. The index refuses the loser's inserts
-  # so the outcome is correct either way — this is here so the *report* is.
-  group: credit-reminders-staging
-  cancel-in-progress: false
 
 jobs:
   remind:
-    name: queue credit reminders (staging)
     runs-on: ubuntu-latest
-    # Staging only, for the reason every other scheduled job here gives: there is
-    # no production environment holding a `DATABASE_URL`, and a schedule pointed
-    # at one that does not exist fails every day, silently enough that nobody
-    # looks.
     environment: staging
-
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      # FAIL CLOSED. Unlike the monthly jobs this runs 365 times a year, so a
-      # single failure is cheap and a *run* of them is the signal — which is
-      # exactly what a red badge on consecutive days shows and a swallowed exit
-      # code hides.
+      - run: uv sync --all-extras --dev
       - name: Queue reminders
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
