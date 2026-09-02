@@ -28,6 +28,7 @@ from conftest import PROJECT_ROOT
 # from a silently smaller test run into a failure.
 EXPECTED_MODELS = {
     "Country",
+    "AdminCreditGrant",
     "CreditLot",
     "CreditTransaction",
     "Language",
@@ -120,7 +121,9 @@ TIMESTAMP_COLUMNS = ("created_at", "updated_at")
 #: column and no `trg_set_updated_at`. `CreditTransaction` joins them under
 #: M5b decision 8; the canonical DDL gives it the column while calling the
 #: table append-only a few lines above.
-APPEND_ONLY = frozenset({"MentorStatusEvent", "SessionEvent", "CreditTransaction"})
+APPEND_ONLY = frozenset(
+    {"MentorStatusEvent", "SessionEvent", "CreditTransaction", "AdminCreditGrant"}
+)
 
 
 def mapped_classes() -> list[type]:

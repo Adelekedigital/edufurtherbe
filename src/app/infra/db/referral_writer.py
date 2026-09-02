@@ -36,7 +36,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
-from app.domain.credits import UNLOCK_GRANT
+from app.domain.credits import CreditLadder
 from app.domain.enums import CreditSource
 from app.domain.referrals import make_code, may_qualify
 from app.infra.db.credit_writer import grant
@@ -85,7 +85,9 @@ async def create_referral(
     return created
 
 
-async def claim_referral(session: AsyncSession, invitee_id: UUID, code: str) -> Any:
+async def claim_referral(
+    session: AsyncSession, invitee_id: UUID, code: str, *, ladder: CreditLadder
+) -> Any:
     """Attach the caller to the invite that named this code. Does not commit.
 
     Idempotent: claiming a code you already hold returns it unchanged rather
@@ -150,7 +152,7 @@ async def claim_referral(session: AsyncSession, invitee_id: UUID, code: str) -> 
                 UserOnboarding.completed_at.is_not(None),
             )
         ):
-            await qualify_invitee(session, invitee_id)
+            await qualify_invitee(session, invitee_id, ladder=ladder)
         return claimed
 
     return (
@@ -162,7 +164,7 @@ async def claim_referral(session: AsyncSession, invitee_id: UUID, code: str) -> 
     ).one()
 
 
-async def qualify_invitee(session: AsyncSession, invitee_id: UUID) -> bool:
+async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: CreditLadder) -> bool:
     """This user finished onboarding — qualify their invite and pay the referrer.
 
     Returns whether an unlock was created. Does not commit; the caller owns the
@@ -211,7 +213,7 @@ async def qualify_invitee(session: AsyncSession, invitee_id: UUID) -> bool:
         session,
         referral.referrer_id,
         source=CreditSource.REFERRAL_UNLOCK,
-        quantity=UNLOCK_GRANT,
+        quantity=ladder.unlock,
         # App clock, matching `credit_store`'s read. Mixing the two would put
         # the boundary a lot expires on in a different frame from the filter
         # that decides whether it is spendable.

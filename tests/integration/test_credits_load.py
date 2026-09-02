@@ -20,6 +20,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.core.config import Settings
+from app.domain.credits import credit_ladder
 from app.domain.transform.credits import ACTIVE_WITHIN, plan_opening_balances
 from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_seen
 from app.infra.etl.reconcile import reconcile_credits
@@ -27,6 +29,8 @@ from app.infra.etl.reconcile import reconcile_credits
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 CUTOVER = dt.datetime(2026, 9, 15, 12, 0, tzinfo=dt.UTC)
+#: Explicit settings, so the loader under test is not reading the machine.
+LADDER = credit_ladder(Settings(_env_file=None))
 #: When a migrated user registered in Bubble — long before any window.
 ANCIENT = dt.datetime(2024, 1, 1, tzinfo=dt.UTC)
 EXPIRY = dt.datetime(2026, 10, 1, tzinfo=dt.UTC)
@@ -115,8 +119,10 @@ async def run_load(engine: AsyncEngine, records: list[dict[str, Any]]) -> Any:
     async with engine.begin() as conn:
         finished = await finished_onboarding(conn)
         seen = await recently_seen(conn, since=CUTOVER - ACTIVE_WITHIN)
-        plan = plan_opening_balances(records, cutover=CUTOVER, finished=finished, seen=seen)
-        await CreditLoader(conn).load(plan)
+        plan = plan_opening_balances(
+            records, cutover=CUTOVER, ladder=LADDER, finished=finished, seen=seen
+        )
+        await CreditLoader(conn, ladder=LADDER).load(plan)
         return await reconcile_credits(conn, plan)
 
 
@@ -354,7 +360,9 @@ async def test_the_totals_catch_what_the_counts_cannot(db_engine: AsyncEngine) -
 
     async with db_engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        plan = plan_opening_balances([record("holder", "3")], cutover=CUTOVER, finished=finished)
+        plan = plan_opening_balances(
+            [record("holder", "3")], cutover=CUTOVER, ladder=LADDER, finished=finished
+        )
         result = await reconcile_credits(conn, plan)
 
     assert all(check.ok for check in result.checks)
@@ -425,7 +433,9 @@ async def test_a_lot_with_no_grant_row_is_reported_unexplained(
 
     async with db_engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        plan = plan_opening_balances([record("holder", "3")], cutover=CUTOVER, finished=finished)
+        plan = plan_opening_balances(
+            [record("holder", "3")], cutover=CUTOVER, ladder=LADDER, finished=finished
+        )
         result = await reconcile_credits(conn, plan)
 
     assert result.unexplained == ("holder",)
@@ -508,7 +518,9 @@ async def test_an_unexplained_lot_is_not_hidden_by_a_starter_for_the_same_user(
 
     async with db_engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        plan = plan_opening_balances([record("holder", "3")], cutover=CUTOVER, finished=finished)
+        plan = plan_opening_balances(
+            [record("holder", "3")], cutover=CUTOVER, ladder=LADDER, finished=finished
+        )
         result = await reconcile_credits(conn, plan)
 
     assert result.unexplained == ("holder",)
@@ -687,7 +699,7 @@ async def test_a_missing_unlock_is_reported_by_name(db_engine: AsyncEngine) -> N
         finished = await finished_onboarding(conn)
         seen = await recently_seen(conn, since=CUTOVER - ACTIVE_WITHIN)
         plan = plan_opening_balances(
-            [record("holder", "3")], cutover=CUTOVER, finished=finished, seen=seen
+            [record("holder", "3")], cutover=CUTOVER, ladder=LADDER, finished=finished, seen=seen
         )
         result = await reconcile_credits(conn, plan)
 

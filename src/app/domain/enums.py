@@ -539,12 +539,17 @@ class ActorType(StrEnum):
 class CreditSource(StrEnum):
     """Where a lot came from. One origin, one expiry — that is what a lot is.
 
-    **Five members, and every one has a producer in M5b.** The canonical DDL
-    declares seven; settled decision #21 names this exact enum as its cautionary
-    example, because `credit_source` "contains `purchase` while payments are out
-    of scope by decision #8". A vocabulary is not a wish list — a shipped member
-    invites a writer, and the reason to defer `purchase`, `promotional` and
-    `admin_grant` is that nothing writes one.
+    **Six members, and every one has a producer.** The canonical DDL declares
+    seven; settled decision #21 names this exact enum as its cautionary example,
+    because `credit_source` "contains `purchase` while payments are out of scope
+    by decision #8". A vocabulary is not a wish list — a shipped member invites a
+    writer, and the reason to defer `purchase` and `promotional` is that nothing
+    writes one.
+
+    `admin_grant` was deferred on that same argument at PR 1 and ships here,
+    in the change that adds the endpoint writing it. That is #21 working rather
+    than being set aside: the rule is *no member without a producer*, not *never
+    add a member*.
 
     Declared here rather than beside `domain/credits.py`'s rules because
     `test_every_domain_enum_is_registered_exactly_once` partitions *this
@@ -573,6 +578,18 @@ class CreditSource(StrEnum):
     #: triggers are settled after the session, so the lot that paid for it may
     #: already be dead, and returning a credit to a dead lot refunds nothing.
     REFUND = "refund"
+
+    #: **A platform admin put it there.** Support's only way to make somebody
+    #: whole — a session that broke in a way no refund path covers, a goodwill
+    #: gesture, a correction after a bug.
+    #:
+    #: Deferred at PR 1 under settled decision #21 because nothing wrote one.
+    #: This is the writer, so the member ships with it rather than before it.
+    #:
+    #: **It expires like every other grant.** Not in `NON_EXPIRING`: only the
+    #: starter is, and that is because it exists to give somebody a first taste
+    #: of the platform rather than because grants are permanent.
+    ADMIN_GRANT = "admin_grant"
 
     #: What a user carried out of Bubble. Not `monthly_free`: the legacy renewal
     #: was a per-user scheduled workflow rather than a monthly grant — the dates

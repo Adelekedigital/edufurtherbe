@@ -50,7 +50,7 @@ class CreditsRead(BaseModel):
     and the client draws. A percentage computed here would be a third
     representation of the same fact.
 
-    ``allowance`` is ``max(MONTHLY_ALLOWANCE, balance)`` rather than the
+    ``allowance`` is ``max(ladder.steady_state, balance)`` rather than the
     allowance alone — a refund landing after the monthly grant leaves a balance
     above it, and the card would otherwise read "4 credits left" beside a bar
     with three positions.

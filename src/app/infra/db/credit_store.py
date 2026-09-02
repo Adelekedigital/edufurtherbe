@@ -42,7 +42,7 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.credits import allowance_for, end_of_month, state_for
+from app.domain.credits import CreditLadder, allowance_for, end_of_month, state_for
 from app.domain.enums import CreditState
 from app.infra.db.models.credits import CreditLot
 
@@ -95,18 +95,18 @@ class CreditSummary:
     next_reset_at: dt.datetime
 
     @classmethod
-    def of(cls, *, balance: int, next_reset_at: dt.datetime) -> CreditSummary:
+    def of(cls, *, balance: int, next_reset_at: dt.datetime, ladder: CreditLadder) -> CreditSummary:
         """Derive the three published values from the one measured one."""
         return cls(
             balance=balance,
-            allowance=allowance_for(balance),
-            state=state_for(balance),
+            allowance=allowance_for(balance, ladder),
+            state=state_for(balance, ladder),
             next_reset_at=next_reset_at,
         )
 
 
 async def get_credit_summary(
-    session: AsyncSession, user_id: UUID, *, now: dt.datetime | None = None
+    session: AsyncSession, user_id: UUID, *, ladder: CreditLadder, now: dt.datetime | None = None
 ) -> CreditSummary:
     """This user's spendable balance, banded, with the date it resets.
 
@@ -128,4 +128,6 @@ async def get_credit_summary(
         )
     )
 
-    return CreditSummary.of(balance=int(total or 0), next_reset_at=end_of_month(moment))
+    return CreditSummary.of(
+        balance=int(total or 0), next_reset_at=end_of_month(moment), ladder=ladder
+    )

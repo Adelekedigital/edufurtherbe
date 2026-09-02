@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
 from app.api.schemas.admin import DeclineRequest, MergeRequest
+from app.api.schemas.admin_credits import AdminCreditGrantWrite
 from app.api.schemas.availability import (
     AvailabilityExceptionWrite,
     AvailabilityRulePatch,
@@ -75,6 +76,7 @@ from app.core.errors import (
 from app.domain.assets import AssetKind, object_path
 from app.domain.attendance import join_window
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
+from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole, MeetingProvider, MentorStatusType
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES, process
@@ -96,6 +98,7 @@ from app.infra.clients.scheduler import (
     verify_callback,
 )
 from app.infra.clients.secrets import SealError, seal, sealed_value, unsealed_value
+from app.infra.db.admin_credits import grant_credits, list_admin_grants
 from app.infra.db.admin_store import (
     approve_institution,
     merge_institution,
@@ -495,7 +498,9 @@ AwardsDep = Annotated[list[dict[str, Any]], Depends(target_awards)]
 MentorProfileDep = Annotated[dict[str, Any] | None, Depends(target_mentor_profile)]
 
 
-async def own_attributes(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
+async def own_attributes(
+    user: CurrentUserDep, session: SessionDep, ladder: LadderDep
+) -> dict[str, Any]:
     """The caller's own four collections, for the one-call profile render.
 
     **The same store functions the `/users/{id}/...` dependencies above call.**
@@ -516,7 +521,7 @@ async def own_attributes(user: CurrentUserDep, session: SessionDep) -> dict[str,
         # "has a mentee goal", which the `goal` fetch above already answers, so
         # branching here would mean ordering these two against each other for
         # one `SUM` against an indexed column.
-        "credits": await get_credit_summary(session, user_id),
+        "credits": await get_credit_summary(session, user_id, ladder=ladder),
     }
 
 
@@ -555,7 +560,7 @@ CreatedReferralDep = Annotated[Any, Depends(created_referral)]
 
 
 async def claimed_referral(
-    payload: ReferralClaim, user: CurrentUserDep, session: SessionDep
+    payload: ReferralClaim, user: CurrentUserDep, session: SessionDep, ladder: LadderDep
 ) -> Any:
     """Attach the caller to an invite.
 
@@ -564,7 +569,7 @@ async def claimed_referral(
     claiming is the invitee saying who invited them, and finishing is the work
     that earns the referrer anything.
     """
-    referral = await claim_referral(session, user["id"], payload.code)
+    referral = await claim_referral(session, user["id"], payload.code, ladder=ladder)
     await session.commit()
     return referral
 
@@ -587,7 +592,9 @@ async def own_onboarding(user: CurrentUserDep, session: SessionDep) -> Any:
 OwnOnboardingDep = Annotated[Any, Depends(own_onboarding)]
 
 
-async def completed_onboarding(user: CurrentUserDep, session: SessionDep) -> OnboardingResult:
+async def completed_onboarding(
+    user: CurrentUserDep, session: SessionDep, ladder: LadderDep
+) -> OnboardingResult:
     """Mark the caller's onboarding finished and pay the starter credit.
 
     **One transaction, and the commit is here.** The completion and the grant
@@ -599,7 +606,7 @@ async def completed_onboarding(user: CurrentUserDep, session: SessionDep) -> Onb
     No authorization argument: `CurrentUserDep` *is* the caller, so there is no
     target to check.
     """
-    result = await complete_onboarding(session, user["id"])
+    result = await complete_onboarding(session, user["id"], ladder=ladder)
     await session.commit()
     return result
 
@@ -763,6 +770,43 @@ def require_admin(*roles: AdminRole) -> Callable[[dict[str, Any]], uuid.UUID]:
 #: Curating the catalogue — institutions. `limited_access` may look, not act.
 CatalogueAdminDep = Annotated[uuid.UUID, Depends(require_admin())]
 
+#: Putting credits into somebody's balance. **Every live grant may do it**, which
+#: is a deliberate widening from the `super_admin` split #220 uses for moderation:
+#: removing a review from a public profile is curation, where crediting somebody
+#: is support work that whoever is on shift has to be able to do.
+#:
+#: **Every role listed, which is what "any platform admin" costs here.**
+#: `require_admin()` with no arguments admits `super_admin` *only* — the empty
+#: call reads like "any admin" and is the narrowest possible gate, which is how
+#: the first version of this dependency shipped documented as one thing and
+#: behaving as its opposite. The integration test for `limited_access` is what
+#: caught it.
+#:
+#: **The asymmetry with review moderation is deliberate, and worth stating
+#: because the two shipped a day apart.** Deciding a report is `super_admin`
+#: only; crediting somebody is not. Three things separate them:
+#:
+#: *Reversibility.* Upholding a report sets `reviews.deleted_at` and takes
+#: somebody's words off a public profile — the author is not told and cannot
+#: undo it. A credit is a lot with an expiry, visible on the recipient's own
+#: card, and every one is in `admin_credit_grants` with a name against it.
+#:
+#: *Who it lands on.* A moderation decision affects a third party — the mentor
+#: being reviewed — who did not ask for it. A credit affects the person
+#: receiving it, in their favour.
+#:
+#: *When it is needed.* Support work happens at whatever hour somebody is stuck;
+#: a report can wait for the person whose judgement it is. Gating credits on one
+#: role means a mentee wrongly charged waits for that person to wake up.
+#:
+#: Bounded rather than trusted: capped at the monthly grant per action,
+#: soft-deleted recipients refused, and the whole history readable by every
+#: admin — so a grant nobody can justify is one anybody can find.
+CreditAdminDep = Annotated[
+    uuid.UUID,
+    Depends(require_admin(AdminRole.MENTOR_APPROVAL, AdminRole.LIMITED_ACCESS)),
+]
+
 #: Approving mentors, which is what the `mentor_approval` grant is named for.
 MentorAdminDep = Annotated[uuid.UUID, Depends(require_admin(AdminRole.MENTOR_APPROVAL))]
 
@@ -770,6 +814,132 @@ MentorAdminDep = Annotated[uuid.UUID, Depends(require_admin(AdminRole.MENTOR_APP
 QueueViewerDep = Annotated[
     uuid.UUID,
     Depends(require_admin(AdminRole.MENTOR_APPROVAL, AdminRole.LIMITED_ACCESS)),
+]
+
+
+def _canonical_grant(payload: AdminCreditGrantWrite) -> dict[str, Any]:
+    """The request as the endpoint actually treats it.
+
+    Recipients sorted and deduplicated, because `grant_credits` does both and
+    says so in the OpenAPI description. The fingerprint has to agree with the
+    behaviour, or a legitimate retry looks like a new request.
+    """
+    body = payload.model_dump(mode="json")
+    body["user_ids"] = sorted({str(user_id) for user_id in payload.user_ids})
+    return body
+
+
+async def granted_admin_credits(
+    payload: AdminCreditGrantWrite,
+    admin_id: CreditAdminDep,
+    session: SessionDep,
+    ladder: LadderDep,
+    idempotency_key: Annotated[
+        str,
+        Header(
+            alias="Idempotency-Key",
+            min_length=1,
+            max_length=255,
+            description="A value unique to this grant attempt. Retries must reuse it.",
+        ),
+    ],
+) -> tuple[dict[str, Any], int, bool]:
+    """Reserve the key, write the lots, store the answer — one transaction.
+
+    **Required rather than optional, for the reason booking gives**: this is
+    money, and an optional header makes the guarantee opt-in for exactly the
+    caller who most needs it. A double-submitted grant is not recoverable by
+    the admin noticing — the credits are already spendable.
+
+    **The key and the write commit together**, so a stored `201` for lots that
+    were never inserted cannot replay ids of nothing.
+    """
+    reservation = await reserve(
+        session,
+        key=idempotency_key,
+        user_id=admin_id,
+        endpoint=ENDPOINT_ADMIN_CREDITS,
+        # **Canonicalised, because the endpoint promises duplicates and order
+        # do not matter.** `request_fingerprint` sorts object keys but leaves
+        # list order alone, so a retry that deduped or reordered its
+        # recipients — which the description tells clients is harmless —
+        # hashes differently and is refused as a *different* request. The
+        # admin then has no way to learn whether the first attempt landed,
+        # which is the one question a retry is asking.
+        request_hash=request_fingerprint(ENDPOINT_ADMIN_CREDITS, _canonical_grant(payload)),
+    )
+    if isinstance(reservation, Replayed):
+        return reservation.body, reservation.status_code, True
+    if isinstance(reservation, Mismatched):
+        raise ValidationError(
+            "this Idempotency-Key was already used for a different request; "
+            "use a new key, or resend the original body"
+        )
+    if not isinstance(reservation, Held):
+        raise ConflictError("a request with this Idempotency-Key is still in flight")
+
+    result = await grant_credits(
+        session,
+        admin_id=admin_id,
+        user_ids=tuple(payload.user_ids),
+        quantity=payload.quantity,
+        note=payload.note,
+        ladder=ladder,
+        now=dt.datetime.now(dt.UTC),
+    )
+    body = {
+        "granted": [str(user_id) for user_id in result.granted],
+        "unresolved": [str(user_id) for user_id in result.unresolved],
+        "quantity": payload.quantity,
+    }
+    # The answer and the lots commit together, so a stored response cannot
+    # survive a crash that lost the credits it describes.
+    await record_response(session, reservation, status_code=GRANTED, body=body)
+    await session.commit()
+    return body, GRANTED, False
+
+
+async def admin_grant_history(
+    _: CreditAdminDep,
+    session: SessionDep,
+    # `le=MAX_PAGE_SIZE`, not the `le=200` the offset-paged admin queues use:
+    # this one goes through `clamp_limit`, which caps at 50, so publishing 200
+    # would advertise a bound the endpoint never satisfies.
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+    cursor: Annotated[str | None, Query(description="From a previous `next_cursor`.")] = None,
+    granted_by: Annotated[
+        uuid.UUID | None,
+        Query(description="Narrow to one admin's grants."),
+    ] = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """The history of admin credit grants, newest first.
+
+    **Every admin sees every grant, including their own and each other's.** An
+    audit only one person can read is not an audit — and the `granted_by` filter
+    exists so somebody can narrow to their own without that being the default.
+
+    Read by the same gate that writes: whoever may hand out credits may see what
+    has been handed out, and splitting the two would let an admin create rows
+    they cannot then review.
+    """
+    rows, has_more = await list_admin_grants(
+        session,
+        limit=clamp_limit(limit),
+        after=decode_cursor(cursor),
+        granted_by=granted_by,
+    )
+    # **Minted beside the decode**, the rule `mentor_page` states: issuing the
+    # token where the sort key is known keeps the two halves of the codec from
+    # drifting, which is the defect that once invalidated every cursor an
+    # endpoint handed out.
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_cursor(last["created_at"].isoformat(), last["id"])
+
+
+AdminGrantHistoryDep = Annotated[
+    tuple[list[dict[str, Any]], str | None], Depends(admin_grant_history)
 ]
 
 
@@ -1190,6 +1360,28 @@ REMINDER_CALLBACK_PATH = "/api/v1/callbacks/reminders"
 
 ENDPOINT_BOOKING = "POST /api/v1/sessions"
 
+#: The second endpoint with an idempotency key, and the second that moves
+#: something like money. Kept beside the first so the two fingerprints are
+#: obviously distinct — a shared endpoint string would let a booking key replay
+#: a credit grant.
+ENDPOINT_ADMIN_CREDITS = "POST /api/v1/admin/credits"
+
+#: **200, not 201, and that is a decision rather than an oversight.**
+#:
+#: `test_a_creating_route_sends_a_location` requires every `201` route to set
+#: `Location`, and it is right to: *"a client that has to guess the URL of what
+#: it just made is being told less than the response could tell it."*
+#:
+#: A bulk grant has no single URL to give. It creates one lot per recipient, in
+#: as many places, and the body is a *report* — what landed, what did not — not a
+#: representation of one created thing. Setting `Location: /api/v1/admin/credits`
+#: would satisfy the letter of the rule by pointing at a collection that cannot
+#: be read, which is worse than not pointing at all.
+#:
+#: So the status says what actually happened rather than the header lying about
+#: it. The rule keeps its full force for routes that create one thing.
+GRANTED = status.HTTP_200_OK
+
 #: The one success code booking has. Stored on the key so a replay returns the
 #: same status as the original, rather than a `200` this endpoint never issues.
 CREATED = status.HTTP_201_CREATED
@@ -1276,6 +1468,23 @@ async def booked_session(
 
 
 BookedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(booked_session)]
+
+AdminCreditGrantDep = Annotated[tuple[dict[str, Any], int, bool], Depends(granted_admin_credits)]
+
+
+def _ladder(request: Request) -> CreditLadder:
+    """This app's credit ladder, resolved through the settings seam.
+
+    **One dependency rather than three call sites reaching for configuration.**
+    `credit_ladder` takes a `Settings` precisely so the choice of *which*
+    settings is made here — in the composition root — and `_configured` is the
+    rule for that: an app built with explicit settings must not silently run on
+    the process-wide environment cache.
+    """
+    return credit_ladder(_configured(request))
+
+
+LadderDep = Annotated[CreditLadder, Depends(_ladder)]
 
 
 def _configured(request: Request) -> Settings:

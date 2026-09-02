@@ -260,7 +260,7 @@ async def test_a_migrated_balance_renders_on_the_card(
     migration working.
 
     Five is the legacy maximum and 29 of 43 dev users hold it, so it is also the
-    case that decides whether `allowance_for` raises: `STEADY_STATE` is four, and
+    case that decides whether `allowance_for` raises: the steady state is four, and
     a migrated user arrives *above* it.
     """
     auth_id = uuid4()
@@ -279,7 +279,7 @@ async def test_a_migrated_balance_renders_on_the_card(
     assert block["balance"] == 5
     # **The bar has to be able to draw five.** Clamping to the steady state of
     # four would render "5 credits left" beside four positions — which is why
-    # `allowance_for` publishes `max(STEADY_STATE, balance)`.
+    # `allowance_for` publishes `max(ladder.steady_state, balance)`.
     assert block["allowance"] == 5
     assert block["state"] == "on_track"
 

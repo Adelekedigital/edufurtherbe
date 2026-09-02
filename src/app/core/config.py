@@ -71,6 +71,18 @@ PREFIXED_FIELDS = frozenset({"environment", "debug"})
 Environment = Literal["local", "ci", "staging", "production"]
 
 
+#: The ceiling on every rung of the credit ladder.
+#:
+#: **A tripwire, not a product rule**, and far below the `smallint` limit that
+#: makes a bound necessary at all: the mistake worth catching is a typed zero too
+#: many. Three becoming thirty is plausible configuration; three becoming three
+#: hundred is not.
+#:
+#: Change it deliberately if the economics ever need more — anything at or below
+#: 32767 is safe from the database's point of view.
+CREDIT_CEILING = 100
+
+
 def env_key(field: str) -> str:
     """The environment variable a field is read from.
 
@@ -106,6 +118,49 @@ class Settings(BaseSettings):
 
     environment: Environment = "local"
     debug: bool = False
+
+    # ------------------------------------------------------------------
+    # The credit ladder
+    #
+    # **Configuration because the economics are still moving**, not because the
+    # rules are. What each grant *means* stays in `domain/credits.py`; these are
+    # only the sizes, and `credit_ladder(settings)` there is the single reader.
+    #
+    # Named `CREDIT_*` in the environment rather than a bare `MONTHLY_ALLOWANCE`:
+    # these sit beside a platform's worth of other variables, and a name that
+    # generic is one somebody else eventually sets for something else.
+    #
+    # Defaults are the values the product shipped with, so an unset environment
+    # behaves exactly as before. Every one is `gt=0`: a grant of zero is a lot
+    # `ck_credit_lots_quantity_granted_positive` refuses at the database, and a
+    # negative one is a debit wearing a grant's name.
+    #
+    # **And every one is bounded**, which is not symmetry for its own sake.
+    # These flow into `credit_lots.quantity_granted`, a `smallint`, so a value
+    # above 32767 passes startup validation and then fails at *insert* — a
+    # configuration mistake surfacing on the 1st, inside a scheduled job nobody
+    # is watching, as a database range error rather than at boot where it
+    # belongs. `CREDIT_MONTHLY_ALLOWANCE` also caps what an admin may hand out
+    # in one action, so an unbounded value is unbounded authority too.
+    # ------------------------------------------------------------------
+
+    #: What finishing onboarding earns. **Never expires** — that is a rule, in
+    #: `NON_EXPIRING`, and is deliberately not configurable here.
+    credit_starter_grant: int = Field(
+        default=1, gt=0, le=CREDIT_CEILING, validation_alias=env_key("credit_starter_grant")
+    )
+
+    #: Added by the first qualifying invite, on top of the starter.
+    credit_referral_unlock_grant: int = Field(
+        default=2, gt=0, le=CREDIT_CEILING, validation_alias=env_key("credit_referral_unlock_grant")
+    )
+
+    #: Granted on the 1st to every unlocked mentee, and the cap on what a
+    #: migrated user may carry in.
+    credit_monthly_allowance: int = Field(
+        default=3, gt=0, le=CREDIT_CEILING, validation_alias=env_key("credit_monthly_allowance")
+    )
+
     # ``NoDecode`` is load-bearing, not decoration. Without it pydantic-settings
     # JSON-decodes a complex type *inside the settings source*, before any
     # validator runs, and a bare origin typed into a cloud console fails as

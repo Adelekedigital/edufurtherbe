@@ -30,7 +30,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from starlette.types import ASGIApp
 
 from app.api.limits import BodyLimitMiddleware
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
+from app.domain.credits import CreditLadder, credit_ladder
 from app.infra.auth.admin import SupabaseAdminClient
 from app.infra.auth.dev_tokens import mint_dev_token
 from app.infra.auth.supabase import SupabaseTokenVerifier
@@ -117,6 +118,25 @@ def api_storage() -> SupabaseStorage | None:
     return None
 
 
+def build_api_app(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None, settings: Settings
+) -> Any:
+    """An app bound to this test's database, with the settings it should run on.
+
+    **Extracted so a test wanting different configuration does not rebuild the
+    wiring.** `_configured` resolves through `app.state.settings`, so changing an
+    environment variable no longer reaches a running app — which is the seam
+    working, and which means the only way to exercise a different credit ladder
+    end to end is to build the app with different settings.
+    """
+    app = create_app(settings)
+    app.state.session_factory = create_session_factory(db_engine)
+    app.state.token_verifier = SupabaseTokenVerifier(secret=SECRET)
+    if api_storage is not None:
+        app.state.storage = api_storage
+    return app
+
+
 @pytest_asyncio.fixture
 async def api_client(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
@@ -132,11 +152,7 @@ async def api_client(
     to a different loop" — which sounds like an asyncpg bug and is a test-harness
     one.
     """
-    app = create_app(Settings(_env_file=None))
-    app.state.session_factory = create_session_factory(db_engine)
-    app.state.token_verifier = SupabaseTokenVerifier(secret=SECRET)
-    if api_storage is not None:
-        app.state.storage = api_storage
+    app = build_api_app(db_engine, api_storage, Settings(_env_file=None))
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
@@ -839,7 +855,7 @@ async def fund(conn: Any, user_id: Any, quantity: int = TEST_CREDITS) -> None:
 
     Never expires: the lot is `opening_balance`, which is the migration's source
     and the only one whose quantity is arbitrary. Using `monthly_free` would tie
-    every test to `MONTHLY_ALLOWANCE` and make raising it a test-wide edit.
+    every test to the monthly grant and make raising it a test-wide edit.
     """
     lot_id = (
         await conn.execute(
@@ -882,3 +898,48 @@ async def fund_by_auth(conn: Any, auth_id: Any, quantity: int = TEST_CREDITS) ->
         ),
         {"a": auth_id, "q": quantity},
     )
+
+
+@pytest.fixture
+def fresh_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Isolate the credit ladder's settings, on the way in **and on the way out**.
+
+    Three things, and each was a real defect before it was one fixture:
+
+    **The cache is cleared both sides.** `get_settings` is `lru_cache(maxsize=1)`,
+    so a test that overrides a variable and clears the cache leaves the overridden
+    `Settings` in it; `monkeypatch` restores the variable but nothing restores the
+    cache. Watched failing: running `test_an_override_moves_the_grant` and then
+    `test_credit_state.py` takes down two allowance tests against a leaked monthly
+    grant of five.
+
+    **The three `CREDIT_*` keys are unset on entry.** A test asserting "the
+    defaults are what shipped" that only clears the cache is asserting something
+    about the machine it runs on — `Settings()` reads the dotenv file, which the
+    test app is deliberately isolated from — and would go red on a developer's
+    box holding `CREDIT_MONTHLY_ALLOWANCE=5`.
+
+    **One copy.** It existed in two shapes, in two files, differing in the half
+    that mattered — which non-negotiable #8 calls a defect rather than a style
+    question.
+    """
+    for key in (
+        "CREDIT_STARTER_GRANT",
+        "CREDIT_REFERRAL_UNLOCK_GRANT",
+        "CREDIT_MONTHLY_ALLOWANCE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def ladder() -> CreditLadder:
+    """The default ladder, for the many tests that just need one to pass along.
+
+    Built from explicit `Settings(_env_file=None)` rather than through
+    `fresh_settings`: it never touches the process cache, so there is nothing to
+    isolate. `fresh_settings` is for tests that deliberately override.
+    """
+    return credit_ladder(Settings(_env_file=None))

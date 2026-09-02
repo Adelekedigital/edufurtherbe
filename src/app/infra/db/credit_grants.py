@@ -48,7 +48,7 @@ from sqlalchemy import exists, func, insert, literal, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.credits import MONTHLY_ALLOWANCE, expiry_for
+from app.domain.credits import CreditLadder, expiry_for
 from app.domain.enums import CreditReason, CreditSource
 from app.domain.notifications import Notification
 from app.infra.db.models.credits import CreditLot, CreditTransaction
@@ -61,7 +61,9 @@ from app.infra.db.predicates import LIVE
 __all__ = ["grant_monthly_credits"]
 
 
-async def grant_monthly_credits(session: AsyncSession, *, now: dt.datetime) -> int:
+async def grant_monthly_credits(
+    session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder
+) -> int:
     """Grant this month's credits. Returns how many users were paid.
 
     Does not commit — the caller owns the transaction, which is what lets the
@@ -73,13 +75,14 @@ async def grant_monthly_credits(session: AsyncSession, *, now: dt.datetime) -> i
     loop reading eligibility per user would let a mentee who unlocked mid-run be
     granted or skipped depending on where the cursor was.
     """
+    monthly = ladder.monthly
     expires_at = expiry_for(CreditSource.MONTHLY_FREE, now=now)
 
     eligible = select(
         User.id,
         literal(CreditSource.MONTHLY_FREE.value).label("source"),
-        literal(MONTHLY_ALLOWANCE).label("quantity_granted"),
-        literal(MONTHLY_ALLOWANCE).label("quantity_remaining"),
+        literal(monthly).label("quantity_granted"),
+        literal(monthly).label("quantity_remaining"),
         literal(expires_at).label("expires_at"),
     ).where(
         LIVE,
@@ -122,7 +125,7 @@ async def grant_monthly_credits(session: AsyncSession, *, now: dt.datetime) -> i
             {
                 "user_id": row["user_id"],
                 "credit_lot_id": row["id"],
-                "delta": MONTHLY_ALLOWANCE,
+                "delta": monthly,
                 "reason": CreditReason.GRANT,
                 "session_id": None,
             }

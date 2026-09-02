@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # **Manual, and it earned its place.** When Actions had no runners for three
+  # days, `main` could not be re-verified without pushing a commit to it — the
+  # one branch where an empty commit is the worst way to ask a question. Nine
+  # PRs merged unverified in that window and the only route back was re-running
+  # a historical run by id.
+  workflow_dispatch:
 
 permissions:
   contents: read
