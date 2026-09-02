@@ -10,6 +10,15 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Changed
+
+- **QStash now owns application-runtime scheduling.** The five recurring jobs
+  share one `RuntimeJobs` dispatcher across signed HTTP delivery and manual CLI
+  recovery. A versioned UTC manifest is reconciled by a manually dispatched
+  workflow; production remains disabled until explicit go-live reconciliation.
+  Railway is the current host, while GitHub Actions retains CI, migrations,
+  security, reconciliation, and exceptional recovery (ADR 0028).
+
 ### Fixed
 
 - **Percentages rounded ties the wrong way, in two places.** A Python `100.0`

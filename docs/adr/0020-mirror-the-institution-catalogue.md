@@ -6,6 +6,9 @@ Date: 2026-08-08
 
 Accepted.
 
+The GitHub Actions scheduling mechanism is superseded by ADR 0028. The source,
+mirror, weekly cadence, and idempotency decisions remain.
+
 Supersedes ADR 0008 **on the storage strategy and the autocomplete mechanism
 only**. The rest of 0008 stands untouched: hipolabs remains the source, the
 surrogate `uuid` remains the primary key, `domain` remains the natural key, and

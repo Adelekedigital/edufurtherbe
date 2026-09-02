@@ -24,17 +24,18 @@ answer is a new record that supersedes the old one, not an edit.
 | [0014](0014-our-own-user-id-with-supabase-auth-as-a-column.md) | `users.id` is ours; the Supabase auth id is a column | Accepted — provisioning and reconciliation answered by 0018 |
 | [0015](0015-every-table-has-a-surrogate-primary-key.md) | Every table has a generated surrogate primary key | Accepted |
 | [0016](0016-api-contract-foundations.md) | API contract foundations — Problem Details, cursor pagination, normalisation at the boundary | Accepted — cursor rule scoped by a 2026-08-08 amendment |
-| [0017](0017-deployment-and-how-migrations-run.md) | Deployment — no Dockerfile, and migrations from a dispatched workflow | Accepted |
+| [0017](0017-deployment-and-how-migrations-run.md) | Deployment — no Dockerfile, and migrations from a dispatched workflow | Accepted — hosting portion superseded by 0028; migration rules remain |
 | [0018](0018-eager-auth-provisioning-and-how-it-recovers.md) | Auth provisioning is eager, idempotent, and silent | Accepted |
 | [0019](0019-profile-images-move-to-supabase-storage.md) | Profile images move to Supabase Storage, keyed on their own content | Accepted |
-| [0020](0020-mirror-the-institution-catalogue.md) | Mirror the institution catalogue, refreshed weekly | Accepted — supersedes part of 0008 |
+| [0020](0020-mirror-the-institution-catalogue.md) | Mirror the institution catalogue, refreshed weekly | Accepted — scheduling mechanism superseded by 0028 |
 | [0021](0021-conferencing-is-a-mentor-owned-table.md) | A mentor's conferencing options are their own table | Accepted — diverges from canonical `04_sessions.sql` |
 | [0022](0022-session-type-vocabularies.md) | A session type's classification and stage get vocabularies | Accepted — diverges from canonical `04_sessions.sql` |
 | [0023](0023-per-offering-scheduling-windows.md) | Per-offering scheduling windows replace general availability | Accepted — no canonical counterpart |
 | [0024](0024-booking-is-idempotent-and-scoped-to-the-caller.md) | Booking is idempotent, and the key is scoped to the caller | Accepted — diverges from the package on `idempotency_keys` |
-| [0025](0025-notifications-two-senders-one-taxonomy.md) | Notifications: two senders, one taxonomy, and scheduled callbacks | Accepted — no canonical counterpart |
+| [0025](0025-notifications-two-senders-one-taxonomy.md) | Notifications: two senders, one taxonomy, and scheduled callbacks | Accepted — QStash role expanded by 0028 |
 | [0026](0026-the-review-scale-the-package-cannot-hold.md) | Reviews store the ordinal a mentee chose, not the number Bubble displayed | Accepted — diverges from canonical `05_credits_reviews.sql` |
 | [0027](0027-the-credit-ledger-diverges-from-the-package.md) | The credit ledger ships five sources, five reasons, and RESTRICT | Accepted — diverges from canonical `05_credits_reviews.sql` |
+| [0028](0028-qstash-owns-runtime-scheduling.md) | QStash owns application-runtime scheduling | Accepted |
 
 ## Conventions
 

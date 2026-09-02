@@ -1,84 +1,22 @@
-name: Expire credits
+name: Expire credits (manual recovery)
 
-# Writes a `lot_expired` ledger row for every lot whose date has passed.
-#
-# THIS DOES NOT CHANGE A BALANCE, WHICH CHANGES WHAT A FAILURE COSTS. The
-# balance stopped counting these lots the instant their date passed —
-# `spendable_now` decides that on every read, without asking whether this ran.
-# So a failed run leaves the *ledger* behind, never the balance, and the fix is
-# to run it again. That is the opposite of `monthly-credits`, where a failed run
-# means a month with no credits.
-#
-# WHY MONTHLY AND NOT DAILY. Every source that expires uses `end_of_month`, so
-# every expiring lot in this product dies at a month boundary and a daily sweep
-# would find nothing on thirty days out of thirty-one. If a future source ever
-# expires mid-month, this cadence leaves its row late by up to a month — the
-# balance is still right, and the cadence is the thing to change.
-#
-# WHY BEFORE THE GRANT, AT 05:00 RATHER THAN 06:00. Nothing requires the order:
-# the grant creates lots expiring on the *next* 1st, so this sweep cannot reach
-# them whichever runs first. The hour's gap is so the two reports are separable
-# and so a sweep holding row locks is finished before the grant asks for the
-# same users.
-#
-# SAFE TO RUN REPEATEDLY, AND NOT BECAUSE OF AN INDEX. The sweep only touches
-# lots with credits left and sets them to zero, so a second run finds nothing.
-# Self-terminating rather than guarded, which is why this ships with no
-# migration where the grant needed one.
-#
-# THIS JOB IS NOT SELF-ANNOUNCING, and the same warning `monthly-credits` gives
-# applies with less force: twelve runs a year means a silent failure is
-# invisible for a month, and GitHub disables scheduled workflows after a period
-# of repository inactivity, which fails as *silence*. Here that costs a late
-# ledger rather than a missed grant — worth a heartbeat before either is relied
-# on, and named here rather than discovered in January.
-
-on:
-  schedule:
-    # 05:00 UTC on the 1st. Off midnight for the reason `monthly-credits` gives:
-    # the top of the hour is when Actions schedules are most delayed, and
-    # nothing here needs to race the boundary it is recording.
-    - cron: "0 5 1 * *"
-  # No inputs, for the reason `sync-institutions` gives: one environment during
-  # the build and migration phase makes a one-option dropdown decoration.
-  workflow_dispatch:
+# QStash owns runtime cadence. This dispatch exists only for recovery.
+on: workflow_dispatch
 
 permissions:
-  # Read-only. This job changes a database, never the repository.
   contents: read
-
-concurrency:
-  # Two runs against one database would take row locks on the same lots. The
-  # second would block, then find them at zero and report nothing — so the
-  # outcome is correct either way, and this is here so the *report* is.
-  group: expire-credits-staging
-  cancel-in-progress: false
 
 jobs:
   expire:
-    name: expire credit lots (staging)
     runs-on: ubuntu-latest
-    # Staging only, for the reason the other scheduled jobs give: there is no
-    # production environment to hold a `DATABASE_URL`, and a schedule pointed at
-    # one that does not exist fails every month, silently enough that nobody
-    # looks.
     environment: staging
-
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      # FAIL CLOSED. No exit code is forgiven. A swallowed failure here is a
-      # ledger that quietly stops explaining itself, which is exactly the state
-      # D8 chose a ledger over a counter to avoid.
-      - name: Expire
+      - run: uv sync --all-extras --dev
+      - name: Expire credit lots
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: uv run python scripts/expire_credits.py

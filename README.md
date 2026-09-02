@@ -183,14 +183,14 @@ recorded and unwritten.
 | Concern | Choice | Notes |
 |---|---|---|
 | Database, auth, file storage | Supabase | Used *as Postgres* — no PostgREST, no RLS as application logic ([ADR 0005](docs/adr/0005-data-platform.md)) |
-| Hosting | FastAPI Cloud | Railway is the named fallback; a standalone Dockerfile keeps the exit real |
-| Scheduled and background jobs | Upstash QStash | HTTP delivery, so no always-on worker process |
+| Hosting | Railway | FastAPI Cloud is a possible future option; the entrypoint remains host-independent ([ADR 0028](docs/adr/0028-qstash-owns-runtime-scheduling.md)) |
+| Scheduled and background jobs | Upstash QStash | Owns recurring runtime jobs, delayed callbacks and retryable HTTP delivery; GitHub configures schedules and retains manual recovery |
 | Transactional email | Emailit | Behind a port, like every vendor — this one has already been swapped twice |
 | Video sessions | Daily | |
 | Product analytics | PostHog | |
 | Google Calendar | Direct, behind a `CalendarPort` | Our own OAuth client; write events, read free/busy on demand ([ADR 0004](docs/adr/0004-calendar-integration.md)). The scopes we need are non-sensitive, so there is no review to survive and no platform to pay for it ([ADR 0012](docs/adr/0012-google-oauth-scopes-and-client-split.md)) |
 | HTML to PDF and image | MarkupGo | |
-| Institution data | hipolabs | Autocomplete served live; a row is stored only once someone selects it, so reads never depend on it ([ADR 0008](docs/adr/0008-institutions-hipolabs-registry.md)) |
+| Institution data | hipolabs mirror | The catalogue is mirrored weekly and autocomplete reads PostgreSQL, never the live provider ([ADR 0020](docs/adr/0020-mirror-the-institution-catalogue.md)) |
 | Push notifications | Native Web Push | VAPID and a service worker, no vendor. iOS delivers only to installed PWAs |
 | LLM access | Provider-agnostic port | No gateway — a port gives swappability without flattening provider features |
 

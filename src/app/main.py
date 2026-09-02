@@ -14,6 +14,7 @@ from app.api.routes import (
     callbacks,
     catalogue,
     health,
+    internal_jobs,
     me_calendar,
     me_intake,
     me_onboarding,
@@ -34,6 +35,14 @@ from app.core.config import Settings, get_settings
 # A reader arriving at the schema cold should learn what a group is for and what
 # it deliberately is not, without opening a route module.
 OPENAPI_TAGS: list[dict[str, str]] = [
+    {
+        "name": "internal-jobs",
+        "description": (
+            "Machine-only QStash deliveries for recurring application work. "
+            "There is no Supabase user token: the raw body, issuer, time window, "
+            "and exact configured destination are verified before parsing."
+        ),
+    },
     {
         "name": "health",
         "description": (
@@ -323,6 +332,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_referrals.router)
     application.include_router(me_reviews.router)
     application.include_router(callbacks.router)
+    application.include_router(internal_jobs.router)
     application.include_router(sessions.router)
     application.include_router(reviews.router)
     application.include_router(admin.router)

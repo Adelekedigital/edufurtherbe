@@ -369,6 +369,22 @@ class Settings(BaseSettings):
         default=None, validation_alias=env_key("qstash_next_signing_key")
     )
 
+    #: Environment-scoped operational changes. Only ``cron`` and ``enabled``
+    #: are accepted later by the manifest resolver; delivery policy stays in git.
+    qstash_schedule_overrides: Annotated[dict[str, dict[str, object]], NoDecode] = Field(
+        default_factory=dict, validation_alias=env_key("qstash_schedule_overrides")
+    )
+
+    @field_validator("qstash_schedule_overrides", mode="before")
+    @classmethod
+    def accept_schedule_override_json(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        parsed = json.loads(value)
+        if not isinstance(parsed, dict):
+            raise ValueError("QSTASH_SCHEDULE_OVERRIDES must be a JSON object")
+        return parsed
+
     #: The Cloud project a **mentor** consents through.
     #:
     #: **A different client from the one above** (ADR 0012): sign-in and

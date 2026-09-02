@@ -1,0 +1,36 @@
+name: Reconcile QStash runtime schedules
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      apply:
+        description: Apply the printed diff (otherwise dry-run)
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - name: Reconcile repository policy
+        env:
+          EDUFURTHER_ENVIRONMENT: ${{ inputs.environment }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          QSTASH_TOKEN: ${{ secrets.QSTASH_TOKEN }}
+          QSTASH_SCHEDULE_OVERRIDES: ${{ vars.QSTASH_SCHEDULE_OVERRIDES }}
+        run: >-
+          uv run python scripts/reconcile_qstash_schedules.py
+          ${{ inputs.environment }}
+          ${{ inputs.apply && '--apply' || '' }}

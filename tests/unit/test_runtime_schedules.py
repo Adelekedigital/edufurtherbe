@@ -1,0 +1,146 @@
+"""The repository policy for recurring application work."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from app.core.config import Settings
+from app.infra.jobs.manifest import (
+    ManifestError,
+    load_manifest,
+    resolve_manifest,
+    schedule_id,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+MANIFEST = ROOT / "config" / "runtime-schedules.json"
+
+
+def test_the_manifest_declares_the_five_runtime_jobs_in_utc() -> None:
+    manifest = load_manifest(MANIFEST)
+
+    assert manifest.timezone == "UTC"
+    assert {job.name for job in manifest.jobs} == {
+        "settle-sessions",
+        "credit-reminders",
+        "monthly-credits",
+        "expire-credits",
+        "sync-institutions",
+    }
+    assert {job.name: job.cron for job in manifest.jobs} == {
+        "settle-sessions": "30 * * * *",
+        "credit-reminders": "0 7 * * *",
+        "monthly-credits": "0 6 1 * *",
+        "expire-credits": "0 5 1 * *",
+        "sync-institutions": "0 4 * * 1",
+    }
+
+
+@pytest.mark.parametrize("environment", ["local", "ci", "production"])
+def test_local_ci_and_production_resolve_disabled(environment: str) -> None:
+    resolved = resolve_manifest(
+        load_manifest(MANIFEST),
+        environment=environment,
+        public_base_url="https://api.example.test",
+        overrides={},
+    )
+
+    assert resolved
+    assert all(not schedule.enabled for schedule in resolved)
+
+
+def test_staging_resolves_enabled_with_stable_environment_ids() -> None:
+    resolved = resolve_manifest(
+        load_manifest(MANIFEST),
+        environment="staging",
+        public_base_url="https://api.example.test/",
+        overrides={},
+    )
+
+    assert all(schedule.enabled for schedule in resolved)
+    assert [schedule.id for schedule in resolved] == sorted(schedule.id for schedule in resolved)
+    assert resolved[0].destination.startswith("https://api.example.test/api/v1/internal/jobs/")
+    assert schedule_id("staging", "settle-sessions") == "edufurther-staging-settle-sessions"
+
+
+def test_only_cron_and_enabled_may_be_overridden() -> None:
+    manifest = load_manifest(MANIFEST)
+    resolved = resolve_manifest(
+        manifest,
+        environment="staging",
+        public_base_url="https://api.example.test",
+        overrides={"settle-sessions": {"cron": "15 * * * *", "enabled": False}},
+    )
+    settle = next(item for item in resolved if item.name == "settle-sessions")
+
+    assert settle.cron == "15 * * * *"
+    assert settle.enabled is False
+
+    with pytest.raises(ManifestError, match="unknown override key"):
+        resolve_manifest(
+            manifest,
+            environment="staging",
+            public_base_url="https://api.example.test",
+            overrides={"settle-sessions": {"timeout": "1s"}},
+        )
+
+
+def test_unknown_jobs_and_incorrect_override_types_are_refused() -> None:
+    manifest = load_manifest(MANIFEST)
+    with pytest.raises(ManifestError, match="unknown job"):
+        resolve_manifest(
+            manifest,
+            environment="staging",
+            public_base_url="https://api.example.test",
+            overrides={"invented": {"enabled": True}},
+        )
+    with pytest.raises(ManifestError, match="enabled"):
+        resolve_manifest(
+            manifest,
+            environment="staging",
+            public_base_url="https://api.example.test",
+            overrides={"settle-sessions": {"enabled": "yes"}},
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"version": 2}, "version"),
+        ({"timezone": "America/New_York"}, "UTC"),
+    ],
+)
+def test_unsupported_versions_and_non_utc_manifests_are_refused(
+    tmp_path: Path, mutation: dict[str, object], message: str
+) -> None:
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8")) | mutation
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises((ManifestError, ValidationError), match=message):
+        load_manifest(path)
+
+
+def test_duplicate_job_names_are_refused(tmp_path: Path) -> None:
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    raw["jobs"].append(raw["jobs"][0])
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="duplicate"):
+        load_manifest(path)
+
+
+def test_schedule_overrides_are_one_strict_json_object() -> None:
+    settings = Settings(
+        _env_file=None,
+        qstash_schedule_overrides='{"settle-sessions":{"enabled":false}}',
+    )
+    assert settings.qstash_schedule_overrides == {"settle-sessions": {"enabled": False}}
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, qstash_schedule_overrides='{"settle-sessions":[]}')
