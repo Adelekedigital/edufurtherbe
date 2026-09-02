@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-pytestmark = [pytest.mark.db, pytest.mark.asyncio]
+pytestmark = pytest.mark.db
 
 SEARCH = "/api/v1/institutions"
 CATALOG = "/api/v1/catalog"
@@ -54,6 +54,7 @@ def names(response: httpx.Response) -> list[str]:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_search_needs_no_token(api_client: httpx.AsyncClient) -> None:
     """Signup asks for a school before an account exists. If this ever starts
     returning 401, that flow breaks for people who cannot work around it."""
@@ -66,6 +67,7 @@ async def test_search_needs_no_token(api_client: httpx.AsyncClient) -> None:
     "catalogue",
     ["degree-levels", "service-offerings", "scholarship-programs", "countries", "languages"],
 )
+@pytest.mark.asyncio
 async def test_every_lookup_needs_no_token(api_client: httpx.AsyncClient, catalogue: str) -> None:
     response = await api_client.get(f"{CATALOG}/{catalogue}")
 
@@ -78,6 +80,7 @@ async def test_every_lookup_needs_no_token(api_client: httpx.AsyncClient, catalo
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_a_prefix_match_outranks_a_substring_one(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -91,6 +94,7 @@ async def test_a_prefix_match_outranks_a_substring_one(
     assert found.index("Lagos State University") < found.index("University of Lagos")
 
 
+@pytest.mark.asyncio
 async def test_a_typo_still_finds_the_school(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -102,6 +106,7 @@ async def test_a_typo_still_finds_the_school(
     assert found == ["University of Lagos"]
 
 
+@pytest.mark.asyncio
 async def test_a_short_typo_is_honestly_not_rescued(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -117,6 +122,7 @@ async def test_a_short_typo_is_honestly_not_rescued(
     assert names(await api_client.get(SEARCH, params={"q": "Oxfrod"})) == []
 
 
+@pytest.mark.asyncio
 async def test_a_pending_institution_is_not_offered(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -130,6 +136,7 @@ async def test_a_pending_institution_is_not_offered(
     assert names(await api_client.get(SEARCH, params={"q": "Unlisted"})) == []
 
 
+@pytest.mark.asyncio
 async def test_a_merged_institution_is_not_offered(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -141,6 +148,7 @@ async def test_a_merged_institution_is_not_offered(
     assert names(await api_client.get(SEARCH, params={"q": "University"})) == ["Real University"]
 
 
+@pytest.mark.asyncio
 async def test_an_approved_institution_is_offered(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -151,6 +159,7 @@ async def test_an_approved_institution_is_offered(
     assert names(await api_client.get(SEARCH, params={"q": "Findable"})) == ["Findable University"]
 
 
+@pytest.mark.asyncio
 async def test_the_country_comes_back_nested(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -168,6 +177,7 @@ async def test_the_country_comes_back_nested(
     assert row["country"] == {"code": "NG", "display_name": "Nigeria"}
 
 
+@pytest.mark.asyncio
 async def test_a_manual_institution_with_no_country_still_serialises(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -196,6 +206,7 @@ async def test_a_manual_institution_with_no_country_still_serialises(
 
 
 @pytest.mark.parametrize("q", ["", "   "])
+@pytest.mark.asyncio
 async def test_an_empty_query_is_an_empty_list_not_an_error(
     api_client: httpx.AsyncClient, q: str
 ) -> None:
@@ -207,12 +218,14 @@ async def test_an_empty_query_is_an_empty_list_not_an_error(
     assert response.json()["data"] == []
 
 
+@pytest.mark.asyncio
 async def test_the_limit_is_capped(api_client: httpx.AsyncClient) -> None:
     """Refused rather than clamped at the boundary, because FastAPI validates it
     before the handler — the clamp exists for the `None` path."""
     assert (await api_client.get(SEARCH, params={"q": "a", "limit": 999})).status_code == 422
 
 
+@pytest.mark.asyncio
 async def test_no_curation_state_leaks(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -231,6 +244,7 @@ async def test_no_curation_state_leaks(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_degree_levels_keep_their_intended_order(api_client: httpx.AsyncClient) -> None:
     """`sort_order`, not alphabetical — and the order is ISCED ascending, so the
     dropdown reads as a progression. Sorting by name would render it
@@ -245,6 +259,7 @@ async def test_degree_levels_keep_their_intended_order(api_client: httpx.AsyncCl
     assert found != sorted(found)
 
 
+@pytest.mark.asyncio
 async def test_a_closed_vocabulary_returns_whole_with_no_cursor(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -254,6 +269,7 @@ async def test_a_closed_vocabulary_returns_whole_with_no_cursor(
     assert len(body["data"]) == 6
 
 
+@pytest.mark.asyncio
 async def test_countries_fit_in_one_page(api_client: httpx.AsyncClient) -> None:
     """249 rows, and a client rendering a select box wants all of them."""
     body = (await api_client.get(f"{CATALOG}/countries")).json()
@@ -262,6 +278,7 @@ async def test_countries_fit_in_one_page(api_client: httpx.AsyncClient) -> None:
     assert body["next_cursor"] is None
 
 
+@pytest.mark.asyncio
 async def test_languages_page_without_skipping_or_repeating(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -285,6 +302,7 @@ async def test_languages_page_without_skipping_or_repeating(
     assert first["data"][-1]["display_name"] <= second["data"][0]["display_name"]
 
 
+@pytest.mark.asyncio
 async def test_languages_can_be_searched(api_client: httpx.AsyncClient) -> None:
     """Why the table is ISO 639-3 at all: the two-letter set omits Nigerian
     Pidgin, and this platform's market cannot lose it."""
@@ -293,6 +311,7 @@ async def test_languages_can_be_searched(api_client: httpx.AsyncClient) -> None:
     assert [row["display_name"] for row in body["data"]] == ["Nigerian Pidgin"]
 
 
+@pytest.mark.asyncio
 async def test_a_language_search_ranks_the_exact_match_first(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -308,6 +327,7 @@ async def test_a_language_search_ranks_the_exact_match_first(
     assert body["data"][0]["display_name"] == "English"
 
 
+@pytest.mark.asyncio
 async def test_a_lookup_search_does_not_claim_another_page(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -319,6 +339,7 @@ async def test_a_lookup_search_does_not_claim_another_page(
     assert body["next_cursor"] is None
 
 
+@pytest.mark.asyncio
 async def test_the_common_set_is_the_default_picker(api_client: httpx.AsyncClient) -> None:
     """100 languages rather than 7,078. ISO 639-3 is a completeness registry and
     not a picker — searching "english" returned twenty creoles before ranking,
@@ -330,6 +351,7 @@ async def test_the_common_set_is_the_default_picker(api_client: httpx.AsyncClien
     assert {"English", "Yoruba", "Igbo", "Hausa", "Amharic", "Zulu", "Afrikaans"} <= names
 
 
+@pytest.mark.asyncio
 async def test_the_long_tail_is_absent_from_the_picker_and_present_in_search(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -349,6 +371,7 @@ async def test_the_long_tail_is_absent_from_the_picker_and_present_in_search(
         assert name in {row["display_name"] for row in found["data"]}, f"{name} is unsearchable"
 
 
+@pytest.mark.asyncio
 async def test_nigerian_pidgin_is_excluded_from_the_default_and_still_selectable(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -364,6 +387,7 @@ async def test_nigerian_pidgin_is_excluded_from_the_default_and_still_selectable
     assert [row["display_name"] for row in searched["data"]] == ["Nigerian Pidgin"]
 
 
+@pytest.mark.asyncio
 async def test_asking_for_the_common_set_of_a_catalogue_without_one_is_refused(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -375,6 +399,7 @@ async def test_asking_for_the_common_set_of_a_catalogue_without_one_is_refused(
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
+@pytest.mark.asyncio
 async def test_the_seeded_common_set_matches_the_migrations_literal(
     db_engine: AsyncEngine, common_languages_migration: ModuleType
 ) -> None:
@@ -398,6 +423,7 @@ async def test_the_seeded_common_set_matches_the_migrations_literal(
     )
 
 
+@pytest.mark.asyncio
 async def test_a_pending_scholarship_programme_is_not_listed(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -417,6 +443,7 @@ async def test_a_pending_scholarship_programme_is_not_listed(
     assert "Unvetted Award" not in [row["display_name"] for row in body["data"]]
 
 
+@pytest.mark.asyncio
 async def test_an_unknown_catalogue_is_404(api_client: httpx.AsyncClient) -> None:
     response = await api_client.get(f"{CATALOG}/nonsense")
 
@@ -424,6 +451,7 @@ async def test_an_unknown_catalogue_is_404(api_client: httpx.AsyncClient) -> Non
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
+@pytest.mark.asyncio
 async def test_a_forged_cursor_is_refused(api_client: httpx.AsyncClient) -> None:
     """Not silently treated as "start from the beginning" — that answers a paging
     bug with page one forever, which looks like working software and loses rows."""
@@ -433,6 +461,7 @@ async def test_a_forged_cursor_is_refused(api_client: httpx.AsyncClient) -> None
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
+@pytest.mark.asyncio
 async def test_the_catalogue_route_does_not_shadow_me(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -443,6 +472,7 @@ async def test_the_catalogue_route_does_not_shadow_me(
     assert (await api_client.get("/api/v1/me")).status_code == 401
 
 
+@pytest.mark.asyncio
 async def test_a_wildcard_is_searched_for_literally(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -461,6 +491,7 @@ async def test_a_wildcard_is_searched_for_literally(
     assert names(await api_client.get(SEARCH, params={"q": "%"})) == ["100% Academy"]
 
 
+@pytest.mark.asyncio
 async def test_an_underscore_is_searched_for_literally(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -472,6 +503,7 @@ async def test_an_underscore_is_searched_for_literally(
     assert names(await api_client.get(SEARCH, params={"q": "Under_"})) == ["Under_score College"]
 
 
+@pytest.mark.asyncio
 async def test_a_backslash_is_searched_for_literally(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -487,6 +519,7 @@ async def test_a_backslash_is_searched_for_literally(
     assert names(await api_client.get(SEARCH, params={"q": "Back\\"})) == [r"Back\slash Institute"]
 
 
+@pytest.mark.asyncio
 async def test_a_wildcard_in_a_lookup_filter_is_literal_too(
     api_client: httpx.AsyncClient,
 ) -> None:
@@ -496,6 +529,7 @@ async def test_a_wildcard_in_a_lookup_filter_is_literal_too(
     assert body["data"] == [], "the lookup filter treated % as a wildcard"
 
 
+@pytest.mark.asyncio
 async def test_an_unexpected_failure_is_still_problem_details() -> None:
     """**The shape of a 500, which nothing asserted before.**
 
@@ -551,6 +585,7 @@ def test_the_prefix_index_is_declared_on_the_model() -> None:
     assert "ix_institutions_name_prefix" in declared
 
 
+@pytest.mark.asyncio
 async def test_the_prefix_index_exists_in_the_database(db_engine: AsyncEngine) -> None:
     """The other half: declared on the model *and* created by the migration."""
     async with db_engine.connect() as conn:

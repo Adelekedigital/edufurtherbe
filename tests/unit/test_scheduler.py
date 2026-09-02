@@ -31,8 +31,8 @@ URL = "https://api.example.test/api/v1/callbacks/reminders"
 
 #: Stand-ins for QStash's rotating pair. Named so the secret scanner has one
 #: obvious placeholder rather than several literals to object to.
-CURRENT_KEY = "not-a-real-current-key"
-NEXT_KEY = "not-a-real-next-key"
+CURRENT_KEY = "not-a-real-current-signing-key-for-local-tests"
+NEXT_KEY = "not-a-real-next-signing-key-for-local-tests"
 
 DEADLINE = dt.datetime(2026, 9, 1, 12, 0, tzinfo=dt.UTC)
 
@@ -184,7 +184,7 @@ def test_a_token_minted_for_another_endpoint_is_refused() -> None:
 def test_an_unknown_key_is_refused() -> None:
     with pytest.raises(UntrustedCallbackError):
         verify_callback(
-            token=signed(BODY, key="somebody-elses-key"),
+            token=signed(BODY, key="somebody-elses-signing-key-for-local-tests"),
             body=BODY,
             url=URL,
             signing_keys=(CURRENT_KEY,),

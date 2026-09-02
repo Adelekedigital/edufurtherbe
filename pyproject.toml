@@ -168,6 +168,12 @@ testpaths = ["tests"]
 # purpose; this makes the path explicit instead of inherited.
 pythonpath = ["."]
 addopts = "-q --strict-markers --strict-config"
+# Unexpected warnings fail the suite instead of accumulating into an unreadable
+# flood. The one narrow exception is tracked in project conventions.
+filterwarnings = [
+    "error",
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+]
 # Explicit, not "auto". Auto mode collects every async def as a test, including
 # ones that were never meant to be, and the failure is a silent skip rather than
 # an error. Both keys are required on pytest-asyncio 1.x — omitting the loop

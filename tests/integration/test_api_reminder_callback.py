@@ -34,7 +34,7 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 BASE = "https://api.example.test"
 PATH = "/api/v1/callbacks/reminders"
-SIGNING_KEY = "not-a-real-signing-key"
+SIGNING_KEY = "not-a-real-signing-key-for-local-tests"
 
 
 @pytest.fixture

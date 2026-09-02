@@ -22,7 +22,7 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 # Only the *wrong* key stays local: it exists to prove a signature check, and
 # nothing else needs it. `SECRET`, `api_token`, `bearer` and the `api_client`
 # fixture moved to `conftest.py` when a second API test file needed them.
-OTHER_SECRET = "not-the-signing-secret"  # noqa: S105
+OTHER_SECRET = "not-the-signing-secret-for-local-tests"  # noqa: S105
 
 
 async def seed_user(engine: AsyncEngine, auth_id: UUID, *, admin: bool = False) -> None:

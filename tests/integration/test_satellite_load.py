@@ -21,7 +21,7 @@ from app.infra.etl.loader import UserLoader
 from app.infra.etl.satellites import SatelliteLoader, reference_maps, user_id_map
 from conftest import PROFILE_ID, user
 
-pytestmark = [pytest.mark.db, pytest.mark.asyncio]
+pytestmark = pytest.mark.db
 
 
 def profile(**overrides: Any) -> dict[str, Any]:
@@ -63,6 +63,7 @@ async def load_everything(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_all_five_tables_load_from_one_snapshot(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
         counts = await load_everything(conn, [user(**{"Admin 🎩": "Super Admin"})], [profile()])
@@ -82,6 +83,7 @@ async def test_all_five_tables_load_from_one_snapshot(db_engine: AsyncEngine) ->
     assert counts.languages == 2
 
 
+@pytest.mark.asyncio
 async def test_the_country_comes_from_the_text_field(db_engine: AsyncEngine) -> None:
     """The canonical field mapping says the opposite, and is wrong.
 
@@ -106,6 +108,7 @@ async def test_the_country_comes_from_the_text_field(db_engine: AsyncEngine) -> 
     assert resolved.scalar_one() == "GH"
 
 
+@pytest.mark.asyncio
 async def test_bubble_timestamps_survive_on_profiles_too(db_engine: AsyncEngine) -> None:
     """The satellites load inside the same trigger-disabled window as ``users``."""
     async with db_engine.begin() as conn:
@@ -115,6 +118,7 @@ async def test_bubble_timestamps_survive_on_profiles_too(db_engine: AsyncEngine)
     assert stored.scalar_one().year == 2025
 
 
+@pytest.mark.asyncio
 async def test_a_second_load_changes_nothing(db_engine: AsyncEngine) -> None:
     """Idempotent across all six tables, not only ``users``."""
     async with db_engine.begin() as conn:
@@ -139,6 +143,7 @@ async def test_a_second_load_changes_nothing(db_engine: AsyncEngine) -> None:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_an_unresolvable_language_is_reported_and_skipped(db_engine: AsyncEngine) -> None:
     """``Avestan`` is a real ISO 639-3 code the M0 seed deliberately excluded.
 
@@ -158,6 +163,7 @@ async def test_an_unresolvable_language_is_reported_and_skipped(db_engine: Async
     assert stored.scalar_one() == 1, "the resolvable language still loaded"
 
 
+@pytest.mark.asyncio
 async def test_a_naming_variant_resolves_through_the_alias_table(db_engine: AsyncEngine) -> None:
     """``Abkhaz`` is ISO's ``Abkhazian`` — a variant, unlike ``Avestan``."""
     async with db_engine.begin() as conn:
@@ -174,6 +180,7 @@ async def test_a_naming_variant_resolves_through_the_alias_table(db_engine: Asyn
     assert code.scalar_one() == "abk"
 
 
+@pytest.mark.asyncio
 async def test_an_unresolvable_country_does_not_discard_the_profile(
     db_engine: AsyncEngine,
 ) -> None:
@@ -191,6 +198,7 @@ async def test_an_unresolvable_country_does_not_discard_the_profile(
     assert country is None
 
 
+@pytest.mark.asyncio
 async def test_a_repeated_language_is_counted_once(db_engine: AsyncEngine) -> None:
     """What the transform's dedupe actually buys — and it is not what I assumed.
 
@@ -286,6 +294,7 @@ def test_a_profile_nobody_points_at_is_reported_not_attributed() -> None:
     assert plan.orphaned_profiles == (PROFILE_ID,)
 
 
+@pytest.mark.asyncio
 async def test_a_profile_referencing_an_unknown_user_raises(db_engine: AsyncEngine) -> None:
     """Silently skipping it would lose a profile with no trace."""
     async with db_engine.begin() as conn:
@@ -325,6 +334,7 @@ def test_every_script_uses_the_one_export_timezone() -> None:
         assert module.EXPORT_TIMEZONE is bubble.EXPORT_TIMEZONE, module.__name__
 
 
+@pytest.mark.asyncio
 async def test_an_unresolved_name_makes_the_run_exit_two(
     migrated_database: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -19,7 +19,7 @@ from app.domain.transform import TransformError, to_user, transform_users
 from app.infra.etl.loader import UserLoader
 from app.infra.etl.reconcile import reconcile_users
 
-pytestmark = [pytest.mark.db, pytest.mark.asyncio]
+pytestmark = pytest.mark.db
 
 CREATED = "2023-12-07T18:36:46.179Z"
 MODIFIED = "2025-11-06T11:52:41.383Z"
@@ -46,6 +46,7 @@ def record(**overrides: Any) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_bubble_timestamps_survive_the_load(db_engine: AsyncEngine) -> None:
     """Settled decision #29, and the assertion the whole loader is built around.
 
@@ -79,6 +80,7 @@ async def test_bubble_timestamps_survive_the_load(db_engine: AsyncEngine) -> Non
     assert updated_at == datetime(2025, 11, 6, 11, 52, 41, 383000, tzinfo=UTC)
 
 
+@pytest.mark.asyncio
 async def test_the_trigger_is_re_enabled_after_a_successful_load(db_engine: AsyncEngine) -> None:
     """Leaving it disabled is a worse failure than the one it was turned off for.
 
@@ -99,6 +101,7 @@ async def test_the_trigger_is_re_enabled_after_a_successful_load(db_engine: Asyn
         assert enabled.scalar_one() == b"O", "trigger left disabled after the load"
 
 
+@pytest.mark.asyncio
 async def test_the_trigger_is_re_enabled_even_when_the_load_fails(db_engine: AsyncEngine) -> None:
     """The failure path, and it is the rollback that does the work.
 
@@ -133,6 +136,7 @@ async def test_the_trigger_is_re_enabled_even_when_the_load_fails(db_engine: Asy
         assert remaining.scalar_one() == 0, "a failed load must leave nothing behind"
 
 
+@pytest.mark.asyncio
 async def test_an_ordinary_update_after_the_load_moves_updated_at(db_engine: AsyncEngine) -> None:
     """The counterweight.
 
@@ -163,6 +167,7 @@ async def test_an_ordinary_update_after_the_load_moves_updated_at(db_engine: Asy
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_a_second_load_changes_nothing(db_engine: AsyncEngine) -> None:
     """The guardrail: importers are idempotent on ``legacy_bubble_id``.
 
@@ -187,6 +192,7 @@ async def test_a_second_load_changes_nothing(db_engine: AsyncEngine) -> None:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_reconciliation_passes_on_a_clean_load(db_engine: AsyncEngine) -> None:
     rows = transform_users(
         [record(), record(bubble_id="2x2", email="b@example.com", **{"Slug": "other-slug"})]
@@ -200,6 +206,7 @@ async def test_reconciliation_passes_on_a_clean_load(db_engine: AsyncEngine) -> 
     assert result.loaded == 2
 
 
+@pytest.mark.asyncio
 async def test_reconciliation_catches_a_load_that_left_the_trigger_on(
     db_engine: AsyncEngine,
 ) -> None:
@@ -226,6 +233,7 @@ async def test_reconciliation_catches_a_load_that_left_the_trigger_on(
     assert "trg_set_updated_at" in result.report()
 
 
+@pytest.mark.asyncio
 async def test_reconciliation_catches_a_row_that_did_not_land(db_engine: AsyncEngine) -> None:
     rows = transform_users(
         [record(), record(bubble_id="2x2", email="b@example.com", **{"Slug": "other-slug"})]
@@ -244,6 +252,7 @@ async def test_reconciliation_catches_a_row_that_did_not_land(db_engine: AsyncEn
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_a_transformed_role_matches_the_database_enum(db_engine: AsyncEngine) -> None:
     """Guards the mapping against the enum drifting apart from it.
 
