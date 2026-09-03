@@ -397,7 +397,16 @@ class Settings(BaseSettings):
         doubled slash — a `404` wearing the same face as the wrong-region `404`
         this field exists to prevent.
         """
-        return value.strip().rstrip("/") or QSTASH_EU
+        origin = value.strip().rstrip("/") or QSTASH_EU
+        # **A missing scheme is the silent one.** `qstash-us-east-1.upstash.io`
+        # looks right in a console and builds a *relative* URL, so every publish
+        # raises `UnsupportedProtocol` — and `session_writer` catches
+        # `SchedulerError` and logs it at INFO, so reminders simply stop being
+        # scheduled with nothing saying so. That is the exact failure this field
+        # exists to prevent, so it is refused at startup instead.
+        if not origin.startswith(("http://", "https://")):
+            raise ValueError(f"QSTASH_URL must start with https:// or http://, got {origin!r}")
+        return origin
 
     #: **Two keys, because QStash rotates them.** Both are tried, so a rotation
     #: does not drop callbacks in the window where the old and the new are each

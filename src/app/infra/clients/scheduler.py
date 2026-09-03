@@ -26,6 +26,7 @@ import httpx
 import jwt
 
 from app.core.errors import AppError
+from app.infra.http.upstream import why
 
 __all__ = [
     "NullScheduler",
@@ -116,16 +117,11 @@ class QStashScheduler:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            # **QStash's own words, when it gave any.** A wrong region answers
-            # `404` and names the region in the body; `httpx` renders only the
-            # status line, so without this the operator sees a bare `404` against
-            # a correctly spelled URL (settled decision #173).
-            detail = ""
-            refusal = getattr(exc, "response", None)
-            if refusal is not None and refusal.text.strip():
-                detail = f"; QStash said: {refusal.text.strip()[:400]}"
+            # QStash names a wrong region in the body and `httpx` shows only the
+            # status line. One helper, shared with the reconciler, because two
+            # copies of this is what non-negotiable #8 is about.
             raise SchedulerError(
-                f"qstash refused a callback for {at.isoformat()}: {exc}{detail}"
+                f"qstash refused a callback for {at.isoformat()}: {why(exc)}"
             ) from exc
 
 

@@ -26,11 +26,15 @@ released. A tag with no matching section here fails the release job.
   reconciler previously hardcoded the EU host, so an account in another region
   got `404` from every call, naming the region in the body.
 
-  Set `QSTASH_URL` alongside `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and
-  `PUBLIC_BASE_URL`. **All four are region-scoped and the console issues them
-  together** — changing the URL alone leaves reconciliation working and every
-  callback failing verification, which surfaces only when a job first fires.
-  Unset, an EU deployment behaves exactly as before.
+  **Four values move together, and they are `QSTASH_URL`, `QSTASH_TOKEN`,
+  `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY`** — the console
+  issues them per region. Changing the URL alone leaves reconciliation working
+  and every callback failing verification, which surfaces only when a job first
+  fires. `PUBLIC_BASE_URL` is *not* among them: it is this service's own origin,
+  the address QStash calls back, and it has no region.
+
+  Unset, an EU deployment behaves exactly as before. A value without a scheme is
+  refused at startup rather than failing silently at publish time.
 
 ### Fixed
 

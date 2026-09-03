@@ -303,3 +303,22 @@ def test_a_trailing_slash_on_the_origin_does_not_double_up() -> None:
     (request,) = seen
     assert "//v2/publish" not in str(request.url)
     assert str(request.url).startswith("https://qstash-us-east-1.upstash.io/v2/publish/")
+
+
+def test_a_refused_publish_carries_what_qstash_said() -> None:
+    """**Without this, deleting the detail leaves the suite green.**
+
+    `SchedulerError` is caught and logged at INFO by both callers, so a publish
+    that fails explains itself only in that log line. If the upstream body stops
+    travelling with the error, the regression is invisible in the tests *and* in
+    production — which is how the bare `404` this whole change is about survived
+    in the first place.
+    """
+    body = '{"error":"user (abc) not found in this region (eu-central-1)."}'
+    api, _ = scheduler(lambda _: httpx.Response(404, content=body))
+
+    with pytest.raises(SchedulerError) as raised:
+        api.schedule(url=URL, body={}, at=dt.datetime(2026, 9, 1, tzinfo=dt.UTC))
+
+    assert "not found in this region" in str(raised.value)
+    assert "eu-central-1" in str(raised.value)

@@ -164,3 +164,17 @@ def test_a_pasted_console_url_keeps_no_trailing_slash() -> None:
     settings = Settings(_env_file=None, qstash_url="https://qstash-us-east-1.upstash.io/")
 
     assert settings.qstash_url == "https://qstash-us-east-1.upstash.io"
+
+
+def test_a_qstash_url_without_a_scheme_is_refused_at_startup() -> None:
+    """**The silent failure this field exists to prevent.**
+
+    `qstash-us-east-1.upstash.io` is what a console shows and looks entirely
+    right. Without a scheme it builds a *relative* URL, so every publish raises
+    `UnsupportedProtocol` — and `session_writer` catches `SchedulerError` and
+    logs it at INFO, so reminders stop being scheduled and nothing says so.
+
+    Refusing at startup turns a silent production degradation into a boot error.
+    """
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, qstash_url="qstash-us-east-1.upstash.io")
