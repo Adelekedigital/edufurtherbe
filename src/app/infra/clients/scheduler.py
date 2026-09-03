@@ -26,6 +26,7 @@ import httpx
 import jwt
 
 from app.core.errors import AppError
+from app.infra.http.upstream import why
 
 __all__ = [
     "NullScheduler",
@@ -36,8 +37,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-QSTASH_PUBLISH = "https://qstash.upstash.io/v2/publish"
 
 #: Long enough for a slow third party, short enough that scheduling cannot hold
 #: a booking open. A reminder that fails to schedule is recoverable; a booking
@@ -91,7 +90,14 @@ class QStashScheduler:
     a deadline — and it survives a retry of the publish itself.
     """
 
-    def __init__(self, token: str, client: httpx.Client | None = None) -> None:
+    def __init__(self, token: str, url: str, client: httpx.Client | None = None) -> None:
+        """``url`` is the QStash **origin**, and it is region-scoped.
+
+        Passed in rather than a module constant, because the host is
+        configuration: `qstash.upstash.io` is `eu-central-1`, not a global
+        endpoint, and a token from another region answers it with `404`.
+        """
+        self._publish = f"{url.rstrip('/')}/v2/publish"
         self._client = client or httpx.Client(
             headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT
         )
@@ -105,13 +111,18 @@ class QStashScheduler:
         """
         try:
             response = self._client.post(
-                f"{QSTASH_PUBLISH}/{url}",
+                f"{self._publish}/{url}",
                 json=body,
                 headers={"Upstash-Not-Before": str(int(at.timestamp()))},
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise SchedulerError(f"qstash refused a callback for {at.isoformat()}: {exc}") from exc
+            # QStash names a wrong region in the body and `httpx` shows only the
+            # status line. One helper, shared with the reconciler, because two
+            # copies of this is what non-negotiable #8 is about.
+            raise SchedulerError(
+                f"qstash refused a callback for {at.isoformat()}: {why(exc)}"
+            ) from exc
 
 
 def verify_callback(*, token: str, body: bytes, url: str, signing_keys: tuple[str, ...]) -> None:
