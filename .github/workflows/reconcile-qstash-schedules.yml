@@ -29,6 +29,8 @@ jobs:
           EDUFURTHER_ENVIRONMENT: ${{ inputs.environment }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
           QSTASH_TOKEN: ${{ secrets.QSTASH_TOKEN }}
+          # Region-scoped alongside the token; see `.env.example`.
+          QSTASH_URL: ${{ vars.QSTASH_URL }}
           QSTASH_SCHEDULE_OVERRIDES: ${{ vars.QSTASH_SCHEDULE_OVERRIDES }}
         run: >-
           uv run python scripts/reconcile_qstash_schedules.py

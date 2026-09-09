@@ -18,6 +18,7 @@ import httpx
 import jwt
 import pytest
 
+from app.core.config import QSTASH_EU
 from app.domain.notifications import REMINDER_OFFSETS, reminders_for
 from app.infra.clients.scheduler import (
     NullScheduler,
@@ -71,7 +72,7 @@ BODY = json.dumps({"session_id": "abc", "kind": "t12"}).encode()
 # --------------------------------------------------------------------------
 
 
-def scheduler(handler: Any) -> tuple[QStashScheduler, list[httpx.Request]]:
+def scheduler(handler: Any, *, url: str = QSTASH_EU) -> tuple[QStashScheduler, list[httpx.Request]]:
     seen: list[httpx.Request] = []
 
     def record(request: httpx.Request) -> httpx.Response:
@@ -79,7 +80,7 @@ def scheduler(handler: Any) -> tuple[QStashScheduler, list[httpx.Request]]:
         return handler(request)
 
     return QStashScheduler(
-        "token", client=httpx.Client(transport=httpx.MockTransport(record))
+        "token", url, client=httpx.Client(transport=httpx.MockTransport(record))
     ), seen
 
 
@@ -259,3 +260,65 @@ def test_no_configured_key_accepts_nothing() -> None:
     broken; one that accepts everything is quietly open."""
     with pytest.raises(UntrustedCallbackError):
         verify_callback(token=signed(BODY), body=BODY, url=URL, signing_keys=())
+
+
+def test_the_configured_region_is_where_the_callback_is_published() -> None:
+    """**QStash is region-scoped and `qstash.upstash.io` is the EU, not a global
+    endpoint.** A token issued in `us-east-1` answers the EU host with `404`
+    naming a region — not `401` — so a wrong endpoint reads as a broken path and
+    sends whoever debugs it after the URL rather than the configuration.
+
+    The host was a module constant with nothing asserting it, which is why it
+    survived. This is that assertion: the origin the caller configured is the
+    origin the request goes to.
+    """
+    api, seen = scheduler(
+        lambda _: httpx.Response(200, json={"messageId": "m1"}),
+        url="https://qstash-us-east-1.upstash.io",
+    )
+
+    api.schedule(url=URL, body={"session_id": "abc"}, at=dt.datetime(2026, 9, 1, tzinfo=dt.UTC))
+
+    (request,) = seen
+    assert str(request.url).startswith("https://qstash-us-east-1.upstash.io/v2/publish/")
+    # The destination survives being nested in the path, which is the shape a
+    # refactor to `base_url` plus a relative path would quietly mangle.
+    assert URL in str(request.url)
+
+
+def test_a_trailing_slash_on_the_origin_does_not_double_up() -> None:
+    """`https://host/` and `https://host` must publish to the same place.
+
+    A doubled slash is a `404` from QStash, which is the same symptom as a wrong
+    region — and an operator pasting a URL from a console is exactly where the
+    trailing slash comes from.
+    """
+    api, seen = scheduler(
+        lambda _: httpx.Response(200, json={"messageId": "m1"}),
+        url="https://qstash-us-east-1.upstash.io/",
+    )
+
+    api.schedule(url=URL, body={}, at=dt.datetime(2026, 9, 1, tzinfo=dt.UTC))
+
+    (request,) = seen
+    assert "//v2/publish" not in str(request.url)
+    assert str(request.url).startswith("https://qstash-us-east-1.upstash.io/v2/publish/")
+
+
+def test_a_refused_publish_carries_what_qstash_said() -> None:
+    """**Without this, deleting the detail leaves the suite green.**
+
+    `SchedulerError` is caught and logged at INFO by both callers, so a publish
+    that fails explains itself only in that log line. If the upstream body stops
+    travelling with the error, the regression is invisible in the tests *and* in
+    production — which is how the bare `404` this whole change is about survived
+    in the first place.
+    """
+    body = '{"error":"user (abc) not found in this region (eu-central-1)."}'
+    api, _ = scheduler(lambda _: httpx.Response(404, content=body))
+
+    with pytest.raises(SchedulerError) as raised:
+        api.schedule(url=URL, body={}, at=dt.datetime(2026, 9, 1, tzinfo=dt.UTC))
+
+    assert "not found in this region" in str(raised.value)
+    assert "eu-central-1" in str(raised.value)

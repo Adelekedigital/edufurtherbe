@@ -28,6 +28,7 @@ import os
 import re
 from functools import lru_cache
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -69,6 +70,13 @@ def supabase_project_ref(value: str) -> str | None:
 PREFIXED_FIELDS = frozenset({"environment", "debug"})
 
 Environment = Literal["local", "ci", "staging", "production"]
+
+#: The QStash origin every deployment gets unless it says otherwise.
+#:
+#: **EU, because that is what `qstash.upstash.io` is.** Upstash's own SDKs
+#: default here, so matching them keeps a deployment that never sets
+#: `QSTASH_URL` behaving the way its documentation says it will.
+QSTASH_EU = "https://qstash.upstash.io"
 
 
 #: The ceiling on every rung of the credit ladder.
@@ -357,6 +365,69 @@ class Settings(BaseSettings):
     #: and the expiry sweep still frees the slot — the mentor is simply never
     #: nudged. Nothing else degrades.
     qstash_token: SecretStr | None = Field(default=None, validation_alias=env_key("qstash_token"))
+
+    #: **Which QStash region answers.** `qstash.upstash.io` reads like a global
+    #: endpoint and is not — it is `eu-central-1`, and `us-east-1` is reached at
+    #: `https://qstash-us-east-1.upstash.io`.
+    #:
+    #: **A wrong region fails as `404`, not `401`**, with the region named in the
+    #: body. That points whoever is debugging at the path rather than the
+    #: configuration, which is exactly the wrong place to look, and is why this is
+    #: configuration rather than a constant in each client.
+    #:
+    #: The token *and both signing keys* are region-scoped too, and the console
+    #: issues them per region. Moving region means moving all four together —
+    #: changing this alone leaves reconciliation working and every callback
+    #: failing verification, which surfaces only when a job first fires.
+    qstash_url: str = Field(default=QSTASH_EU, validation_alias=env_key("qstash_url"))
+
+    @field_validator("qstash_url", mode="after")
+    @classmethod
+    def _trim_qstash_url(cls, value: str) -> str:
+        """Normalise the origin, treating blank as unset.
+
+        **Blank falls back to the default, because blank is how "unset" arrives.**
+        A GitHub Actions `${{ vars.X }}` renders as an empty string when the
+        variable does not exist, and a `.env` line left as `QSTASH_URL=` is the
+        same. Taking those literally builds a *relative* URL — `/v2/publish` —
+        which fails at request time with a host error naming nothing, and would
+        break the EU deployments this field was added to leave untouched.
+
+        **Only a genuinely blank value counts as unset.** `"/"` is not blank —
+        stripping trailing slashes *before* checking would make it empty and
+        silently fall back to the default, masking a real misconfiguration as if
+        nothing had been set. `urlsplit` runs on the original value, so blankness
+        is decided before anything is trimmed away.
+
+        A trailing slash is dropped so the clients can append their own path: a
+        pasted console URL carries one, and `https://host/` + `/v2/publish` is a
+        doubled slash — a `404` wearing the same face as the wrong-region `404`
+        this field exists to prevent. A configured *path* is refused outright
+        rather than silently kept, for the same reason: `https://host/v2` plus a
+        client's own `/v2/publish` doubles into `/v2/v2/publish`, a `404` with
+        the same wrong-path face.
+        """
+        stripped = value.strip()
+        if not stripped:
+            return QSTASH_EU
+        parsed = urlsplit(stripped)
+        # **A missing scheme is the silent one.** `qstash-us-east-1.upstash.io`
+        # looks right in a console and builds a *relative* URL, so every publish
+        # raises `UnsupportedProtocol` — and `session_writer` catches
+        # `SchedulerError` and logs it at INFO, so reminders simply stop being
+        # scheduled with nothing saying so. That is the exact failure this field
+        # exists to prevent, so it is refused at startup instead. Checking the
+        # *parsed* scheme and host — not a string prefix on a value already
+        # trimmed — is what keeps the error naming what the operator actually
+        # typed rather than a mangled remainder of it.
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"QSTASH_URL must be an origin like https://host, got {value!r}")
+        if parsed.path not in ("", "/"):
+            raise ValueError(
+                f"QSTASH_URL must carry no path — clients append their own "
+                f"(e.g. /v2/publish); got {value!r}"
+            )
+        return f"{parsed.scheme}://{parsed.netloc}"
 
     #: **Two keys, because QStash rotates them.** Both are tried, so a rotation
     #: does not drop callbacks in the window where the old and the new are each

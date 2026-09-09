@@ -1519,8 +1519,11 @@ def _scheduler(request: Request) -> Any:
     wired = getattr(request.app.state, "scheduler", None)
     if wired is not None:
         return wired
-    token = _configured(request).qstash_token
-    return QStashScheduler(token.get_secret_value()) if token else NullScheduler()
+    settings = _configured(request)
+    token = settings.qstash_token
+    return (
+        QStashScheduler(token.get_secret_value(), settings.qstash_url) if token else NullScheduler()
+    )
 
 
 def _reminder_callback_url(request: Request) -> str | None:

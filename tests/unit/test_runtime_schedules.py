@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from app.core.config import QSTASH_EU, Settings
 from app.infra.jobs.manifest import (
     ManifestError,
     load_manifest,
@@ -144,3 +145,62 @@ def test_schedule_overrides_are_one_strict_json_object() -> None:
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None, qstash_schedule_overrides='{"settle-sessions":[]}')
+
+
+def test_a_blank_qstash_url_falls_back_to_the_default_region() -> None:
+    """**Blank is how "unset" arrives**, and taking it literally breaks the EU
+    deployments this setting exists to leave alone.
+
+    A GitHub Actions `${{ vars.QSTASH_URL }}` renders as an empty string when the
+    variable does not exist, and a `.env` line left as `QSTASH_URL=` is the same.
+    Read literally, both build a *relative* URL — `/v2/publish` — which fails at
+    request time with a host error naming nothing.
+    """
+    for blank in ("", "   "):
+        assert Settings(_env_file=None, qstash_url=blank).qstash_url == QSTASH_EU
+
+
+def test_a_pasted_console_url_keeps_no_trailing_slash() -> None:
+    """A doubled slash is a `404`, indistinguishable from the wrong-region `404`."""
+    settings = Settings(_env_file=None, qstash_url="https://qstash-us-east-1.upstash.io/")
+
+    assert settings.qstash_url == "https://qstash-us-east-1.upstash.io"
+
+
+def test_a_qstash_url_without_a_scheme_is_refused_at_startup() -> None:
+    """**The silent failure this field exists to prevent.**
+
+    `qstash-us-east-1.upstash.io` is what a console shows and looks entirely
+    right. Without a scheme it builds a *relative* URL, so every publish raises
+    `UnsupportedProtocol` — and `session_writer` catches `SchedulerError` and
+    logs it at INFO, so reminders stop being scheduled and nothing says so.
+
+    Refusing at startup turns a silent production degradation into a boot error.
+    """
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, qstash_url="qstash-us-east-1.upstash.io")
+
+
+def test_an_all_slash_qstash_url_is_refused_rather_than_treated_as_unset() -> None:
+    """`"/"` is not blank — `.rstrip("/")` alone cannot tell the two apart.
+
+    Silently falling back to the EU default here would mask a real, if
+    nonsensical, misconfiguration as if nothing had been set at all.
+    """
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, qstash_url="/")
+
+
+def test_a_scheme_only_qstash_url_is_refused_with_the_value_the_operator_typed() -> None:
+    """`"https://"` must not be mangled to `"https:"` before it is rejected —
+    the error an operator reads has to name what they actually wrote."""
+    with pytest.raises(ValidationError, match=re.escape("'https://'")):
+        Settings(_env_file=None, qstash_url="https://")
+
+
+def test_a_qstash_url_carrying_a_path_is_refused() -> None:
+    """A client appends its own path (`/v2/publish`); a configured path doubles
+    it into a `404` wearing the same face as the wrong-region `404` this field
+    exists to prevent."""
+    with pytest.raises(ValidationError, match="/v2"):
+        Settings(_env_file=None, qstash_url="https://qstash-us-east-1.upstash.io/v2")

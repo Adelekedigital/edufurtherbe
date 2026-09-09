@@ -10,9 +10,10 @@ from typing import Any, cast, get_args
 
 from fastapi import Request
 
-from app.api.deps import SettingsDep, _calendar, _configured, _rooms
+from app.api.deps import SettingsDep, _calendar, _configured, _rooms, _scheduler
 from app.core.config import Settings
 from app.infra.clients.meetings import DailyRooms, GoogleCalendar, NullCalendar, NullRooms
+from app.infra.clients.scheduler import NullScheduler, QStashScheduler
 
 
 def test_settings_dependency_resolves_to_settings() -> None:
@@ -74,3 +75,25 @@ def test_a_wired_adapter_still_wins_over_configuration() -> None:
     )
 
     assert _rooms(request) is sentinel
+
+
+def test_the_scheduler_reads_the_apps_settings() -> None:
+    """The real `QStashScheduler` branch had zero coverage — every other test
+    exercising a reminder wires a fake onto `app.state.scheduler` and never
+    reaches the branch that builds one, the same gap `_rooms` had."""
+    configured = fake_request(
+        settings=Settings(_env_file=None, qstash_token="a-token")  # noqa: S106
+    )
+
+    assert isinstance(_scheduler(configured), QStashScheduler)
+    assert isinstance(_scheduler(fake_request(settings=Settings(_env_file=None))), NullScheduler)
+
+
+def test_a_wired_scheduler_still_wins_over_configuration() -> None:
+    sentinel = object()
+    request = fake_request(
+        scheduler=sentinel,
+        settings=Settings(_env_file=None, qstash_token="a-token"),  # noqa: S106
+    )
+
+    assert _scheduler(request) is sentinel

@@ -11,9 +11,9 @@ from typing import Any
 import httpx
 
 from app.core.errors import ConfigurationError, UpstreamError
+from app.infra.http.upstream import trim_origin, why
 from app.infra.jobs.manifest import ResolvedSchedule
 
-QSTASH_API = "https://qstash.upstash.io/v2"
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
@@ -123,11 +123,12 @@ def _body(value: Any) -> str:
 class QStashSchedules:
     """The narrow QStash schedule API used by repository reconciliation."""
 
-    def __init__(self, token: str, client: httpx.Client | None = None) -> None:
+    def __init__(self, token: str, url: str, client: httpx.Client | None = None) -> None:
+        """``url`` is the QStash **origin** — region-scoped, see `Settings.qstash_url`."""
         if not token:
             raise ConfigurationError("QSTASH_TOKEN is required to reconcile schedules")
         self.client = client or httpx.Client(
-            base_url=QSTASH_API,
+            base_url=f"{trim_origin(url)}/v2",
             headers={"Authorization": f"Bearer {token}"},
             timeout=TIMEOUT,
         )
@@ -136,9 +137,15 @@ class QStashSchedules:
         try:
             response = self.client.get("/schedules")
             response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise UpstreamError(f"could not list QStash schedules: {why(exc)}") from exc
+        try:
             raw = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise UpstreamError(f"could not list QStash schedules: {exc}") from exc
+        except ValueError as exc:
+            # **`JSONDecodeError` carries no `.response`** — it is the parser's
+            # own `ValueError`, not `httpx`'s. `response` is still in scope here,
+            # so it is passed explicitly rather than lost.
+            raise UpstreamError(f"could not list QStash schedules: {why(exc, response)}") from exc
         if isinstance(raw, dict):
             raw = raw.get("schedules", [])
         if not isinstance(raw, list):
@@ -182,14 +189,16 @@ class QStashSchedules:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise UpstreamError(f"could not apply QStash schedule {schedule.id}: {exc}") from exc
+            raise UpstreamError(
+                f"could not apply QStash schedule {schedule.id}: {why(exc)}"
+            ) from exc
 
     def delete(self, identity: str) -> None:
         try:
             response = self.client.delete(f"/schedules/{identity}")
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise UpstreamError(f"could not delete QStash schedule {identity}: {exc}") from exc
+            raise UpstreamError(f"could not delete QStash schedule {identity}: {why(exc)}") from exc
 
 
 def apply_reconciliation(client: QStashSchedules, changes: tuple[ScheduleChange, ...]) -> None:
