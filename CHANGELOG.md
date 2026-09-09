@@ -19,12 +19,15 @@ released. A tag with no matching section here fails the release job.
   Railway is the current host, while GitHub Actions retains CI, migrations,
   security, reconciliation, and exceptional recovery (ADR 0028).
 
-- **The QStash endpoint is configuration, not a constant.** `QSTASH_URL` selects
-  the region and defaults to `https://qstash.upstash.io`, which is `eu-central-1`
-  rather than a global endpoint — `us-east-1` is
-  `https://qstash-us-east-1.upstash.io`. Both the publisher and the schedule
-  reconciler previously hardcoded the EU host, so an account in another region
-  got `404` from every call, naming the region in the body.
+### Fixed
+
+- **The QStash endpoint was a constant, and a wrong region answered `404`.**
+  `QSTASH_URL` now selects the region and defaults to
+  `https://qstash.upstash.io`, which is `eu-central-1` rather than a global
+  endpoint — `us-east-1` is `https://qstash-us-east-1.upstash.io`. Both the
+  publisher and the schedule reconciler previously hardcoded the EU host, so an
+  account in another region got `404` from every call, naming the region in the
+  body.
 
   **Four values move together, and they are `QSTASH_URL`, `QSTASH_TOKEN`,
   `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY`** — the console
@@ -33,10 +36,10 @@ released. A tag with no matching section here fails the release job.
   fires. `PUBLIC_BASE_URL` is *not* among them: it is this service's own origin,
   the address QStash calls back, and it has no region.
 
-  Unset, an EU deployment behaves exactly as before. A value without a scheme is
-  refused at startup rather than failing silently at publish time.
-
-### Fixed
+  Unset, an EU deployment behaves exactly as before. A value without a scheme,
+  without a host, or carrying a path (which would double up with a client's own
+  `/v2/publish`) is refused at startup rather than failing silently — or,
+  for a bare `/`, silently falling back to the default — at publish time.
 
 - **Percentages rounded ties the wrong way, in two places.** A Python `100.0`
   binds as `float8`, so the whole expression became float and `round(float8)`

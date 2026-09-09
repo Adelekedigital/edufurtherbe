@@ -26,7 +26,7 @@ import httpx
 import jwt
 
 from app.core.errors import AppError
-from app.infra.http.upstream import why
+from app.infra.http.upstream import trim_origin, why
 
 __all__ = [
     "NullScheduler",
@@ -90,14 +90,20 @@ class QStashScheduler:
     a deadline — and it survives a retry of the publish itself.
     """
 
-    def __init__(self, token: str, url: str, client: httpx.Client | None = None) -> None:
-        """``url`` is the QStash **origin**, and it is region-scoped.
+    def __init__(self, token: str, origin: str, client: httpx.Client | None = None) -> None:
+        """``origin`` is the QStash origin, and it is region-scoped.
 
         Passed in rather than a module constant, because the host is
         configuration: `qstash.upstash.io` is `eu-central-1`, not a global
         endpoint, and a token from another region answers it with `404`.
+
+        Named ``origin`` rather than ``url``, unlike an earlier version: this
+        class also has a ``url`` on :meth:`schedule`, and that one means the
+        callback destination — a different value entirely. One class with two
+        parameters sharing a name for different things is the kind of mistake a
+        future edit makes without noticing, not this one.
         """
-        self._publish = f"{url.rstrip('/')}/v2/publish"
+        self._publish = f"{trim_origin(origin)}/v2/publish"
         self._client = client or httpx.Client(
             headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT
         )

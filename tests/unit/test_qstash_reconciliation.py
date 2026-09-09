@@ -204,3 +204,23 @@ def test_a_wrong_region_explains_itself_in_the_error() -> None:
 
     assert "not found in this region" in str(raised.value)
     assert "eu-central-1" in str(raised.value)
+
+
+def test_a_response_that_fails_to_parse_as_json_carries_its_own_body_in_the_error() -> None:
+    """**A 200 with an unparseable body is a different failure from an HTTP
+    error, and `why()` cannot see it the same way.**
+
+    `JSONDecodeError` carries no `.response` — it is a `ValueError` raised by
+    the parser, not by `httpx`, so the body that actually failed to parse would
+    otherwise be dropped from the error entirely.
+    """
+    body = "<html>not json</html>"
+    client = httpx.Client(
+        base_url=f"{QSTASH_EU}/v2",
+        transport=httpx.MockTransport(lambda _r: httpx.Response(200, content=body)),
+    )
+
+    with pytest.raises(UpstreamError) as raised:
+        QStashSchedules("t", QSTASH_EU, client).list()
+
+    assert "not json" in str(raised.value)

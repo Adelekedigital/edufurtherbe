@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -178,3 +179,28 @@ def test_a_qstash_url_without_a_scheme_is_refused_at_startup() -> None:
     """
     with pytest.raises(ValidationError):
         Settings(_env_file=None, qstash_url="qstash-us-east-1.upstash.io")
+
+
+def test_an_all_slash_qstash_url_is_refused_rather_than_treated_as_unset() -> None:
+    """`"/"` is not blank — `.rstrip("/")` alone cannot tell the two apart.
+
+    Silently falling back to the EU default here would mask a real, if
+    nonsensical, misconfiguration as if nothing had been set at all.
+    """
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, qstash_url="/")
+
+
+def test_a_scheme_only_qstash_url_is_refused_with_the_value_the_operator_typed() -> None:
+    """`"https://"` must not be mangled to `"https:"` before it is rejected —
+    the error an operator reads has to name what they actually wrote."""
+    with pytest.raises(ValidationError, match=re.escape("'https://'")):
+        Settings(_env_file=None, qstash_url="https://")
+
+
+def test_a_qstash_url_carrying_a_path_is_refused() -> None:
+    """A client appends its own path (`/v2/publish`); a configured path doubles
+    it into a `404` wearing the same face as the wrong-region `404` this field
+    exists to prevent."""
+    with pytest.raises(ValidationError, match="/v2"):
+        Settings(_env_file=None, qstash_url="https://qstash-us-east-1.upstash.io/v2")

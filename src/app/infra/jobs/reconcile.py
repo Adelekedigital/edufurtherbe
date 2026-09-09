@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from app.core.errors import ConfigurationError, UpstreamError
-from app.infra.http.upstream import why
+from app.infra.http.upstream import trim_origin, why
 from app.infra.jobs.manifest import ResolvedSchedule
 
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
@@ -128,7 +128,7 @@ class QStashSchedules:
         if not token:
             raise ConfigurationError("QSTASH_TOKEN is required to reconcile schedules")
         self.client = client or httpx.Client(
-            base_url=f"{url.rstrip('/')}/v2",
+            base_url=f"{trim_origin(url)}/v2",
             headers={"Authorization": f"Bearer {token}"},
             timeout=TIMEOUT,
         )
@@ -137,9 +137,15 @@ class QStashSchedules:
         try:
             response = self.client.get("/schedules")
             response.raise_for_status()
-            raw = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
+        except httpx.HTTPError as exc:
             raise UpstreamError(f"could not list QStash schedules: {why(exc)}") from exc
+        try:
+            raw = response.json()
+        except ValueError as exc:
+            # **`JSONDecodeError` carries no `.response`** — it is the parser's
+            # own `ValueError`, not `httpx`'s. `response` is still in scope here,
+            # so it is passed explicitly rather than lost.
+            raise UpstreamError(f"could not list QStash schedules: {why(exc, response)}") from exc
         if isinstance(raw, dict):
             raw = raw.get("schedules", [])
         if not isinstance(raw, list):
