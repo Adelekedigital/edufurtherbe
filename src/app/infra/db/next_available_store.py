@@ -254,8 +254,12 @@ async def refresh_next_available(
             if dry_run:
                 written = True
             else:
+                # The run's start, not this mentor's: age is checked against
+                # the next run's start, so a mentor reached late in a long run
+                # would otherwise be skipped by the next run and refreshed only
+                # every other time. It also orders overlapping runs.
                 written = await _save(
-                    session, mentor, first=first, until=until, computed_at=moment, seen=seen
+                    session, mentor, first=first, until=until, computed_at=run_clock, seen=seen
                 )
                 await session.commit()
         except Exception:
