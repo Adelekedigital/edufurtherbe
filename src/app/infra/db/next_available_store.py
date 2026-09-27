@@ -59,7 +59,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, case, delete, exists, func, or_, select
+from sqlalchemy import case, delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,7 +67,7 @@ from app.domain.availability import MAX_PROJECTION_DAYS, UtcInterval
 from app.infra.db.models.availability import MentorAvailabilityChange, MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
-from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
+from app.infra.db.public_visibility import bookable_mentors
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import FreeBusyReader, list_slots, mentor_today
 
@@ -109,15 +109,6 @@ def next_available_state() -> Any:
         (MentorNextAvailability.bookable_until > func.now(), OPEN),
         (MentorNextAvailability.next_available_at.is_(None), NONE),
         else_=REFRESHING,
-    )
-
-
-def _bookable_mentors() -> Select[Any]:
-    """Every mentor the discovery list could show, by user id."""
-    return (
-        select(MentorProfile.user_id)
-        .join(User, User.id == MentorProfile.user_id)
-        .where(*mentor_is_public(), *mentor_is_bookable())
     )
 
 
@@ -227,7 +218,7 @@ async def refresh_next_available(
             MentorNextAvailability,
             MentorNextAvailability.mentor_user_id == MentorProfile.user_id,
         )
-        .where(MentorProfile.user_id.in_(_bookable_mentors()))
+        .where(MentorProfile.user_id.in_(bookable_mentors()))
         .where(
             or_(
                 ~_unchanged(),
@@ -284,7 +275,7 @@ async def refresh_next_available(
         # is itself a change, and logs one.
         await session.execute(
             delete(MentorAvailabilityChange).where(
-                MentorAvailabilityChange.mentor_user_id.not_in(_bookable_mentors())
+                MentorAvailabilityChange.mentor_user_id.not_in(bookable_mentors())
             )
         )
         await session.commit()
