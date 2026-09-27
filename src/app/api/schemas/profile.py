@@ -16,7 +16,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.schemas.catalogue import CountryRef, InstitutionRead
-from app.api.schemas.common import Normalised
+from app.api.schemas.common import AvatarFocusRead, Normalised
 from app.domain.enums import LanguageProficiency
 
 
@@ -419,3 +419,13 @@ class UserLanguagesWrite(Normalised):
         if len(ids) != len(set(ids)):
             raise ValueError("a language may appear only once")
         return self
+
+
+class AvatarUploadRead(BaseModel):
+    """The stored avatar, and where to centre it — so a client can show the new
+    photo without fetching `/me` again. `avatar_focus` is what is stored after
+    the upload: usually the detected face, but a re-upload of the same photo
+    keeps a chosen crop."""
+
+    avatar_url: str
+    avatar_focus: AvatarFocusRead | None = None

@@ -38,8 +38,14 @@ from app.api.deps import (
     UpsertedGoalDep,
     UpsertedProfileDep,
 )
-from app.api.schemas.common import Page
-from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
+from app.api.schemas.common import AvatarFocusRead, Page
+from app.api.schemas.profile import (
+    AvatarUploadRead,
+    AwardRead,
+    EducationRead,
+    GoalRead,
+    MentorProfileRead,
+)
 from app.core.errors import NotFoundError
 
 router = APIRouter(prefix="/api/v1/users/{user_id}", tags=["users"])
@@ -432,12 +438,14 @@ UPLOAD_RESPONSES: dict[int | str, dict[str, str]] = {
 
 @router.post(
     "/avatar",
+    response_model=AvatarUploadRead,
     summary="Upload a profile picture",
     description=IMAGE_DESCRIPTION,
     responses=UPLOAD_RESPONSES,
 )
-async def upload_avatar(url: UploadedAvatarDep) -> dict[str, str]:
-    return {"avatar_url": url}
+async def upload_avatar(uploaded: UploadedAvatarDep) -> AvatarUploadRead:
+    url, (x, y) = uploaded
+    return AvatarUploadRead(avatar_url=url, avatar_focus=AvatarFocusRead.of(x, y))
 
 
 @router.post(
