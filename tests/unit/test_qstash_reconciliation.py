@@ -119,6 +119,13 @@ def test_create_sets_every_delivery_policy_header_explicitly() -> None:
 
     (request,) = seen
     assert request.method == "POST"
+    # `Upstash-Cron`, as the QStash API reference names it ("Create a Schedule",
+    # required header). This header once went out as `Upstash-Schedule`, which
+    # QStash ignores, and every schedule was refused with "Invalid cron
+    # expression empty spec string" — while this test, missing the line below,
+    # stayed green.
+    assert request.headers["Upstash-Cron"] == schedule.cron
+    assert "Upstash-Schedule" not in request.headers
     assert request.headers["Upstash-Schedule-Id"] == schedule.id
     assert request.headers["Upstash-Method"] == "POST"
     assert request.headers["Upstash-Retries"] == "3"
