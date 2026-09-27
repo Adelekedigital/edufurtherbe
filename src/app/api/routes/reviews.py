@@ -9,9 +9,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import EditedReviewDep, ReviewableSessionsDep, WrittenReviewDep
+from app.api.deps import (
+    EditedReviewDep,
+    MentorRelationshipDep,
+    ReviewableSessionsDep,
+    WrittenReviewDep,
+)
 from app.api.schemas.common import Page
-from app.api.schemas.reviews import ReviewableSessionRead, ReviewRead
+from app.api.schemas.reviews import MentorRelationshipRead, ReviewableSessionRead, ReviewRead
 
 router = APIRouter(prefix="/api/v1", tags=["reviews"])
 
@@ -105,6 +110,34 @@ async def list_reviewable_sessions(
     return Page(
         data=[ReviewableSessionRead.model_validate(row) for row in sessions], next_cursor=None
     )
+
+
+@router.get(
+    "/me/mentors/{mentor_id}/relationship",
+    response_model=MentorRelationshipRead,
+    summary="Your history with one mentor",
+    description=(
+        "How many sessions you have had with this mentor, when you last "
+        "reviewed them, and whether a review is owed now — what a profile's "
+        "review prompts need.\n\n"
+        "Each figure is read by the same rule as the endpoint it summarises, so "
+        "`review_due` is true exactly when `/me/reviewable-sessions?mentor_id=` "
+        "is non-empty.\n\n"
+        "**An id that is nobody, or not a mentor, answers zeros**, not `404`: "
+        "your history with them is empty, and a `404` would say which ids are "
+        "mentors. Never cached by anyone but you."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The bearer token is absent, malformed, expired or wrongly signed."
+        }
+    },
+)
+async def read_mentor_relationship(
+    relationship: MentorRelationshipDep, response: Response
+) -> MentorRelationshipRead:
+    response.headers["Cache-Control"] = "private, no-store"
+    return MentorRelationshipRead.model_validate(relationship)
 
 
 @router.post(
