@@ -14,6 +14,7 @@ pinned by the runtime-job unit tests; what is tested here is what it runs.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
@@ -24,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import add_session, add_session_type, make_bookable_mentor
 
 from app.domain.availability import UtcInterval
-from app.infra.db.next_available_store import refresh_next_available
+from app.infra.db.next_available_store import JITTER, refresh_next_available
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -48,10 +49,20 @@ TRIGGERED = {
 
 
 class FakeCalendar:
-    """A `FreeBusyReader` that reports fixed busy intervals and counts its calls."""
+    """A `FreeBusyReader` that reports fixed busy intervals and counts its calls.
 
-    def __init__(self, busy: tuple[UtcInterval, ...] = ()) -> None:
+    `during` runs inside the call — the only point in a refresh where the test
+    can make a change land *after* the refresh read the row and *before* it
+    wrote its answer.
+    """
+
+    def __init__(
+        self,
+        busy: tuple[UtcInterval, ...] = (),
+        during: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self.busy_intervals = busy
+        self.during = during
         self.calls = 0
 
     async def busy(
@@ -59,21 +70,26 @@ class FakeCalendar:
     ) -> tuple[UtcInterval, ...]:
         del session, user_id, start, end
         self.calls += 1
+        if self.during is not None:
+            await self.during()
         return self.busy_intervals
 
 
 async def refresh(
-    engine: AsyncEngine, *, now: dt.datetime | None = None, calendar: Any = None
+    engine: AsyncEngine,
+    *,
+    now: dt.datetime | None = None,
+    calendar: Any = None,
+    dry_run: bool = False,
 ) -> dict[str, int]:
     async with AsyncSession(engine) as session:
-        counts = await refresh_next_available(
+        return await refresh_next_available(
             session,
             now=now or dt.datetime.now(dt.UTC),
             max_age=MAX_AGE,
             reader=calendar or FakeCalendar(),
+            dry_run=dry_run,
         )
-        await session.commit()
-        return counts
 
 
 async def card(client: httpx.AsyncClient, mentor: UUID) -> dict[str, Any]:
@@ -200,18 +216,18 @@ async def test_the_next_refresh_brings_it_back(
     assert (await card(api_client, mentor))["next_available_state"] == "open"
 
 
-async def test_a_change_during_a_refresh_leaves_it_stale(
+async def test_a_booking_committed_during_a_refresh_leaves_it_stale(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The refresh records the time it *started*. A change that lands after that
-    has a later mark, so the result is already stale when written — recording
-    when it *finished* would bless a value computed before the change."""
+    """The refresh read the row before the booking committed, and computed from
+    data without it. Its answer must not be vouched for — which is what the
+    first version, comparing clocks, got wrong."""
     mentor = await make_bookable_mentor(db_engine, "next-race")
-    await refresh(db_engine)  # the row exists, so the trigger has something to mark
-    started = dt.datetime.now(dt.UTC)
-    await add_session(db_engine, mentor, status="confirmed", days_ago=-3)
 
-    await refresh(db_engine, now=started)
+    async def book() -> None:
+        await add_session(db_engine, mentor, status="confirmed", days_ago=-3)
+
+    await refresh(db_engine, calendar=FakeCalendar(during=book))
 
     assert (await card(api_client, mentor))["next_available_state"] == "refreshing"
 
@@ -277,10 +293,11 @@ async def test_a_fresh_value_is_left_until_it_reaches_the_maximum_age(
     first = dt.datetime.now(dt.UTC)
     await refresh(db_engine, now=first)
 
-    await refresh(db_engine, now=first + MAX_AGE - dt.timedelta(seconds=1))
+    early = MAX_AGE - JITTER - dt.timedelta(seconds=1)
+    await refresh(db_engine, now=first + early)
     assert await computed_at(db_engine, mentor) == first
 
-    later = first + MAX_AGE + dt.timedelta(seconds=1)
+    later = first + MAX_AGE - JITTER + dt.timedelta(seconds=1)
     await refresh(db_engine, now=later)
     assert await computed_at(db_engine, mentor) == later
 
@@ -301,3 +318,78 @@ async def test_a_mentor_who_stops_being_bookable_leaves_the_card(
     listed = [row["id"] for row in (await api_client.get(URL)).json()["data"]]
 
     assert str(mentor) not in listed
+
+
+# --------------------------------------------------------------------------
+# What does and does not mark a mentor stale
+# --------------------------------------------------------------------------
+
+
+async def state_after(
+    client: httpx.AsyncClient, engine: AsyncEngine, mentor: UUID, *statements: str
+) -> str:
+    await refresh(engine)
+    async with engine.begin() as conn:
+        for sql in statements:
+            await conn.execute(text(sql), {"m": mentor})
+    return str((await card(client, mentor))["next_available_state"])
+
+
+async def test_a_headline_edit_does_not_blank_the_card(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "next-bio")
+
+    state = await state_after(
+        api_client,
+        db_engine,
+        mentor,
+        "UPDATE mentor_profiles SET headline = 'New headline' WHERE user_id = :m",
+    )
+
+    assert state == "open"
+
+
+async def test_a_listing_change_does_mark_the_mentor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The positive half of the column filter above: the columns that decide
+    visibility still fire. Relisted straight after, so the mentor is still on
+    the page to be read."""
+    mentor = await make_bookable_mentor(db_engine, "next-listing")
+
+    state = await state_after(
+        api_client,
+        db_engine,
+        mentor,
+        "UPDATE mentor_profiles SET listing_status = 'unlisted' WHERE user_id = :m",
+        "UPDATE mentor_profiles SET listing_status = 'listed' WHERE user_id = :m",
+    )
+
+    assert state == "refreshing"
+
+
+async def test_an_update_that_changes_nothing_does_not_blank_the_card(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "next-noop")
+
+    state = await state_after(
+        api_client,
+        db_engine,
+        mentor,
+        "UPDATE availability_rules SET end_time = end_time WHERE mentor_user_id = :m",
+    )
+
+    assert state == "open"
+
+
+async def test_a_dry_run_writes_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "next-dry")
+
+    counts = await refresh(db_engine, dry_run=True)
+
+    assert counts["refreshed"] >= 1
+    assert (await card(api_client, mentor))["next_available_state"] == "refreshing"

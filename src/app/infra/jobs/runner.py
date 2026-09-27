@@ -21,7 +21,7 @@ from app.infra.clients.hipolabs import FileCatalogue, HipolabsCatalogue
 from app.infra.clients.meetings import GoogleCalendar, NullCalendar, free_busy
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier
 from app.infra.clients.templates import LoopsTemplates
-from app.infra.db.calendar_store import MentorFreeBusy, NullFreeBusy, check_connections
+from app.infra.db.calendar_store import check_connections, free_busy_reader
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
 from app.infra.db.credit_grants import grant_monthly_credits, unlocked_mentee_count
 from app.infra.db.credit_reminders import (
@@ -57,7 +57,7 @@ class JobResult:
 
 
 class RuntimeJobs:
-    """Dispatch the five supported jobs through one reusable surface."""
+    """Dispatch the six supported jobs through one reusable surface."""
 
     def __init__(
         self,
@@ -196,42 +196,20 @@ class RuntimeJobs:
         finally:
             await engine.dispose()
 
-    def _free_busy(self, factory: Callable[[], AsyncSession]) -> Any:
-        """Each mentor's Google free/busy, or nothing when unconfigured.
-
-        The same null-unless-configured rule `api/deps._free_busy` applies, so a
-        staging deployment without calendar keys refreshes from declared hours
-        alone rather than failing every run.
-        """
-        oauth = self._calendar_health()
-        if oauth is None:
-            return NullFreeBusy()
-        return MentorFreeBusy(
-            client_id=oauth["client_id"],
-            client_secret=oauth["client_secret"],
-            key=oauth["key"],
-            # Its own sessions for the one write it makes — a dead grant is
-            # recorded even when a dry run rolls the refresh back.
-            session_factory=factory,
-        )
-
     async def _refresh_next_available(self, *, dry_run: bool) -> dict[str, int]:
         engine = create_database_engine(self.settings)
         try:
             factory = create_session_factory(engine)
-            reader = self._free_busy(factory)
             async with factory() as session:
-                counts = await refresh_next_available(
+                # Commits per mentor itself (see its docstring), so a run that
+                # times out keeps what it finished; a dry run writes nothing.
+                return await refresh_next_available(
                     session,
                     now=dt.datetime.now(dt.UTC),
                     max_age=dt.timedelta(minutes=self.settings.next_available_max_age_minutes),
-                    reader=reader,
+                    reader=free_busy_reader(self.settings, factory),
+                    dry_run=dry_run,
                 )
-                if dry_run:
-                    await session.rollback()
-                else:
-                    await session.commit()
-                return counts
         finally:
             await engine.dispose()
 

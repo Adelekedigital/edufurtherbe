@@ -407,12 +407,13 @@ class MentorNextAvailability(TimestampMixin, Base):
     everything that *decides* anything. This row decides nothing: booking reads
     live slots, and a card that cannot vouch for this value shows `null`.
 
-    **Two clocks, and the card compares them.** `changed_at` is set by
+    **One value compared for equality, not two clocks.** `changed_at` is set by
     `trg_mark_next_available_stale` whenever anything that decides this mentor's
-    availability changes; `computed_at` is when the refresh that wrote
-    `next_available_at` *started*. The value is shown only while
-    `computed_at >= changed_at`, so a change that lands mid-refresh leaves the
-    row stale rather than blessing a value computed before it.
+    availability changes. A refresh copies the `changed_at` it *read* into
+    `seen_changed_at`, and the value is shown only while the two are equal — so
+    any change after that read, including one whose transaction was still open
+    when the refresh looked, leaves the row stale. `computed_at` decides only how
+    old a value is, for the Google-side changes no trigger sees.
     """
 
     __tablename__ = "mentor_next_availability"
@@ -426,9 +427,10 @@ class MentorNextAvailability(TimestampMixin, Base):
     )
     #: The first bookable instant within `MAX_PROJECTION_DAYS`, or null for none.
     next_available_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    #: When the refresh that wrote `next_available_at` started. Null until the
-    #: first refresh, which reads as stale.
+    #: When the value was last computed, by the job's clock. Age only.
     computed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: The `changed_at` the last refresh read. Null until the first refresh.
+    seen_changed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     #: The last change to anything that decides this mentor's availability.
     changed_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")

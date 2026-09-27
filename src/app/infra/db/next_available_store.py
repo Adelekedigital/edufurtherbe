@@ -6,28 +6,38 @@ shows `null` whenever it cannot vouch for what is stored.
 
 WHY THE CARD CAN VOUCH FOR IT
 =============================
-`trg_mark_next_available_stale` sets `changed_at` whenever anything that
-decides a mentor's availability changes. A refresh records `computed_at` as the
-moment it **started**, and the card shows the value only while
-`computed_at >= changed_at` and the time is still ahead. So a booking, an hours
-change, or a change that lands *during* a refresh all read as `refreshing` until
-the next run. Recording when the refresh finished instead would bless a value
-computed before a change it never saw.
+`trg_mark_next_available_stale` sets a mentor's `changed_at` whenever anything
+that decides their availability changes. A refresh reads `changed_at` *before*
+it computes, and writes that value back as `seen_changed_at` beside the result.
+The card shows the result only while `seen_changed_at = changed_at` and the time
+is still ahead.
+
+**An equality, deliberately, not a comparison of two clocks.** The first version
+compared the job's start time against `changed_at`, and review found two ways it
+blessed a taken slot: a booking whose trigger fired before the refresh started
+but whose transaction committed after the refresh read `sessions`, and an app
+host whose clock ran ahead of the database's. Both break an equality. The first
+because the refresh read the *old* `changed_at` (the booking's was uncommitted),
+so the commit leaves them unequal; the second because no clock is compared.
 
 WHY THE SLOTS ARE `list_slots`
 ==============================
 The card's time is the first instant `list_slots` offers for any of the
-mentor's live offerings, over `MAX_PROJECTION_DAYS`. A second slot computation
-here would be the copy that drifts, and the card would promise a time the
-booking flow refuses.
+mentor's live offerings, from the mentor's own today over `MAX_PROJECTION_DAYS` —
+exactly the range `/slots` will answer. A second slot computation here would be
+the copy that drifts, and the card would promise a time booking refuses.
 
-THREE PHASES, AND WHY NO LOCK SPANS A GOOGLE CALL
-=================================================
-Rows for newly bookable mentors are created and committed first. Computing then
-only reads, including one free/busy call per mentor. The writes come last, as
-one short transaction the caller commits. Holding a row lock across the compute
-phase would make a mentee's booking — whose trigger updates the same row — wait
-on Google.
+NO LOCK SPANS A GOOGLE CALL, AND A TIMEOUT KEEPS WHAT IT FINISHED
+================================================================
+Each mentor is computed, then written and committed on its own. Computing only
+reads, so a mentee's booking — whose trigger writes the same row — waits at most
+for one `UPDATE`, never for Google. And a run QStash times out has still saved
+every mentor it reached.
+
+**Known limit:** `list_slots` re-reads the mentor's rules and bookings once per
+offering, and mentors are computed one after another. At today's few dozen that
+is seconds. Bounded concurrency and one load per mentor are the next step if a
+run approaches the manifest's timeout.
 """
 
 from __future__ import annotations
@@ -35,6 +45,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import CursorResult, and_, case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -54,24 +65,28 @@ OPEN = "open"
 NONE = "none"
 REFRESHING = "refreshing"
 
+#: How early a run may arrive and still count a value as due. QStash delivers a
+#: few seconds either side of the cron, so a maximum age equal to the interval
+#: would otherwise recompute on some runs and skip others. With this, the
+#: default of five minutes on a five-minute cron means *every run*.
+JITTER = dt.timedelta(seconds=60)
+
 
 def _vouched() -> Any:
-    """The stored value may be shown: computed, and since the last change."""
+    """The stored value was computed with no change since."""
     return and_(
-        MentorNextAvailability.computed_at.is_not(None),
-        MentorNextAvailability.computed_at >= MentorNextAvailability.changed_at,
+        MentorNextAvailability.seen_changed_at.is_not(None),
+        MentorNextAvailability.seen_changed_at == MentorNextAvailability.changed_at,
     )
+
+
+def _ahead() -> Any:
+    return MentorNextAvailability.next_available_at > func.now()
 
 
 def next_available_at() -> Any:
     """The card's time: the stored value when it is vouched for and still ahead."""
-    return case(
-        (
-            and_(_vouched(), MentorNextAvailability.next_available_at > func.now()),
-            MentorNextAvailability.next_available_at,
-        ),
-        else_=None,
-    )
+    return case((and_(_vouched(), _ahead()), MentorNextAvailability.next_available_at), else_=None)
 
 
 def next_available_state() -> Any:
@@ -81,10 +96,7 @@ def next_available_state() -> Any:
     free, and the next run will say what is free now.
     """
     return case(
-        (
-            and_(_vouched(), MentorNextAvailability.next_available_at > func.now()),
-            OPEN,
-        ),
+        (and_(_vouched(), _ahead()), OPEN),
         (and_(_vouched(), MentorNextAvailability.next_available_at.is_(None)), NONE),
         else_=REFRESHING,
     )
@@ -115,9 +127,10 @@ async def _first_free(
 ) -> dt.datetime | None:
     """The earliest instant any of this mentor's offerings could be booked."""
     offerings = await list_session_types(session, mentor) or []
-    # Yesterday in UTC, so the mentor's own "today" is inside the range whatever
-    # their zone; a day already past yields no slots, so starting early is free.
-    start = (now - dt.timedelta(days=1)).date()
+    zone = (await session.execute(select(User.timezone).where(User.id == mentor))).scalar_one()
+    # The mentor's today, which is how `list_slots` defaults its own range, so
+    # the whole horizon a mentee could ask `/slots` about is searched here.
+    start = now.astimezone(ZoneInfo(zone)).date()
     end = start + dt.timedelta(days=MAX_PROJECTION_DAYS)
     once = _OneReadPerMentor(reader)
     firsts = []
@@ -136,61 +149,57 @@ async def refresh_next_available(
     now: dt.datetime,
     max_age: dt.timedelta,
     reader: FreeBusyReader,
+    dry_run: bool = False,
 ) -> dict[str, int]:
-    """Create rows for new mentors, then recompute every row that is due.
+    """Create rows for new mentors, then recompute and save every row that is due.
 
-    Due is stale (changed since computed, or never computed) or older than
-    `max_age` — age is the only thing that catches a change made in Google,
+    Due is not vouched for (changed since computed, or never computed) or older
+    than `max_age` — age is the only thing that catches a change made in Google,
     which fires no trigger here.
 
-    **Commits once, after creating rows**, so they are visible to the triggers
-    before anything is computed for them. A dry run therefore still creates
-    empty rows; they carry no value and the next run would create them anyway.
-    The updates are left for the caller to commit or roll back.
+    **Commits as it goes**: the new rows, then each mentor as it is computed. A
+    dry run creates and writes nothing, and reports what it would have done.
     """
     bookable = (
         select(MentorProfile.user_id)
         .join(User, User.id == MentorProfile.user_id)
         .where(*mentor_is_public(), *mentor_is_bookable())
     )
-    # `changed_at` at the epoch: a row just created has seen no change yet.
-    # Its insert time would be *after* this run's `now`, and the first value
-    # computed for it would read as stale forever — every refresh would record
-    # a `computed_at` earlier than the row's own birth.
-    never = func.to_timestamp(0)
-    created = await session.execute(
-        insert(MentorNextAvailability)
-        .from_select(["mentor_user_id", "changed_at"], bookable.add_columns(never))
-        .on_conflict_do_nothing(index_elements=["mentor_user_id"])
-    )
-    await session.commit()
+    created = 0
+    if not dry_run:
+        result = await session.execute(
+            insert(MentorNextAvailability)
+            .from_select(["mentor_user_id"], bookable)
+            .on_conflict_do_nothing(index_elements=["mentor_user_id"])
+        )
+        created = cast("CursorResult[Any]", result).rowcount or 0
+        await session.commit()
 
     due = (
-        (
-            await session.execute(
-                select(MentorNextAvailability.mentor_user_id).where(
-                    MentorNextAvailability.mentor_user_id.in_(bookable),
-                    or_(
-                        ~_vouched(),
-                        MentorNextAvailability.computed_at <= now - max_age,
-                    ),
-                )
+        await session.execute(
+            select(MentorNextAvailability.mentor_user_id, MentorNextAvailability.changed_at).where(
+                MentorNextAvailability.mentor_user_id.in_(bookable),
+                or_(
+                    ~_vouched(),
+                    MentorNextAvailability.computed_at <= now - max_age + JITTER,
+                ),
             )
         )
-        .scalars()
-        .all()
-    )
+    ).all()
 
-    results = {mentor: await _first_free(session, mentor, now=now, reader=reader) for mentor in due}
-
-    for mentor, first in results.items():
+    refreshed = found = 0
+    for mentor, seen in due:
+        first = await _first_free(session, mentor, now=now, reader=reader)
+        refreshed += 1
+        found += first is not None
+        if dry_run:
+            continue
         await session.execute(
             update(MentorNextAvailability)
             .where(MentorNextAvailability.mentor_user_id == mentor)
-            .values(next_available_at=first, computed_at=now)
+            .values(next_available_at=first, computed_at=now, seen_changed_at=seen)
         )
-    return {
-        "created": cast("CursorResult[Any]", created).rowcount or 0,
-        "refreshed": len(results),
-        "open": sum(1 for first in results.values() if first is not None),
-    }
+        await session.commit()
+    if dry_run:
+        await session.rollback()
+    return {"created": created, "refreshed": refreshed, "open": found}
