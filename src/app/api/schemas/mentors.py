@@ -48,6 +48,23 @@ class ServiceOfferingRead(BaseModel):
     display_name: str
 
 
+class AvatarFocusRead(BaseModel):
+    """Where to centre the avatar: the main face, as 0..1 fractions of the image.
+
+    For CSS, `object-position: {x * 100}% {y * 100}%`. Absent (`null` on the
+    parent) when no face was found or the photo has not been processed yet —
+    fall back to the client's default crop.
+    """
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+    @classmethod
+    def from_row(cls, row: Any) -> AvatarFocusRead | None:
+        x, y = row["avatar_focus_x"], row["avatar_focus_y"]
+        return None if x is None or y is None else cls(x=float(x), y=float(y))
+
+
 class MentorSummaryRead(BaseModel):
     """One mentor as a search result — a card, not a profile.
 
@@ -70,6 +87,8 @@ class MentorSummaryRead(BaseModel):
     last_name: str | None = None
     headline: str | None = None
     avatar_url: str | None = None
+    #: Where a card should centre `avatar_url`; `null` means use the default.
+    avatar_focus: AvatarFocusRead | None = None
     primary_study_country: str | None = None
     #: Where the mentor is *from*. The search document has always indexed it,
     #: so a mentee could find a mentor by a fact the card could not show them.
@@ -120,6 +139,7 @@ class MentorSummaryRead(BaseModel):
             last_name=_text(row["last_name"]),
             headline=_text(row["headline"]),
             avatar_url=_text(row["avatar_url"]),
+            avatar_focus=AvatarFocusRead.from_row(row),
             primary_study_country=_text(row["primary_study_country"]),
             origin_country=_text(row["origin_country"]),
             degree=_text(row["degree"]),
@@ -292,6 +312,8 @@ class MentorPublicRead(BaseModel):
     headline: str | None = None
     about_me: str | None = None
     avatar_url: str | None = None
+    #: Where a card should centre `avatar_url`; `null` means use the default.
+    avatar_focus: AvatarFocusRead | None = None
     banner_url: str | None = None
     primary_study_program: str | None = None
     primary_study_country: str | None = Field(
@@ -369,6 +391,7 @@ class MentorPublicRead(BaseModel):
             headline=_text(row["headline"]),
             about_me=_text(row["about_me"]),
             avatar_url=_text(row["avatar_url"]),
+            avatar_focus=AvatarFocusRead.from_row(row),
             banner_url=_text(row["banner_url"]),
             primary_study_program=_text(row["primary_study_program"]),
             primary_study_country=_text(row["primary_study_country"]),

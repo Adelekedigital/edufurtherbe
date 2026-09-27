@@ -14,6 +14,8 @@ from the content — the three things this endpoint exists to do.
 from __future__ import annotations
 
 import io
+from decimal import Decimal
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import httpx
@@ -582,3 +584,103 @@ async def test_a_chunked_upload_over_the_ceiling_stores_nothing(
     assert response.status_code == 413, response.text
     assert fake_storage.uploads == []
     assert (await stored_urls(db_engine, user_id))[0] is None
+
+
+# --------------------------------------------------------------------------
+# the avatar's focal point (#180)
+# --------------------------------------------------------------------------
+
+FACE = (Path(__file__).parents[1] / "fixtures" / "faces" / "nasa-portrait.jpg").read_bytes()
+
+
+async def focus_of(engine: AsyncEngine, user_id: UUID) -> tuple[object, object, object]:
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT avatar_focus_x, avatar_focus_y, avatar_focus_source "
+                    "FROM user_profiles WHERE user_id = :u"
+                ),
+                {"u": user_id},
+            )
+        ).one()
+    return row[0], row[1], row[2]
+
+
+async def choose_focus(engine: AsyncEngine, user_id: UUID) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, avatar_focus_x, avatar_focus_y, "
+                " avatar_focus_source) VALUES (:u, 0.1, 0.9, 'chosen') "
+                "ON CONFLICT (user_id) DO UPDATE SET avatar_focus_x = 0.1, "
+                " avatar_focus_y = 0.9, avatar_focus_source = 'chosen'"
+            ),
+            {"u": user_id},
+        )
+
+
+async def test_an_avatar_with_a_face_is_stored_with_its_focal_point(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Found in the re-encoded image that is served, as fractions of it — the
+    portrait's face sits a little right of centre, in the upper third."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "face@example.com")
+
+    response = await api_client.post(
+        url(user_id, "avatar"), files=upload(FACE), headers=bearer(api_token(auth_id))
+    )
+
+    assert response.status_code == 200, response.text
+    x, y, source = await focus_of(db_engine, user_id)
+    assert source == "detected"
+    assert 0.45 < x < 0.6  # type: ignore[operator]
+    assert 0.28 < y < 0.42  # type: ignore[operator]
+
+
+async def test_an_avatar_without_a_face_is_looked_at_and_has_no_point(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`detected` with no point: the backfill must not look at it again."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "noface@example.com")
+
+    response = await api_client.post(
+        url(user_id, "avatar"),
+        files=upload(image_bytes("JPEG")),
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert response.status_code == 200, response.text
+    assert await focus_of(db_engine, user_id) == (None, None, "detected")
+
+
+async def test_a_new_avatar_replaces_a_chosen_focus(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A chosen crop was a crop of the *old* picture."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "rechosen@example.com")
+    await choose_focus(db_engine, user_id)
+
+    await api_client.post(
+        url(user_id, "avatar"), files=upload(FACE), headers=bearer(api_token(auth_id))
+    )
+
+    _, _, source = await focus_of(db_engine, user_id)
+    assert source == "detected"
+
+
+async def test_a_banner_upload_leaves_the_avatar_focus_alone(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "banner-focus@example.com")
+    await choose_focus(db_engine, user_id)
+
+    await api_client.post(
+        url(user_id, "banner"), files=upload(FACE), headers=bearer(api_token(auth_id))
+    )
+
+    assert await focus_of(db_engine, user_id) == (Decimal("0.1"), Decimal("0.9"), "chosen")

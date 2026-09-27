@@ -10,17 +10,22 @@ which is why the predicate moved to ``infra/db/predicates.py`` in this change.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import bindparam, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.domain.assets import AssetKind
+from app.domain.assets import AssetKind, object_path
+from app.domain.avatar_focus import DETECTED
+from app.domain.images import process
 from app.infra.db.models.user import User
 from app.infra.db.models.user import UserProfile as Profile
 from app.infra.db.predicates import LIVE
 from app.infra.db.triggers import timestamps_from_source
+from app.infra.images.faces import avatar_focus
+from app.infra.storage.supabase import SupabaseStorage
 
 #: Users with a profile row, and whatever images they hold. A LEFT JOIN because
 #: only 19 of 43 dev users have a profile at all, and the avatar lives on
@@ -39,6 +44,19 @@ SET_AVATAR = (
     update(Profile)
     .where(Profile.user_id == bindparam("target_user"))
     .values(avatar_url=bindparam("url"))
+)
+
+#: The focal point, reset whenever the avatar changes: a point found in the old
+#: picture says nothing about the new one, and a mentor's chosen crop was a
+#: crop *of that picture*.
+SET_AVATAR_FOCUS = (
+    update(Profile)
+    .where(Profile.user_id == bindparam("target_user"))
+    .values(
+        avatar_focus_x=bindparam("focus_x"),
+        avatar_focus_y=bindparam("focus_y"),
+        avatar_focus_source=bindparam("focus_source"),
+    )
 )
 
 SET_BANNER = (
@@ -95,8 +113,19 @@ class AssetStore:
             return result.rowcount > 0
 
 
+def _focus_values(focus: tuple[float, float] | None) -> dict[str, object]:
+    """A detection's columns: `detected`, with or without a point."""
+    x, y = focus if focus is not None else (None, None)
+    return {"focus_x": x, "focus_y": y, "focus_source": DETECTED}
+
+
 async def replace_url(
-    session: AsyncSession, user_id: UUID, kind: AssetKind, url: str
+    session: AsyncSession,
+    user_id: UUID,
+    kind: AssetKind,
+    url: str,
+    *,
+    focus: tuple[float, float] | None = None,
 ) -> str | None:
     """Point the column at a newly uploaded object; return what it held before.
 
@@ -117,14 +146,50 @@ async def replace_url(
     The two are pinned together by `test_first_write_creates_the_profile_row`,
     which drives both entry points against a user who has neither.
     """
-    column = Profile.avatar_url if kind is AssetKind.AVATAR else Profile.banner_url
+    avatar = kind is AssetKind.AVATAR
+    column = Profile.avatar_url if avatar else Profile.banner_url
     found = await session.execute(select(column).where(Profile.user_id == user_id))
     row = found.first()
     if row is None:
-        await session.execute(insert(Profile).values(user_id=user_id, **{column.key: url}))
+        values: dict[str, object] = {column.key: url}
+        if avatar:
+            x, y = focus if focus is not None else (None, None)
+            values |= {"avatar_focus_x": x, "avatar_focus_y": y, "avatar_focus_source": DETECTED}
+        await session.execute(insert(Profile).values(user_id=user_id, **values))
         return None
 
-    statement = SET_AVATAR if kind is AssetKind.AVATAR else SET_BANNER
+    statement = SET_AVATAR if avatar else SET_BANNER
     await session.execute(statement, {"target_user": user_id, "url": url})
+    if avatar:
+        await session.execute(SET_AVATAR_FOCUS, {"target_user": user_id, **_focus_values(focus)})
     previous: str | None = row[0]
     return previous
+
+
+async def store_image(
+    session: AsyncSession,
+    storage: SupabaseStorage,
+    kind: AssetKind,
+    user_id: UUID,
+    payload: bytes,
+) -> tuple[str, str | None]:
+    """Validate, re-encode, store, find the face, point the profile at it.
+
+    **The one pipeline** for an image entering a profile: the upload endpoint
+    and the demo seed both call it, so a demo avatar is processed, stored and
+    focused exactly as a mentor's own upload is. Returns the new URL and the
+    one it replaced. Does not commit.
+
+    The blocking steps — decoding, detection, the synchronous storage client —
+    run on worker threads, so a large photo does not stall other requests.
+    The face is found in the **re-encoded** image, so the point matches the
+    picture that is actually served.
+    """
+    image = await asyncio.to_thread(process, payload, kind)
+    path = object_path(user_id, kind, image.payload, image.content_type)
+    url = await asyncio.to_thread(storage.upload, path, image.payload, image.content_type)
+    focus = (
+        await asyncio.to_thread(avatar_focus, image.payload) if kind is AssetKind.AVATAR else None
+    )
+    previous = await replace_url(session, user_id, kind, url, focus=focus)
+    return url, previous

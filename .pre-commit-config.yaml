@@ -46,11 +46,16 @@ repos:
             pydantic-settings,
             fastapi,
             structlog,
-            sqlalchemy,
+            # Pinned to uv.lock's minor: an unpinned hook environment is rebuilt
+            # whenever this list changes, and SQLAlchemy 2.1's stricter `Select`
+            # generics then fail files the project's own mypy passes.
+            "sqlalchemy>=2.0.51,<2.1",
             httpx,
             pyjwt,
             pillow,
             cryptography,
+            # Face detection (#180); brings numpy, which faces.py also imports.
+            "opencv-python-headless>=5,<6",
           ]
         files: ^src/
 

@@ -660,6 +660,10 @@ class FakeStorage:
         if request.url.path.startswith("/storage/v1/bucket/"):
             return httpx.Response(200 if self.bucket_exists else 404, json={})
         path = request.url.path.split(f"/storage/v1/object/{STORAGE_BUCKET}/", 1)[-1]
+        if request.method == "GET":
+            if path not in self.objects:
+                return httpx.Response(404, json={})
+            return httpx.Response(200, content=self.objects[path][0])
         if request.method == "DELETE":
             self.deletes.append(path)
             if path not in self.objects:

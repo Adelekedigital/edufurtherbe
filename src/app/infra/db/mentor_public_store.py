@@ -82,6 +82,8 @@ def _public_profile(handle: str) -> Select[Any]:
             MentorProfile.primary_study_program,
             UserProfile.about_me,
             UserProfile.avatar_url,
+            UserProfile.avatar_focus_x,
+            UserProfile.avatar_focus_y,
             UserProfile.banner_url,
             UserProfile.social_linkedin,
             UserProfile.social_twitter,

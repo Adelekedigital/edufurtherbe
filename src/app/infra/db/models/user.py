@@ -30,12 +30,14 @@ two legal tables are what it becomes.
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     TIMESTAMP,
     CheckConstraint,
     ForeignKey,
     Index,
+    Numeric,
     Text,
     Uuid,
     text,
@@ -224,6 +226,14 @@ class UserProfile(TimestampMixin, Base):
     avatar_url: Mapped[str | None] = mapped_column(Text)
     banner_url: Mapped[str | None] = mapped_column(Text)
 
+    #: Where a card should centre the avatar: the main face's centre as 0..1
+    #: fractions of the stored image. Both or neither; see `domain/avatar_focus`.
+    avatar_focus_x: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    avatar_focus_y: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    #: `detected` or `chosen`; a mentor's choice is never overwritten by a
+    #: detection. `detected` with no point means "looked, found no face".
+    avatar_focus_source: Mapped[str | None] = mapped_column(Text)
+
     about_me: Mapped[str | None] = mapped_column(Text)
 
     # Free text, not an enum. The dev extract holds "Male", "Female" and "I'd
@@ -254,6 +264,23 @@ class UserProfile(TimestampMixin, Base):
     legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "(avatar_focus_x IS NULL OR avatar_focus_x BETWEEN 0 AND 1) "
+            "AND (avatar_focus_y IS NULL OR avatar_focus_y BETWEEN 0 AND 1)",
+            name="avatar_focus_in_range",
+        ),
+        CheckConstraint(
+            "(avatar_focus_x IS NULL) = (avatar_focus_y IS NULL)",
+            name="avatar_focus_both_or_neither",
+        ),
+        CheckConstraint(
+            "avatar_focus_source IS NULL OR avatar_focus_source IN ('detected', 'chosen')",
+            name="avatar_focus_source_is_known",
+        ),
+        CheckConstraint(
+            "avatar_focus_x IS NULL OR avatar_focus_source IS NOT NULL",
+            name="avatar_focus_has_a_source",
+        ),
         Index("ix_user_profiles_origin_country", "origin_country_id"),
         Index("ix_user_profiles_current_country", "current_country_id"),
         # Full-text search over the bio, deferred from M1 and arriving with M2.

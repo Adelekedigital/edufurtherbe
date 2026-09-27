@@ -288,6 +288,8 @@ def _card(scope: Select[Any]) -> Select[Any]:
             User.last_name,
             MentorProfile.headline,
             UserProfile.avatar_url,
+            UserProfile.avatar_focus_x,
+            UserProfile.avatar_focus_y,
             _STUDY_COUNTRY.c.display_name.label("primary_study_country"),
             _ORIGIN_COUNTRY.c.display_name.label("origin_country"),
             qualification.c.degree,
