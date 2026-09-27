@@ -91,7 +91,13 @@ SECRET = "test-signing-secret-for-local-tests"  # noqa: S105
 PROBLEM_JSON = "application/problem+json"
 
 
-def api_token(subject: str | uuid.UUID, *, secret: str = SECRET, **overrides: Any) -> str:
+def api_token(
+    subject: str | uuid.UUID,
+    *,
+    secret: str = SECRET,
+    email: str | None = None,
+    **overrides: Any,
+) -> str:
     """A token for ``subject``, signed with the local test key.
 
     The claim set lives in ``app.infra.auth.dev_tokens`` rather than here,
@@ -99,8 +105,13 @@ def api_token(subject: str | uuid.UUID, *, secret: str = SECRET, **overrides: An
     the API by hand. Two copies would be non-negotiable #8 in exactly the form
     this file warns about above — and the copy that drifts is the one that keeps
     passing, because it is the one the suite exercises.
+
+    **No email unless one is asked for.** A token with an email creates its
+    account on first sign-in (#178), so a default address would quietly give
+    every stranger in the suite an account — and a test meaning "a caller we do
+    not know" would pass for some other reason. Pass `email=` to mean a sign-in.
     """
-    return mint_dev_token(subject, secret=secret, **overrides)
+    return mint_dev_token(subject, secret=secret, email=email, **overrides)
 
 
 def bearer(value: str) -> dict[str, str]:

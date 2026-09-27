@@ -33,6 +33,7 @@ and carries on.
 from __future__ import annotations
 
 import logging
+from typing import NoReturn
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -40,6 +41,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AccountExistsError
+from app.domain.emails import normalise_email
 from app.infra.db.models.user import User
 
 __all__ = ["provision_first_sign_in"]
@@ -54,7 +56,21 @@ async def provision_first_sign_in(session: AsyncSession, *, auth_id: UUID, email
     that raced this one. Raises `AccountExistsError` when the address belongs
     to an account this sign-in is not linked to. Commits what it creates.
     """
-    address = email.strip().lower()
+    address = normalise_email(email)
+
+    # **Checked before inserting**, so the states that can never succeed cost
+    # one read on each request rather than a failed write. This dependency runs
+    # on every authenticated request, and a deleted account or a refused address
+    # would otherwise attempt an insert every time the app polled `/me`.
+    #
+    # Deleted rows included, deliberately — an exemption from `LIVE`: a
+    # soft-deleted account keeps its `auth_id`, and must be found here so it is
+    # neither resurrected nor treated as a stranger.
+    if (await session.execute(select(User.id).where(User.auth_id == auth_id))).first():
+        return
+    if await _address_is_taken(session, address):
+        _refuse(auth_id)
+
     created = await session.execute(
         insert(User)
         .values(auth_id=auth_id, email=address, email_verified_at=func.now())
@@ -76,6 +92,27 @@ async def provision_first_sign_in(session: AsyncSession, *, auth_id: UUID, email
     linked = await session.execute(select(User.id).where(User.auth_id == auth_id))
     if linked.first() is not None:
         return
+    _refuse(auth_id)
+
+
+async def _address_is_taken(session: AsyncSession, address: str) -> bool:
+    """A live account already holds this address — the unique index's own test."""
+    held = await session.execute(
+        select(User.id).where(User.email == address, User.deleted_at.is_(None))
+    )
+    return held.first() is not None
+
+
+def _refuse(auth_id: UUID) -> NoReturn:
+    """Refuse a first sign-in whose address belongs to another account.
+
+    Logged at WARNING with the sign-in id — never the address — because the
+    person is told to contact support, and support needs something to find.
+    """
+    logger.warning(
+        "first sign-in refused: address held by another account",
+        extra={"auth_id": str(auth_id)},
+    )
     raise AccountExistsError(
         "An account with this email already exists. Contact support to sign in to it."
     )

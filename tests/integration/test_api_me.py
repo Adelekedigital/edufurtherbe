@@ -127,7 +127,7 @@ async def test_a_valid_token_with_nothing_to_build_an_account_from_is_a_404(
     account on first sign-in (#178, `test_first_sign_in.py`); a migrated user
     whose account was never linked is a 409 there, not a 404 here.
     """
-    response = await api_client.get("/api/v1/me", headers=bearer(api_token(uuid4(), email=None)))
+    response = await api_client.get("/api/v1/me", headers=bearer(api_token(uuid4())))
 
     assert response.status_code == 404
     assert response.headers["content-type"].startswith(PROBLEM_JSON)

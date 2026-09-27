@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
+from app.domain.emails import normalise_email
 from app.domain.enums import CreditState, PrimaryRole
 
 
@@ -25,7 +26,7 @@ class NormalisedEmail(BaseModel):
     @field_validator("email")
     @classmethod
     def normalise(cls, value: str) -> str:
-        return value.strip().lower()
+        return normalise_email(value)
 
 
 class UserProfileRead(BaseModel):

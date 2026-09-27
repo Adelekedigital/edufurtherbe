@@ -28,7 +28,7 @@ URL = "/api/v1/me"
 
 
 def token_for(auth_id: UUID, email: str | None) -> dict[str, str]:
-    return bearer(api_token(auth_id, email=email) if email else api_token(auth_id, email=None))
+    return bearer(api_token(auth_id, email=email))
 
 
 BY_AUTH_ID = text(
