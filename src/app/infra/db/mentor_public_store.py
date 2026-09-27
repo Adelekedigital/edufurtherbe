@@ -9,6 +9,13 @@ read the owner-facing endpoint, which names whose records they are reviewing.
 What remains is `mentor_is_public()` — the same predicate `/slots` and
 `/session-types` scope by, which is why this module writes none of its own.
 
+**One viewer is added back: the mentor themself** (product rule, 2026-09-27).
+`mentor_is_visible_to(viewer)` widens the public predicate by exactly the owner,
+so a pending, declined or unlisted mentor can read their own profile, and a
+`None` viewer is `mentor_is_public()` unchanged. The owner's row also carries
+`approval_status` and `listing_status`, which `is_owner` tells the schema to
+publish — to them and nobody else.
+
 **Reachable by id or by slug.** `users.slug` is the legacy public profile handle
 (settled decision #28), carried specifically so live profile links keep working.
 Both arrive in one path segment and one statement resolves either, because a
@@ -21,13 +28,15 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, case, false, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.public_visibility import mentor_is_public
+from app.infra.db.next_available_store import NONE, next_available_state
+from app.infra.db.public_visibility import mentor_is_published, mentor_is_visible_to
 
 __all__ = ["get_public_mentor", "get_public_mentor_id"]
 
@@ -59,7 +68,7 @@ def _by_handle(handle: str) -> Any:
         return User.slug == handle
 
 
-def _public_profile(handle: str) -> Select[Any]:
+def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
     """Everything the public may read about one mentor, in a single statement.
 
     The three country columns are **resolved to names here**, not returned as
@@ -90,29 +99,51 @@ def _public_profile(handle: str) -> Select[Any]:
             UserProfile.social_youtube,
             _STUDY_COUNTRY.c.display_name.label("primary_study_country"),
             _ORIGIN_COUNTRY.c.display_name.label("origin_country"),
+            MentorProfile.approval_status,
+            MentorProfile.listing_status,
+            # Only the owner can reach a row that is not published, and only the
+            # owner's row says `true` here — the schema reads it to decide
+            # whether the two statuses above are published at all.
+            (User.id == viewer if viewer is not None else false()).label("is_owner"),
+            MentorNextAvailability.next_available_at,
+            # A mentor strangers cannot see has nothing they can book, so
+            # `none` — not the `refreshing` an absent row would otherwise read
+            # as, which would promise a time the job never computes (it
+            # refreshes bookable mentors only).
+            case((mentor_is_published(), next_available_state()), else_=literal(NONE)).label(
+                "next_available_state"
+            ),
         )
         .select_from(User)
         .join(MentorProfile, MentorProfile.user_id == User.id)
+        # Outer, as on the discovery card: a mentor the job has not reached has
+        # no row and reads `refreshing`.
+        .outerjoin(MentorNextAvailability, MentorNextAvailability.mentor_user_id == User.id)
         .outerjoin(UserProfile, UserProfile.user_id == User.id)
         .outerjoin(_STUDY_COUNTRY, _STUDY_COUNTRY.c.id == MentorProfile.primary_study_country_id)
         .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
-        .where(_by_handle(handle), *mentor_is_public())
+        .where(_by_handle(handle), *mentor_is_visible_to(viewer))
     )
 
 
-async def get_public_mentor(session: AsyncSession, handle: str) -> dict[str, Any] | None:
+async def get_public_mentor(
+    session: AsyncSession, handle: str, viewer: UUID | None = None
+) -> dict[str, Any] | None:
     """One publicly visible mentor, or ``None`` if there is no such thing.
 
     ``None`` covers every reason at once — no such user, not a mentor, unapproved,
     unlisted, a soft-deleted profile, a soft-deleted user, and a handle that is
-    nobody. Telling them apart would say which mentors exist and what state they
+    nobody. ``viewer`` widens it by one person: the mentor, reading their own.
+    Telling them apart would say which mentors exist and what state they
     are in, which is the thing a public endpoint most easily gives away.
     """
-    row = (await session.execute(_public_profile(handle))).mappings().first()
+    row = (await session.execute(_public_profile(handle, viewer))).mappings().first()
     return dict(row) if row else None
 
 
-async def get_public_mentor_id(session: AsyncSession, handle: str) -> UUID | None:
+async def get_public_mentor_id(
+    session: AsyncSession, handle: str, viewer: UUID | None = None
+) -> UUID | None:
     """The user id behind a public handle, or ``None``.
 
     For readers that need to *scope* to a mentor rather than render one — the
@@ -131,6 +162,6 @@ async def get_public_mentor_id(session: AsyncSession, handle: str) -> UUID | Non
             select(User.id)
             .select_from(MentorProfile)
             .join(User, User.id == MentorProfile.user_id)
-            .where(_by_handle(handle), *mentor_is_public())
+            .where(_by_handle(handle), *mentor_is_visible_to(viewer))
         )
     ).scalar_one_or_none()

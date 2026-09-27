@@ -346,6 +346,38 @@ async def get_current_user(claims: ClaimsDep, session: SessionDep) -> dict[str, 
 CurrentUserDep = Annotated[dict[str, Any], Depends(get_current_user)]
 
 
+async def optional_viewer(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    session: SessionDep,
+) -> UUID | None:
+    """Who is asking, on an endpoint that answers anyone — or ``None``.
+
+    **No header is the anonymous viewer, and that is the only way to be one.**
+    A header that fails verification is still the `401` every other endpoint
+    gives: a client that sent a token meant to be somebody, and quietly
+    answering as nobody would hide its bug behind a response that looks right.
+
+    **A genuine token with no live account reads as anonymous**, not as the
+    `404` `get_current_user` raises — on a public read that `404` would say the
+    *mentor* is missing when it is the caller's account that is. Resolved
+    through `get_current_user` itself, so first sign-in and the account
+    rules are the same statement as everywhere else rather than a second copy.
+    """
+    if credentials is None or not credentials.credentials:
+        return None
+    claims = await get_claims(request, credentials)
+    try:
+        user = await get_current_user(claims, session)
+    except NotFoundError:
+        return None
+    viewer: UUID = user["id"]
+    return viewer
+
+
+OptionalViewerDep = Annotated[UUID | None, Depends(optional_viewer)]
+
+
 # Resolving `{user_id}` to a user the caller may actually read.
 #
 # **The scope is the WHERE clause, not a branch after the fetch** (non-negotiable
@@ -2040,7 +2072,9 @@ async def mentor_slots(
 # --------------------------------------------------------------------------
 
 
-async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
+async def public_mentor(
+    handle: str, session: SessionDep, viewer: OptionalViewerDep
+) -> dict[str, Any]:
     """One mentor, as a stranger sees them, or a 404 that says nothing about why.
 
     **Composed rather than re-queried.** The session types come from
@@ -2053,8 +2087,13 @@ async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
     `handle` is an id or a slug and the store resolves either. It is not a `UUID`
     in the signature for that reason: FastAPI would refuse a slug at the door with
     a 422, which would tell a caller that the id they guessed was well-formed.
+
+    **`viewer` widens it to the owner and nobody else** — a mentor reads their
+    own profile in any state (`mentor_is_visible_to`). The lists below are not
+    widened: `session_types` is what a stranger can book, so a hidden profile
+    shows none, and the mentor's own list is `/me/session-types`.
     """
-    row = await get_public_mentor(session, handle)
+    row = await get_public_mentor(session, handle, viewer)
     if row is None:
         raise NotFoundError("no such mentor")
 
@@ -2407,6 +2446,7 @@ ReviewableSessionsDep = Annotated[list[dict[str, Any]], Depends(own_reviewable_s
 async def mentor_reviews_page(
     handle: str,
     session: SessionDep,
+    viewer: OptionalViewerDep,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
@@ -2418,7 +2458,7 @@ async def mentor_reviews_page(
     answer from a mentor with nothing to show, and a client renders them
     differently.
     """
-    mentor = await get_public_mentor_id(session, handle)
+    mentor = await get_public_mentor_id(session, handle, viewer)
     if mentor is None:
         raise NotFoundError("no such mentor")
     # The **two-part** codec, because the list sorts on `created_at` rather than
