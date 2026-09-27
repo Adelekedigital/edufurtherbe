@@ -422,12 +422,17 @@ class MentorFreeBusy:
         key: str,
         reader: Callable[..., tuple[UtcInterval, ...]] = free_busy,
         session_factory: Callable[[], AsyncSession] | None = None,
+        fail_open: bool = True,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
         self._key = key
         self._reader = reader
         self._session_factory = session_factory
+        #: A slot read fails open: one request, answered from declared hours.
+        #: The next-free-time job must not, because it would store that answer
+        #: and show it to everyone for a whole cycle — so it raises instead.
+        self._fail_open = fail_open
 
     async def _mark_dead(self, session: AsyncSession, user_id: UUID, reason: str) -> None:
         """Record a dead grant **outside the caller's transaction**.
@@ -510,11 +515,16 @@ class MentorFreeBusy:
             # rate limit into a re-consent, and would put a write on a public
             # read path that an anonymous caller could drive.
             logger.info("free/busy unavailable for %s: %s", user_id, exc)
+            if not self._fail_open:
+                raise
             return ()
 
 
 def free_busy_reader(
-    settings: Settings, session_factory: Callable[[], AsyncSession] | None
+    settings: Settings,
+    session_factory: Callable[[], AsyncSession] | None,
+    *,
+    fail_open: bool = True,
 ) -> MentorFreeBusy | NullFreeBusy:
     """Each mentor's Google free/busy, or a reader that subtracts nothing.
 
@@ -541,4 +551,5 @@ def free_busy_reader(
         client_secret=settings.google_calendar_client_secret.get_secret_value(),
         key=settings.calendar_token_key.get_secret_value(),
         session_factory=session_factory,
+        fail_open=fail_open,
     )

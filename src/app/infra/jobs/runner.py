@@ -205,11 +205,12 @@ class RuntimeJobs:
                 # times out keeps what it finished; a dry run writes nothing.
                 return await refresh_next_available(
                     session,
-                    now=dt.datetime.now(dt.UTC),
                     max_age=dt.timedelta(minutes=self.settings.next_available_max_age_minutes),
                     # No factory on a dry run: the reader then records a dead
                     # grant in this session, which the dry run rolls back.
-                    reader=free_busy_reader(self.settings, None if dry_run else factory),
+                    reader=free_busy_reader(
+                        self.settings, None if dry_run else factory, fail_open=False
+                    ),
                     dry_run=dry_run,
                 )
         finally:

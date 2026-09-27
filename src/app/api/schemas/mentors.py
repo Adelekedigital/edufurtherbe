@@ -131,7 +131,12 @@ class MentorSummaryRead(BaseModel):
                 None if row["session_value"] is None else float(str(row["session_value"]))
             ),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
-            next_available_at=row["next_available_at"],
+            # The stored time is only a claim while the state says `open`; the
+            # state is computed once in SQL, and this is the one place it gates
+            # the time.
+            next_available_at=(
+                row["next_available_at"] if row["next_available_state"] == "open" else None
+            ),
             next_available_state=row["next_available_state"],
         )
 

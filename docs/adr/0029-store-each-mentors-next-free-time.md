@@ -80,10 +80,19 @@ way to reach Google. If it is adopted, re-price this job against it.
    offerings, on a worker thread. **Only intervals are read, and nothing from
    Google is stored**: the row holds one derived instant, so "never mirrored"
    still holds. One builder serves both this job and the API's slot reads.
-6. **No lock spans a Google call, and a timeout keeps what it finished.** Each
-   mentor is computed, then written and committed on its own; computing only
-   reads. A dry run hands the calendar reader no session factory, so even a
-   dead-grant write lands in the session the dry run rolls back.
+6. **No row lock spans a Google call, and a timeout keeps what it finished.**
+   Each mentor is computed with the clock read as it starts, then written and
+   committed on its own; computing takes no row locks. One mentor failing is
+   rolled back, logged and counted, and the run carries on. A dry run hands the
+   calendar reader no session factory, so even a dead-grant write lands in the
+   session the dry run rolls back.
+7. **Overlapping runs cannot go backwards.** A QStash retry or the recovery
+   script can overlap a scheduled run, so a write lands only if it was computed
+   later than the stored value, and a refused write deletes no change rows.
+8. **The job's calendar reader fails closed.** `/slots` answers one request
+   from declared hours when Google is unavailable; stored, that answer would be
+   shown to everyone for a cycle. So the job's reader raises, and that mentor
+   keeps whatever the card showed before.
 
 ### Two designs rejected in review
 
@@ -128,7 +137,9 @@ no clock is compared, and appends do not block one another.
 - the trigger covers exactly the nine tables and every column visibility reads;
   it ignores a no-op update, a headline edit and a past session being settled,
   and still fires on a listing change
-- a dry run writes nothing
+- a dry run writes nothing; one mentor failing does not stop the run; an older
+  run's write is refused and keeps its change rows; the job's reader raises where
+  a slot read fails open
 
 A mutation batch removing each guard turns a test red, including deleting every
 change row rather than the snapshotted ones, and taking the snapshot after

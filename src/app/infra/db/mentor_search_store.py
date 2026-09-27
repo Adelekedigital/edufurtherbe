@@ -46,7 +46,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import next_available_at, next_available_state
+from app.infra.db.next_available_store import next_available_state
 from app.infra.db.offerings import offerings_for, offers_any
 from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
 from app.infra.db.qualifications import top_qualification
@@ -296,7 +296,7 @@ def _card(scope: Select[Any]) -> Select[Any]:
             _completed_sessions().label("completed_sessions"),
             review_count.scalar_subquery().label("review_count"),
             session_value.scalar_subquery().label("session_value"),
-            next_available_at().label("next_available_at"),
+            MentorNextAvailability.next_available_at,
             next_available_state().label("next_available_state"),
         )
         # Outer: a mentor the job has not reached yet has no row, and reads as

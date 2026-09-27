@@ -30,8 +30,11 @@ from tests.integration.factories import (
     make_bookable_mentor,
     make_public_mentor,
 )
+from tests.integration.test_api_freebusy import KEY, connect_calendar
 
 from app.domain.availability import UtcInterval
+from app.infra.clients.meetings import VenueUnavailableError
+from app.infra.db.calendar_store import MentorFreeBusy
 from app.infra.db.next_available_store import JITTER, refresh_next_available
 from app.infra.db.public_visibility import mentor_is_public
 
@@ -69,16 +72,20 @@ class FakeCalendar:
         self,
         busy: tuple[UtcInterval, ...] = (),
         during: Callable[[], Awaitable[None]] | None = None,
+        fails_for: UUID | None = None,
     ) -> None:
         self.busy_intervals = busy
         self.during = during
+        self.fails_for = fails_for
         self.calls = 0
 
     async def busy(
         self, session: AsyncSession, user_id: UUID, start: dt.datetime, end: dt.datetime
     ) -> tuple[UtcInterval, ...]:
-        del session, user_id, start, end
+        del session, start, end
         self.calls += 1
+        if user_id == self.fails_for:
+            raise RuntimeError("calendar unreachable")
         if self.during is not None:
             await self.during()
         return self.busy_intervals
@@ -475,3 +482,66 @@ async def test_the_profile_and_user_triggers_watch_every_column_visibility_reads
         }
 
     assert read <= watched, read - watched
+
+
+# --------------------------------------------------------------------------
+# Failure and overlap
+# --------------------------------------------------------------------------
+
+
+async def test_one_mentor_failing_does_not_stop_the_run(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    broken = await make_bookable_mentor(db_engine, "next-broken")
+    fine = await make_bookable_mentor(db_engine, "next-fine")
+
+    counts = await refresh(db_engine, calendar=FakeCalendar(fails_for=broken))
+
+    assert counts["failed"] == 1
+    assert (await card(api_client, fine))["next_available_state"] == "open"
+    assert (await card(api_client, broken))["next_available_state"] == "refreshing"
+
+
+async def test_an_older_run_cannot_overwrite_a_newer_answer(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A QStash retry overlapping the run it retried: the one that started
+    earlier finishes last. Its write is refused, and it must not clear the
+    change it never saw."""
+    mentor = await make_bookable_mentor(db_engine, "next-overlap")
+    newer = dt.datetime.now(dt.UTC)
+    await refresh(db_engine, now=newer)
+    await add_session(db_engine, mentor, status="confirmed", days_ago=-3)
+
+    counts = await refresh(db_engine, now=newer - dt.timedelta(minutes=2))
+
+    assert counts["superseded"] == 1
+    assert (await card(api_client, mentor))["next_available_state"] == "refreshing"
+
+
+async def test_the_job_reader_raises_where_a_slot_read_fails_open(
+    db_engine: AsyncEngine,
+) -> None:
+    """`/slots` answers one request from declared hours when Google is down.
+    The job must not: stored, that answer would reach every viewer."""
+    mentor = await make_bookable_mentor(db_engine, "next-google-down")
+    await connect_calendar(db_engine, mentor)
+
+    def unavailable(**_: Any) -> tuple[UtcInterval, ...]:
+        raise VenueUnavailableError("rate limited")
+
+    def reader(*, fail_open: bool) -> MentorFreeBusy:
+        return MentorFreeBusy(
+            client_id="cid",
+            client_secret="gcs",  # noqa: S106
+            key=KEY,
+            reader=unavailable,
+            fail_open=fail_open,
+        )
+
+    now = dt.datetime.now(dt.UTC)
+    later = now + dt.timedelta(days=1)
+    async with AsyncSession(db_engine) as session:
+        assert await reader(fail_open=True).busy(session, mentor, now, later) == ()
+        with pytest.raises(VenueUnavailableError):
+            await reader(fail_open=False).busy(session, mentor, now, later)

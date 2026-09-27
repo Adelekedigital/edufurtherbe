@@ -71,7 +71,14 @@ WATCHED: tuple[tuple[str, str, str, str | None], ...] = (
         "user_id, approval_status, listing_status, deleted_at",
     ),
     ("users", "id", "mentor", "deleted_at, timezone"),
-    ("calendar_connections", "user_id", "mentor", "user_id, status"),
+    # Whose calendar is read, and whether: reconnecting a different Google
+    # account rewrites the token on an active row without touching `status`.
+    (
+        "calendar_connections",
+        "user_id",
+        "mentor",
+        "user_id, status, provider, refresh_token_encrypted",
+    ),
 )
 
 LOG_FUNCTION = """
