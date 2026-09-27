@@ -28,6 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.domain.enums import (
     ApprovalStatus,
     ConferencingProvider,
+    FeaturedSource,
     ListingStatus,
     MentorStatusType,
 )
@@ -569,8 +570,15 @@ class FeaturedMentor(Base):
     `cycle` counts rotations: nobody is featured twice in one cycle, and a new
     cycle starts once everyone bookable has had a turn (`domain/featured.py`).
 
-    Append-only. Cascades with the profile: a history of a mentor who no longer
-    exists has no one to feature, and nothing here is evidence of anything.
+    Never updated. Rows are deleted only by an admin override (#188): its own
+    row when it is withdrawn, and the automatic pick it bumps from the same
+    week — which is how that mentor gets their rotation turn back. Cascades with
+    the profile: a history of a mentor who no longer exists has no one to
+    feature, and nothing here is evidence of anything.
+
+    **`source` says who chose the week**, and `chosen_by` names the admin for
+    exactly the rows an admin wrote — a CHECK, so an override is never
+    unattributed.
     """
 
     __tablename__ = "featured_mentors"
@@ -584,6 +592,14 @@ class FeaturedMentor(Base):
     #: The Monday, in UTC, of the week this mentor was featured.
     week_start: Mapped[date] = mapped_column(Date, nullable=False)
     cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[FeaturedSource] = mapped_column(
+        str_enum(FeaturedSource), nullable=False, server_default=text("'automatic'")
+    )
+    #: The admin who chose the week; null for the rotation's own picks.
+    #: `RESTRICT`: who chose what is attribution, as `created_by` is elsewhere.
+    chosen_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT")
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -591,4 +607,8 @@ class FeaturedMentor(Base):
     __table_args__ = (
         UniqueConstraint("week_start", "mentor_user_id", name="uq_featured_mentors_week_mentor"),
         Index("ix_featured_mentors_cycle", "cycle"),
+        CheckConstraint(check_is_known("source", FeaturedSource), name="source_is_known"),
+        CheckConstraint(
+            "(source = 'admin') = (chosen_by IS NOT NULL)", name="admin_names_its_admin"
+        ),
     )

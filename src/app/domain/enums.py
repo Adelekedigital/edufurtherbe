@@ -711,3 +711,15 @@ class ReviewReportOutcome(StrEnum):
     #: The review stays. Recorded rather than deleted, so a second report of the
     #: same review by the same person has a prior answer to point at.
     DISMISSED = "dismissed"
+
+
+class FeaturedSource(StrEnum):
+    """Who chose a week's featured mentor (settled decision #188).
+
+    The rotation is the default and needs nobody; an admin may override a week.
+    Read to tell the two apart in the admin schedule, and constrained because
+    `chosen_by` must be present for exactly one of them.
+    """
+
+    AUTOMATIC = "automatic"
+    ADMIN = "admin"

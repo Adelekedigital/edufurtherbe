@@ -43,6 +43,7 @@ from app.domain.enums import (
     CreditReason,
     CreditSource,
     CreditState,
+    FeaturedSource,
     IntakeStatus,
     LanguageProficiency,
     LegalDocumentType,
@@ -176,6 +177,8 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     ReviewReportOutcome: frozenset({"ck_review_reports_outcome_is_known"}),
     CreditSource: frozenset({"ck_credit_lots_source_is_known"}),
     CreditReason: frozenset({"ck_credit_transactions_reason_is_known"}),
+    # Who chose a featured week: the rotation or an admin (#188).
+    FeaturedSource: frozenset({"ck_featured_mentors_source_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.
