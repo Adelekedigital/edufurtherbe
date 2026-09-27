@@ -187,6 +187,48 @@ def _within_cap(offset: int) -> bool:
     return 0 <= offset <= MAX_SEARCH_OFFSET
 
 
+#: Marks a goal-ranked `/mentors` cursor. **A kind tag, where search and browse
+#: cursors need none**, because this one must be told apart from a *search*
+#: cursor — both are offsets. A search cursor sent without its `q` stays a 422
+#: (a client that dropped its query), while a goal cursor must keep paging
+#: after the viewer changes: a token that lapses between pages, or a last goal
+#: removed in another tab.
+GOAL_CURSOR_TAG = "g"
+
+
+def _raw(cursor: str) -> str:
+    try:
+        return base64.urlsafe_b64decode(cursor.encode()).decode()
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+
+
+def is_goal_cursor(cursor: str) -> bool:
+    """Whether a token is a goal-ranked cursor. Malformed tokens are not — they
+    fall through to the decoder that refuses them."""
+    try:
+        return _raw(cursor).startswith(GOAL_CURSOR_TAG)
+    except ValidationError:
+        return False
+
+
+def next_goal_cursor(offset: int) -> str | None:
+    """The next goal-ranked page's token, or `None` past the same depth cap."""
+    if not _within_cap(offset):
+        return None
+    return base64.urlsafe_b64encode(f"{GOAL_CURSOR_TAG}{offset}".encode()).decode()
+
+
+def decode_goal_cursor(cursor: str) -> int:
+    """A goal cursor back into a position — the offset decoder's rules exactly,
+    by handing it the untagged offset."""
+    raw = _raw(cursor)
+    if not raw.startswith(GOAL_CURSOR_TAG):
+        raise ValidationError("cursor is not a cursor this endpoint issued")
+    untagged = base64.urlsafe_b64encode(raw[len(GOAL_CURSOR_TAG) :].encode()).decode()
+    return decode_offset_cursor(untagged)
+
+
 def next_offset_cursor(offset: int) -> str | None:
     """The token for the next page of a search, or `None` because the cap ends it.
 

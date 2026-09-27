@@ -33,11 +33,12 @@ last week is a new mentor, and this list is of mentors.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, literal, literal_column, select, true
+from sqlalchemy import Select, Text, cast, func, literal, literal_column, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.availability import MentorNextAvailability
@@ -47,7 +48,12 @@ from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.next_available_store import next_available_state
-from app.infra.db.offerings import offerings_for, offers_any, shared_offering_count
+from app.infra.db.offerings import (
+    goal_overlap_count,
+    offerings_for,
+    offers_any,
+    shared_offering_count,
+)
 from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
@@ -245,7 +251,7 @@ def completed_sessions() -> Any:
     )
 
 
-def _who(offerings: Sequence[str]) -> Select[Any]:
+def _who(offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
     """Which mentors are visible — the joins and predicates, and no card.
 
     Extracted so browse, search and the count cannot drift on *who is visible*.
@@ -275,6 +281,11 @@ def _who(offerings: Sequence[str]) -> Select[Any]:
         .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
         .where(*mentor_is_public(), *mentor_is_bookable())
         .where(*([offers_any(MentorProfile.user_id, offerings)] if offerings else []))
+        # **A signed-in mentor is never listed to themself.** Here rather than
+        # in one mode, so browse, the goal ranking, search and `total` all
+        # agree — a count that still included the viewer would promise a
+        # mentor the pages never show.
+        .where(*([MentorProfile.user_id != viewer] if viewer is not None else []))
     )
 
 
@@ -321,7 +332,13 @@ def _card(scope: Select[Any]) -> Select[Any]:
     )
 
 
-def _page(after: UUID | None, limit: int, offerings: Sequence[str]) -> Select[Any]:
+def _page(
+    after: UUID | None,
+    limit: int,
+    offerings: Sequence[str],
+    viewer: UUID | None = None,
+    offset: int = 0,
+) -> Select[Any]:
     """One page of mentors, newest first.
 
     `mentor_profiles.id` is both the sort key and the cursor, which is ADR 0016's
@@ -331,25 +348,57 @@ def _page(after: UUID | None, limit: int, offerings: Sequence[str]) -> Select[An
     reach for the visible one when building the next token.
     """
     return (
-        _card(_scope(None, offerings))
+        _card(_scope(None, offerings, viewer))
         .where(*([MentorProfile.id < after] if after is not None else []))
         .order_by(MentorProfile.id.desc())
+        # Only ever non-zero when a goal-ranked page's offset cursor comes back
+        # for a viewer who no longer has goals (a token that lapsed, or a last
+        # goal removed): newest first from that position, so paging goes on —
+        # a row may repeat or be skipped across the switch, never a 422.
+        .offset(offset)
         .limit(limit + 1)
     )
 
 
-def _scope(term: str | None, offerings: Sequence[str]) -> Select[Any]:
+def _scope(term: str | None, offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
     """Who a request lists, before any ordering or paging.
 
     The page and the count both read this, so `total` cannot describe a
     different set from the pages it sits beside — a count that forgot the text
     match or the filter would still return a plausible number.
     """
-    base = _who(offerings)
+    base = _who(offerings, viewer)
     return base if term is None else base.where(_document().op("@@")(_matches(term)))
 
 
-def _ranked(term: str, offset: int, limit: int, offerings: Sequence[str]) -> Select[Any]:
+def _matched(
+    viewer: UUID, day: dt.date, offset: int, limit: int, offerings: Sequence[str]
+) -> Select[Any]:
+    """One page of mentors for a mentee with goals: most goals covered first.
+
+    **Ties are shuffled, fixed per viewer per day.** The shuffle key is
+    `md5(viewer : day : mentor)`, so one mentee sees one order all day — paging
+    is stable and a refresh does not reshuffle — while tomorrow, and every other
+    mentee, sees the tied mentors in a different order. Without it every mentee
+    covering the same goals would see the same newest mentors first, forever.
+
+    **Offset-paged, like search**, for the reason `_ranked` gives: the order is
+    not a column in the row. `mentor_profiles.id` is the last tie-break, so even
+    a hash collision cannot make the order non-deterministic.
+    """
+    overlap = goal_overlap_count(MentorProfile.user_id, viewer)
+    shuffle = func.md5(literal(f"{viewer}:{day.isoformat()}:").concat(cast(MentorProfile.id, Text)))
+    return (
+        _card(_scope(None, offerings, viewer))
+        .order_by(overlap.desc(), shuffle, MentorProfile.id.desc())
+        .offset(offset)
+        .limit(limit + 1)
+    )
+
+
+def _ranked(
+    term: str, offset: int, limit: int, offerings: Sequence[str], viewer: UUID | None = None
+) -> Select[Any]:
     """One page of mentors matching `term`, best first.
 
     **Offset, not a keyset, and that is deliberate.** A rank is not in the row and
@@ -365,7 +414,7 @@ def _ranked(term: str, offset: int, limit: int, offerings: Sequence[str]) -> Sel
     """
     rank = func.ts_rank_cd(_document(), _matches(term))
     return (
-        _card(_scope(term, offerings))
+        _card(_scope(term, offerings, viewer))
         .add_columns(rank.label("rank"))
         .order_by(rank.desc(), MentorProfile.id.desc())
         .offset(offset)
@@ -381,8 +430,16 @@ async def search_mentors(
     q: str | None = None,
     offset: int = 0,
     offerings: Sequence[str] = (),
+    viewer: UUID | None = None,
+    goal_day: dt.date | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of bookable mentors, and whether another follows.
+
+    **`viewer` is who is asking**, and never appears in their own list.
+    **`goal_day` switches browse to the goal ranking** (`_matched`) for that
+    viewer and day; the caller passes it only for a viewer who has goals, so a
+    mentee without any still browses newest first. `q` outranks both: a search
+    is ranked by the search.
 
     **Two modes behind one signature.** Without `q` this is a browse list, newest
     first, keyset-paged on `mentor_profiles.id`. With `q` it is a ranked search,
@@ -410,9 +467,12 @@ async def search_mentors(
     # the one nobody is looking at.
     #
     # `offerings` arrives validated as live slugs; the store only applies them.
-    statement = (
-        _ranked(q, offset, limit, offerings) if q is not None else _page(after, limit, offerings)
-    )
+    if q is not None:
+        statement = _ranked(q, offset, limit, offerings, viewer)
+    elif viewer is not None and goal_day is not None:
+        statement = _matched(viewer, goal_day, offset, limit, offerings)
+    else:
+        statement = _page(after, limit, offerings, viewer, offset)
 
     rows = [dict(r) for r in (await session.execute(statement)).mappings()]
     page, has_more = rows[:limit], len(rows) > limit
@@ -424,7 +484,11 @@ async def search_mentors(
 
 
 async def count_mentors(
-    session: AsyncSession, *, q: str | None = None, offerings: Sequence[str] = ()
+    session: AsyncSession,
+    *,
+    q: str | None = None,
+    offerings: Sequence[str] = (),
+    viewer: UUID | None = None,
 ) -> int:
     """How many mentors `search_mentors` would list across every page.
 
@@ -438,7 +502,7 @@ async def count_mentors(
     qualification lateral, the review and session subqueries — runs per mentor
     counted.
     """
-    statement = _scope(q, offerings).with_only_columns(func.count(MentorProfile.id))
+    statement = _scope(q, offerings, viewer).with_only_columns(func.count(MentorProfile.id))
     return int((await session.execute(statement)).scalar_one())
 
 

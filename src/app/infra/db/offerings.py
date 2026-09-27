@@ -24,9 +24,20 @@ from uuid import UUID
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infra.db.models.mentoring import MentorServiceOffering, ServiceOffering
+from app.infra.db.models.mentoring import (
+    MenteeGoalNeed,
+    MentorServiceOffering,
+    ServiceOffering,
+)
 
-__all__ = ["live_offering_slugs", "offerings_for", "offers_any", "shared_offering_count"]
+__all__ = [
+    "goal_overlap_count",
+    "has_live_goals",
+    "live_offering_slugs",
+    "offerings_for",
+    "offers_any",
+    "shared_offering_count",
+]
 
 
 def _live() -> Any:
@@ -81,6 +92,51 @@ def shared_offering_count(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
         .where(*_gives(mentor_user_id, slugs))
         .scalar_subquery()
     )
+
+
+def _live_goals(mentee: UUID) -> list[Any]:
+    """This mentee's goal needs that name an offering the platform still offers.
+
+    **`_live()` applies here, unlike the filter**, because goal needs are stored
+    rows: a mentee can hold a goal for an offering retired after they chose it.
+    Counting it would rank a mentor up for a reason their card — which drops
+    retired offerings — can no longer show. Shared by the overlap and
+    `has_live_goals`, so a mentee whose only goals are retired browses newest
+    first rather than getting a shuffle where every mentor scores zero.
+    """
+    return [
+        MenteeGoalNeed.user_id == mentee,
+        ServiceOffering.id == MenteeGoalNeed.service_offering_id,
+        _live(),
+    ]
+
+
+def goal_overlap_count(mentor_user_id: Any, mentee: UUID) -> Any:
+    """How many of this mentee's live goal needs the mentor gives — a scalar subquery.
+
+    The join `MenteeGoalNeed`'s own docstring describes: both sides were
+    collapsed to the same six parent offerings, so an overlap is an equality on
+    `service_offering_id` and needs no fuzzy matching. Beside
+    `shared_offering_count` because it is the same question asked of a mentee's
+    goals instead of another mentor's offerings.
+    """
+    return (
+        select(func.count())
+        .select_from(MenteeGoalNeed, ServiceOffering)
+        .join(
+            MentorServiceOffering,
+            MentorServiceOffering.service_offering_id == MenteeGoalNeed.service_offering_id,
+        )
+        .where(*_live_goals(mentee), MentorServiceOffering.mentor_user_id == mentor_user_id)
+        .scalar_subquery()
+    )
+
+
+async def has_live_goals(session: AsyncSession, mentee: UUID) -> bool:
+    """Whether this mentee has any live goal — what turns browse into the goal
+    ranking. An empty goal row, or one naming only retired offerings, is no goal."""
+    statement = select(exists().where(*_live_goals(mentee)))
+    return bool((await session.execute(statement)).scalar_one())
 
 
 async def live_offering_slugs(session: AsyncSession, slugs: Sequence[str]) -> set[str]:

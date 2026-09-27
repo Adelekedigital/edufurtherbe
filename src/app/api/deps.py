@@ -39,10 +39,13 @@ from app.api.schemas.common import (
     StorableText,
     clamp_limit,
     decode_cursor,
+    decode_goal_cursor,
     decode_id_cursor,
     decode_offset_cursor,
     encode_cursor,
     encode_id_cursor,
+    is_goal_cursor,
+    next_goal_cursor,
     next_offset_cursor,
 )
 from app.api.schemas.intake import QuestionPatch, QuestionWrite
@@ -151,7 +154,7 @@ from app.infra.db.mentor_status_store import (
     resume,
     set_listing,
 )
-from app.infra.db.offerings import live_offering_slugs, offerings_for
+from app.infra.db.offerings import has_live_goals, live_offering_slugs, offerings_for
 from app.infra.db.onboarding_store import get_onboarding
 from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
 from app.infra.db.own_review_reader import list_reviews_about
@@ -2136,6 +2139,7 @@ MAX_SLUG_LENGTH = 60
 
 async def mentor_page(
     session: SessionDep,
+    viewer: OptionalViewerDep,
     q: Annotated[
         str | None,
         Query(description="Search mentors by name, school, programme or country."),
@@ -2187,12 +2191,59 @@ async def mentor_page(
 
     # Counted on the first page only: on the search path the count is a second
     # sequential scan, and a client paging on already has the number.
-    total = await count_mentors(session, q=term, offerings=slugs) if cursor is None else None
+    total = (
+        await count_mentors(session, q=term, offerings=slugs, viewer=viewer)
+        if cursor is None
+        else None
+    )
 
+    # **A signed-in mentee with goals gets the goal ranking** (settled decision
+    # #187), keyed on today's UTC date so the tie shuffle holds all day. A
+    # search outranks it — that precedence is `search_mentors`'s, which reads
+    # `q` first; `term is None` here only skips a goals lookup a search would
+    # ignore, so dropping it changes no response (an equivalent mutant).
+    goal_day = (
+        dt.datetime.now(dt.UTC).date()
+        if term is None and viewer is not None and await has_live_goals(session, viewer)
+        else None
+    )
+
+    # **Once paging has begun, the cursor's kind decides the mode**, not who the
+    # viewer is now. A token can lapse between pages, a visitor can sign in, a
+    # mentee can add a first goal: re-deciding from the viewer would hand one
+    # kind of cursor to the other's decoder and answer a list anyone may read
+    # with a 422. A goal cursor continues by offset — goal-ranked if the viewer
+    # still has goals, else newest first from that position; an id cursor
+    # continues newest first. A *search* cursor without its `q` is still
+    # refused: that is a client that dropped its query, not a changed viewer.
+    goal_paging = term is None and (
+        is_goal_cursor(cursor) if cursor is not None else goal_day is not None
+    )
+    if goal_paging:
+        offset = decode_goal_cursor(cursor) if cursor is not None else 0
+        rows, has_more = await search_mentors(
+            session,
+            limit=clamp_limit(limit),
+            offset=offset,
+            offerings=slugs,
+            viewer=viewer,
+            goal_day=goal_day,
+        )
+        next_cursor = next_goal_cursor(offset + len(rows)) if has_more else None
+        return rows, has_more, next_cursor, total
+
+    # Search pages by offset too — its order is not a column in the row — and
+    # shares the depth cap.
     if term is not None:
         offset = decode_offset_cursor(cursor)
         rows, has_more = await search_mentors(
-            session, limit=clamp_limit(limit), q=term, offset=offset, offerings=slugs
+            session,
+            limit=clamp_limit(limit),
+            q=term,
+            offset=offset,
+            offerings=slugs,
+            viewer=viewer,
+            goal_day=goal_day,
         )
         # `next_offset_cursor`, not `encode_offset_cursor`: past the depth cap
         # there is no next page, and minting one the decoder then refuses ends a
@@ -2201,8 +2252,12 @@ async def mentor_page(
         return rows, has_more, next_cursor, total
 
     rows, has_more = await search_mentors(
-        session, limit=clamp_limit(limit), after=decode_id_cursor(cursor), offerings=slugs
-    )
+        session,
+        limit=clamp_limit(limit),
+        after=decode_id_cursor(cursor),
+        offerings=slugs,
+        viewer=viewer,
+    )  # `goal_day` is not passed: an id cursor continues newest first.
     next_cursor = encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None
     return rows, has_more, next_cursor, total
 
