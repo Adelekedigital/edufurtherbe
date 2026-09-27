@@ -28,7 +28,15 @@ from uuid import UUID
 
 from app.domain.reviews import VALUABLE_SCALE
 
-__all__ = ["Candidate", "eligible", "pick", "week_start", "weight"]
+__all__ = [
+    "MAX_WEEKS_AHEAD",
+    "Candidate",
+    "eligible",
+    "pick",
+    "schedule_problem",
+    "week_start",
+    "weight",
+]
 
 #: The order is the product rule; the gaps keep each signal outranking the next.
 RATING_WEIGHT = 3.0
@@ -132,3 +140,26 @@ def eligible(
     fresh_cycle = bookable - {last_featured} if last_featured is not None else set(bookable)
     # One bookable mentor: "never twice running" would feature nobody at all.
     return (fresh_cycle or set(bookable)), True
+
+
+#: How far ahead an admin may choose a week's mentor. Far enough to plan a
+#: campaign month, near enough that a choice is still likely to be bookable
+#: when its week arrives — and if it is not, the rotation fills the week.
+MAX_WEEKS_AHEAD = 8
+
+
+def schedule_problem(week: dt.date, *, now: dt.datetime) -> str | None:
+    """Why an admin may not choose a mentor for `week`, or `None` if they may.
+
+    A week is named by its Monday (UTC), as `week_start` gives it. The current
+    week may be overridden — that is the ordinary "feature this person now" —
+    and so may any of the next `MAX_WEEKS_AHEAD`. A past week is history.
+    """
+    current = week_start(now)
+    if week.weekday() != 0:
+        return "a week is named by its Monday"
+    if week < current:
+        return "that week has already passed"
+    if week > current + dt.timedelta(weeks=MAX_WEEKS_AHEAD):
+        return f"a week may be chosen at most {MAX_WEEKS_AHEAD} weeks ahead"
+    return None

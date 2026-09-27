@@ -26,7 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
-from app.api.schemas.admin import DeclineRequest, MergeRequest
+from app.api.schemas.admin import DeclineRequest, FeaturedWrite, MergeRequest
 from app.api.schemas.admin_credits import AdminCreditGrantWrite
 from app.api.schemas.availability import (
     AvailabilityExceptionWrite,
@@ -83,6 +83,7 @@ from app.domain.attendance import join_window
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole, MeetingProvider, MentorStatusType
+from app.domain.featured import week_start as week_of
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES
 from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
@@ -129,7 +130,12 @@ from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutio
 from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
-from app.infra.db.featured_store import current_featured
+from app.infra.db.featured_store import (
+    current_featured,
+    featured_schedule,
+    remove_featured,
+    set_featured,
+)
 from app.infra.db.first_sign_in import provision_first_sign_in
 from app.infra.db.idempotency import Held, Mismatched, Replayed, record_response, reserve
 from app.infra.db.intake_store import (
@@ -1043,6 +1049,46 @@ async def decided_mentor(
     )
     await session.commit()
     return changed
+
+
+async def featured_week_set(
+    week_start: dt.date,
+    payload: FeaturedWrite,
+    admin_id: MentorAdminDep,
+    session: SessionDep,
+) -> dt.date:
+    """An admin choosing a week's featured mentor (settled decision #188)."""
+    await set_featured(
+        session, week_start, payload.mentor_id, admin_id, now=dt.datetime.now(dt.UTC)
+    )
+    return week_start
+
+
+async def featured_week_removed(
+    week_start: dt.date, admin_id: MentorAdminDep, session: SessionDep
+) -> bool:
+    """An admin withdrawing their choice; the rotation resumes for that week."""
+    del admin_id  # the gate is the point; who withdrew is not recorded
+    return await remove_featured(session, week_start, now=dt.datetime.now(dt.UTC))
+
+
+async def featured_weeks(
+    admin_id: MentorAdminDep,
+    session: SessionDep,
+    since: Annotated[
+        dt.date | None,
+        Query(description="The earliest week to list. Default: eight weeks ago."),
+    ] = None,
+) -> list[dict[str, Any]]:
+    """The featured schedule: past weeks and chosen future ones, newest first."""
+    del admin_id
+    start = since or week_of(dt.datetime.now(dt.UTC)) - dt.timedelta(weeks=8)
+    return await featured_schedule(session, since=start)
+
+
+FeaturedWeekSetDep = Annotated[dt.date, Depends(featured_week_set)]
+FeaturedWeekRemovedDep = Annotated[bool, Depends(featured_week_removed)]
+FeaturedWeeksDep = Annotated[list[dict[str, Any]], Depends(featured_weeks)]
 
 
 async def listed_mentor(

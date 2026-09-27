@@ -29,6 +29,9 @@ from app.api.deps import (
     ApprovedInstitutionDep,
     DecidedMentorDep,
     DecidedReportDep,
+    FeaturedWeekRemovedDep,
+    FeaturedWeeksDep,
+    FeaturedWeekSetDep,
     ListedMentorDep,
     MentorHistoryDep,
     MergedInstitutionDep,
@@ -37,6 +40,7 @@ from app.api.deps import (
     PendingMentorsDep,
 )
 from app.api.schemas.admin import (
+    FeaturedWeekRead,
     PendingInstitutionRead,
     PendingMentorRead,
     StatusEventRead,
@@ -334,3 +338,58 @@ async def grant_credits_to_users(
 async def admin_credit_history(page: AdminGrantHistoryDep) -> Page[AdminGrantHistoryRead]:
     rows, cursor = page
     return Page(data=[AdminGrantHistoryRead.from_row(row) for row in rows], next_cursor=cursor)
+
+
+@router.put(
+    "/featured-mentor/{week_start}",
+    summary="Choose the featured mentor for a week",
+    description=(
+        "Overrides the automatic rotation for one week: the current one, or up to "
+        "eight ahead. `week_start` is the week's **Monday** (UTC); anything else, a "
+        "past week, or a week further out is a `422`, as is a mentor who cannot be "
+        "booked now.\n\n"
+        "**The choice counts as that mentor's rotation turn**, and a mentor the "
+        "rotation had already picked for the week **gets their turn back**. A "
+        "second choice for the same week replaces the first.\n\n"
+        "If the chosen mentor pauses before or during their week they are skipped "
+        "and the rotation fills the week, so the public card is never empty "
+        "because of an override. The public `/featured-mentor` caches for 60 "
+        "seconds, so a change shows within a minute.\n\n"
+        "Mentor-approval admins and super admins (settled decision #188)."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def choose_featured(chosen: FeaturedWeekSetDep) -> dict[str, str]:
+    return {"week_start": chosen.isoformat()}
+
+
+@router.delete(
+    "/featured-mentor/{week_start}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Withdraw a week's featured choice",
+    description=(
+        "Removes an admin's choice; the rotation picks for that week as usual. "
+        "`404` when the week holds no admin choice. Past weeks are history and "
+        "are refused with a `422`."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def withdraw_featured(removed: FeaturedWeekRemovedDep) -> Response:
+    if not removed:
+        raise NotFoundError("no admin choice for that week")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/featured-mentors",
+    response_model=Page[FeaturedWeekRead],
+    summary="The featured-mentor schedule",
+    description=(
+        "Each week from `since` (default: eight weeks ago), newest first: who, "
+        "whether the rotation or an admin chose them, which admin, and whether "
+        "they can still be booked."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def featured_weeks_list(rows: FeaturedWeeksDep) -> Page[FeaturedWeekRead]:
+    return Page(data=[FeaturedWeekRead(**row) for row in rows])

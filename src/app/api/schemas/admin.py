@@ -8,12 +8,13 @@ shoulder-surfing.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.schemas.common import Normalised
+from app.domain.enums import FeaturedSource
 
 
 class PendingInstitutionRead(BaseModel):
@@ -81,3 +82,33 @@ class StatusEventRead(BaseModel):
     #: Null for rows the backfill wrote, where nobody made the decision.
     created_by: UUID | None = None
     created_by_email: str | None = None
+
+
+class FeaturedWrite(BaseModel):
+    """The mentor an admin features for a week."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mentor_id: UUID = Field(description="A mentor who is bookable now.")
+
+
+class FeaturedWeekRead(BaseModel):
+    """One week of "Featured this week", as the admin schedule shows it."""
+
+    week_start: date = Field(description="The week's Monday, UTC.")
+    mentor_id: UUID
+    first_name: str | None = None
+    last_name: str | None = None
+    slug: str | None = None
+    source: FeaturedSource = Field(
+        description="`automatic` for the rotation's own pick, `admin` for an override."
+    )
+    chosen_by: UUID | None = Field(
+        default=None, description="The admin who chose the week; null for the rotation."
+    )
+    bookable: bool = Field(
+        description=(
+            "Whether the mentor can be booked now. A future choice who has since "
+            "paused is skipped when the week arrives, and the rotation fills it."
+        )
+    )
