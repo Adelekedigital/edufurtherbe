@@ -30,7 +30,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.api.schemas.common import AvatarFocusRead, Page
+from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 from app.domain.enums import ApprovalStatus, ListingStatus
@@ -298,9 +298,10 @@ class MentorPublicRead(BaseModel):
         default=None, description="Where they studied, resolved to a name."
     )
     origin_country: str | None = None
-    social_linkedin: str | None = None
-    social_twitter: str | None = None
-    social_youtube: str | None = None
+    #: Canonical `https://` links or `null` — render them, never parse them (#182).
+    social_linkedin: LinkedInRead = None
+    social_twitter: XRead = None
+    social_youtube: YouTubeRead = None
     offerings: list[ServiceOfferingRead] = Field(
         default_factory=list, description="What kind of help they give."
     )

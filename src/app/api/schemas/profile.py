@@ -16,7 +16,13 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.schemas.catalogue import CountryRef, InstitutionRead
-from app.api.schemas.common import AvatarFocusRead, Normalised
+from app.api.schemas.common import (
+    AvatarFocusRead,
+    LinkedInWrite,
+    Normalised,
+    XWrite,
+    YouTubeWrite,
+)
 from app.domain.enums import LanguageProficiency
 
 
@@ -342,9 +348,27 @@ class UserProfileWrite(Normalised):
     about_me: str | None = Field(default=None, max_length=5000)
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None
-    social_linkedin: str | None = Field(default=None, max_length=500)
-    social_twitter: str | None = Field(default=None, max_length=500)
-    social_youtube: str | None = Field(default=None, max_length=500)
+    social_linkedin: LinkedInWrite = Field(
+        default=None,
+        description=(
+            "`ada-lovelace` or a linkedin.com/in/ (or /company/) link, stored as "
+            "`https://www.linkedin.com/in/ada-lovelace`. Anything else is a `422`."
+        ),
+    )
+    social_twitter: XWrite = Field(
+        default=None,
+        description=(
+            "`@ada` or an x.com / twitter.com link, stored as `https://x.com/ada`. "
+            "Anything else is a `422`."
+        ),
+    )
+    social_youtube: YouTubeWrite = Field(
+        default=None,
+        description=(
+            "`@ada` or a youtube.com/@ or /channel/ link, stored as "
+            "`https://www.youtube.com/@ada`. Anything else is a `422`."
+        ),
+    )
 
 
 class EducationPatch(Normalised):
