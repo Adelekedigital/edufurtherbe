@@ -141,6 +141,22 @@ class MentorSummaryRead(BaseModel):
         )
 
 
+class FeaturedMentorRead(MentorSummaryRead):
+    """The week's featured mentor: their discovery card, and their bio.
+
+    **The card plus one field, not a new shape.** The frontend renders it with
+    the same component as the list, so it must carry the same fields from the
+    same query (`mentor_card`). `about_me` is the full text; the design clamps
+    it to two lines, which is a layout decision the client owns.
+    """
+
+    about_me: str | None = None
+
+    @classmethod
+    def from_featured(cls, row: dict[str, Any]) -> FeaturedMentorRead:
+        return cls(**MentorSummaryRead.from_row(row).model_dump(), about_me=_text(row["about_me"]))
+
+
 class MentorPage(Page[MentorSummaryRead]):
     """A discovery page, and on the first page, how many mentors there are.
 

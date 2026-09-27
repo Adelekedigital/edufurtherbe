@@ -9,13 +9,15 @@ models, mentor and mentee separate and this table moves to its own module
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     TIMESTAMP,
     CheckConstraint,
+    Date,
     ForeignKey,
     Index,
+    Integer,
     Text,
     UniqueConstraint,
     Uuid,
@@ -552,4 +554,41 @@ class MentorStatusEvent(Base):
             check_is_known("status_type", MentorStatusType),
             name="status_type_is_known",
         ),
+    )
+
+
+class FeaturedMentor(Base):
+    """Who was "Featured this week", and in which rotation.
+
+    **The rotation's memory, and the week's pick.** The first request of a week
+    writes a row; every later request that week reads it, so the card does not
+    change under a viewer. A week can hold more than one row only when the
+    mentor featured stopped being bookable and was replaced — the latest still
+    bookable row is the week's mentor.
+
+    `cycle` counts rotations: nobody is featured twice in one cycle, and a new
+    cycle starts once everyone bookable has had a turn (`domain/featured.py`).
+
+    Append-only. Cascades with the profile: a history of a mentor who no longer
+    exists has no one to feature, and nothing here is evidence of anything.
+    """
+
+    __tablename__ = "featured_mentors"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("mentor_profiles.user_id", ondelete="CASCADE"), nullable=False
+    )
+    #: The Monday, in UTC, of the week this mentor was featured.
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("week_start", "mentor_user_id", name="uq_featured_mentors_week_mentor"),
+        Index("ix_featured_mentors_cycle", "cycle"),
     )

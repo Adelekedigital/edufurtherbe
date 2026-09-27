@@ -28,6 +28,7 @@ from conftest import PROJECT_ROOT
 # from a silently smaller test run into a failure.
 EXPECTED_MODELS = {
     "Country",
+    "FeaturedMentor",
     "MentorAvailabilityChange",
     "MentorNextAvailability",
     "AdminCreditGrant",
@@ -130,6 +131,7 @@ APPEND_ONLY = frozenset(
         "CreditTransaction",
         "AdminCreditGrant",
         "MentorAvailabilityChange",
+        "FeaturedMentor",
     }
 )
 

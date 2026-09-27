@@ -53,7 +53,7 @@ from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
 from app.infra.db.session_stats import delivered
 
-__all__ = ["count_mentors", "search_mentors"]
+__all__ = ["completed_sessions", "count_mentors", "mentor_card", "search_mentors"]
 
 #: `english` stems, which is right for prose and wrong for names. Named rather
 #: than inlined so the two never drift apart across the document and the query.
@@ -209,7 +209,7 @@ def _matches(term: str) -> Any:
     )
 
 
-def _completed_sessions() -> Any:
+def completed_sessions() -> Any:
     """How many sessions this mentor has delivered.
 
     Derived, never stored — D56, and the migration package agrees: it lists
@@ -293,7 +293,7 @@ def _card(scope: Select[Any]) -> Select[Any]:
             qualification.c.degree,
             qualification.c.study_course,
             qualification.c.institution,
-            _completed_sessions().label("completed_sessions"),
+            completed_sessions().label("completed_sessions"),
             review_count.scalar_subquery().label("review_count"),
             session_value.scalar_subquery().label("session_value"),
             MentorNextAvailability.next_available_at,
@@ -431,3 +431,24 @@ async def count_mentors(
     """
     statement = _scope(q, offerings).with_only_columns(func.count(MentorProfile.id))
     return int((await session.execute(statement)).scalar_one())
+
+
+async def mentor_card(session: AsyncSession, user_id: UUID) -> dict[str, Any] | None:
+    """One bookable mentor as a discovery card, with their bio.
+
+    **The same `_card()` over the same `_scope()`** the list reads, so a card
+    shown on its own — the featured mentor — cannot differ from the same mentor
+    in the list. `None` when the mentor is not bookable, which is a real answer:
+    the caller must not show them.
+    """
+    statement = (
+        _card(_scope(None, ()))
+        .add_columns(UserProfile.about_me)
+        .where(MentorProfile.user_id == user_id)
+    )
+    row = (await session.execute(statement)).mappings().first()
+    if row is None:
+        return None
+    card = dict(row)
+    card["offerings"] = (await offerings_for(session, [user_id])).get(user_id, [])
+    return card

@@ -19,7 +19,7 @@ It takes its mentor as a parameter because the two callers identify them
 differently: the card correlates against a column inside a paged query, the
 profile passes a resolved id.
 
-**A lateral rather than one scalar subquery per figure.** `_completed_sessions()`
+**A lateral rather than one scalar subquery per figure.** `completed_sessions()`
 is a scalar subquery because it is *one* value; `top_qualification()` is a
 lateral because it is three columns from the same rows. This is six from the
 same rows, so it is the second shape — and the difference is real work: six

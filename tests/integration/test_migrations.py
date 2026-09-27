@@ -106,6 +106,7 @@ EXPECTED_TABLES = [
     # M2 — the profile tables themselves. `user_scholarship_experience` is
     # deliberately absent: no option set, no values, nothing to write it.
     "education_entries",
+    "featured_mentors",
     "mentee_goal_countries",
     "mentee_goal_needs",
     "mentee_goals",

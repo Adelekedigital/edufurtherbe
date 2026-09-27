@@ -31,6 +31,7 @@ from app.infra.db.models.intake import (
 )
 from app.infra.db.models.legal import LegalDocument, UserLegalConsent
 from app.infra.db.models.mentoring import (
+    FeaturedMentor,
     MenteeGoal,
     MenteeGoalCountry,
     MenteeGoalNeed,
@@ -73,6 +74,7 @@ __all__ = [
     "CreditTransaction",
     "DegreeLevel",
     "EducationEntry",
+    "FeaturedMentor",
     "IdempotencyKey",
     "Institution",
     "IntakeAnswer",

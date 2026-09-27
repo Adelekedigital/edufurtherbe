@@ -13,6 +13,7 @@ from app.api.routes import (
     availability,
     callbacks,
     catalogue,
+    featured,
     health,
     internal_jobs,
     me_calendar,
@@ -319,6 +320,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(health.router)
     application.include_router(users.router)
     application.include_router(catalogue.router)
+    application.include_router(featured.router)
     application.include_router(mentors.router)
     application.include_router(user_attributes.router)
     application.include_router(availability.router)

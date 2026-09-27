@@ -125,6 +125,7 @@ from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutio
 from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.featured_store import current_featured
 from app.infra.db.idempotency import Held, Mismatched, Replayed, record_response, reserve
 from app.infra.db.intake_store import (
     create_question,
@@ -133,7 +134,7 @@ from app.infra.db.intake_store import (
     update_question,
 )
 from app.infra.db.mentor_public_store import get_public_mentor, get_public_mentor_id
-from app.infra.db.mentor_search_store import count_mentors, search_mentors
+from app.infra.db.mentor_search_store import count_mentors, mentor_card, search_mentors
 from app.infra.db.mentor_status_store import (
     decide,
     history,
@@ -2159,6 +2160,20 @@ MentorPageDep = Annotated[
 ]
 
 PublicMentorDep = Annotated[dict[str, Any], Depends(public_mentor)]
+
+
+async def featured_mentor(session: SessionDep) -> dict[str, Any] | None:
+    """This week's featured mentor as a card, or `None` when nobody is.
+
+    `None` too if they stopped being bookable between the pick and the read —
+    the next request picks a replacement, and this one shows nothing rather
+    than a mentor who cannot be booked.
+    """
+    mentor = await current_featured(session, now=dt.datetime.now(dt.UTC))
+    return None if mentor is None else await mentor_card(session, mentor)
+
+
+FeaturedMentorDep = Annotated[dict[str, Any] | None, Depends(featured_mentor)]
 
 SlotsDep = Annotated[list[UtcInterval], Depends(mentor_slots)]
 

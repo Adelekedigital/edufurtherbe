@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 
 from app.domain.enums import ApprovalStatus, ListingStatus
 from app.infra.db.models.availability import AvailabilityRule
@@ -35,6 +35,7 @@ from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
 
 __all__ = [
+    "bookable_mentors",
     "mentor_is_bookable",
     "mentor_is_public",
     "session_type_is_live",
@@ -183,3 +184,18 @@ def session_type_is_live(user_id: UUID) -> list[Any]:
     takes no argument that could carry the mistake.
     """
     return [*session_type_of(user_id), SessionType.is_active.is_(True)]
+
+
+def bookable_mentors() -> Select[Any]:
+    """Every mentor discovery could show, by user id.
+
+    The two predicates above, joined to what they read. Shared by the
+    next-free-time job, which refreshes exactly these mentors, and the featured
+    pick, which chooses among them — a third spelling of the same join is the
+    copy that drifts (non-negotiable #8).
+    """
+    return (
+        select(MentorProfile.user_id)
+        .join(User, User.id == MentorProfile.user_id)
+        .where(*mentor_is_public(), *mentor_is_bookable())
+    )
