@@ -15,7 +15,7 @@ what `/slots` answers, freshly, one click later.
 
 **One filter: service offering, any of.** A mentor who gives *at least one* of
 the slugs asked for appears, because chips in one category widen — a mentee who
-picks two kinds of help wants mentors for either. It applies in `_base()`, so
+picks two kinds of help wants mentors for either. It applies in `_who()`, so
 browse and search cannot disagree about it, and it is an `EXISTS` because
 `mentor_service_offerings` is one-to-many and a join would list a mentor once per
 matching slug.
@@ -51,7 +51,7 @@ from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
 from app.infra.db.session_stats import delivered
 
-__all__ = ["search_mentors"]
+__all__ = ["count_mentors", "search_mentors"]
 
 #: `english` stems, which is right for prose and wrong for names. Named rather
 #: than inlined so the two never drift apart across the document and the query.
@@ -236,14 +236,41 @@ def _completed_sessions() -> Any:
     )
 
 
-def _base(offerings: Sequence[str]) -> Select[Any]:
-    """The columns and the scope, shared by both modes.
+def _who(offerings: Sequence[str]) -> Select[Any]:
+    """Which mentors are visible — the joins and predicates, and no card.
 
-    Extracted so browse and search cannot drift on *who is visible*. The two
-    differ only in ordering and how they page; if the predicates lived in each,
-    a clause added to one would silently not apply to the other — and the one
-    with a text box in front of it is the worse half to forget.
+    Extracted so browse, search and the count cannot drift on *who is visible*.
+    The modes differ only in ordering and how they page; if the predicates lived
+    in each, a clause added to one would silently not apply to the other — and
+    the one with a text box in front of it is the worse half to forget.
+
+    **Only the joins a predicate or the search document reads.** The card's
+    qualification lateral is added by `_card()` instead: it is an ordered
+    `LIMIT 1` per mentor that Postgres cannot drop from a query that never reads
+    it, so carrying it here made `count_mentors` run it for every visible mentor
+    where a page runs it for twenty-one.
     """
+    return (
+        select(MentorProfile.id)
+        .select_from(MentorProfile)
+        .join(User, User.id == MentorProfile.user_id)
+        # Outer: a mentor who never wrote a bio has no `user_profiles` row at all,
+        # and an inner join would make them unfindable while their profile page
+        # works perfectly — invisible in the one place a mentee looks.
+        .outerjoin(UserProfile, UserProfile.user_id == MentorProfile.user_id)
+        .outerjoin(_STUDY_COUNTRY, _STUDY_COUNTRY.c.id == MentorProfile.primary_study_country_id)
+        # Moved here from `_ranked`, where a comment used to say browse never
+        # reads it. Browse does now: where a mentor is *from* is on the card,
+        # and it was the one field the search document indexed while the
+        # payload withheld it — findable by a fact a client could not display.
+        .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
+        .where(*mentor_is_public(), *mentor_is_bookable())
+        .where(*([offers_any(MentorProfile.user_id, offerings)] if offerings else []))
+    )
+
+
+def _card(scope: Select[Any]) -> Select[Any]:
+    """`scope`'s mentors with the columns a search result renders."""
     qualification = top_qualification(MentorProfile.user_id)
     # **Scalar subqueries, not a lateral.** They run per output row, after the
     # page limit, which is the property `_document()` records for the
@@ -251,7 +278,7 @@ def _base(offerings: Sequence[str]) -> Select[Any]:
     # per *match* on the search path, where the rank sort materialises them all.
     review_count, session_value = card_summary(MentorProfile.user_id)
     return (
-        select(
+        scope.with_only_columns(
             User.id.label("user_id"),
             MentorProfile.id.label("cursor_id"),
             User.slug,
@@ -268,24 +295,10 @@ def _base(offerings: Sequence[str]) -> Select[Any]:
             review_count.scalar_subquery().label("review_count"),
             session_value.scalar_subquery().label("session_value"),
         )
-        .select_from(MentorProfile)
-        .join(User, User.id == MentorProfile.user_id)
-        # Outer: a mentor who never wrote a bio has no `user_profiles` row at all,
-        # and an inner join would make them unfindable while their profile page
-        # works perfectly — invisible in the one place a mentee looks.
-        .outerjoin(UserProfile, UserProfile.user_id == MentorProfile.user_id)
-        .outerjoin(_STUDY_COUNTRY, _STUDY_COUNTRY.c.id == MentorProfile.primary_study_country_id)
-        # Moved here from `_ranked`, where a comment used to say browse never
-        # reads it. Browse does now: where a mentor is *from* is on the card,
-        # and it was the one field the search document indexed while the
-        # payload withheld it — findable by a fact a client could not display.
-        .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
-        # Outer for the same reason: an academic line is something a card
-        # *displays*, and a mentor without one is a worse card, not a hidden
-        # mentor. Bookability is what decides who appears, and it is above.
+        # Outer: an academic line is something a card *displays*, and a mentor
+        # without one is a worse card, not a hidden mentor. Bookability is what
+        # decides who appears, and it is in `_who()`.
         .outerjoin(qualification, true())
-        .where(*mentor_is_public(), *mentor_is_bookable())
-        .where(*([offers_any(MentorProfile.user_id, offerings)] if offerings else []))
     )
 
 
@@ -299,11 +312,22 @@ def _page(after: UUID | None, limit: int, offerings: Sequence[str]) -> Select[An
     reach for the visible one when building the next token.
     """
     return (
-        _base(offerings)
+        _card(_scope(None, offerings))
         .where(*([MentorProfile.id < after] if after is not None else []))
         .order_by(MentorProfile.id.desc())
         .limit(limit + 1)
     )
+
+
+def _scope(term: str | None, offerings: Sequence[str]) -> Select[Any]:
+    """Who a request lists, before any ordering or paging.
+
+    The page and the count both read this, so `total` cannot describe a
+    different set from the pages it sits beside — a count that forgot the text
+    match or the filter would still return a plausible number.
+    """
+    base = _who(offerings)
+    return base if term is None else base.where(_document().op("@@")(_matches(term)))
 
 
 def _ranked(term: str, offset: int, limit: int, offerings: Sequence[str]) -> Select[Any]:
@@ -322,9 +346,8 @@ def _ranked(term: str, offset: int, limit: int, offerings: Sequence[str]) -> Sel
     """
     rank = func.ts_rank_cd(_document(), _matches(term))
     return (
-        _base(offerings)
+        _card(_scope(term, offerings))
         .add_columns(rank.label("rank"))
-        .where(_document().op("@@")(_matches(term)))
         .order_by(rank.desc(), MentorProfile.id.desc())
         .offset(offset)
         .limit(limit + 1)
@@ -344,7 +367,7 @@ async def search_mentors(
 
     **Two modes behind one signature.** Without `q` this is a browse list, newest
     first, keyset-paged on `mentor_profiles.id`. With `q` it is a ranked search,
-    best first, offset-paged. Both read the same scope from `_base()`, so a
+    best first, offset-paged. Both read the same scope from `_who()`, so a
     visibility clause cannot apply to one and not the other.
 
     A blank `q` is browse, not an empty search — an empty box is the resting
@@ -358,8 +381,10 @@ async def search_mentors(
     trips a page.
 
     One more row than asked for is fetched: if it comes back there is a next
-    page. Cheaper and more honest than a second `COUNT`, which can disagree with
-    the page it claims to describe.
+    page. *Whether there is more* never reads the count — a `COUNT` can
+    disagree with the page it sits beside under concurrent writes. The header's
+    number is `count_mentors`, a separate, display-only answer over the same
+    `_scope()`.
     """
     # `q` arrives normalised: a blank search is `None` by the time it gets here.
     # Re-deciding would be a second copy of the rule, and the copy that drifts is
@@ -377,3 +402,22 @@ async def search_mentors(
     for row in page:
         row["offerings"] = grouped.get(row["user_id"], [])
     return page, has_more
+
+
+async def count_mentors(
+    session: AsyncSession, *, q: str | None = None, offerings: Sequence[str] = ()
+) -> int:
+    """How many mentors `search_mentors` would list across every page.
+
+    **A second statement, and that is the cost this field carries.** On the
+    search path it is a second sequential scan over the inline document, so
+    `total` roughly doubles what a first search page costs; browse is a count
+    over the visibility predicates alone. The
+    route asks for it on the first page only, so paging does not pay it again.
+
+    Reads `_scope()` without `_card()`, so none of the card's per-row work — the
+    qualification lateral, the review and session subqueries — runs per mentor
+    counted.
+    """
+    statement = _scope(q, offerings).with_only_columns(func.count(MentorProfile.id))
+    return int((await session.execute(statement)).scalar_one())

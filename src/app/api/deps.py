@@ -134,7 +134,7 @@ from app.infra.db.intake_store import (
     update_question,
 )
 from app.infra.db.mentor_public_store import get_public_mentor, get_public_mentor_id
-from app.infra.db.mentor_search_store import search_mentors
+from app.infra.db.mentor_search_store import count_mentors, search_mentors
 from app.infra.db.mentor_status_store import (
     decide,
     history,
@@ -2115,7 +2115,7 @@ async def mentor_page(
             ),
         ),
     ] = None,
-) -> tuple[list[dict[str, Any]], bool, str | None]:
+) -> tuple[list[dict[str, Any]], bool, str | None, int | None]:
     """One page of bookable mentors, browsing or searching.
 
     **The mode decides how the token is read**, which is why decoding happens
@@ -2142,6 +2142,10 @@ async def mentor_page(
     if unknown:
         raise ValidationError(f"unknown offering: {', '.join(sorted(unknown))}")
 
+    # Counted on the first page only: on the search path the count is a second
+    # sequential scan, and a client paging on already has the number.
+    total = await count_mentors(session, q=term, offerings=slugs) if cursor is None else None
+
     if term is not None:
         offset = decode_offset_cursor(cursor)
         rows, has_more = await search_mentors(
@@ -2150,15 +2154,19 @@ async def mentor_page(
         # `next_offset_cursor`, not `encode_offset_cursor`: past the depth cap
         # there is no next page, and minting one the decoder then refuses ends a
         # deep search on a 422 for a client that followed the envelope exactly.
-        return rows, has_more, next_offset_cursor(offset + len(rows)) if has_more else None
+        next_cursor = next_offset_cursor(offset + len(rows)) if has_more else None
+        return rows, has_more, next_cursor, total
 
     rows, has_more = await search_mentors(
         session, limit=clamp_limit(limit), after=decode_id_cursor(cursor), offerings=slugs
     )
-    return rows, has_more, encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None
+    next_cursor = encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None
+    return rows, has_more, next_cursor, total
 
 
-MentorPageDep = Annotated[tuple[list[dict[str, Any]], bool, str | None], Depends(mentor_page)]
+MentorPageDep = Annotated[
+    tuple[list[dict[str, Any]], bool, str | None, int | None], Depends(mentor_page)
+]
 
 PublicMentorDep = Annotated[dict[str, Any], Depends(public_mentor)]
 
