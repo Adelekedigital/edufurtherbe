@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import errors
 from app.api.limits import BodyLimitMiddleware
+from app.api.per_viewer import PerViewerHeadersMiddleware
 from app.api.routes import (
     admin,
     availability,
@@ -289,6 +290,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # reverse). That is the order we want: a 413 still leaves with its CORS
     # headers, so a browser sees the refusal instead of an opaque network error.
     application.add_middleware(BodyLimitMiddleware)
+
+    # Inside CORS for the same reason as the body limit: every response under
+    # the per-viewer prefixes, a `404` included, leaves with its cache headers.
+    application.add_middleware(PerViewerHeadersMiddleware)
 
     # Added only when origins are configured. An empty list would install a
     # middleware that allows nothing, which is indistinguishable from no CORS at

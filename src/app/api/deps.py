@@ -68,6 +68,7 @@ from app.api.schemas.sessions import (
 )
 from app.core.config import Settings, get_settings
 from app.core.errors import (
+    AccountExistsError,
     AuthenticationError,
     ConfigurationError,
     ConflictError,
@@ -353,23 +354,24 @@ async def optional_viewer(
 ) -> UUID | None:
     """Who is asking, on an endpoint that answers anyone — or ``None``.
 
-    **No header is the anonymous viewer, and that is the only way to be one.**
-    A header that fails verification is still the `401` every other endpoint
-    gives: a client that sent a token meant to be somebody, and quietly
-    answering as nobody would hide its bug behind a response that looks right.
+    **Any problem with the token reads as anonymous, never as an error.** The
+    endpoints using this answer anybody, so a token can only ever *add* the
+    owner's view — it must not take the public one away. An expired token (a
+    tab resumed after Supabase's hour, before the refresh lands), a genuine
+    token with no live account, and one whose email belongs to another account
+    all get exactly what a visitor with no token gets. A `401`, `404` or `409`
+    here would break a page anyone may read, for a reason about the caller.
 
-    **A genuine token with no live account reads as anonymous**, not as the
-    `404` `get_current_user` raises — on a public read that `404` would say the
-    *mentor* is missing when it is the caller's account that is. Resolved
-    through `get_current_user` itself, so first sign-in and the account
-    rules are the same statement as everywhere else rather than a second copy.
+    Resolved through `get_current_user` itself, so first sign-in and the
+    account rules are the same statement as everywhere else rather than a
+    second copy.
     """
     if credentials is None or not credentials.credentials:
         return None
-    claims = await get_claims(request, credentials)
     try:
+        claims = await get_claims(request, credentials)
         user = await get_current_user(claims, session)
-    except NotFoundError:
+    except AuthenticationError, NotFoundError, AccountExistsError:
         return None
     viewer: UUID = user["id"]
     return viewer

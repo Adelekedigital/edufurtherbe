@@ -28,7 +28,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
+from pydantic import BaseModel, Field
 
 from app.api.schemas.common import AvatarFocusRead, Page
 from app.api.schemas.reviews import ReviewSummaryRead
@@ -354,8 +354,12 @@ class MentorPublicRead(BaseModel):
     next_available_at: datetime | None = None
     next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
 
+    # `exclude_if`, not a model serializer: a wrap serializer typed `dict`
+    # replaces this model's whole serialization schema, and the published
+    # OpenAPI loses every property of the profile.
     approval_status: ApprovalStatus | None = Field(
         default=None,
+        exclude_if=lambda value: value is None,
         description=(
             "**Only in the mentor's own view of their profile, and absent for "
             "everyone else** — its presence means the caller is this mentor. "
@@ -365,18 +369,9 @@ class MentorPublicRead(BaseModel):
     )
     listing_status: ListingStatus | None = Field(
         default=None,
+        exclude_if=lambda value: value is None,
         description="Owner only, like `approval_status`. `unlisted` means hidden from search.",
     )
-
-    @model_serializer(mode="wrap")
-    def _owner_fields_only_for_the_owner(
-        self, handler: SerializerFunctionWrapHandler
-    ) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        for key in OWNER_ONLY:
-            if data.get(key) is None:
-                data.pop(key, None)
-        return data
 
     @classmethod
     def from_row(

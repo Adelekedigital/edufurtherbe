@@ -18,7 +18,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_public_mentor
+from tests.integration.factories import make_bookable_mentor, make_public_mentor
 
 from conftest import api_token, bearer
 
@@ -183,7 +183,7 @@ async def test_the_owner_reads_their_own_reviews_list(
 async def test_the_profile_carries_the_cards_next_available_time(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "profile-next")
+    mentor = await make_bookable_mentor(db_engine, "profile-next")
     at = dt.datetime(2030, 1, 7, 9, tzinfo=dt.UTC)
     async with db_engine.begin() as conn:
         await conn.execute(
@@ -208,7 +208,7 @@ async def test_the_profile_carries_the_cards_next_available_time(
 async def test_a_mentor_the_job_has_not_reached_reads_refreshing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "profile-refreshing")
+    mentor = await make_bookable_mentor(db_engine, "profile-refreshing")
 
     body = (await api_client.get(url(mentor))).json()
 
@@ -236,7 +236,7 @@ async def test_a_stored_time_is_withheld_once_it_is_stale(
 ) -> None:
     """A change since the job ran makes the stored time a stale claim: the
     state says `refreshing` and the time must not be sent beside it."""
-    mentor = await make_public_mentor(db_engine, "profile-stale")
+    mentor = await make_bookable_mentor(db_engine, "profile-stale")
     at = dt.datetime(2030, 1, 7, 9, tzinfo=dt.UTC)
     async with db_engine.begin() as conn:
         await conn.execute(
@@ -256,3 +256,123 @@ async def test_a_stored_time_is_withheld_once_it_is_stale(
 
     assert body["next_available_state"] == "refreshing"
     assert body["next_available_at"] is None
+
+
+async def store_future_time(engine: AsyncEngine, mentor: UUID) -> None:
+    """A vouched, future time with no change since — what `open` is made of."""
+    at = dt.datetime(2030, 1, 7, 9, tzinfo=dt.UTC)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_next_availability "
+                "(mentor_user_id, next_available_at, bookable_until, computed_at) "
+                "VALUES (:u, :at, :until, now())"
+            ),
+            {"u": mentor, "at": at, "until": at - dt.timedelta(hours=1)},
+        )
+        await conn.execute(
+            text("DELETE FROM mentor_availability_changes WHERE mentor_user_id = :u"),
+            {"u": mentor},
+        )
+
+
+async def test_a_visible_mentor_nobody_can_book_shows_no_time(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Approved and listed, but no offering or hours: the job does not cover
+    them, so a row left from when they were bookable is no longer watched and
+    would read `open` for a mentor nobody can book."""
+    mentor = await make_public_mentor(db_engine, "visible-unbookable")
+    await store_future_time(db_engine, mentor)
+
+    body = (await api_client.get(url(mentor))).json()
+
+    assert body["next_available_state"] == "none"
+    assert body["next_available_at"] is None
+
+
+async def test_a_bad_token_on_a_public_profile_reads_as_anonymous(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A tab resumed with an expired token must not break a page anyone may
+    read. The token can only add the owner's view, never take the public one."""
+    mentor = await make_public_mentor(db_engine, "bad-token")
+
+    response = await api_client.get(url(mentor), headers={"Authorization": "Bearer not-a-jwt"})
+
+    assert response.status_code == 200
+    assert "approval_status" not in response.json()
+    assert "private" in response.headers["cache-control"]
+
+
+async def test_a_deleted_accounts_token_reads_as_anonymous(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_public_mentor(db_engine, "gone-viewer-target")
+    headers = await a_stranger(db_engine, "gone-viewer")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE email = :e"),
+            {"e": "stranger-gone-viewer@example.test"},
+        )
+
+    response = await api_client.get(url(mentor), headers=headers)
+
+    assert response.status_code == 200
+    assert "approval_status" not in response.json()
+
+
+async def test_the_owner_of_a_deleted_account_gets_the_404(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The *user* row this time — soft deletion is waived for the owner on
+    neither table."""
+    mentor = await make_public_mentor(db_engine, "owner-user-deleted", approved=False)
+    headers = await auth_of(db_engine, mentor)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+
+    response = await api_client.get(url(mentor), headers=headers)
+
+    assert response.status_code == 404
+
+
+async def test_a_404_carries_the_cache_headers_too(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Raised in a dependency, so no route code runs — yet a shared cache holding
+    the anonymous 404 must not serve it to the owner."""
+    mentor = await make_public_mentor(db_engine, "hidden-404", approved=False)
+
+    anonymous = await api_client.get(url(mentor))
+    signed_in = await api_client.get(url(mentor), headers=await a_stranger(db_engine, "hidden-404"))
+
+    assert anonymous.status_code == signed_in.status_code == 404
+    assert "authorization" in anonymous.headers["vary"].lower()
+    assert "private" in signed_in.headers["cache-control"]
+
+
+async def test_the_discovery_list_is_not_marked_per_viewer(api_client: httpx.AsyncClient) -> None:
+    """The list answers everybody the same, and keeps its caching."""
+    response = await api_client.get("/api/v1/mentors")
+
+    assert "authorization" not in response.headers.get("vary", "").lower()
+
+
+async def test_the_published_contract_keeps_every_profile_field(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """The frontend generates its client from this document. A serializer that
+    erased the schema would turn the whole profile into an untyped object."""
+    spec = (await api_client.get("/openapi.json")).json()
+    profile = spec["components"]["schemas"]["MentorPublicRead"]["properties"]
+    operation = spec["paths"]["/api/v1/mentors/{handle}"]["get"]
+
+    assert {
+        "id",
+        "session_types",
+        "approval_status",
+        "listing_status",
+        "next_available_state",
+    } <= set(profile)
+    assert {} in operation["security"], "the token is optional, not required"

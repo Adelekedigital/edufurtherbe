@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, case, false, literal, select
+from sqlalchemy import Select, and_, case, false, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.availability import MentorNextAvailability
@@ -36,7 +36,11 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.next_available_store import NONE, next_available_state
-from app.infra.db.public_visibility import mentor_is_published, mentor_is_visible_to
+from app.infra.db.public_visibility import (
+    mentor_is_bookable,
+    mentor_is_published,
+    mentor_is_visible_to,
+)
 
 __all__ = ["get_public_mentor", "get_public_mentor_id"]
 
@@ -106,13 +110,18 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             # whether the two statuses above are published at all.
             (User.id == viewer if viewer is not None else false()).label("is_owner"),
             MentorNextAvailability.next_available_at,
-            # A mentor strangers cannot see has nothing they can book, so
-            # `none` — not the `refreshing` an absent row would otherwise read
-            # as, which would promise a time the job never computes (it
-            # refreshes bookable mentors only).
-            case((mentor_is_published(), next_available_state()), else_=literal(NONE)).label(
-                "next_available_state"
-            ),
+            # Only a mentor the job refreshes has a time worth reading: the job
+            # covers `bookable_mentors()` and nobody else. Anyone outside it —
+            # hidden, or visible with no bookable offering or no hours — has
+            # nothing a stranger can book, so `none`. Not the `refreshing` an
+            # absent row reads as, which would promise a time that never comes;
+            # and never a left-over row, whose change log the job stops
+            # watching once the mentor leaves its set, and which would read
+            # `open` for a mentor nobody can book.
+            case(
+                (and_(mentor_is_published(), *mentor_is_bookable()), next_available_state()),
+                else_=literal(NONE),
+            ).label("next_available_state"),
         )
         .select_from(User)
         .join(MentorProfile, MentorProfile.user_id == User.id)

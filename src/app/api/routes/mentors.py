@@ -18,12 +18,15 @@ reviewed.
 their own profile and reviews in any state, which makes the profile and its
 reviews the first responses here that vary by caller — so both send
 `Vary: Authorization`, and `Cache-Control: private` whenever a token came with
-the request. `/mentors` itself is unchanged and still identical for everyone.
+the request, errors included (`api/per_viewer.py`). `/mentors` itself is
+unchanged and still identical for everyone.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Response, status
+from typing import Any
+
+from fastapi import APIRouter, status
 
 from app.api.deps import MentorPageDep, MentorReviewsDep, PublicMentorDep
 from app.api.schemas.common import Page
@@ -33,17 +36,10 @@ from app.api.schemas.reviews import MentorReviewRead
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
 
 
-def _per_viewer(request: Request, response: Response) -> None:
-    """Mark a response that the caller's token may have changed.
-
-    **`Vary` always**, because a cache holding the anonymous copy must not hand
-    it to the owner, whose token changes the answer. **`private` whenever a token
-    came**, so no shared cache keeps a signed-in view at all — the rule agreed
-    for every response that depends on who is asking.
-    """
-    response.headers["Vary"] = "Authorization"
-    if "authorization" in request.headers:
-        response.headers["Cache-Control"] = "private"
+#: The bearer token is optional on the two per-viewer reads. Without the empty
+#: alternative, OpenAPI marks it required and generated clients refuse to call
+#: a public endpoint anonymously.
+OPTIONAL_TOKEN: dict[str, Any] = {"security": [{}, {"HTTPBearer": []}]}
 
 
 PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
@@ -113,6 +109,7 @@ async def find_mentors(page: MentorPageDep) -> MentorPage:
     "/{handle}",
     response_model=MentorPublicRead,
     summary="A mentor's public profile",
+    openapi_extra=OPTIONAL_TOKEN,
     description=(
         "Everything the public may read about one mentor, with what they offer "
         "and what can be booked.\n\n"
@@ -138,10 +135,7 @@ async def find_mentors(page: MentorPageDep) -> MentorPage:
     ),
     responses=PUBLIC_RESPONSES,
 )
-async def read_public_mentor(
-    mentor: PublicMentorDep, request: Request, response: Response
-) -> MentorPublicRead:
-    _per_viewer(request, response)
+async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
     return MentorPublicRead.from_row(
         mentor["row"],
         mentor["offerings"],
@@ -158,6 +152,7 @@ async def read_public_mentor(
     "/{handle}/reviews",
     response_model=Page[MentorReviewRead],
     summary="What mentees said about this mentor",
+    openapi_extra=OPTIONAL_TOKEN,
     description=(
         "One page of published reviews, newest first.\n\n"
         "**Public**, like the profile it belongs to, and scoped the same way: a "
@@ -188,9 +183,6 @@ async def read_public_mentor(
         },
     },
 )
-async def read_mentor_reviews(
-    page: MentorReviewsDep, request: Request, response: Response
-) -> Page[MentorReviewRead]:
-    _per_viewer(request, response)
+async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
     rows, next_cursor = page
     return Page(data=[MentorReviewRead.from_row(row) for row in rows], next_cursor=next_cursor)
