@@ -47,13 +47,20 @@ from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.next_available_store import next_available_state
-from app.infra.db.offerings import offerings_for, offers_any
+from app.infra.db.offerings import offerings_for, offers_any, shared_offering_count
 from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
 from app.infra.db.session_stats import delivered
 
-__all__ = ["completed_sessions", "count_mentors", "mentor_card", "search_mentors"]
+__all__ = [
+    "SIMILAR_LIMIT",
+    "completed_sessions",
+    "count_mentors",
+    "mentor_card",
+    "search_mentors",
+    "similar_mentors",
+]
 
 #: `english` stems, which is right for prose and wrong for names. Named rather
 #: than inlined so the two never drift apart across the document and the query.
@@ -454,3 +461,62 @@ async def mentor_card(session: AsyncSession, user_id: UUID) -> dict[str, Any] | 
     card = dict(row)
     card["offerings"] = (await offerings_for(session, [user_id])).get(user_id, [])
     return card
+
+
+#: At most this many similar mentors — a row under a profile, not a list.
+SIMILAR_LIMIT = 3
+
+
+async def similar_mentors(
+    session: AsyncSession, mentor_user_id: UUID, *, limit: int = SIMILAR_LIMIT
+) -> list[dict[str, Any]]:
+    """Bookable mentors who give the same kind of help as this one, best first.
+
+    **Similar means sharing a service offering** — the closed taxonomy matching
+    already runs on — and each card says which one (`shared_offering`), so the
+    suggestion explains itself.
+
+    **Candidates are exactly who discovery lists**: `_card(_scope(...))`, the
+    same visibility and bookability, narrowed by the same `offers_any` filter
+    `?offering=` uses. A suggestion that links to a 404, or to a mentor nobody
+    can book, is worse than no suggestion.
+
+    **Ranked by how many offerings are shared, then by delivered sessions, then
+    by review count** — the two proofs of a working mentor the card already
+    shows — and finally by `mentor_profiles.id`, newest first, so the order is
+    total and a refresh never reshuffles a tie.
+
+    `shared_offering` is the first shared offering in the platform's own order:
+    `offerings_for` returns each list in `sort_order`, so the first candidate
+    offering that this mentor also gives is it. Two statements beyond the
+    mentor's own offerings: the ranked cards, and one batch for their offerings.
+    """
+    mine = [
+        o["slug"] for o in (await offerings_for(session, [mentor_user_id])).get(mentor_user_id, [])
+    ]
+    if not mine:
+        return []
+
+    shared = shared_offering_count(MentorProfile.user_id, mine).label("shared_offerings")
+    statement = (
+        _card(_scope(None, mine))
+        .add_columns(shared)
+        .where(MentorProfile.user_id != mentor_user_id)
+        .order_by(
+            shared.desc(),
+            literal_column("completed_sessions").desc(),
+            literal_column("review_count").desc(),
+            MentorProfile.id.desc(),
+        )
+        .limit(limit)
+    )
+    rows = [dict(r) for r in (await session.execute(statement)).mappings()]
+
+    grouped = await offerings_for(session, [row["user_id"] for row in rows])
+    wanted = set(mine)
+    for row in rows:
+        row["offerings"] = grouped.get(row["user_id"], [])
+        # `None` only if an offering was retired between the two statements;
+        # such a row no longer has a reason to be here, so it is dropped.
+        row["shared_offering"] = next((o for o in row["offerings"] if o["slug"] in wanted), None)
+    return [row for row in rows if row["shared_offering"] is not None]

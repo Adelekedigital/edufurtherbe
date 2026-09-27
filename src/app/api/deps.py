@@ -136,7 +136,12 @@ from app.infra.db.intake_store import (
     update_question,
 )
 from app.infra.db.mentor_public_store import get_public_mentor, get_public_mentor_id
-from app.infra.db.mentor_search_store import count_mentors, mentor_card, search_mentors
+from app.infra.db.mentor_search_store import (
+    count_mentors,
+    mentor_card,
+    search_mentors,
+    similar_mentors,
+)
 from app.infra.db.mentor_status_store import (
     decide,
     history,
@@ -2220,6 +2225,23 @@ async def featured_mentor(session: SessionDep) -> dict[str, Any] | None:
 
 
 FeaturedMentorDep = Annotated[dict[str, Any] | None, Depends(featured_mentor)]
+
+
+async def similar_to_mentor(handle: str, session: SessionDep) -> list[dict[str, Any]]:
+    """Up to three bookable mentors like this one, or a 404 for a hidden mentor.
+
+    **Resolved as a stranger resolves the profile** — `get_public_mentor_id`
+    with no viewer — so a mentor who is paused or unapproved has no similar
+    list, owner included. Suggestions are for a mentee choosing between
+    mentors, and a profile nobody can visit has nobody to suggest them to.
+    """
+    mentor = await get_public_mentor_id(session, handle)
+    if mentor is None:
+        raise NotFoundError("no such mentor")
+    return await similar_mentors(session, mentor)
+
+
+SimilarMentorsDep = Annotated[list[dict[str, Any]], Depends(similar_to_mentor)]
 
 SlotsDep = Annotated[list[UtcInterval], Depends(mentor_slots)]
 
