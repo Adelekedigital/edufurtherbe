@@ -12,6 +12,7 @@ has to be able to see.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.domain.availability import UtcInterval
 from app.domain.notifications import Notification
 from app.infra.clients.meetings import (
@@ -420,12 +422,17 @@ class MentorFreeBusy:
         key: str,
         reader: Callable[..., tuple[UtcInterval, ...]] = free_busy,
         session_factory: Callable[[], AsyncSession] | None = None,
+        fail_open: bool = True,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
         self._key = key
         self._reader = reader
         self._session_factory = session_factory
+        #: A slot read fails open: one request, answered from declared hours.
+        #: The next-free-time job must not, because it would store that answer
+        #: and show it to everyone for a whole cycle — so it raises instead.
+        self._fail_open = fail_open
 
     async def _mark_dead(self, session: AsyncSession, user_id: UUID, reason: str) -> None:
         """Record a dead grant **outside the caller's transaction**.
@@ -482,7 +489,13 @@ class MentorFreeBusy:
             return ()
 
         try:
-            return self._reader(
+            # **On a worker thread.** The reader is synchronous `httpx` — a token
+            # refresh then the free/busy request — and called inline it froze
+            # the event loop, and every request the server was handling, for the
+            # length of both. A slot read paid that once; the next-free-time job
+            # would pay it once per connected mentor.
+            return await asyncio.to_thread(
+                self._reader,
                 client_id=self._client_id,
                 client_secret=self._client_secret,
                 refresh_token=token,
@@ -502,4 +515,41 @@ class MentorFreeBusy:
             # rate limit into a re-consent, and would put a write on a public
             # read path that an anonymous caller could drive.
             logger.info("free/busy unavailable for %s: %s", user_id, exc)
+            if not self._fail_open:
+                raise
             return ()
+
+
+def free_busy_reader(
+    settings: Settings,
+    session_factory: Callable[[], AsyncSession] | None,
+    *,
+    fail_open: bool = True,
+) -> MentorFreeBusy | NullFreeBusy:
+    """Each mentor's Google free/busy, or a reader that subtracts nothing.
+
+    **Null unless all three settings are present.** A deployment part-way
+    through being configured should behave like one that has not started, not
+    fail every slot render with an OAuth error. Unconnected mentors are
+    unaffected either way — the reader checks for a grant before it calls
+    anything.
+
+    One builder for the API's slot reads and the next-free-time job, so the two
+    cannot disagree about when Google is consulted.
+
+    `session_factory` is for the one write the reader makes: a dead grant is
+    recorded in its own session, whether the surrounding work commits or not.
+    """
+    if not (
+        settings.google_calendar_client_id
+        and settings.google_calendar_client_secret
+        and settings.calendar_token_key
+    ):
+        return NullFreeBusy()
+    return MentorFreeBusy(
+        client_id=settings.google_calendar_client_id,
+        client_secret=settings.google_calendar_client_secret.get_secret_value(),
+        key=settings.calendar_token_key.get_secret_value(),
+        session_factory=session_factory,
+        fail_open=fail_open,
+    )

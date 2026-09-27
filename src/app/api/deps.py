@@ -116,11 +116,10 @@ from app.infra.db.availability_writer import (
     update_rule,
 )
 from app.infra.db.calendar_store import (
-    MentorFreeBusy,
-    NullFreeBusy,
     active_connection,
     connect,
     disconnect,
+    free_busy_reader,
 )
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
@@ -1708,22 +1707,12 @@ def _free_busy(request: Request) -> Any:
     wired = getattr(request.app.state, "free_busy", None)
     if wired is not None:
         return wired
-    settings = _configured(request)
-    if not (
-        settings.google_calendar_client_id
-        and settings.google_calendar_client_secret
-        and settings.calendar_token_key
-    ):
-        return NullFreeBusy()
-    return MentorFreeBusy(
-        client_id=settings.google_calendar_client_id,
-        client_secret=settings.google_calendar_client_secret.get_secret_value(),
-        key=settings.calendar_token_key.get_secret_value(),
+    return free_busy_reader(
+        _configured(request),
         # **Its own session for the one write it makes.** A dead grant has to be
         # recorded whether the surrounding read commits or the surrounding
         # booking rolls back, and it must never commit either of them.
-        session_factory=getattr(request.app.state, "session_factory", None)
-        or get_session_factory(),
+        getattr(request.app.state, "session_factory", None) or get_session_factory(),
     )
 
 

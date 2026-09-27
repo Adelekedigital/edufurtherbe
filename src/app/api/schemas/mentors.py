@@ -25,8 +25,8 @@ offer.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -102,6 +102,15 @@ class MentorSummaryRead(BaseModel):
 
     offerings: list[ServiceOfferingRead] = Field(default_factory=list)
 
+    #: The first instant this mentor could be booked, within the booking horizon.
+    #: **Non-null only when `next_available_state` is `open`.** Stored and
+    #: refreshed by a job (ADR 0029); booking always reads live slots.
+    next_available_at: datetime | None = None
+    #: What a null `next_available_at` means. `none`: nothing free in the
+    #: booking horizon. `refreshing`: not recomputed since a booking, an hours
+    #: change or the mentor becoming bookable — unknown, not empty.
+    next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
+
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> MentorSummaryRead:
         return cls(
@@ -122,6 +131,13 @@ class MentorSummaryRead(BaseModel):
                 None if row["session_value"] is None else float(str(row["session_value"]))
             ),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
+            # The stored time is only a claim while the state says `open`; the
+            # state is computed once in SQL, and this is the one place it gates
+            # the time.
+            next_available_at=(
+                row["next_available_at"] if row["next_available_state"] == "open" else None
+            ),
+            next_available_state=row["next_available_state"],
         )
 
 

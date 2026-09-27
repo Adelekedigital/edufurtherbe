@@ -18,6 +18,7 @@ RUNTIME_JOB_NAMES = frozenset(
         "monthly-credits",
         "expire-credits",
         "sync-institutions",
+        "refresh-next-available",
     }
 )
 

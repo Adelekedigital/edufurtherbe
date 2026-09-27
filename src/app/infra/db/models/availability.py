@@ -397,3 +397,73 @@ class CalendarConnection(TimestampMixin, Base):
             postgresql_where=text("status = 'active'"),
         ),
     )
+
+
+class MentorNextAvailability(TimestampMixin, Base):
+    """When a mentor is next free, computed by a job and read by the card.
+
+    **A stored derived value, and ADR 0029 is why that is allowed here.** D56
+    forbids stored counts and D18 derives slots on demand; both still hold for
+    everything that *decides* anything. This row decides nothing: booking reads
+    live slots, and a card that cannot vouch for this value shows `null`.
+
+    The card vouches only while `MentorAvailabilityChange` holds no row for the
+    mentor — see that class for why a log rather than a timestamp here.
+    """
+
+    __tablename__ = "mentor_next_availability"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    #: Cascades: the row is a cache of the profile, meaningless without it.
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("mentor_profiles.user_id", ondelete="CASCADE"), nullable=False
+    )
+    #: The first bookable instant within the booking horizon, or null for none.
+    next_available_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: The last instant that slot can still be booked — its start less the
+    #: offering's notice. Past it, `/slots` no longer offers the slot, so the
+    #: card stops showing it.
+    bookable_until: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: When the value was computed, by the job's clock. Decides age only.
+    computed_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("uq_mentor_next_availability_mentor_user_id", "mentor_user_id", unique=True),
+    )
+
+
+class MentorAvailabilityChange(Base):
+    """Something that decides a mentor's availability changed, and nobody has
+    recomputed since.
+
+    Appended by `trg_log_availability_change` on the nine tables that decide
+    when a mentor is free; deleted by the refresh job, which removes exactly the
+    rows it saw before computing. The card vouches for a stored time only while
+    the mentor has none left, so a change committed during a refresh — or one
+    still uncommitted when the refresh looked — survives it and keeps the card
+    at `refreshing`.
+
+    **A log rather than a `changed_at` on the cache row, because of locks.**
+    Bumping one shared row made every booking hold its lock for the whole
+    booking transaction, including the meeting-provisioning call, so two
+    mentees booking the same mentor queued behind each other. Appends do not
+    block one another.
+
+    Append-only: no `updated_at`, and a row is never changed, only deleted.
+    """
+
+    __tablename__ = "mentor_availability_changes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("mentor_profiles.user_id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (Index("ix_mentor_availability_changes_mentor_user_id", "mentor_user_id"),)

@@ -21,7 +21,7 @@ from app.infra.clients.hipolabs import FileCatalogue, HipolabsCatalogue
 from app.infra.clients.meetings import GoogleCalendar, NullCalendar, free_busy
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier
 from app.infra.clients.templates import LoopsTemplates
-from app.infra.db.calendar_store import check_connections
+from app.infra.db.calendar_store import check_connections, free_busy_reader
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
 from app.infra.db.credit_grants import grant_monthly_credits, unlocked_mentee_count
 from app.infra.db.credit_reminders import (
@@ -30,6 +30,7 @@ from app.infra.db.credit_reminders import (
     remind_about_expiring_credits,
 )
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.outbox import drain
 from app.infra.db.session_writer import expire_requests, remind_unreviewed, settle_attendance
 from app.infra.db.triggers import timestamps_from_source_across
@@ -56,7 +57,7 @@ class JobResult:
 
 
 class RuntimeJobs:
-    """Dispatch the five supported jobs through one reusable surface."""
+    """Dispatch the six supported jobs through one reusable surface."""
 
     def __init__(
         self,
@@ -99,6 +100,7 @@ class RuntimeJobs:
             "monthly-credits": self._monthly_credits,
             "expire-credits": self._expire_credits,
             "sync-institutions": self._sync_institutions,
+            "refresh-next-available": self._refresh_next_available,
         }
         counts = await methods[name](dry_run=dry_run)
         status = "no-op" if not any(counts.values()) else "completed"
@@ -191,6 +193,26 @@ class RuntimeJobs:
                     "disconnected_calendars": health["disconnected"],
                     "messages": sum(sent.values()),
                 }
+        finally:
+            await engine.dispose()
+
+    async def _refresh_next_available(self, *, dry_run: bool) -> dict[str, int]:
+        engine = create_database_engine(self.settings)
+        try:
+            factory = create_session_factory(engine)
+            async with factory() as session:
+                # Commits per mentor itself (see its docstring), so a run that
+                # times out keeps what it finished; a dry run writes nothing.
+                return await refresh_next_available(
+                    session,
+                    max_age=dt.timedelta(minutes=self.settings.next_available_max_age_minutes),
+                    # No factory on a dry run: the reader then records a dead
+                    # grant in this session, which the dry run rolls back.
+                    reader=free_busy_reader(
+                        self.settings, None if dry_run else factory, fail_open=False
+                    ),
+                    dry_run=dry_run,
+                )
         finally:
             await engine.dispose()
 

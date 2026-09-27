@@ -20,6 +20,7 @@ from app.infra.jobs.runner import JobResult
         ("scripts.grant_monthly_credits", "monthly-credits"),
         ("scripts.expire_credits", "expire-credits"),
         ("scripts.sync_institutions", "sync-institutions"),
+        ("scripts.refresh_next_available", "refresh-next-available"),
     ],
 )
 async def test_each_cli_calls_the_shared_runner(

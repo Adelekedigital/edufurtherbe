@@ -41,6 +41,14 @@
       "environments": {"local": false, "ci": false, "staging": true, "production": false},
       "timeout": "300s",
       "retries": 3
+    },
+    {
+      "name": "refresh-next-available",
+      "handler": "/api/v1/internal/jobs/refresh-next-available",
+      "cron": "*/5 * * * *",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "240s",
+      "retries": 1
     }
   ]
 }

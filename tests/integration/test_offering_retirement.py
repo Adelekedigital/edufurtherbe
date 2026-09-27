@@ -144,7 +144,10 @@ async def test_no_trigger_remains_on_session_types_for_retirement(
     which is the claim the migration actually makes.
 
     `trg_set_updated_at` is expected and is asserted present rather than filtered
-    out, so a migration that dropped the wrong trigger fails here too.
+    out, so a migration that dropped the wrong trigger fails here too. So is
+    `trg_log_availability_change` (ADR 0029): it refuses nothing, it only logs
+    that a mentor's offerings changed so their stored next free time stops
+    being vouched for.
     """
     async with db_engine.connect() as conn:
         triggers = sorted(
@@ -159,4 +162,4 @@ async def test_no_trigger_remains_on_session_types_for_retirement(
             ).all()
         )
 
-    assert triggers == ["trg_set_updated_at"]
+    assert triggers == ["trg_log_availability_change", "trg_set_updated_at"]
