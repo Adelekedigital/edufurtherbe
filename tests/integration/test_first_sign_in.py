@@ -188,3 +188,27 @@ async def test_a_token_with_no_email_creates_nothing(
 
     assert response.status_code == 404
     assert await users_with(db_engine, auth_id=auth_id) == []
+
+
+async def test_an_address_held_by_this_sign_in_is_not_taken(db_engine: AsyncEngine) -> None:
+    """The race CI found: two first requests, and the winner commits between
+    the loser's `auth_id` check and its address check. The address then reads
+    as held — by the loser's own account — and a 409 refused a person their own
+    sign-in. Asked directly, because no test client can pin that interleaving."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.infra.db.first_sign_in import _address_is_taken
+
+    mine, theirs = uuid4(), uuid4()
+    await add_user(db_engine, "raced@example.com", auth_id=mine)
+
+    async with AsyncSession(db_engine) as session:
+        assert not await _address_is_taken(session, "raced@example.com", auth_id=mine)
+        assert await _address_is_taken(session, "raced@example.com", auth_id=theirs)
+
+    # An unlinked holder is somebody else's too. `!=` would read null as
+    # "not distinct" and let the insert's conflict catch it instead — right by
+    # accident, and one refactor of that fallback away from a takeover.
+    await add_user(db_engine, "unlinked-raced@example.com", auth_id=None)
+    async with AsyncSession(db_engine) as session:
+        assert await _address_is_taken(session, "unlinked-raced@example.com", auth_id=mine)
