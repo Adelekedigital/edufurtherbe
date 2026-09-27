@@ -1,4 +1,6 @@
-"""What a mentor has actually done, derived every time it is asked.
+"""What a mentor has actually done, derived every time it is asked — and the
+one mentee-side count, `received()`, which reads the same `_completed()` clause
+so the two sides cannot disagree about what *completed* means.
 
 **Nothing here is stored, and D56 is why**: *"counts and ratios are derived at
 query time, never stored — no cached totals, no denormalised counters, no
@@ -92,7 +94,9 @@ __all__ = [
     "TERMINAL",
     "attendance_rate",
     "delivered",
+    "mentee_completed_sessions",
     "mentor_stats",
+    "received",
 ]
 
 #: The mentor turned up.
@@ -117,7 +121,37 @@ def delivered(mentor: Any) -> Any:
     Served by `ix_sessions_mentor_completed`, a partial index that existed from
     the M4 schema with no reader until the card.
     """
-    return and_(Session.mentor_id == mentor, Session.status == SessionStatus.COMPLETED)
+    return and_(Session.mentor_id == mentor, _completed())
+
+
+def received(mentee: Any) -> Any:
+    """The predicate for a session this mentee received.
+
+    `delivered()` from the other side, and scoped to `mentee_id` for the same
+    reason: a dual-role user's sessions as a mentor are not sessions they
+    received.
+    """
+    return and_(Session.mentee_id == mentee, _completed())
+
+
+def _completed() -> Any:
+    """What counts as a session that happened, for either side.
+
+    One clause so the two counts cannot drift — the day `completed` gains a
+    sibling status that also means delivered, both sides change together.
+    """
+    return Session.status == SessionStatus.COMPLETED
+
+
+async def mentee_completed_sessions(session: AsyncSession, user_id: UUID) -> int:
+    """How many sessions `user_id` has received as a mentee.
+
+    Derived per request under D56, like every figure in this module.
+    """
+    result = await session.execute(
+        select(func.count()).select_from(Session).where(received(user_id))
+    )
+    return int(result.scalar_one())
 
 
 #: The inner ``sessions`` of the rate subquery, aliased.

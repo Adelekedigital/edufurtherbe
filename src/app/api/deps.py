@@ -173,7 +173,7 @@ from app.infra.db.review_reader import get_review_row, list_mentor_reviews
 from app.infra.db.review_report_writer import report_review
 from app.infra.db.review_stats import mentor_review_stats
 from app.infra.db.review_writer import edit_review, write_review
-from app.infra.db.session_stats import mentor_stats
+from app.infra.db.session_stats import mentee_completed_sessions, mentor_stats
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -525,6 +525,7 @@ async def own_attributes(
         # branching here would mean ordering these two against each other for
         # one `SUM` against an indexed column.
         "credits": await get_credit_summary(session, user_id, ladder=ladder),
+        "mentee_completed_sessions": await mentee_completed_sessions(session, user_id),
     }
 
 

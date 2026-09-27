@@ -403,3 +403,79 @@ async def until_blocked(engine: AsyncEngine) -> None:
         if waiting:
             return
     raise AssertionError("the second writer never blocked, so nothing raced")
+
+
+async def add_session(
+    engine: AsyncEngine,
+    mentor: UUID,
+    *,
+    status: str = "completed",
+    minutes: int = 45,
+    mentee: UUID | None = None,
+    attendance: str | None = "attended",
+    days_ago: int = 1,
+    participant: bool = True,
+    #: The mentee's own attendance row. Real sessions have two participants,
+    #: and a fixture with only the mentor's cannot tell a query scoped to the
+    #: mentor from one that reads whichever row it finds first.
+    mentee_attendance: str | None = None,
+) -> UUID:
+    """One session, with every axis a stat reads as a knob.
+
+    `participant=False` leaves the mentor with no `session_participants` row —
+    the state of two of the 105 dev bookings, which have no tracker and so carry
+    no attendance fact at all.
+    """
+    async with engine.begin() as conn:
+        if mentee is None:
+            mentee = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO users (email, first_name, primary_role, timezone) "
+                        "VALUES (:e, 'Mentee', 'mentee', 'UTC') RETURNING id"
+                    ),
+                    {"e": f"mentee-{uuid4()}@example.test"},
+                )
+            ).scalar_one()
+        session_type = (
+            await conn.execute(
+                text("SELECT id FROM session_types WHERE mentor_user_id = :m LIMIT 1"),
+                {"m": mentor},
+            )
+        ).scalar_one_or_none()
+        session_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO sessions "
+                    "(mentor_id, mentee_id, session_type_id, starts_at, duration_minutes, status) "
+                    "VALUES (:m, :e, :t, :s, :d, :st) RETURNING id"
+                ),
+                {
+                    "m": mentor,
+                    "e": mentee,
+                    "t": session_type,
+                    "s": dt.datetime.now(dt.UTC) - dt.timedelta(days=days_ago),
+                    "d": minutes,
+                    "st": status,
+                },
+            )
+        ).scalar_one()
+        if participant:
+            await conn.execute(
+                text(
+                    "INSERT INTO session_participants "
+                    "(session_id, user_id, role, attendance_status) "
+                    "VALUES (:s, :u, 'mentor', :a)"
+                ),
+                {"s": session_id, "u": mentor, "a": attendance},
+            )
+        if mentee_attendance is not None:
+            await conn.execute(
+                text(
+                    "INSERT INTO session_participants "
+                    "(session_id, user_id, role, attendance_status) "
+                    "VALUES (:s, :u, 'mentee', :a)"
+                ),
+                {"s": session_id, "u": mentee, "a": mentee_attendance},
+            )
+        return session_id

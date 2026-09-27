@@ -116,3 +116,9 @@ class UserRead(NormalisedEmail):
     #: mentee, and a negative predicate would hide the card from somebody who
     #: can book.
     credits: CreditsRead | None = None
+
+    #: Sessions the caller has **received** as a mentee with status `completed`.
+    #: **Never null** — zero is a real answer, as on the discovery card. Not the
+    #: card's `completed_sessions`, which counts sessions a mentor *gave*; a
+    #: dual-role user has both and they are different numbers.
+    mentee_completed_sessions: int = 0
