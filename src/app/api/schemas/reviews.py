@@ -218,6 +218,34 @@ class ReviewRead(BaseModel):
         return cls.model_validate(values)
 
 
+class MentorRelationshipRead(BaseModel):
+    """Your history, as a mentee, with one mentor — what a profile's review
+    prompts are built from."""
+
+    completed_sessions_with_mentor: int = Field(
+        description=(
+            "Sessions with this mentor that happened — the same rule as "
+            "`mentee_completed_sessions` on `/me`. Zero means *you can review "
+            "after your first session*."
+        )
+    )
+    last_reviewed_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When you last reviewed this mentor. Withdrawn reviews are left out, "
+            "as they are from the mentor's public figures. Null when you never "
+            "have."
+        ),
+    )
+    review_due: bool = Field(
+        description=(
+            "Whether `/me/reviewable-sessions?mentor_id=` lists anything right "
+            "now — the same query, asked for existence, so the prompt and the "
+            "list never disagree."
+        )
+    )
+
+
 class ReviewableSessionRead(BaseModel):
     """A session this mentee may review right now.
 
