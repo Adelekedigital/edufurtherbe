@@ -169,8 +169,13 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
         "The review was earned, so its text, its value and its place in "
         "`reviews.count` stay; every `author_*` field is null and "
         "`author_deleted` is true — label it rather than rendering an empty "
-        "byline. So this list's total always equals the profile's "
-        "`reviews.count`.\n\n"
+        "byline. So the **unfiltered** list's total always equals the "
+        "profile's `reviews.count`.\n\n"
+        "**`session_type` says which offering a review was about**, with the "
+        "offering's name as it is now. It is null for a migrated review, which "
+        "had no link to a session. Pass its `id` as `?session_type=` to list "
+        "only reviews of that offering; paging works the same within the "
+        "filter.\n\n"
         "`session_value` on a row is that review's own answer to *how valuable "
         "was this session*, `1..5` — the badge beside it. The mentor's overall "
         "figures are on the profile, not repeated per row.\n\n"
@@ -184,7 +189,9 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
             "description": "No such mentor, or they are not publicly visible."
         },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": "The `cursor` was not one this endpoint issued."
+            "description": (
+                "The `cursor` was not one this endpoint issued, or `session_type` is not a UUID."
+            )
         },
     },
 )

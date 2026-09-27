@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
 from app.infra.db.models.reviews import Review
+from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.review_authors import author_columns, with_author
 from app.infra.db.review_stats import published
 
@@ -95,8 +96,19 @@ async def list_mentor_reviews(
     *,
     limit: int,
     after: tuple[str, UUID] | None = None,
+    session_type: UUID | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of a mentor's published reviews, newest first.
+
+    **Each review says which offering it was about**, reached through its
+    session — `reviews` holds only the session, because a second key to the
+    offering would be the same fact twice (the model's own note). Both joins are
+    outer: the 53 migrated reviews have no session, and they stay listed with no
+    topic rather than vanishing from a list whose length is `reviews.count`.
+    The offering is read whatever its state now: retiring it does not change
+    what an old session was about. `session_type` narrows the page to one
+    offering, and the cursor still works within it because the sort key is
+    unchanged.
 
     **Ordered on `created_at`, with the id breaking ties** — ADR 0016's amended
     form, *"the cursor is the sort column plus the id"*.
@@ -139,10 +151,18 @@ async def list_mentor_reviews(
                 Review.created_at,
                 Review.public_review,
                 Review.valuable_rating,
+                SessionType.id.label("session_type_id"),
+                SessionType.name.label("session_type_name"),
                 *author_columns(),
             ).select_from(Review)
         )
-        .where(published(mentor), *([_after(after)] if after is not None else []))
+        .outerjoin(Session, Session.id == Review.session_id)
+        .outerjoin(SessionType, SessionType.id == Session.session_type_id)
+        .where(
+            published(mentor),
+            *([_after(after)] if after is not None else []),
+            *([Session.session_type_id == session_type] if session_type is not None else []),
+        )
         .order_by(Review.created_at.desc(), Review.id.desc())
         .limit(limit + 1)
     )
