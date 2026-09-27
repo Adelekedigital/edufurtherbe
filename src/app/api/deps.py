@@ -2451,6 +2451,16 @@ async def mentor_reviews_page(
     viewer: OptionalViewerDep,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+    session_type: Annotated[
+        UUID | None,
+        Query(
+            description=(
+                "Only reviews of sessions booked as this offering — an id from a "
+                "review's `session_type`, or from the profile's `session_types`. "
+                "An id nothing was reviewed under is an empty page."
+            )
+        ),
+    ] = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """One page of a mentor's published reviews.
 
@@ -2467,7 +2477,11 @@ async def mentor_reviews_page(
     # on the id. Mispairing the two forms is a paging bug that only shows on page
     # two, which this endpoint has already had once.
     rows, has_more = await list_mentor_reviews(
-        session, mentor, limit=clamp_limit(limit), after=decode_cursor(cursor)
+        session,
+        mentor,
+        limit=clamp_limit(limit),
+        after=decode_cursor(cursor),
+        session_type=session_type,
     )
     # **Minted here, beside the decode.** `mentor_page` states the rule: the token
     # is issued where the sort key is known, because deriving it again in the
