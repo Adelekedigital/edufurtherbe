@@ -37,16 +37,15 @@ from app.core.config import Settings, get_settings
 from app.domain.assets import AssetKind, object_path
 from app.domain.images import process
 from app.infra.db.asset_store import replace_url
-from app.infra.db.calendar_store import NullFreeBusy
 from app.infra.db.demo_seed import (
     DemoMentor,
+    RealHistoryError,
     catalogue_offerings,
     create_demo_mentor,
     demo_avatar_urls,
     remove_demo,
 )
 from app.infra.db.engine import create_database_engine
-from app.infra.db.next_available_store import refresh_next_available
 from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
 from app.infra.storage.supabase import StorageError
 
@@ -147,7 +146,15 @@ def roster(
 
 
 def refuse(settings: Settings) -> str | None:
-    """Why this run must not proceed, or `None` when it may."""
+    """Why this run must not proceed, or `None` when it may.
+
+    **The environment must be set explicitly**, not merely not be production.
+    It defaults to `local`, so a run against a production database from a
+    shell that never set it would pass a plain "is it production?" check.
+    `model_fields_set` holds the settings that were actually provided.
+    """
+    if "environment" not in settings.model_fields_set:
+        return "EDUFURTHER_ENVIRONMENT is not set; refusing to guess where this is"
     if settings.environment == "production":
         return "refusing to seed demo mentors into production"
     return None
@@ -159,21 +166,24 @@ async def run(args: argparse.Namespace) -> int:
         print(why)
         return EXIT_REFUSED
 
-    storage = get_storage()
     engine = create_database_engine(settings)
     try:
         async with AsyncSession(engine) as session:
-            for url in await demo_avatar_urls(session):
-                if (path := storage.path_of(url)) is not None:
-                    try:
-                        await asyncio.to_thread(storage.delete, path)
-                    except StorageError as exc:
-                        print(f"could not delete old avatar {path}: {exc}")
-            removed = await remove_demo(session)
+            old_avatars = await demo_avatar_urls(session)
+            try:
+                removed = await remove_demo(session)
+            except RealHistoryError as exc:
+                print(f"{exc}. Resolve those first; the demo set is unchanged.")
+                return EXIT_REFUSED
             await session.commit()
             print(f"removed {removed} demo users")
+            # **After the commit**: deleting the images first would leave the
+            # profiles pointing at nothing if the removal then failed.
+            if old_avatars:
+                await _delete_avatars(get_storage(), old_avatars)
             if args.remove:
                 return EXIT_OK
+            storage = get_storage()
 
             folder = Path(args.avatars)
             people = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))["people"]
@@ -185,14 +195,21 @@ async def run(args: argparse.Namespace) -> int:
                 if face is not None:
                     await _avatar(session, storage, user_id, folder / face)
                 print(f"seeded {mentor.first_name} {mentor.last_name}")
-
-            counts = await refresh_next_available(
-                session, max_age=dt.timedelta(minutes=5), reader=NullFreeBusy()
-            )
-            print(f"next free time computed: {counts}")
+            # No next-free-time refresh here: it would recompute real mentors
+            # too, without their calendars. The scheduled job fills these cards
+            # within one run.
     finally:
         await engine.dispose()
     return EXIT_OK
+
+
+async def _delete_avatars(storage: object, urls: list[str]) -> None:
+    for url in urls:
+        if (path := storage.path_of(url)) is not None:  # type: ignore[attr-defined]
+            try:
+                await asyncio.to_thread(storage.delete, path)  # type: ignore[attr-defined]
+            except StorageError as exc:
+                print(f"could not delete old avatar {path}: {exc}")
 
 
 async def _avatar(session: AsyncSession, storage: object, user_id: UUID, file: Path) -> None:

@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 __all__ = [
     "DEMO_DOMAIN",
     "DemoMentor",
+    "RealHistoryError",
     "catalogue_offerings",
     "create_demo_mentor",
     "demo_avatar_urls",
@@ -276,13 +277,40 @@ _REMOVAL = (
 )
 
 
+class RealHistoryError(Exception):
+    """A real user has history with a demo user, so nothing was removed.
+
+    A tester booking or reviewing a demo mentor on dev is the point of having
+    them. Deleting that session would erase a real person's history — and a
+    credit movement points at it with a `RESTRICT` key, so the delete would
+    fail half-way anyway. A person decides what happens to it.
+    """
+
+
+#: Sessions and reviews joining a demo user to someone who is not one.
+_REAL_HISTORY = text(
+    "SELECT (SELECT count(*) FROM sessions s "
+    "  JOIN users m ON m.id = s.mentor_id JOIN users e ON e.id = s.mentee_id "
+    "  WHERE (m.email LIKE :suffix) <> (e.email LIKE :suffix)) "
+    "+ (SELECT count(*) FROM reviews r "
+    "  JOIN users b ON b.id = r.reviewed_by JOIN users f ON f.id = r.reviewed_for "
+    "  WHERE (b.email LIKE :suffix) <> (f.email LIKE :suffix))"
+)
+
+
 async def remove_demo(session: AsyncSession) -> int:
     """Delete every demo user and everything they own. Returns how many users.
 
-    Reviews and sessions first — their foreign keys to users `RESTRICT`, which
-    is right for real people, whose history is kept. Does not commit.
+    **Refuses, deleting nothing, if a real user has a session with or a review
+    of a demo user** (`RealHistoryError`). Otherwise every session and review
+    touching a demo user involves only demo users, and goes first — their keys
+    to users `RESTRICT`. Does not commit.
     """
     demo = {"suffix": f"%@{DEMO_DOMAIN}"}
+    if (shared := int((await session.execute(_REAL_HISTORY, demo)).scalar_one())) > 0:
+        raise RealHistoryError(
+            f"{shared} session(s) or review(s) link a real user to a demo user; nothing was removed"
+        )
     for statement in _REMOVAL:
         await session.execute(statement, demo)
     removed = await session.execute(text("DELETE FROM users WHERE email LIKE :suffix"), demo)

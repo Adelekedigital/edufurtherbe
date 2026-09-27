@@ -18,7 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import add_session, make_bookable_mentor
 
 from app.infra.db.calendar_store import NullFreeBusy
-from app.infra.db.demo_seed import DEMO_DOMAIN, DemoMentor, create_demo_mentor, remove_demo
+from app.infra.db.demo_seed import (
+    DEMO_DOMAIN,
+    DemoMentor,
+    RealHistoryError,
+    create_demo_mentor,
+    remove_demo,
+)
 from app.infra.db.next_available_store import refresh_next_available
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -128,3 +134,30 @@ async def test_seeding_twice_after_removal_is_clean(db_engine: AsyncEngine) -> N
     await seed(db_engine, OPEN)
 
     assert await demo_users(db_engine) == 1 + len(OPEN.ratings)
+
+
+async def test_removal_refuses_when_a_real_user_booked_a_demo_mentor(
+    db_engine: AsyncEngine,
+) -> None:
+    """A tester's booking with a demo mentor is real history. Removal must not
+    erase it, and must not half-run into the credit ledger's RESTRICT key."""
+    await seed(db_engine, OPEN)
+    async with db_engine.begin() as conn:
+        demo_mentor = (
+            await conn.execute(
+                text("SELECT id FROM users WHERE email = :e"), {"e": f"demo-open@{DEMO_DOMAIN}"}
+            )
+        ).scalar_one()
+    real_mentee_session = await add_session(db_engine, demo_mentor, days_ago=-3)
+    before = await demo_users(db_engine)
+
+    async with AsyncSession(db_engine) as session:
+        with pytest.raises(RealHistoryError):
+            await remove_demo(session)
+
+    assert await demo_users(db_engine) == before
+    async with db_engine.begin() as conn:
+        kept = await conn.execute(
+            text("SELECT count(*) FROM sessions WHERE id = :s"), {"s": real_mentee_session}
+        )
+        assert kept.scalar_one() == 1

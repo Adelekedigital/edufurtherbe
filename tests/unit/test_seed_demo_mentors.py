@@ -17,9 +17,15 @@ def test_production_is_refused() -> None:
     assert refuse(Settings(_env_file=None, environment="production")) is not None
 
 
-def test_dev_environments_are_allowed() -> None:
+def test_explicit_dev_environments_are_allowed() -> None:
     for environment in ("local", "staging"):
         assert refuse(Settings(_env_file=None, environment=environment)) is None
+
+
+def test_an_environment_left_at_its_default_is_refused() -> None:
+    """The default is `local`, so an unset environment against a production
+    database would otherwise pass as local."""
+    assert refuse(Settings(_env_file=None)) is not None
 
 
 def test_the_roster_is_the_22_faces_and_two_without_a_photo() -> None:
