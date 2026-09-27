@@ -98,6 +98,12 @@ async def current_featured(session: AsyncSession, *, now: dt.datetime) -> UUID |
     if (found := await _week_pick(session, week)) is not None:
         return found
 
+    # Nobody bookable is answered without the lock. It is the state of a fresh
+    # environment, and every anonymous request there would otherwise queue on
+    # the one global lock to learn, again, that there is nobody.
+    if (await session.execute(select(bookable_mentors().exists()))).scalar_one() is False:
+        return None
+
     await session.execute(select(func.pg_advisory_xact_lock(PICK_LOCK)))
     # Looked for again under the lock: a request that raced this one may have
     # picked while this one waited.
@@ -118,10 +124,18 @@ async def current_featured(session: AsyncSession, *, now: dt.datetime) -> UUID |
             )
         ).scalars()
     )
+    # **Last week's** mentor, not the newest row: after a mid-week replacement
+    # the newest row is this week's paused pick, and a new cycle keyed on it
+    # would let last week's mentor come straight back.
     last = (
         await session.execute(
             select(FeaturedMentor.mentor_user_id)
-            .order_by(FeaturedMentor.created_at.desc(), FeaturedMentor.id.desc())
+            .where(FeaturedMentor.week_start < week)
+            .order_by(
+                FeaturedMentor.week_start.desc(),
+                FeaturedMentor.created_at.desc(),
+                FeaturedMentor.id.desc(),
+            )
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -140,7 +154,10 @@ async def current_featured(session: AsyncSession, *, now: dt.datetime) -> UUID |
     # The week, and how many picks it already had, so a replacement does not
     # land on the same seed as the pick it replaces.
     chosen = pick(
-        [c for c in candidates if c.id in pool], seed=f"{week.isoformat()}:{this_week}", now=now
+        [c for c in candidates if c.id in pool],
+        seed=f"{week.isoformat()}:{this_week}",
+        now=now,
+        most_sessions=max(c.completed_sessions for c in candidates),
     )
     session.add(FeaturedMentor(mentor_user_id=chosen, week_start=week, cycle=cycle))
     await session.commit()

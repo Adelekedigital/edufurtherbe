@@ -72,6 +72,32 @@ def test_sessions_count_for_more_than_freshness() -> None:
     assert weight(busiest, most_sessions=10, now=NOW) > weight(freshest, most_sessions=10, now=NOW)
 
 
+def test_the_lowest_rating_adds_nothing() -> None:
+    """A 1/5 mentor is not ahead of one nobody has reviewed yet: the bottom of
+    the scale scores zero, not a fifth."""
+    worst = candidate(rating=1.0)
+    unreviewed = candidate()
+
+    assert weight(worst, most_sessions=0, now=NOW) == weight(unreviewed, most_sessions=0, now=NOW)
+
+
+def test_a_future_edit_is_no_fresher_than_today() -> None:
+    """A clock skew or a migrated timestamp must not let freshness outrank
+    sessions."""
+    future = candidate(updated_days_ago=-180)
+    today = candidate(updated_days_ago=0)
+
+    assert weight(future, most_sessions=0, now=NOW) == weight(today, most_sessions=0, now=NOW)
+
+
+def test_sessions_are_scaled_by_the_busiest_bookable_mentor_not_the_pool() -> None:
+    """Late in a cycle the pool is small; a mentor's weight must not jump
+    because the busy ones already had their turn."""
+    modest = candidate(sessions=2)
+
+    assert weight(modest, most_sessions=200, now=NOW) < weight(modest, most_sessions=2, now=NOW)
+
+
 def test_a_fresher_profile_weighs_more_than_a_stale_one() -> None:
     fresh = candidate(updated_days_ago=1)
     stale = candidate(updated_days_ago=200)
@@ -83,7 +109,9 @@ def test_the_weighting_shows_in_what_is_picked() -> None:
     """Over many weeks the top-rated mentor comes up more often than a new one."""
     strong = candidate(rating=5.0, sessions=50, updated_days_ago=1)
     new = candidate()
-    picks = Counter(pick([strong, new], seed=f"week-{n}", now=NOW) for n in range(400))
+    picks = Counter(
+        pick([strong, new], seed=f"week-{n}", now=NOW, most_sessions=50) for n in range(400)
+    )
 
     # About 85% by the weights; an unweighted pick would sit near half.
     assert picks[strong.id] > 0.7 * 400
@@ -93,7 +121,9 @@ def test_the_weighting_shows_in_what_is_picked() -> None:
 def test_the_same_week_picks_the_same_mentor() -> None:
     pool = [candidate(rating=4.0), candidate(sessions=3), candidate()]
 
-    assert pick(pool, seed="2026-09-28", now=NOW) == pick(pool, seed="2026-09-28", now=NOW)
+    first = pick(pool, seed="2026-09-28", now=NOW, most_sessions=3)
+
+    assert first == pick(pool, seed="2026-09-28", now=NOW, most_sessions=3)
 
 
 # --------------------------------------------------------------------------

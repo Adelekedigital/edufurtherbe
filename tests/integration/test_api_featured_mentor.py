@@ -49,6 +49,7 @@ async def test_nobody_bookable_is_null(
 
     assert response.status_code == 200
     assert response.json() is None
+    assert response.headers["cache-control"] == "public, max-age=60"
 
 
 async def test_the_featured_mentor_is_a_card_with_their_bio(
@@ -158,3 +159,23 @@ async def test_the_second_rotation_is_also_complete(db_engine: AsyncEngine) -> N
             .all()
         )
     assert list(cycles) == [1, 1, 1, 2, 2, 2]
+
+
+async def test_a_replacement_at_the_turn_of_a_cycle_skips_last_week_s_mentor(
+    db_engine: AsyncEngine,
+) -> None:
+    """The week's pick finishes a cycle, then pauses mid-week. The replacement
+    starts a new cycle, and must still not be the mentor featured *last week* —
+    not merely not this week's paused one."""
+    mentors = [await make_bookable_mentor(db_engine, f"featured-turn-r-{n}") for n in range(3)]
+    picks = [await featured_on(db_engine, MONDAY + dt.timedelta(weeks=w)) for w in range(3)]
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE mentor_profiles SET listing_status = 'unlisted' WHERE user_id = :m"),
+            {"m": picks[2]},
+        )
+
+    replacement = await featured_on(db_engine, MONDAY + dt.timedelta(weeks=2, hours=1))
+
+    assert replacement not in {picks[1], picks[2]}
+    assert replacement in set(mentors)

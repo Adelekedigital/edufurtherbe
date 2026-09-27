@@ -6,10 +6,11 @@ featured twice until every eligible mentor has had a turn — "a form of
 celebrating mentors while also keeping them bookable". With twenty mentors that
 is four a month and everyone within five.
 
-**Random, and reproducible.** The pick is seeded by the week, so the same week
-over the same pool always names the same mentor. That is what makes it testable,
-and it means a retried request can never disagree with the first — though the
-store persists the pick anyway, because the pool changes as mentors join.
+**Random, and reproducible for one input.** The pick is seeded, so the same
+seed over the same weights names the same mentor, which is what makes it
+testable. It is **not** what keeps a week stable: freshness depends on `now`, so
+two computations in one week can weigh differently. The stored row is what holds
+the week — never compute the pick twice and expect agreement.
 
 **Nobody's weight is zero.** Each signal adds to a base of one, so a mentor with
 no reviews, no sessions and an old profile still has a chance. Featuring is
@@ -25,6 +26,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.domain.reviews import VALUABLE_SCALE
+
 __all__ = ["Candidate", "eligible", "pick", "week_start", "weight"]
 
 #: The order is the product rule; the gaps keep each signal outranking the next.
@@ -33,8 +36,6 @@ SESSIONS_WEIGHT = 2.0
 FRESHNESS_WEIGHT = 1.0
 #: A profile edited today is fully fresh; one untouched this long is not fresh.
 FRESH_FOR = dt.timedelta(days=90)
-#: The top of the review scale, which `session_value` is measured on.
-TOP_RATING = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +67,14 @@ def weight(candidate: Candidate, *, most_sessions: int, now: dt.datetime) -> flo
     hundred and two hundred and twenty, and one very busy mentor does not
     flatten everyone else to nothing.
     """
-    rating = (candidate.session_value or 0.0) / TOP_RATING
+    # Scaled from the bottom of the review scale, not from zero: a mentor rated
+    # as badly as the scale allows is not ahead of one nobody has reviewed.
+    low, high = VALUABLE_SCALE
+    rating = (
+        0.0
+        if candidate.session_value is None
+        else max(0.0, (candidate.session_value - low) / (high - low))
+    )
     sessions = (
         math.log1p(candidate.completed_sessions) / math.log1p(most_sessions)
         if most_sessions > 0
@@ -76,12 +84,21 @@ def weight(candidate: Candidate, *, most_sessions: int, now: dt.datetime) -> flo
         freshness = 0.0
     else:
         age = now - candidate.profile_updated_at
-        freshness = max(0.0, 1.0 - age / FRESH_FOR)
+        # Clamped both ways: a timestamp in the future — clock skew, or a
+        # migrated `Modified Date` — is as fresh as today, never fresher.
+        freshness = min(1.0, max(0.0, 1.0 - age / FRESH_FOR))
     return 1.0 + RATING_WEIGHT * rating + SESSIONS_WEIGHT * sessions + FRESHNESS_WEIGHT * freshness
 
 
-def pick(candidates: Iterable[Candidate], *, seed: str, now: dt.datetime) -> UUID:
+def pick(
+    candidates: Iterable[Candidate], *, seed: str, now: dt.datetime, most_sessions: int
+) -> UUID:
     """One mentor, at random, weighted as `weight` says — the same for one seed.
+
+    `most_sessions` is the busiest **bookable** mentor's count, not the busiest
+    left in this pool. Late in a cycle the pool is small, and scaling by it would
+    hand a mentor with two sessions the weight a mentor with two hundred earned
+    at the cycle's start.
 
     Sorted by id first so the order the database returned rows in cannot change
     the answer for a given seed.
@@ -89,8 +106,7 @@ def pick(candidates: Iterable[Candidate], *, seed: str, now: dt.datetime) -> UUI
     pool = sorted(candidates, key=lambda c: c.id)
     if not pool:
         raise ValueError("nobody to pick from")
-    most = max(c.completed_sessions for c in pool)
-    weights = [weight(c, most_sessions=most, now=now) for c in pool]
+    weights = [weight(c, most_sessions=most_sessions, now=now) for c in pool]
     # Not a security decision: which mentor is featured is public, and
     # predicting it gains nothing. `random` is right; `secrets` has no seed.
     chooser = random.Random(seed)  # noqa: S311  # nosec B311

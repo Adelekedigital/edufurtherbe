@@ -9,7 +9,7 @@ a list that will vary per signed-in viewer.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from app.api.deps import FeaturedMentorDep
 from app.api.schemas.mentors import FeaturedMentorRead
@@ -34,5 +34,11 @@ router = APIRouter(prefix="/api/v1", tags=["public"])
         "bookable, a replacement is chosen from the same rotation."
     ),
 )
-async def read_featured_mentor(featured: FeaturedMentorDep) -> FeaturedMentorRead | None:
+async def read_featured_mentor(
+    featured: FeaturedMentorDep, response: Response
+) -> FeaturedMentorRead | None:
+    # The same answer for every viewer, changing weekly — so shared caches may
+    # hold it. A minute, not a week: the card's `next_available_*` refresh
+    # every few minutes, and a paused mentor must drop off promptly.
+    response.headers["Cache-Control"] = "public, max-age=60"
     return None if featured is None else FeaturedMentorRead.from_featured(featured)
