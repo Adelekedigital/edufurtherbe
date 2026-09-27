@@ -177,7 +177,7 @@ class QStashSchedules:
             "Upstash-Label": f"{schedule.scope_label},{schedule.fingerprint_label}",
             "Upstash-Method": "POST",
             "Upstash-Retries": str(schedule.retries),
-            "Upstash-Schedule": schedule.cron,
+            "Upstash-Cron": schedule.cron,
             "Upstash-Schedule-Id": schedule.id,
             "Upstash-Timeout": schedule.timeout,
         }
