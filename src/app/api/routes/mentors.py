@@ -63,10 +63,23 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
     "",
     response_model=MentorPage,
     summary="Find a mentor",
+    openapi_extra=OPTIONAL_TOKEN,
     description=(
         "Every mentor a mentee could actually book, newest first.\n\n"
         "**Public.** No token — this is the page somebody lands on before they "
         "have an account.\n\n"
+        "**Signed in, it is ordered for you.** Send the bearer token when you "
+        "have one:\n\n"
+        "- With goals (`mentee_goal_needs`), mentors who give more of your goal "
+        "offerings come first. Ties are shuffled, but the shuffle is fixed per "
+        "user per UTC day, so paging and refreshing are stable.\n"
+        "- Without goals, newest first, as for everyone.\n"
+        "- With `q`, best match first: a search is ranked by the search.\n"
+        "- A signed-in mentor never appears in their own list, and `total` "
+        "agrees.\n\n"
+        "The order is the server's: don't re-sort on the client. Any problem "
+        "with the token gives the public list, never an error. Responses send "
+        "`Vary: Authorization`, and `Cache-Control: private` when a token came.\n\n"
         "**Bookable, not available.** A mentor appears while they are approved, "
         "listed, and set up: at least one active offering with a duration, and "
         "at least one weekly availability window. It says nothing about *when* "

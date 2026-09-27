@@ -16,12 +16,17 @@ from __future__ import annotations
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-__all__ = ["PER_VIEWER_PREFIXES", "PerViewerHeadersMiddleware"]
+__all__ = ["PER_VIEWER_ROOTS", "PerViewerHeadersMiddleware"]
 
-#: Paths whose answer depends on who is asking. The discovery list
-#: (`/api/v1/mentors`, no trailing slash) is not one of them: it is identical
-#: for everybody and keeps its caching.
-PER_VIEWER_PREFIXES = ("/api/v1/mentors/",)
+#: Paths whose answer depends on who is asking: each root and everything under
+#: it. `/api/v1/mentors` itself joined when the list started ranking by the
+#: viewer's goals and leaving the viewer out.
+PER_VIEWER_ROOTS = ("/api/v1/mentors",)
+
+
+def _is_per_viewer(path: str) -> bool:
+    """The root exactly, or a path under it — not a sibling sharing a prefix."""
+    return any(path == root or path.startswith(root + "/") for root in PER_VIEWER_ROOTS)
 
 
 def _has_authorization(scope: Scope) -> bool:
@@ -41,9 +46,7 @@ class PerViewerHeadersMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not str(scope.get("path", "")).startswith(
-            PER_VIEWER_PREFIXES
-        ):
+        if scope["type"] != "http" or not _is_per_viewer(str(scope.get("path", ""))):
             await self.app(scope, receive, send)
             return
 

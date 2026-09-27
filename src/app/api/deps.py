@@ -139,6 +139,7 @@ from app.infra.db.mentor_public_store import get_public_mentor, get_public_mento
 from app.infra.db.mentor_relationship import mentor_relationship
 from app.infra.db.mentor_search_store import (
     count_mentors,
+    has_goals,
     mentor_card,
     search_mentors,
     similar_mentors,
@@ -2136,6 +2137,7 @@ MAX_SLUG_LENGTH = 60
 
 async def mentor_page(
     session: SessionDep,
+    viewer: OptionalViewerDep,
     q: Annotated[
         str | None,
         Query(description="Search mentors by name, school, programme or country."),
@@ -2187,12 +2189,35 @@ async def mentor_page(
 
     # Counted on the first page only: on the search path the count is a second
     # sequential scan, and a client paging on already has the number.
-    total = await count_mentors(session, q=term, offerings=slugs) if cursor is None else None
+    total = (
+        await count_mentors(session, q=term, offerings=slugs, viewer=viewer)
+        if cursor is None
+        else None
+    )
 
-    if term is not None:
+    # **A signed-in mentee with goals gets the goal ranking** (settled decision
+    # #187), keyed on today's UTC date so the tie shuffle holds all day. A
+    # search outranks it — that precedence is `search_mentors`'s, which reads
+    # `q` first; `term is None` here only skips a goals lookup a search would
+    # ignore, so dropping it changes no response (an equivalent mutant).
+    goal_day = (
+        dt.datetime.now(dt.UTC).date()
+        if term is None and viewer is not None and await has_goals(session, viewer)
+        else None
+    )
+
+    # Search and the goal ranking both page by offset — neither order is a
+    # column in the row — so they share the offset codec and its depth cap.
+    if term is not None or goal_day is not None:
         offset = decode_offset_cursor(cursor)
         rows, has_more = await search_mentors(
-            session, limit=clamp_limit(limit), q=term, offset=offset, offerings=slugs
+            session,
+            limit=clamp_limit(limit),
+            q=term,
+            offset=offset,
+            offerings=slugs,
+            viewer=viewer,
+            goal_day=goal_day,
         )
         # `next_offset_cursor`, not `encode_offset_cursor`: past the depth cap
         # there is no next page, and minting one the decoder then refuses ends a
@@ -2201,7 +2226,11 @@ async def mentor_page(
         return rows, has_more, next_cursor, total
 
     rows, has_more = await search_mentors(
-        session, limit=clamp_limit(limit), after=decode_id_cursor(cursor), offerings=slugs
+        session,
+        limit=clamp_limit(limit),
+        after=decode_id_cursor(cursor),
+        offerings=slugs,
+        viewer=viewer,
     )
     next_cursor = encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None
     return rows, has_more, next_cursor, total

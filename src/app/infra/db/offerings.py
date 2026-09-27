@@ -24,9 +24,19 @@ from uuid import UUID
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infra.db.models.mentoring import MentorServiceOffering, ServiceOffering
+from app.infra.db.models.mentoring import (
+    MenteeGoalNeed,
+    MentorServiceOffering,
+    ServiceOffering,
+)
 
-__all__ = ["live_offering_slugs", "offerings_for", "offers_any", "shared_offering_count"]
+__all__ = [
+    "goal_overlap_count",
+    "live_offering_slugs",
+    "offerings_for",
+    "offers_any",
+    "shared_offering_count",
+]
 
 
 def _live() -> Any:
@@ -79,6 +89,30 @@ def shared_offering_count(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
         select(func.count())
         .select_from(MentorServiceOffering, ServiceOffering)
         .where(*_gives(mentor_user_id, slugs))
+        .scalar_subquery()
+    )
+
+
+def goal_overlap_count(mentor_user_id: Any, mentee: UUID) -> Any:
+    """How many of this mentee's goal needs the mentor gives — a scalar subquery.
+
+    The join `MenteeGoalNeed`'s own docstring describes: both sides were
+    collapsed to the same six parent offerings, so an overlap is an equality on
+    `service_offering_id` and needs no fuzzy matching. Beside
+    `shared_offering_count` because it is the same question asked of a mentee's
+    goals instead of another mentor's offerings.
+    """
+    return (
+        select(func.count())
+        .select_from(MenteeGoalNeed)
+        .join(
+            MentorServiceOffering,
+            MentorServiceOffering.service_offering_id == MenteeGoalNeed.service_offering_id,
+        )
+        .where(
+            MenteeGoalNeed.user_id == mentee,
+            MentorServiceOffering.mentor_user_id == mentor_user_id,
+        )
         .scalar_subquery()
     )
 

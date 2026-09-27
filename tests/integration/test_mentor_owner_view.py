@@ -352,13 +352,6 @@ async def test_a_404_carries_the_cache_headers_too(
     assert "private" in signed_in.headers["cache-control"]
 
 
-async def test_the_discovery_list_is_not_marked_per_viewer(api_client: httpx.AsyncClient) -> None:
-    """The list answers everybody the same, and keeps its caching."""
-    response = await api_client.get("/api/v1/mentors")
-
-    assert "authorization" not in response.headers.get("vary", "").lower()
-
-
 async def test_the_published_contract_keeps_every_profile_field(
     api_client: httpx.AsyncClient,
 ) -> None:
