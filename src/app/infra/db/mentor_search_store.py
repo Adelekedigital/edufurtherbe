@@ -51,7 +51,7 @@ from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
 from app.infra.db.session_stats import delivered
 
-__all__ = ["search_mentors"]
+__all__ = ["count_mentors", "search_mentors"]
 
 #: `english` stems, which is right for prose and wrong for names. Named rather
 #: than inlined so the two never drift apart across the document and the query.
@@ -299,11 +299,22 @@ def _page(after: UUID | None, limit: int, offerings: Sequence[str]) -> Select[An
     reach for the visible one when building the next token.
     """
     return (
-        _base(offerings)
+        _scope(None, offerings)
         .where(*([MentorProfile.id < after] if after is not None else []))
         .order_by(MentorProfile.id.desc())
         .limit(limit + 1)
     )
+
+
+def _scope(term: str | None, offerings: Sequence[str]) -> Select[Any]:
+    """Who a request lists, before any ordering or paging.
+
+    The page and the count both read this, so `total` cannot describe a
+    different set from the pages it sits beside — a count that forgot the text
+    match or the filter would still return a plausible number.
+    """
+    base = _base(offerings)
+    return base if term is None else base.where(_document().op("@@")(_matches(term)))
 
 
 def _ranked(term: str, offset: int, limit: int, offerings: Sequence[str]) -> Select[Any]:
@@ -322,9 +333,8 @@ def _ranked(term: str, offset: int, limit: int, offerings: Sequence[str]) -> Sel
     """
     rank = func.ts_rank_cd(_document(), _matches(term))
     return (
-        _base(offerings)
+        _scope(term, offerings)
         .add_columns(rank.label("rank"))
-        .where(_document().op("@@")(_matches(term)))
         .order_by(rank.desc(), MentorProfile.id.desc())
         .offset(offset)
         .limit(limit + 1)
@@ -358,8 +368,10 @@ async def search_mentors(
     trips a page.
 
     One more row than asked for is fetched: if it comes back there is a next
-    page. Cheaper and more honest than a second `COUNT`, which can disagree with
-    the page it claims to describe.
+    page. *Whether there is more* never reads the count — a `COUNT` can
+    disagree with the page it sits beside under concurrent writes. The header's
+    number is `count_mentors`, a separate, display-only answer over the same
+    `_scope()`.
     """
     # `q` arrives normalised: a blank search is `None` by the time it gets here.
     # Re-deciding would be a second copy of the rule, and the copy that drifts is
@@ -377,3 +389,20 @@ async def search_mentors(
     for row in page:
         row["offerings"] = grouped.get(row["user_id"], [])
     return page, has_more
+
+
+async def count_mentors(
+    session: AsyncSession, *, q: str | None = None, offerings: Sequence[str] = ()
+) -> int:
+    """How many mentors `search_mentors` would list across every page.
+
+    **A second statement, and that is the cost this field carries.** On the
+    search path it is a second sequential scan over the inline document, so
+    `total` roughly doubles what a first search page costs; browse is cheap. The
+    route asks for it on the first page only, so paging does not pay it again.
+
+    `with_only_columns` keeps `_scope()`'s joins and predicates and drops its
+    card columns, whose per-row subqueries a count has no use for.
+    """
+    statement = _scope(q, offerings).with_only_columns(func.count(MentorProfile.id))
+    return int((await session.execute(statement)).scalar_one())

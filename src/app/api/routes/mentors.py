@@ -23,7 +23,7 @@ from fastapi import APIRouter, status
 
 from app.api.deps import MentorPageDep, MentorReviewsDep, PublicMentorDep
 from app.api.schemas.common import Page
-from app.api.schemas.mentors import MentorPublicRead, MentorSummaryRead
+from app.api.schemas.mentors import MentorPage, MentorPublicRead, MentorSummaryRead
 from app.api.schemas.reviews import MentorReviewRead
 
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
@@ -42,7 +42,7 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
 
 @router.get(
     "",
-    response_model=Page[MentorSummaryRead],
+    response_model=MentorPage,
     summary="Find a mentor",
     description=(
         "Every mentor a mentee could actually book, newest first.\n\n"
@@ -56,6 +56,8 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         "`/users/{id}/availability/slots` for the calendar.\n\n"
         "A mentor who has not finished setting up does not appear here at all, "
         "though their profile still resolves by direct link.\n\n"
+        "**`total`** is how many mentors the request lists across every page, "
+        "sent on the first page only and `null` after it.\n\n"
         "**`offering` filters by service offering**, repeatable, any of: "
         "`?offering=a&offering=b` lists mentors who give either, and it narrows "
         "a `q` search to those mentors. Slugs come from "
@@ -71,12 +73,16 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         }
     },
 )
-async def find_mentors(page: MentorPageDep) -> Page[MentorSummaryRead]:
+async def find_mentors(page: MentorPageDep) -> MentorPage:
     # The token is minted in the dependency, which is the only place that knows
     # which mode ran. Deriving it again here from `q` would be one rule in two
     # places, and the copy that drifted would mint the wrong kind.
-    rows, _, next_cursor = page
-    return Page(data=[MentorSummaryRead.from_row(row) for row in rows], next_cursor=next_cursor)
+    rows, _, next_cursor, total = page
+    return MentorPage(
+        data=[MentorSummaryRead.from_row(row) for row in rows],
+        next_cursor=next_cursor,
+        total=total,
+    )
 
 
 @router.get(

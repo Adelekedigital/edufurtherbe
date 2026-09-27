@@ -423,7 +423,7 @@ async def test_no_bookable_mentors_is_an_empty_page_not_an_error(
     response = await api_client.get(URL)
 
     assert response.status_code == 200
-    assert response.json() == {"data": [], "next_cursor": None}
+    assert response.json() == {"data": [], "next_cursor": None, "total": 0}
 
 
 # --------------------------------------------------------------------------
@@ -1017,3 +1017,71 @@ async def test_every_catalogue_offering_is_one_the_filter_accepts(
     for slug in slugs:
         response = await api_client.get(URL, params={"offering": slug})
         assert response.status_code == 200, (slug, response.text)
+
+
+# --------------------------------------------------------------------------
+# Total
+#
+# **Walked, not reasoned about.** `total` claims to describe the pages; the only
+# honest test is to page through all of them and count what came back. A count
+# that read a different scope — missing the bookable rule, the filter or the
+# text match — would still return a plausible number.
+# --------------------------------------------------------------------------
+
+
+async def walk(client: httpx.AsyncClient, query: str) -> tuple[int | None, list[str]]:
+    """The first page's `total`, and every id across every page."""
+    first = (await client.get(f"{URL}?{query}&limit=1")).json()
+    total, seen, body = first["total"], [], first
+    for _ in range(10):  # bounded: a cursor that never advances fails rather than hangs
+        seen.extend(row["id"] for row in body["data"])
+        if body["next_cursor"] is None:
+            return total, seen
+        body = (await client.get(f"{URL}?{query}&limit=1&cursor={body['next_cursor']}")).json()
+        assert body["total"] is None, "only the first page is counted"
+    raise AssertionError("paging never terminated")
+
+
+async def test_the_total_is_how_many_mentors_the_pages_list(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    for n in range(3):
+        await make_bookable_mentor(db_engine, f"total-{n}")
+    await make_public_mentor(db_engine, "total-not-bookable")
+
+    total, seen = await walk(api_client, "")
+
+    assert total == len(seen) == 3
+
+
+async def test_the_total_counts_only_what_the_offering_filter_lists(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    for n in range(3):
+        mentor = await make_bookable_mentor(db_engine, f"total-filter-{n}")
+        if n:
+            await give_offering(db_engine, mentor, "test-preparation")
+
+    total, seen = await walk(api_client, "offering=test-preparation")
+
+    assert total == len(seen) == 2
+
+
+async def test_the_total_counts_only_what_a_search_matches(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    for n in range(3):
+        mentor = await make_bookable_mentor(db_engine, f"total-search-{n}")
+        if n:
+            await set_headline(db_engine, mentor, "Chemistry tutor")
+
+    total, seen = await walk(api_client, "q=chemistry")
+
+    assert total == len(seen) == 2
+
+
+async def test_no_mentors_is_a_total_of_zero(api_client: httpx.AsyncClient) -> None:
+    """Zero is a real answer; null is reserved for "not counted on this page"."""
+    body = (await api_client.get(URL)).json()
+
+    assert body["total"] == 0

@@ -30,6 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.api.schemas.common import Page
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 
@@ -122,6 +123,25 @@ class MentorSummaryRead(BaseModel):
             ),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
         )
+
+
+class MentorPage(Page[MentorSummaryRead]):
+    """A discovery page, and on the first page, how many mentors there are.
+
+    **A subclass rather than a field on `Page`.** Every other list pages without
+    a count, and a nullable `total` on the shared envelope would promise one to
+    clients of endpoints that will never send it.
+    """
+
+    total: int | None = Field(
+        default=None,
+        description=(
+            "How many mentors this request lists across every page — the same "
+            "`q` and `offering`. Sent on the **first page only** (no `cursor`); "
+            "`null` on later pages, so carry the first page's value forward. "
+            "`0` is a real answer."
+        ),
+    )
 
 
 class EducationRead(BaseModel):
