@@ -20,7 +20,7 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, File, Header, Path, Query, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, StringConstraints
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -143,7 +143,7 @@ from app.infra.db.mentor_status_store import (
     resume,
     set_listing,
 )
-from app.infra.db.offerings import offerings_for
+from app.infra.db.offerings import live_offering_slugs, offerings_for
 from app.infra.db.onboarding_store import get_onboarding
 from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
 from app.infra.db.own_review_reader import list_reviews_about
@@ -2081,6 +2081,16 @@ async def public_mentor(handle: str, session: SessionDep) -> dict[str, Any]:
     }
 
 
+#: An input bound, not the taxonomy's size: #53 closes the list at six, and a
+#: second copy of that number here would be the one that drifts.
+MAX_OFFERING_FILTERS = 10
+
+#: An input bound on one offering slug. The column is unbounded `text`; the six
+#: platform-authored slugs are all far shorter, and this only keeps a 422's echo
+#: of what the caller sent short.
+MAX_SLUG_LENGTH = 60
+
+
 async def mentor_page(
     session: SessionDep,
     q: Annotated[
@@ -2090,6 +2100,21 @@ async def mentor_page(
     ] = None,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+    offering: Annotated[
+        # `StorableText` per item, not on the list: a NUL in a slug reached
+        # Postgres and was a 500 from one anonymous request — #97's fourth
+        # parameter. The length bound keeps what a 422 echoes back short.
+        list[Annotated[str, StringConstraints(max_length=MAX_SLUG_LENGTH), StorableText]] | None,
+        Query(
+            max_length=MAX_OFFERING_FILTERS,
+            description=(
+                "A service-offering slug from `/api/v1/catalog/service-offerings`. "
+                "Repeatable, and **any** one matches: "
+                "`?offering=a&offering=b` lists mentors who give either. A "
+                "`q` search is narrowed to those mentors. An unknown or retired slug is a `422`."
+            ),
+        ),
+    ] = None,
 ) -> tuple[list[dict[str, Any]], bool, str | None]:
     """One page of bookable mentors, browsing or searching.
 
@@ -2107,10 +2132,20 @@ async def mentor_page(
     # copy quietly doing the right thing — one rule in two places, invisible
     # precisely because the two agreed. Now this decides and the store trusts.
     term = (q or "").strip() or None
+
+    # Refused rather than matching nobody: a typo'd slug would otherwise render
+    # as "no mentors" and read as a supply problem. Retired counts as unknown,
+    # for the reason `offerings._live()` gives.
+    # A value that empties is no filter, as a blank `q` is no search.
+    slugs = list(dict.fromkeys(s for s in (v.strip() for v in offering or ()) if s))
+    unknown = set(slugs) - await live_offering_slugs(session, slugs)
+    if unknown:
+        raise ValidationError(f"unknown offering: {', '.join(sorted(unknown))}")
+
     if term is not None:
         offset = decode_offset_cursor(cursor)
         rows, has_more = await search_mentors(
-            session, limit=clamp_limit(limit), q=term, offset=offset
+            session, limit=clamp_limit(limit), q=term, offset=offset, offerings=slugs
         )
         # `next_offset_cursor`, not `encode_offset_cursor`: past the depth cap
         # there is no next page, and minting one the decoder then refuses ends a
@@ -2118,7 +2153,7 @@ async def mentor_page(
         return rows, has_more, next_offset_cursor(offset + len(rows)) if has_more else None
 
     rows, has_more = await search_mentors(
-        session, limit=clamp_limit(limit), after=decode_id_cursor(cursor)
+        session, limit=clamp_limit(limit), after=decode_id_cursor(cursor), offerings=slugs
     )
     return rows, has_more, encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None
 

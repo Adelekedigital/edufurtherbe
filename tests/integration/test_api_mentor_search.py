@@ -850,3 +850,170 @@ async def test_a_fabricated_negative_offset_is_refused(
     response = await api_client.get(f"{URL}?q=Lovelace&cursor={backwards}")
 
     assert response.status_code == 422
+
+
+# --------------------------------------------------------------------------
+# Filtering by offering
+#
+# **Any of the slugs, and with `q`.** Chips in one category widen: a mentee who
+# picks two kinds of help wants mentors for either. The several-slug test holds a
+# mentor with both, one with each, and one with neither, because an AND passes
+# any test where nobody holds only part of the set, and reading one slug passes
+# any test where only the first is held.
+# --------------------------------------------------------------------------
+
+
+async def test_one_offering_lists_only_the_mentors_who_give_it(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    giver = await make_bookable_mentor(db_engine, "filter-giver")
+    other = await make_bookable_mentor(db_engine, "filter-other")
+    await give_offering(db_engine, giver, "test-preparation")
+    await give_offering(db_engine, other, "interview-preparation")
+
+    assert await ids(api_client, f"{URL}?offering=test-preparation") == [str(giver)]
+
+
+async def test_several_offerings_list_mentors_who_give_any_of_them_once(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    both = await make_bookable_mentor(db_engine, "filter-both")
+    first = await make_bookable_mentor(db_engine, "filter-first")
+    second = await make_bookable_mentor(db_engine, "filter-second")
+    neither = await make_bookable_mentor(db_engine, "filter-neither")
+    for slug in ("test-preparation", "interview-preparation"):
+        await give_offering(db_engine, both, slug)
+    await give_offering(db_engine, first, "test-preparation")
+    await give_offering(db_engine, second, "interview-preparation")
+    await give_offering(db_engine, neither, "scholarships-financial-aid")
+
+    url = f"{URL}?offering=test-preparation&offering=interview-preparation"
+    listed = await ids(api_client, url)
+
+    assert sorted(listed) == sorted([str(both), str(first), str(second)])
+    assert len(listed) == len(set(listed)), "a mentor holding both appeared twice"
+
+
+async def test_the_offering_filter_narrows_a_search_too(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Search reads the same `_base()` scope, so it must read the filter too —
+    the half with a text box in front of it is the worse one to forget."""
+    giver = await make_bookable_mentor(db_engine, "filter-search-giver")
+    other = await make_bookable_mentor(db_engine, "filter-search-other")
+    await give_offering(db_engine, giver, "test-preparation")
+
+    assert set(await ids(api_client, f"{URL}?q=Ada")) == {str(giver), str(other)}
+    assert await ids(api_client, f"{URL}?q=Ada&offering=test-preparation") == [str(giver)]
+
+
+async def test_filtered_paging_walks_only_the_mentors_who_match(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    matching = set()
+    for n in range(3):
+        mentor = await make_bookable_mentor(db_engine, f"filter-page-{n}")
+        if n != 1:
+            await give_offering(db_engine, mentor, "test-preparation")
+            matching.add(str(mentor))
+
+    seen: list[str] = []
+    query = "offering=test-preparation&limit=1"
+    url: str | None = f"{URL}?{query}"
+    for _ in range(5):  # bounded: a cursor that never advances fails rather than hangs
+        assert url is not None
+        body = (await api_client.get(url)).json()
+        seen.extend(row["id"] for row in body["data"])
+        if body["next_cursor"] is None:
+            url = None
+            break
+        url = f"{URL}?{query}&cursor={body['next_cursor']}"
+
+    assert url is None, "paging never terminated"
+    assert sorted(seen) == sorted(matching)
+
+
+async def test_an_offering_nobody_gives_is_an_empty_page(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A real slug that matches nobody is `200` and empty — the empty state the
+    design draws. Only a slug that is not a slug is the client's mistake."""
+    await make_bookable_mentor(db_engine, "filter-none")
+
+    assert await ids(api_client, f"{URL}?offering=test-preparation") == []
+
+
+@pytest.mark.parametrize("slug", ["no-such-offering", "Test-Preparation"])
+async def test_an_unknown_offering_is_a_client_error(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, slug: str
+) -> None:
+    """Refused rather than matching nobody: a typo'd chip would otherwise show
+    "no mentors" and look like a supply problem. Relaxing a `422` later breaks no
+    client; tightening an empty page into one would."""
+    await make_bookable_mentor(db_engine, "filter-unknown")
+
+    response = await api_client.get(f"{URL}?offering=test-preparation&offering={slug}")
+
+    assert response.status_code == 422
+    assert slug in response.text
+
+
+async def test_a_retired_offering_is_refused_like_an_unknown_one(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Retired offerings are already hidden from every card and profile. A
+    filter that still matched on one would list a mentor for a reason their card
+    cannot show."""
+    mentor = await make_bookable_mentor(db_engine, "filter-retired")
+    await give_offering(db_engine, mentor, "test-preparation")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE service_offerings SET is_active = false WHERE slug = 'test-preparation'")
+        )
+
+    response = await api_client.get(f"{URL}?offering=test-preparation")
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("value", ["", "%00", "%20"])
+async def test_an_empty_offering_browses_rather_than_filtering(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, value: str
+) -> None:
+    """The same rule `?q=` follows: an empty value is no filter, not a slug
+    called nothing."""
+    mentor = await make_bookable_mentor(db_engine, "filter-empty")
+
+    assert await ids(api_client, f"{URL}?offering={value}") == [str(mentor)]
+
+
+async def test_the_offering_count_is_bounded(api_client: httpx.AsyncClient) -> None:
+    """Counted before de-duplication, so repeats of one real slug hit it too."""
+    ten = "&".join(["offering=test-preparation"] * 10)
+
+    assert (await api_client.get(f"{URL}?{ten}")).status_code == 200
+    assert (await api_client.get(f"{URL}?{ten}&offering=test-preparation")).status_code == 422
+
+
+async def test_an_overlong_offering_is_refused_before_it_is_echoed(
+    api_client: httpx.AsyncClient,
+) -> None:
+    response = await api_client.get(f"{URL}?offering={'x' * 61}")
+
+    assert response.status_code == 422
+    assert "x" * 61 not in response.text
+
+
+async def test_every_catalogue_offering_is_one_the_filter_accepts(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """The catalogue is where clients read slugs from and the filter is what
+    refuses them, and each decides "live" through its own query. This fails the
+    day the two disagree, which is the only form of the rule a gate can see."""
+    catalogue = await api_client.get("/api/v1/catalog/service-offerings")
+    slugs = [row["code"] for row in catalogue.json()["data"]]
+    assert slugs, "the catalogue lists offerings at all"
+
+    for slug in slugs:
+        response = await api_client.get(URL, params={"offering": slug})
+        assert response.status_code == 200, (slug, response.text)

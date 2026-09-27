@@ -13,13 +13,17 @@ being a database keyset; and caching it in a column is the drift D20 rejected,
 where a stored `is_available` was wrong the moment somebody booked. *When* is
 what `/slots` answers, freshly, one click later.
 
-**No filters.** Service, school, degree, country of study and country of origin
-are all reachable from existing tables, and four of the indexes they would want
-already exist. They are not here because a query parameter is additive and a
-sort order is not (rule #21) — what has to be right today is the shape a client
-renders and the cursor it pages with. Three of those five filters read through
-`education_entries`, which is one-to-many, so they arrive as `EXISTS` clauses
-rather than joins when they arrive at all.
+**One filter: service offering, any of.** A mentor who gives *at least one* of
+the slugs asked for appears, because chips in one category widen — a mentee who
+picks two kinds of help wants mentors for either. It applies in `_base()`, so
+browse and search cannot disagree about it, and it is an `EXISTS` because
+`mentor_service_offerings` is one-to-many and a join would list a mentor once per
+matching slug.
+
+School, degree, country of study and country of origin are still to come. They
+were held back because a query parameter is additive and a sort order is not
+(rule #21). Three of those four read through `education_entries`, also
+one-to-many, so they arrive as `EXISTS` clauses too.
 
 **Ordered by `mentor_profiles.id`, not `users.id`.** Both are UUIDv7 and both are
 therefore time-ordered, but they order different events: when somebody signed up
@@ -29,6 +33,7 @@ last week is a new mentor, and this list is of mentors.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -40,7 +45,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.offerings import offerings_for
+from app.infra.db.offerings import offerings_for, offers_any
 from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
@@ -231,7 +236,7 @@ def _completed_sessions() -> Any:
     )
 
 
-def _base() -> Select[Any]:
+def _base(offerings: Sequence[str]) -> Select[Any]:
     """The columns and the scope, shared by both modes.
 
     Extracted so browse and search cannot drift on *who is visible*. The two
@@ -280,10 +285,11 @@ def _base() -> Select[Any]:
         # mentor. Bookability is what decides who appears, and it is above.
         .outerjoin(qualification, true())
         .where(*mentor_is_public(), *mentor_is_bookable())
+        .where(*([offers_any(MentorProfile.user_id, offerings)] if offerings else []))
     )
 
 
-def _page(after: UUID | None, limit: int) -> Select[Any]:
+def _page(after: UUID | None, limit: int, offerings: Sequence[str]) -> Select[Any]:
     """One page of mentors, newest first.
 
     `mentor_profiles.id` is both the sort key and the cursor, which is ADR 0016's
@@ -293,14 +299,14 @@ def _page(after: UUID | None, limit: int) -> Select[Any]:
     reach for the visible one when building the next token.
     """
     return (
-        _base()
+        _base(offerings)
         .where(*([MentorProfile.id < after] if after is not None else []))
         .order_by(MentorProfile.id.desc())
         .limit(limit + 1)
     )
 
 
-def _ranked(term: str, offset: int, limit: int) -> Select[Any]:
+def _ranked(term: str, offset: int, limit: int, offerings: Sequence[str]) -> Select[Any]:
     """One page of mentors matching `term`, best first.
 
     **Offset, not a keyset, and that is deliberate.** A rank is not in the row and
@@ -316,7 +322,7 @@ def _ranked(term: str, offset: int, limit: int) -> Select[Any]:
     """
     rank = func.ts_rank_cd(_document(), _matches(term))
     return (
-        _base()
+        _base(offerings)
         .add_columns(rank.label("rank"))
         .where(_document().op("@@")(_matches(term)))
         .order_by(rank.desc(), MentorProfile.id.desc())
@@ -332,6 +338,7 @@ async def search_mentors(
     after: UUID | None = None,
     q: str | None = None,
     offset: int = 0,
+    offerings: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of bookable mentors, and whether another follows.
 
@@ -357,7 +364,11 @@ async def search_mentors(
     # `q` arrives normalised: a blank search is `None` by the time it gets here.
     # Re-deciding would be a second copy of the rule, and the copy that drifts is
     # the one nobody is looking at.
-    statement = _ranked(q, offset, limit) if q is not None else _page(after, limit)
+    #
+    # `offerings` arrives validated as live slugs; the store only applies them.
+    statement = (
+        _ranked(q, offset, limit, offerings) if q is not None else _page(after, limit, offerings)
+    )
 
     rows = [dict(r) for r in (await session.execute(statement)).mappings()]
     page, has_more = rows[:limit], len(rows) > limit

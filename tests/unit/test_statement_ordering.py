@@ -84,8 +84,8 @@ def order_by(statement: object) -> str:
 @pytest.mark.parametrize(
     ("mode", "statement", "unique_key"),
     [
-        ("browse", _page(None, 20), MENTOR_KEY),
-        ("search", _ranked("ada", 0, 20), MENTOR_KEY),
+        ("browse", _page(None, 20, ()), MENTOR_KEY),
+        ("search", _ranked("ada", 0, 20, ()), MENTOR_KEY),
         ("education", _education_statement(uuid4()), EDUCATION_KEY),
     ],
 )
@@ -113,7 +113,7 @@ def test_search_ranks_before_it_breaks_the_tie() -> None:
     become browse, returning the right rows in the wrong order, and every
     relevance test would still pass because each of them asserts on a set.
     """
-    clause = order_by(_ranked("ada", 0, 20))
+    clause = order_by(_ranked("ada", 0, 20, ()))
 
     assert clause.index("ts_rank_cd") < clause.index(MENTOR_KEY)
 
