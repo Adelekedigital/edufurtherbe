@@ -10,17 +10,25 @@ which is why the predicate moved to ``infra/db/predicates.py`` in this change.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import bindparam, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.domain.assets import AssetKind
+from app.domain.assets import AssetKind, object_path
+from app.domain.images import process
+from app.infra.db.avatar_focus_store import focus_columns
 from app.infra.db.models.user import User
 from app.infra.db.models.user import UserProfile as Profile
 from app.infra.db.predicates import LIVE
 from app.infra.db.triggers import timestamps_from_source
+from app.infra.images.faces import FaceDetectionError, avatar_focus
+from app.infra.storage.supabase import SupabaseStorage
+
+logger = logging.getLogger(__name__)
 
 #: Users with a profile row, and whatever images they hold. A LEFT JOIN because
 #: only 19 of 43 dev users have a profile at all, and the avatar lives on
@@ -96,7 +104,13 @@ class AssetStore:
 
 
 async def replace_url(
-    session: AsyncSession, user_id: UUID, kind: AssetKind, url: str
+    session: AsyncSession,
+    user_id: UUID,
+    kind: AssetKind,
+    url: str,
+    *,
+    focus: tuple[float, float] | None = None,
+    looked: bool = False,
 ) -> str | None:
     """Point the column at a newly uploaded object; return what it held before.
 
@@ -117,14 +131,62 @@ async def replace_url(
     The two are pinned together by `test_first_write_creates_the_profile_row`,
     which drives both entry points against a user who has neither.
     """
-    column = Profile.avatar_url if kind is AssetKind.AVATAR else Profile.banner_url
+    avatar = kind is AssetKind.AVATAR
+    column = Profile.avatar_url if avatar else Profile.banner_url
     found = await session.execute(select(column).where(Profile.user_id == user_id))
     row = found.first()
     if row is None:
-        await session.execute(insert(Profile).values(user_id=user_id, **{column.key: url}))
+        values: dict[str, object] = {column.key: url}
+        if avatar:
+            values |= focus_columns(focus, looked=looked)
+        await session.execute(insert(Profile).values(user_id=user_id, **values))
         return None
 
-    statement = SET_AVATAR if kind is AssetKind.AVATAR else SET_BANNER
-    await session.execute(statement, {"target_user": user_id, "url": url})
     previous: str | None = row[0]
+    statement = SET_AVATAR if avatar else SET_BANNER
+    await session.execute(statement, {"target_user": user_id, "url": url})
+    # Only a different picture resets the focus. Object paths are content
+    # hashes, so the same file uploaded again is the same URL — and a mentor's
+    # chosen crop of it still holds.
+    if avatar and previous != url:
+        await session.execute(
+            update(Profile)
+            .where(Profile.user_id == user_id)
+            .values(**focus_columns(focus, looked=looked))
+        )
     return previous
+
+
+async def store_image(
+    session: AsyncSession,
+    storage: SupabaseStorage,
+    kind: AssetKind,
+    user_id: UUID,
+    payload: bytes,
+) -> tuple[str, str | None]:
+    """Validate, re-encode, store, find the face, point the profile at it.
+
+    **The one pipeline** for an image entering a profile: the upload endpoint
+    and the demo seed both call it, so a demo avatar is processed, stored and
+    focused exactly as a mentor's own upload is. Returns the new URL and the
+    one it replaced. Does not commit.
+
+    The blocking steps — decoding, detection, the synchronous storage client —
+    run on worker threads, so a large photo does not stall other requests.
+    The face is found in the **re-encoded** image, so the point matches the
+    picture that is actually served.
+    """
+    image = await asyncio.to_thread(process, payload, kind)
+    # **Before the upload**, so nothing detection does can leave a stored
+    # object that no profile points at.
+    focus, looked = None, False
+    if kind is AssetKind.AVATAR:
+        try:
+            focus, looked = await asyncio.to_thread(avatar_focus, image.payload), True
+        except FaceDetectionError:
+            # Never a reason to refuse a photo. Left unprocessed for the backfill.
+            logger.warning("face detection failed on upload", extra={"user_id": str(user_id)})
+    path = object_path(user_id, kind, image.payload, image.content_type)
+    url = await asyncio.to_thread(storage.upload, path, image.payload, image.content_type)
+    previous = await replace_url(session, user_id, kind, url, focus=focus, looked=looked)
+    return url, previous

@@ -128,6 +128,23 @@ class SupabaseStorage:
         prefix = f"{self._base_url}{PUBLIC_OBJECT}/{self._bucket}/"
         return url[len(prefix) :] if url.startswith(prefix) else None
 
+    def download(self, path: str) -> bytes:
+        """The bytes of an object this bucket holds.
+
+        Authenticated, so it works whether or not the bucket is public. Raises
+        `StorageError` when the object cannot be read; the caller decides
+        whether that stops anything.
+        """
+        response = send_with_backoff(
+            lambda: self._client.get(
+                f"{self._base_url}{OBJECT}/{self._bucket}/{path}", headers=self._headers
+            ),
+            self._sleep,
+        )
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            raise StorageError(f"download of {path} failed with {response.status_code}")
+        return response.content
+
     def delete(self, path: str) -> bool:
         """Remove an object. ``False`` if it was not there.
 

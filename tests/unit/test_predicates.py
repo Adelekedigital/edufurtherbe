@@ -20,7 +20,7 @@ from sqlalchemy import Delete, Select, Update
 from sqlalchemy.dialects import postgresql
 
 from app.domain.enums import ApprovalStatus, MentorStatusType
-from app.infra.db import asset_store, provisioning_store
+from app.infra.db import asset_store, avatar_focus_store, provisioning_store
 
 PREDICATE = "deleted_at IS NULL"
 
@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STORES: list[tuple[ModuleType, str]] = [
     (provisioning_store, "provisioning_store"),
     (asset_store, "asset_store"),
+    (avatar_focus_store, "avatar_focus_store"),
 ]
 
 

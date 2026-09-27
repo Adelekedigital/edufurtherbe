@@ -74,13 +74,13 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
-from app.domain.assets import AssetKind, object_path
+from app.domain.assets import AssetKind
 from app.domain.attendance import join_window
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole, MeetingProvider, MentorStatusType
 from app.domain.idempotency import request_fingerprint
-from app.domain.images import MAX_UPLOAD_BYTES, process
+from app.domain.images import MAX_UPLOAD_BYTES
 from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.clients.meetings import (
@@ -106,7 +106,7 @@ from app.infra.db.admin_store import (
     pending_institutions,
     pending_mentors,
 )
-from app.infra.db.asset_store import replace_url
+from app.infra.db.asset_store import store_image
 from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.availability_writer import (
     create_exception,
@@ -1135,13 +1135,8 @@ async def _store_image(
     # duration of a 5 MB round trip. This is what FastAPI does with a `def`
     # endpoint; the storage client stays synchronous because the asset migration
     # script uses the same class outside any event loop.
-    image = await run_in_threadpool(process, payload, kind)
-    path = object_path(user_id, kind, image.payload, image.content_type)
-
     storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
-    url = await run_in_threadpool(storage.upload, path, image.payload, image.content_type)
-
-    previous = await replace_url(session, user_id, kind, url)
+    url, previous = await store_image(session, storage, kind, user_id, payload)
     await session.commit()
 
     # **After the commit, and never fatal.** The profile already points at the

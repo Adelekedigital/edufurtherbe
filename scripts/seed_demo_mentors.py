@@ -34,9 +34,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_storage
 from app.core.config import Settings, get_settings
-from app.domain.assets import AssetKind, object_path
-from app.domain.images import process
-from app.infra.db.asset_store import replace_url
+from app.domain.assets import AssetKind
+from app.infra.db.asset_store import store_image
 from app.infra.db.demo_seed import (
     DemoMentor,
     RealHistoryError,
@@ -213,11 +212,8 @@ async def _delete_avatars(storage: object, urls: list[str]) -> None:
 
 
 async def _avatar(session: AsyncSession, storage: object, user_id: UUID, file: Path) -> None:
-    """The real avatar path: validate, re-encode, store, point the profile at it."""
-    image = await asyncio.to_thread(process, file.read_bytes(), AssetKind.AVATAR)
-    path = object_path(user_id, AssetKind.AVATAR, image.payload, image.content_type)
-    url = await asyncio.to_thread(storage.upload, path, image.payload, image.content_type)  # type: ignore[attr-defined]
-    await replace_url(session, user_id, AssetKind.AVATAR, url)
+    """The real avatar path — `store_image`, the upload endpoint's own pipeline."""
+    await store_image(session, storage, AssetKind.AVATAR, user_id, file.read_bytes())  # type: ignore[arg-type]
     await session.commit()
 
 

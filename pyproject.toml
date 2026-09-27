@@ -51,6 +51,8 @@ dependencies = [
     # codec â€” `features.check_module("avif")` was confirmed true here â€” and a
     # floor guessed from a changelog is a claim nobody checked.
     "pillow>=12.3",
+    "opencv-python-headless>=5,<6",
+    "numpy>=2.5,<3",
 ]
 
 [dependency-groups]
@@ -250,6 +252,9 @@ domain = [
     "posthog",
     "qstash",
     "upstash_qstash",
+    # OpenCV, for face detection. Its one home is `infra/images/faces.py` (#180);
+    # the focal-point rule in `domain/avatar_focus.py` is pure and takes boxes.
+    "cv2",
     # Arrived as a transitive of `fastapi[standard]` -> fastapi-cloud-cli, not by a
     # decision to adopt error reporting. Listed so it cannot be imported by accident
     # simply because it happens to be installed. See the note under `core` below for
@@ -272,6 +277,8 @@ api = [
     # that caps pixels and re-encodes to strip EXIF: a route decoding bytes itself
     # would bypass both, and no other gate reads imports.
     "PIL",
+    # OpenCV: face detection lives behind `infra/images/faces.py` (#180).
+    "cv2",
     "composio",
     "composio_core",
     "supabase",
@@ -312,6 +319,8 @@ core = [
     # that caps pixels and re-encodes to strip EXIF: a route decoding bytes itself
     # would bypass both, and no other gate reads imports.
     "PIL",
+    # OpenCV: face detection lives behind `infra/images/faces.py` (#180).
+    "cv2",
     "composio",
     "composio_core",
     "supabase",
