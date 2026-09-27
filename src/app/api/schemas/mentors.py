@@ -56,8 +56,8 @@ class MentorSummaryRead(BaseModel):
     `/mentors/{handle}`, one click away.
 
     `offerings` stays because it is the matching axis — the thing a mentee scans
-    a card for — and because when the service filter arrives, a row that cannot
-    say *why* it matched is a bad card. It is at most six short rows.
+    a card for — and because under the `offering` filter, a row that cannot say
+    *why* it matched is a bad card. It is at most six short rows.
 
     Names are nullable for the same reason they are everywhere else: the columns
     are, and the M2 transform maps them from optional Bubble fields.

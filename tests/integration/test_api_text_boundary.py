@@ -306,3 +306,17 @@ async def test_an_absent_parameter_still_filters_nothing(
 
     assert response.status_code == 200, response.text
     assert len(response.json()["data"]) > 1, "an absent filter is not a filter"
+
+
+async def test_a_nul_in_an_offering_filter_matches_what_the_clean_slug_matches(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`?offering=` is the fourth text parameter on this endpoint, and #97's
+    prediction held: it shipped without the normaliser and `%00` was a 500."""
+    await make_bookable_mentor(db_engine, "nul-offering")
+
+    dirty = await api_client.get(URL_MENTORS, params={"offering": "test-pre\x00paration"})
+    clean = await api_client.get(URL_MENTORS, params={"offering": "test-preparation"})
+
+    assert dirty.status_code == 200, dirty.text
+    assert dirty.json()["data"] == clean.json()["data"]

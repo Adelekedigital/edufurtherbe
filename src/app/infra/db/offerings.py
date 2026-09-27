@@ -21,12 +21,54 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.mentoring import MentorServiceOffering, ServiceOffering
 
-__all__ = ["offerings_for"]
+__all__ = ["live_offering_slugs", "offerings_for", "offers_any"]
+
+
+def _live() -> Any:
+    """Whether an offering is still one the platform offers.
+
+    One clause, read by the card, the profile and the filter's validation. A
+    retired offering hidden from the card but still accepted by the filter would
+    list a mentor for a reason their card cannot show.
+
+    `/catalog/service-offerings` decides the same thing through its own generic
+    `is_active` spec. The two are pinned by
+    `test_every_catalogue_offering_is_one_the_filter_accepts`.
+    """
+    return ServiceOffering.is_active.is_(True)
+
+
+def offers_any(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
+    """`EXISTS`: this mentor gives at least one of the offerings `slugs`.
+
+    An `EXISTS` rather than a join, because `mentor_service_offerings` is
+    one-to-many and a join lists a mentor once for every slug they match — the
+    same reason the search module gives for reading education this way.
+
+    **No `_live()` here, deliberately.** `slugs` arrive already checked by
+    `live_offering_slugs`, and a second copy of that check would be a guard no
+    test can reach — the retired case is refused before this runs.
+    """
+    return exists().where(
+        MentorServiceOffering.mentor_user_id == mentor_user_id,
+        ServiceOffering.id == MentorServiceOffering.service_offering_id,
+        ServiceOffering.slug.in_(slugs),
+    )
+
+
+async def live_offering_slugs(session: AsyncSession, slugs: Sequence[str]) -> set[str]:
+    """Which of `slugs` name an offering the platform still offers."""
+    if not slugs:
+        return set()
+    result = await session.execute(
+        select(ServiceOffering.slug).where(ServiceOffering.slug.in_(slugs), _live())
+    )
+    return set(result.scalars())
 
 
 async def offerings_for(
@@ -69,7 +111,7 @@ async def offerings_for(
         .join(ServiceOffering, ServiceOffering.id == MentorServiceOffering.service_offering_id)
         .where(
             MentorServiceOffering.mentor_user_id.in_(user_ids),
-            ServiceOffering.is_active.is_(True),
+            _live(),
         )
         .order_by(ServiceOffering.sort_order)
     )
