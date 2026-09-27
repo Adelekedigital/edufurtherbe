@@ -129,9 +129,13 @@ _PARTY_COLUMNS = (
     _MENTOR.first_name.label("mentor_first_name"),
     _MENTOR.last_name.label("mentor_last_name"),
     _MENTOR_PROFILE.avatar_url.label("mentor_avatar_url"),
+    _MENTOR_PROFILE.avatar_focus_x.label("mentor_avatar_focus_x"),
+    _MENTOR_PROFILE.avatar_focus_y.label("mentor_avatar_focus_y"),
     _MENTEE.first_name.label("mentee_first_name"),
     _MENTEE.last_name.label("mentee_last_name"),
     _MENTEE_PROFILE.avatar_url.label("mentee_avatar_url"),
+    _MENTEE_PROFILE.avatar_focus_x.label("mentee_avatar_focus_x"),
+    _MENTEE_PROFILE.avatar_focus_y.label("mentee_avatar_focus_y"),
     _attendance(Session.mentor_id, SessionParticipant.joined_at, "mentor_joined_at"),
     _attendance(
         Session.mentor_id, SessionParticipant.attendance_status, "mentor_attendance_status"

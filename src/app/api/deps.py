@@ -106,7 +106,7 @@ from app.infra.db.admin_store import (
     pending_institutions,
     pending_mentors,
 )
-from app.infra.db.asset_store import store_image
+from app.infra.db.asset_store import store_image, stored_avatar_focus
 from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.availability_writer import (
     create_exception,
@@ -305,6 +305,7 @@ CURRENT_USER = text("""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at,
            p.about_me, p.gender, p.avatar_url, p.banner_url,
+           p.avatar_focus_x, p.avatar_focus_y,
            p.social_linkedin, p.social_twitter, p.social_youtube,
            (p.user_id IS NOT NULL) AS has_profile,
            COALESCE(a.roles, ARRAY[]::text[]) AS admin_roles,
@@ -1157,8 +1158,10 @@ async def uploaded_avatar(
     user_id: OwnerDep,
     session: SessionDep,
     file: Annotated[UploadFile, File(description="JPEG, PNG or WebP, up to 5 MB.")],
-) -> str:
-    return await _store_image(AssetKind.AVATAR, file, user_id, session, request)
+) -> tuple[str, tuple[object, object]]:
+    """The stored avatar's URL, and its focus as stored after the upload."""
+    url = await _store_image(AssetKind.AVATAR, file, user_id, session, request)
+    return url, await stored_avatar_focus(session, user_id)
 
 
 async def uploaded_banner(
@@ -1170,7 +1173,7 @@ async def uploaded_banner(
     return await _store_image(AssetKind.BANNER, file, user_id, session, request)
 
 
-UploadedAvatarDep = Annotated[str, Depends(uploaded_avatar)]
+UploadedAvatarDep = Annotated[tuple[str, tuple[object, object]], Depends(uploaded_avatar)]
 UploadedBannerDep = Annotated[str, Depends(uploaded_banner)]
 
 

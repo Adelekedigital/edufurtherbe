@@ -27,7 +27,8 @@ RACE SAFETY
 ===========
 `ON CONFLICT DO NOTHING` against the unique `auth_id` and the unique live email.
 Two first requests: one inserts, the other conflicts, finds the row by `auth_id`,
-and carries on.
+and carries on. The loser can also see the winner's row at the address check,
+which is why that check ignores the caller's own account.
 """
 
 from __future__ import annotations
@@ -68,7 +69,7 @@ async def provision_first_sign_in(session: AsyncSession, *, auth_id: UUID, email
     # neither resurrected nor treated as a stranger.
     if (await session.execute(select(User.id).where(User.auth_id == auth_id))).first():
         return
-    if await _address_is_taken(session, address):
+    if await _address_is_taken(session, address, auth_id=auth_id):
         _refuse(auth_id)
 
     created = await session.execute(
@@ -95,10 +96,21 @@ async def provision_first_sign_in(session: AsyncSession, *, auth_id: UUID, email
     _refuse(auth_id)
 
 
-async def _address_is_taken(session: AsyncSession, address: str) -> bool:
-    """A live account already holds this address — the unique index's own test."""
+async def _address_is_taken(session: AsyncSession, address: str, *, auth_id: UUID) -> bool:
+    """A live account **other than this sign-in's own** holds this address.
+
+    Excluding the caller's own `auth_id` is what makes the race safe: a racing
+    first request can commit between the `auth_id` check above and this one,
+    and its row would otherwise read as somebody else's — refusing a person
+    their own account. An unlinked holder (`auth_id` null) is still somebody
+    else's, since `IS DISTINCT FROM` is true against null.
+    """
     held = await session.execute(
-        select(User.id).where(User.email == address, User.deleted_at.is_(None))
+        select(User.id).where(
+            User.email == address,
+            User.deleted_at.is_(None),
+            User.auth_id.is_distinct_from(auth_id),
+        )
     )
     return held.first() is not None
 

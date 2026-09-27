@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
+from app.api.schemas.common import AvatarFocusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.domain.emails import normalise_email
 from app.domain.enums import CreditState, PrimaryRole
@@ -37,6 +38,8 @@ class UserProfileRead(BaseModel):
     about_me: str | None = None
     gender: str | None = None
     avatar_url: str | None = None
+    #: Where to centre `avatar_url`; `null` means the client's default crop.
+    avatar_focus: AvatarFocusRead | None = None
     banner_url: str | None = None
     social_linkedin: str | None = None
     social_twitter: str | None = None

@@ -190,3 +190,18 @@ async def store_image(
     url = await asyncio.to_thread(storage.upload, path, image.payload, image.content_type)
     previous = await replace_url(session, user_id, kind, url, focus=focus, looked=looked)
     return url, previous
+
+
+async def stored_avatar_focus(session: AsyncSession, user_id: UUID) -> tuple[object, object]:
+    """The avatar focus as stored now — `(None, None)` when there is none.
+
+    Read back rather than taken from the detector, because what an upload
+    leaves stored is not always what it detected: the same photo uploaded again
+    keeps a mentor's chosen crop.
+    """
+    row = (
+        await session.execute(
+            select(Profile.avatar_focus_x, Profile.avatar_focus_y).where(Profile.user_id == user_id)
+        )
+    ).first()
+    return (None, None) if row is None else (row[0], row[1])

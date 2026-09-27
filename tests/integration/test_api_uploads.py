@@ -723,3 +723,37 @@ async def test_the_same_photo_again_keeps_a_chosen_focus(
     await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
 
     assert await focus_of(db_engine, user_id) == (Decimal("0.1"), Decimal("0.9"), "chosen")
+
+
+async def test_the_upload_response_carries_the_new_focal_point(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """So the client can crop the photo it just uploaded without refetching."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "upload-focus@example.com")
+
+    body = (
+        await api_client.post(
+            url(user_id, "avatar"), files=upload(FACE), headers=bearer(api_token(auth_id))
+        )
+    ).json()
+
+    assert 0.45 < body["avatar_focus"]["x"] < 0.6
+    assert 0.28 < body["avatar_focus"]["y"] < 0.42
+
+
+async def test_the_upload_response_reports_what_is_stored_not_what_was_detected(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The same photo again keeps a chosen crop, so that is what comes back."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "upload-focus-kept@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
+    await choose_focus(db_engine, user_id)
+
+    body = (
+        await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
+    ).json()
+
+    assert body["avatar_focus"] == pytest.approx({"x": 0.1, "y": 0.9})
