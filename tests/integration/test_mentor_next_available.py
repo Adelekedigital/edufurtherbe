@@ -20,20 +20,28 @@ from uuid import UUID
 
 import httpx
 import pytest
-from sqlalchemy import text
+from sqlalchemy import Column, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from tests.integration.factories import add_session, add_session_type, make_bookable_mentor
+from sqlalchemy.sql import visitors
+from tests.integration.factories import (
+    add_availability,
+    add_session,
+    add_session_type,
+    make_bookable_mentor,
+    make_public_mentor,
+)
 
 from app.domain.availability import UtcInterval
 from app.infra.db.next_available_store import JITTER, refresh_next_available
+from app.infra.db.public_visibility import mentor_is_public
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 URL = "/api/v1/mentors"
 MAX_AGE = dt.timedelta(minutes=5)
 
-#: Every table whose rows change when a mentor is free, and so must mark them
-#: stale. Pinned against `pg_trigger` rather than exercised one insert at a time:
+#: Every table whose rows change when a mentor is free, and so must log a
+#: change. Pinned against `pg_trigger` rather than exercised one insert at a time:
 #: the failure this guards is a table *missing* from the list, which a test of
 #: the tables somebody remembered cannot see.
 TRIGGERED = {
@@ -44,6 +52,7 @@ TRIGGERED = {
     "session_type_booking_configs",
     "session_type_scheduling_windows",
     "mentor_profiles",
+    "users",
     "calendar_connections",
 }
 
@@ -232,7 +241,7 @@ async def test_a_booking_committed_during_a_refresh_leaves_it_stale(
     assert (await card(api_client, mentor))["next_available_state"] == "refreshing"
 
 
-async def test_a_time_that_has_passed_is_not_shown(
+async def test_a_slot_past_its_booking_deadline_is_not_shown(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_bookable_mentor(db_engine, "next-passed")
@@ -241,7 +250,7 @@ async def test_a_time_that_has_passed_is_not_shown(
         await conn.execute(
             text(
                 "UPDATE mentor_next_availability "
-                "SET next_available_at = now() - interval '1 minute' WHERE mentor_user_id = :m"
+                "SET bookable_until = now() - interval '1 minute' WHERE mentor_user_id = :m"
             ),
             {"m": mentor},
         )
@@ -252,7 +261,7 @@ async def test_a_time_that_has_passed_is_not_shown(
     assert row["next_available_at"] is None
 
 
-async def test_every_availability_table_marks_the_mentor_stale(db_engine: AsyncEngine) -> None:
+async def test_every_availability_table_logs_a_change(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
         tables = set(
             (
@@ -260,7 +269,7 @@ async def test_every_availability_table_marks_the_mentor_stale(db_engine: AsyncE
                     text(
                         "SELECT c.relname FROM pg_trigger t "
                         "JOIN pg_class c ON c.oid = t.tgrelid "
-                        "WHERE t.tgname = 'trg_mark_next_available_stale' AND NOT t.tgisinternal"
+                        "WHERE t.tgname = 'trg_log_availability_change' AND NOT t.tgisinternal"
                     )
                 )
             ).scalars()
@@ -393,3 +402,76 @@ async def test_a_dry_run_writes_nothing(
 
     assert counts["refreshed"] >= 1
     assert (await card(api_client, mentor))["next_available_state"] == "refreshing"
+
+
+async def test_settling_a_past_session_does_not_blank_the_card(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The hourly settle job moves yesterday's sessions to `completed`. That
+    frees nothing ahead, so it must not blank every card it touches."""
+    mentor = await make_bookable_mentor(db_engine, "next-settle")
+    await add_session(db_engine, mentor, status="confirmed", days_ago=1)
+
+    state = await state_after(
+        api_client,
+        db_engine,
+        mentor,
+        "UPDATE sessions SET status = 'completed' WHERE mentor_id = :m",
+    )
+
+    assert state == "open"
+
+
+async def test_the_booking_deadline_is_the_slot_less_its_notice(
+    db_engine: AsyncEngine,
+) -> None:
+    """Past `bookable_until` the notice window has closed on the slot, `/slots`
+    no longer offers it, and the card must stop showing it."""
+    mentor = await make_public_mentor(db_engine, "next-notice")
+    await add_session_type(db_engine, mentor, notice=120)
+    await add_availability(db_engine, mentor)
+    await refresh(db_engine)
+
+    async with db_engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT next_available_at, bookable_until FROM mentor_next_availability "
+                    "WHERE mentor_user_id = :m"
+                ),
+                {"m": mentor},
+            )
+        ).one()
+
+    assert row.next_available_at - row.bookable_until == dt.timedelta(minutes=120)
+
+
+async def test_the_profile_and_user_triggers_watch_every_column_visibility_reads(
+    db_engine: AsyncEngine,
+) -> None:
+    """Their triggers fire only for named columns, so a column `mentor_is_public()`
+    starts reading must be named too — or a mentor who is unapproved or deleted
+    keeps a vouched time. This fails the day the two lists diverge."""
+    read = {
+        (element.table.name, element.name)
+        for clause in mentor_is_public()
+        for element in visitors.iterate(clause)
+        if isinstance(element, Column) and element.table.name in {"mentor_profiles", "users"}
+    }
+    assert read, "the predicate reads profile and user columns at all"
+
+    async with db_engine.begin() as conn:
+        watched = {
+            (row.relname, row.attname)
+            for row in await conn.execute(
+                text(
+                    "SELECT c.relname, a.attname FROM pg_trigger t "
+                    "JOIN pg_class c ON c.oid = t.tgrelid "
+                    "CROSS JOIN LATERAL unnest(t.tgattr::int2[]) AS k(attnum) "
+                    "JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum "
+                    "WHERE t.tgname = 'trg_log_availability_change'"
+                )
+            )
+        }
+
+    assert read <= watched, read - watched

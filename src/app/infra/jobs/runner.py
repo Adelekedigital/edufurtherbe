@@ -207,7 +207,9 @@ class RuntimeJobs:
                     session,
                     now=dt.datetime.now(dt.UTC),
                     max_age=dt.timedelta(minutes=self.settings.next_available_max_age_minutes),
-                    reader=free_busy_reader(self.settings, factory),
+                    # No factory on a dry run: the reader then records a dead
+                    # grant in this session, which the dry run rolls back.
+                    reader=free_busy_reader(self.settings, None if dry_run else factory),
                     dry_run=dry_run,
                 )
         finally:

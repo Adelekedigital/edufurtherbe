@@ -12,6 +12,7 @@ has to be able to see.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 from collections.abc import Callable
@@ -483,7 +484,13 @@ class MentorFreeBusy:
             return ()
 
         try:
-            return self._reader(
+            # **On a worker thread.** The reader is synchronous `httpx` — a token
+            # refresh then the free/busy request — and called inline it froze
+            # the event loop, and every request the server was handling, for the
+            # length of both. A slot read paid that once; the next-free-time job
+            # would pay it once per connected mentor.
+            return await asyncio.to_thread(
+                self._reader,
                 client_id=self._client_id,
                 client_secret=self._client_secret,
                 refresh_token=token,

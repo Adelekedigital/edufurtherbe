@@ -407,13 +407,8 @@ class MentorNextAvailability(TimestampMixin, Base):
     everything that *decides* anything. This row decides nothing: booking reads
     live slots, and a card that cannot vouch for this value shows `null`.
 
-    **One value compared for equality, not two clocks.** `changed_at` is set by
-    `trg_mark_next_available_stale` whenever anything that decides this mentor's
-    availability changes. A refresh copies the `changed_at` it *read* into
-    `seen_changed_at`, and the value is shown only while the two are equal — so
-    any change after that read, including one whose transaction was still open
-    when the refresh looked, leaves the row stale. `computed_at` decides only how
-    old a value is, for the Google-side changes no trigger sees.
+    The card vouches only while `MentorAvailabilityChange` holds no row for the
+    mentor — see that class for why a log rather than a timestamp here.
     """
 
     __tablename__ = "mentor_next_availability"
@@ -425,17 +420,50 @@ class MentorNextAvailability(TimestampMixin, Base):
     mentor_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("mentor_profiles.user_id", ondelete="CASCADE"), nullable=False
     )
-    #: The first bookable instant within `MAX_PROJECTION_DAYS`, or null for none.
+    #: The first bookable instant within the booking horizon, or null for none.
     next_available_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    #: When the value was last computed, by the job's clock. Age only.
-    computed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    #: The `changed_at` the last refresh read. Null until the first refresh.
-    seen_changed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    #: The last change to anything that decides this mentor's availability.
-    changed_at: Mapped[datetime.datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
-    )
+    #: The last instant that slot can still be booked — its start less the
+    #: offering's notice. Past it, `/slots` no longer offers the slot, so the
+    #: card stops showing it.
+    bookable_until: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: When the value was computed, by the job's clock. Decides age only.
+    computed_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
 
     __table_args__ = (
         Index("uq_mentor_next_availability_mentor_user_id", "mentor_user_id", unique=True),
     )
+
+
+class MentorAvailabilityChange(Base):
+    """Something that decides a mentor's availability changed, and nobody has
+    recomputed since.
+
+    Appended by `trg_log_availability_change` on the nine tables that decide
+    when a mentor is free; deleted by the refresh job, which removes exactly the
+    rows it saw before computing. The card vouches for a stored time only while
+    the mentor has none left, so a change committed during a refresh — or one
+    still uncommitted when the refresh looked — survives it and keeps the card
+    at `refreshing`.
+
+    **A log rather than a `changed_at` on the cache row, because of locks.**
+    Bumping one shared row made every booking hold its lock for the whole
+    booking transaction, including the meeting-provisioning call, so two
+    mentees booking the same mentor queued behind each other. Appends do not
+    block one another.
+
+    Append-only: no `updated_at`, and a row is never changed, only deleted.
+    """
+
+    __tablename__ = "mentor_availability_changes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("mentor_profiles.user_id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (Index("ix_mentor_availability_changes_mentor_user_id", "mentor_user_id"),)

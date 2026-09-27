@@ -17,6 +17,7 @@ from app.infra.db.models.availability import (
     AvailabilityException,
     AvailabilityRule,
     CalendarConnection,
+    MentorAvailabilityChange,
     MentorNextAvailability,
     SessionTypeSchedulingWindow,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "MenteeGoal",
     "MenteeGoalCountry",
     "MenteeGoalNeed",
+    "MentorAvailabilityChange",
     "MentorConferencingOption",
     "MentorNextAvailability",
     "MentorProfile",

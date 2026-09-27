@@ -72,7 +72,7 @@ from app.infra.db.models.sessions import (
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 
-__all__ = ["list_slots"]
+__all__ = ["FreeBusyReader", "list_slots", "mentor_today"]
 
 
 class FreeBusyReader(Protocol):
@@ -167,6 +167,16 @@ def _busy(user_id: UUID, span_start: dt.datetime, span_end: dt.datetime) -> Sele
     )
 
 
+def mentor_today(timezone: str, now: dt.datetime) -> dt.date:
+    """Today, in the mentor's zone — where an omitted `start` begins.
+
+    One function because the next-free-time job searches exactly the range
+    `list_slots` answers, and a second copy of where that range starts is the
+    one that drifts: the card would search days `/slots` never offers.
+    """
+    return now.astimezone(ZoneInfo(timezone)).date()
+
+
 async def list_slots(
     session: AsyncSession,
     user_id: UUID,
@@ -208,7 +218,7 @@ async def list_slots(
         return None
 
     if start is None:
-        start = now.astimezone(ZoneInfo(offering["timezone"])).date()
+        start = mentor_today(offering["timezone"], now)
     if end is None:
         end = start + dt.timedelta(days=DEFAULT_PROJECTION_DAYS)
 
