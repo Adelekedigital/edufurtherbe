@@ -11,6 +11,12 @@ rewrite, no backfill in the migration (a script does that, reading the images).
   outranks a detection and is never overwritten by one. ``detected`` with no
   coordinates means "looked, found no face" — so a backfill does not look again.
 
+**`trg_clear_stale_avatar_focus`** clears the point whenever `avatar_url`
+changes and the writer did not also set the focus. The upload path sets both;
+the Bubble ETL and the asset re-host write `avatar_url` alone, and a point
+found in the old picture says nothing about the new one. One trigger, so a
+writer added later obeys it too.
+
 Additive; old code never reads the columns, so both versions serve during the
 deploy.
 """
@@ -27,6 +33,22 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 TABLE = "user_profiles"
+
+CLEAR_FUNCTION = """
+CREATE FUNCTION clear_stale_avatar_focus() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.avatar_url IS DISTINCT FROM OLD.avatar_url
+       AND NEW.avatar_focus_x IS NOT DISTINCT FROM OLD.avatar_focus_x
+       AND NEW.avatar_focus_y IS NOT DISTINCT FROM OLD.avatar_focus_y
+       AND NEW.avatar_focus_source IS NOT DISTINCT FROM OLD.avatar_focus_source THEN
+        NEW.avatar_focus_x := NULL;
+        NEW.avatar_focus_y := NULL;
+        NEW.avatar_focus_source := NULL;
+    END IF;
+    RETURN NEW;
+END
+$$
+"""
 
 
 def upgrade() -> None:
@@ -56,12 +78,19 @@ def upgrade() -> None:
         TABLE,
         "avatar_focus_x IS NULL OR avatar_focus_source IS NOT NULL",
     )
+    op.execute(CLEAR_FUNCTION)
+    op.execute(
+        "CREATE TRIGGER trg_clear_stale_avatar_focus BEFORE UPDATE OF avatar_url "
+        "ON user_profiles FOR EACH ROW EXECUTE FUNCTION clear_stale_avatar_focus()"
+    )
 
 
 def downgrade() -> None:
     """Drop the columns. Detected points are recomputable by the backfill; a
     mentor-chosen one is not, so a downgrade after that feature ships loses it."""
     op.execute("SET lock_timeout = '3s'")
+    op.execute("DROP TRIGGER IF EXISTS trg_clear_stale_avatar_focus ON user_profiles")
+    op.execute("DROP FUNCTION IF EXISTS clear_stale_avatar_focus()")
     for name in (
         "ck_user_profiles_avatar_focus_has_a_source",
         "ck_user_profiles_avatar_focus_source_is_known",

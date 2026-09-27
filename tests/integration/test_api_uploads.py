@@ -684,3 +684,42 @@ async def test_a_banner_upload_leaves_the_avatar_focus_alone(
     )
 
     assert await focus_of(db_engine, user_id) == (Decimal("0.1"), Decimal("0.9"), "chosen")
+
+
+async def test_a_detector_failure_still_stores_the_avatar_and_leaves_it_unprocessed(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Best-effort by contract: the photo is saved, and "unknown" is left for the
+    backfill — never recorded as "no face", a claim nobody checked."""
+    from app.infra.images import faces
+
+    def broken(_payload: bytes) -> None:
+        raise ValueError("detector blew up")
+
+    monkeypatch.setattr(faces, "detect_faces", broken)
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "detector-down@example.com")
+
+    response = await api_client.post(
+        url(user_id, "avatar"), files=upload(FACE), headers=bearer(api_token(auth_id))
+    )
+
+    assert response.status_code == 200, response.text
+    assert (await stored_urls(db_engine, user_id))[0] is not None
+    assert await focus_of(db_engine, user_id) == (None, None, None)
+
+
+async def test_the_same_photo_again_keeps_a_chosen_focus(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Object paths are content hashes, so the same file is the same URL — the
+    picture did not change, and neither should the mentor's crop of it."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "same-photo@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
+    await choose_focus(db_engine, user_id)
+
+    await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
+
+    assert await focus_of(db_engine, user_id) == (Decimal("0.1"), Decimal("0.9"), "chosen")

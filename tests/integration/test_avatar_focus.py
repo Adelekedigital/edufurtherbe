@@ -197,3 +197,81 @@ async def test_a_choice_made_while_the_backfill_ran_is_kept(db_engine: AsyncEngi
 
     assert written is False
     assert await focus_of(db_engine, mentor) == (Decimal("0.1"), Decimal("0.9"), "chosen")
+
+
+async def test_any_writer_that_changes_the_photo_clears_its_point(db_engine: AsyncEngine) -> None:
+    """The ETL and the asset re-host write `avatar_url` directly. A point found
+    in the old picture says nothing about the new one, whoever changed it."""
+    mentor = await make_bookable_mentor(db_engine, "focus-etl")
+    await set_profile(
+        db_engine,
+        mentor,
+        avatar_url="https://cdn.example/old.jpg",
+        avatar_focus_x=0.5,
+        avatar_focus_y=0.4,
+        avatar_focus_source="detected",
+    )
+
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE user_profiles SET avatar_url = 'https://cdn.example/new.jpg' "
+                "WHERE user_id = :u"
+            ),
+            {"u": mentor},
+        )
+
+    assert await focus_of(db_engine, mentor) == (None, None, None)
+
+
+async def test_a_writer_setting_the_point_with_the_photo_keeps_it(db_engine: AsyncEngine) -> None:
+    """The positive half: the trigger clears only a point the writer left stale."""
+    mentor = await make_bookable_mentor(db_engine, "focus-with-photo")
+    await set_profile(db_engine, mentor, avatar_url="https://cdn.example/old.jpg")
+
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE user_profiles SET avatar_url = 'https://cdn.example/new.jpg', "
+                "avatar_focus_x = 0.3, avatar_focus_y = 0.2, avatar_focus_source = 'detected' "
+                "WHERE user_id = :u"
+            ),
+            {"u": mentor},
+        )
+
+    assert await focus_of(db_engine, mentor) == (Decimal("0.3"), Decimal("0.2"), "detected")
+
+
+async def test_an_image_that_cannot_be_decoded_is_left_for_a_rerun(db_engine: AsyncEngine) -> None:
+    mentor = await make_bookable_mentor(db_engine, "focus-garbage")
+    fake = FakeStorage()
+    await set_profile(
+        db_engine, mentor, avatar_url=stored(fake, f"users/{mentor}/bad.jpg", b"not an image")
+    )
+
+    counts = await run_backfill(db_engine, fake)
+
+    assert counts["unreadable"] == 1
+    assert await focus_of(db_engine, mentor) == (None, None, None)
+
+
+async def test_a_network_error_on_one_avatar_does_not_stop_the_run(db_engine: AsyncEngine) -> None:
+    first = await make_bookable_mentor(db_engine, "focus-timeout")
+    second = await make_bookable_mentor(db_engine, "focus-after-timeout")
+    fake = FakeStorage()
+    timeout_url = stored(fake, f"users/{first}/a.jpg", FACE)
+    await set_profile(db_engine, first, avatar_url=timeout_url)
+    await set_profile(db_engine, second, avatar_url=stored(fake, f"users/{second}/a.jpg", FACE))
+    original = fake.handle
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and str(first) in request.url.path:
+            raise httpx.ReadTimeout("slow", request=request)
+        return original(request)
+
+    fake.handle = flaky  # type: ignore[method-assign]
+
+    counts = await run_backfill(db_engine, fake)
+
+    assert counts["unreadable"] == 1
+    assert counts["focused"] == 1

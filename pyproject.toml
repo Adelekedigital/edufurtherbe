@@ -52,6 +52,7 @@ dependencies = [
     # floor guessed from a changelog is a claim nobody checked.
     "pillow>=12.3",
     "opencv-python-headless>=5,<6",
+    "numpy>=2.5,<3",
 ]
 
 [dependency-groups]

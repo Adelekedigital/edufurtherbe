@@ -51,6 +51,7 @@ pytestmark = pytest.mark.db
 #: the re-upgrade is for.
 FUNCTION_NAMES = (
     "apply_mentor_status",
+    "clear_stale_avatar_focus",
     "log_availability_change",
     "session_window",
     "set_updated_at",

@@ -16,16 +16,23 @@ import asyncio
 import logging
 from uuid import UUID
 
+import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.avatar_focus import DETECTED
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.predicates import LIVE
-from app.infra.images.faces import avatar_focus
+from app.infra.images.faces import FaceDetectionError, avatar_focus
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
-__all__ = ["USER_STATEMENTS", "backfill_avatar_focus", "record_focus", "unprocessed_avatars"]
+__all__ = [
+    "USER_STATEMENTS",
+    "backfill_avatar_focus",
+    "focus_columns",
+    "record_focus",
+    "unprocessed_avatars",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +52,18 @@ UNPROCESSED = (
 USER_STATEMENTS = (UNPROCESSED,)
 
 
+def focus_columns(focus: tuple[float, float] | None, *, looked: bool) -> dict[str, object]:
+    """The profile columns for one detection outcome — the only place they are built.
+
+    `looked=False` (detection failed) leaves everything empty, so the backfill
+    tries again. `looked=True` with no point records `detected`: looked, no face.
+    """
+    if not looked:
+        return {"avatar_focus_x": None, "avatar_focus_y": None, "avatar_focus_source": None}
+    x, y = focus if focus is not None else (None, None)
+    return {"avatar_focus_x": x, "avatar_focus_y": y, "avatar_focus_source": DETECTED}
+
+
 async def unprocessed_avatars(session: AsyncSession) -> list[tuple[UUID, str]]:
     """`(user_id, avatar_url)` for every live avatar without a focus decision."""
     rows = await session.execute(UNPROCESSED)
@@ -60,7 +79,6 @@ async def record_focus(
     next run does not download it again. Returns whether a row was written.
     Does not commit.
     """
-    x, y = focus if focus is not None else (None, None)
     result = await session.execute(
         update(UserProfile)
         .where(
@@ -68,7 +86,7 @@ async def record_focus(
             UserProfile.avatar_url == url,
             UserProfile.avatar_focus_source.is_(None),
         )
-        .values(avatar_focus_x=x, avatar_focus_y=y, avatar_focus_source=DETECTED)
+        .values(**focus_columns(focus, looked=True))
     )
     return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -90,11 +108,13 @@ async def backfill_avatar_focus(session: AsyncSession, storage: SupabaseStorage)
             continue
         try:
             payload = await asyncio.to_thread(storage.download, path)
-        except StorageError:
+            focus = await asyncio.to_thread(avatar_focus, payload)
+        except StorageError, httpx.HTTPError, FaceDetectionError:
+            # A timeout, a missing object or an undecodable one: nobody looked
+            # at the picture, so nothing is recorded and a re-run tries again.
             logger.warning("avatar could not be read for focus", extra={"user_id": str(user_id)})
             counts["unreadable"] += 1
             continue
-        focus = await asyncio.to_thread(avatar_focus, payload)
         if await record_focus(session, user_id, url, focus):
             counts["focused" if focus is not None else "no_face"] += 1
         else:
