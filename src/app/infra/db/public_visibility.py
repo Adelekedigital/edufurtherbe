@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, and_, or_, select
 
 from app.domain.enums import ApprovalStatus, ListingStatus
 from app.infra.db.models.availability import AvailabilityRule
@@ -38,6 +38,8 @@ __all__ = [
     "bookable_mentors",
     "mentor_is_bookable",
     "mentor_is_public",
+    "mentor_is_published",
+    "mentor_is_visible_to",
     "session_type_is_live",
     "session_type_of",
 ]
@@ -78,12 +80,43 @@ def mentor_is_public() -> list[Any]:
     spread it into `.where(...)` beside its own predicates and read the whole
     condition in one place.
     """
-    return [
-        MentorProfile.deleted_at.is_(None),
+    return [*_mentor_exists(), mentor_is_published()]
+
+
+def _mentor_exists() -> list[Any]:
+    """Neither the profile nor the account is soft-deleted — see above for why both."""
+    return [MentorProfile.deleted_at.is_(None), User.deleted_at.is_(None)]
+
+
+def mentor_is_published() -> Any:
+    """Approved **and** listed — the half of `mentor_is_public` that a mentor's
+    own state decides, as one expression so a `SELECT` can read it as a column
+    as well as filter on it."""
+    return and_(
         MentorProfile.approval_status == ApprovalStatus.APPROVED,
         MentorProfile.listing_status == ListingStatus.LISTED,
-        User.deleted_at.is_(None),
-    ]
+    )
+
+
+def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
+    """`mentor_is_public()`, widened by one person: the mentor themself.
+
+    **The owner sees their own profile in every state** — pending, declined,
+    unlisted — because a mentor preparing a profile, or wondering why nobody
+    books them, needs to see what it says (product rule, 2026-09-27). Nobody
+    else is widened: a stranger with a token is scoped exactly as one without.
+
+    **Soft deletion is not waived for the owner.** A deleted profile is gone for
+    everyone, and the owner reading it back would be a resurrection by URL.
+
+    ``None`` is the anonymous viewer and returns `mentor_is_public()` itself,
+    not an equivalent spelling, so the anonymous path cannot drift from the
+    predicate every other public read uses. Every caller must join `users`, for
+    the reason `mentor_is_public` gives.
+    """
+    if viewer is None:
+        return mentor_is_public()
+    return [*_mentor_exists(), or_(mentor_is_published(), User.id == viewer)]
 
 
 def mentor_is_bookable() -> list[Any]:

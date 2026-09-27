@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
+from app.domain.enums import ApprovalStatus, ListingStatus
 
 
 class ServiceOfferingRead(BaseModel):
@@ -134,13 +135,7 @@ class MentorSummaryRead(BaseModel):
                 None if row["session_value"] is None else float(str(row["session_value"]))
             ),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
-            # The stored time is only a claim while the state says `open`; the
-            # state is computed once in SQL, and this is the one place it gates
-            # the time.
-            next_available_at=(
-                row["next_available_at"] if row["next_available_state"] == "open" else None
-            ),
-            next_available_state=row["next_available_state"],
+            **_next_available(row),
         )
 
 
@@ -354,6 +349,31 @@ class MentorPublicRead(BaseModel):
         ),
     )
 
+    #: The same pair, with the same meaning, as the discovery card's — read from
+    #: the same stored table (ADR 0029) and gated by the same helper. A profile
+    #: the public cannot see has nothing bookable, so its owner reads `none`.
+    next_available_at: datetime | None = None
+    next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
+
+    # `exclude_if`, not a model serializer: a wrap serializer typed `dict`
+    # replaces this model's whole serialization schema, and the published
+    # OpenAPI loses every property of the profile.
+    approval_status: ApprovalStatus | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "**Only in the mentor's own view of their profile, and absent for "
+            "everyone else** — its presence means the caller is this mentor. "
+            "Sent with a bearer token, the owner reads their profile in any "
+            "state, including before approval."
+        ),
+    )
+    listing_status: ListingStatus | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Owner only, like `approval_status`. `unlisted` means hidden from search.",
+    )
+
     @classmethod
     def from_row(
         cls,
@@ -395,7 +415,34 @@ class MentorPublicRead(BaseModel):
                 int(str(stats["attendance_rate"])) if stats["attendance_rate"] is not None else None
             ),
             reviews=ReviewSummaryRead.from_row(reviews),
+            **_next_available(row),
+            **_owner_fields(row),
         )
+
+
+def _next_available(row: dict[str, Any]) -> dict[str, Any]:
+    """`next_available_at` and `next_available_state`, for a card or a profile.
+
+    **The stored time is only a claim while the state says `open`.** The state
+    is computed once in SQL; this is the one place it gates the time — shared by
+    the discovery card and the profile, so the two cannot disagree about when a
+    mentor is free.
+    """
+    state = row["next_available_state"]
+    return {
+        "next_available_at": row["next_available_at"] if state == "open" else None,
+        "next_available_state": state,
+    }
+
+
+#: Published to the mentor reading their own profile, and absent — not null —
+#: for everybody else, so their presence alone means "this is you".
+OWNER_ONLY = ("approval_status", "listing_status")
+
+
+def _owner_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """The owner-only statuses, when the row says the caller is the owner."""
+    return {key: row[key] for key in OWNER_ONLY} if row.get("is_owner") else {}
 
 
 def _text(value: object) -> str | None:

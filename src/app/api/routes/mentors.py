@@ -12,12 +12,19 @@ D20's rule was three clauses — listed, *or* the viewer has a session, *or* the
 viewer is an admin. Only the first survives here. A mentee with a session sees
 *that session*, which carries the mentor's name since the party identity change;
 an admin reads the owner-facing endpoint, which names whose records are being
-reviewed. Dropping the other two removes the need for an optional-token
-dependency, which this codebase has no shape for and which would make every
-response vary by caller.
+reviewed.
+
+**One viewer was added back, 2026-09-27: the mentor themself.** A mentor reads
+their own profile and reviews in any state, which makes the profile and its
+reviews the first responses here that vary by caller — so both send
+`Vary: Authorization`, and `Cache-Control: private` whenever a token came with
+the request, errors included (`api/per_viewer.py`). `/mentors` itself is
+unchanged and still identical for everyone.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from fastapi import APIRouter, status
 
@@ -27,6 +34,13 @@ from app.api.schemas.mentors import MentorPage, MentorPublicRead, MentorSummaryR
 from app.api.schemas.reviews import MentorReviewRead
 
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
+
+
+#: The bearer token is optional on the two per-viewer reads. Without the empty
+#: alternative, OpenAPI marks it required and generated clients refuse to call
+#: a public endpoint anonymously.
+OPTIONAL_TOKEN: dict[str, Any] = {"security": [{}, {"HTTPBearer": []}]}
+
 
 PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_404_NOT_FOUND: {
@@ -95,12 +109,18 @@ async def find_mentors(page: MentorPageDep) -> MentorPage:
     "/{handle}",
     response_model=MentorPublicRead,
     summary="A mentor's public profile",
+    openapi_extra=OPTIONAL_TOKEN,
     description=(
         "Everything the public may read about one mentor, with what they offer "
         "and what can be booked.\n\n"
         "**Public.** No token is required — a mentee compares mentors before "
         "signing up. A mentor appears only while they are both approved and "
         "listed, so pausing removes them from here as well as from search.\n\n"
+        "**Except to themselves.** With a bearer token, a mentor reads their own "
+        "profile in any state — pending, declined or unlisted — and the response "
+        "adds `approval_status` and `listing_status`, which nobody else ever "
+        "receives. A hidden profile's `session_types` is empty and its "
+        "`next_available_state` is `none`: strangers can book none of it.\n\n"
         "**`handle` is an id or a slug.** The slug is the legacy public profile "
         "handle, carried so existing profile links keep working; it is nullable, "
         "and a mentor without one is reachable by id.\n\n"
@@ -132,6 +152,7 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
     "/{handle}/reviews",
     response_model=Page[MentorReviewRead],
     summary="What mentees said about this mentor",
+    openapi_extra=OPTIONAL_TOKEN,
     description=(
         "One page of published reviews, newest first.\n\n"
         "**Public**, like the profile it belongs to, and scoped the same way: a "
@@ -149,7 +170,9 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
         "was this session*, `1..5` — the badge beside it. The mentor's overall "
         "figures are on the profile, not repeated per row.\n\n"
         "Withdrawn reviews are absent, which is the whole point of withdrawing "
-        "one."
+        "one.\n\n"
+        "A mentor reads their own reviews with a bearer token whatever state "
+        "their profile is in, as on the profile."
     ),
     responses={
         status.HTTP_404_NOT_FOUND: {
