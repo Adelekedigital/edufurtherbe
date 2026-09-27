@@ -30,7 +30,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.api.schemas.common import Page
+from app.api.schemas.common import AvatarFocusRead, Page
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 
@@ -46,23 +46,6 @@ class ServiceOfferingRead(BaseModel):
 
     slug: str
     display_name: str
-
-
-class AvatarFocusRead(BaseModel):
-    """Where to centre the avatar: the main face, as 0..1 fractions of the image.
-
-    For CSS, `object-position: {x * 100}% {y * 100}%`. Absent (`null` on the
-    parent) when no face was found or the photo has not been processed yet —
-    fall back to the client's default crop.
-    """
-
-    x: float = Field(ge=0, le=1)
-    y: float = Field(ge=0, le=1)
-
-    @classmethod
-    def from_row(cls, row: Any) -> AvatarFocusRead | None:
-        x, y = row["avatar_focus_x"], row["avatar_focus_y"]
-        return None if x is None or y is None else cls(x=float(x), y=float(y))
 
 
 class MentorSummaryRead(BaseModel):
@@ -139,7 +122,7 @@ class MentorSummaryRead(BaseModel):
             last_name=_text(row["last_name"]),
             headline=_text(row["headline"]),
             avatar_url=_text(row["avatar_url"]),
-            avatar_focus=AvatarFocusRead.from_row(row),
+            avatar_focus=AvatarFocusRead.of(row["avatar_focus_x"], row["avatar_focus_y"]),
             primary_study_country=_text(row["primary_study_country"]),
             origin_country=_text(row["origin_country"]),
             degree=_text(row["degree"]),
@@ -391,7 +374,7 @@ class MentorPublicRead(BaseModel):
             headline=_text(row["headline"]),
             about_me=_text(row["about_me"]),
             avatar_url=_text(row["avatar_url"]),
-            avatar_focus=AvatarFocusRead.from_row(row),
+            avatar_focus=AvatarFocusRead.of(row["avatar_focus_x"], row["avatar_focus_y"]),
             banner_url=_text(row["banner_url"]),
             primary_study_program=_text(row["primary_study_program"]),
             primary_study_country=_text(row["primary_study_country"]),

@@ -305,6 +305,7 @@ CURRENT_USER = text("""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at,
            p.about_me, p.gender, p.avatar_url, p.banner_url,
+           p.avatar_focus_x, p.avatar_focus_y,
            p.social_linkedin, p.social_twitter, p.social_youtube,
            (p.user_id IS NOT NULL) AS has_profile,
            COALESCE(a.roles, ARRAY[]::text[]) AS admin_roles,

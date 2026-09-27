@@ -34,6 +34,29 @@ DEFAULT_PAGE_SIZE = 10
 LOOKUP_PAGE_SIZE = 300
 
 
+class AvatarFocusRead(BaseModel):
+    """Where to centre an avatar: the main face, as 0..1 fractions of the image.
+
+    For CSS, `object-position: {x * 100}% {y * 100}%`. `null` on the parent
+    when no face was found or the photo has not been processed yet — fall back
+    to the client's default crop (settled decision #180).
+
+    **Sent wherever `avatar_url` is**: the discovery card, the featured mentor,
+    the public profile, a session's party cards and `/me`. A photo framed well
+    in one place and badly in another is the same problem, moved.
+    """
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+    @classmethod
+    def of(cls, x: object, y: object) -> AvatarFocusRead | None:
+        """From the two stored columns; `None` unless both are set."""
+        if x is None or y is None:
+            return None
+        return cls(x=float(str(x)), y=float(str(y)))
+
+
 class Page[T](BaseModel):
     """One page of results, and how to ask for the next.
 

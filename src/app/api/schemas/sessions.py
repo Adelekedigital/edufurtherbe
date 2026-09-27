@@ -29,6 +29,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field
 
+from app.api.schemas.common import AvatarFocusRead
 from app.domain.attendance import join_window
 from app.domain.enums import (
     ActorType,
@@ -62,6 +63,8 @@ class PartyRead(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     avatar_url: str | None = None
+    #: Where to centre `avatar_url`; `null` means the client's default crop.
+    avatar_focus: AvatarFocusRead | None = None
     joined_at: dt.datetime | None = Field(
         default=None,
         description=(
@@ -240,6 +243,9 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
         first_name=_text(row.get(f"{side}_first_name")),
         last_name=_text(row.get(f"{side}_last_name")),
         avatar_url=_text(row.get(f"{side}_avatar_url")),
+        avatar_focus=AvatarFocusRead.of(
+            row.get(f"{side}_avatar_focus_x"), row.get(f"{side}_avatar_focus_y")
+        ),
         joined_at=row.get(f"{side}_joined_at"),  # type: ignore[arg-type]
         # A missing participant row arrives as `None` and becomes `pending`,
         # which is the same answer as an unsettled row and the right one: both

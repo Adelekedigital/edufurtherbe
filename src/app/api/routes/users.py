@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import CurrentUserDep, OwnAttributesDep
+from app.api.schemas.common import AvatarFocusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import CreditsRead, UserProfileRead, UserRead
 
@@ -69,7 +70,14 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
     responses=ME_RESPONSES,
 )
 async def read_me(user: CurrentUserDep, attributes: OwnAttributesDep) -> UserRead:
-    profile = UserProfileRead(**user) if user["has_profile"] else None
+    profile = (
+        UserProfileRead(
+            **user,
+            avatar_focus=AvatarFocusRead.of(user["avatar_focus_x"], user["avatar_focus_y"]),
+        )
+        if user["has_profile"]
+        else None
+    )
     mentor_profile = attributes["mentor_profile"]
     # Bound before the call rather than walrused inside it: `credits` reads it
     # too, and a keyword argument that depends on an earlier argument's
