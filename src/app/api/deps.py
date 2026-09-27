@@ -136,6 +136,7 @@ from app.infra.db.intake_store import (
     update_question,
 )
 from app.infra.db.mentor_public_store import get_public_mentor, get_public_mentor_id
+from app.infra.db.mentor_relationship import mentor_relationship
 from app.infra.db.mentor_search_store import count_mentors, mentor_card, search_mentors
 from app.infra.db.mentor_status_store import (
     decide,
@@ -2443,6 +2444,22 @@ async def own_reviewable_sessions(
 WrittenReviewDep = Annotated[dict[str, Any], Depends(written_review)]
 EditedReviewDep = Annotated[dict[str, Any], Depends(edited_review)]
 ReviewableSessionsDep = Annotated[list[dict[str, Any]], Depends(own_reviewable_sessions)]
+
+
+async def own_mentor_relationship(
+    mentor_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
+    """The caller's history, as a mentee, with one mentor.
+
+    No visibility check on the mentor, deliberately: the figures are the
+    caller's own sessions and reviews, which they may always read, and an id
+    that is nobody reads as no history rather than a `404` that would say which
+    ids are mentors.
+    """
+    return await mentor_relationship(session, user["id"], mentor_id, now=dt.datetime.now(dt.UTC))
+
+
+MentorRelationshipDep = Annotated[dict[str, Any], Depends(own_mentor_relationship)]
 
 
 async def mentor_reviews_page(
