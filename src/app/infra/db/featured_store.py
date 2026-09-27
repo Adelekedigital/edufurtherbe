@@ -28,7 +28,7 @@ import datetime as dt
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, delete, func, select
+from sqlalchemy import CursorResult, and_, delete, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
@@ -119,14 +119,56 @@ async def current_featured(session: AsyncSession, *, now: dt.datetime) -> UUID |
         await session.rollback()
         return None
 
-    cycle = (await session.execute(select(func.max(FeaturedMentor.cycle)))).scalar_one() or 0
+    # **Only weeks that have arrived.** An admin may schedule a week ahead
+    # (#188), and a row for a week that has not come yet is not a turn anybody
+    # has had — reading it would spend the chosen mentor's turn early, and the
+    # rotation could then feature them the week before their own.
+    arrived = FeaturedMentor.week_start <= week
+    cycle = (
+        await session.execute(select(func.max(FeaturedMentor.cycle)).where(arrived))
+    ).scalar_one() or 0
+    # **An admin's week counts in whichever cycle it falls in**, not the one
+    # stamped when it was chosen: a choice made weeks ahead may arrive after a
+    # new cycle began. So a turn this cycle is a row of the cycle, or an admin
+    # row whose week falls on or after the cycle's first week.
+    began = (
+        await session.execute(
+            select(func.min(FeaturedMentor.week_start)).where(
+                arrived, FeaturedMentor.cycle == cycle
+            )
+        )
+    ).scalar_one()
+    admin_week_in_cycle = (
+        and_(FeaturedMentor.source == FeaturedSource.ADMIN, FeaturedMentor.week_start >= began)
+        if began is not None
+        else false()
+    )
     had_a_turn = set(
         (
             await session.execute(
-                select(FeaturedMentor.mentor_user_id).where(FeaturedMentor.cycle == cycle)
+                # No `arrived` here, deliberately: a row not yet arrived is an
+                # admin's, and its mentor is held out of the pick below, so
+                # counting them changes nothing — a guard no test could reach.
+                select(FeaturedMentor.mentor_user_id).where(
+                    or_(FeaturedMentor.cycle == cycle, admin_week_in_cycle)
+                )
             )
         ).scalars()
     )
+    # **A mentor an admin has scheduled ahead is held for that week**: their
+    # turn is reserved, so the rotation neither spends it nor shows them the
+    # week before. Unless holding them leaves nobody to feature.
+    reserved = set(
+        (
+            await session.execute(
+                select(FeaturedMentor.mentor_user_id).where(
+                    FeaturedMentor.week_start > week,
+                    FeaturedMentor.source == FeaturedSource.ADMIN,
+                )
+            )
+        ).scalars()
+    )
+    available = [c for c in candidates if c.id not in reserved] or candidates
     # **Last week's** mentor, not the newest row: after a mid-week replacement
     # the newest row is this week's paused pick, and a new cycle keyed on it
     # would let last week's mentor come straight back.
@@ -151,13 +193,13 @@ async def current_featured(session: AsyncSession, *, now: dt.datetime) -> UUID |
     ).scalar_one()
 
     pool, new_cycle = eligible(
-        {c.id for c in candidates}, featured_this_cycle=had_a_turn, last_featured=last
+        {c.id for c in available}, featured_this_cycle=had_a_turn, last_featured=last
     )
     cycle = cycle + 1 if new_cycle or cycle == 0 else cycle
     # The week, and how many picks it already had, so a replacement does not
     # land on the same seed as the pick it replaces.
     chosen = pick(
-        [c for c in candidates if c.id in pool],
+        [c for c in available if c.id in pool],
         seed=f"{week.isoformat()}:{this_week}",
         now=now,
         most_sessions=max(c.completed_sessions for c in candidates),

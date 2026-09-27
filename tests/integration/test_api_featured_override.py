@@ -279,3 +279,85 @@ async def test_an_admin_row_must_name_its_admin(db_engine: AsyncEngine) -> None:
                 ),
                 {"u": mentor, "w": this_week()},
             )
+
+
+async def test_a_future_choice_is_not_featured_the_week_before(db_engine: AsyncEngine) -> None:
+    """The reviewer's case: the rotation picks x, then an admin schedules y two
+    weeks out. y is held for their week — never featured the week before, so
+    never twice running — and their admin week is their turn, not an extra one.
+
+    Three mentors, because with two the week in between must repeat somebody;
+    that limit is recorded in #188.
+    """
+    from itertools import pairwise
+
+    from app.infra.db.featured_store import set_featured
+
+    mentors = [await make_bookable_mentor(db_engine, f"seq-{n}") for n in range(3)]
+    admin = await make_user(db_engine, uuid4(), "admin-seq@example.com", role="mentor_approval")
+    now = dt.datetime.now(dt.UTC)
+    week = week_start(now)
+    async with AsyncSession(db_engine) as session:
+        x = await current_featured(session, now=now)
+    y = next(m for m in mentors if m != x)
+    async with AsyncSession(db_engine) as session:
+        await set_featured(session, week + dt.timedelta(weeks=2), y, admin, now=now)
+
+    sequence = [x]
+    for weeks in range(1, 6):
+        at = dt.datetime.combine(week + dt.timedelta(weeks=weeks), dt.time(9), tzinfo=dt.UTC)
+        async with AsyncSession(db_engine) as session:
+            sequence.append(await current_featured(session, now=at))
+
+    assert sequence[2] == y
+    assert all(one != two for one, two in pairwise(sequence)), sequence
+    # One full rotation over the first three weeks: everyone once, y by admin.
+    assert set(sequence[:3]) == set(mentors)
+
+
+async def test_a_scheduled_mentor_is_held_until_their_week(db_engine: AsyncEngine) -> None:
+    """Deterministic, unlike the case above: with two mentors, the rotation
+    must not spend y the week before y's admin week — which reading future
+    rows as turns always did. The repeat of x in between is forced by having
+    two mentors and is accepted (#188)."""
+    from app.infra.db.featured_store import set_featured
+
+    a = await make_bookable_mentor(db_engine, "hold-a")
+    b = await make_bookable_mentor(db_engine, "hold-b")
+    admin = await make_user(db_engine, uuid4(), "admin-hold@example.com", role="mentor_approval")
+    now = dt.datetime.now(dt.UTC)
+    week = week_start(now)
+    async with AsyncSession(db_engine) as session:
+        x = await current_featured(session, now=now)
+    y = b if x == a else a
+    async with AsyncSession(db_engine) as session:
+        await set_featured(session, week + dt.timedelta(weeks=2), y, admin, now=now)
+
+    picked = []
+    for weeks in (1, 2, 3):
+        at = dt.datetime.combine(week + dt.timedelta(weeks=weeks), dt.time(9), tzinfo=dt.UTC)
+        async with AsyncSession(db_engine) as session:
+            picked.append(await current_featured(session, now=at))
+    week_before, their_week, week_after = picked
+
+    assert week_before != y
+    assert their_week == y
+    # By then a new cycle has begun, and y's admin week falls in it: it is
+    # their turn in *that* cycle, not the one stamped when it was chosen.
+    assert week_after != y
+
+
+async def test_withdrawing_is_for_mentor_admins_only(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    chosen = await make_bookable_mentor(db_engine, "rm-gate")
+    await api_client.put(
+        f"{ADMIN}/{this_week()}", json={"mentor_id": str(chosen)}, headers=await an_admin(db_engine)
+    )
+
+    refused = await api_client.delete(
+        f"{ADMIN}/{this_week()}", headers=await an_admin(db_engine, "limited_access")
+    )
+
+    assert refused.status_code == 404
+    assert [r[2] for r in await rows(db_engine)] == ["admin"]
