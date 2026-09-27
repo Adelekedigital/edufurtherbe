@@ -71,6 +71,9 @@ class OwnReviewRead(BaseModel):
     author_first_name: str | None = None
     author_last_initial: str | None = None
     author_institution: str | None = None
+    #: The reviewer has deleted their account: the review stays, every
+    #: `author_*` field is null — exactly as on the public list.
+    author_deleted: bool = False
     #: The caller's own report, if they filed one. Null is "not reported",
     #: which is a different state from reported-and-dismissed.
     report: ReviewReportRead | None = None
@@ -103,6 +106,7 @@ class OwnReviewRead(BaseModel):
             author_first_name=row.get("author_first_name"),
             author_last_initial=row.get("author_last_initial"),
             author_institution=row.get("author_institution"),
+            author_deleted=bool(row.get("author_deleted")),
             report=report,
         )
 

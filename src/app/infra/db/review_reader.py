@@ -23,14 +23,12 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, literal, select, true, tuple_
+from sqlalchemy import literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
 from app.infra.db.models.reviews import Review
-from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE
-from app.infra.db.qualifications import top_qualification
+from app.infra.db.review_authors import author_columns, with_author
 from app.infra.db.review_stats import published
 
 __all__ = ["get_review_row", "list_mentor_reviews"]
@@ -125,33 +123,25 @@ async def list_mentor_reviews(
     Two copies of *which* institution represents somebody would drift, and the
     copy with fewer tests is the one that would.
 
+    **A deleted reviewer's review is listed, unattributed** (`review_authors`),
+    so this list and `published()`'s count are the same set of rows.
+
     Scoped by `published()`, so a withdrawn review is absent here exactly as it
     is absent from the averages — the one thing withdrawal is *for*.
     """
-    author = top_qualification(Review.reviewed_by, name="author_qualification")
     statement = (
-        select(
-            Review.id,
-            Review.created_at,
-            Review.public_review,
-            Review.valuable_rating,
-            User.first_name.label("author_first_name"),
-            # `nullif`, because `left('', 1)` is `''` rather than null and a client
-            # concatenating renders "Fauziyah .". Both name columns are nullable,
-            # and the migrated rows do not go through the boundary that turns an
-            # emptied string into null.
-            func.nullif(func.left(User.last_name, 1), "").label("author_last_initial"),
-            author.c.institution.label("author_institution"),
+        # **This endpoint needs no token**, so a deleted reviewer's identity is
+        # withheld by the join itself — see `review_authors`. Their review stays,
+        # which is what keeps this list's length equal to the profile's count.
+        with_author(
+            select(
+                Review.id,
+                Review.created_at,
+                Review.public_review,
+                Review.valuable_rating,
+                *author_columns(),
+            ).select_from(Review)
         )
-        .select_from(Review)
-        # **`LIVE`, and this endpoint needs no token.** A reviewer who deletes
-        # their account must stop being named on a public page; without it their
-        # first name, initial and institution stay published for good.
-        # `predicates.LIVE` exists because this rule has been missed twice
-        # already, and `test_predicates` walks only two stores, so nothing here
-        # would have caught a third.
-        .join(User, and_(User.id == Review.reviewed_by, LIVE))
-        .outerjoin(author, true())
         .where(published(mentor), *([_after(after)] if after is not None else []))
         .order_by(Review.created_at.desc(), Review.id.desc())
         .limit(limit + 1)

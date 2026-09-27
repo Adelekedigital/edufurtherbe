@@ -22,15 +22,13 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, literal, select, true, tuple_
+from sqlalchemy import and_, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
 from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
-from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE
-from app.infra.db.qualifications import top_qualification
+from app.infra.db.review_authors import author_columns, with_author
 
 __all__ = ["list_reviews_about"]
 
@@ -71,32 +69,29 @@ async def list_reviews_about(
     name than a stranger does: knowing who reviewed you is the product's choice
     already, and widening it here would be a second answer to one question.
     """
-    author = top_qualification(Review.reviewed_by, name="author_qualification")
     mine = ReviewReport.__table__.alias("mine")
 
     statement = (
-        select(
-            Review.id,
-            Review.created_at,
-            Review.public_review,
-            Review.valuable_rating,
-            # The subject sees that a review went, which the public list cannot
-            # show and which they would otherwise learn only by its absence.
-            (Review.deleted_at.is_not(None)).label("withdrawn"),
-            User.first_name.label("author_first_name"),
-            func.nullif(func.left(User.last_name, 1), "").label("author_last_initial"),
-            author.c.institution.label("author_institution"),
-            mine.c.id.label("report_id"),
-            mine.c.reason.label("report_reason"),
-            mine.c.created_at.label("report_created_at"),
-            mine.c.resolved_at.label("report_resolved_at"),
-            mine.c.outcome.label("report_outcome"),
+        # The same author join as the public list: a reviewer who deletes their
+        # account stops being named, here as well as there, and their review
+        # stays in both.
+        with_author(
+            select(
+                Review.id,
+                Review.created_at,
+                Review.public_review,
+                Review.valuable_rating,
+                # The subject sees that a review went, which the public list cannot
+                # show and which they would otherwise learn only by its absence.
+                (Review.deleted_at.is_not(None)).label("withdrawn"),
+                *author_columns(),
+                mine.c.id.label("report_id"),
+                mine.c.reason.label("report_reason"),
+                mine.c.created_at.label("report_created_at"),
+                mine.c.resolved_at.label("report_resolved_at"),
+                mine.c.outcome.label("report_outcome"),
+            ).select_from(Review)
         )
-        .select_from(Review)
-        # `LIVE` for the same reason the public list has it: a reviewer who
-        # deletes their account stops being named, here as well as there.
-        .join(User, and_(User.id == Review.reviewed_by, LIVE))
-        .outerjoin(author, true())
         .outerjoin(
             mine,
             and_(mine.c.review_id == Review.id, mine.c.reported_by == subject),
