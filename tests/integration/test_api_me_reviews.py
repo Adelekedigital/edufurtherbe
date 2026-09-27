@@ -288,6 +288,38 @@ async def test_the_report_never_names_the_moderator(
     assert "resolved_by" not in filed
 
 
+async def test_a_deleted_reviewer_stays_listed_without_their_identity(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The subject sees the same review a stranger does: kept, unattributed."""
+    subject_auth = uuid4()
+    subject = await a_user(db_engine, subject_auth, role="mentor")
+    author = await a_user(db_engine, uuid4())
+    await a_review(db_engine, about=subject, by=author, text_="Useful.")
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": author})
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert row["public_review"] == "Useful."
+    assert row["author_deleted"] is True
+    assert row["author_first_name"] is None
+    assert row["author_last_initial"] is None
+
+
+async def test_a_live_reviewer_is_named_to_the_subject(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    subject_auth = uuid4()
+    subject = await a_user(db_engine, subject_auth, role="mentor")
+    await a_review(db_engine, about=subject, by=await a_user(db_engine, uuid4()))
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert row["author_deleted"] is False
+    assert row["author_first_name"] == "Ada"
+
+
 async def test_no_token_is_refused(api_client: httpx.AsyncClient) -> None:
     assert (await api_client.get(MINE)).status_code == 401
     assert (

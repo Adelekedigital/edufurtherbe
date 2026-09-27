@@ -322,7 +322,8 @@ class MentorReviewRead(BaseModel):
 
     **The author is a first name and an initial**, never a surname — the
     attribution the product chose, and the surname is not selected at all rather
-    than dropped here.
+    than dropped here. **None of it** for a reviewer who has deleted their
+    account: `author_deleted` is true and the review stays.
 
     `private_review` is absent, as it is from every read model: it is feedback
     about the platform and the mentor never sees it.
@@ -336,6 +337,10 @@ class MentorReviewRead(BaseModel):
     author_first_name: str | None = None
     author_last_initial: str | None = None
     author_institution: str | None = None
+    #: The reviewer has deleted their account. The review stays — it was earned,
+    #: and it is in `reviews.count` — but every `author_*` field is null. Label
+    #: it ("Deleted user") rather than rendering an empty byline.
+    author_deleted: bool = False
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> MentorReviewRead:
@@ -347,4 +352,5 @@ class MentorReviewRead(BaseModel):
             author_first_name=row["author_first_name"],
             author_last_initial=row["author_last_initial"],
             author_institution=row["author_institution"],
+            author_deleted=bool(row["author_deleted"]),
         )
