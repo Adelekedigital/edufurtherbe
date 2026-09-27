@@ -23,6 +23,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.errors import (
+    AccountExistsError,
     AlreadyReviewedError,
     AppError,
     AuthenticationError,
@@ -77,6 +78,7 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
 # nothing about problem documents, the same split that keeps `domain/` testable
 # without a request.
 TYPE_BY_ERROR: dict[type[AppError], str] = {
+    AccountExistsError: "/problems/account-exists",
     InsufficientCreditError: "/problems/insufficient-credit",
     OnboardingIncompleteError: "/problems/onboarding-incomplete",
     AlreadyReviewedError: "/problems/review-already-exists",

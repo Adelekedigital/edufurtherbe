@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.domain.emails import normalise_email
+
 
 class ReferralWrite(BaseModel):
     """Sending an invite.
@@ -23,7 +25,7 @@ class ReferralWrite(BaseModel):
     @field_validator("invitee_email")
     @classmethod
     def normalise(cls, value: str | None) -> str | None:
-        return value.strip().lower() if value else None
+        return normalise_email(value) if value else None
 
 
 class ReferralClaim(BaseModel):

@@ -21,6 +21,7 @@ from typing import Any
 
 from app.domain.availability import UnknownTimezoneError, normalise_timezone
 from app.domain.bubble import CREATED_AT, MODIFIED_AT, normalise_list, parse_timestamp
+from app.domain.emails import normalise_email
 from app.domain.enums import AdminRole, AuthProvider, PrimaryRole
 
 # Legacy `👥Role` values. Written out rather than derived by lowercasing,
@@ -151,7 +152,7 @@ def to_user(record: dict[str, Any], *, export_timezone: tzinfo | None = None) ->
         # rather than quietly accepted. That is deliberate (ADR 0016) —
         # normalisation belongs at the boundary and the constraint proves the
         # boundary did its job.
-        email=str(email).strip().lower(),
+        email=normalise_email(str(email)),
         primary_role=PRIMARY_ROLES[str(role_raw)],
         timezone=_resolve_timezone(record.get("UserTimezonID"), bubble_id),
         created_at=created,

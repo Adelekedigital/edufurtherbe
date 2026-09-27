@@ -41,9 +41,16 @@ OWNER_RESPONSES: dict[int | str, dict[str, str]] = {
     },
     status.HTTP_404_NOT_FOUND: {
         "description": (
-            "The token is genuine but no account is linked to it. Every migrated "
-            "user is in that state until provisioning runs, so during cutover "
-            "this is the ordinary case rather than an attack."
+            "The token is valid but has no live account and nothing to create one "
+            "from: it carries no email, or its account was deleted. A first "
+            "sign-in with an email creates the account (settled decision #178)."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "`/problems/account-exists`: a first sign-in whose email belongs to "
+            "an account this sign-in is not linked to. Never linked or merged "
+            "automatically; the person should contact support."
         )
     },
 }

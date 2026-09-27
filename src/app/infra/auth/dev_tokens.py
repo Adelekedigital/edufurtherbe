@@ -31,7 +31,7 @@ def mint_dev_token(
     *,
     secret: str,
     ttl: timedelta = DEFAULT_TTL,
-    email: str = "someone@example.com",
+    email: str | None = "someone@example.com",
     **overrides: Any,
 ) -> str:
     """A signed access token for ``subject``.

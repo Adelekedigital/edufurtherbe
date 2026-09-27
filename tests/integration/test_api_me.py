@@ -117,12 +117,15 @@ async def test_every_refusal_reads_the_same(api_client: httpx.AsyncClient) -> No
 # --------------------------------------------------------------------------
 
 
-async def test_a_valid_token_with_no_linked_account_is_a_404(api_client: httpx.AsyncClient) -> None:
-    """The state every migrated user is in until provisioning runs.
+async def test_a_valid_token_with_nothing_to_build_an_account_from_is_a_404(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """A genuine token with no email creates no account, so nothing is linked.
 
-    The token is genuine; nothing is linked to it. That is not an authentication
-    failure, and reporting it as one would send an operator looking at the wrong
-    thing during cutover.
+    That is not an authentication failure, and reporting it as one would send an
+    operator looking at the wrong thing. A token *with* an email creates the
+    account on first sign-in (#178, `test_first_sign_in.py`); a migrated user
+    whose account was never linked is a 409 there, not a 404 here.
     """
     response = await api_client.get("/api/v1/me", headers=bearer(api_token(uuid4())))
 
