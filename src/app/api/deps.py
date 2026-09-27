@@ -126,6 +126,7 @@ from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.featured_store import current_featured
+from app.infra.db.first_sign_in import provision_first_sign_in
 from app.infra.db.idempotency import Held, Mismatched, Replayed, record_response, reserve
 from app.infra.db.intake_store import (
     create_question,
@@ -320,16 +321,22 @@ CURRENT_USER = text("""
 
 
 async def get_current_user(claims: ClaimsDep, session: SessionDep) -> dict[str, Any]:
-    """Resolve a verified token to the user it belongs to.
+    """Resolve a verified token to the user it belongs to, creating it on first sign-in.
 
-    **A valid token for a user we do not hold is a 404, not a 401.** The token is
-    genuine; no account is linked to it. Every migrated user is in exactly that
-    state until provisioning runs, so during cutover this is the ordinary case
-    rather than an attack — and ``NotFoundError`` already conflates "absent" with
-    "not yours", which is the right answer either way.
+    **A first sign-in creates the account** (settled decision #178), from the
+    token's `sub` and `email` — never by linking to an existing account by
+    email, which is refused as `AccountExistsError`. See `first_sign_in`.
+
+    **A valid token that still has no live account is a 404, not a 401**: one
+    with no email to build an account from, or whose account was deleted. The
+    token is genuine; no live account is linked to it.
     """
     result = await session.execute(CURRENT_USER, {"auth_id": claims.subject})
     row = result.mappings().first()
+    if row is None and claims.email:
+        await provision_first_sign_in(session, auth_id=claims.subject, email=claims.email)
+        result = await session.execute(CURRENT_USER, {"auth_id": claims.subject})
+        row = result.mappings().first()
     if row is None:
         raise NotFoundError("no account is linked to this identity")
     return dict(row)

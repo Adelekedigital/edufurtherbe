@@ -21,6 +21,19 @@ class ConflictError(AppError):
     """The request cannot be applied to the current state of the resource."""
 
 
+class AccountExistsError(ConflictError):
+    """A first sign-in's email already belongs to an account it is not linked to.
+
+    Refused rather than linked, and refused rather than duplicated. Linking by
+    email is how an account is taken over; a second account for one address is
+    how a person ends up with two histories. The only safe outcome is a person —
+    support — deciding (settled decision #178).
+
+    Carries a problem type, because the client's response is unlike any other
+    refusal: not "sign in again", but "contact support".
+    """
+
+
 class InsufficientCreditError(ConflictError):
     """The caller has no spendable credit left.
 
