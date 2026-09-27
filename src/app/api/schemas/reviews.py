@@ -345,6 +345,13 @@ class ReviewSummaryRead(BaseModel):
         )
 
 
+class ReviewTopicRead(BaseModel):
+    """Which of the mentor's offerings a review was about."""
+
+    id: UUID = Field(description="Pass as `?session_type=` to list only these reviews.")
+    name: str = Field(description="The offering's name as it is now.")
+
+
 class MentorReviewRead(BaseModel):
     """One review on a mentor's public profile.
 
@@ -369,6 +376,10 @@ class MentorReviewRead(BaseModel):
     #: and it is in `reviews.count` — but every `author_*` field is null. Label
     #: it ("Deleted user") rather than rendering an empty byline.
     author_deleted: bool = False
+    #: The offering the reviewed session was booked as. **Null for a migrated
+    #: review**: the legacy review had no link to a session, so nothing records
+    #: what it was about.
+    session_type: ReviewTopicRead | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> MentorReviewRead:
@@ -381,4 +392,9 @@ class MentorReviewRead(BaseModel):
             author_last_initial=row["author_last_initial"],
             author_institution=row["author_institution"],
             author_deleted=bool(row["author_deleted"]),
+            session_type=(
+                ReviewTopicRead(id=row["session_type_id"], name=str(row["session_type_name"]))
+                if row["session_type_id"] is not None
+                else None
+            ),
         )

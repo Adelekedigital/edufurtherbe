@@ -59,6 +59,10 @@ class Profile:
         author_name: tuple[str, str] = ("Fauziyah", "Fashola"),
         institution: str | None = None,
         days_ago: int = 1,
+        #: Which offering the reviewed session was for; the fixture's own by default.
+        session_type: UUID | None = None,
+        #: A migrated review: the legacy type has no link to a session at all.
+        legacy: bool = False,
     ) -> str:
         """One published review by a fresh mentee, written straight to the table.
 
@@ -85,16 +89,25 @@ class Profile:
                     {"u": author, "s": institution},
                 )
             session_id = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO sessions (mentor_id, mentee_id, session_type_id, starts_at, "
-                        "duration_minutes, status) "
-                        "VALUES (:m, :a, :t, now() - make_interval(days => :d), 45, 'completed') "
-                        "RETURNING id"
-                    ),
-                    {"m": self.mentor, "a": author, "t": self.offering, "d": days_ago},
-                )
-            ).scalar_one()
+                None
+                if legacy
+                else (
+                    await conn.execute(
+                        text(
+                            "INSERT INTO sessions (mentor_id, mentee_id, session_type_id, "
+                            "starts_at, duration_minutes, status) "
+                            "VALUES (:m, :a, :t, now() - make_interval(days => :d), 45, "
+                            "'completed') RETURNING id"
+                        ),
+                        {
+                            "m": self.mentor,
+                            "a": author,
+                            "t": session_type or self.offering,
+                            "d": days_ago,
+                        },
+                    )
+                ).scalar_one()
+            )
             review = (
                 await conn.execute(
                     text(
@@ -367,6 +380,7 @@ async def test_the_platform_feedback_never_reaches_the_list(profile: Profile) ->
         "author_last_initial",
         "author_institution",
         "author_deleted",
+        "session_type",
     }
 
 
@@ -675,3 +689,86 @@ async def test_paging_follows_the_same_order(profile: Profile) -> None:
     # session, not the review, which is the distinction this whole ordering is about.
     assert seen == ["Number 2.", "Number 1.", "Number 0."]
     assert second["next_cursor"] is None
+
+
+# --------------------------------------------------------------------------
+# The topic — which of the mentor's offerings a review was about
+# --------------------------------------------------------------------------
+
+
+async def test_each_review_carries_the_offering_it_was_about(profile: Profile) -> None:
+    await profile.reviewed()
+
+    (row,) = (await profile.listed())["data"]
+
+    assert row["session_type"]["id"] == str(profile.offering)
+    assert row["session_type"]["name"].startswith("CV review")
+
+
+async def test_a_migrated_review_has_no_topic(profile: Profile) -> None:
+    """The legacy review type has no session, so nothing says what it was about."""
+    await profile.reviewed(legacy=True)
+
+    (row,) = (await profile.listed())["data"]
+
+    assert row["session_type"] is None
+
+
+async def test_the_list_filters_to_one_offering(profile: Profile) -> None:
+    other = await add_session_type(profile.engine, profile.mentor, name="Interview prep")
+    mine = await profile.reviewed(text_body="About the CV.")
+    await profile.reviewed(session_type=other, text_body="About the interview.")
+    # A migrated review has no topic, so it belongs under none of them, not
+    # under every one, which "keep the legacy rows" would be an easy edit away.
+    await profile.reviewed(legacy=True, text_body="From before sessions were linked.")
+
+    rows = (await profile.listed(f"?session_type={profile.offering}"))["data"]
+
+    assert [row["id"] for row in rows] == [mine]
+
+
+async def test_the_filtered_list_pages_within_the_filter(profile: Profile) -> None:
+    """The cursor is the sort key alone, so page two must still apply the filter
+    — a filter the cursor forgets is the bug that only shows on page two."""
+    other = await add_session_type(profile.engine, profile.mentor, name="Essay review")
+    older = await profile.reviewed(days_ago=5)
+    await profile.reviewed(session_type=other, days_ago=3)
+    newer = await profile.reviewed(days_ago=1)
+    query = f"?session_type={profile.offering}&limit=1"
+
+    first = await profile.listed(query)
+    second = await profile.listed(f"{query}&cursor={first['next_cursor']}")
+
+    assert [row["id"] for row in first["data"]] == [newer]
+    assert [row["id"] for row in second["data"]] == [older]
+    assert second["next_cursor"] is None
+
+
+async def test_an_offering_with_no_reviews_is_an_empty_page(profile: Profile) -> None:
+    await profile.reviewed()
+
+    body = await profile.listed(f"?session_type={uuid4()}")
+
+    assert body["data"] == []
+
+
+async def test_a_malformed_offering_id_is_refused(profile: Profile) -> None:
+    response = await profile.client.get(
+        f"/api/v1/mentors/{profile.mentor}/reviews?session_type=cv-review"
+    )
+
+    assert response.status_code == 422
+
+
+async def test_a_retired_offering_still_names_its_reviews(profile: Profile) -> None:
+    """Deleting an offering does not change what an old session was about."""
+    await profile.reviewed()
+    async with profile.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE session_types SET deleted_at = now() WHERE id = :t"),
+            {"t": profile.offering},
+        )
+
+    (row,) = (await profile.listed())["data"]
+
+    assert row["session_type"]["id"] == str(profile.offering)
