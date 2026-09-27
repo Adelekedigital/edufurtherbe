@@ -45,7 +45,7 @@ docker compose up -d           # local Postgres on 55432; tests marked `db` skip
 uv run alembic upgrade head    # apply migrations — never on app startup
 uv run uvicorn app.main:app --reload --app-dir src
 uv run pytest -q               # full suite
-make check                     # the full local gate — before every commit
+make check                     # the full local gate — CI runs it on every push (rule 10)
 ```
 
 ## Non-negotiables
@@ -83,9 +83,10 @@ make check                     # the full local gate — before every commit
 
 ## How we work
 
-Nine rules. The first six came out of a retrospective on M1 — each is there
+Ten rules. The first six came out of a retrospective on M1 — each is there
 because it cost real time, and that count is in `failure-modes.md`. Rules 7–9 were
-added 2026-08-17, when the approval gate itself turned out to be one of the costs.
+added 2026-08-17, when the approval gate itself turned out to be one of the costs;
+rule 10 on 2026-09-27, when the duplicated local gate turned out to be another.
 
 1. ~~**Never stack pull requests.**~~ **Reversed 2026-08-16, deliberately.**
    Stacking is allowed: branch from the PR you build on, merge in order. The
@@ -153,8 +154,17 @@ added 2026-08-17, when the approval gate itself turned out to be one of the cost
    every test fail before it passes; no threshold lowered to go green;
    object-level authorization scoped in the query on every read and write path;
    `security-checker` run whenever auth, input, SQL or PII is touched; the Build
-   Verification Gate in full before any work is called done; and a red gate is
-   fixed in the build that found it (#99).
+   Verification Gate in full before any work is called done — **run by CI**,
+   per rule 10; and a red gate is fixed in the build that found it (#99).
+10. **CI is the full gate; locally, run what can fail.** Added 2026-09-27: the
+    full local run (~12 min) agreed with CI on every PR it was compared on, and
+    a review fix made #230 pay it twice. Before committing, run the fast checks
+    (format, lint, types, layers, bandit), **the test files the change
+    touches**, and the mutation batch, then `/security-review` and
+    `/code-review`. The full suite runs in CI, and work is done only when **CI
+    is green on the PR's exact head commit**. Check the SHA, because a stale
+    green has been reported before (#35). A CI failure is fixed on the branch
+    like any red gate. Run `make check` locally only to reproduce a CI failure.
 
 Working alone in the repository is assumed. When another session may be active,
 use `git worktree` rather than switching the shared checkout.
@@ -193,4 +203,6 @@ classes, and it may hold **no business rules and no SQL** (see
 ## Before saying it's done
 
 Run the Build Verification Gate in `build-workflow`. All of it, not most of it.
-End with the explicit verdict — or say what you found.
+The full test suite runs in CI (rule 10). The gate is passed when CI is green on
+the PR's head commit, not when the local subset passes. End with the explicit
+verdict — or say what you found.
