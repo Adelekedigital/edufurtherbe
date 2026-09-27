@@ -52,6 +52,9 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "credit is spent, and it rises above that when a migrated balance "
         "or a late refund exceeds it. `next_reset_at` is exclusive — the 1st of "
         "the next month at midnight UTC.\n\n"
+        "`mentee_completed_sessions` counts sessions the caller **received** as "
+        "a mentee with status `completed` — never null, and not the mentor "
+        "card's `completed_sessions`, which counts sessions given.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -78,4 +81,5 @@ async def read_me(user: CurrentUserDep, attributes: OwnAttributesDep) -> UserRea
         # a dual-role user is both, and a negative predicate would hide the card
         # from somebody who can book.
         credits=(CreditsRead.model_validate(attributes["credits"]) if goal is not None else None),
+        mentee_completed_sessions=attributes["mentee_completed_sessions"],
     )
