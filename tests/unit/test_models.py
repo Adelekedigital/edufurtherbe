@@ -28,6 +28,7 @@ from conftest import PROJECT_ROOT
 # from a silently smaller test run into a failure.
 EXPECTED_MODELS = {
     "Country",
+    "MentorNextAvailability",
     "AdminCreditGrant",
     "CreditLot",
     "CreditTransaction",

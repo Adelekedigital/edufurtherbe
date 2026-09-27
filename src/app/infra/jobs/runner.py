@@ -21,7 +21,7 @@ from app.infra.clients.hipolabs import FileCatalogue, HipolabsCatalogue
 from app.infra.clients.meetings import GoogleCalendar, NullCalendar, free_busy
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier
 from app.infra.clients.templates import LoopsTemplates
-from app.infra.db.calendar_store import check_connections
+from app.infra.db.calendar_store import MentorFreeBusy, NullFreeBusy, check_connections
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
 from app.infra.db.credit_grants import grant_monthly_credits, unlocked_mentee_count
 from app.infra.db.credit_reminders import (
@@ -30,6 +30,7 @@ from app.infra.db.credit_reminders import (
     remind_about_expiring_credits,
 )
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.outbox import drain
 from app.infra.db.session_writer import expire_requests, remind_unreviewed, settle_attendance
 from app.infra.db.triggers import timestamps_from_source_across
@@ -99,6 +100,7 @@ class RuntimeJobs:
             "monthly-credits": self._monthly_credits,
             "expire-credits": self._expire_credits,
             "sync-institutions": self._sync_institutions,
+            "refresh-next-available": self._refresh_next_available,
         }
         counts = await methods[name](dry_run=dry_run)
         status = "no-op" if not any(counts.values()) else "completed"
@@ -191,6 +193,45 @@ class RuntimeJobs:
                     "disconnected_calendars": health["disconnected"],
                     "messages": sum(sent.values()),
                 }
+        finally:
+            await engine.dispose()
+
+    def _free_busy(self, factory: Callable[[], AsyncSession]) -> Any:
+        """Each mentor's Google free/busy, or nothing when unconfigured.
+
+        The same null-unless-configured rule `api/deps._free_busy` applies, so a
+        staging deployment without calendar keys refreshes from declared hours
+        alone rather than failing every run.
+        """
+        oauth = self._calendar_health()
+        if oauth is None:
+            return NullFreeBusy()
+        return MentorFreeBusy(
+            client_id=oauth["client_id"],
+            client_secret=oauth["client_secret"],
+            key=oauth["key"],
+            # Its own sessions for the one write it makes — a dead grant is
+            # recorded even when a dry run rolls the refresh back.
+            session_factory=factory,
+        )
+
+    async def _refresh_next_available(self, *, dry_run: bool) -> dict[str, int]:
+        engine = create_database_engine(self.settings)
+        try:
+            factory = create_session_factory(engine)
+            reader = self._free_busy(factory)
+            async with factory() as session:
+                counts = await refresh_next_available(
+                    session,
+                    now=dt.datetime.now(dt.UTC),
+                    max_age=dt.timedelta(minutes=self.settings.next_available_max_age_minutes),
+                    reader=reader,
+                )
+                if dry_run:
+                    await session.rollback()
+                else:
+                    await session.commit()
+                return counts
         finally:
             await engine.dispose()
 

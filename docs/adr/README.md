@@ -36,6 +36,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0026](0026-the-review-scale-the-package-cannot-hold.md) | Reviews store the ordinal a mentee chose, not the number Bubble displayed | Accepted — diverges from canonical `05_credits_reviews.sql` |
 | [0027](0027-the-credit-ledger-diverges-from-the-package.md) | The credit ledger ships five sources, five reasons, and RESTRICT | Accepted — diverges from canonical `05_credits_reviews.sql` |
 | [0028](0028-qstash-owns-runtime-scheduling.md) | QStash owns application-runtime scheduling | Accepted |
+| [0029](0029-store-each-mentors-next-free-time.md) | Store each mentor's next free time, and poll free/busy to keep it | Accepted |
 
 ## Conventions
 

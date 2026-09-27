@@ -17,6 +17,7 @@ from app.infra.db.models.availability import (
     AvailabilityException,
     AvailabilityRule,
     CalendarConnection,
+    MentorNextAvailability,
     SessionTypeSchedulingWindow,
 )
 from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTransaction
@@ -81,6 +82,7 @@ __all__ = [
     "MenteeGoalCountry",
     "MenteeGoalNeed",
     "MentorConferencingOption",
+    "MentorNextAvailability",
     "MentorProfile",
     "MentorServiceOffering",
     "MentorStatusEvent",

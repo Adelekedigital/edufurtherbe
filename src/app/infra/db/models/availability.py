@@ -397,3 +397,43 @@ class CalendarConnection(TimestampMixin, Base):
             postgresql_where=text("status = 'active'"),
         ),
     )
+
+
+class MentorNextAvailability(TimestampMixin, Base):
+    """When a mentor is next free, computed by a job and read by the card.
+
+    **A stored derived value, and ADR 0029 is why that is allowed here.** D56
+    forbids stored counts and D18 derives slots on demand; both still hold for
+    everything that *decides* anything. This row decides nothing: booking reads
+    live slots, and a card that cannot vouch for this value shows `null`.
+
+    **Two clocks, and the card compares them.** `changed_at` is set by
+    `trg_mark_next_available_stale` whenever anything that decides this mentor's
+    availability changes; `computed_at` is when the refresh that wrote
+    `next_available_at` *started*. The value is shown only while
+    `computed_at >= changed_at`, so a change that lands mid-refresh leaves the
+    row stale rather than blessing a value computed before it.
+    """
+
+    __tablename__ = "mentor_next_availability"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    #: Cascades: the row is a cache of the profile, meaningless without it.
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("mentor_profiles.user_id", ondelete="CASCADE"), nullable=False
+    )
+    #: The first bookable instant within `MAX_PROJECTION_DAYS`, or null for none.
+    next_available_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: When the refresh that wrote `next_available_at` started. Null until the
+    #: first refresh, which reads as stale.
+    computed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: The last change to anything that decides this mentor's availability.
+    changed_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        Index("uq_mentor_next_availability_mentor_user_id", "mentor_user_id", unique=True),
+    )

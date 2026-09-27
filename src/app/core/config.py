@@ -169,6 +169,14 @@ class Settings(BaseSettings):
         default=3, gt=0, le=CREDIT_CEILING, validation_alias=env_key("credit_monthly_allowance")
     )
 
+    #: How old a mentor's stored next free time may get before the refresh job
+    #: recomputes it anyway (ADR 0029). Only Google-side changes need this — a
+    #: change here marks the mentor stale at once. Keep it at or above the
+    #: job's cron interval, or every run recomputes every mentor.
+    next_available_max_age_minutes: int = Field(
+        default=5, ge=1, le=1440, validation_alias=env_key("next_available_max_age_minutes")
+    )
+
     # ``NoDecode`` is load-bearing, not decoration. Without it pydantic-settings
     # JSON-decodes a complex type *inside the settings source*, before any
     # validator runs, and a bare origin typed into a cloud console fails as

@@ -40,12 +40,17 @@ pytestmark = pytest.mark.db
 #: because this tuple would also pass against a trigger left in place over a
 #: dropped function.
 #:
+#: `mark_next_available_stale` joins in `5930c3cc1109` (ADR 0029): the trigger
+#: function that marks a mentor's stored next free time stale. Infrastructure
+#: like the rest — it decides nothing, it only invalidates a cache.
+#:
 #: This tuple catching a *new* one is the test doing its job: a schema-level
 #: object added without a downgrade would survive `downgrade base` and break the
 #: next upgrade on "already exists", which is exactly what the assertion above
 #: the re-upgrade is for.
 FUNCTION_NAMES = (
     "apply_mentor_status",
+    "mark_next_available_stale",
     "session_window",
     "set_updated_at",
     "timemultirange",
@@ -104,6 +109,7 @@ EXPECTED_TABLES = [
     "mentee_goal_needs",
     "mentee_goals",
     "mentor_conferencing_options",
+    "mentor_next_availability",
     "mentor_profiles",
     "mentor_service_offerings",
     "mentor_status_events",
