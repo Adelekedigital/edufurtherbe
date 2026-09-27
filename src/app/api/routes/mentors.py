@@ -26,11 +26,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
-from app.api.deps import MentorPageDep, MentorReviewsDep, PublicMentorDep
+from app.api.deps import MentorPageDep, MentorReviewsDep, PublicMentorDep, SimilarMentorsDep
 from app.api.schemas.common import Page
-from app.api.schemas.mentors import MentorPage, MentorPublicRead, MentorSummaryRead
+from app.api.schemas.mentors import (
+    MentorPage,
+    MentorPublicRead,
+    MentorSummaryRead,
+    SimilarMentorRead,
+)
 from app.api.schemas.reviews import MentorReviewRead
 
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
@@ -193,3 +198,33 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
 async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
     rows, next_cursor = page
     return Page(data=[MentorReviewRead.from_row(row) for row in rows], next_cursor=next_cursor)
+
+
+@router.get(
+    "/{handle}/similar",
+    response_model=Page[SimilarMentorRead],
+    summary="Mentors who give the same kind of help",
+    description=(
+        "Up to three bookable mentors who share a service offering with this "
+        "one, as discovery cards, each with the `shared_offering` that makes "
+        "them similar.\n\n"
+        "**Public.** No token, and no owner view: a paused or unapproved "
+        "mentor is a `404` here for everyone.\n\n"
+        "**Ranked** by how many offerings are shared, then delivered sessions, "
+        "then review count, then newest profile — a total order, so a refresh "
+        "never reshuffles. Candidates are exactly who `/mentors` lists: public "
+        "and bookable, never the mentor themself.\n\n"
+        "**An empty `data`** when the mentor gives no offering or nobody "
+        "shares one. `next_cursor` is always null: there is no second page."
+    ),
+    responses=PUBLIC_RESPONSES,
+)
+async def read_similar_mentors(
+    similar: SimilarMentorsDep, response: Response
+) -> Page[SimilarMentorRead]:
+    # The same answer for every viewer, so shared caches may hold it — for a
+    # minute, as the featured card does, because the cards' `next_available_*`
+    # move every few minutes. A request that brought a token is made `private`
+    # by `PerViewerHeadersMiddleware` regardless.
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return Page(data=[SimilarMentorRead.from_similar(row) for row in similar], next_cursor=None)

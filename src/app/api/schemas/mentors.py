@@ -155,6 +155,30 @@ class FeaturedMentorRead(MentorSummaryRead):
         return cls(**MentorSummaryRead.from_row(row).model_dump(), about_me=_text(row["about_me"]))
 
 
+class SimilarMentorRead(MentorSummaryRead):
+    """A discovery card, and the offering that makes this mentor similar.
+
+    **The card plus one field**, like `FeaturedMentorRead`: the frontend renders
+    it with the list's component, so it carries the list's fields from the
+    list's query.
+    """
+
+    shared_offering: ServiceOfferingRead = Field(
+        description=(
+            "The kind of help this mentor shares with the profile being viewed — "
+            "the first shared one in the platform's order. Always one of this "
+            "card's `offerings`."
+        )
+    )
+
+    @classmethod
+    def from_similar(cls, row: dict[str, Any]) -> SimilarMentorRead:
+        return cls(
+            **MentorSummaryRead.from_row(row).model_dump(),
+            shared_offering=ServiceOfferingRead(**row["shared_offering"]),
+        )
+
+
 class MentorPage(Page[MentorSummaryRead]):
     """A discovery page, and on the first page, how many mentors there are.
 

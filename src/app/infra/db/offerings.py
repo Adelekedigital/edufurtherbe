@@ -21,12 +21,12 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.mentoring import MentorServiceOffering, ServiceOffering
 
-__all__ = ["live_offering_slugs", "offerings_for", "offers_any"]
+__all__ = ["live_offering_slugs", "offerings_for", "offers_any", "shared_offering_count"]
 
 
 def _live() -> Any:
@@ -43,6 +43,17 @@ def _live() -> Any:
     return ServiceOffering.is_active.is_(True)
 
 
+def _gives(mentor_user_id: Any, slugs: Sequence[str]) -> list[Any]:
+    """This mentor gives one of `slugs` — the clauses `offers_any` and
+    `shared_offering_count` both read, so *whether* and *how many* cannot come
+    to mean different things."""
+    return [
+        MentorServiceOffering.mentor_user_id == mentor_user_id,
+        ServiceOffering.id == MentorServiceOffering.service_offering_id,
+        ServiceOffering.slug.in_(slugs),
+    ]
+
+
 def offers_any(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
     """`EXISTS`: this mentor gives at least one of the offerings `slugs`.
 
@@ -54,10 +65,21 @@ def offers_any(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
     `live_offering_slugs`, and a second copy of that check would be a guard no
     test can reach — the retired case is refused before this runs.
     """
-    return exists().where(
-        MentorServiceOffering.mentor_user_id == mentor_user_id,
-        ServiceOffering.id == MentorServiceOffering.service_offering_id,
-        ServiceOffering.slug.in_(slugs),
+    return exists().where(*_gives(mentor_user_id, slugs))
+
+
+def shared_offering_count(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
+    """How many of the offerings `slugs` this mentor gives — a scalar subquery.
+
+    `offers_any` asks *whether*; this asks *how many*, for ranking similar
+    mentors. The same clauses (`_gives`), and the same contract on `slugs`: they
+    arrive live, so no second `_live()` here.
+    """
+    return (
+        select(func.count())
+        .select_from(MentorServiceOffering, ServiceOffering)
+        .where(*_gives(mentor_user_id, slugs))
+        .scalar_subquery()
     )
 
 
