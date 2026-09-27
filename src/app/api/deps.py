@@ -39,10 +39,13 @@ from app.api.schemas.common import (
     StorableText,
     clamp_limit,
     decode_cursor,
+    decode_goal_cursor,
     decode_id_cursor,
     decode_offset_cursor,
     encode_cursor,
     encode_id_cursor,
+    is_goal_cursor,
+    next_goal_cursor,
     next_offset_cursor,
 )
 from app.api.schemas.intake import QuestionPatch, QuestionWrite
@@ -139,7 +142,6 @@ from app.infra.db.mentor_public_store import get_public_mentor, get_public_mento
 from app.infra.db.mentor_relationship import mentor_relationship
 from app.infra.db.mentor_search_store import (
     count_mentors,
-    has_goals,
     mentor_card,
     search_mentors,
     similar_mentors,
@@ -152,7 +154,7 @@ from app.infra.db.mentor_status_store import (
     resume,
     set_listing,
 )
-from app.infra.db.offerings import live_offering_slugs, offerings_for
+from app.infra.db.offerings import has_live_goals, live_offering_slugs, offerings_for
 from app.infra.db.onboarding_store import get_onboarding
 from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
 from app.infra.db.own_review_reader import list_reviews_about
@@ -2202,13 +2204,37 @@ async def mentor_page(
     # ignore, so dropping it changes no response (an equivalent mutant).
     goal_day = (
         dt.datetime.now(dt.UTC).date()
-        if term is None and viewer is not None and await has_goals(session, viewer)
+        if term is None and viewer is not None and await has_live_goals(session, viewer)
         else None
     )
 
-    # Search and the goal ranking both page by offset — neither order is a
-    # column in the row — so they share the offset codec and its depth cap.
-    if term is not None or goal_day is not None:
+    # **Once paging has begun, the cursor's kind decides the mode**, not who the
+    # viewer is now. A token can lapse between pages, a visitor can sign in, a
+    # mentee can add a first goal: re-deciding from the viewer would hand one
+    # kind of cursor to the other's decoder and answer a list anyone may read
+    # with a 422. A goal cursor continues by offset — goal-ranked if the viewer
+    # still has goals, else newest first from that position; an id cursor
+    # continues newest first. A *search* cursor without its `q` is still
+    # refused: that is a client that dropped its query, not a changed viewer.
+    goal_paging = term is None and (
+        is_goal_cursor(cursor) if cursor is not None else goal_day is not None
+    )
+    if goal_paging:
+        offset = decode_goal_cursor(cursor) if cursor is not None else 0
+        rows, has_more = await search_mentors(
+            session,
+            limit=clamp_limit(limit),
+            offset=offset,
+            offerings=slugs,
+            viewer=viewer,
+            goal_day=goal_day,
+        )
+        next_cursor = next_goal_cursor(offset + len(rows)) if has_more else None
+        return rows, has_more, next_cursor, total
+
+    # Search pages by offset too — its order is not a column in the row — and
+    # shares the depth cap.
+    if term is not None:
         offset = decode_offset_cursor(cursor)
         rows, has_more = await search_mentors(
             session,
@@ -2231,7 +2257,7 @@ async def mentor_page(
         after=decode_id_cursor(cursor),
         offerings=slugs,
         viewer=viewer,
-    )
+    )  # `goal_day` is not passed: an id cursor continues newest first.
     next_cursor = encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None
     return rows, has_more, next_cursor, total
 

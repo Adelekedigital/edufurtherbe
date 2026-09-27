@@ -245,3 +245,56 @@ async def test_the_shuffle_changes_with_the_day(db_engine: AsyncEngine) -> None:
             orders.add(tuple(row["user_id"] for row in rows if row["user_id"] in tied))
 
     assert len(orders) > 1
+
+
+async def test_a_token_that_lapses_mid_paging_keeps_paging(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Page one goal-ranked, page two anonymous (the tab resumed after the
+    token's hour): the offset cursor must keep working, not 422."""
+    for n in range(3):
+        await a_mentor(db_engine, f"lapse-{n}", INTERVIEW)
+    _, headers = await a_mentee(db_engine, "lapse", goals=(INTERVIEW,))
+
+    first = (await api_client.get(f"{URL}?limit=1", headers=headers)).json()
+    second = await api_client.get(f"{URL}?limit=1&cursor={first['next_cursor']}")
+
+    assert second.status_code == 200
+    # It continues from the cursor's position, newest first, rather than
+    # starting the list again.
+    newest_first = await listed(api_client)
+    assert [row["id"] for row in second.json()["data"]] == newest_first[1:2]
+
+
+async def test_signing_in_mid_paging_keeps_paging(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The other way: an anonymous id cursor, then a mentee with goals."""
+    for n in range(3):
+        await a_mentor(db_engine, f"signin-{n}", INTERVIEW)
+    _, headers = await a_mentee(db_engine, "signin", goals=(INTERVIEW,))
+
+    first = (await api_client.get(f"{URL}?limit=1")).json()
+    second = await api_client.get(f"{URL}?limit=1&cursor={first['next_cursor']}", headers=headers)
+
+    assert second.status_code == 200
+    assert second.json()["data"]
+
+
+async def test_a_retired_goal_offering_lifts_nobody(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A retired offering is off every card; it must not rank a mentor either.
+    With it the mentee's only goal, the list falls back to newest first."""
+    older = await a_mentor(db_engine, "retired-older", SCHOLARSHIPS)
+    newer = await a_mentor(db_engine, "retired-newer", TESTS)
+    _, headers = await a_mentee(db_engine, "retired", goals=(SCHOLARSHIPS,))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE service_offerings SET is_active = false WHERE slug = :s"),
+            {"s": SCHOLARSHIPS},
+        )
+
+    order = await listed(api_client, headers)
+
+    assert order.index(str(newer)) < order.index(str(older))

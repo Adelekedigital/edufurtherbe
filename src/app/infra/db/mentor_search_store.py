@@ -38,12 +38,12 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, Text, cast, exists, func, literal, literal_column, select, true
+from sqlalchemy import Select, Text, cast, func, literal, literal_column, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.education import EducationEntry, Institution
-from app.infra.db.models.mentoring import MenteeGoalNeed, MentorProfile
+from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
@@ -63,7 +63,6 @@ __all__ = [
     "SIMILAR_LIMIT",
     "completed_sessions",
     "count_mentors",
-    "has_goals",
     "mentor_card",
     "search_mentors",
     "similar_mentors",
@@ -334,7 +333,11 @@ def _card(scope: Select[Any]) -> Select[Any]:
 
 
 def _page(
-    after: UUID | None, limit: int, offerings: Sequence[str], viewer: UUID | None = None
+    after: UUID | None,
+    limit: int,
+    offerings: Sequence[str],
+    viewer: UUID | None = None,
+    offset: int = 0,
 ) -> Select[Any]:
     """One page of mentors, newest first.
 
@@ -348,6 +351,11 @@ def _page(
         _card(_scope(None, offerings, viewer))
         .where(*([MentorProfile.id < after] if after is not None else []))
         .order_by(MentorProfile.id.desc())
+        # Only ever non-zero when a goal-ranked page's offset cursor comes back
+        # for a viewer who no longer has goals (a token that lapsed, or a last
+        # goal removed): newest first from that position, so paging goes on —
+        # a row may repeat or be skipped across the switch, never a 422.
+        .offset(offset)
         .limit(limit + 1)
     )
 
@@ -464,7 +472,7 @@ async def search_mentors(
     elif viewer is not None and goal_day is not None:
         statement = _matched(viewer, goal_day, offset, limit, offerings)
     else:
-        statement = _page(after, limit, offerings, viewer)
+        statement = _page(after, limit, offerings, viewer, offset)
 
     rows = [dict(r) for r in (await session.execute(statement)).mappings()]
     page, has_more = rows[:limit], len(rows) > limit
@@ -496,13 +504,6 @@ async def count_mentors(
     """
     statement = _scope(q, offerings, viewer).with_only_columns(func.count(MentorProfile.id))
     return int((await session.execute(statement)).scalar_one())
-
-
-async def has_goals(session: AsyncSession, viewer: UUID) -> bool:
-    """Whether this viewer has named any goal offering — what turns browse into
-    the goal ranking. An empty goal row is no goal."""
-    statement = select(exists().where(MenteeGoalNeed.user_id == viewer))
-    return bool((await session.execute(statement)).scalar_one())
 
 
 async def mentor_card(session: AsyncSession, user_id: UUID) -> dict[str, Any] | None:
