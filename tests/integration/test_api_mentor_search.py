@@ -897,7 +897,7 @@ async def test_several_offerings_list_mentors_who_give_any_of_them_once(
 async def test_the_offering_filter_narrows_a_search_too(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Search reads the same `_base()` scope, so it must read the filter too —
+    """Search reads the same `_who()` scope, so it must read the filter too —
     the half with a text box in front of it is the worse one to forget."""
     giver = await make_bookable_mentor(db_engine, "filter-search-giver")
     other = await make_bookable_mentor(db_engine, "filter-search-other")

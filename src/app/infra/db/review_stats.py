@@ -134,7 +134,7 @@ def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
 
     **Two scalar subqueries rather than a lateral, and the plan position is why.**
     A lateral joins in the `FROM`, so it is evaluated for every row that passes
-    the `WHERE` — before the sort. `_base()` feeds the *search* path too, whose
+    the `WHERE` — before the sort. `_card()` feeds the *search* path too, whose
     `ORDER BY ts_rank_cd` has to materialise every match before taking the top
     N, so a broad `?q=` would run the aggregate once per matching mentor rather
     than once per card. `_document()` records the shape that avoids it: the

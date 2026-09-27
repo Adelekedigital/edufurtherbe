@@ -34,7 +34,7 @@ async def card(client: httpx.AsyncClient, query: str = "") -> dict:
     """The first row of whichever mode is asked for.
 
     Both modes take the same assertions throughout this file: browse and search
-    read one `_base()`, and a field present on one and absent from the other is
+    read one `_card()`, and a field present on one and absent from the other is
     the failure this shares a helper to catch.
     """
     response = await client.get(f"{URL}{query}")
