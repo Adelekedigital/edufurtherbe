@@ -333,7 +333,7 @@ def _written_link(network: SocialNetwork) -> Any:
 
 
 #: A social link as written: a handle or a link on that network, **stored in
-#: its canonical `https://` form** and refused (`422`) otherwise (#181).
+#: its canonical `https://` form** and refused (`422`) otherwise (#182).
 LinkedInWrite = Annotated[
     str | None, Field(max_length=MAX_LENGTH), AfterValidator(_written_link(SocialNetwork.LINKEDIN))
 ]

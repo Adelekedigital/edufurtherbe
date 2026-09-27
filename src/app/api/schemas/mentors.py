@@ -303,7 +303,7 @@ class MentorPublicRead(BaseModel):
         default=None, description="Where they studied, resolved to a name."
     )
     origin_country: str | None = None
-    #: Canonical `https://` links or `null` — render them, never parse them (#181).
+    #: Canonical `https://` links or `null` — render them, never parse them (#182).
     social_linkedin: LinkedInRead = None
     social_twitter: XRead = None
     social_youtube: YouTubeRead = None

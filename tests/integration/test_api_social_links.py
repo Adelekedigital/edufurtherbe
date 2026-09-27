@@ -1,4 +1,4 @@
-"""Social links through the API: canonical on the way in and on the way out (#181).
+"""Social links through the API: canonical on the way in and on the way out (#182).
 
 The client renders these and never parses them, so every response carries the
 canonical `https://` form or `null` — including for a value stored before the

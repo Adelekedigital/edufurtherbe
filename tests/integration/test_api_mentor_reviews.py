@@ -366,6 +366,7 @@ async def test_the_platform_feedback_never_reaches_the_list(profile: Profile) ->
         "author_first_name",
         "author_last_initial",
         "author_institution",
+        "author_deleted",
     }
 
 
@@ -485,27 +486,65 @@ async def test_the_recommend_figure_ties_the_same_way(profile: Profile) -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_a_deleted_reviewer_is_no_longer_named(profile: Profile) -> None:
-    """**A tokenless endpoint, so this is what "deleted" has to mean.**
-
-    `predicates.LIVE` exists because this rule was missed twice before, and
-    `test_predicates` walks only two stores — so nothing else here would catch a
-    third. A reviewer who deletes their account must stop being named, and their
-    words stay: the review is the mentor's record, the name is the reviewer's.
-    """
-    await profile.reviewed(author_name=("Fauziyah", "Fashola"), text_body="Still here.")
+async def delete_reviewers_of(profile: Profile) -> None:
     async with profile.engine.begin() as conn:
         await conn.execute(
             text(
-                "UPDATE users SET deleted_at = now() WHERE id = "
+                "UPDATE users SET deleted_at = now() WHERE id IN "
                 "(SELECT reviewed_by FROM reviews WHERE reviewed_for = :m)"
             ),
             {"m": profile.mentor},
         )
 
-    body = await profile.listed()
 
-    assert body["data"] == [], "a deleted reviewer takes their attribution with them"
+async def test_a_deleted_reviewers_review_stays_without_their_identity(profile: Profile) -> None:
+    """**A tokenless endpoint, so this is what "deleted" has to mean.**
+
+    The review is earned: its words and its value stay on the mentor's page,
+    and in the count. The reviewer's identity goes — no name, no initial, no
+    institution — and `author_deleted` says so, so a client can label it rather
+    than render an empty byline. `predicates.LIVE` is still what decides it.
+    """
+    await profile.reviewed(
+        author_name=("Fauziyah", "Fashola"),
+        institution="University of Lagos",
+        text_body="Still here.",
+        valuable=4,
+    )
+    await delete_reviewers_of(profile)
+
+    (row,) = (await profile.listed())["data"]
+
+    assert row["public_review"] == "Still here."
+    assert row["session_value"] == 4
+    assert row["author_deleted"] is True
+    assert row["author_first_name"] is None
+    assert row["author_last_initial"] is None
+    assert row["author_institution"] is None
+
+
+async def test_a_live_reviewer_is_still_named(profile: Profile) -> None:
+    await profile.reviewed(author_name=("Fauziyah", "Fashola"), institution="University of Lagos")
+
+    (row,) = (await profile.listed())["data"]
+
+    assert row["author_deleted"] is False
+    assert (row["author_first_name"], row["author_last_initial"]) == ("Fauziyah", "F")
+    assert row["author_institution"] == "University of Lagos"
+
+
+async def test_the_count_matches_the_list_when_a_reviewer_is_deleted(profile: Profile) -> None:
+    """The asymmetry this change removes: the count kept a deleted reviewer's
+    review and the list dropped it, so a client paging the list never reached
+    the number in the header."""
+    await profile.reviewed(author_name=("Gone", "Soon"))
+    await delete_reviewers_of(profile)
+    await profile.reviewed(author_name=("Still", "Here"))
+
+    listed = (await profile.listed())["data"]
+
+    assert (await profile.block())["count"] == len(listed) == 2
+    assert [row["author_deleted"] for row in listed] == [False, True]
 
 
 async def test_an_empty_surname_yields_no_initial(profile: Profile) -> None:

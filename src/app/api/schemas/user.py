@@ -41,7 +41,7 @@ class UserProfileRead(BaseModel):
     #: Where to centre `avatar_url`; `null` means the client's default crop.
     avatar_focus: AvatarFocusRead | None = None
     banner_url: str | None = None
-    #: Canonical `https://` links or `null` — render them, never parse them (#181).
+    #: Canonical `https://` links or `null` — render them, never parse them (#182).
     social_linkedin: LinkedInRead = None
     social_twitter: XRead = None
     social_youtube: YouTubeRead = None

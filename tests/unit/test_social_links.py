@@ -1,4 +1,4 @@
-"""`canonical_social`: what a stored or published social link may be (#181)."""
+"""`canonical_social`: what a stored or published social link may be (#182)."""
 
 from __future__ import annotations
 

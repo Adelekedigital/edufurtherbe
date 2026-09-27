@@ -1,4 +1,4 @@
-"""Social profile links: one canonical form per network (settled decision #181).
+"""Social profile links: one canonical form per network (settled decision #182).
 
 **The frontend renders these and never parses them.** So the one place that
 knows what a LinkedIn, X or YouTube link looks like is here, and it runs on
