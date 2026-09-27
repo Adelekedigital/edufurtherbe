@@ -23,10 +23,13 @@ on:
 permissions:
   contents: write
 
-# A newer push supersedes an older one; the last to finish must be the newest.
+# One run at a time, and **never cancelled mid-run**. `upload --clobber` deletes
+# the old asset before uploading the new one, so a run cancelled between the two
+# would leave the fixed URL a 404 until the next push. GitHub still keeps only
+# the newest *pending* run, so the newest spec wins without cancelling anything.
 concurrency:
   group: publish-openapi
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   UV_FROZEN: "1"
