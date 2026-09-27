@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, model_validator
 
 from app.core.errors import ValidationError
+from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
 
 #: Anything above this is clamped rather than refused. A client asking for 5,000
 #: rows has made a mistake, and a 422 in the middle of an autocomplete is a worse
@@ -303,3 +304,49 @@ class Normalised(BaseModel):
             else:
                 normalised[key] = value
         return normalised
+
+
+def _published_link(network: SocialNetwork) -> Any:
+    def convert(value: object) -> str | None:
+        return canonical_social(network, value) if isinstance(value, str) else None
+
+    return convert
+
+
+_REFUSAL = {
+    SocialNetwork.LINKEDIN: "not a LinkedIn profile: give a handle or a linkedin.com/in/ link",
+    SocialNetwork.X: "not an X profile: give a handle or an x.com link",
+    SocialNetwork.YOUTUBE: "not a YouTube channel: give a @handle or a youtube.com link",
+}
+
+
+def _written_link(network: SocialNetwork) -> Any:
+    def convert(value: str | None) -> str | None:
+        if value is None:
+            return None
+        link = canonical_social(network, value)
+        if link is None:
+            raise ValueError(_REFUSAL[network])
+        return link
+
+    return convert
+
+
+#: A social link as written: a handle or a link on that network, **stored in
+#: its canonical `https://` form** and refused (`422`) otherwise (#181).
+LinkedInWrite = Annotated[
+    str | None, Field(max_length=MAX_LENGTH), AfterValidator(_written_link(SocialNetwork.LINKEDIN))
+]
+XWrite = Annotated[
+    str | None, Field(max_length=MAX_LENGTH), AfterValidator(_written_link(SocialNetwork.X))
+]
+YouTubeWrite = Annotated[
+    str | None, Field(max_length=MAX_LENGTH), AfterValidator(_written_link(SocialNetwork.YOUTUBE))
+]
+
+#: A social link as published: **always canonical or `null`**. The same rule
+#: the write applies, run again on the way out, so a legacy value stored before
+#: the rule existed is never published in a shape the client must parse.
+LinkedInRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.LINKEDIN))]
+XRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.X))]
+YouTubeRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.YOUTUBE))]
