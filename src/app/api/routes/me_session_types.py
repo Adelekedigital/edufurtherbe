@@ -212,11 +212,10 @@ async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> dict[str, 
     | {
         status.HTTP_409_CONFLICT: {
             "description": (
-                "Sessions are still booked on this offering. **The only refusal "
-                "this endpoint has**, which is why it carries no machine-readable "
-                "reason: the primary-offering refusal it once had to be "
-                "distinguished from no longer exists. A second reason would "
-                "bring one back."
+                "Sessions are still live on this offering (awaiting a decision or "
+                "agreed). `type` is `/problems/session-type-has-bookings`, and "
+                "`booked_count` says how many — switch the offering off instead, or "
+                "cancel them first."
             )
         }
     },

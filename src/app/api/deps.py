@@ -48,7 +48,7 @@ from app.api.schemas.common import (
     next_goal_cursor,
     next_offset_cursor,
 )
-from app.api.schemas.intake import QuestionPatch, QuestionWrite
+from app.api.schemas.intake import QuestionOrderWrite, QuestionPatch, QuestionWrite
 from app.api.schemas.profile import (
     AwardPatch,
     AwardWrite,
@@ -142,6 +142,7 @@ from app.infra.db.intake_store import (
     create_question,
     delete_question,
     list_questions,
+    reorder_questions,
     update_question,
 )
 from app.infra.db.mentor_public_store import get_public_mentor, get_public_mentor_id
@@ -2627,10 +2628,20 @@ async def deleted_own_question(
     return removed
 
 
+async def reordered_own_questions(
+    session_type_id: UUID, payload: QuestionOrderWrite, user: CurrentUserDep, session: SessionDep
+) -> bool:
+    """The whole form renumbered in one transaction (#197)."""
+    reordered = await reorder_questions(session, user["id"], session_type_id, payload.question_ids)
+    await session.commit()
+    return reordered
+
+
 OwnQuestionsDep = Annotated[list[dict[str, Any]], Depends(own_questions)]
 CreatedOwnQuestionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(created_own_question)]
 UpdatedOwnQuestionDep = Annotated[bool, Depends(updated_own_question)]
 DeletedOwnQuestionDep = Annotated[bool, Depends(deleted_own_question)]
+ReorderedOwnQuestionsDep = Annotated[bool, Depends(reordered_own_questions)]
 
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]

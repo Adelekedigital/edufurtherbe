@@ -52,7 +52,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, SessionTypeHasBookingsError
 from app.domain.enums import ConferencingProvider
 from app.infra.db.models.mentoring import (
     MentorConferencingOption,
@@ -535,15 +535,19 @@ async def delete_session_type(
     if (await session.execute(scoped)).first() is None:
         return False
 
-    booked = await session.execute(
-        select(literal(1))
-        .select_from(Session)
-        .where(Session.session_type_id == session_type_id, text(LIVE_STATUSES))
-    )
-    if booked.first() is not None:
-        raise ConflictError(
+    booked = (
+        await session.execute(
+            select(func.count())
+            .select_from(Session)
+            .where(Session.session_type_id == session_type_id, text(LIVE_STATUSES))
+        )
+    ).scalar_one()
+    if booked:
+        # Counted, so the refusal can say how many (#197).
+        raise SessionTypeHasBookingsError(
             "this session type still has sessions booked on it; cancel them or "
-            "wait for them to finish, or switch the offering off instead"
+            "wait for them to finish, or switch the offering off instead",
+            booked_count=int(booked),
         )
 
     await session.execute(

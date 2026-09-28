@@ -23,6 +23,7 @@ from app.api.deps import (
     CreatedOwnQuestionDep,
     DeletedOwnQuestionDep,
     OwnQuestionsDep,
+    ReorderedOwnQuestionsDep,
     UpdatedOwnQuestionDep,
 )
 from app.api.routes.sessions import REPLAYED_HEADER
@@ -150,3 +151,24 @@ async def edit_own_question(changed: UpdatedOwnQuestionDep) -> dict[str, bool]:
 async def remove_own_question(removed: DeletedOwnQuestionDep) -> None:
     if not removed:
         raise NotFoundError("no such question")
+
+
+@router.put(
+    "/session-types/{session_type_id}/questions/order",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Reorder the questions on one of your offerings",
+    description=(
+        "Send every live question on the form, each once, in the order to show "
+        "them; they are renumbered from zero in one transaction — one request per "
+        "drag, rather than a `PATCH` per moved question.\n\n"
+        "A missing, extra or repeated id is a `422` naming the problem, and "
+        "nothing changes. `204` with no body: read the form back with `GET` if "
+        "the new order is needed, rather than a second copy of it here.\n\n"
+        "An offering that is not yours, or is deleted, gets `404`."
+    ),
+    responses=QUESTION_RESPONSES,
+)
+async def reorder_own_questions(reordered: ReorderedOwnQuestionsDep) -> Response:
+    if not reordered:
+        raise NotFoundError("no such session type")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

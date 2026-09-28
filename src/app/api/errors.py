@@ -33,6 +33,7 @@ from app.core.errors import (
     NotFoundError,
     OnboardingIncompleteError,
     ReviewIntervalError,
+    SessionTypeHasBookingsError,
     UpstreamError,
 )
 from app.core.errors import ValidationError as DomainValidationError
@@ -83,6 +84,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     OnboardingIncompleteError: "/problems/onboarding-incomplete",
     AlreadyReviewedError: "/problems/review-already-exists",
     ReviewIntervalError: "/problems/review-interval-not-elapsed",
+    SessionTypeHasBookingsError: "/problems/session-type-has-bookings",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx
@@ -97,6 +99,7 @@ def problem(
     detail: str | None = None,
     type_: str = "about:blank",
     errors: list[dict[str, str]] | None = None,
+    members: dict[str, object] | None = None,
 ) -> JSONResponse:
     """Build a Problem Details response.
 
@@ -108,6 +111,10 @@ def problem(
         body["detail"] = detail
     if errors is not None:
         body["errors"] = errors
+    # Extension members a problem type carries (#197), never overriding the
+    # standard ones.
+    for name, value in (members or {}).items():
+        body.setdefault(name, value)
     return JSONResponse(status_code=status_code, content=body, media_type=CONTENT_TYPE)
 
 
@@ -186,6 +193,7 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
                 # the request as a whole: one shape, so a client reads the list
                 # without first asking whether it is there.
                 errors=[] if code == status.HTTP_422_UNPROCESSABLE_CONTENT else None,
+                members=exc.problem_members() if isinstance(exc, AppError) else None,
             )
 
     # An `AppError` subclass nobody mapped. 500 rather than a guessed 4xx: an

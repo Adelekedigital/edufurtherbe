@@ -8,6 +8,12 @@ these to responses, which is what keeps ``domain/`` free of framework concepts.
 class AppError(Exception):
     """Base class for every error this application raises deliberately."""
 
+    def problem_members(self) -> dict[str, object]:
+        """Extension members for the problem document — RFC 9457 lets a problem
+        type carry its own. None by default; a refusal that has facts a client
+        acts on overrides this (settled decision #197)."""
+        return {}
+
 
 class NotFoundError(AppError):
     """The resource does not exist, or is not visible to this caller.
@@ -32,6 +38,22 @@ class AccountExistsError(ConflictError):
     Carries a problem type, because the client's response is unlike any other
     refusal: not "sign in again", but "contact support".
     """
+
+
+class SessionTypeHasBookingsError(ConflictError):
+    """A session type cannot be deleted while sessions are live on it.
+
+    Carries a problem type and `booked_count` (#197): the client's answer is
+    unlike a name clash — "N booked sessions use this; switch it off instead" —
+    and the count is what lets it say so.
+    """
+
+    def __init__(self, message: str, *, booked_count: int) -> None:
+        super().__init__(message)
+        self.booked_count = booked_count
+
+    def problem_members(self) -> dict[str, object]:
+        return {"booked_count": self.booked_count}
 
 
 class InsufficientCreditError(ConflictError):
