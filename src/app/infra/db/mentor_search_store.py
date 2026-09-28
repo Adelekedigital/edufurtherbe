@@ -318,6 +318,7 @@ def _card(scope: Select[Any]) -> Select[Any]:
             review_count.scalar_subquery().label("review_count"),
             session_value.scalar_subquery().label("session_value"),
             MentorNextAvailability.next_available_at,
+            MentorNextAvailability.next_available_session_type_id,
             next_available_state().label("next_available_state"),
             # When they became a mentor; backfilled from the legacy platform.
             MentorProfile.created_at.label("joined_at"),
