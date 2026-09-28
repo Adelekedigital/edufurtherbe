@@ -5,11 +5,9 @@ is enforced in the store and tested here. The count is of *live* questions —
 deleting one frees a slot, and counting every row would leave a mentor who added
 and removed five stuck forever with an empty form.
 
-**`multi_choice` is refused at the boundary.** The column accepts it and
-`session_type_question_options` exists for its choices, but nothing can create an
-option, so a `multi_choice` question would be one no mentee could answer. The
-selectable set is narrower than the column's, the same shape as
-`ConferencingProvider` against `MeetingProvider`.
+**`multi_choice` needs its options.** Since #200 a mentor writes them with the
+question; one sent without options is refused, because it would be a question no
+mentee could answer. `test_choice_questions` covers the rest.
 """
 
 from __future__ import annotations
@@ -198,16 +196,11 @@ async def test_the_limit_is_per_offering(
 # --------------------------------------------------------------------------
 
 
-async def test_multi_choice_is_not_selectable(
+async def test_multi_choice_without_options_is_refused(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The column accepts it; the boundary does not.
-
-    `session_type_question_options` exists and nothing can create an option, so
-    a `multi_choice` question would be one no mentee could answer. The refusal
-    lifts when option management arrives, and the message says what is missing
-    rather than that the value is unknown.
-    """
+    """A choice question with nothing to choose is one no mentee could answer;
+    the message says options are what is missing."""
     mentor, auth_id = await as_mentor(db_engine, "q-multi")
     session_type = await add_session_type(db_engine, mentor)
 
