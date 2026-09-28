@@ -114,11 +114,23 @@ async def card(client: httpx.AsyncClient, mentor: UUID) -> dict[str, Any]:
 
 
 async def first_slot(client: httpx.AsyncClient, mentor: UUID) -> str:
-    """What the booking flow offers first, from the public slots endpoint."""
+    """What the booking flow offers first, from the public slots endpoint.
+
+    **Over the card's own horizon, not `/slots`' default week.** The card looks
+    56 days ahead; the fixture's hours are one weekday, and with 24 hours'
+    notice the next one can be eight days out — on a Monday evening UTC the
+    default week came back empty while the card rightly said `open`.
+    """
     types = (await client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
+    today = dt.datetime.now(dt.UTC).date()
     response = await client.get(
         f"/api/v1/users/{mentor}/availability/slots",
-        params={"session_type_id": types[0]["id"]},
+        params={
+            "session_type_id": types[0]["id"],
+            # One day short of the 56-day maximum span, so a start that is the
+            # mentor's tomorrow in UTC terms still fits.
+            "end": (today + dt.timedelta(days=55)).isoformat(),
+        },
     )
     assert response.status_code == 200, response.text
     return response.json()["data"][0]["start"]
