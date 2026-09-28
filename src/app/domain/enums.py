@@ -319,6 +319,8 @@ class ApplicationStage(StrEnum):
     DRAFTING_STAGE = "drafting_stage"
     POST_SUBMISSION = "post_submission"
     REVISIONS = "revisions"
+    #: At interview (#198), between revising and `OTHER` — the design's order.
+    INTERVIEWING = "interviewing"
     OTHER = "other"
 
 
@@ -767,3 +769,22 @@ class CoverArt(StrEnum):
     ICONS = "icons"
     PATTERN = "pattern"
     SINGLE = "single"
+
+
+class SessionTypeIcon(StrEnum):
+    """The icon a session type shows, from the design's set (#198).
+
+    Material Symbols names, **in the design's order**. `NULL` on the column is
+    the client's automatic pick (from the offering's first topic), so no member
+    stands for "none".
+    """
+
+    VIDEO_CALL = "video_call"
+    EDIT_DOCUMENT = "edit_document"
+    FIND_IN_PAGE = "find_in_page"
+    SCHOOL = "school"
+    PAYMENTS = "payments"
+    RECORD_VOICE_OVER = "record_voice_over"
+    QUIZ = "quiz"
+    BADGE = "badge"
+    LIGHTBULB = "lightbulb"
