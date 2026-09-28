@@ -33,6 +33,7 @@ from app.domain.enums import SessionReasonCode, SessionRole, SessionStatus
 
 __all__ = [
     "CANCELLATION_CUTOFF",
+    "MAX_SESSION_TYPE_OFFERINGS",
     "RESPONSE_WINDOW",
     "TRANSITIONS",
     "Transition",
@@ -210,3 +211,9 @@ def too_late_to_cancel(starts_at: dt.datetime, now: dt.datetime) -> bool:
     cannot be tested at a boundary without moving the machine's time.
     """
     return starts_at - now < CANCELLATION_CUTOFF
+
+
+#: How many service offerings one session type may cover (#205). The owner's
+#: number (2026-09-28); a product rule, so it lives here and both the boundary
+#: and the store read it.
+MAX_SESSION_TYPE_OFFERINGS = 3

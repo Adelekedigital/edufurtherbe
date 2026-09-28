@@ -40,24 +40,40 @@ from app.api.schemas.profile import LookupRef
 from app.domain.availability import BOOKING_WINDOW_DAYS, BREAK_AFTER_MINUTES
 from app.domain.enums import ApplicationStage, ConferencingProvider, SessionTypeIcon
 from app.domain.intake import MAX_QUESTIONS
+from app.domain.sessions import MAX_SESSION_TYPE_OFFERINGS
 
 
 def _int_or_none(value: object) -> int | None:
     return None if value is None else int(str(value))
 
 
-def _taxonomy(row: dict[str, object]) -> LookupRef | None:
-    """The service offering as a `code`/`display_name` pair, or `None`.
+def _offerings(row: dict[str, object]) -> list[LookupRef]:
+    """The service offerings a type covers, in the mentor's order (#205).
 
-    **A `LookupRef` rather than the bare slug**, matching `MentorProfileRead.
-    offerings`. A slug alone would make every client join against
+    **`LookupRef`s rather than bare slugs**, matching `MentorProfileRead.
+    offerings`: a slug alone would make every client join against
     `/catalog/service-offerings` to render a chip, for a six-row table the
     response can carry inline at no cost.
     """
-    slug = row.get("service_offering_slug")
-    if slug is None:
-        return None
-    return LookupRef(code=str(slug), display_name=str(row["service_offering_name"]))
+    return [LookupRef(**o) for o in row.get("service_offerings") or []]  # type: ignore[attr-defined]
+
+
+def _taxonomy(row: dict[str, object]) -> LookupRef | None:
+    """The single `service_offering` kept this release: **the first of the set**
+    (#205), so the old field and the new list can never disagree."""
+    offerings = _offerings(row)
+    return offerings[0] if offerings else None
+
+
+def _refuse_two_offering_fields(model: BaseModel) -> None:
+    """`service_offering_ids` is the set and `service_offering_id` a set of one;
+    a request sending both has two answers and no rule for which wins."""
+    fields = model.model_fields_set
+    if "service_offering_ids" in fields and "service_offering_id" in fields:
+        raise ValueError("send service_offering_ids or service_offering_id, not both")
+    ids = getattr(model, "service_offering_ids", None)
+    if ids is not None and len(set(ids)) != len(ids):
+        raise ValueError("service_offering_ids: an offering appears twice")
 
 
 def _stage(row: dict[str, object]) -> ApplicationStage | None:
@@ -96,6 +112,13 @@ class SessionTypeRead(BaseModel):
             "and mentor offers are matched on. Null when the mentor has not "
             "classified this offering, which is not an error: it simply matches "
             "no filter."
+        ),
+    )
+    service_offerings: list[LookupRef] = Field(
+        default_factory=list,
+        description=(
+            "Every service offering this type covers, at most three, in the "
+            "mentor's order. `service_offering` is the first of these."
         ),
     )
     application_stage: ApplicationStage | None = Field(
@@ -143,6 +166,7 @@ class SessionTypeRead(BaseModel):
             min_notice_minutes=int(str(row["min_notice_minutes"])),
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
             service_offering=_taxonomy(row),
+            service_offerings=_offerings(row),
             application_stage=_stage(row),
             custom_stage_label=(
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
@@ -214,6 +238,13 @@ class OwnSessionTypeRead(BaseModel):
             "findable rather than a private note."
         ),
     )
+    service_offerings: list[LookupRef] = Field(
+        default_factory=list,
+        description=(
+            "Every service offering this type covers, at most three, in your "
+            "order. `service_offering` is the first of these."
+        ),
+    )
     application_stage: ApplicationStage | None = Field(
         default=None,
         description="Which stage of an application this offering is aimed at.",
@@ -265,6 +296,7 @@ class OwnSessionTypeRead(BaseModel):
             booking_window_days=_int_or_none(row.get("booking_window_days")),
             break_after_minutes=_int_or_none(row.get("break_after_minutes")),
             service_offering=_taxonomy(row),
+            service_offerings=_offerings(row),
             application_stage=_stage(row),
             custom_stage_label=(
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
@@ -340,6 +372,17 @@ class MentorSessionTypeWrite(Normalised):
     #: and simply matches no filter, and forcing a mentor to classify before they
     #: can sell would put a required field in front of the thing they came to do.
     service_offering_id: UUID | None = None
+    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#205). Its first is
+    #: what `service_offering_id` reports. `[]` clears it; absent leaves it.
+    service_offering_ids: list[UUID] | None = Field(
+        default=None,
+        max_length=MAX_SESSION_TYPE_OFFERINGS,
+        description=(
+            f"The service offerings this type covers, at most "
+            f"{MAX_SESSION_TYPE_OFFERINGS}, in the order to show them; each once. "
+            "`[]` clears them. Send this or `service_offering_id`, not both."
+        ),
+    )
     application_stage: ApplicationStage | None = None
     #: Only with `OTHER`, and required by it. Enforced here **and** by a symmetric
     #: `CHECK`: the database refuses what is impossible, and this turns the same
@@ -395,6 +438,7 @@ class MentorSessionTypeWrite(Normalised):
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
+        _refuse_two_offering_fields(self)
         return _refuse_mismatched_label(self)
 
 
@@ -422,6 +466,17 @@ class MentorSessionTypePatch(Normalised):
     #: and simply matches no filter, and forcing a mentor to classify before they
     #: can sell would put a required field in front of the thing they came to do.
     service_offering_id: UUID | None = None
+    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#205). Its first is
+    #: what `service_offering_id` reports. `[]` clears it; absent leaves it.
+    service_offering_ids: list[UUID] | None = Field(
+        default=None,
+        max_length=MAX_SESSION_TYPE_OFFERINGS,
+        description=(
+            f"The service offerings this type covers, at most "
+            f"{MAX_SESSION_TYPE_OFFERINGS}, in the order to show them; each once. "
+            "`[]` clears them. Send this or `service_offering_id`, not both."
+        ),
+    )
     application_stage: ApplicationStage | None = None
     #: Only with `OTHER`, and required by it. Enforced here **and** by a symmetric
     #: `CHECK`: the database refuses what is impossible, and this turns the same
@@ -466,6 +521,7 @@ class MentorSessionTypePatch(Normalised):
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
+        _refuse_two_offering_fields(self)
         return _refuse_mismatched_label(self)
 
 

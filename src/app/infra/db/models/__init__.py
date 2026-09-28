@@ -40,6 +40,7 @@ from app.infra.db.models.mentoring import (
     MentorServiceOffering,
     MentorStatusEvent,
     ServiceOffering,
+    SessionTypeOffering,
 )
 from app.infra.db.models.platform import IdempotencyKey, OutboxEvent
 from app.infra.db.models.reference import Country, Language
@@ -102,6 +103,7 @@ __all__ = [
     "SessionParticipant",
     "SessionType",
     "SessionTypeBookingConfig",
+    "SessionTypeOffering",
     "SessionTypeQuestion",
     "SessionTypeQuestionOption",
     "SessionTypeSchedulingWindow",

@@ -304,6 +304,7 @@ async def test_the_response_carries_nothing_it_should_not(
         "min_notice_minutes",
         "meeting_venue",
         "service_offering",
+        "service_offerings",
         "application_stage",
         "custom_stage_label",
         "icon",

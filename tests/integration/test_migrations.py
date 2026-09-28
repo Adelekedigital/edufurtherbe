@@ -141,6 +141,8 @@ EXPECTED_TABLES = [
     "session_events",
     "session_participants",
     "session_type_booking_configs",
+    # Session Types #9: the offerings one session type covers, up to three.
+    "session_type_offerings",
     "session_types",
     "sessions",
     # M4 — the intake stack, deferred out of `04_sessions.sql` when M4 shipped
@@ -399,6 +401,55 @@ def test_the_notice_backfill_reaches_rows_that_predate_it(
     ), (
         "the backfill did not reach a row that predates it; every migrated "
         "offering would keep two-hour notice while the default reads twenty-four"
+    )
+
+
+def test_the_topic_backfill_carries_every_classified_session_type(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """Session Types #9 moves a type's offering into `session_type_offerings`.
+
+    Only a type created **before** the migration exercises the backfill; every
+    fresh type is written by the new code. So this writes one at the prior
+    revision — classified — and one unclassified, then upgrades over them: the
+    first must arrive as a set of one, the second as nothing.
+    """
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "030c8bba5d6e")
+
+    execute(
+        disposable_database,
+        """
+        WITH u AS (
+            INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+            VALUES ('topics@example.test', gen_random_uuid(), 'Probe', 'mentor', 'UTC')
+            RETURNING id
+        ), p AS (
+            INSERT INTO mentor_profiles (user_id, headline) SELECT id, 'P' FROM u
+            RETURNING user_id
+        )
+        INSERT INTO session_types (mentor_user_id, name, service_offering_id)
+        SELECT user_id, 'Classified',
+               (SELECT id FROM service_offerings WHERE slug = 'test-preparation')
+        FROM p
+        UNION ALL
+        SELECT user_id, 'Unclassified', NULL FROM p
+        """,
+    )
+
+    command.upgrade(config, "head")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT count(*) FROM session_type_offerings o JOIN session_types t "
+            "ON t.id = o.session_type_id AND t.service_offering_id = o.service_offering_id "
+            "WHERE t.name = 'Classified'",
+        )
+        == 1
+    ), "a classified type that predates the migration lost its offering"
+    assert scalar(disposable_database, "SELECT count(*) FROM session_type_offerings") == 1, (
+        "an unclassified type must not gain a row"
     )
 
 

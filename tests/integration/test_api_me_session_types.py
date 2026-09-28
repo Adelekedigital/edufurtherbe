@@ -321,6 +321,7 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "booking_window_days",
         "break_after_minutes",
         "service_offering",
+        "service_offerings",
         "application_stage",
         "custom_stage_label",
         "icon",
@@ -368,6 +369,7 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         # shape, so this set grew — but `is_active` is still owner-only, which
         # is what this test is actually about.
         "service_offering",
+        "service_offerings",
         "application_stage",
         "custom_stage_label",
         "icon",

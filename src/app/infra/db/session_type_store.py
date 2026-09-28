@@ -57,7 +57,6 @@ from app.domain.enums import ConferencingProvider
 from app.infra.db.models.mentoring import (
     MentorConferencingOption,
     MentorProfile,
-    ServiceOffering,
 )
 from app.infra.db.models.sessions import (
     LIVE_STATUSES,
@@ -66,6 +65,10 @@ from app.infra.db.models.sessions import (
     SessionTypeBookingConfig,
 )
 from app.infra.db.models.user import User
+from app.infra.db.offerings import (
+    offerings_for_session_types,
+    set_session_type_offerings,
+)
 from app.infra.db.public_visibility import (
     mentor_is_public,
     session_type_is_live,
@@ -156,15 +159,6 @@ async def resolve_venue(
     return ConferencingProvider(str(row["meeting_venue"])), row["custom_url"]
 
 
-def _with_taxonomy(statement: Select[Any]) -> Select[Any]:
-    """Attach the service-offering join. **Outer**: classifying an offering is
-    optional, and an inner join would silently drop every unclassified one from
-    both lists — which is all of them today."""
-    return statement.outerjoin(
-        ServiceOffering, ServiceOffering.id == SessionType.service_offering_id
-    )
-
-
 def _with_venue(statement: Select[Any]) -> Select[Any]:
     """Attach both option joins. Outer on both — an offering need not have chosen
     one, and a mentor need not have configured any."""
@@ -218,8 +212,6 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             SessionType.id,
             SessionType.name,
             SessionType.description,
-            ServiceOffering.slug.label("service_offering_slug"),
-            ServiceOffering.display_name.label("service_offering_name"),
             SessionType.application_stage,
             SessionType.custom_stage_label,
             SessionType.icon,
@@ -237,7 +229,7 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
         .join(User, User.id == SessionType.mentor_user_id)
     )
     return (
-        _with_taxonomy(_with_venue(statement))
+        _with_venue(statement)
         .where(*session_type_is_live(user_id), *mentor_is_public())
         .order_by(SessionType.name)
     )
@@ -284,8 +276,6 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionType.id,
             SessionType.name,
             SessionType.description,
-            ServiceOffering.slug.label("service_offering_slug"),
-            ServiceOffering.display_name.label("service_offering_name"),
             SessionType.application_stage,
             SessionType.custom_stage_label,
             SessionType.icon,
@@ -303,11 +293,7 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionTypeBookingConfig.session_type_id == SessionType.id,
         )
     )
-    return (
-        _with_taxonomy(_with_venue(statement))
-        .where(*session_type_of(mentor_user_id))
-        .order_by(SessionType.name)
-    )
+    return _with_venue(statement).where(*session_type_of(mentor_user_id)).order_by(SessionType.name)
 
 
 async def list_own_session_types(
@@ -328,7 +314,7 @@ async def list_own_session_types(
     that found it.
     """
     result = await session.execute(_own_session_types(mentor_user_id))
-    return [dict(row) for row in result.mappings()]
+    return await _with_offerings(session, [dict(row) for row in result.mappings()])
 
 
 async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]] | None:
@@ -345,7 +331,17 @@ async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[
         return None
 
     result = await session.execute(_live_session_types(user_id))
-    return [dict(row) for row in result.mappings()]
+    return await _with_offerings(session, [dict(row) for row in result.mappings()])
+
+
+async def _with_offerings(
+    session: AsyncSession, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Attach each type's offerings (#205) — one extra statement for the list."""
+    by_type = await offerings_for_session_types(session, [row["id"] for row in rows])
+    for row in rows:
+        row["service_offerings"] = by_type.get(row["id"], [])
+    return rows
 
 
 #: The partial unique index from `20260812_1000_m4_session_type_idempotency_key`,
@@ -420,7 +416,6 @@ async def create_session_type(
                     mentor_user_id=mentor_user_id,
                     name=payload["name"],
                     description=payload.get("description"),
-                    service_offering_id=payload.get("service_offering_id"),
                     application_stage=payload.get("application_stage"),
                     custom_stage_label=payload.get("custom_stage_label"),
                     icon=payload.get("icon"),
@@ -442,7 +437,25 @@ async def create_session_type(
                 break_after_minutes=payload.get("break_after_minutes"),
             )
         )
+    offerings = _requested_offerings(payload)
+    if offerings is not None:
+        await set_session_type_offerings(session, session_type_id, offerings)
     return session_type_id
+
+
+def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
+    """The set a write asks for, or `None` when it names none (#205).
+
+    `service_offering_ids` is the set; the legacy `service_offering_id` is a set
+    of one, and `null` there clears it. The boundary refuses a payload sending
+    both, so at most one is present here.
+    """
+    if "service_offering_ids" in payload and payload["service_offering_ids"] is not None:
+        return list(payload["service_offering_ids"])
+    if "service_offering_id" in payload:
+        value = payload["service_offering_id"]
+        return [value] if value is not None else []
+    return None
 
 
 #: Which payload keys belong to which table. Split here rather than at the
@@ -451,7 +464,6 @@ async def create_session_type(
 SESSION_TYPE_COLUMNS = (
     "name",
     "description",
-    "service_offering_id",
     "application_stage",
     "custom_stage_label",
     "icon",
@@ -500,6 +512,10 @@ async def update_session_type(
             await session.execute(
                 update(SessionType).where(SessionType.id == session_type_id).values(**own)
             )
+
+    offerings = _requested_offerings(payload)
+    if offerings is not None:
+        await set_session_type_offerings(session, session_type_id, offerings)
 
     config = {key: value for key, value in payload.items() if key in BOOKING_CONFIG_COLUMNS}
     if config:
