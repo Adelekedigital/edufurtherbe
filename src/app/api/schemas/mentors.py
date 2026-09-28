@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
-from app.domain.enums import ApprovalStatus, AwardFunding, ListingStatus
+from app.domain.enums import ApprovalStatus, AwardFunding, CoverArt, CoverColor, ListingStatus
 
 
 class ServiceOfferingRead(BaseModel):
@@ -338,6 +338,17 @@ class MentorPublicRead(BaseModel):
     #: Where a card should centre `avatar_url`; `null` means use the default.
     avatar_focus: AvatarFocusRead | None = None
     banner_url: str | None = None
+    cover_color: CoverColor | None = Field(
+        default=None,
+        description=(
+            "The cover colour when there is no `banner_url` (which wins when set). "
+            "`null` means automatic: hash the mentor's id over `CoverColor`'s "
+            "values, in their published order."
+        ),
+    )
+    cover_art: CoverArt = Field(
+        default=CoverArt.NONE, description="What is drawn over the cover colour."
+    )
     primary_study_program: str | None = None
     primary_study_country: str | None = Field(
         default=None, description="Where they studied, resolved to a name."
@@ -453,6 +464,10 @@ class MentorPublicRead(BaseModel):
             avatar_url=_text(row["avatar_url"]),
             avatar_focus=AvatarFocusRead.of(row["avatar_focus_x"], row["avatar_focus_y"]),
             banner_url=_text(row["banner_url"]),
+            cover_color=(
+                CoverColor(str(row["cover_color"])) if row["cover_color"] is not None else None
+            ),
+            cover_art=CoverArt(str(row["cover_art"])),
             primary_study_program=_text(row["primary_study_program"]),
             primary_study_country=_text(row["primary_study_country"]),
             origin_country=_text(row["origin_country"]),

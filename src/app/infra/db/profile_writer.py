@@ -73,6 +73,8 @@ PROFILE_COLUMNS = (
     "about_me",
     "gender",
     "origin_country_id",
+    "cover_color",
+    "cover_art",
     "social_linkedin",
     "social_twitter",
     "social_youtube",

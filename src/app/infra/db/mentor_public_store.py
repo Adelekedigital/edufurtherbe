@@ -28,9 +28,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, case, false, literal, select
+from sqlalchemy import Select, and_, case, false, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.enums import CoverArt
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
@@ -101,6 +102,10 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             UserProfile.avatar_focus_x,
             UserProfile.avatar_focus_y,
             UserProfile.banner_url,
+            UserProfile.cover_color,
+            # A mentor with no profile row has no cover row either: the
+            # column's own default, so the response never says `null` art.
+            func.coalesce(UserProfile.cover_art, CoverArt.NONE.value).label("cover_art"),
             UserProfile.social_linkedin,
             UserProfile.social_twitter,
             UserProfile.social_youtube,

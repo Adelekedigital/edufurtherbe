@@ -44,7 +44,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.enums import AuthProvider, LanguageProficiency, PrimaryRole
+from app.domain.enums import AuthProvider, CoverArt, CoverColor, LanguageProficiency, PrimaryRole
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -225,6 +225,12 @@ class UserProfile(TimestampMixin, Base):
     # resolves to Bubble and would pass such a check.
     avatar_url: Mapped[str | None] = mapped_column(Text)
     banner_url: Mapped[str | None] = mapped_column(Text)
+    #: The cover when there is no banner image (#193): one of the design's
+    #: colours, or `NULL` for the automatic one the client picks from the id.
+    cover_color: Mapped[CoverColor | None] = mapped_column(str_enum(CoverColor))
+    cover_art: Mapped[CoverArt] = mapped_column(
+        str_enum(CoverArt), nullable=False, server_default=text("'none'")
+    )
 
     #: Where a card should centre the avatar: the main face's centre as 0..1
     #: fractions of the stored image. Both or neither; see `domain/avatar_focus`.
@@ -277,6 +283,9 @@ class UserProfile(TimestampMixin, Base):
             "avatar_focus_source IS NULL OR avatar_focus_source IN ('detected', 'chosen')",
             name="avatar_focus_source_is_known",
         ),
+        # `NULL` is the automatic colour; the CHECK permits it without a case.
+        CheckConstraint(check_is_known("cover_color", CoverColor), name="cover_color_is_known"),
+        CheckConstraint(check_is_known("cover_art", CoverArt), name="cover_art_is_known"),
         CheckConstraint(
             "avatar_focus_x IS NULL OR avatar_focus_source IS NOT NULL",
             name="avatar_focus_has_a_source",
