@@ -36,6 +36,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.next_available_store import NONE, next_available_state
+from app.infra.db.profile_store import top_award
 from app.infra.db.public_visibility import (
     has_live_offering,
     has_weekly_hours,
@@ -95,6 +96,8 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             User.timezone,
             MentorProfile.headline,
             MentorProfile.primary_study_program,
+            MentorProfile.created_at.label("joined_at"),
+            top_award(User.id).label("top_award"),
             UserProfile.about_me,
             UserProfile.avatar_url,
             UserProfile.avatar_focus_x,
@@ -115,6 +118,7 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             has_live_offering().label("has_offering"),
             has_weekly_hours().label("has_hours"),
             MentorNextAvailability.next_available_at,
+            MentorNextAvailability.next_available_session_type_id,
             # Only a mentor the job refreshes has a time worth reading: the job
             # covers `bookable_mentors()` and nobody else. Anyone outside it —
             # hidden, or visible with no bookable offering or no hours — has

@@ -47,7 +47,14 @@ from app.infra.db.models.user import User, UserLanguage, UserProfile
 from app.infra.db.outbox import enqueue
 
 GOAL_COLUMNS = ("degree_goal_id", "degree_goal_raw", "target_start_term", "notes")
-AWARD_COLUMNS = ("title", "institution", "scholarship_program_id", "year", "evidence_url")
+AWARD_COLUMNS = (
+    "title",
+    "institution",
+    "scholarship_program_id",
+    "year",
+    "evidence_url",
+    "funding",
+)
 #: `requires_booking_confirmation` is back, and `_fan_out_booking_confirmation`
 #: is gone with it. The fan-out existed only because the column had moved to
 #: `session_type_booking_configs` while this endpoint was still the mentor's only

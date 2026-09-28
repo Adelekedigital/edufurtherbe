@@ -165,7 +165,7 @@ async def test_the_owner_facing_fields_stay_out_of_the_public_shape(
         "date_start",
         "date_end",
     }
-    assert set(body["scholarships"][0]) == {"id", "title", "institution", "year"}
+    assert set(body["scholarships"][0]) == {"id", "title", "institution", "year", "funding"}
     assert set(body["languages"][0]) == {"id", "display_name", "code"}
 
 

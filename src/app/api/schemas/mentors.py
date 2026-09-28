@@ -27,13 +27,14 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
-from app.domain.enums import ApprovalStatus, ListingStatus
+from app.domain.enums import ApprovalStatus, AwardFunding, ListingStatus
 
 
 class ServiceOfferingRead(BaseModel):
@@ -113,6 +114,17 @@ class MentorSummaryRead(BaseModel):
     #: booking horizon. `refreshing`: not recomputed since a booking, an hours
     #: change or the mentor becoming bookable — unknown, not empty.
     next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
+    #: The offering `next_available_at` belongs to — open booking on it. Null
+    #: whenever the time is (settled decision #189).
+    next_available_session_type_id: UUID | None = None
+
+    #: When this person became a mentor — `mentor_profiles.created_at`, which
+    #: for a migrated mentor is their creation date on the legacy platform. Not
+    #: the approval date: migrated mentors carry no approval event to read.
+    joined_at: datetime
+    #: The title of their most recent scholarship or award — exactly the one the
+    #: profile's `scholarships` list leads with. `null` when they list none.
+    top_award: str | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> MentorSummaryRead:
@@ -136,6 +148,7 @@ class MentorSummaryRead(BaseModel):
             ),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
             **_next_available(row),
+            **_joined_and_award(row),
         )
 
 
@@ -254,6 +267,13 @@ class AwardRead(BaseModel):
     title: str
     institution: str
     year: int | None = None
+    funding: AwardFunding | None = Field(
+        default=None,
+        description=(
+            "`full` or `partial`, as the holder says. **Null when the mentor hasn't said**, "
+            'which is most awards: show "fully funded" only when this is `full`.'
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> AwardRead:
@@ -267,6 +287,7 @@ class AwardRead(BaseModel):
             title=str(_text(row.get("programme_name")) or row["title"]),
             institution=str(row["institution"]),
             year=int(str(row["year"])) if row["year"] is not None else None,
+            funding=AwardFunding(str(row["funding"])) if row.get("funding") else None,
         )
 
 
@@ -365,6 +386,14 @@ class MentorPublicRead(BaseModel):
     #: *set*, so any sibling added or withdrawn invalidates a cached one.
     reviews: ReviewSummaryRead = Field(default_factory=ReviewSummaryRead)
 
+    #: When this person became a mentor — `mentor_profiles.created_at`, which
+    #: for a migrated mentor is their creation date on the legacy platform. Not
+    #: the approval date: migrated mentors carry no approval event to read.
+    joined_at: datetime
+    #: The title of their most recent scholarship or award — exactly the one the
+    #: profile's `scholarships` list leads with. `null` when they list none.
+    top_award: str | None = None
+
     languages: list[LanguageRead] = Field(
         default_factory=list,
         description=(
@@ -378,6 +407,9 @@ class MentorPublicRead(BaseModel):
     #: the public cannot see has nothing bookable, so its owner reads `none`.
     next_available_at: datetime | None = None
     next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
+    #: The offering `next_available_at` belongs to — open booking on it. Null
+    #: whenever the time is (settled decision #189).
+    next_available_session_type_id: UUID | None = None
 
     # `exclude_if`, not a model serializer: a wrap serializer typed `dict`
     # replaces this model's whole serialization schema, and the published
@@ -450,6 +482,7 @@ class MentorPublicRead(BaseModel):
                 int(str(stats["attendance_rate"])) if stats["attendance_rate"] is not None else None
             ),
             reviews=ReviewSummaryRead.from_row(reviews),
+            **_joined_and_award(row),
             **_next_available(row),
             **_owner_fields(row),
         )
@@ -464,8 +497,14 @@ def _next_available(row: dict[str, Any]) -> dict[str, Any]:
     mentor is free.
     """
     state = row["next_available_state"]
+    vouched = state == "open"
+    session_type = row.get("next_available_session_type_id")
     return {
-        "next_available_at": row["next_available_at"] if state == "open" else None,
+        "next_available_at": row["next_available_at"] if vouched else None,
+        # Gated with the time, never apart from it: a change to any offering
+        # logs a change and the state leaves `open`, so an id sent here is one
+        # of the offerings the mentor still has live.
+        "next_available_session_type_id": session_type if vouched and session_type else None,
         "next_available_state": state,
     }
 
@@ -488,6 +527,11 @@ def _owner_fields(row: dict[str, Any]) -> dict[str, Any]:
         if not present
     ]
     return {**{key: row[key] for key in OWNER_ONLY}, "setup_needed": missing}
+
+
+def _joined_and_award(row: dict[str, Any]) -> dict[str, Any]:
+    """`joined_at` and `top_award`, mapped once for the card and the profile."""
+    return {"joined_at": row["joined_at"], "top_award": _text(row["top_award"])}
 
 
 def _text(value: object) -> str | None:

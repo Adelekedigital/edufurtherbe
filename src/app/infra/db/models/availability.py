@@ -426,6 +426,19 @@ class MentorNextAvailability(TimestampMixin, Base):
     #: offering's notice. Past it, `/slots` no longer offers the slot, so the
     #: card stops showing it.
     bookable_until: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: Which offering that first slot belongs to, so "Book" can open on it
+    #: (settled decision #189). Null exactly when `next_available_at` is.
+    #: `SET NULL`: a deleted offering must not take this cached row with it, and
+    #: the next refresh rewrites the value anyway. Named by hand — the
+    #: convention renders 71 characters, past PostgreSQL's 63.
+    next_available_session_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "session_types.id",
+            ondelete="SET NULL",
+            name="fk_mentor_next_availability_session_type_id",
+        ),
+    )
     #: When the value was computed, by the job's clock. Decides age only.
     computed_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
 

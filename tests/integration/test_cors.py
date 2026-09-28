@@ -141,3 +141,32 @@ def test_the_refusal_is_problem_json_like_every_other_error() -> None:
         "the hand-written problem body has different keys from the generated one"
     )
     assert refused.json()["status"] == 413
+
+
+def test_a_booking_preflight_allows_the_idempotency_key() -> None:
+    """Booking sends `Idempotency-Key` (ADR 0024). A preflight that does not
+    list it makes the browser drop the POST before it leaves — the booking
+    never reaches the API, and the user sees a network error."""
+    response = client(ALLOWED).options(
+        "/api/v1/sessions",
+        headers={
+            "Origin": ALLOWED,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type,idempotency-key",
+        },
+    )
+
+    assert response.status_code == 200
+    allowed_headers = response.headers.get("access-control-allow-headers", "").lower()
+    assert "idempotency-key" in allowed_headers
+
+
+def test_the_booking_response_headers_are_readable_cross_origin() -> None:
+    """A browser hides every response header outside the safelist from script
+    on another origin unless it is exposed. Booking's replay flag and the new
+    session's `Location` are both read by the client."""
+    response = client(ALLOWED).get("/health", headers={"Origin": ALLOWED})
+
+    exposed = response.headers.get("access-control-expose-headers", "").lower()
+    assert "idempotent-replayed" in exposed
+    assert "location" in exposed

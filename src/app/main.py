@@ -31,6 +31,7 @@ from app.api.routes import (
     user_attributes,
     users,
 )
+from app.api.routes.sessions import REPLAYED_HEADER
 from app.core.config import Settings, get_settings
 
 # Tag metadata, so /docs explains each group rather than listing bare paths.
@@ -319,8 +320,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
             # `Accept`, `Accept-Language`, `Content-Language` and `Content-Type`
             # are always allowed by the middleware; `Authorization` is not, and
-            # is the one this API cannot work without.
-            allow_headers=["Authorization", "Content-Type"],
+            # is the one this API cannot work without. `Idempotency-Key` is
+            # what booking and admin grants send (ADR 0024): missing here, the
+            # browser drops a cross-origin booking before it leaves.
+            allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+            # Response headers a browser hides from another origin's script
+            # unless exposed: the replay flag a retry reads, and a created
+            # resource's `Location`.
+            expose_headers=[REPLAYED_HEADER, "Location"],
         )
     application.include_router(health.router)
     application.include_router(users.router)

@@ -397,8 +397,9 @@ async def test_a_replayed_key_grants_once(
     second = await grant(api_client, auth, [target], key="same")
 
     assert (first.status_code, second.status_code) == (200, 200)
-    assert first.headers["Idempotent-Replay"] == "false"
-    assert second.headers["Idempotent-Replay"] == "true"
+    # The same header booking sends, so one client rule reads both.
+    assert first.headers["Idempotent-Replayed"] == "false"
+    assert second.headers["Idempotent-Replayed"] == "true"
     assert len(await lots_of(db_engine, target)) == 1
 
 
