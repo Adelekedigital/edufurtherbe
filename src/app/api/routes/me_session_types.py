@@ -29,8 +29,9 @@ from app.api.deps import (
     OwnSessionTypesDep,
     UpdatedOwnSessionTypeDep,
 )
+from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.common import Page
-from app.api.schemas.session_types import OwnSessionTypeRead
+from app.api.schemas.session_types import OwnSessionTypeRead, SessionTypeCreated
 from app.core.errors import NotFoundError
 
 router = APIRouter(prefix="/api/v1/me", tags=["session-types"])
@@ -115,6 +116,7 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
 @router.post(
     "/session-types",
     status_code=status.HTTP_201_CREATED,
+    response_model=SessionTypeCreated,
     summary="Create a session type",
     description=(
         "The offering and its booking settings are created **together**, in one "
@@ -133,15 +135,27 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
         "nothing to publish — `is_active` is writable on `PATCH`, where "
         "switching one off is the point.\n\n"
         "A caller with no mentor profile gets `404`: a session type belongs to a "
-        "mentor, and there is no true empty answer to a write."
+        "mentor, and there is no true empty answer to a write.\n\n"
+        "**`questions`** (at most five) are created with the offering in one "
+        "transaction; an invalid question refuses the whole request. The response "
+        "is `{id, question_ids}`.\n\n"
+        "**`Idempotency-Key` is optional.** Sent, a retry with the same key and "
+        "body replays the first answer (with `Idempotent-Replayed: true`) instead "
+        "of creating a second offering; the same key with a different body is a "
+        "`422`. Absent, nothing changes."
     ),
     responses=WRITE_RESPONSES | NAME_CONFLICT,
 )
 async def create_own_session_type(
-    session_type_id: CreatedOwnSessionTypeDep, response: Response
-) -> dict[str, str]:
+    created: CreatedOwnSessionTypeDep, response: Response
+) -> SessionTypeCreated:
+    body, status_code, replayed = created
+    response.status_code = status_code
+    if replayed:
+        response.headers[REPLAYED_HEADER] = "true"
     response.headers["Location"] = "/api/v1/me/session-types"
-    return {"id": str(session_type_id)}
+    # Validated, so a body replayed out of JSONB is the same typed answer.
+    return SessionTypeCreated.model_validate(body)
 
 
 @router.patch(

@@ -25,6 +25,7 @@ from app.api.deps import (
     OwnQuestionsDep,
     UpdatedOwnQuestionDep,
 )
+from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.common import Page
 from app.api.schemas.intake import QuestionRead
 from app.core.errors import NotFoundError
@@ -95,15 +96,22 @@ async def read_own_questions(questions: OwnQuestionsDep) -> Page[QuestionRead]:
         "work.\n\n"
         "`display_order` is yours to set and need not be contiguous; leaving it "
         "at `0` puts the question at the end of the questions that also left it "
-        "there, in creation order."
+        "there, in creation order.\n\n"
+        "**`Idempotency-Key` is optional**, as on creating an offering: a retry with "
+        "the same key replays the first answer; the same key sent to a different "
+        "offering, or with a different body, is a `422`."
     ),
     responses=QUESTION_RESPONSES | FULL_FORM,
 )
 async def create_own_question(
-    question_id: CreatedOwnQuestionDep, session_type_id: str, response: Response
+    created: CreatedOwnQuestionDep, session_type_id: str, response: Response
 ) -> dict[str, str]:
+    body, status_code, replayed = created
+    response.status_code = status_code
+    if replayed:
+        response.headers[REPLAYED_HEADER] = "true"
     response.headers["Location"] = f"/api/v1/me/session-types/{session_type_id}/questions"
-    return {"id": str(question_id)}
+    return body
 
 
 @router.patch(
