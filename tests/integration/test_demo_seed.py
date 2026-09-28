@@ -10,6 +10,7 @@ mentor here is for.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -21,7 +22,10 @@ from app.infra.db.calendar_store import NullFreeBusy
 from app.infra.db.demo_seed import (
     DEMO_DOMAIN,
     DemoMentor,
+    DemoQuestion,
+    DemoSessionType,
     RealHistoryError,
+    apply_demo_session_types,
     create_demo_mentor,
     remove_demo,
 )
@@ -161,3 +165,128 @@ async def test_removal_refuses_when_a_real_user_booked_a_demo_mentor(
             text("SELECT count(*) FROM sessions WHERE id = :s"), {"s": real_mentee_session}
         )
         assert kept.scalar_one() == 1
+
+
+# --------------------------------------------------------------------------
+# Session types: several per mentor, each with what the frontend displays
+# --------------------------------------------------------------------------
+
+MOCK = DemoSessionType(
+    name="Mock interview with feedback",
+    description="A full practice interview, then feedback on every answer.",
+    offering="interview-preparation",
+    duration=60,
+    notice=2880,
+    stage="post_submission",
+    questions=(
+        DemoQuestion("Which programme or scholarship is the interview for?", required=True),
+        DemoQuestion("When is your interview?", required=False),
+    ),
+)
+INTRO = DemoSessionType(
+    name="Intro call",
+    description="Twenty minutes to see whether we are a good fit.",
+    offering=None,
+    duration=20,
+    notice=1440,
+    stage=None,
+    questions=(DemoQuestion("What would you like to get out of this call?", required=True),),
+)
+
+
+async def session_types_of(engine: AsyncEngine, user: object) -> dict[str, dict[str, object]]:
+    async with engine.begin() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT t.id, t.name, t.description, t.application_stage, c.duration_minutes, "
+                "       c.min_notice_minutes, o.slug AS offering, "
+                "       (SELECT count(*) FROM session_type_questions q "
+                "         WHERE q.session_type_id = t.id AND q.deleted_at IS NULL) AS questions "
+                "FROM session_types t "
+                "JOIN session_type_booking_configs c ON c.session_type_id = t.id "
+                "LEFT JOIN service_offerings o ON o.id = t.service_offering_id "
+                "WHERE t.mentor_user_id = :u AND t.deleted_at IS NULL"
+            ),
+            {"u": user},
+        )
+        return {row.name: dict(row._mapping) for row in rows}
+
+
+async def demo_user(engine: AsyncEngine, key: str) -> object:
+    async with engine.begin() as conn:
+        return (
+            await conn.execute(
+                text("SELECT id FROM users WHERE email = :e"), {"e": f"{key}@{DEMO_DOMAIN}"}
+            )
+        ).scalar_one()
+
+
+async def test_a_seeded_mentor_offers_every_session_type_given(db_engine: AsyncEngine) -> None:
+    mentor = replace(OPEN, key="demo-types", session_types=(MOCK, INTRO))
+    await seed(db_engine, mentor)
+
+    types = await session_types_of(db_engine, await demo_user(db_engine, "demo-types"))
+
+    assert set(types) == {"Mock interview with feedback", "Intro call"}
+    mock = types["Mock interview with feedback"]
+    assert (mock["duration_minutes"], mock["min_notice_minutes"]) == (60, 2880)
+    assert (mock["offering"], mock["application_stage"]) == (
+        "interview-preparation",
+        "post_submission",
+    )
+    assert mock["description"]
+    assert mock["questions"] == 2
+    assert types["Intro call"]["offering"] is None
+
+
+async def test_upgrading_keeps_the_legacy_type_and_its_history(db_engine: AsyncEngine) -> None:
+    """A mentor seeded before this change has one '1:1 mentorship' type that
+    their demo sessions point at. The upgrade rewrites that row into the first
+    type rather than deleting it, and adds the rest."""
+    legacy = replace(OPEN, key="demo-legacy")
+    await seed(db_engine, legacy)
+    user = await demo_user(db_engine, "demo-legacy")
+    (before,) = (await session_types_of(db_engine, user)).values()
+
+    async with AsyncSession(db_engine) as session:
+        await apply_demo_session_types(session, user, (MOCK, INTRO))
+        await session.commit()
+    after = await session_types_of(db_engine, user)
+
+    assert set(after) == {"Mock interview with feedback", "Intro call"}
+    assert after["Mock interview with feedback"]["id"] == before["id"]
+    async with db_engine.begin() as conn:
+        orphaned = await conn.execute(
+            text(
+                "SELECT count(*) FROM sessions s WHERE s.mentor_id = :u AND s.session_type_id "
+                "NOT IN (SELECT id FROM session_types WHERE mentor_user_id = :u)"
+            ),
+            {"u": user},
+        )
+    assert orphaned.scalar_one() == 0
+
+
+async def test_upgrading_twice_changes_nothing(db_engine: AsyncEngine) -> None:
+    await seed(db_engine, replace(OPEN, key="demo-twice"))
+    user = await demo_user(db_engine, "demo-twice")
+
+    for _ in range(2):
+        async with AsyncSession(db_engine) as session:
+            await apply_demo_session_types(session, user, (MOCK, INTRO))
+            await session.commit()
+
+    types = await session_types_of(db_engine, user)
+    assert len(types) == 2
+    assert types["Mock interview with feedback"]["questions"] == 2
+    assert types["Intro call"]["questions"] == 1
+
+
+async def test_the_session_types_are_public_on_the_profile(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    await seed(db_engine, replace(OPEN, key="demo-public", session_types=(MOCK, INTRO)))
+    user = await demo_user(db_engine, "demo-public")
+
+    body = (await api_client.get(f"/api/v1/users/{user}/session-types")).json()
+
+    assert sorted(t["name"] for t in body["data"]) == ["Intro call", "Mock interview with feedback"]
