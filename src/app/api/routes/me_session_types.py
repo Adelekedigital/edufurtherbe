@@ -21,8 +21,6 @@ regrouping breaks nothing whenever that happens.
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
@@ -33,7 +31,7 @@ from app.api.deps import (
 )
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.common import Page
-from app.api.schemas.session_types import OwnSessionTypeRead
+from app.api.schemas.session_types import OwnSessionTypeRead, SessionTypeCreated
 from app.core.errors import NotFoundError
 
 router = APIRouter(prefix="/api/v1/me", tags=["session-types"])
@@ -118,6 +116,7 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
 @router.post(
     "/session-types",
     status_code=status.HTTP_201_CREATED,
+    response_model=SessionTypeCreated,
     summary="Create a session type",
     description=(
         "The offering and its booking settings are created **together**, in one "
@@ -149,13 +148,14 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
 )
 async def create_own_session_type(
     created: CreatedOwnSessionTypeDep, response: Response
-) -> dict[str, Any]:
+) -> SessionTypeCreated:
     body, status_code, replayed = created
     response.status_code = status_code
     if replayed:
         response.headers[REPLAYED_HEADER] = "true"
     response.headers["Location"] = "/api/v1/me/session-types"
-    return body
+    # Validated, so a body replayed out of JSONB is the same typed answer.
+    return SessionTypeCreated.model_validate(body)
 
 
 @router.patch(

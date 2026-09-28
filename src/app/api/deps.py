@@ -891,20 +891,21 @@ def _canonical_grant(payload: AdminCreditGrantWrite) -> dict[str, Any]:
     return body
 
 
+#: The header every idempotent endpoint reads.
+IdempotencyKeyHeader = Header(
+    alias="Idempotency-Key",
+    min_length=1,
+    max_length=255,
+    description="A value unique to this attempt. Retries must reuse it.",
+)
+
+
 async def granted_admin_credits(
     payload: AdminCreditGrantWrite,
     admin_id: CreditAdminDep,
     session: SessionDep,
     ladder: LadderDep,
-    idempotency_key: Annotated[
-        str,
-        Header(
-            alias="Idempotency-Key",
-            min_length=1,
-            max_length=255,
-            description="A value unique to this grant attempt. Retries must reuse it.",
-        ),
-    ],
+    idempotency_key: Annotated[str, IdempotencyKeyHeader],
 ) -> tuple[dict[str, Any], int, bool]:
     """Reserve the key, write the lots, store the answer — one transaction.
 
@@ -1458,19 +1459,11 @@ ENDPOINT_BOOKING = "POST /api/v1/sessions"
 #: a credit grant.
 ENDPOINT_ADMIN_CREDITS = "POST /api/v1/admin/credits"
 
-#: The two session-type creates (#195). Optional keys, unlike the two above:
+#: The two session-type creates (#196). Optional keys, unlike the two above:
 #: nothing here is money, and requiring one would break every client already
 #: creating offerings without it.
 ENDPOINT_SESSION_TYPE = "POST /api/v1/me/session-types"
 ENDPOINT_QUESTION = "POST /api/v1/me/session-types/{session_type_id}/questions"
-
-#: The header every idempotent endpoint reads.
-IdempotencyKeyHeader = Header(
-    alias="Idempotency-Key",
-    min_length=1,
-    max_length=255,
-    description="A value unique to this attempt. Retries must reuse it.",
-)
 
 
 async def claim_idempotency_key(
@@ -1526,15 +1519,7 @@ async def booked_session(
     user: CurrentUserDep,
     session: SessionDep,
     request: Request,
-    idempotency_key: Annotated[
-        str,
-        Header(
-            alias="Idempotency-Key",
-            min_length=1,
-            max_length=255,
-            description="A value unique to this booking attempt. Retries must reuse it.",
-        ),
-    ],
+    idempotency_key: Annotated[str, IdempotencyKeyHeader],
 ) -> tuple[dict[str, Any], int, bool]:
     """Reserve the key, book the hour, store the answer — one transaction.
 
@@ -2425,11 +2410,11 @@ async def created_own_session_type(
 ) -> tuple[dict[str, Any], int, bool]:
     """The offering, its booking config and its questions, in one transaction.
 
-    **Questions ride in the same transaction** (#195): each goes through
+    **Questions ride in the same transaction** (#196): each goes through
     `create_question`, the same writer `POST .../questions` uses, so the limit
     and the type rules are one rule; one refused refuses the lot.
 
-    **`Idempotency-Key` is optional here** (#195): sent, a retry replays the first
+    **`Idempotency-Key` is optional here** (#196): sent, a retry replays the first
     answer; absent, the request behaves as it always has. Returns the body, the
     status and whether it was a replay.
 
@@ -2463,6 +2448,8 @@ async def created_own_session_type(
         question_id = await create_question(
             session, user["id"], session_type_id, question.model_dump()
         )
+        if question_id is None:  # pragma: no cover - the offering was just written here
+            raise NotFoundError("no such session type")
         question_ids.append(str(question_id))
     body = {"id": str(session_type_id), "question_ids": question_ids}
     if reservation is not None:

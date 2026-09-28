@@ -78,10 +78,12 @@ async def test_no_questions_is_still_a_plain_create(
     assert response.json()["question_ids"] == []
 
 
-async def test_a_bad_question_refuses_the_whole_create(
+async def test_a_question_the_schema_refuses_writes_nothing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """One invalid question and nothing is written — not the type without it."""
+    """One question refused at the boundary and nothing is written — not the
+    type without it. (Refused before the transaction opens; the one commit,
+    after every insert, is what makes a later failure all-or-nothing too.)"""
     mentor, auth = await as_mentor(db_engine, "atomic-bad")
 
     response = await api_client.post(
@@ -167,6 +169,7 @@ async def test_a_retried_question_with_the_same_key_is_added_once(
 
     assert first.status_code == second.status_code == 201
     assert first.json() == second.json()
+    assert second.headers["Idempotent-Replayed"] == "true"
     assert await counts(db_engine, mentor) == (1, 1)
 
 

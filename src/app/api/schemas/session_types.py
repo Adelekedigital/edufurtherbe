@@ -305,7 +305,7 @@ class MentorSessionTypeWrite(Normalised):
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
     #: The intake questions, created **in the same transaction** as the offering
-    #: (#195): a question refused refuses the whole create, so a mentor never
+    #: (#196): a question refused refuses the whole create, so a mentor never
     #: ends up with a live offering and half its form. Each is a `QuestionWrite`,
     #: exactly as `POST .../questions` takes one, at most `MAX_QUESTIONS`.
     questions: list[QuestionWrite] = Field(
@@ -356,3 +356,12 @@ class MentorSessionTypePatch(Normalised):
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
         return _refuse_mismatched_label(self)
+
+
+class SessionTypeCreated(BaseModel):
+    """What creating a session type answers (#196)."""
+
+    id: UUID
+    question_ids: list[UUID] = Field(
+        description="The ids of the `questions` sent, in the order they were sent."
+    )
