@@ -723,3 +723,16 @@ class FeaturedSource(StrEnum):
 
     AUTOMATIC = "automatic"
     ADMIN = "admin"
+
+
+class AwardFunding(StrEnum):
+    """How much of a scholarship or award was funded, as the holder says (#189).
+
+    Self-reported, like everything else about an award. **Null means "not
+    said"**, which is most rows: the legacy export carried no funding at all, and
+    the programme catalogue's own `funding_type` is empty on every migrated row.
+    The profile shows "fully funded" only where the holder said so.
+    """
+
+    FULL = "full"
+    PARTIAL = "partial"

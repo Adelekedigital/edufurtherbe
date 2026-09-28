@@ -25,7 +25,7 @@ from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.enums import LookupStatus, VerificationStatus
+from app.domain.enums import AwardFunding, LookupStatus, VerificationStatus
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -179,6 +179,8 @@ class UserAward(TimestampMixin, Base):
     )
 
     year: Mapped[int | None] = mapped_column()
+    #: `full` or `partial` as the holder says; null when they have not said (#189).
+    funding: Mapped[AwardFunding | None] = mapped_column(str_enum(AwardFunding))
 
     verification_status: Mapped[VerificationStatus] = mapped_column(
         str_enum(VerificationStatus), nullable=False, server_default=text("'unverified'")
@@ -213,4 +215,7 @@ class UserAward(TimestampMixin, Base):
             check_is_known("verification_status", VerificationStatus),
             name="verification_status_is_known",
         ),
+        # Nullable, and the `IN` check permits NULL without a special case:
+        # `NULL IN (...)` is unknown, and a CHECK rejects only what is false.
+        CheckConstraint(check_is_known("funding", AwardFunding), name="funding_is_known"),
     )

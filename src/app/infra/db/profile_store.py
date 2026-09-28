@@ -174,6 +174,7 @@ async def list_awards(session: AsyncSession, user_id: UUID) -> list[dict[str, An
             UserAward.institution,
             UserAward.title,
             UserAward.year,
+            UserAward.funding,
             UserAward.verification_status,
             UserAward.evidence_url,
             ScholarshipProgram.display_name.label("programme_name"),
