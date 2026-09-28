@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -113,6 +114,9 @@ class MentorSummaryRead(BaseModel):
     #: booking horizon. `refreshing`: not recomputed since a booking, an hours
     #: change or the mentor becoming bookable — unknown, not empty.
     next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
+    #: The offering `next_available_at` belongs to — open booking on it. Null
+    #: whenever the time is (settled decision #189).
+    next_available_session_type_id: UUID | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> MentorSummaryRead:
@@ -378,6 +382,9 @@ class MentorPublicRead(BaseModel):
     #: the public cannot see has nothing bookable, so its owner reads `none`.
     next_available_at: datetime | None = None
     next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
+    #: The offering `next_available_at` belongs to — open booking on it. Null
+    #: whenever the time is (settled decision #189).
+    next_available_session_type_id: UUID | None = None
 
     # `exclude_if`, not a model serializer: a wrap serializer typed `dict`
     # replaces this model's whole serialization schema, and the published
@@ -453,8 +460,14 @@ def _next_available(row: dict[str, Any]) -> dict[str, Any]:
     mentor is free.
     """
     state = row["next_available_state"]
+    vouched = state == "open"
+    session_type = row.get("next_available_session_type_id")
     return {
-        "next_available_at": row["next_available_at"] if state == "open" else None,
+        "next_available_at": row["next_available_at"] if vouched else None,
+        # Gated with the time, never apart from it: a change to any offering
+        # logs a change and the state leaves `open`, so an id sent here is one
+        # of the offerings the mentor still has live.
+        "next_available_session_type_id": session_type if vouched and session_type else None,
         "next_available_state": state,
     }
 
