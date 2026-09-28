@@ -72,6 +72,7 @@ from app.domain.enums import (
     SessionReasonCode,
     SessionRole,
     SessionStatus,
+    SessionTypeIcon,
 )
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
@@ -164,6 +165,9 @@ class SessionType(TimestampMixin, Base):
     #: `OTHER`'s label, and **only** `OTHER`'s — tied by the symmetric `CHECK`
     #: below. See `ApplicationStage` for why the escape hatch is kept.
     custom_stage_label: Mapped[str | None] = mapped_column(Text)
+    #: The icon the client shows (#197), from the design's closed set; `NULL`
+    #: is the client's automatic pick.
+    icon: Mapped[SessionTypeIcon | None] = mapped_column(str_enum(SessionTypeIcon))
 
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
 
@@ -234,6 +238,10 @@ class SessionType(TimestampMixin, Base):
         CheckConstraint(
             f"application_stage IS NULL OR {check_is_known('application_stage', ApplicationStage)}",
             name="application_stage_is_known",
+        ),
+        CheckConstraint(
+            f"icon IS NULL OR {check_is_known('icon', SessionTypeIcon)}",
+            name="icon_is_known",
         ),
         # **Symmetric.** `other` with no label renders a blank chip; a named
         # stage carrying a stale label is dead data that survives an edit. The

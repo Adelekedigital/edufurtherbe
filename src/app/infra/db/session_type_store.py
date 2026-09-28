@@ -222,6 +222,7 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             ServiceOffering.display_name.label("service_offering_name"),
             SessionType.application_stage,
             SessionType.custom_stage_label,
+            SessionType.icon,
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
             # Resolved, not read. See `_resolved_venue`.
@@ -287,6 +288,7 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             ServiceOffering.display_name.label("service_offering_name"),
             SessionType.application_stage,
             SessionType.custom_stage_label,
+            SessionType.icon,
             SessionType.is_active,
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
@@ -418,6 +420,7 @@ async def create_session_type(
                     service_offering_id=payload.get("service_offering_id"),
                     application_stage=payload.get("application_stage"),
                     custom_stage_label=payload.get("custom_stage_label"),
+                    icon=payload.get("icon"),
                 )
                 .returning(SessionType.id)
             )
@@ -445,6 +448,7 @@ SESSION_TYPE_COLUMNS = (
     "service_offering_id",
     "application_stage",
     "custom_stage_label",
+    "icon",
     "is_active",
 )
 BOOKING_CONFIG_COLUMNS = ("duration_minutes", "min_notice_minutes")

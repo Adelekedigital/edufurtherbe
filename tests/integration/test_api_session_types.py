@@ -306,6 +306,7 @@ async def test_the_response_carries_nothing_it_should_not(
         "service_offering",
         "application_stage",
         "custom_stage_label",
+        "icon",
     }
     assert offering["service_offering"] == {
         "code": "document-preparation",
