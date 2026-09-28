@@ -27,16 +27,50 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 __all__ = [
     "DEMO_DOMAIN",
+    "LEGACY_SESSION_TYPE",
     "DemoMentor",
+    "DemoQuestion",
+    "DemoSessionType",
     "RealHistoryError",
+    "apply_demo_session_types",
     "catalogue_offerings",
     "create_demo_mentor",
     "demo_avatar_urls",
+    "demo_mentor_offerings",
     "remove_demo",
 ]
 
 #: The suffix every demo user's email carries, and the only thing removal reads.
 DEMO_DOMAIN = "demo.edufurther.test"
+
+
+#: The one session type every demo mentor was seeded with before the catalogue.
+#: An upgrade rewrites this row in place — the demo sessions point at it.
+LEGACY_SESSION_TYPE = "1:1 mentorship"
+
+
+@dataclass(frozen=True, slots=True)
+class DemoQuestion:
+    """One free-text intake question on a demo session type."""
+
+    text: str
+    required: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DemoSessionType:
+    """One session type as the profile and booking flow will show it."""
+
+    name: str
+    description: str
+    #: A service-offering slug, or `None` for a type that matches no filter.
+    offering: str | None
+    duration: int
+    #: Minutes; within the write path's 24-72 hour range (#104).
+    notice: int
+    #: An `ApplicationStage` value, or `None` for any stage.
+    stage: str | None
+    questions: tuple[DemoQuestion, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +95,9 @@ class DemoMentor:
     #: False blocks the whole booking horizon, so the card reads `none`.
     open: bool = True
     weekdays: tuple[int, ...] = field(default=(0, 1, 2, 3, 4))
+    #: What they offer, first one first. Empty keeps the old single
+    #: `LEGACY_SESSION_TYPE`, which is what the tests' plain mentors use.
+    session_types: tuple[DemoSessionType, ...] = ()
 
 
 def _email(key: str) -> str:
@@ -124,20 +161,23 @@ async def create_demo_mentor(
             {"u": user, "s": slug},
         )
 
-    session_type = await _one(
-        session,
-        "INSERT INTO session_types (mentor_user_id, name, service_offering_id, is_active) "
-        "VALUES (:u, '1:1 mentorship', "
-        "        (SELECT id FROM service_offerings WHERE slug = :s), true) RETURNING id",
-        {"u": user, "s": mentor.offerings[0]},
-    )
-    await session.execute(
-        text(
-            "INSERT INTO session_type_booking_configs "
-            "(session_type_id, duration_minutes, min_notice_minutes) VALUES (:t, 45, 120)"
-        ),
-        {"t": session_type},
-    )
+    if mentor.session_types:
+        session_type = await apply_demo_session_types(session, user, mentor.session_types)
+    else:
+        session_type = await _one(
+            session,
+            "INSERT INTO session_types (mentor_user_id, name, service_offering_id, is_active) "
+            "VALUES (:u, :n, (SELECT id FROM service_offerings WHERE slug = :s), true) "
+            "RETURNING id",
+            {"u": user, "n": LEGACY_SESSION_TYPE, "s": mentor.offerings[0]},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO session_type_booking_configs "
+                "(session_type_id, duration_minutes, min_notice_minutes) VALUES (:t, 45, 1440)"
+            ),
+            {"t": session_type},
+        )
     for day in mentor.weekdays:
         await session.execute(
             text(
@@ -160,6 +200,135 @@ async def create_demo_mentor(
 
     await _history(session, user, session_type, mentor, now=now)
     return UUID(str(user))
+
+
+async def apply_demo_session_types(
+    session: AsyncSession, user: Any, types: tuple[DemoSessionType, ...]
+) -> Any:
+    """Give a demo mentor exactly these session types; return the first one's id.
+
+    **Safe to run again.** A type is matched by name and rewritten to the
+    template, so a second run converges instead of duplicating. **The legacy
+    `LEGACY_SESSION_TYPE` row becomes the first type in place**, keeping its id,
+    because the demo sessions and reviews point at it. Questions are added only
+    to a type that has none, so a re-run never stacks them. Does not commit.
+    """
+    existing = {
+        row.name: row.id
+        for row in await session.execute(
+            text(
+                "SELECT id, name FROM session_types "
+                "WHERE mentor_user_id = :u AND deleted_at IS NULL"
+            ),
+            {"u": user},
+        )
+    }
+    first_id: Any = None
+    for index, template in enumerate(types):
+        type_id = existing.get(template.name)
+        if type_id is None and index == 0:
+            type_id = existing.get(LEGACY_SESSION_TYPE)
+        values = {
+            "u": user,
+            "n": template.name,
+            "d": template.description,
+            "o": template.offering,
+            "st": template.stage,
+        }
+        if type_id is None:
+            type_id = await _one(
+                session,
+                "INSERT INTO session_types (mentor_user_id, name, description, "
+                " service_offering_id, application_stage, is_active) "
+                "VALUES (:u, :n, :d, (SELECT id FROM service_offerings WHERE slug = :o), "
+                "        :st, true) "
+                "RETURNING id",
+                values,
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO session_type_booking_configs "
+                    "(session_type_id, duration_minutes, min_notice_minutes) VALUES (:t, :m, :n)"
+                ),
+                {"t": type_id, "m": template.duration, "n": template.notice},
+            )
+        else:
+            await session.execute(
+                text(
+                    "UPDATE session_types SET name = :n, description = :d, "
+                    " service_offering_id = (SELECT id FROM service_offerings WHERE slug = :o), "
+                    " application_stage = :st, custom_stage_label = NULL, is_active = true "
+                    "WHERE id = :t"
+                ),
+                {**values, "t": type_id},
+            )
+            await session.execute(
+                text(
+                    "UPDATE session_type_booking_configs "
+                    "SET duration_minutes = :m, min_notice_minutes = :n WHERE session_type_id = :t"
+                ),
+                {"t": type_id, "m": template.duration, "n": template.notice},
+            )
+        has_questions = await _one(
+            session,
+            "SELECT EXISTS (SELECT 1 FROM session_type_questions "
+            "WHERE session_type_id = :t AND deleted_at IS NULL)",
+            {"t": type_id},
+        )
+        if not has_questions:
+            for order, question in enumerate(template.questions):
+                await session.execute(
+                    text(
+                        "INSERT INTO session_type_questions (session_type_id, question_text, "
+                        " question_type, is_required, display_order, created_by) "
+                        "VALUES (:t, :q, 'free_text', :r, :o, :u)"
+                    ),
+                    {
+                        "t": type_id,
+                        "q": question.text,
+                        "r": question.required,
+                        "o": order,
+                        "u": user,
+                    },
+                )
+        first_id = first_id if first_id is not None else type_id
+    return first_id
+
+
+async def demo_mentor_offerings(session: AsyncSession) -> list[tuple[Any, tuple[str, ...]]]:
+    """Every demo **mentor** and their offerings, the legacy type's offering first.
+
+    Joined to `mentor_profiles`, because the suffix also matches the demo mentees
+    the seed creates to hold its reviews — and they are not mentors.
+
+    The seed made the legacy type from a mentor's first offering, and nothing
+    else recorded which one that was — so it is read back from that row.
+    """
+    rows = await session.execute(
+        text(
+            "SELECT u.id, "
+            "       (SELECT o.slug FROM session_types t JOIN service_offerings o "
+            "          ON o.id = t.service_offering_id "
+            "        WHERE t.mentor_user_id = u.id AND t.deleted_at IS NULL "
+            "        ORDER BY t.created_at LIMIT 1) AS first, "
+            "       ARRAY(SELECT o.slug FROM mentor_service_offerings m "
+            "             JOIN service_offerings o ON o.id = m.service_offering_id "
+            "             WHERE m.mentor_user_id = u.id ORDER BY o.sort_order) AS offerings "
+            # Mentors only: the demo mentees share the email suffix, and a session
+            # type written for one fails the key to `mentor_profiles`.
+            "FROM users u JOIN mentor_profiles mp ON mp.user_id = u.id "
+            "WHERE u.email LIKE :s ORDER BY u.email"
+        ),
+        {"s": f"%@{DEMO_DOMAIN}"},
+    )
+    result = []
+    for row in rows:
+        offerings = list(row.offerings or ())
+        if row.first in offerings:
+            offerings.remove(row.first)
+            offerings.insert(0, row.first)
+        result.append((row.id, tuple(offerings)))
+    return result
 
 
 async def _history(

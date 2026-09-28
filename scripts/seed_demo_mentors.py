@@ -2,6 +2,7 @@
 
     railway run uv run python scripts/seed_demo_mentors.py --avatars <folder>
     railway run uv run python scripts/seed_demo_mentors.py --remove
+    railway run uv run python scripts/seed_demo_mentors.py --session-types
 
 **Never production.** It refuses before touching anything when the environment
 is `production`, whatever else is configured.
@@ -16,6 +17,12 @@ Re-running replaces the demo set: everything demo is removed first, including
 its stored avatars. Every demo user's email ends in `@demo.edufurther.test`, and
 `--remove` deletes exactly those. Two further mentors have no photo, for the
 initials path.
+
+`--session-types` upgrades the demo mentors already seeded, in place: each gets
+the catalogue's session types for their offerings plus an intro call — 2 to 4,
+each with a description, duration, notice, stage and intake questions. Their
+original single type becomes the first one, so their history stays attached.
+Safe to run again.
 
 The roster below is data; the SQL is in `app.infra.db.demo_seed` (a script may
 hold none).
@@ -38,15 +45,164 @@ from app.domain.assets import AssetKind
 from app.infra.db.asset_store import store_image
 from app.infra.db.demo_seed import (
     DemoMentor,
+    DemoQuestion,
+    DemoSessionType,
     RealHistoryError,
+    apply_demo_session_types,
     catalogue_offerings,
     create_demo_mentor,
     demo_avatar_urls,
+    demo_mentor_offerings,
     remove_demo,
 )
 from app.infra.db.engine import create_database_engine
 from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
 from app.infra.storage.supabase import StorageError
+
+DAY = 1440
+Q = DemoQuestion
+
+#: What a demo mentor can be booked for, by the service offering it serves.
+#: The first entry is a mentor's main type for that offering; a second is
+#: added only while the mentor has room (at most four types in all).
+CATALOGUE: dict[str, tuple[DemoSessionType, ...]] = {
+    "test-preparation": (
+        DemoSessionType(
+            name="IELTS & TOEFL game plan",
+            description=(
+                "We look at where your scores are, where they need to be, and build a "
+                "study plan for the weeks you have left. Bring a recent practice score."
+            ),
+            offering="test-preparation",
+            duration=45,
+            notice=DAY,
+            stage="early_exploration",
+            questions=(
+                Q("Which test are you taking, and when?", required=True),
+                Q("What is your latest practice score, and your target?"),
+            ),
+        ),
+    ),
+    "document-preparation": (
+        DemoSessionType(
+            name="Personal statement review",
+            description=(
+                "A line-by-line read of your statement: structure, story and what the "
+                "committee will actually remember. Share your draft before we meet."
+            ),
+            offering="document-preparation",
+            duration=60,
+            notice=2 * DAY,
+            stage="drafting_stage",
+            questions=(
+                Q("Which programme is this statement for?", required=True),
+                Q("Paste a link to your current draft (a shared Google Doc is fine)."),
+            ),
+        ),
+        DemoSessionType(
+            name="CV and résumé polish",
+            description=(
+                "Thirty focused minutes on the one page that gets you read: what to cut, "
+                "what to lead with, and how to show impact."
+            ),
+            offering="document-preparation",
+            duration=30,
+            notice=DAY,
+            stage="revisions",
+            questions=(Q("What role or programme is this CV for?", required=True),),
+        ),
+    ),
+    "school-selection": (
+        DemoSessionType(
+            name="Build your university shortlist",
+            description=(
+                "From a long list to five schools you can defend: fit, funding, "
+                "admission odds and life after the degree."
+            ),
+            offering="school-selection",
+            duration=45,
+            notice=DAY,
+            stage="early_exploration",
+            questions=(
+                Q("Which countries are you considering?", required=True),
+                Q("Roughly what can you spend per year, including living costs?"),
+            ),
+        ),
+    ),
+    "program-selection": (
+        DemoSessionType(
+            name="Choosing the right programme",
+            description=(
+                "Taught or research, one year or two, conversion or specialist — we "
+                "match programmes to where you want to be in five years."
+            ),
+            offering="program-selection",
+            duration=45,
+            notice=DAY,
+            stage="early_exploration",
+            questions=(
+                Q("What did you study, and what do you want to study next?", required=True),
+            ),
+        ),
+    ),
+    "scholarships-financial-aid": (
+        DemoSessionType(
+            name="Scholarship strategy",
+            description=(
+                "Which scholarships you are competitive for, what each committee looks "
+                "for, and a timeline that gets every application in on time."
+            ),
+            offering="scholarships-financial-aid",
+            duration=60,
+            notice=2 * DAY,
+            stage="early_exploration",
+            questions=(
+                Q("Which scholarships are you considering?", required=True),
+                Q("When is your earliest deadline?"),
+            ),
+        ),
+    ),
+    "interview-preparation": (
+        DemoSessionType(
+            name="Mock interview with feedback",
+            description=(
+                "A full practice interview in the format you will face, then honest "
+                "feedback on every answer and what to change before the real one."
+            ),
+            offering="interview-preparation",
+            duration=60,
+            notice=2 * DAY,
+            stage="post_submission",
+            questions=(
+                Q("Which programme or scholarship is the interview for?", required=True),
+                Q("When is your interview?"),
+            ),
+        ),
+    ),
+}
+
+#: Every demo mentor also offers a short first conversation.
+INTRO = DemoSessionType(
+    name="Intro call",
+    description="Twenty minutes to talk about your plans and see whether we are a good fit.",
+    offering=None,
+    duration=20,
+    notice=DAY,
+    stage=None,
+    questions=(Q("What would you like to get out of this call?", required=True),),
+)
+
+#: A mentor's types in all: their offerings' types, then the intro call.
+MAX_TYPES = 4
+
+
+def session_types_for(offerings: tuple[str, ...]) -> tuple[DemoSessionType, ...]:
+    """Each offering's main type, a second one while there is room, then the intro."""
+    main = [CATALOGUE[slug][0] for slug in offerings if slug in CATALOGUE]
+    extra = [t for slug in offerings if slug in CATALOGUE for t in CATALOGUE[slug][1:]]
+    room = MAX_TYPES - 1 - len(main)
+    return (*main[: MAX_TYPES - 1], *extra[: max(room, 0)], INTRO)
+
 
 #: Varied on purpose, so filters, the academic line and search all have work.
 SCHOOLS = (
@@ -136,6 +292,7 @@ def roster(
             course=course,
             school=school,
             offerings=picked,
+            session_types=session_types_for(picked),
             completed_sessions=SESSIONS[n % len(SESSIONS)],
             ratings=RATINGS[n % len(RATINGS)],
             open=n not in BLOCKED,
@@ -167,6 +324,8 @@ async def run(args: argparse.Namespace) -> int:
 
     engine = create_database_engine(settings)
     try:
+        if args.session_types:
+            return await _upgrade_session_types(engine)
         async with AsyncSession(engine) as session:
             old_avatars = await demo_avatar_urls(session)
             try:
@@ -202,6 +361,22 @@ async def run(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+async def _upgrade_session_types(engine: object) -> int:
+    """Give every demo mentor already seeded the catalogue's session types."""
+    async with AsyncSession(engine) as session:  # type: ignore[arg-type]
+        mentors = await demo_mentor_offerings(session)
+        if not mentors:
+            print("no demo mentors to upgrade")
+            return EXIT_OK
+        for user_id, offerings in mentors:
+            types = session_types_for(offerings)
+            await apply_demo_session_types(session, user_id, types)
+            await session.commit()
+            print(f"{user_id}: {', '.join(t.name for t in types)}")
+        print(f"upgraded {len(mentors)} demo mentors")
+    return EXIT_OK
+
+
 async def _delete_avatars(storage: object, urls: list[str]) -> None:
     for url in urls:
         if (path := storage.path_of(url)) is not None:  # type: ignore[attr-defined]
@@ -222,6 +397,11 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--avatars", help="Folder holding manifest.json and the face images.")
     group.add_argument("--remove", action="store_true", help="Remove every demo mentor.")
+    group.add_argument(
+        "--session-types",
+        action="store_true",
+        help="Give the demo mentors already seeded the catalogue's session types, in place.",
+    )
     configure_streams()
     return asyncio.run(run(parser.parse_args()))
 
