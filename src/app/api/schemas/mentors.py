@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
-from app.domain.enums import ApprovalStatus, ListingStatus
+from app.domain.enums import ApprovalStatus, AwardFunding, ListingStatus
 
 
 class ServiceOfferingRead(BaseModel):
@@ -267,6 +267,13 @@ class AwardRead(BaseModel):
     title: str
     institution: str
     year: int | None = None
+    funding: AwardFunding | None = Field(
+        default=None,
+        description=(
+            "`full` or `partial`, as the holder says. **Null when the mentor hasn't said**, "
+            'which is most awards: show "fully funded" only when this is `full`.'
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> AwardRead:
@@ -280,6 +287,7 @@ class AwardRead(BaseModel):
             title=str(_text(row.get("programme_name")) or row["title"]),
             institution=str(row["institution"]),
             year=int(str(row["year"])) if row["year"] is not None else None,
+            funding=AwardFunding(str(row["funding"])) if row.get("funding") else None,
         )
 
 

@@ -23,7 +23,7 @@ from app.api.schemas.common import (
     XWrite,
     YouTubeWrite,
 )
-from app.domain.enums import LanguageProficiency
+from app.domain.enums import AwardFunding, LanguageProficiency
 
 
 class LookupRef(BaseModel):
@@ -156,6 +156,13 @@ class AwardRead(BaseModel):
     institution: str
     programme_name: str | None = None
     year: int | None = None
+    funding: AwardFunding | None = Field(
+        default=None,
+        description=(
+            "`full` or `partial`, as the holder says. **Null when the mentor hasn't said**, "
+            'which is most awards: show "fully funded" only when this is `full`.'
+        ),
+    )
     verification_status: str
     evidence_url: str | None = None
 
@@ -167,6 +174,7 @@ class AwardRead(BaseModel):
             institution=row["institution"],
             programme_name=row.get("programme_name"),
             year=row.get("year"),
+            funding=row.get("funding"),
             verification_status=str(row["verification_status"]),
             evidence_url=row.get("evidence_url"),
         )
@@ -302,6 +310,9 @@ class AwardWrite(Normalised):
     scholarship_program_id: UUID | None = None
     year: int | None = Field(default=None, ge=1900, le=2100)
     evidence_url: str | None = Field(default=None, max_length=1000)
+    funding: AwardFunding | None = Field(
+        default=None, description="`full`, `partial`, or null for not said."
+    )
 
 
 class MentorProfileWrite(Normalised):
@@ -409,6 +420,10 @@ class AwardPatch(Normalised):
     scholarship_program_id: UUID | None = None
     year: int | None = Field(default=None, ge=1900, le=2100)
     evidence_url: str | None = Field(default=None, max_length=1000)
+    funding: AwardFunding | None = Field(
+        default=None,
+        description="`full`, `partial`, or null to clear. Absent leaves it unchanged.",
+    )
 
 
 class UserLanguageWrite(Normalised):
