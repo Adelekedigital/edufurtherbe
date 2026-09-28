@@ -214,7 +214,7 @@ async def offerings_for_session_types(
 
     **One statement for a whole list**, keyed by session type. A type with rows
     in `session_type_offerings` reads them; **a type with none falls back to the
-    legacy `service_offering_id`** (#200) — which is what code from before the
+    legacy `service_offering_id`** (#204) — which is what code from before the
     table, the demo seed and the ETL still write, so none of them reads as
     unclassified. Retired offerings are still named: retiring one does not change
     what an existing session type was about.
@@ -261,7 +261,7 @@ async def set_session_type_offerings(
     **Every id must name an offering the platform still offers** — a `422`
     naming the unknown ones otherwise, rather than the foreign-key 500 an unknown
     id used to produce. The first of the set is written to
-    `session_types.service_offering_id` (#200: the expand step), so code reading
+    `session_types.service_offering_id` (#204: the expand step), so code reading
     only that column this release still sees the type's main offering.
     """
     wanted = list(offering_ids)

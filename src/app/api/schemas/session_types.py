@@ -43,7 +43,7 @@ from app.domain.sessions import MAX_SESSION_TYPE_OFFERINGS
 
 
 def _offerings(row: dict[str, object]) -> list[LookupRef]:
-    """The service offerings a type covers, in the mentor's order (#200).
+    """The service offerings a type covers, in the mentor's order (#204).
 
     **`LookupRef`s rather than bare slugs**, matching `MentorProfileRead.
     offerings`: a slug alone would make every client join against
@@ -55,7 +55,7 @@ def _offerings(row: dict[str, object]) -> list[LookupRef]:
 
 def _taxonomy(row: dict[str, object]) -> LookupRef | None:
     """The single `service_offering` kept this release: **the first of the set**
-    (#200), so the old field and the new list can never disagree."""
+    (#204), so the old field and the new list can never disagree."""
     offerings = _offerings(row)
     return offerings[0] if offerings else None
 
@@ -359,7 +359,7 @@ class MentorSessionTypeWrite(Normalised):
     #: and simply matches no filter, and forcing a mentor to classify before they
     #: can sell would put a required field in front of the thing they came to do.
     service_offering_id: UUID | None = None
-    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#200). Its first is
+    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#204). Its first is
     #: what `service_offering_id` reports. `[]` clears it; absent leaves it.
     service_offering_ids: list[UUID] | None = Field(
         default=None,
@@ -431,7 +431,7 @@ class MentorSessionTypePatch(Normalised):
     #: and simply matches no filter, and forcing a mentor to classify before they
     #: can sell would put a required field in front of the thing they came to do.
     service_offering_id: UUID | None = None
-    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#200). Its first is
+    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#204). Its first is
     #: what `service_offering_id` reports. `[]` clears it; absent leaves it.
     service_offering_ids: list[UUID] | None = Field(
         default=None,

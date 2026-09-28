@@ -292,7 +292,7 @@ class MentorServiceOffering(TimestampMixin, Base):
 
 
 class SessionTypeOffering(TimestampMixin, Base):
-    """Which service offerings one session type covers — up to three (#200).
+    """Which service offerings one session type covers — up to three (#204).
 
     Beside `MentorServiceOffering` because it is the same subject — *what help
     does this cover* — asked of one bookable offering instead of a mentor.

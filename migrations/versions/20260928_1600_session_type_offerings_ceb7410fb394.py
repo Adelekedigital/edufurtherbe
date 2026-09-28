@@ -1,6 +1,6 @@
 """``session_type_offerings``: a session type covers up to three offerings.
 
-Settled decision #200, Session Types frontend #9. **The expand step.** The new
+Settled decision #204, Session Types frontend #9. **The expand step.** The new
 table holds the set, in the mentor's order; ``session_types.service_offering_id``
 stays and is dual-written as the first of the set, so code from before this
 release keeps reading and writing it. Reads fall back to that column for a type
@@ -18,7 +18,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "ceb7410fb394"
-down_revision: str | Sequence[str] | None = "030c8bba5d6e"
+down_revision: str | Sequence[str] | None = "390e11db5980"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
