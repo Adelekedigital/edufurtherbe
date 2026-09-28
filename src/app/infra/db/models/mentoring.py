@@ -180,6 +180,10 @@ class MentorProfile(TimestampMixin, Base):
     requires_booking_confirmation: Mapped[bool] = mapped_column(
         nullable=False, server_default=text("false")
     )
+    #: The mentor's defaults every offering inherits unless it sets its own
+    #: (#200). Null means the platform's: the full horizon, and no break.
+    booking_window_days: Mapped[int | None] = mapped_column(nullable=True)
+    break_after_minutes: Mapped[int | None] = mapped_column(nullable=True)
 
     # `primary_session_type_id` is gone, and with it
     # `trg_refuse_retiring_a_primary_offering`. D88 gave it two jobs: the
@@ -203,6 +207,14 @@ class MentorProfile(TimestampMixin, Base):
     legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "booking_window_days IS NULL OR booking_window_days BETWEEN 1 AND 365",
+            name="booking_window_days_sane",
+        ),
+        CheckConstraint(
+            "break_after_minutes IS NULL OR break_after_minutes BETWEEN 0 AND 1440",
+            name="break_after_minutes_sane",
+        ),
         # These indexes plus the user_profiles ones ARE the search
         # implementation. No Typesense, no Meilisearch, no synced table.
         Index(

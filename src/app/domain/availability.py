@@ -43,6 +43,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.domain.enums import AvailabilityExceptionType
 
 __all__ = [
+    "BOOKING_WINDOW_DAYS",
+    "BREAK_AFTER_MINUTES",
+    "DEFAULT_BREAK_MINUTES",
     "DEFAULT_PROJECTION_DAYS",
     "MAX_PROJECTION_DAYS",
     "BlockedWindow",
@@ -67,6 +70,18 @@ MAX_PROJECTION_DAYS = 56
 #: horizon most people actually use, and it keeps the default answer small; a
 #: client planning further out asks for further out.
 DEFAULT_PROJECTION_DAYS = 7
+
+#: How far ahead a session type may be booked, in days (#200): what a mentor or
+#: an offering may set. The ceiling is the projection bound — nothing further is
+#: ever computed — and it is also the platform default when neither sets one.
+BOOKING_WINDOW_DAYS = (1, MAX_PROJECTION_DAYS)
+
+#: The break after each session, in minutes (#200): what may be set. The design
+#: offers 0/10/15/30; two hours leaves room without letting a typo hide a day.
+BREAK_AFTER_MINUTES = (0, 120)
+
+#: No break unless a mentor or an offering asks for one.
+DEFAULT_BREAK_MINUTES = 0
 
 
 class UnknownTimezoneError(ValueError):

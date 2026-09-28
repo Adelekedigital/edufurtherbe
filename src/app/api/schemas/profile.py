@@ -23,6 +23,7 @@ from app.api.schemas.common import (
     XWrite,
     YouTubeWrite,
 )
+from app.domain.availability import BOOKING_WINDOW_DAYS, BREAK_AFTER_MINUTES
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
 
 
@@ -205,6 +206,10 @@ class MentorProfileRead(BaseModel):
     # Narrowing rather than breaking: a client that handled the old `null` still
     # validates a bool, and the field never stops being present.
     requires_booking_confirmation: bool
+    #: Your defaults for every offering that does not set its own (#200); null
+    #: means the platform's: bookable up to 56 days ahead, no break.
+    booking_window_days: int | None = None
+    break_after_minutes: int | None = None
     # `default_meeting_venue` is **removed**, not made optional. It was read
     # through `primary_session_type_id`, which is dropped, and venue has no
     # mentor-level home to fall back to. Keeping the key with a permanent `null`
@@ -231,6 +236,8 @@ class MentorProfileRead(BaseModel):
             approval_status=str(row["approval_status"]),
             listing_status=str(row["listing_status"]),
             requires_booking_confirmation=bool(row["requires_booking_confirmation"]),
+            booking_window_days=row.get("booking_window_days"),
+            break_after_minutes=row.get("break_after_minutes"),
             primary_study_program=row.get("primary_study_program"),
             primary_study_country=country,
             offerings=[
@@ -332,6 +339,14 @@ class MentorProfileWrite(Normalised):
     #: explicit `null`, which `_sent` forwarded to a `NOT NULL` column as a 500.
     #: A 422 is the correct answer to a value the column cannot hold.
     requires_booking_confirmation: bool = False
+    #: The defaults every offering inherits unless it sets its own (#200); null
+    #: means the platform's — the full horizon, and no break.
+    booking_window_days: int | None = Field(
+        default=None, ge=BOOKING_WINDOW_DAYS[0], le=BOOKING_WINDOW_DAYS[1]
+    )
+    break_after_minutes: int | None = Field(
+        default=None, ge=BREAK_AFTER_MINUTES[0], le=BREAK_AFTER_MINUTES[1]
+    )
     primary_study_country_id: UUID | None = None
     primary_study_program: str | None = Field(default=None, max_length=300)
     offering_ids: list[UUID] | None = None

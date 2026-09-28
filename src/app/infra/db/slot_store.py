@@ -56,6 +56,7 @@ from app.domain.availability import (
     bookable,
 )
 from app.domain.enums import AvailabilityExceptionType
+from app.infra.db.booking_rules import effective_break_minutes, effective_window_days
 from app.infra.db.calendar_store import NullFreeBusy
 from app.infra.db.models.availability import (
     AvailabilityException,
@@ -105,6 +106,9 @@ def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
         select(
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
+            # This offering's window and break, resolved (#200).
+            effective_window_days().label("window_days"),
+            effective_break_minutes().label("break_minutes"),
             # The mentor's own zone, because `start` and `end` are *their* days.
             # Fetched here rather than in a second statement: a caller who omits
             # `start` needs it to know what "today" means, and this query has
@@ -157,13 +161,26 @@ def _busy(user_id: UUID, span_start: dt.datetime, span_end: dt.datetime) -> Sele
     be offered.
     """
     window = func.session_window(Session.starts_at, Session.duration_minutes)
-    return select(
-        func.lower(window).label("start"),
-        func.upper(window).label("end"),
-    ).where(
-        Session.mentor_id == user_id,
-        Session.status.notin_(FREES_THE_HOUR),
-        window.op("&&")(func.tstzrange(span_start, span_end)),
+    return (
+        select(
+            func.lower(window).label("start"),
+            func.upper(window).label("end"),
+            # **Each session's own break**, resolved through the offering it was
+            # booked as (#200). Outer joins: a session with no offering, or one
+            # whose offering has no config, falls back to the mentor's default.
+            effective_break_minutes().label("break_minutes"),
+        )
+        .select_from(Session)
+        .join(MentorProfile, MentorProfile.user_id == Session.mentor_id)
+        .outerjoin(
+            SessionTypeBookingConfig,
+            SessionTypeBookingConfig.session_type_id == Session.session_type_id,
+        )
+        .where(
+            Session.mentor_id == user_id,
+            Session.status.notin_(FREES_THE_HOUR),
+            window.op("&&")(func.tstzrange(span_start, span_end)),
+        )
     )
 
 
@@ -319,8 +336,25 @@ async def list_slots(
     # booking; this only stops one being offered.
     elsewhere = await external_busy.busy(session, user_id, span_start, span_end)
 
-    return list(
-        bookable(
+    # **The break, both ways** (#200). A booked session occupies its own break
+    # after it, whichever offering is asked about next; and a slot of *this*
+    # offering needs its own break before the next session, so each session is
+    # also pushed earlier by this offering's break. Our sessions only — a
+    # Google event is somebody else's commitment, not a session to recover from.
+    before = dt.timedelta(minutes=int(offering["break_minutes"]))
+    ours = [
+        UtcInterval(
+            row["start"] - before,
+            row["end"] + dt.timedelta(minutes=int(row["break_minutes"])),
+        )
+        for row in busy
+    ]
+    # **The window**: nothing starts later than this offering allows ahead of now.
+    cutoff = now + dt.timedelta(days=int(offering["window_days"]))
+
+    return [
+        slot
+        for slot in bookable(
             rules=[
                 WeeklyWindow(
                     day_of_week=row["day_of_week"],
@@ -341,11 +375,12 @@ async def list_slots(
                 )
                 for row in exceptions
             ],
-            busy=[UtcInterval(row["start"], row["end"]) for row in busy] + list(elsewhere),
+            busy=ours + list(elsewhere),
             duration_minutes=offering["duration_minutes"],
             min_notice_minutes=offering["min_notice_minutes"],
             now=now,
             start=start,
             end=end,
         )
-    )
+        if slot.start < cutoff
+    ]
