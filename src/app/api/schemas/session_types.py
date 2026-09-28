@@ -37,13 +37,18 @@ from pydantic import BaseModel, Field, model_validator
 from app.api.schemas.common import Normalised
 from app.api.schemas.intake import QuestionWrite
 from app.api.schemas.profile import LookupRef
+from app.domain.availability import BOOKING_WINDOW_DAYS, BREAK_AFTER_MINUTES
 from app.domain.enums import ApplicationStage, ConferencingProvider, SessionTypeIcon
 from app.domain.intake import MAX_QUESTIONS
 from app.domain.sessions import MAX_SESSION_TYPE_OFFERINGS
 
 
+def _int_or_none(value: object) -> int | None:
+    return None if value is None else int(str(value))
+
+
 def _offerings(row: dict[str, object]) -> list[LookupRef]:
-    """The service offerings a type covers, in the mentor's order (#204).
+    """The service offerings a type covers, in the mentor's order (#205).
 
     **`LookupRef`s rather than bare slugs**, matching `MentorProfileRead.
     offerings`: a slug alone would make every client join against
@@ -55,7 +60,7 @@ def _offerings(row: dict[str, object]) -> list[LookupRef]:
 
 def _taxonomy(row: dict[str, object]) -> LookupRef | None:
     """The single `service_offering` kept this release: **the first of the set**
-    (#204), so the old field and the new list can never disagree."""
+    (#205), so the old field and the new list can never disagree."""
     offerings = _offerings(row)
     return offerings[0] if offerings else None
 
@@ -266,6 +271,12 @@ class OwnSessionTypeRead(BaseModel):
             "This offering's own approval setting; `null` means it follows your mentor profile's."
         ),
     )
+    booking_window_days: int | None = Field(
+        default=None, description="This offering's own window in days; `null` inherits."
+    )
+    break_after_minutes: int | None = Field(
+        default=None, description="This offering's own break in minutes; `null` inherits."
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> OwnSessionTypeRead:
@@ -282,6 +293,8 @@ class OwnSessionTypeRead(BaseModel):
                 if row["requires_booking_confirmation"] is None
                 else bool(row["requires_booking_confirmation"])
             ),
+            booking_window_days=_int_or_none(row.get("booking_window_days")),
+            break_after_minutes=_int_or_none(row.get("break_after_minutes")),
             service_offering=_taxonomy(row),
             service_offerings=_offerings(row),
             application_stage=_stage(row),
@@ -359,7 +372,7 @@ class MentorSessionTypeWrite(Normalised):
     #: and simply matches no filter, and forcing a mentor to classify before they
     #: can sell would put a required field in front of the thing they came to do.
     service_offering_id: UUID | None = None
-    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#204). Its first is
+    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#205). Its first is
     #: what `service_offering_id` reports. `[]` clears it; absent leaves it.
     service_offering_ids: list[UUID] | None = Field(
         default=None,
@@ -384,6 +397,28 @@ class MentorSessionTypeWrite(Normalised):
             "Whether bookings of this offering wait for your approval. `null` "
             "follows your own setting on your mentor profile; `true` or `false` "
             "overrides it for this offering."
+        ),
+    )
+    #: How far ahead, and the break after each session (#204). `null` inherits
+    #: the mentor's default, then the platform's (the full horizon, no break).
+    booking_window_days: int | None = Field(
+        default=None,
+        ge=BOOKING_WINDOW_DAYS[0],
+        le=BOOKING_WINDOW_DAYS[1],
+        description=(
+            "How many days ahead this offering can be booked "
+            f"({BOOKING_WINDOW_DAYS[0]}-{BOOKING_WINDOW_DAYS[1]}); `null` follows your "
+            "default on your mentor profile."
+        ),
+    )
+    break_after_minutes: int | None = Field(
+        default=None,
+        ge=BREAK_AFTER_MINUTES[0],
+        le=BREAK_AFTER_MINUTES[1],
+        description=(
+            "Minutes of break after each session of this offering "
+            f"({BREAK_AFTER_MINUTES[0]}-{BREAK_AFTER_MINUTES[1]}); no session of yours "
+            "can start inside it. `null` follows your default."
         ),
     )
     #: One of the design's icons, or `null` for the automatic pick (#198).
@@ -431,7 +466,7 @@ class MentorSessionTypePatch(Normalised):
     #: and simply matches no filter, and forcing a mentor to classify before they
     #: can sell would put a required field in front of the thing they came to do.
     service_offering_id: UUID | None = None
-    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#204). Its first is
+    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#205). Its first is
     #: what `service_offering_id` reports. `[]` clears it; absent leaves it.
     service_offering_ids: list[UUID] | None = Field(
         default=None,
@@ -456,6 +491,28 @@ class MentorSessionTypePatch(Normalised):
             "Whether bookings of this offering wait for your approval. `null` "
             "follows your own setting on your mentor profile; `true` or `false` "
             "overrides it for this offering."
+        ),
+    )
+    #: How far ahead, and the break after each session (#204). `null` inherits
+    #: the mentor's default, then the platform's (the full horizon, no break).
+    booking_window_days: int | None = Field(
+        default=None,
+        ge=BOOKING_WINDOW_DAYS[0],
+        le=BOOKING_WINDOW_DAYS[1],
+        description=(
+            "How many days ahead this offering can be booked "
+            f"({BOOKING_WINDOW_DAYS[0]}-{BOOKING_WINDOW_DAYS[1]}); `null` follows your "
+            "default on your mentor profile."
+        ),
+    )
+    break_after_minutes: int | None = Field(
+        default=None,
+        ge=BREAK_AFTER_MINUTES[0],
+        le=BREAK_AFTER_MINUTES[1],
+        description=(
+            "Minutes of break after each session of this offering "
+            f"({BREAK_AFTER_MINUTES[0]}-{BREAK_AFTER_MINUTES[1]}); no session of yours "
+            "can start inside it. `null` follows your default."
         ),
     )
     #: One of the design's icons, or `null` for the automatic pick (#198).

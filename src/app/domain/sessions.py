@@ -213,7 +213,7 @@ def too_late_to_cancel(starts_at: dt.datetime, now: dt.datetime) -> bool:
     return starts_at - now < CANCELLATION_CUTOFF
 
 
-#: How many service offerings one session type may cover (#204). The owner's
+#: How many service offerings one session type may cover (#205). The owner's
 #: number (2026-09-28); a product rule, so it lives here and both the boundary
 #: and the store read it.
 MAX_SESSION_TYPE_OFFERINGS = 3

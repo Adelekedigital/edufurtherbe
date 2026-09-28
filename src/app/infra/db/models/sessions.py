@@ -321,9 +321,24 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     #: Ship it now anyway — a null costs nothing and the alternative is a second
     #: migration when the UI catches up.
     requires_booking_confirmation: Mapped[bool | None] = mapped_column(nullable=True)
+    #: How many days ahead this offering may be booked; null inherits the
+    #: mentor's default, then the platform's (#204).
+    booking_window_days: Mapped[int | None] = mapped_column(nullable=True)
+    #: Minutes of break after a session of this offering; null inherits (#204).
+    break_after_minutes: Mapped[int | None] = mapped_column(nullable=True)
 
     __table_args__ = (
         UniqueConstraint("session_type_id"),
+        # Sanity only, as `min_notice_minutes_sane` is (#104): the product range
+        # is the boundary's, and must be able to move without a migration.
+        CheckConstraint(
+            "booking_window_days IS NULL OR booking_window_days BETWEEN 1 AND 365",
+            name="booking_window_days_sane",
+        ),
+        CheckConstraint(
+            "break_after_minutes IS NULL OR break_after_minutes BETWEEN 0 AND 1440",
+            name="break_after_minutes_sane",
+        ),
         CheckConstraint("duration_minutes BETWEEN 5 AND 480", name="duration_minutes_valid"),
         # Thirty days. Wide on purpose: a sanity bound must never be the thing
         # blocking a product decision, and the 72-hour ceiling is already

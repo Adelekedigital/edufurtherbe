@@ -66,6 +66,8 @@ MENTOR_COLUMNS = (
     "headline",
     "years_of_experience",
     "requires_booking_confirmation",
+    "booking_window_days",
+    "break_after_minutes",
     "primary_study_country_id",
     "primary_study_program",
 )

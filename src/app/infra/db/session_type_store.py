@@ -283,6 +283,8 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
             SessionTypeBookingConfig.requires_booking_confirmation,
+            SessionTypeBookingConfig.booking_window_days,
+            SessionTypeBookingConfig.break_after_minutes,
             _resolved_venue(),
         )
         .select_from(SessionType)
@@ -335,7 +337,7 @@ async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[
 async def _with_offerings(
     session: AsyncSession, rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Attach each type's offerings (#204) — one extra statement for the list."""
+    """Attach each type's offerings (#205) — one extra statement for the list."""
     by_type = await offerings_for_session_types(session, [row["id"] for row in rows])
     for row in rows:
         row["service_offerings"] = by_type.get(row["id"], [])
@@ -431,6 +433,8 @@ async def create_session_type(
                 duration_minutes=payload["duration_minutes"],
                 min_notice_minutes=payload["min_notice_minutes"],
                 requires_booking_confirmation=payload.get("requires_booking_confirmation"),
+                booking_window_days=payload.get("booking_window_days"),
+                break_after_minutes=payload.get("break_after_minutes"),
             )
         )
     offerings = _requested_offerings(payload)
@@ -440,7 +444,7 @@ async def create_session_type(
 
 
 def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
-    """The set a write asks for, or `None` when it names none (#204).
+    """The set a write asks for, or `None` when it names none (#205).
 
     `service_offering_ids` is the set; the legacy `service_offering_id` is a set
     of one, and `null` there clears it. The boundary refuses a payload sending
@@ -465,7 +469,13 @@ SESSION_TYPE_COLUMNS = (
     "icon",
     "is_active",
 )
-BOOKING_CONFIG_COLUMNS = ("duration_minutes", "min_notice_minutes", "requires_booking_confirmation")
+BOOKING_CONFIG_COLUMNS = (
+    "duration_minutes",
+    "min_notice_minutes",
+    "requires_booking_confirmation",
+    "booking_window_days",
+    "break_after_minutes",
+)
 
 
 async def update_session_type(
