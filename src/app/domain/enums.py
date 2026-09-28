@@ -726,7 +726,7 @@ class FeaturedSource(StrEnum):
 
 
 class AwardFunding(StrEnum):
-    """How much of a scholarship or award was funded, as the holder says (#189).
+    """How much of a scholarship or award was funded, as the holder says (#190).
 
     Self-reported, like everything else about an award. **Null means "not
     said"**, which is most rows: the legacy export carried no funding at all, and

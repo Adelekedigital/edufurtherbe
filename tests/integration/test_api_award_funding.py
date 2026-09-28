@@ -1,4 +1,4 @@
-"""Whether an award was fully or partly funded, as the mentor says (#189).
+"""Whether an award was fully or partly funded, as the mentor says (#190).
 
 Nothing in the data carried this: no award field, and the programme's own
 `funding_type` is empty on every migrated row. So the mentor enters it per

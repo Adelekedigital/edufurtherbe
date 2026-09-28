@@ -1,4 +1,4 @@
-"""``user_awards.funding``: how an award was funded, as the holder says (#189).
+"""``user_awards.funding``: how an award was funded, as the holder says (#190).
 
 ``full``, ``partial``, or NULL for "not said". Self-reported, like every other
 field on an award. Nothing in the migrated data carries it — no award field, and
@@ -19,7 +19,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a41f0c7e92b3"
-down_revision: str | Sequence[str] | None = "58725a5c5ed8"
+down_revision: str | Sequence[str] | None = "d41c7e9a2b85"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

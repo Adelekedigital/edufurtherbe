@@ -180,7 +180,7 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     CreditReason: frozenset({"ck_credit_transactions_reason_is_known"}),
     # Who chose a featured week: the rotation or an admin (#188).
     FeaturedSource: frozenset({"ck_featured_mentors_source_is_known"}),
-    # How an award was funded, as the holder says (#189). Nullable: not said.
+    # How an award was funded, as the holder says (#190). Nullable: not said.
     AwardFunding: frozenset({"ck_user_awards_funding_is_known"}),
 }
 

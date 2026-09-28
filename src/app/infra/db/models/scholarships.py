@@ -179,7 +179,7 @@ class UserAward(TimestampMixin, Base):
     )
 
     year: Mapped[int | None] = mapped_column()
-    #: `full` or `partial` as the holder says; null when they have not said (#189).
+    #: `full` or `partial` as the holder says; null when they have not said (#190).
     funding: Mapped[AwardFunding | None] = mapped_column(str_enum(AwardFunding))
 
     verification_status: Mapped[VerificationStatus] = mapped_column(

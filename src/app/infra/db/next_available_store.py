@@ -134,14 +134,15 @@ class _OneReadPerMentor:
 
 async def _first_free(
     session: AsyncSession, mentor: UUID, *, now: dt.datetime, reader: FreeBusyReader
-) -> tuple[dt.datetime | None, dt.datetime | None]:
-    """The earliest instant any offering could be booked, and until when."""
+) -> tuple[dt.datetime | None, dt.datetime | None, UUID | None]:
+    """The earliest instant any offering could be booked, until when, and which
+    offering it is — the one whose slot is kept, so the three always agree."""
     offerings = await list_session_types(session, mentor) or []
     zone = (await session.execute(select(User.timezone).where(User.id == mentor))).scalar_one()
     start = mentor_today(zone, now)
     end = start + dt.timedelta(days=MAX_PROJECTION_DAYS)
     once = _OneReadPerMentor(reader)
-    best: tuple[dt.datetime, dt.datetime] | None = None
+    best: tuple[dt.datetime, dt.datetime, UUID] | None = None
     for offering in offerings:
         slots = await list_slots(
             session, mentor, offering["id"], start=start, end=end, now=now, external_busy=once
@@ -152,8 +153,8 @@ async def _first_free(
         until = first - dt.timedelta(minutes=int(offering["min_notice_minutes"]))
         # The same start from two offerings stays bookable while either takes it.
         if best is None or first < best[0] or (first == best[0] and until > best[1]):
-            best = (first, until)
-    return best if best is not None else (None, None)
+            best = (first, until, UUID(str(offering["id"])))
+    return best if best is not None else (None, None, None)
 
 
 async def _save(
@@ -162,6 +163,7 @@ async def _save(
     *,
     first: dt.datetime | None,
     until: dt.datetime | None,
+    session_type: UUID | None,
     computed_at: dt.datetime,
     seen: list[UUID],
 ) -> bool:
@@ -170,7 +172,12 @@ async def _save(
     Returns whether it was written. A refused write deletes no change rows: the
     run that wrote the newer value owns them.
     """
-    values = {"next_available_at": first, "bookable_until": until, "computed_at": computed_at}
+    values = {
+        "next_available_at": first,
+        "bookable_until": until,
+        "next_available_session_type_id": session_type,
+        "computed_at": computed_at,
+    }
     written = (
         await session.execute(
             insert(MentorNextAvailability)
@@ -241,7 +248,9 @@ async def refresh_next_available(
                     )
                 ).scalars()
             )
-            first, until = await _first_free(session, mentor, now=moment, reader=reader)
+            first, until, session_type = await _first_free(
+                session, mentor, now=moment, reader=reader
+            )
             if dry_run:
                 written = True
             else:
@@ -250,7 +259,13 @@ async def refresh_next_available(
                 # would otherwise be skipped by the next run and refreshed only
                 # every other time. It also orders overlapping runs.
                 written = await _save(
-                    session, mentor, first=first, until=until, computed_at=run_clock, seen=seen
+                    session,
+                    mentor,
+                    first=first,
+                    until=until,
+                    session_type=session_type,
+                    computed_at=run_clock,
+                    seen=seen,
                 )
                 await session.commit()
         except Exception:
