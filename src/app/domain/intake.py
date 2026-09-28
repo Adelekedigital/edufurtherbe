@@ -21,3 +21,11 @@ enforced in the store and the count races. That cost is named at the call site.
 #: a one-line edit here rather than a migration — which is the whole reason a
 #: product rule does not belong in a constraint.
 MAX_QUESTIONS = 5
+
+
+#: A choice question offers at least two options — one is not a choice — and at
+#: most ten, past which a form stops being answerable on a phone (#200).
+MIN_OPTIONS = 2
+MAX_OPTIONS = 10
+#: One option's text. Long enough for "Post-submission, waiting for interviews".
+MAX_OPTION_LENGTH = 200
