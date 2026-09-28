@@ -214,6 +214,13 @@ class OwnSessionTypeRead(BaseModel):
         ),
     )
 
+    requires_booking_confirmation: bool | None = Field(
+        default=None,
+        description=(
+            "This offering's own approval setting; `null` means it follows your mentor profile's."
+        ),
+    )
+
     @classmethod
     def from_row(cls, row: dict[str, object]) -> OwnSessionTypeRead:
         return cls(
@@ -224,6 +231,11 @@ class OwnSessionTypeRead(BaseModel):
             min_notice_minutes=int(str(row["min_notice_minutes"])),
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
             is_active=bool(row["is_active"]),
+            requires_booking_confirmation=(
+                None
+                if row["requires_booking_confirmation"] is None
+                else bool(row["requires_booking_confirmation"])
+            ),
             service_offering=_taxonomy(row),
             application_stage=_stage(row),
             custom_stage_label=(
@@ -304,6 +316,17 @@ class MentorSessionTypeWrite(Normalised):
     #: `CHECK`: the database refuses what is impossible, and this turns the same
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
+    #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
+    #: each request, `false` confirms bookings at once (#197). Booking already
+    #: resolves it with `COALESCE`, so this only makes it writable.
+    requires_booking_confirmation: bool | None = Field(
+        default=None,
+        description=(
+            "Whether bookings of this offering wait for your approval. `null` "
+            "follows your own setting on your mentor profile; `true` or `false` "
+            "overrides it for this offering."
+        ),
+    )
     #: The intake questions, created **in the same transaction** as the offering
     #: (#196): a question refused refuses the whole create, so a mentor never
     #: ends up with a live offering and half its form. Each is a `QuestionWrite`,
@@ -351,6 +374,17 @@ class MentorSessionTypePatch(Normalised):
     #: `CHECK`: the database refuses what is impossible, and this turns the same
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
+    #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
+    #: each request, `false` confirms bookings at once (#197). Booking already
+    #: resolves it with `COALESCE`, so this only makes it writable.
+    requires_booking_confirmation: bool | None = Field(
+        default=None,
+        description=(
+            "Whether bookings of this offering wait for your approval. `null` "
+            "follows your own setting on your mentor profile; `true` or `false` "
+            "overrides it for this offering."
+        ),
+    )
     is_active: bool | None = None
 
     @model_validator(mode="after")

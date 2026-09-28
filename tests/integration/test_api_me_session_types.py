@@ -317,6 +317,7 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "min_notice_minutes",
         "meeting_venue",
         "is_active",
+        "requires_booking_confirmation",
         "service_offering",
         "application_stage",
         "custom_stage_label",

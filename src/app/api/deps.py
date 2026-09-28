@@ -211,6 +211,12 @@ from app.infra.db.session_type_store import (
     list_session_types,
     update_session_type,
 )
+from app.infra.db.session_type_window_store import (
+    create_window,
+    delete_window,
+    list_windows,
+    update_window,
+)
 from app.infra.db.session_writer import (
     book_session,
     provision_meeting,
@@ -1084,6 +1090,54 @@ async def featured_weeks(
 FeaturedWeekSetDep = Annotated[dt.date, Depends(featured_week_set)]
 FeaturedWeekRemovedDep = Annotated[bool, Depends(featured_week_removed)]
 FeaturedWeeksDep = Annotated[list[dict[str, Any]], Depends(featured_weeks)]
+
+
+async def own_session_type_windows(
+    session_type_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    """An offering's own weekly windows; 404 when it is not the caller's (#197)."""
+    windows = await list_windows(session, user["id"], session_type_id)
+    if windows is None:
+        raise NotFoundError("no such session type")
+    return windows
+
+
+async def created_session_type_window(
+    session_type_id: UUID, payload: AvailabilityRuleWrite, user: CurrentUserDep, session: SessionDep
+) -> UUID:
+    window_id = await create_window(session, user["id"], session_type_id, payload.model_dump())
+    if window_id is None:
+        raise NotFoundError("no such session type")
+    await session.commit()
+    return window_id
+
+
+async def updated_session_type_window(
+    session_type_id: UUID,
+    window_id: UUID,
+    payload: AvailabilityRulePatch,
+    user: CurrentUserDep,
+    session: SessionDep,
+) -> bool:
+    changed = await update_window(
+        session, user["id"], session_type_id, window_id, payload.model_dump(exclude_unset=True)
+    )
+    await session.commit()
+    return changed
+
+
+async def deleted_session_type_window(
+    session_type_id: UUID, window_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> bool:
+    removed = await delete_window(session, user["id"], session_type_id, window_id)
+    await session.commit()
+    return removed
+
+
+SessionTypeWindowsDep = Annotated[list[dict[str, Any]], Depends(own_session_type_windows)]
+CreatedSessionTypeWindowDep = Annotated[UUID, Depends(created_session_type_window)]
+UpdatedSessionTypeWindowDep = Annotated[bool, Depends(updated_session_type_window)]
+DeletedSessionTypeWindowDep = Annotated[bool, Depends(deleted_session_type_window)]
 
 
 async def listed_mentor(
