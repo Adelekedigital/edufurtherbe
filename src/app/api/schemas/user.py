@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, XRead, YouTubeRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.domain.emails import normalise_email
-from app.domain.enums import CreditState, PrimaryRole
+from app.domain.enums import CoverArt, CoverColor, CreditState, PrimaryRole
 
 
 class NormalisedEmail(BaseModel):
@@ -41,6 +41,9 @@ class UserProfileRead(BaseModel):
     #: Where to centre `avatar_url`; `null` means the client's default crop.
     avatar_focus: AvatarFocusRead | None = None
     banner_url: str | None = None
+    #: The cover when there is no banner (#193). `null` colour means automatic.
+    cover_color: CoverColor | None = None
+    cover_art: CoverArt = CoverArt.NONE
     #: Canonical `https://` links or `null` — render them, never parse them (#182).
     social_linkedin: LinkedInRead = None
     social_twitter: XRead = None

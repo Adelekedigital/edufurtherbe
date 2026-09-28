@@ -23,7 +23,7 @@ from app.api.schemas.common import (
     XWrite,
     YouTubeWrite,
 )
-from app.domain.enums import AwardFunding, LanguageProficiency
+from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
 
 
 class LookupRef(BaseModel):
@@ -359,6 +359,21 @@ class UserProfileWrite(Normalised):
     about_me: str | None = Field(default=None, max_length=5000)
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None
+    cover_color: CoverColor | None = Field(
+        default=None,
+        description=(
+            "The cover colour when there is no banner image, one of the design's "
+            "twelve keys. `null` means automatic: the client derives a colour "
+            "from the mentor's id over the same list, in the same order."
+        ),
+    )
+    #: **`CoverArt`, not `CoverArt | None`**, for the reason
+    #: `requires_booking_confirmation` gives: the column is `NOT NULL`, so an
+    #: explicit `null` is a `422` rather than a 500. Omitted leaves it alone.
+    cover_art: CoverArt = Field(
+        default=CoverArt.NONE,
+        description="What is drawn over the cover colour. `none` by default.",
+    )
     social_linkedin: LinkedInWrite = Field(
         default=None,
         description=(

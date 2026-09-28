@@ -323,6 +323,7 @@ CURRENT_USER = text("""
            p.about_me, p.gender, p.avatar_url, p.banner_url,
            p.avatar_focus_x, p.avatar_focus_y,
            p.social_linkedin, p.social_twitter, p.social_youtube,
+           p.cover_color, p.cover_art,
            (p.user_id IS NOT NULL) AS has_profile,
            COALESCE(a.roles, ARRAY[]::text[]) AS admin_roles,
            (a.roles IS NOT NULL) AS is_admin

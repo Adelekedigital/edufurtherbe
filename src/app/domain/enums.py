@@ -736,3 +736,34 @@ class AwardFunding(StrEnum):
 
     FULL = "full"
     PARTIAL = "partial"
+
+
+class CoverColor(StrEnum):
+    """The design's twelve cover colours, **in the design's order** (#193).
+
+    The order is part of the contract: a mentor who has not chosen one (`NULL`)
+    gets an automatic colour the frontend picks by hashing their id over this
+    list, so the published enum must list them exactly as the design does.
+    """
+
+    SKY = "sky"
+    ICE = "ice"
+    AQUA = "aqua"
+    MINT = "mint"
+    SAGE = "sage"
+    LEMON = "lemon"
+    SAND = "sand"
+    PEACH = "peach"
+    BLUSH = "blush"
+    ROSE = "rose"
+    LILAC = "lilac"
+    MIST = "mist"
+
+
+class CoverArt(StrEnum):
+    """What is drawn over a cover colour (#193). `none` is the default."""
+
+    NONE = "none"
+    ICONS = "icons"
+    PATTERN = "pattern"
+    SINGLE = "single"

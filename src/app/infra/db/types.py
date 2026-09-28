@@ -41,6 +41,8 @@ from app.domain.enums import (
     AvailabilityExceptionType,
     AwardFunding,
     ConferencingProvider,
+    CoverArt,
+    CoverColor,
     CreditReason,
     CreditSource,
     CreditState,
@@ -180,6 +182,9 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     CreditReason: frozenset({"ck_credit_transactions_reason_is_known"}),
     # Who chose a featured week: the rotation or an admin (#188).
     FeaturedSource: frozenset({"ck_featured_mentors_source_is_known"}),
+    # A mentor's cover (#193): the design's closed palette and art styles.
+    CoverColor: frozenset({"ck_user_profiles_cover_color_is_known"}),
+    CoverArt: frozenset({"ck_user_profiles_cover_art_is_known"}),
     # How an award was funded, as the holder says (#191). Nullable: not said.
     AwardFunding: frozenset({"ck_user_awards_funding_is_known"}),
 }
