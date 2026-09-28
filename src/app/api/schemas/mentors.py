@@ -440,6 +440,17 @@ class MentorPublicRead(BaseModel):
         exclude_if=lambda value: value is None,
         description="Owner only, like `approval_status`. `unlisted` means hidden from search.",
     )
+    setup_needed: list[Literal["session_type", "weekly_hours"]] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "**Owner only**, like `approval_status`. What stops this profile being "
+            "live: `session_type` (no active offering) and/or `weekly_hours` (no "
+            "weekly availability). Empty when nothing is missing. While it is not "
+            "empty, strangers get a `404` for this profile and it is not on "
+            "Explore; it goes live by itself as soon as both exist (#192)."
+        ),
+    )
 
     @classmethod
     def from_row(
@@ -519,8 +530,18 @@ OWNER_ONLY = ("approval_status", "listing_status")
 
 
 def _owner_fields(row: dict[str, Any]) -> dict[str, Any]:
-    """The owner-only statuses, when the row says the caller is the owner."""
-    return {key: row[key] for key in OWNER_ONLY} if row.get("is_owner") else {}
+    """The owner-only fields, when the row says the caller is the owner."""
+    if not row.get("is_owner"):
+        return {}
+    missing = [
+        need
+        for need, present in (
+            ("session_type", row["has_offering"]),
+            ("weekly_hours", row["has_hours"]),
+        )
+        if not present
+    ]
+    return {**{key: row[key] for key in OWNER_ONLY}, "setup_needed": missing}
 
 
 def _joined_and_award(row: dict[str, Any]) -> dict[str, Any]:

@@ -6,13 +6,13 @@ is an admin. The middle clause is dropped by product decision: a mentee with a
 session sees *that session*, not the mentor's profile, and the sessions endpoints
 already carry the names they need. The admin clause is dropped because admins
 read the owner-facing endpoint, which names whose records they are reviewing.
-What remains is `mentor_is_public()` — the same predicate `/slots` and
-`/session-types` scope by, which is why this module writes none of its own.
+What remains is `mentor_is_live()` — public **and bookable** (#192), the set
+discovery lists — which is why this module writes no predicate of its own.
 
 **One viewer is added back: the mentor themself** (product rule, 2026-09-27).
 `mentor_is_visible_to(viewer)` widens the public predicate by exactly the owner,
 so a pending, declined or unlisted mentor can read their own profile, and a
-`None` viewer is `mentor_is_public()` unchanged. The owner's row also carries
+`None` viewer is `mentor_is_live()` unchanged. The owner's row also carries
 `approval_status` and `listing_status`, which `is_owner` tells the schema to
 publish — to them and nobody else.
 
@@ -39,8 +39,9 @@ from app.infra.db.models.user import User, UserProfile
 from app.infra.db.next_available_store import NONE, next_available_state
 from app.infra.db.profile_store import top_award
 from app.infra.db.public_visibility import (
-    mentor_is_bookable,
-    mentor_is_published,
+    has_live_offering,
+    has_weekly_hours,
+    mentor_is_live,
     mentor_is_visible_to,
 )
 
@@ -117,6 +118,9 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             # owner's row says `true` here — the schema reads it to decide
             # whether the two statuses above are published at all.
             (User.id == viewer if viewer is not None else false()).label("is_owner"),
+            # What is missing for a mentor to be bookable, told to the owner.
+            has_live_offering().label("has_offering"),
+            has_weekly_hours().label("has_hours"),
             MentorNextAvailability.next_available_at,
             MentorNextAvailability.next_available_session_type_id,
             # Only a mentor the job refreshes has a time worth reading: the job
@@ -128,7 +132,7 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             # watching once the mentor leaves its set, and which would read
             # `open` for a mentor nobody can book.
             case(
-                (and_(mentor_is_published(), *mentor_is_bookable()), next_available_state()),
+                (and_(*mentor_is_live()), next_available_state()),
                 else_=literal(NONE),
             ).label("next_available_state"),
         )
@@ -168,10 +172,10 @@ async def get_public_mentor_id(
     reviews list is the first. Loading the whole profile to learn one id would
     read six joins to throw five of them away.
 
-    **The same `_by_handle` and the same `mentor_is_public()`**, so a mentor who
-    is paused or unapproved is absent here exactly as they are absent from their
-    profile. A second visibility clause is the shape this module's own docstring
-    warns about — *"the second lookup path is where a visibility clause goes
+    **The same `_by_handle` and the same `mentor_is_visible_to()`**, so a
+    mentor who is paused, unapproved or unbookable is absent here exactly as they
+    are absent from their profile. A second visibility clause is the shape this
+    module's own docstring warns about — *"the second lookup path is where a visibility clause goes
     missing"* — which is why this composes the existing pair rather than
     restating it.
     """

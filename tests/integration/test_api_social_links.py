@@ -13,7 +13,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_public_mentor
+from tests.integration.factories import make_bookable_mentor
 from tests.integration.test_api_writes import make_user, url
 
 from conftest import api_token, bearer
@@ -141,7 +141,7 @@ async def test_a_legacy_value_reads_canonical_or_null_on_me(
 async def test_a_legacy_value_reads_canonical_or_null_on_the_public_profile(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "social-public")
+    mentor = await make_bookable_mentor(db_engine, "social-public")
     await store_legacy(
         db_engine, mentor, "https://linkedin.test/ada", "https://twitter.com/ada", "@ada"
     )
