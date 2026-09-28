@@ -1,4 +1,4 @@
-"""``user_awards.funding``: how an award was funded, as the holder says (#190).
+"""``user_awards.funding``: how an award was funded, as the holder says (#191).
 
 ``full``, ``partial``, or NULL for "not said". Self-reported, like every other
 field on an award. Nothing in the migrated data carries it — no award field, and
