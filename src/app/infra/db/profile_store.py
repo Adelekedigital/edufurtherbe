@@ -166,6 +166,36 @@ async def get_goal(session: AsyncSession, user_id: UUID) -> dict[str, Any] | Non
     return dict(first) | {"countries": shared_countries, "needs": shared_needs}
 
 
+def _live_awards(user_id: Any) -> list[Any]:
+    """One user's awards that are not deleted — every award reader's predicate.
+
+    `deleted_at IS NULL` is not optional here, and it was missed once.
+    `ix_user_awards_user` is declared `WHERE deleted_at IS NULL`, so a query
+    without the predicate cannot use it.
+    """
+    return [UserAward.user_id == user_id, UserAward.deleted_at.is_(None)]
+
+
+#: The order a profile lists awards in, newest first. Shared with `top_award`,
+#: so the card's award is always the one the profile leads with.
+AWARD_ORDER = (UserAward.year.desc().nulls_last(), UserAward.title)
+
+
+def top_award(user_id: Any) -> Any:
+    """The title of the award `list_awards` would put first — a scalar subquery.
+
+    `user_id` may be a column of an outer query, which is how the discovery card
+    reads it per row after the page limit.
+    """
+    return (
+        select(UserAward.title)
+        .where(*_live_awards(user_id))
+        .order_by(*AWARD_ORDER)
+        .limit(1)
+        .scalar_subquery()
+    )
+
+
 async def list_awards(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]]:
     """One user's scholarships and awards, newest first."""
     statement = (
@@ -179,12 +209,8 @@ async def list_awards(session: AsyncSession, user_id: UUID) -> list[dict[str, An
             ScholarshipProgram.display_name.label("programme_name"),
         )
         .outerjoin(ScholarshipProgram, ScholarshipProgram.id == UserAward.scholarship_program_id)
-        # `deleted_at IS NULL` is not optional here, and it was missed once.
-        # `ix_user_awards_user` is declared `WHERE deleted_at IS NULL`, so a
-        # query without the predicate cannot use it — the index exists for this
-        # statement and this statement could not reach it.
-        .where(UserAward.user_id == user_id, UserAward.deleted_at.is_(None))
-        .order_by(UserAward.year.desc().nulls_last(), UserAward.title)
+        .where(*_live_awards(user_id))
+        .order_by(*AWARD_ORDER)
     )
     return [dict(row) for row in (await session.execute(statement)).mappings()]
 

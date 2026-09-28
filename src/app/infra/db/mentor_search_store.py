@@ -54,6 +54,7 @@ from app.infra.db.offerings import (
     offers_any,
     shared_offering_count,
 )
+from app.infra.db.profile_store import top_award
 from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
@@ -318,6 +319,10 @@ def _card(scope: Select[Any]) -> Select[Any]:
             session_value.scalar_subquery().label("session_value"),
             MentorNextAvailability.next_available_at,
             next_available_state().label("next_available_state"),
+            # When they became a mentor; backfilled from the legacy platform.
+            MentorProfile.created_at.label("joined_at"),
+            # Per row, after the page limit, like the review subqueries above.
+            top_award(MentorProfile.user_id).label("top_award"),
         )
         # Outer: a mentor the job has not reached yet has no row, and reads as
         # `refreshing` rather than disappearing.
