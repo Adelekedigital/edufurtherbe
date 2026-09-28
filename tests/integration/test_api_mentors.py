@@ -15,7 +15,12 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_session_type, make_public_mentor
+from tests.integration.factories import (
+    add_availability,
+    add_session_type,
+    make_bookable_mentor,
+    make_public_mentor,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -71,7 +76,7 @@ async def set_study_country(engine: AsyncEngine, user_id: UUID, code: str) -> No
 async def test_a_mentor_is_readable_by_id_without_a_token(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "by-id", slug="ada-by-id")
+    mentor = await make_bookable_mentor(db_engine, "by-id", slug="ada-by-id")
     await give_profile(db_engine, mentor)
 
     response = await api_client.get(url(mentor))
@@ -88,7 +93,7 @@ async def test_the_same_mentor_is_readable_by_slug(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """The legacy profile link keeps working — decision #28's whole reason."""
-    mentor = await make_public_mentor(db_engine, "by-slug", slug="ada-by-slug")
+    mentor = await make_bookable_mentor(db_engine, "by-slug", slug="ada-by-slug")
     await give_profile(db_engine, mentor)
 
     body = (await api_client.get(url("ada-by-slug"))).json()
@@ -101,7 +106,7 @@ async def test_a_mentor_with_no_slug_is_still_reachable_by_id(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """`users.slug` is nullable and null on 4 of 43 migrated users."""
-    mentor = await make_public_mentor(db_engine, "no-slug")
+    mentor = await make_bookable_mentor(db_engine, "no-slug")
 
     body = (await api_client.get(url(mentor))).json()
 
@@ -115,7 +120,7 @@ async def test_a_mentor_with_no_user_profile_row_still_renders(
     """The join is outer. A mentor who never wrote a bio has no `user_profiles`
     row at all, and an inner join would 404 them — indistinguishable from "not
     listed", and debugged in the authorization code where the defect is not."""
-    mentor = await make_public_mentor(db_engine, "no-user-profile", slug="bare")
+    mentor = await make_bookable_mentor(db_engine, "no-user-profile", slug="bare")
 
     response = await api_client.get(url(mentor))
 
@@ -207,6 +212,8 @@ async def test_the_inlined_session_types_match_the_standalone_endpoint(
     mentor = await make_public_mentor(db_engine, "inline", slug="inline")
     await add_session_type(db_engine, mentor, name="Deep dive", duration=60)
     await add_session_type(db_engine, mentor, name="Quick chat", duration=15)
+    # Hours, so the profile is live (#15) without adding a third offering.
+    await add_availability(db_engine, mentor)
 
     inlined = (await api_client.get(url(mentor))).json()["session_types"]
     standalone = (await api_client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
@@ -219,7 +226,7 @@ async def test_offerings_are_the_taxonomy_in_platform_order(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """`sort_order`, not alphabetical: the platform decides how these read."""
-    mentor = await make_public_mentor(db_engine, "offerings", slug="offerings")
+    mentor = await make_bookable_mentor(db_engine, "offerings", slug="offerings")
     await give_offering(db_engine, mentor, "interview-preparation")  # sort_order 60
     await give_offering(db_engine, mentor, "test-preparation")  # sort_order 10
 
@@ -241,8 +248,8 @@ async def test_offerings_are_scoped_to_the_mentor_asked_for(
     non-negotiable #5 names: object-level authorization scoped in the query, and
     a scope nothing can fail is not pinned.
     """
-    asked_for = await make_public_mentor(db_engine, "scoped-a", slug="scoped-a")
-    somebody_else = await make_public_mentor(db_engine, "scoped-b", slug="scoped-b")
+    asked_for = await make_bookable_mentor(db_engine, "scoped-a", slug="scoped-a")
+    somebody_else = await make_bookable_mentor(db_engine, "scoped-b", slug="scoped-b")
     await give_offering(db_engine, asked_for, "test-preparation")
     await give_offering(db_engine, somebody_else, "interview-preparation")
 
@@ -257,7 +264,7 @@ async def test_countries_are_names_not_identifiers(
     """Returning a `countries.id` would reproduce exactly the gap the party
     identity change closed: correct, and unusable without a call this API does
     not offer."""
-    mentor = await make_public_mentor(db_engine, "country", slug="country")
+    mentor = await make_bookable_mentor(db_engine, "country", slug="country")
     await set_study_country(db_engine, mentor, "GB")
 
     body = (await api_client.get(url(mentor))).json()

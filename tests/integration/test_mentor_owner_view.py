@@ -285,7 +285,8 @@ async def test_a_visible_mentor_nobody_can_book_shows_no_time(
     mentor = await make_public_mentor(db_engine, "visible-unbookable")
     await store_future_time(db_engine, mentor)
 
-    body = (await api_client.get(url(mentor))).json()
+    # Hidden from strangers since #15, so asked as the owner, who still reads it.
+    body = (await api_client.get(url(mentor), headers=await auth_of(db_engine, mentor))).json()
 
     assert body["next_available_state"] == "none"
     assert body["next_available_at"] is None
@@ -296,7 +297,7 @@ async def test_a_bad_token_on_a_public_profile_reads_as_anonymous(
 ) -> None:
     """A tab resumed with an expired token must not break a page anyone may
     read. The token can only add the owner's view, never take the public one."""
-    mentor = await make_public_mentor(db_engine, "bad-token")
+    mentor = await make_bookable_mentor(db_engine, "bad-token")
 
     response = await api_client.get(url(mentor), headers={"Authorization": "Bearer not-a-jwt"})
 
@@ -308,7 +309,7 @@ async def test_a_bad_token_on_a_public_profile_reads_as_anonymous(
 async def test_a_deleted_accounts_token_reads_as_anonymous(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "gone-viewer-target")
+    mentor = await make_bookable_mentor(db_engine, "gone-viewer-target")
     headers = await a_stranger(db_engine, "gone-viewer")
     async with db_engine.begin() as conn:
         await conn.execute(

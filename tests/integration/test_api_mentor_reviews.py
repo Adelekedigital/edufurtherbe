@@ -763,6 +763,9 @@ async def test_a_malformed_offering_id_is_refused(profile: Profile) -> None:
 async def test_a_retired_offering_still_names_its_reviews(profile: Profile) -> None:
     """Deleting an offering does not change what an old session was about."""
     await profile.reviewed()
+    # Still bookable through another offering: a mentor with none left is
+    # hidden altogether (#15), which is not what this test is about.
+    await add_session_type(profile.engine, profile.mentor, name="Another offering")
     async with profile.engine.begin() as conn:
         await conn.execute(
             text("UPDATE session_types SET deleted_at = now() WHERE id = :t"),

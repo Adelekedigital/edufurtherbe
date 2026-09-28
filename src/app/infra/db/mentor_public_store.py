@@ -37,6 +37,8 @@ from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.next_available_store import NONE, next_available_state
 from app.infra.db.public_visibility import (
+    has_live_offering,
+    has_weekly_hours,
     mentor_is_bookable,
     mentor_is_published,
     mentor_is_visible_to,
@@ -109,6 +111,9 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             # owner's row says `true` here — the schema reads it to decide
             # whether the two statuses above are published at all.
             (User.id == viewer if viewer is not None else false()).label("is_owner"),
+            # What is missing for a mentor to be bookable, told to the owner.
+            has_live_offering().label("has_offering"),
+            has_weekly_hours().label("has_hours"),
             MentorNextAvailability.next_available_at,
             # Only a mentor the job refreshes has a time worth reading: the job
             # covers `bookable_mentors()` and nobody else. Anyone outside it —

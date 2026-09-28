@@ -36,7 +36,10 @@ from app.infra.db.models.user import User
 
 __all__ = [
     "bookable_mentors",
+    "has_live_offering",
+    "has_weekly_hours",
     "mentor_is_bookable",
+    "mentor_is_live",
     "mentor_is_public",
     "mentor_is_published",
     "mentor_is_visible_to",
@@ -109,14 +112,33 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
     **Soft deletion is not waived for the owner.** A deleted profile is gone for
     everyone, and the owner reading it back would be a resurrection by URL.
 
-    ``None`` is the anonymous viewer and returns `mentor_is_public()` itself,
-    not an equivalent spelling, so the anonymous path cannot drift from the
-    predicate every other public read uses. Every caller must join `users`, for
-    the reason `mentor_is_public` gives.
+    **What strangers see is `mentor_is_live()`: published and bookable**
+    (settled decision #192). A mentor with no offering or no weekly hours cannot
+    be booked, so their profile is not shown to anyone but them — the same rule
+    that already kept them off Explore, now on the profile too.
+
+    ``None`` is the anonymous viewer and returns `mentor_is_live()` itself, not
+    an equivalent spelling, so the anonymous path cannot drift from it. Every
+    caller must join `users`, for the reason `mentor_is_public` gives.
     """
     if viewer is None:
-        return mentor_is_public()
-    return [*_mentor_exists(), or_(mentor_is_published(), User.id == viewer)]
+        return mentor_is_live()
+    return [
+        *_mentor_exists(),
+        or_(and_(mentor_is_published(), *mentor_is_bookable()), User.id == viewer),
+    ]
+
+
+def mentor_is_live() -> list[Any]:
+    """Public and bookable: what a stranger may see of a mentor's profile.
+
+    `mentor_is_public()` plus `mentor_is_bookable()`, spread. Discovery already
+    listed only these mentors; since #192 the profile, its reviews and its
+    similar-mentors page answer the same set, so a mentor who cannot be booked
+    is not findable by a link either. Going live needs no action: the moment
+    both an offering and a weekly window exist, this is true.
+    """
+    return [*mentor_is_public(), *mentor_is_bookable()]
 
 
 def mentor_is_bookable() -> list[Any]:
@@ -149,7 +171,16 @@ def mentor_is_bookable() -> list[Any]:
     of, and "you have no hours" and "you have no offering" are different things
     to tell them.
     """
-    live_type = (
+    return [has_live_offering(), has_weekly_hours()]
+
+
+def has_live_offering() -> Any:
+    """`EXISTS`: at least one active, undeleted offering with a booking config.
+
+    Half of `mentor_is_bookable`, named so a mentor can be told which half they
+    are missing (`setup_needed` on their own profile).
+    """
+    return (
         select(SessionType.id)
         .join(
             SessionTypeBookingConfig,
@@ -163,7 +194,14 @@ def mentor_is_bookable() -> list[Any]:
         .correlate(MentorProfile)
         .exists()
     )
-    live_hours = (
+
+
+def has_weekly_hours() -> Any:
+    """`EXISTS`: at least one active, undeleted weekly availability rule.
+
+    The other half of `mentor_is_bookable`.
+    """
+    return (
         select(AvailabilityRule.id)
         .where(
             AvailabilityRule.mentor_user_id == MentorProfile.user_id,
@@ -173,7 +211,6 @@ def mentor_is_bookable() -> list[Any]:
         .correlate(MentorProfile)
         .exists()
     )
-    return [live_type, live_hours]
 
 
 def session_type_of(user_id: UUID) -> list[Any]:
