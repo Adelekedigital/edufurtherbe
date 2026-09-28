@@ -1,4 +1,4 @@
-"""The booking window and break a session type actually uses (settled decision #200).
+"""The booking window and break a session type actually uses (settled decision #204).
 
 **One rule: the offering's own value, else its mentor's default, else the
 platform's.** `COALESCE` over the config row and the mentor profile — the same

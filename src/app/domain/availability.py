@@ -71,12 +71,12 @@ MAX_PROJECTION_DAYS = 56
 #: client planning further out asks for further out.
 DEFAULT_PROJECTION_DAYS = 7
 
-#: How far ahead a session type may be booked, in days (#200): what a mentor or
+#: How far ahead a session type may be booked, in days (#204): what a mentor or
 #: an offering may set. The ceiling is the projection bound — nothing further is
 #: ever computed — and it is also the platform default when neither sets one.
 BOOKING_WINDOW_DAYS = (1, MAX_PROJECTION_DAYS)
 
-#: The break after each session, in minutes (#200): what may be set. The design
+#: The break after each session, in minutes (#204): what may be set. The design
 #: offers 0/10/15/30; two hours leaves room without letting a typo hide a day.
 BREAK_AFTER_MINUTES = (0, 120)
 

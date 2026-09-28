@@ -356,7 +356,7 @@ class MentorSessionTypeWrite(Normalised):
             "overrides it for this offering."
         ),
     )
-    #: How far ahead, and the break after each session (#200). `null` inherits
+    #: How far ahead, and the break after each session (#204). `null` inherits
     #: the mentor's default, then the platform's (the full horizon, no break).
     booking_window_days: int | None = Field(
         default=None,
@@ -438,7 +438,7 @@ class MentorSessionTypePatch(Normalised):
             "overrides it for this offering."
         ),
     )
-    #: How far ahead, and the break after each session (#200). `null` inherits
+    #: How far ahead, and the break after each session (#204). `null` inherits
     #: the mentor's default, then the platform's (the full horizon, no break).
     booking_window_days: int | None = Field(
         default=None,

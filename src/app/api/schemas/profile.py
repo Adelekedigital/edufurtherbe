@@ -206,7 +206,7 @@ class MentorProfileRead(BaseModel):
     # Narrowing rather than breaking: a client that handled the old `null` still
     # validates a bool, and the field never stops being present.
     requires_booking_confirmation: bool
-    #: Your defaults for every offering that does not set its own (#200); null
+    #: Your defaults for every offering that does not set its own (#204); null
     #: means the platform's: bookable up to 56 days ahead, no break.
     booking_window_days: int | None = None
     break_after_minutes: int | None = None
@@ -339,7 +339,7 @@ class MentorProfileWrite(Normalised):
     #: explicit `null`, which `_sent` forwarded to a `NOT NULL` column as a 500.
     #: A 422 is the correct answer to a value the column cannot hold.
     requires_booking_confirmation: bool = False
-    #: The defaults every offering inherits unless it sets its own (#200); null
+    #: The defaults every offering inherits unless it sets its own (#204); null
     #: means the platform's — the full horizon, and no break.
     booking_window_days: int | None = Field(
         default=None, ge=BOOKING_WINDOW_DAYS[0], le=BOOKING_WINDOW_DAYS[1]

@@ -1,6 +1,6 @@
 """Booking window and break-after: mentor defaults, per-offering overrides.
 
-Settled decision #200, Session Types frontend #13. Four nullable integer columns:
+Settled decision #204, Session Types frontend #13. Four nullable integer columns:
 ``booking_window_days`` and ``break_after_minutes`` on ``mentor_profiles`` (the
 mentor's defaults) and on ``session_type_booking_configs`` (an offering's
 override). Null means inherit: offering, then mentor, then the platform's own
@@ -18,7 +18,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "6c148bef8b52"
-down_revision: str | Sequence[str] | None = "030c8bba5d6e"
+down_revision: str | Sequence[str] | None = "390e11db5980"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

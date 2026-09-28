@@ -106,7 +106,7 @@ def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
         select(
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
-            # This offering's window and break, resolved (#200).
+            # This offering's window and break, resolved (#204).
             effective_window_days().label("window_days"),
             effective_break_minutes().label("break_minutes"),
             # The mentor's own zone, because `start` and `end` are *their* days.
@@ -166,7 +166,7 @@ def _busy(user_id: UUID, span_start: dt.datetime, span_end: dt.datetime) -> Sele
             func.lower(window).label("start"),
             func.upper(window).label("end"),
             # **Each session's own break**, resolved through the offering it was
-            # booked as (#200). Outer joins: a session with no offering, or one
+            # booked as (#204). Outer joins: a session with no offering, or one
             # whose offering has no config, falls back to the mentor's default.
             effective_break_minutes().label("break_minutes"),
         )
@@ -336,7 +336,7 @@ async def list_slots(
     # booking; this only stops one being offered.
     elsewhere = await external_busy.busy(session, user_id, span_start, span_end)
 
-    # **The break, both ways** (#200). A booked session occupies its own break
+    # **The break, both ways** (#204). A booked session occupies its own break
     # after it, whichever offering is asked about next; and a slot of *this*
     # offering needs its own break before the next session, so each session is
     # also pushed earlier by this offering's break. Our sessions only — a

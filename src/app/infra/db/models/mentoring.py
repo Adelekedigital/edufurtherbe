@@ -181,7 +181,7 @@ class MentorProfile(TimestampMixin, Base):
         nullable=False, server_default=text("false")
     )
     #: The mentor's defaults every offering inherits unless it sets its own
-    #: (#200). Null means the platform's: the full horizon, and no break.
+    #: (#204). Null means the platform's: the full horizon, and no break.
     booking_window_days: Mapped[int | None] = mapped_column(nullable=True)
     break_after_minutes: Mapped[int | None] = mapped_column(nullable=True)
 

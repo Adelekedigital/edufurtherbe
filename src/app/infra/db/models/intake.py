@@ -78,6 +78,11 @@ class SessionTypeQuestion(TimestampMixin, Base):
     question_type: Mapped[QuestionType] = mapped_column(str_enum(QuestionType), nullable=False)
     is_required: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     display_order: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
+    #: For `multi_choice` only: whether several options may be picked. False is
+    #: single choice. One choice type plus this flag, rather than a second
+    #: vocabulary value, because the canonical package declares one choice type
+    #: (ADR 0007) and "one or several" is a property of it, not a new kind (#200).
+    allows_multiple: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
     #: Who added it. `RESTRICT` rather than the package's unspecified action:
     #: ADR 0013 makes an authorship record evidence, and a user delete that
@@ -100,22 +105,18 @@ class SessionTypeQuestion(TimestampMixin, Base):
             check_is_known("question_type", QuestionType),
             name="question_type_is_known",
         ),
+        CheckConstraint(
+            "NOT allows_multiple OR question_type = 'multi_choice'",
+            name="only_choice_allows_multiple",
+        ),
     )
 
 
 class SessionTypeQuestionOption(TimestampMixin, Base):
     """One choice offered by a multi-choice question.
 
-    **Nothing writes these yet, and the table ships anyway.** The UI's intake
-    screens use `free_text` and `file_upload`; `multi_choice` is the third value
-    the canonical package declares, and dropping the table would be an
-    undeclared divergence from a document ADR 0007 makes authoritative rather
-    than a deferral under #21.
-
-    What changed the arithmetic is #100's completion: the sub-rule against
-    shipping an unused vocabulary value existed because `ALTER TYPE ... ADD
-    VALUE` is permanent, and #107 recorded that it "does not survive its
-    removal". Being early now costs a migration rather than forever.
+    **Written by the question endpoints since #200**: a mentor gives a
+    `multi_choice` question its options, 2 to 10, in `sort_order`.
 
     **No `deleted_at`, deliberately.** An option removed from a question is
     referenced by `intake_answers.selected_option_id`, which restricts — so the

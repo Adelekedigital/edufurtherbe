@@ -17,12 +17,17 @@ from __future__ import annotations
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Select, func, insert, select, update
+from sqlalchemy import CursorResult, Select, delete, exists, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, ValidationError
+from app.domain.enums import QuestionType
 from app.domain.intake import MAX_QUESTIONS
-from app.infra.db.models.intake import SessionTypeQuestion
+from app.infra.db.models.intake import (
+    IntakeAnswer,
+    SessionTypeQuestion,
+    SessionTypeQuestionOption,
+)
 from app.infra.db.models.sessions import SessionType
 from app.infra.db.public_visibility import session_type_of
 
@@ -43,6 +48,7 @@ QUESTION_COLUMNS = (
     SessionTypeQuestion.question_type,
     SessionTypeQuestion.is_required,
     SessionTypeQuestion.display_order,
+    SessionTypeQuestion.allows_multiple,
 )
 
 
@@ -83,7 +89,43 @@ async def list_questions(
     if not await _owns(session, mentor_user_id, session_type_id):
         return None
     result = await session.execute(_live_questions(session_type_id))
-    return [dict(row) for row in result.mappings()]
+    questions = [dict(row) for row in result.mappings()]
+    options = await _options_of(session, [q["id"] for q in questions])
+    for question in questions:
+        question["options"] = options.get(question["id"], [])
+    return questions
+
+
+async def _options_of(
+    session: AsyncSession, question_ids: list[UUID]
+) -> dict[UUID, list[dict[str, Any]]]:
+    """Each question's options in order, for several questions in one query."""
+    if not question_ids:
+        return {}
+    rows = await session.execute(
+        select(
+            SessionTypeQuestionOption.question_id,
+            SessionTypeQuestionOption.id,
+            SessionTypeQuestionOption.option_text.label("text"),
+        )
+        .where(SessionTypeQuestionOption.question_id.in_(question_ids))
+        .order_by(SessionTypeQuestionOption.sort_order, SessionTypeQuestionOption.id)
+    )
+    grouped: dict[UUID, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row.question_id, []).append({"id": row.id, "text": row.text})
+    return grouped
+
+
+async def _insert_options(
+    session: AsyncSession, question_id: UUID, texts: list[str], start: int = 0
+) -> None:
+    for position, option_text in enumerate(texts, start=start):
+        await session.execute(
+            insert(SessionTypeQuestionOption).values(
+                question_id=question_id, option_text=option_text, sort_order=position
+            )
+        )
 
 
 async def create_question(
@@ -120,7 +162,7 @@ async def create_question(
             "delete one before adding another"
         )
 
-    return (
+    question_id: UUID = (
         await session.execute(
             insert(SessionTypeQuestion)
             .values(
@@ -130,10 +172,14 @@ async def create_question(
                 question_type=payload["question_type"],
                 is_required=payload["is_required"],
                 display_order=payload["display_order"],
+                allows_multiple=payload.get("allows_multiple", False),
             )
             .returning(SessionTypeQuestion.id)
         )
     ).scalar_one()
+    # The boundary has already refused options on anything but `multi_choice`.
+    await _insert_options(session, question_id, [o["text"] for o in payload.get("options") or []])
+    return question_id
 
 
 async def update_question(
@@ -152,19 +198,92 @@ async def update_question(
     """
     if not await _owns(session, mentor_user_id, session_type_id):
         return False
+    current = (
+        await session.execute(
+            select(SessionTypeQuestion.question_type).where(
+                SessionTypeQuestion.id == question_id,
+                SessionTypeQuestion.session_type_id == session_type_id,
+                SessionTypeQuestion.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if current is None:
+        return False
     if not payload:
         return True
 
-    result = await session.execute(
-        update(SessionTypeQuestion)
-        .where(
-            SessionTypeQuestion.id == question_id,
-            SessionTypeQuestion.session_type_id == session_type_id,
-            SessionTypeQuestion.deleted_at.is_(None),
+    options = payload.pop("options", None)
+    was_choice = current == QuestionType.MULTI_CHOICE
+    is_choice = payload.get("question_type", current) == QuestionType.MULTI_CHOICE
+    # **Not across the choice line, either way** (#200): a choice answer is an
+    # option id and a free-text one is prose, and neither means anything as the
+    # other. Delete the question and add a new one instead.
+    if was_choice != is_choice:
+        raise ValidationError(
+            "a question cannot change to or from multi_choice; delete it and add a new one"
         )
-        .values(**payload)
-    )
-    return cast("CursorResult[Any]", result).rowcount > 0
+    if not is_choice and (options is not None or payload.get("allows_multiple")):
+        raise ValidationError("options and allows_multiple are only for multi_choice questions")
+
+    if payload:
+        await session.execute(
+            update(SessionTypeQuestion)
+            .where(
+                SessionTypeQuestion.id == question_id,
+                SessionTypeQuestion.session_type_id == session_type_id,
+            )
+            .values(**payload)
+        )
+    if options is not None:
+        await _replace_options(session, question_id, options)
+    return True
+
+
+async def _replace_options(
+    session: AsyncSession, question_id: UUID, options: list[dict[str, Any]]
+) -> None:
+    """Make the question's options exactly `options`, in that order.
+
+    **An `id` keeps that option** — its text and position may change, and every
+    answer that chose it still means it. **No `id` adds one. One left out goes**,
+    unless an answer chose it: `intake_answers.selected_option_id` restricts, so
+    that is a `409` naming the reason rather than a constraint error, and nothing
+    is changed. An `id` that is not one of *this* question's options is a `422`.
+    """
+    existing = {
+        row.id
+        for row in await session.execute(
+            select(SessionTypeQuestionOption.id).where(
+                SessionTypeQuestionOption.question_id == question_id
+            )
+        )
+    }
+    kept = [o["id"] for o in options if o.get("id") is not None]
+    if not set(kept) <= existing:
+        raise ValidationError("an option id is not one of this question's options")
+    removed = existing - set(kept)
+    if removed:
+        answered = (
+            await session.execute(
+                select(exists().where(IntakeAnswer.selected_option_id.in_(removed)))
+            )
+        ).scalar_one()
+        if answered:
+            raise ConflictError(
+                "an option a mentee has already chosen cannot be removed; keep it, or rename it"
+            )
+        await session.execute(
+            delete(SessionTypeQuestionOption).where(SessionTypeQuestionOption.id.in_(removed))
+        )
+    for position, option in enumerate(options):
+        if option.get("id") is not None:
+            await session.execute(
+                update(SessionTypeQuestionOption)
+                .where(SessionTypeQuestionOption.id == option["id"])
+                .values(option_text=option["text"], sort_order=position)
+            )
+        else:
+            await _insert_options(session, question_id, [option["text"]], start=position)
 
 
 async def delete_question(

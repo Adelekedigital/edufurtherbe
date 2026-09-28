@@ -322,9 +322,9 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     #: migration when the UI catches up.
     requires_booking_confirmation: Mapped[bool | None] = mapped_column(nullable=True)
     #: How many days ahead this offering may be booked; null inherits the
-    #: mentor's default, then the platform's (#200).
+    #: mentor's default, then the platform's (#204).
     booking_window_days: Mapped[int | None] = mapped_column(nullable=True)
-    #: Minutes of break after a session of this offering; null inherits (#200).
+    #: Minutes of break after a session of this offering; null inherits (#204).
     break_after_minutes: Mapped[int | None] = mapped_column(nullable=True)
 
     __table_args__ = (
