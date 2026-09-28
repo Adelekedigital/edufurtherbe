@@ -39,6 +39,7 @@ from app.api.deps import (
     PendingInstitutionsDep,
     PendingMentorsDep,
 )
+from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.admin import (
     FeaturedWeekRead,
     PendingInstitutionRead,
@@ -309,7 +310,7 @@ async def grant_credits_to_users(
     # **Says so on a replay**, the way booking does: an admin retrying after a
     # timeout needs to know whether this attempt created the credits or merely
     # found them, because the difference decides whether they grant again.
-    response.headers["Idempotent-Replay"] = "true" if replayed else "false"
+    response.headers[REPLAYED_HEADER] = "true" if replayed else "false"
     return body
 
 
