@@ -186,7 +186,7 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # A mentor's cover (#193): the design's closed palette and art styles.
     CoverColor: frozenset({"ck_user_profiles_cover_color_is_known"}),
     CoverArt: frozenset({"ck_user_profiles_cover_art_is_known"}),
-    # A session type's icon (#197): the design's closed set; NULL is automatic.
+    # A session type's icon (#198): the design's closed set; NULL is automatic.
     SessionTypeIcon: frozenset({"ck_session_types_icon_is_known"}),
     # How an award was funded, as the holder says (#191). Nullable: not said.
     AwardFunding: frozenset({"ck_user_awards_funding_is_known"}),

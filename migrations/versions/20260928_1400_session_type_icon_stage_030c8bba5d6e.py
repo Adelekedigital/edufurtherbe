@@ -1,6 +1,6 @@
 """``session_types.icon``, and ``interviewing`` joins ``application_stage``.
 
-Settled decision #197, Session Types frontend #18 and #10.
+Settled decision #198, Session Types frontend #18 and #10.
 
 - ``icon``: one of the design's nine Material Symbols names, or NULL for the
   client's automatic pick. Text + CHECK (#100), values frozen here as the

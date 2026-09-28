@@ -320,7 +320,7 @@ class MentorSessionTypeWrite(Normalised):
     #: `CHECK`: the database refuses what is impossible, and this turns the same
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
-    #: One of the design's icons, or `null` for the automatic pick (#197).
+    #: One of the design's icons, or `null` for the automatic pick (#198).
     icon: SessionTypeIcon | None = None
     #: The intake questions, created **in the same transaction** as the offering
     #: (#196): a question refused refuses the whole create, so a mentor never
@@ -369,7 +369,7 @@ class MentorSessionTypePatch(Normalised):
     #: `CHECK`: the database refuses what is impossible, and this turns the same
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
-    #: One of the design's icons, or `null` for the automatic pick (#197).
+    #: One of the design's icons, or `null` for the automatic pick (#198).
     icon: SessionTypeIcon | None = None
     is_active: bool | None = None
 

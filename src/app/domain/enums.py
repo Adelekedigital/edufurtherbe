@@ -319,7 +319,7 @@ class ApplicationStage(StrEnum):
     DRAFTING_STAGE = "drafting_stage"
     POST_SUBMISSION = "post_submission"
     REVISIONS = "revisions"
-    #: At interview (#197), between revising and `OTHER` — the design's order.
+    #: At interview (#198), between revising and `OTHER` — the design's order.
     INTERVIEWING = "interviewing"
     OTHER = "other"
 
@@ -772,7 +772,7 @@ class CoverArt(StrEnum):
 
 
 class SessionTypeIcon(StrEnum):
-    """The icon a session type shows, from the design's set (#197).
+    """The icon a session type shows, from the design's set (#198).
 
     Material Symbols names, **in the design's order**. `NULL` on the column is
     the client's automatic pick (from the offering's first topic), so no member

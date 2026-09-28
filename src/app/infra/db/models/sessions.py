@@ -165,7 +165,7 @@ class SessionType(TimestampMixin, Base):
     #: `OTHER`'s label, and **only** `OTHER`'s — tied by the symmetric `CHECK`
     #: below. See `ApplicationStage` for why the escape hatch is kept.
     custom_stage_label: Mapped[str | None] = mapped_column(Text)
-    #: The icon the client shows (#197), from the design's closed set; `NULL`
+    #: The icon the client shows (#198), from the design's closed set; `NULL`
     #: is the client's automatic pick.
     icon: Mapped[SessionTypeIcon | None] = mapped_column(str_enum(SessionTypeIcon))
 

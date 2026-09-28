@@ -8,6 +8,7 @@ required.
 from __future__ import annotations
 
 from typing import Self
+from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -96,3 +97,15 @@ class QuestionPatch(Normalised):
     def _type_is_buildable(self) -> Self:
         _refuse_unbuildable_type(self.question_type)
         return self
+
+
+class QuestionOrderWrite(BaseModel):
+    """The form's questions in their new order: every live question, once (#197)."""
+
+    question_ids: list[UUID] = Field(
+        max_length=50,
+        description=(
+            "Every live question on the form, each once, in the order to show them. "
+            "Renumbered from zero. Missing, extra or repeated ids are a `422`."
+        ),
+    )
