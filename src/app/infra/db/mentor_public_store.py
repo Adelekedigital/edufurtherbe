@@ -110,6 +110,7 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             # whether the two statuses above are published at all.
             (User.id == viewer if viewer is not None else false()).label("is_owner"),
             MentorNextAvailability.next_available_at,
+            MentorNextAvailability.next_available_session_type_id,
             # Only a mentor the job refreshes has a time worth reading: the job
             # covers `bookable_mentors()` and nobody else. Anyone outside it —
             # hidden, or visible with no bookable offering or no hours — has
