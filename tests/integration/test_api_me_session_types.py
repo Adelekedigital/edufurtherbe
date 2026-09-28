@@ -318,6 +318,8 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "meeting_venue",
         "is_active",
         "requires_booking_confirmation",
+        "booking_window_days",
+        "break_after_minutes",
         "service_offering",
         "application_stage",
         "custom_stage_label",

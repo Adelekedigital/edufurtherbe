@@ -293,6 +293,8 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionTypeBookingConfig.duration_minutes,
             SessionTypeBookingConfig.min_notice_minutes,
             SessionTypeBookingConfig.requires_booking_confirmation,
+            SessionTypeBookingConfig.booking_window_days,
+            SessionTypeBookingConfig.break_after_minutes,
             _resolved_venue(),
         )
         .select_from(SessionType)
@@ -436,6 +438,8 @@ async def create_session_type(
                 duration_minutes=payload["duration_minutes"],
                 min_notice_minutes=payload["min_notice_minutes"],
                 requires_booking_confirmation=payload.get("requires_booking_confirmation"),
+                booking_window_days=payload.get("booking_window_days"),
+                break_after_minutes=payload.get("break_after_minutes"),
             )
         )
     return session_type_id
@@ -453,7 +457,13 @@ SESSION_TYPE_COLUMNS = (
     "icon",
     "is_active",
 )
-BOOKING_CONFIG_COLUMNS = ("duration_minutes", "min_notice_minutes", "requires_booking_confirmation")
+BOOKING_CONFIG_COLUMNS = (
+    "duration_minutes",
+    "min_notice_minutes",
+    "requires_booking_confirmation",
+    "booking_window_days",
+    "break_after_minutes",
+)
 
 
 async def update_session_type(
