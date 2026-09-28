@@ -291,6 +291,49 @@ class MentorServiceOffering(TimestampMixin, Base):
     )
 
 
+class SessionTypeOffering(TimestampMixin, Base):
+    """Which service offerings one session type covers — up to three (#200).
+
+    Beside `MentorServiceOffering` because it is the same subject — *what help
+    does this cover* — asked of one bookable offering instead of a mentor.
+
+    **The set, in the mentor's order.** `position` keeps the order the mentor
+    chose; the first is what the legacy `session_types.service_offering_id` and
+    the single `service_offering` read field report this release. Three is a
+    product rule, enforced at the boundary — a per-group cardinality is not
+    something a `CHECK` can express.
+
+    Cascades with the session type: the row means nothing without it.
+    Restricts on the offering, like the mentor's own join.
+    """
+
+    __tablename__ = "session_type_offerings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    session_type_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("session_types.id", ondelete="CASCADE", name="fk_session_type_offerings_type"),
+        nullable=False,
+    )
+    service_offering_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "service_offerings.id", ondelete="RESTRICT", name="fk_session_type_offerings_offering"
+        ),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        Index(
+            "ix_session_type_offerings_pair", "session_type_id", "service_offering_id", unique=True
+        ),
+        Index("ix_session_type_offerings_offering", "service_offering_id"),
+    )
+
+
 class MenteeGoal(TimestampMixin, Base):
     """What a mentee is trying to do. 1:1 with the user.
 

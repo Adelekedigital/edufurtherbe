@@ -60,6 +60,7 @@ EXPECTED_MODELS = {
     # nothing to migrate and nothing to write it.
     "MentorProfile",
     "MentorServiceOffering",
+    "SessionTypeOffering",
     "MentorStatusEvent",
     # The fourth `mentor_*` table, which is why it lives in `mentoring.py` rather
     # than beside `session_types`. It fires #54's seven-model tripwire; the split

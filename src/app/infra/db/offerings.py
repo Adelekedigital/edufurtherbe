@@ -21,21 +21,26 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import delete, exists, func, insert, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ValidationError
 from app.infra.db.models.mentoring import (
     MenteeGoalNeed,
     MentorServiceOffering,
     ServiceOffering,
+    SessionTypeOffering,
 )
+from app.infra.db.models.sessions import SessionType
 
 __all__ = [
     "goal_overlap_count",
     "has_live_goals",
     "live_offering_slugs",
     "offerings_for",
+    "offerings_for_session_types",
     "offers_any",
+    "set_session_type_offerings",
     "shared_offering_count",
 ]
 
@@ -200,3 +205,96 @@ async def offerings_for(
             {"slug": row["slug"], "display_name": row["display_name"]}
         )
     return grouped
+
+
+async def offerings_for_session_types(
+    session: AsyncSession, session_type_ids: Sequence[Any]
+) -> dict[Any, list[dict[str, str]]]:
+    """Each session type's offerings, in the mentor's order, as `code`/`display_name`.
+
+    **One statement for a whole list**, keyed by session type. A type with rows
+    in `session_type_offerings` reads them; **a type with none falls back to the
+    legacy `service_offering_id`** (#200) — which is what code from before the
+    table, the demo seed and the ETL still write, so none of them reads as
+    unclassified. Retired offerings are still named: retiring one does not change
+    what an existing session type was about.
+    """
+    if not session_type_ids:
+        return {}
+    joined = (
+        select(
+            SessionTypeOffering.session_type_id.label("type_id"),
+            ServiceOffering.slug,
+            ServiceOffering.display_name,
+            SessionTypeOffering.position,
+        )
+        .join(ServiceOffering, ServiceOffering.id == SessionTypeOffering.service_offering_id)
+        .where(SessionTypeOffering.session_type_id.in_(session_type_ids))
+    )
+    legacy = (
+        select(
+            SessionType.id.label("type_id"),
+            ServiceOffering.slug,
+            ServiceOffering.display_name,
+            literal(0).label("position"),
+        )
+        .join(ServiceOffering, ServiceOffering.id == SessionType.service_offering_id)
+        .where(
+            SessionType.id.in_(session_type_ids),
+            ~exists().where(SessionTypeOffering.session_type_id == SessionType.id),
+        )
+    )
+    rows = await session.execute(joined.union_all(legacy).order_by("type_id", "position"))
+    result: dict[Any, list[dict[str, str]]] = {}
+    for row in rows:
+        result.setdefault(row.type_id, []).append(
+            {"code": str(row.slug), "display_name": str(row.display_name)}
+        )
+    return result
+
+
+async def set_session_type_offerings(
+    session: AsyncSession, session_type_id: Any, offering_ids: Sequence[UUID]
+) -> None:
+    """Replace one session type's set, in order, and dual-write the legacy column.
+
+    **Every id must name an offering the platform still offers** — a `422`
+    naming the unknown ones otherwise, rather than the foreign-key 500 an unknown
+    id used to produce. The first of the set is written to
+    `session_types.service_offering_id` (#200: the expand step), so code reading
+    only that column this release still sees the type's main offering.
+    """
+    wanted = list(offering_ids)
+    if wanted:
+        live = set(
+            (
+                await session.execute(
+                    select(ServiceOffering.id).where(ServiceOffering.id.in_(wanted), _live())
+                )
+            ).scalars()
+        )
+        unknown = [str(value) for value in wanted if value not in live]
+        if unknown:
+            raise ValidationError(
+                f"service_offering_ids: not an offering the platform offers: {', '.join(unknown)}"
+            )
+    await session.execute(
+        delete(SessionTypeOffering).where(SessionTypeOffering.session_type_id == session_type_id)
+    )
+    if wanted:
+        await session.execute(
+            insert(SessionTypeOffering),
+            [
+                {
+                    "session_type_id": session_type_id,
+                    "service_offering_id": value,
+                    "position": index,
+                }
+                for index, value in enumerate(wanted)
+            ],
+        )
+    await session.execute(
+        update(SessionType)
+        .where(SessionType.id == session_type_id)
+        .values(service_offering_id=wanted[0] if wanted else None)
+    )
