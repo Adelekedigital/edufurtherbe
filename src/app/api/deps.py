@@ -916,7 +916,7 @@ async def granted_admin_credits(
     **The key and the write commit together**, so a stored `201` for lots that
     were never inserted cannot replay ids of nothing.
     """
-    reservation = await reserve(
+    reservation = await claim_idempotency_key(
         session,
         key=idempotency_key,
         user_id=admin_id,
@@ -928,17 +928,10 @@ async def granted_admin_credits(
         # hashes differently and is refused as a *different* request. The
         # admin then has no way to learn whether the first attempt landed,
         # which is the one question a retry is asking.
-        request_hash=request_fingerprint(ENDPOINT_ADMIN_CREDITS, _canonical_grant(payload)),
+        body=_canonical_grant(payload),
     )
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
-    if isinstance(reservation, Mismatched):
-        raise ValidationError(
-            "this Idempotency-Key was already used for a different request; "
-            "use a new key, or resend the original body"
-        )
-    if not isinstance(reservation, Held):
-        raise ConflictError("a request with this Idempotency-Key is still in flight")
 
     result = await grant_credits(
         session,
@@ -1465,6 +1458,48 @@ ENDPOINT_BOOKING = "POST /api/v1/sessions"
 #: a credit grant.
 ENDPOINT_ADMIN_CREDITS = "POST /api/v1/admin/credits"
 
+#: The two session-type creates (#195). Optional keys, unlike the two above:
+#: nothing here is money, and requiring one would break every client already
+#: creating offerings without it.
+ENDPOINT_SESSION_TYPE = "POST /api/v1/me/session-types"
+ENDPOINT_QUESTION = "POST /api/v1/me/session-types/{session_type_id}/questions"
+
+#: The header every idempotent endpoint reads.
+IdempotencyKeyHeader = Header(
+    alias="Idempotency-Key",
+    min_length=1,
+    max_length=255,
+    description="A value unique to this attempt. Retries must reuse it.",
+)
+
+
+async def claim_idempotency_key(
+    session: AsyncSession, *, key: str, user_id: uuid.UUID, endpoint: str, body: Any
+) -> Held | Replayed:
+    """Claim `key` for this request, or return the answer it already has.
+
+    **One place for the refusals every idempotent endpoint gives**: a key reused
+    with a different body is a `422` naming the mistake, and a key whose first
+    request is still running is a `409`. `body` is fingerprinted with the
+    endpoint, so one key cannot replay one endpoint's answer on another.
+    """
+    reservation = await reserve(
+        session,
+        key=key,
+        user_id=user_id,
+        endpoint=endpoint,
+        request_hash=request_fingerprint(endpoint, body),
+    )
+    if isinstance(reservation, Mismatched):
+        raise ValidationError(
+            "this Idempotency-Key was already used for a different request; "
+            "use a new key, or resend the original body"
+        )
+    if isinstance(reservation, Held | Replayed):
+        return reservation
+    raise ConflictError("a request with this Idempotency-Key is still in flight")
+
+
 #: **200, not 201, and that is a decision rather than an oversight.**
 #:
 #: `test_a_creating_route_sends_a_location` requires every `201` route to set
@@ -1523,22 +1558,15 @@ async def booked_session(
     the insert's own values would mean composing the party join by hand at the
     one moment there is no row to read it from.
     """
-    reservation = await reserve(
+    reservation = await claim_idempotency_key(
         session,
         key=idempotency_key,
         user_id=user["id"],
         endpoint=ENDPOINT_BOOKING,
-        request_hash=request_fingerprint(ENDPOINT_BOOKING, payload.model_dump(mode="json")),
+        body=payload.model_dump(mode="json"),
     )
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
-    if isinstance(reservation, Mismatched):
-        raise ValidationError(
-            "this Idempotency-Key was already used for a different request; "
-            "use a new key, or resend the original body"
-        )
-    if not isinstance(reservation, Held):
-        raise ConflictError("a request with this Idempotency-Key is still in flight")
 
     session_id = await book_session(
         session,
@@ -2390,9 +2418,20 @@ OwnSessionTypesDep = Annotated[list[dict[str, Any]], Depends(own_session_types)]
 
 
 async def created_own_session_type(
-    payload: MentorSessionTypeWrite, user: CurrentUserDep, session: SessionDep
-) -> UUID:
-    """The offering and its booking config, in one transaction.
+    payload: MentorSessionTypeWrite,
+    user: CurrentUserDep,
+    session: SessionDep,
+    idempotency_key: Annotated[str | None, IdempotencyKeyHeader] = None,
+) -> tuple[dict[str, Any], int, bool]:
+    """The offering, its booking config and its questions, in one transaction.
+
+    **Questions ride in the same transaction** (#195): each goes through
+    `create_question`, the same writer `POST .../questions` uses, so the limit
+    and the type rules are one rule; one refused refuses the lot.
+
+    **`Idempotency-Key` is optional here** (#195): sent, a retry replays the first
+    answer; absent, the request behaves as it always has. Returns the body, the
+    status and whether it was a replay.
 
     **One commit, after both inserts.** `/slots` and both read paths inner-join
     `session_type_booking_configs`, so an offering without one is invisible
@@ -2402,11 +2441,34 @@ async def created_own_session_type(
     `CurrentUserDep` rather than `OwnerDep`: there is no `{user_id}` in the path
     to resolve, so the caller *is* the scope, matching `own_session_types` above.
     """
+    reservation = (
+        await claim_idempotency_key(
+            session,
+            key=idempotency_key,
+            user_id=user["id"],
+            endpoint=ENDPOINT_SESSION_TYPE,
+            body=payload.model_dump(mode="json"),
+        )
+        if idempotency_key is not None
+        else None
+    )
+    if isinstance(reservation, Replayed):
+        return reservation.body, reservation.status_code, True
+
     session_type_id = await create_session_type(session, user["id"], payload.model_dump())
     if session_type_id is None:
         raise NotFoundError("this user has no mentor profile")
+    question_ids = []
+    for question in payload.questions:
+        question_id = await create_question(
+            session, user["id"], session_type_id, question.model_dump()
+        )
+        question_ids.append(str(question_id))
+    body = {"id": str(session_type_id), "question_ids": question_ids}
+    if reservation is not None:
+        await record_response(session, reservation, status_code=CREATED, body=body)
     await session.commit()
-    return session_type_id
+    return body, CREATED, False
 
 
 async def updated_own_session_type(
@@ -2439,7 +2501,9 @@ async def deleted_own_session_type(
     return removed
 
 
-CreatedOwnSessionTypeDep = Annotated[UUID, Depends(created_own_session_type)]
+CreatedOwnSessionTypeDep = Annotated[
+    tuple[dict[str, Any], int, bool], Depends(created_own_session_type)
+]
 UpdatedOwnSessionTypeDep = Annotated[bool, Depends(updated_own_session_type)]
 DeletedOwnSessionTypeDep = Annotated[bool, Depends(deleted_own_session_type)]
 
@@ -2460,13 +2524,40 @@ async def own_questions(
 
 
 async def created_own_question(
-    session_type_id: UUID, payload: QuestionWrite, user: CurrentUserDep, session: SessionDep
-) -> UUID:
+    session_type_id: UUID,
+    payload: QuestionWrite,
+    user: CurrentUserDep,
+    session: SessionDep,
+    idempotency_key: Annotated[str | None, IdempotencyKeyHeader] = None,
+) -> tuple[dict[str, Any], int, bool]:
+    """One question; with an `Idempotency-Key`, once however often it is sent.
+
+    **The offering is part of the fingerprint**, so the same key and body sent
+    to a different offering is a different request (a `422`), never a replay of
+    a question on the wrong form.
+    """
+    reservation = (
+        await claim_idempotency_key(
+            session,
+            key=idempotency_key,
+            user_id=user["id"],
+            endpoint=ENDPOINT_QUESTION,
+            body={"session_type_id": str(session_type_id), **payload.model_dump(mode="json")},
+        )
+        if idempotency_key is not None
+        else None
+    )
+    if isinstance(reservation, Replayed):
+        return reservation.body, reservation.status_code, True
+
     question_id = await create_question(session, user["id"], session_type_id, payload.model_dump())
     if question_id is None:
         raise NotFoundError("no such session type")
+    body = {"id": str(question_id)}
+    if reservation is not None:
+        await record_response(session, reservation, status_code=CREATED, body=body)
     await session.commit()
-    return question_id
+    return body, CREATED, False
 
 
 async def updated_own_question(
@@ -2496,7 +2587,7 @@ async def deleted_own_question(
 
 
 OwnQuestionsDep = Annotated[list[dict[str, Any]], Depends(own_questions)]
-CreatedOwnQuestionDep = Annotated[UUID, Depends(created_own_question)]
+CreatedOwnQuestionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(created_own_question)]
 UpdatedOwnQuestionDep = Annotated[bool, Depends(updated_own_question)]
 DeletedOwnQuestionDep = Annotated[bool, Depends(deleted_own_question)]
 

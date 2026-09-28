@@ -35,8 +35,10 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.schemas.common import Normalised
+from app.api.schemas.intake import QuestionWrite
 from app.api.schemas.profile import LookupRef
 from app.domain.enums import ApplicationStage, ConferencingProvider
+from app.domain.intake import MAX_QUESTIONS
 
 
 def _taxonomy(row: dict[str, object]) -> LookupRef | None:
@@ -302,6 +304,18 @@ class MentorSessionTypeWrite(Normalised):
     #: `CHECK`: the database refuses what is impossible, and this turns the same
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
+    #: The intake questions, created **in the same transaction** as the offering
+    #: (#195): a question refused refuses the whole create, so a mentor never
+    #: ends up with a live offering and half its form. Each is a `QuestionWrite`,
+    #: exactly as `POST .../questions` takes one, at most `MAX_QUESTIONS`.
+    questions: list[QuestionWrite] = Field(
+        default_factory=list,
+        max_length=MAX_QUESTIONS,
+        description=(
+            f"The offering's intake questions, at most {MAX_QUESTIONS}, created with it "
+            "in one transaction — any invalid question refuses the whole request."
+        ),
+    )
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
