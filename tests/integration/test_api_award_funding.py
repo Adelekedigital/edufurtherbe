@@ -14,7 +14,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_public_mentor
+from tests.integration.factories import make_bookable_mentor, make_public_mentor
 from tests.integration.test_api_writes import make_user, url
 
 from conftest import api_token, bearer
@@ -104,7 +104,7 @@ async def test_an_unknown_funding_value_is_refused(
 async def test_the_public_profile_shows_funding(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "funding-public")
+    mentor = await make_bookable_mentor(db_engine, "funding-public")
     async with db_engine.begin() as conn:
         await conn.execute(
             text(

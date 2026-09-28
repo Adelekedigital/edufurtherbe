@@ -135,15 +135,20 @@ async def test_the_statuses_reach_the_owner_and_nobody_else(
     """Absent rather than null for everyone else, so their presence *means*
     "you are the owner" — the allowlist test in `test_api_mentors` asserts the
     anonymous half, this asserts a signed-in stranger's."""
-    mentor = await make_public_mentor(db_engine, "owner-public")
+    mentor = await make_bookable_mentor(db_engine, "owner-public")
 
-    theirs = (
-        await api_client.get(url(mentor), headers=await a_stranger(db_engine, "owner-public"))
-    ).json()
+    their_response = await api_client.get(
+        url(mentor), headers=await a_stranger(db_engine, "owner-public")
+    )
+    theirs = their_response.json()
     mine = (await api_client.get(url(mentor), headers=await auth_of(db_engine, mentor))).json()
 
+    # A 200 for the stranger too: a 404 body would pass the absences below
+    # whatever the profile leaked (#192 hides unbookable mentors).
+    assert their_response.status_code == 200
     assert "approval_status" not in theirs
     assert "listing_status" not in theirs
+    assert "setup_needed" not in theirs
     assert mine["approval_status"] == "approved"
     assert mine["listing_status"] == "listed"
 
@@ -154,7 +159,7 @@ async def test_a_response_that_depends_on_the_token_is_private(
     """`Vary` on every response, since any of them could have differed by
     caller; `private` whenever a token was sent, so no shared cache keeps an
     owner's view."""
-    mentor = await make_public_mentor(db_engine, "owner-cache")
+    mentor = await make_bookable_mentor(db_engine, "owner-cache")
 
     anonymous = await api_client.get(url(mentor))
     signed_in = await api_client.get(url(mentor), headers=await auth_of(db_engine, mentor))
@@ -285,7 +290,8 @@ async def test_a_visible_mentor_nobody_can_book_shows_no_time(
     mentor = await make_public_mentor(db_engine, "visible-unbookable")
     await store_future_time(db_engine, mentor)
 
-    body = (await api_client.get(url(mentor))).json()
+    # Hidden from strangers since #15, so asked as the owner, who still reads it.
+    body = (await api_client.get(url(mentor), headers=await auth_of(db_engine, mentor))).json()
 
     assert body["next_available_state"] == "none"
     assert body["next_available_at"] is None
@@ -296,7 +302,7 @@ async def test_a_bad_token_on_a_public_profile_reads_as_anonymous(
 ) -> None:
     """A tab resumed with an expired token must not break a page anyone may
     read. The token can only add the owner's view, never take the public one."""
-    mentor = await make_public_mentor(db_engine, "bad-token")
+    mentor = await make_bookable_mentor(db_engine, "bad-token")
 
     response = await api_client.get(url(mentor), headers={"Authorization": "Bearer not-a-jwt"})
 
@@ -308,7 +314,7 @@ async def test_a_bad_token_on_a_public_profile_reads_as_anonymous(
 async def test_a_deleted_accounts_token_reads_as_anonymous(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "gone-viewer-target")
+    mentor = await make_bookable_mentor(db_engine, "gone-viewer-target")
     headers = await a_stranger(db_engine, "gone-viewer")
     async with db_engine.begin() as conn:
         await conn.execute(
