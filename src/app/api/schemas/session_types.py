@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.api.schemas.common import Normalised
 from app.api.schemas.intake import QuestionWrite
 from app.api.schemas.profile import LookupRef
-from app.domain.enums import ApplicationStage, ConferencingProvider
+from app.domain.enums import ApplicationStage, ConferencingProvider, SessionTypeIcon
 from app.domain.intake import MAX_QUESTIONS
 
 
@@ -109,6 +109,13 @@ class SessionTypeRead(BaseModel):
             "`other`. Render it in place of the stage name."
         ),
     )
+    icon: SessionTypeIcon | None = Field(
+        default=None,
+        description=(
+            "The icon to show, one of the design's Material Symbols names; "
+            "`null` means pick one automatically (from the first topic)."
+        ),
+    )
     meeting_venue: ConferencingProvider = Field(
         description=(
             "Where the session happens, **resolved** from the mentor's "
@@ -135,6 +142,7 @@ class SessionTypeRead(BaseModel):
             custom_stage_label=(
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
             ),
+            icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
         )
 
 
@@ -213,6 +221,13 @@ class OwnSessionTypeRead(BaseModel):
             "without one."
         ),
     )
+    icon: SessionTypeIcon | None = Field(
+        default=None,
+        description=(
+            "The icon to show, one of the design's Material Symbols names; "
+            "`null` means pick one automatically (from the first topic)."
+        ),
+    )
 
     requires_booking_confirmation: bool | None = Field(
         default=None,
@@ -241,6 +256,7 @@ class OwnSessionTypeRead(BaseModel):
             custom_stage_label=(
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
             ),
+            icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
         )
 
 
@@ -317,7 +333,7 @@ class MentorSessionTypeWrite(Normalised):
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
-    #: each request, `false` confirms bookings at once (#198). Booking already
+    #: each request, `false` confirms bookings at once (#199). Booking already
     #: resolves it with `COALESCE`, so this only makes it writable.
     requires_booking_confirmation: bool | None = Field(
         default=None,
@@ -327,6 +343,8 @@ class MentorSessionTypeWrite(Normalised):
             "overrides it for this offering."
         ),
     )
+    #: One of the design's icons, or `null` for the automatic pick (#198).
+    icon: SessionTypeIcon | None = None
     #: The intake questions, created **in the same transaction** as the offering
     #: (#196): a question refused refuses the whole create, so a mentor never
     #: ends up with a live offering and half its form. Each is a `QuestionWrite`,
@@ -375,7 +393,7 @@ class MentorSessionTypePatch(Normalised):
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
-    #: each request, `false` confirms bookings at once (#198). Booking already
+    #: each request, `false` confirms bookings at once (#199). Booking already
     #: resolves it with `COALESCE`, so this only makes it writable.
     requires_booking_confirmation: bool | None = Field(
         default=None,
@@ -385,6 +403,8 @@ class MentorSessionTypePatch(Normalised):
             "overrides it for this offering."
         ),
     )
+    #: One of the design's icons, or `null` for the automatic pick (#198).
+    icon: SessionTypeIcon | None = None
     is_active: bool | None = None
 
     @model_validator(mode="after")

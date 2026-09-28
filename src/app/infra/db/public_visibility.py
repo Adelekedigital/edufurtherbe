@@ -203,7 +203,7 @@ def has_weekly_hours() -> Any:
     `slot_store` generates slots from: an offering with its own scheduling
     windows is bookable in *those*, whatever the mentor's general hours, so a
     mentor whose only hours are an offering's windows has slots and is live
-    (#198). Windows count only on a live offering — one switched off, deleted or
+    (#199). Windows count only on a live offering — one switched off, deleted or
     without a booking config offers nothing.
     """
     general = (

@@ -1096,7 +1096,7 @@ FeaturedWeeksDep = Annotated[list[dict[str, Any]], Depends(featured_weeks)]
 async def own_session_type_windows(
     session_type_id: UUID, user: CurrentUserDep, session: SessionDep
 ) -> list[dict[str, Any]]:
-    """An offering's own weekly windows; 404 when it is not the caller's (#198)."""
+    """An offering's own weekly windows; 404 when it is not the caller's (#199)."""
     windows = await list_windows(session, user["id"], session_type_id)
     if windows is None:
         raise NotFoundError("no such session type")
