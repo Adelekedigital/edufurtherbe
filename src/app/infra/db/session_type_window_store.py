@@ -1,4 +1,4 @@
-"""An offering's own weekly hours — its scheduling windows (#197).
+"""An offering's own weekly hours — its scheduling windows (#198).
 
 **An offering with windows is bookable in them and nowhere else**; its mentor's
 general `availability_rules` no longer apply to it, while blocked dates still do

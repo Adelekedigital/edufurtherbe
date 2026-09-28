@@ -317,7 +317,7 @@ class MentorSessionTypeWrite(Normalised):
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
-    #: each request, `false` confirms bookings at once (#197). Booking already
+    #: each request, `false` confirms bookings at once (#198). Booking already
     #: resolves it with `COALESCE`, so this only makes it writable.
     requires_booking_confirmation: bool | None = Field(
         default=None,
@@ -375,7 +375,7 @@ class MentorSessionTypePatch(Normalised):
     #: refusal into a 422 naming the field rather than a 500 naming a constraint.
     custom_stage_label: str | None = Field(default=None, max_length=100)
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
-    #: each request, `false` confirms bookings at once (#197). Booking already
+    #: each request, `false` confirms bookings at once (#198). Booking already
     #: resolves it with `COALESCE`, so this only makes it writable.
     requires_booking_confirmation: bool | None = Field(
         default=None,
