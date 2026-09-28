@@ -27,6 +27,7 @@ from app.infra.db.demo_seed import (
     RealHistoryError,
     apply_demo_session_types,
     create_demo_mentor,
+    demo_mentor_offerings,
     remove_demo,
 )
 from app.infra.db.next_available_store import refresh_next_available
@@ -290,3 +291,44 @@ async def test_the_session_types_are_public_on_the_profile(
     body = (await api_client.get(f"/api/v1/users/{user}/session-types")).json()
 
     assert sorted(t["name"] for t in body["data"]) == ["Intro call", "Mock interview with feedback"]
+
+
+async def test_the_upgrade_finds_the_mentors_and_not_their_mentees(
+    db_engine: AsyncEngine,
+) -> None:
+    """Demo mentees share the demo email suffix. They are not mentors, and a
+    session type written for one fails the foreign key to `mentor_profiles` —
+    which stopped the whole upgrade at the first mentee, on every re-run."""
+    await seed(db_engine, replace(OPEN, key="demo-mentees"))  # two ratings, so two mentees
+
+    async with AsyncSession(db_engine) as session:
+        found = await demo_mentor_offerings(session)
+
+    assert [user for user, _ in found] == [await demo_user(db_engine, "demo-mentees")]
+
+
+async def test_the_upgrade_keeps_history_on_the_legacy_offering(db_engine: AsyncEngine) -> None:
+    """The whole `--session-types` path. The legacy type served the mentor's
+    *first* offering, which is not the first by the catalogue's sort order here;
+    the upgrade must turn that row into *that* offering's type, or the demo
+    sessions and reviews quietly move under another offering."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from seed_demo_mentors import session_types_for
+
+    legacy = replace(
+        OPEN, key="demo-order", offerings=("interview-preparation", "test-preparation")
+    )
+    await seed(db_engine, legacy)
+    user = await demo_user(db_engine, "demo-order")
+    (before,) = (await session_types_of(db_engine, user)).values()
+
+    async with AsyncSession(db_engine) as session:
+        for mentor, offerings in await demo_mentor_offerings(session):
+            await apply_demo_session_types(session, mentor, session_types_for(offerings))
+        await session.commit()
+
+    after = {t["id"]: t for t in (await session_types_of(db_engine, user)).values()}
+    assert after[before["id"]]["offering"] == "interview-preparation"

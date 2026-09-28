@@ -296,7 +296,10 @@ async def apply_demo_session_types(
 
 
 async def demo_mentor_offerings(session: AsyncSession) -> list[tuple[Any, tuple[str, ...]]]:
-    """Every demo mentor and their offerings, the legacy type's offering first.
+    """Every demo **mentor** and their offerings, the legacy type's offering first.
+
+    Joined to `mentor_profiles`, because the suffix also matches the demo mentees
+    the seed creates to hold its reviews — and they are not mentors.
 
     The seed made the legacy type from a mentor's first offering, and nothing
     else recorded which one that was — so it is read back from that row.
@@ -311,7 +314,10 @@ async def demo_mentor_offerings(session: AsyncSession) -> list[tuple[Any, tuple[
             "       ARRAY(SELECT o.slug FROM mentor_service_offerings m "
             "             JOIN service_offerings o ON o.id = m.service_offering_id "
             "             WHERE m.mentor_user_id = u.id ORDER BY o.sort_order) AS offerings "
-            "FROM users u WHERE u.email LIKE :s ORDER BY u.email"
+            # Mentors only: the demo mentees share the email suffix, and a session
+            # type written for one fails the key to `mentor_profiles`.
+            "FROM users u JOIN mentor_profiles mp ON mp.user_id = u.id "
+            "WHERE u.email LIKE :s ORDER BY u.email"
         ),
         {"s": f"%@{DEMO_DOMAIN}"},
     )
