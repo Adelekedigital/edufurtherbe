@@ -20,7 +20,7 @@ from uuid import UUID
 from sqlalchemy import CursorResult, Select, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, ValidationError
 from app.domain.intake import MAX_QUESTIONS
 from app.infra.db.models.intake import SessionTypeQuestion
 from app.infra.db.models.sessions import SessionType
@@ -30,6 +30,7 @@ __all__ = [
     "create_question",
     "delete_question",
     "list_questions",
+    "reorder_questions",
     "update_question",
 ]
 
@@ -190,3 +191,43 @@ async def delete_question(
         .values(deleted_at=func.now())
     )
     return cast("CursorResult[Any]", result).rowcount > 0
+
+
+async def reorder_questions(
+    session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID, question_ids: list[UUID]
+) -> bool:
+    """Put this offering's form in the order given. ``False`` if it is not the caller's.
+
+    **The list must be exactly the live form** — every live question once, and
+    nothing else. A missing id would leave a question at a stale position among
+    renumbered ones; an extra one is another offering's or a deleted question;
+    a repeat has no single position. Each is a `ValidationError` naming what is
+    wrong, and nothing is written. The offering is reached through its owner
+    (non-negotiable #5), so another mentor's is a `False` — a `404` — before any
+    question is looked at.
+
+    Renumbered from zero in the order given, in the caller's transaction.
+    """
+    if not await _owns(session, mentor_user_id, session_type_id):
+        return False
+    if len(set(question_ids)) != len(question_ids):
+        raise ValidationError("a question appears more than once in the order")
+    live = {row.id for row in await session.execute(_live_questions(session_type_id))}
+    given = set(question_ids)
+    if given != live:
+        problems = []
+        if live - given:
+            problems.append(f"{len(live - given)} question(s) of this form are missing")
+        if given - live:
+            problems.append(f"{len(given - live)} id(s) are not questions on this form")
+        raise ValidationError("; ".join(problems))
+    for position, question_id in enumerate(question_ids):
+        await session.execute(
+            update(SessionTypeQuestion)
+            .where(
+                SessionTypeQuestion.id == question_id,
+                SessionTypeQuestion.session_type_id == session_type_id,
+            )
+            .values(display_order=position)
+        )
+    return True
