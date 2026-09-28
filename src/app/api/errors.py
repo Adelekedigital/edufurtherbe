@@ -91,13 +91,50 @@ OPERATOR_ERROR = status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def problem(
-    *, status_code: int, title: str, detail: str | None = None, type_: str = "about:blank"
+    *,
+    status_code: int,
+    title: str,
+    detail: str | None = None,
+    type_: str = "about:blank",
+    errors: list[dict[str, str]] | None = None,
 ) -> JSONResponse:
-    """Build a Problem Details response."""
+    """Build a Problem Details response.
+
+    `errors` is the RFC 9457 extension for field-level problems, sent on every
+    422 and on nothing else (settled decision #195).
+    """
     body: dict[str, object] = {"type": type_, "title": title, "status": status_code}
     if detail:
         body["detail"] = detail
+    if errors is not None:
+        body["errors"] = errors
     return JSONResponse(status_code=status_code, content=body, media_type=CONTENT_TYPE)
+
+
+#: Where a parameter that is not the body lives. Its pointer is the location
+#: then the name, `/query/limit`, so a body field and a parameter never share
+#: a pointer — the body's own fields start at the root.
+PARAMETER_LOCATIONS = frozenset({"query", "path", "header", "cookie"})
+
+
+def json_pointer(tokens: tuple[object, ...] | list[object]) -> str:
+    """An RFC 6901 JSON Pointer: each token escaped, `~` as `~0` then `/` as `~1`."""
+    return "".join("/" + str(t).replace("~", "~0").replace("/", "~1") for t in tokens)
+
+
+def pointer(loc: tuple[object, ...] | list[object]) -> str:
+    """Where a validation error is, as a client can resolve it.
+
+    **Into the body for a body field** — `/answers/0/text` is the JSON Pointer a
+    client applies to what it sent. **Location then name for a parameter** —
+    `/query/limit`, `/path/user_id` — because a parameter is not in the body.
+    """
+    if not loc:
+        return ""
+    where, *rest = loc
+    if where in PARAMETER_LOCATIONS:
+        return json_pointer([where, *rest])
+    return json_pointer(rest)
 
 
 def _problem_type(exc: Exception) -> str:
@@ -145,6 +182,10 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
                 title=type(exc).__name__,
                 detail=str(exc) or None,
                 type_=_problem_type(exc),
+                # **Every 422 carries `errors`**, empty when the refusal is about
+                # the request as a whole: one shape, so a client reads the list
+                # without first asking whether it is there.
+                errors=[] if code == status.HTTP_422_UNPROCESSABLE_CONTENT else None,
             )
 
     # An `AppError` subclass nobody mapped. 500 rather than a guessed 4xx: an
@@ -209,7 +250,83 @@ async def handle_request_validation_error(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         title="Unprocessable Content",
         detail=detail or None,
+        # **The message only, never `input`.** Pydantic's error carries the
+        # submitted value; a password typed into the wrong field must not come
+        # back in the response, or land in a log that records response bodies.
+        errors=[
+            {"pointer": pointer(error.get("loc", ())), "message": str(error.get("msg", ""))}
+            for error in errors
+        ],
     )
+
+
+#: The published shape of every 422, replacing FastAPI's `{"detail": [...]}`,
+#: which this service has never sent. `components.schemas` keeps FastAPI's two
+#: names so every route that already refers to them now documents the truth.
+VALIDATION_ERROR_SCHEMA: dict[str, Any] = {
+    "title": "ValidationError",
+    "type": "object",
+    "required": ["pointer", "message"],
+    "properties": {
+        "pointer": {
+            "type": "string",
+            "title": "Pointer",
+            "description": (
+                "RFC 6901 JSON Pointer. Into the request body for a body field "
+                "(`/answers/0/text`); `/<location>/<name>` for a parameter "
+                "(`/query/limit`, `/path/user_id`). Empty for the body as a whole."
+            ),
+        },
+        "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "What is wrong. Never echoes the submitted value.",
+        },
+    },
+}
+PROBLEM_422_SCHEMA: dict[str, Any] = {
+    "title": "HTTPValidationError",
+    "type": "object",
+    "description": (
+        "RFC 9457 Problem Details, as every error from this API. A 422 always "
+        "carries `errors` — one entry per invalid field, or empty when the "
+        "request is refused as a whole — beside the human-readable `detail`."
+    ),
+    "required": ["type", "title", "status", "errors"],
+    "properties": {
+        "type": {"type": "string", "title": "Type"},
+        "title": {"type": "string", "title": "Title"},
+        "status": {"type": "integer", "title": "Status"},
+        "detail": {"type": "string", "title": "Detail"},
+        "errors": {
+            "type": "array",
+            "title": "Errors",
+            "items": {"$ref": "#/components/schemas/ValidationError"},
+        },
+    },
+}
+
+
+def document_problem_422(application: FastAPI) -> None:
+    """Publish the real 422 shape in the OpenAPI document.
+
+    FastAPI documents every route's 422 as `HTTPValidationError` —
+    `{"detail": [{"loc", "msg", "type"}]}` — which is what *its* handler sends
+    and ours replaces. The route declarations already point at those two
+    component names, so rewriting the components corrects every route at once.
+    """
+    generate = application.openapi
+
+    def openapi() -> dict[str, Any]:
+        if application.openapi_schema:
+            return application.openapi_schema
+        schema = generate()
+        components = schema.setdefault("components", {}).setdefault("schemas", {})
+        components["ValidationError"] = VALIDATION_ERROR_SCHEMA
+        components["HTTPValidationError"] = PROBLEM_422_SCHEMA
+        return schema
+
+    application.openapi = openapi  # type: ignore[method-assign]
 
 
 def register(application: FastAPI) -> None:

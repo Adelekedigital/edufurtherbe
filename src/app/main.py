@@ -281,6 +281,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Registered before the routers so every failure below leaves in the same
     # shape — RFC 9457 Problem Details, never FastAPI's own `{"detail": ...}`.
     errors.register(application)
+    errors.document_problem_422(application)
 
     # A ceiling on the request body, by declared length and then by counting the
     # bytes that arrive. It has to be middleware: FastAPI parses the multipart

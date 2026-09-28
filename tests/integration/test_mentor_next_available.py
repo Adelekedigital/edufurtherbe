@@ -17,6 +17,7 @@ import datetime as dt
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -24,6 +25,7 @@ from sqlalchemy import Column, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.sql import visitors
 from tests.integration.factories import (
+    LAGOS,
     add_availability,
     add_session,
     add_session_type,
@@ -114,22 +116,19 @@ async def card(client: httpx.AsyncClient, mentor: UUID) -> dict[str, Any]:
 
 
 async def first_slot(client: httpx.AsyncClient, mentor: UUID) -> str:
-    """What the booking flow offers first, from the public slots endpoint.
-
-    **Over the card's own horizon, not `/slots`' default week.** The card looks
-    56 days ahead; the fixture's hours are one weekday, and with 24 hours'
-    notice the next one can be eight days out — on a Monday evening UTC the
-    default week came back empty while the card rightly said `open`.
-    """
+    """What the booking flow offers first, from the public slots endpoint."""
     types = (await client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
-    today = dt.datetime.now(dt.UTC).date()
+    # **The same horizon the refresh searches**, not `/slots`' default week. A
+    # mentor open one weekday only has no slot in the default window once that
+    # day's window has passed this week — the refresh finds next week's, and the
+    # comparison failed by the day of the week the suite ran on.
+    today = dt.datetime.now(ZoneInfo(LAGOS)).date()
     response = await client.get(
         f"/api/v1/users/{mentor}/availability/slots",
         params={
             "session_type_id": types[0]["id"],
-            # One day short of the 56-day maximum span, so a start that is the
-            # mentor's tomorrow in UTC terms still fits.
-            "end": (today + dt.timedelta(days=55)).isoformat(),
+            "start": today.isoformat(),
+            "end": (today + dt.timedelta(days=56)).isoformat(),
         },
     )
     assert response.status_code == 200, response.text
