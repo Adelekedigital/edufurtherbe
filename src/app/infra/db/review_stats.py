@@ -62,7 +62,7 @@ from sqlalchemy import Integer, Numeric, Select, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import SessionRole
-from app.domain.reviews import MENTOR_RATINGS, ORDINAL_SCALE, RECOMMEND_SCALE
+from app.domain.reviews import MENTOR_RATINGS, ORDINAL_SCALE, RECOMMEND_SCALE, WOULD_RECOMMEND_FROM
 from app.infra.db.models.reviews import Review
 
 __all__ = ["card_summary", "mentor_review_stats", "profile_summary", "published"]
@@ -129,6 +129,19 @@ def _percent(column: Any, high: int) -> Any:
     return cast(func.round(cast(func.avg(column), Numeric) * 100 / high), Integer)
 
 
+def _in_ten(condition: Any) -> Any:
+    """How many in ten of the rows meet `condition`, whole, or ``NULL`` over none.
+
+    A **share of rows**, where `_percent` is a mean of a scale — "9 in 10 would
+    recommend" counts people, and an average score of 9 does not say that. The
+    arithmetic is `numeric` for the reason `_percent` gives, so a tie rounds half
+    away from zero like every other figure here; `NULLIF` makes no rows `NULL`
+    rather than a division by zero.
+    """
+    met = cast(func.count().filter(condition), Numeric)
+    return cast(func.round(met * 10 / func.nullif(func.count(), 0)), Integer)
+
+
 def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
     """The two figures a discovery card shows: how many, and how valuable.
 
@@ -180,6 +193,7 @@ def profile_summary(mentor: Any) -> Select[Any]:
         func.count().label("review_count"),
         _average(Review.valuable_rating).label("session_value"),
         _percent(Review.nps_recommend_score, _RECOMMEND_MAX).label("recommended_percent"),
+        _in_ten(Review.nps_recommend_score >= WOULD_RECOMMEND_FROM).label("would_recommend_in_10"),
     ]
     for rating in MENTOR_RATINGS:
         column = getattr(Review, rating)
