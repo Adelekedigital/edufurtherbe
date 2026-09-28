@@ -118,6 +118,14 @@ class MentorSummaryRead(BaseModel):
     #: whenever the time is (settled decision #189).
     next_available_session_type_id: UUID | None = None
 
+    #: When this person became a mentor — `mentor_profiles.created_at`, which
+    #: for a migrated mentor is their creation date on the legacy platform. Not
+    #: the approval date: migrated mentors carry no approval event to read.
+    joined_at: datetime
+    #: The title of their most recent scholarship or award — exactly the one the
+    #: profile's `scholarships` list leads with. `null` when they list none.
+    top_award: str | None = None
+
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> MentorSummaryRead:
         return cls(
@@ -140,6 +148,7 @@ class MentorSummaryRead(BaseModel):
             ),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
             **_next_available(row),
+            **_joined_and_award(row),
         )
 
 
@@ -369,6 +378,14 @@ class MentorPublicRead(BaseModel):
     #: *set*, so any sibling added or withdrawn invalidates a cached one.
     reviews: ReviewSummaryRead = Field(default_factory=ReviewSummaryRead)
 
+    #: When this person became a mentor — `mentor_profiles.created_at`, which
+    #: for a migrated mentor is their creation date on the legacy platform. Not
+    #: the approval date: migrated mentors carry no approval event to read.
+    joined_at: datetime
+    #: The title of their most recent scholarship or award — exactly the one the
+    #: profile's `scholarships` list leads with. `null` when they list none.
+    top_award: str | None = None
+
     languages: list[LanguageRead] = Field(
         default_factory=list,
         description=(
@@ -446,6 +463,7 @@ class MentorPublicRead(BaseModel):
                 int(str(stats["attendance_rate"])) if stats["attendance_rate"] is not None else None
             ),
             reviews=ReviewSummaryRead.from_row(reviews),
+            **_joined_and_award(row),
             **_next_available(row),
             **_owner_fields(row),
         )
@@ -480,6 +498,11 @@ OWNER_ONLY = ("approval_status", "listing_status")
 def _owner_fields(row: dict[str, Any]) -> dict[str, Any]:
     """The owner-only statuses, when the row says the caller is the owner."""
     return {key: row[key] for key in OWNER_ONLY} if row.get("is_owner") else {}
+
+
+def _joined_and_award(row: dict[str, Any]) -> dict[str, Any]:
+    """`joined_at` and `top_award`, mapped once for the card and the profile."""
+    return {"joined_at": row["joined_at"], "top_award": _text(row["top_award"])}
 
 
 def _text(value: object) -> str | None:
