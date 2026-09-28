@@ -49,8 +49,11 @@ RULE_COLUMNS = frozenset({"day_of_week", "start_time", "end_time", "timezone", "
 
 
 @asynccontextmanager
-async def overlap_free() -> AsyncIterator[None]:
-    """Turn the exclusion constraint into a 409 rather than a 500.
+async def overlap_free(constraint: str = OVERLAP_CONSTRAINT) -> AsyncIterator[None]:
+    """Turn a weekly-window exclusion constraint into a 409 rather than a 500.
+
+    `constraint` names which: the mentor's rules by default, or an offering's
+    own scheduling windows, which carry the same rule scoped to the offering.
 
     The constraint is the mechanism — checking first and inserting after is a
     check-then-insert race, and the guardrail against exactly that is why the
@@ -60,7 +63,7 @@ async def overlap_free() -> AsyncIterator[None]:
     try:
         yield
     except IntegrityError as exc:
-        if OVERLAP_CONSTRAINT in str(exc.orig):
+        if constraint in str(exc.orig):
             raise ConflictError(
                 "this window overlaps one you already have on that day; widen "
                 "the existing rule instead of adding a second"

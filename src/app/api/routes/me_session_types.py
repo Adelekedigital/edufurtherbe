@@ -25,11 +25,16 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
     CreatedOwnSessionTypeDep,
+    CreatedSessionTypeWindowDep,
     DeletedOwnSessionTypeDep,
+    DeletedSessionTypeWindowDep,
     OwnSessionTypesDep,
+    SessionTypeWindowsDep,
     UpdatedOwnSessionTypeDep,
+    UpdatedSessionTypeWindowDep,
 )
 from app.api.routes.sessions import REPLAYED_HEADER
+from app.api.schemas.availability import AvailabilityRuleRead
 from app.api.schemas.common import Page
 from app.api.schemas.session_types import OwnSessionTypeRead, SessionTypeCreated
 from app.core.errors import NotFoundError
@@ -218,3 +223,69 @@ async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> dict[str, 
 async def remove_own_session_type(removed: DeletedOwnSessionTypeDep) -> None:
     if not removed:
         raise NotFoundError("no such session type")
+
+
+WINDOW_DESCRIPTION = (
+    "An offering's **own** weekly hours. **An offering with windows is bookable in "
+    "them and nowhere else**: your general availability no longer applies to it, "
+    "while dates you blocked still do. An offering with none uses your general "
+    "availability. A window has the same shape as a rule in "
+    "`/users/{id}/availability/rules`: `day_of_week` (0 = Sunday), wall-clock "
+    "`start_time`/`end_time` and an IANA `timezone`; a window crossing midnight is "
+    "two, one per weekday. Two windows on **one** offering may not overlap on a "
+    "weekday (409); different offerings may share hours."
+)
+
+
+@router.get(
+    "/session-types/{session_type_id}/windows",
+    response_model=Page[AvailabilityRuleRead],
+    summary="An offering's own weekly hours",
+    description=WINDOW_DESCRIPTION,
+    responses=OWNER_RESPONSES,
+)
+async def list_session_type_windows(windows: SessionTypeWindowsDep) -> Page[AvailabilityRuleRead]:
+    return Page(data=[AvailabilityRuleRead.from_row(row) for row in windows], next_cursor=None)
+
+
+@router.post(
+    "/session-types/{session_type_id}/windows",
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a weekly window to an offering",
+    description=WINDOW_DESCRIPTION,
+    responses=OWNER_RESPONSES,
+)
+async def add_session_type_window(
+    created: CreatedSessionTypeWindowDep, session_type_id: str, response: Response
+) -> dict[str, str]:
+    response.headers["Location"] = f"/api/v1/me/session-types/{session_type_id}/windows/{created}"
+    return {"id": str(created)}
+
+
+@router.patch(
+    "/session-types/{session_type_id}/windows/{window_id}",
+    summary="Change one of an offering's windows",
+    description=(
+        "Only the fields sent change. Moving onto another window of this offering is a 409."
+    ),
+    responses=OWNER_RESPONSES,
+)
+async def edit_session_type_window(changed: UpdatedSessionTypeWindowDep) -> dict[str, bool]:
+    if not changed:
+        raise NotFoundError("no such window")
+    return {"updated": True}
+
+
+@router.delete(
+    "/session-types/{session_type_id}/windows/{window_id}",
+    summary="Remove one of an offering's windows",
+    description=(
+        "Soft delete: the window stops being offered and stops blocking its hours. "
+        "Removing an offering's last window returns it to your general availability."
+    ),
+    responses=OWNER_RESPONSES,
+)
+async def remove_session_type_window(removed: DeletedSessionTypeWindowDep) -> dict[str, bool]:
+    if not removed:
+        raise NotFoundError("no such window")
+    return {"deleted": True}

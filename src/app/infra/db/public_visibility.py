@@ -29,7 +29,7 @@ from uuid import UUID
 from sqlalchemy import Select, and_, or_, select
 
 from app.domain.enums import ApprovalStatus, ListingStatus
-from app.infra.db.models.availability import AvailabilityRule
+from app.infra.db.models.availability import AvailabilityRule, SessionTypeSchedulingWindow
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
@@ -197,11 +197,16 @@ def has_live_offering() -> Any:
 
 
 def has_weekly_hours() -> Any:
-    """`EXISTS`: at least one active, undeleted weekly availability rule.
+    """Weekly hours the slot grid can use: the mentor's own, or a live offering's.
 
-    The other half of `mentor_is_bookable`.
+    The other half of `mentor_is_bookable`, and it must agree with what
+    `slot_store` generates slots from: an offering with its own scheduling
+    windows is bookable in *those*, whatever the mentor's general hours, so a
+    mentor whose only hours are an offering's windows has slots and is live
+    (#199). Windows count only on a live offering — one switched off, deleted or
+    without a booking config offers nothing.
     """
-    return (
+    general = (
         select(AvailabilityRule.id)
         .where(
             AvailabilityRule.mentor_user_id == MentorProfile.user_id,
@@ -211,6 +216,24 @@ def has_weekly_hours() -> Any:
         .correlate(MentorProfile)
         .exists()
     )
+    dedicated = (
+        select(SessionTypeSchedulingWindow.id)
+        .join(SessionType, SessionType.id == SessionTypeSchedulingWindow.session_type_id)
+        .join(
+            SessionTypeBookingConfig,
+            SessionTypeBookingConfig.session_type_id == SessionType.id,
+        )
+        .where(
+            SessionType.mentor_user_id == MentorProfile.user_id,
+            SessionType.is_active.is_(True),
+            SessionType.deleted_at.is_(None),
+            SessionTypeSchedulingWindow.is_active.is_(True),
+            SessionTypeSchedulingWindow.deleted_at.is_(None),
+        )
+        .correlate(MentorProfile)
+        .exists()
+    )
+    return or_(general, dedicated)
 
 
 def session_type_of(user_id: UUID) -> list[Any]:
