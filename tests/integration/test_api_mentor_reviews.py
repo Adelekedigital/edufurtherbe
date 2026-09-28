@@ -230,6 +230,38 @@ async def test_the_recommend_figure_is_a_percentage_of_ten(profile: Profile) -> 
     assert (await profile.block())["recommended_percent"] == scaled(scores, 10)
 
 
+async def test_would_recommend_counts_the_reviews_scoring_eight_or_more(
+    profile: Profile,
+) -> None:
+    """ "N in 10 would recommend": the share of reviews scoring **8 or more** out
+    of 10 (#194), not the average — 7 does not count, 8 does."""
+    for index, score in enumerate([10, 9, 8, 7, 3]):
+        await profile.reviewed(nps=score, days_ago=index + 1)
+
+    # 3 of 5 score 8+: 6 in 10.
+    assert (await profile.block())["would_recommend_in_10"] == 6
+
+
+async def test_would_recommend_rounds_half_away_from_zero(profile: Profile) -> None:
+    """1 of 4 is 2.5 in 10, which must read 3: half away from zero, as every
+    other figure on the block rounds. Banker's rounding would say 2."""
+    for index, score in enumerate([9, 2, 2, 2]):
+        await profile.reviewed(nps=score, days_ago=index + 1)
+
+    assert (await profile.block())["would_recommend_in_10"] == 3
+
+
+async def test_would_recommend_is_null_with_no_reviews(profile: Profile) -> None:
+    assert (await profile.block())["would_recommend_in_10"] is None
+
+
+async def test_a_withdrawn_review_is_not_counted_for_recommending(profile: Profile) -> None:
+    await profile.reviewed(nps=10, days_ago=1)
+    await profile.reviewed(nps=2, days_ago=2, withdrawn=True)
+
+    assert (await profile.block())["would_recommend_in_10"] == 10
+
+
 async def test_session_value_is_the_mean_out_of_five(profile: Profile) -> None:
     """`5/5 Session Value` on the profile, and the same number on the card."""
     for index, value in enumerate([5, 4, 5]):

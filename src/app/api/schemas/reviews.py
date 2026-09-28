@@ -320,8 +320,13 @@ class ReviewSummaryRead(BaseModel):
     #: Mean `valuable_rating`, `1..5`. The figure shown as `X/5`, and the one the
     #: discovery card carries.
     session_value: float | None = None
-    #: Mean recommend score as a percentage of ten. `97%` on the profile.
+    #: The **mean** recommend score (1-10) as a percentage of ten: 90 is "an
+    #: average of 9/10", not "9 in 10 would recommend" — that is the next field.
     recommended_percent: int | None = None
+    #: **How many in ten reviewers would recommend** this mentor: the share of
+    #: published reviews scoring 8 or more out of 10 (#194), rounded to a whole
+    #: number, 0-10. `null` with no reviews. "9 in 10 mentees would recommend".
+    would_recommend_in_10: int | None = None
 
     #: **Named exactly as `ReviewRead` names them**, and as the columns do. One
     #: API spelling the same four questions two ways — `communication_rating` on a
@@ -341,6 +346,9 @@ class ReviewSummaryRead(BaseModel):
             count=int(row["review_count"] or 0),
             session_value=None if value is None else float(value),
             recommended_percent=None if recommended is None else int(recommended),
+            would_recommend_in_10=(
+                None if row["would_recommend_in_10"] is None else int(row["would_recommend_in_10"])
+            ),
             **{rating: RatingAggregate.of(row, rating) for rating in MENTOR_RATINGS},
         )
 

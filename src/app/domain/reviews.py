@@ -28,6 +28,7 @@ __all__ = [
     "REVIEW_EDIT_WINDOW",
     "REVIEW_INTERVAL",
     "VALUABLE_SCALE",
+    "WOULD_RECOMMEND_FROM",
     "MentorRating",
     "edit_window_open",
     "from_ordinal",
@@ -60,6 +61,13 @@ VALUABLE_SCALE = (1, 5)
 #: "How likely are you to recommend…", `1..10`. **The package permits `0` and
 #: the control has no zero button**, so the bound is what the form can emit.
 RECOMMEND_SCALE = (1, 10)
+
+#: The recommend score from which a mentee counts as **would recommend**, for
+#: "N in 10 mentees would recommend" (#194). The owner's cut-off (2026-09-28):
+#: 8 and up — stricter than 7, where nearly every review would count, and less
+#: harsh than NPS's 9-and-up "promoter", which reads a mentor of mostly 8s as a
+#: mentor nobody recommends.
+WOULD_RECOMMEND_FROM = 8
 
 
 class MentorRating(StrEnum):
