@@ -287,11 +287,15 @@ async def test_no_private_field_reaches_the_public_profile(
     with it. That is the condition, written down rather than left to whoever
     notices.
     """
-    mentor = await make_public_mentor(db_engine, "private", slug="private")
+    # Bookable, so the profile is a 200 (#192): a 404 body would pass this test
+    # whatever the profile leaked.
+    mentor = await make_bookable_mentor(db_engine, "private", slug="private")
     await give_profile(db_engine, mentor)
 
-    raw = (await api_client.get(url(mentor))).text
+    response = await api_client.get(url(mentor))
+    raw = response.text
 
+    assert response.status_code == 200
     assert "mentor-private@example.test" not in raw
     assert "email" not in raw
     assert "approval_status" not in raw

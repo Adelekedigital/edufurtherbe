@@ -55,7 +55,7 @@ from app.infra.db.offerings import (
     shared_offering_count,
 )
 from app.infra.db.profile_store import top_award
-from app.infra.db.public_visibility import mentor_is_bookable, mentor_is_public
+from app.infra.db.public_visibility import mentor_is_live
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
 from app.infra.db.session_stats import delivered
@@ -280,7 +280,7 @@ def _who(offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
         # and it was the one field the search document indexed while the
         # payload withheld it — findable by a fact a client could not display.
         .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
-        .where(*mentor_is_public(), *mentor_is_bookable())
+        .where(*mentor_is_live())
         .where(*([offers_any(MentorProfile.user_id, offerings)] if offerings else []))
         # **A signed-in mentor is never listed to themself.** Here rather than
         # in one mode, so browse, the goal ranking, search and `total` all

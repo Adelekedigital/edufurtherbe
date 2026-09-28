@@ -125,7 +125,7 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
         return mentor_is_live()
     return [
         *_mentor_exists(),
-        or_(and_(mentor_is_published(), *mentor_is_bookable()), User.id == viewer),
+        or_(and_(*mentor_is_live()), User.id == viewer),
     ]
 
 
@@ -267,5 +267,5 @@ def bookable_mentors() -> Select[Any]:
     return (
         select(MentorProfile.user_id)
         .join(User, User.id == MentorProfile.user_id)
-        .where(*mentor_is_public(), *mentor_is_bookable())
+        .where(*mentor_is_live())
     )
