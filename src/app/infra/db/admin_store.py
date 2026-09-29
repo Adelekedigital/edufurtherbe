@@ -47,6 +47,7 @@ from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 
 
 def _rowcount(result: Any) -> int:
@@ -193,7 +194,7 @@ async def pending_mentors(session: AsyncSession, *, limit: int) -> list[dict[str
         .where(
             MentorProfile.approval_status == ApprovalStatus.PENDING,
             MentorProfile.deleted_at.is_(None),
-            User.deleted_at.is_(None),
+            LIVE,
         )
         .order_by(MentorProfile.created_at)
         .limit(limit)

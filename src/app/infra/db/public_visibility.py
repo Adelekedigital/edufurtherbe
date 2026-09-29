@@ -33,6 +33,7 @@ from app.infra.db.models.availability import AvailabilityRule, SessionTypeSchedu
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 
 __all__ = [
     "bookable_mentors",
@@ -94,7 +95,7 @@ def mentor_exists() -> list[Any]:
     live** (owner, 2026-09-29): it resolves any mentor who exists, in any state,
     and this is the one statement of what "exists" means.
     """
-    return [MentorProfile.deleted_at.is_(None), User.deleted_at.is_(None)]
+    return [MentorProfile.deleted_at.is_(None), LIVE]
 
 
 def mentor_is_published() -> Any:
