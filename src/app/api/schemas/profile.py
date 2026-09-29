@@ -9,6 +9,7 @@ into two shapes.
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -27,6 +28,7 @@ from app.api.schemas.common import (
 )
 from app.domain.availability import BOOKING_WINDOW_DAYS, BREAK_AFTER_MINUTES
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
+from app.domain.text import has_letter, is_invisible
 
 
 class LookupRef(BaseModel):
@@ -358,6 +360,22 @@ class MentorProfileWrite(Normalised):
 MAX_NAME_LENGTH = 100
 
 
+def _a_visible_name(value: str) -> str:
+    """A name as a person would read it: composed, with no hidden characters.
+
+    **Refused, not stripped.** A name reaches public cards, email variables and
+    a call's display name; silently removing a right-to-left override or a
+    newline would store something the user did not type. Composed (NFC) so an
+    accent typed two ways is one spelling. A name must hold a letter, in any
+    script — `---` is not one.
+    """
+    if any(is_invisible(character) for character in value):
+        raise ValueError("a name cannot contain control or invisible characters")
+    if not has_letter(value):
+        raise ValueError("a name needs at least one letter")
+    return unicodedata.normalize("NFC", value)
+
+
 class UserProfileWrite(Normalised):
     """The profile fields a user may set about themselves.
 
@@ -438,6 +456,8 @@ class UserProfileWrite(Normalised):
         ),
         examples=["Africa/Lagos"],
     )
+
+    _names = field_validator("first_name", "last_name")(_a_visible_name)
 
     @field_validator("timezone")
     @classmethod

@@ -119,6 +119,81 @@ async def test_a_blank_or_overlong_name_is_refused(
     assert await names_of(db_engine, user_id) == ("Ada", None)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "\u200b\u200b\u200b",
+        "Ada\u202eecalvol",
+        "Ada\nLovelace",
+        "\u00a0",
+        "---",
+        "\ue000",
+    ],
+    ids=[
+        "zero-width-only",
+        "rtl-override",
+        "embedded-newline",
+        "nbsp-only",
+        "no-letter",
+        "private-use",
+    ],
+)
+async def test_an_invisible_or_letterless_name_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, value: str
+) -> None:
+    """Names reach public cards, email variables and the call's display name, so a
+    control or format character is refused rather than stored, or stripped.
+    (NUL is the one exception: `Normalised` removes it from every field first.)"""
+    user_id, headers = await a_user(db_engine, "invisible")
+
+    response = await api_client.patch(
+        url(user_id, "profile"), json={"first_name": value}, headers=headers
+    )
+
+    assert response.status_code == 422
+    assert "/first_name" in pointers(response)
+    assert await names_of(db_engine, user_id) == ("Ada", None)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Ren\u00e9e",
+        "Nu\u00f1ez",
+        "\u0639\u0627\u0626\u0634\u0629",
+        "\u674e\u534e",
+        "Mary-Jane",
+        "O'Brien",
+        "Jean Paul",
+    ],
+    ids=["accent", "tilde", "arabic", "cjk", "hyphen", "apostrophe", "space"],
+)
+async def test_a_real_name_in_any_script_is_kept(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, value: str
+) -> None:
+    user_id, headers = await a_user(db_engine, "script")
+
+    response = await api_client.patch(
+        url(user_id, "profile"), json={"last_name": value}, headers=headers
+    )
+
+    assert response.status_code == 204
+    assert await names_of(db_engine, user_id) == ("Ada", value)
+
+
+async def test_a_decomposed_accent_is_stored_composed(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`e` + combining acute and `\u00e9` are one name; store one spelling of it."""
+    user_id, headers = await a_user(db_engine, "nfc")
+
+    await api_client.patch(
+        url(user_id, "profile"), json={"first_name": "Rene\u0301e"}, headers=headers
+    )
+
+    assert await names_of(db_engine, user_id) == ("Ren\u00e9e", None)
+
+
 async def test_a_name_at_the_limit_is_kept(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -173,7 +248,7 @@ async def test_another_users_name_cannot_be_written(
         url(victim, "profile"), json={"first_name": "Mallory"}, headers=headers
     )
 
-    assert response.status_code in {403, 404}
+    assert response.status_code == 404
     assert await names_of(db_engine, victim) == ("Ada", None)
 
 
@@ -277,5 +352,5 @@ async def test_another_users_crop_cannot_be_chosen(
         url(victim, "profile"), json={"avatar_focus": {"x": 0.9, "y": 0.9}}, headers=headers
     )
 
-    assert response.status_code in {403, 404}
+    assert response.status_code == 404
     assert await focus_of(db_engine, victim) == (Decimal("0.500"), Decimal("0.400"), "detected")
