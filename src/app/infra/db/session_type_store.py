@@ -227,7 +227,7 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             SessionType.application_stage,
             SessionType.custom_stage_label,
             SessionType.icon,
-            # Resolved, not read (#212): the offering's own, else its mentor's
+            # Resolved, not read (#213): the offering's own, else its mentor's
             # default, else the platform's. The field stays an int.
             effective_duration_minutes().label("duration_minutes"),
             effective_min_notice_minutes().label("min_notice_minutes"),
@@ -308,7 +308,7 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionTypeBookingConfig,
             SessionTypeBookingConfig.session_type_id == SessionType.id,
         )
-        # For the inherited length and notice (#212). Inner, because
+        # For the inherited length and notice (#213). Inner, because
         # `session_types.mentor_user_id` references this table.
         .join(MentorProfile, MentorProfile.user_id == SessionType.mentor_user_id)
     )
@@ -354,7 +354,7 @@ async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[
 
 
 async def _with_sets(session: AsyncSession, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Attach each type's offerings (#205) and stages (#211) — one extra
+    """Attach each type's offerings (#205) and stages (#212) — one extra
     statement each for the whole list."""
     ids = [row["id"] for row in rows]
     offerings = await offerings_for_session_types(session, ids)
@@ -453,7 +453,7 @@ async def create_session_type(
         await session.execute(
             insert(SessionTypeBookingConfig).values(
                 session_type_id=session_type_id,
-                # Null inherits (#212), written explicitly: an absent key would
+                # Null inherits (#213), written explicitly: an absent key would
                 # take `min_notice_minutes`' server default and stop inheriting.
                 duration_minutes=payload.get("duration_minutes"),
                 min_notice_minutes=payload.get("min_notice_minutes"),
@@ -471,7 +471,7 @@ async def create_session_type(
 
 
 def _requested_stages(payload: dict[str, Any]) -> list[ApplicationStage] | None:
-    """The stage set a write asks for, or `None` when it names none (#211).
+    """The stage set a write asks for, or `None` when it names none (#212).
 
     `application_stages` is the set; the legacy `application_stage` is a set of
     one, and `null` there clears it — the same reading `_requested_offerings`
@@ -486,7 +486,7 @@ def _requested_stages(payload: dict[str, Any]) -> list[ApplicationStage] | None:
 
 
 def _refuse_stage_label(stages: list[ApplicationStage], label: str | None) -> None:
-    """The stage set and label the row will end up with, judged whole (#211).
+    """The stage set and label the row will end up with, judged whole (#212).
 
     Asked **before** writing, against the final state, because the `CHECK` sees
     only the first stage and a `PATCH` may change either half alone.
@@ -516,7 +516,7 @@ def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
 #: offering*, and that it spans two tables is this layer's problem.
 #:
 #: `application_stage` is absent on purpose: it is derived from the stage set
-#: and written beside the label in one statement (#211).
+#: and written beside the label in one statement (#212).
 SESSION_TYPE_COLUMNS = (
     "name",
     "description",

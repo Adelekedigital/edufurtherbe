@@ -110,7 +110,7 @@ def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
     return (
         select(
             # This offering's length, notice, window and break, resolved
-            # (#204, #212): its own, else its mentor's default, else the platform's.
+            # (#204, #213): its own, else its mentor's default, else the platform's.
             effective_duration_minutes().label("duration_minutes"),
             effective_min_notice_minutes().label("min_notice_minutes"),
             effective_window_days().label("window_days"),

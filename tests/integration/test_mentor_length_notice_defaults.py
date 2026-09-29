@@ -1,4 +1,4 @@
-"""A mentor's default length and notice, and offerings that follow them (#212).
+"""A mentor's default length and notice, and offerings that follow them (#213).
 
 Session Types frontend round 3 B, approved by the product owner 2026-09-29: the
 "Use my defaults" mode. `default_duration_minutes` and

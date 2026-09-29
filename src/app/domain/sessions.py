@@ -225,7 +225,7 @@ def stage_label_problem(
     stages: Sequence[ApplicationStage], label: str | None
 ) -> tuple[str, str] | None:
     """What is wrong with this stage set and label together, as ``(pointer,
-    message)``, or ``None`` (#211).
+    message)``, or ``None`` (#212).
 
     **A label exactly when the set holds `other`**, in both directions: `other`
     with no label renders a blank chip, and a label beside a set without `other`

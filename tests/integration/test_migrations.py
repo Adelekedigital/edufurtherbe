@@ -143,7 +143,7 @@ EXPECTED_TABLES = [
     "session_type_booking_configs",
     # Session Types #9: the offerings one session type covers, up to three.
     "session_type_offerings",
-    # Session Types round 3 A (#211): the stages one session type is aimed at.
+    # Session Types round 3 A (#212): the stages one session type is aimed at.
     "session_type_stages",
     "session_types",
     "sessions",

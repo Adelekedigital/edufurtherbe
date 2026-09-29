@@ -1,4 +1,4 @@
-"""The stage-set label rule (#211) and the duration range's one home (#212)."""
+"""The stage-set label rule (#212) and the duration range's one home (#213)."""
 
 from __future__ import annotations
 
@@ -78,5 +78,5 @@ def test_every_duration_check_is_the_one_range(table: Table, name: str) -> None:
 
 
 def test_the_notice_floor_is_a_day() -> None:
-    """#104's floor, and the reason a 6-hour option was declined (#212)."""
+    """#104's floor, and the reason a 6-hour option was declined (#213)."""
     assert MIN_NOTICE_MINUTES == (1440, 4320)

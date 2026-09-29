@@ -1,6 +1,6 @@
 """Mentor defaults for length and notice, and offerings that inherit them.
 
-Settled decision #212, Session Types frontend round 3 B. **The expand step.**
+Settled decision #213, Session Types frontend round 3 B. **The expand step.**
 
 * ``mentor_profiles`` gains ``default_duration_minutes`` and
   ``default_min_notice_minutes``, nullable: null means the platform's (60

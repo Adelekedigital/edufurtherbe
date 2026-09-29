@@ -219,7 +219,7 @@ class MentorProfileRead(BaseModel):
     booking_window_days: int | None = None
     break_after_minutes: int | None = None
     #: Your default length and notice for every offering that does not set its
-    #: own (#212); null means the platform's.
+    #: own (#213); null means the platform's.
     default_duration_minutes: int | None = Field(
         default=None,
         description=(
@@ -375,7 +375,7 @@ class MentorProfileWrite(Normalised):
         default=None, ge=BREAK_AFTER_MINUTES[0], le=BREAK_AFTER_MINUTES[1]
     )
     #: The length and notice every offering inherits unless it sets its own
-    #: (#212), in the offering's own ranges. Null means the platform's.
+    #: (#213), in the offering's own ranges. Null means the platform's.
     default_duration_minutes: int | None = Field(
         default=None,
         ge=SESSION_DURATION_MINUTES[0],

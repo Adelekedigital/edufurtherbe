@@ -1,4 +1,4 @@
-"""Which application stages a session type is aimed at — the set (#211).
+"""Which application stages a session type is aimed at — the set (#212).
 
 The #205 shape of `offerings.py`, for the other axis: `session_type_stages`
 holds the set in the mentor's order, and the first is dual-written to

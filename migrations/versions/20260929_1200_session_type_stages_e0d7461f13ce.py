@@ -1,6 +1,6 @@
 """``session_type_stages``: a session type is aimed at several application stages.
 
-Settled decision #211, Session Types frontend round 3 A. **The expand step**, the
+Settled decision #212, Session Types frontend round 3 A. **The expand step**, the
 #205 shape: the new table holds the set in the mentor's order, and
 ``session_types.application_stage`` stays, dual-written as the first of the set,
 so code from before this release keeps reading and writing it. Reads fall back

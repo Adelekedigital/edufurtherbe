@@ -74,7 +74,7 @@ def _taxonomy(row: dict[str, object]) -> LookupRef | None:
 def _refuse_two_set_fields(model: BaseModel) -> None:
     """Each set and its legacy single field: `service_offering_ids` beside
     `service_offering_id` (#205), `application_stages` beside `application_stage`
-    (#211). A request sending both of a pair has two answers and no rule for
+    (#212). A request sending both of a pair has two answers and no rule for
     which wins."""
     fields = model.model_fields_set
     for plural, single in (
@@ -89,13 +89,13 @@ def _refuse_two_set_fields(model: BaseModel) -> None:
 
 
 def _stages(row: dict[str, object]) -> list[ApplicationStage]:
-    """The stages a type is aimed at, in the mentor's order (#211); empty is any."""
+    """The stages a type is aimed at, in the mentor's order (#212); empty is any."""
     return [ApplicationStage(str(v)) for v in row.get("application_stages") or []]  # type: ignore[attr-defined]
 
 
 def _stage(row: dict[str, object]) -> ApplicationStage | None:
     """The single `application_stage` kept this release: **the first of the set**
-    (#211), so the old field and the new list can never disagree."""
+    (#212), so the old field and the new list can never disagree."""
     stages = _stages(row)
     return stages[0] if stages else None
 
@@ -391,7 +391,7 @@ def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePa
 
     **One function, called from both write models**, and the rule itself is the
     domain's — the store asks it again against the row's final state, because
-    the database's `CHECK` can see only the first stage (#211).
+    the database's `CHECK` can see only the first stage (#212).
 
     **On a `PATCH`, only when both halves are sent.** An absent field means
     *leave it alone*, so a request naming only `custom_stage_label` cannot be
@@ -435,7 +435,7 @@ class MentorSessionTypeWrite(Normalised):
     #: the constraint by a test, per non-negotiable #8 — the copy is real and
     #: this is the mechanism that keeps it honest.
     #:
-    #: **Null, or absent, follows the mentor's default** (#212), then the
+    #: **Null, or absent, follows the mentor's default** (#213), then the
     #: platform's.
     duration_minutes: int | None = Field(
         default=None,
@@ -454,7 +454,7 @@ class MentorSessionTypeWrite(Normalised):
     #: *disallowed*. When `booking_policies` lands this range moves there and
     #: becomes a config change rather than a migration.
     #:
-    #: **Null, or absent, follows the mentor's default, then the floor** (#212).
+    #: **Null, or absent, follows the mentor's default, then the floor** (#213).
     min_notice_minutes: int | None = Field(
         default=None,
         ge=MIN_NOTICE_MINUTES[0],
@@ -479,7 +479,7 @@ class MentorSessionTypeWrite(Normalised):
             "`[]` clears them. Send this or `service_offering_id`, not both."
         ),
     )
-    #: The stage set, in order, each once (#211). `[]` means any stage; absent
+    #: The stage set, in order, each once (#212). `[]` means any stage; absent
     #: leaves it. `application_stage` below is a set of one, for one release.
     application_stages: list[ApplicationStage] | None = Field(
         default=None,
@@ -567,7 +567,7 @@ class MentorSessionTypePatch(Normalised):
 
     name: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
-    #: `null` switches the offering to inheriting (#212); absent leaves it.
+    #: `null` switches the offering to inheriting (#213); absent leaves it.
     duration_minutes: int | None = Field(
         default=None,
         ge=SESSION_DURATION_MINUTES[0],
@@ -598,7 +598,7 @@ class MentorSessionTypePatch(Normalised):
             "`[]` clears them. Send this or `service_offering_id`, not both."
         ),
     )
-    #: The stage set, in order, each once (#211). `[]` means any stage; absent
+    #: The stage set, in order, each once (#212). `[]` means any stage; absent
     #: leaves it. `application_stage` below is a set of one, for one release.
     application_stages: list[ApplicationStage] | None = Field(
         default=None,

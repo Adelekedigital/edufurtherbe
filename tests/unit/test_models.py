@@ -92,7 +92,7 @@ EXPECTED_MODELS = {
     # arrived, whole, because it is a unit.
     "SessionType",
     "SessionTypeBookingConfig",
-    # The stage set (#211), beside the column whose first it dual-writes.
+    # The stage set (#212), beside the column whose first it dual-writes.
     "SessionTypeStage",
     # The intake stack, in its own module: `sessions.py` is already five
     # models and past #54's line tripwire, and "the intake form" is a
