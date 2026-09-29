@@ -12,6 +12,7 @@ discipline: never logged, never in an error message, never leaves this process.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 
@@ -20,6 +21,8 @@ import httpx
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.infra.http.retry import send_with_backoff
+
+logger = logging.getLogger(__name__)
 
 #: Upload. `x-upsert` lets a re-run overwrite rather than 409 — which matters
 #: because the object name is a content hash, so an "overwrite" writes identical
@@ -149,6 +152,24 @@ class SupabaseStorage:
         prefix = f"{self._base_url}{PUBLIC_OBJECT}/{self._bucket}/"
         return url[len(prefix) :] if url.startswith(prefix) else None
 
+    def drop_url(self, url: str) -> bool:
+        """Delete the object an image URL names; ``True`` only if one was removed.
+
+        **Never raises**, which is its whole contract: every caller runs it after
+        the profile has stopped pointing at the image — an upload replacing it,
+        a removal, a re-seed — so a failure leaves an orphan and nothing broken,
+        and must not fail a change that is already committed. A URL this bucket
+        did not build (a legacy Bubble one) names nothing here and is left alone.
+        """
+        path = self.path_of(url)
+        if path is None:
+            return False
+        try:
+            return self.delete(path)
+        except StorageError as exc:
+            logger.warning("could not delete replaced image %s: %s", path, exc)
+            return False
+
     def download(self, path: str) -> bytes:
         """The bytes of an object this bucket holds.
 
@@ -192,12 +213,17 @@ class SupabaseStorage:
         already succeeded. A missing object is not an error for the same reason:
         two replacements racing both try to remove the same predecessor.
         """
-        response = send_with_backoff(
-            lambda: self._client.delete(
-                f"{self._base_url}{OBJECT}/{self._bucket}/{path}", headers=self._headers
-            ),
-            self._sleep,
-        )
+        try:
+            response = send_with_backoff(
+                lambda: self._client.delete(
+                    f"{self._base_url}{OBJECT}/{self._bucket}/{path}", headers=self._headers
+                ),
+                self._sleep,
+            )
+        except httpx.HTTPError as exc:
+            # A timeout or a refused connection is the same failure as a 5xx to
+            # every caller, so it is one exception type: `StorageError`.
+            raise StorageError(f"delete of {path} failed: {type(exc).__name__}") from exc
         if response.status_code == httpx.codes.NOT_FOUND:
             return False
         if response.status_code >= httpx.codes.BAD_REQUEST:

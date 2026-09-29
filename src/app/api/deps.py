@@ -12,7 +12,6 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import suppress
 from functools import lru_cache
 from typing import Annotated, Any
 from uuid import UUID
@@ -1294,24 +1293,11 @@ async def _store_image(
     url, previous = await store_image(session, storage, kind, user_id, payload)
     await session.commit()
 
+    # **After the commit, and never fatal** — `drop_url`'s contract.
     if previous and previous != url:
-        await _drop_object(storage, previous)
+        await run_in_threadpool(storage.drop_url, previous)
 
     return url
-
-
-async def _drop_object(storage: SupabaseStorage, url: str) -> None:
-    """Delete the object an image URL names, **after the commit and never fatal**.
-
-    The profile no longer points at it, so a failure here leaves an orphan
-    rather than a broken profile — and a change that already succeeded must not
-    report failure because a cleanup did not. A URL outside this bucket (a
-    legacy Bubble one) has no path here and is left alone.
-    """
-    path = storage.path_of(url)
-    if path is not None:
-        with suppress(StorageError):
-            await run_in_threadpool(storage.delete, path)
 
 
 async def uploaded_avatar(
@@ -1335,12 +1321,17 @@ async def uploaded_banner(
 
 
 async def removed_banner(request: Request, user_id: OwnerDep, session: SessionDep) -> None:
-    """Unset the owner's banner, then delete its object. Idempotent."""
+    """Unset the owner's banner, then delete its object. Idempotent.
+
+    Storage is resolved **before** the write, as the upload does: an app with no
+    storage configured refuses up front rather than clearing the banner and then
+    failing after the commit.
+    """
+    storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
     previous = await clear_banner(session, user_id)
     await session.commit()
     if previous is not None:
-        storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
-        await _drop_object(storage, previous)
+        await run_in_threadpool(storage.drop_url, previous)
 
 
 UploadedAvatarDep = Annotated[tuple[str, tuple[object, object]], Depends(uploaded_avatar)]
