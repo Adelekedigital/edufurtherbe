@@ -25,6 +25,10 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.enums import ApplicationStage
+from app.domain.sessions import first_stage
+from app.infra.db.stages import write_session_type_stages
+
 __all__ = [
     "DEMO_DOMAIN",
     "LEGACY_SESSION_TYPE",
@@ -228,12 +232,16 @@ async def apply_demo_session_types(
         type_id = existing.get(template.name)
         if type_id is None and index == 0:
             type_id = existing.get(LEGACY_SESSION_TYPE)
+        # Through the stage set (#213), so the rows the reads prefer and the
+        # legacy column agree; the demo's stages never include `other`, so no
+        # label is written.
+        stages = [ApplicationStage(template.stage)] if template.stage else []
         values = {
             "u": user,
             "n": template.name,
             "d": template.description,
             "o": template.offering,
-            "st": template.stage,
+            "st": first_stage(stages),
         }
         if type_id is None:
             type_id = await _one(
@@ -269,6 +277,7 @@ async def apply_demo_session_types(
                 ),
                 {"t": type_id, "m": template.duration, "n": template.notice},
             )
+        await write_session_type_stages(session, type_id, stages)
         has_questions = await _one(
             session,
             "SELECT EXISTS (SELECT 1 FROM session_type_questions "

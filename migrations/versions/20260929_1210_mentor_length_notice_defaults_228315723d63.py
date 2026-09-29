@@ -12,10 +12,16 @@ Settled decision #213, Session Types frontend round 3 B. **The expand step.**
   without naming it still gets the floor. **Metadata-only**; no row changes, so
   every existing offering keeps its own values and reads exactly as before.
 
-**Rolling-deploy exposure, named rather than wished away:** old code reads the
-config columns raw, so an offering *new* code saves as inheriting would read as
-null on an old pod until the deploy finishes. Nothing creates one before the
-frontend ships the control, and the overlap is one container swap.
+**Rolling-deploy exposure, accepted for one container swap.** Once this runs,
+either version can write a null during the swap: an **old** pod's
+``PATCH /me/session-types/{id} {"duration_minutes": null}`` (old code dumped
+it straight to the column, which used to refuse it), and a **new** pod's
+``POST /me/session-types`` without ``min_notice_minutes`` (null means inherit
+now). Old pods read the columns raw, so any such offering answers **500 on
+``/slots`` and on the owner's ``/me/session-types``** from an old pod until the
+swap finishes. Accepted by the owner's coordinator on 2026-09-29: there is no
+production traffic yet, and the window is one swap. With traffic, this would
+need a release that tolerates null before the one that writes it.
 
 **The availability-change trigger on ``mentor_profiles`` gains the columns
 slots now read** — these two, and ``booking_window_days`` /
