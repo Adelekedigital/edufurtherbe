@@ -1,6 +1,6 @@
 """Dependency wiring.
 
-``deps.py`` is a composition point exempt from the layer check, so nothing else
+``api/deps/`` is a composition point exempt from the layer check, so nothing else
 verifies it. Without this the module sat at 0% coverage — the wiring could stop
 resolving and no test would notice.
 """

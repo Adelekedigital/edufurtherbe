@@ -51,7 +51,7 @@ scripts/           the layer check, the local gate, and the reference-data
                    generator whose output is committed as a migration
 ```
 
-`api/deps.py` and `main.py` are the only sanctioned wiring points.
+`api/deps/` and `main.py` are the only sanctioned wiring points.
 
 ## The rule that matters most
 
@@ -199,7 +199,7 @@ deliberately absent: they land after the cutover and are recorded in
 [`docs/adr/`](docs/adr/README.md) as they are decided.
 
 Each is to be reached through a Protocol in `domain/ports.py`, implemented in
-`infra/` and wired in `api/deps.py`, so that `domain/` never learns a vendor's
+`infra/` and wired in `api/deps/`, so that `domain/` never learns a vendor's
 name. That file does not exist yet — it appears with the first adapter.
 
 ## Contributing
