@@ -27,6 +27,7 @@ from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.user import User
 from app.infra.db.qualifications import top_qualification
+from app.infra.db.review_stats import review_value
 
 __all__ = ["decide_report", "list_reviews_for_moderation"]
 
@@ -70,7 +71,7 @@ async def list_reviews_for_moderation(
             Review.created_at,
             Review.public_review,
             Review.private_review,
-            Review.valuable_rating,
+            review_value().label("session_value"),
             Review.reviewed_for,
             (Review.deleted_at.is_not(None)).label("withdrawn"),
             User.first_name.label("author_first_name"),

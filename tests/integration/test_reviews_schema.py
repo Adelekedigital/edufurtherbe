@@ -231,7 +231,7 @@ async def test_the_reviewed_role_vocabulary_is_closed(pair: Pair) -> None:
 
 @pytest.mark.parametrize("value", [0, 4])
 async def test_a_mentor_rating_off_the_three_point_scale_is_refused(pair: Pair, value: int) -> None:
-    """`1 = Not great`, `2 = Great`, `3 = Excellent`, and nothing else exists.
+    """`1 = Poor`, `2 = Okay`, `3 = Great`, and nothing else exists.
 
     The package declares these `int CHECK (BETWEEN 1 AND 5)`, which is the first
     measured contradiction that breaks the schema outright: Bubble stores the

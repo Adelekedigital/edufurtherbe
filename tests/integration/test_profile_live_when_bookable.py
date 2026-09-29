@@ -114,10 +114,15 @@ async def test_the_reviews_of_a_hidden_mentor_are_hidden_too(
     assert owner.status_code == 200
 
 
-async def test_a_hidden_mentor_has_no_similar_page(
+async def test_a_hidden_mentor_still_has_a_similar_page(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
+    """Superseded #186 (owner, 2026-09-29): the page a visitor lands on offers
+    similar live mentors in place of the profile they cannot open."""
     mentor = await make_public_mentor(db_engine, "no-hours-similar")
     await add_session_type(db_engine, mentor)
 
-    assert (await api_client.get(url(mentor, "/similar"))).status_code == 404
+    response = await api_client.get(url(mentor, "/similar"))
+
+    assert response.status_code == 200
+    assert (await api_client.get(url(mentor, ""))).status_code == 404

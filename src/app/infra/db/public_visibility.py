@@ -38,6 +38,7 @@ __all__ = [
     "bookable_mentors",
     "has_live_offering",
     "has_weekly_hours",
+    "mentor_exists",
     "mentor_is_bookable",
     "mentor_is_live",
     "mentor_is_public",
@@ -83,11 +84,16 @@ def mentor_is_public() -> list[Any]:
     spread it into `.where(...)` beside its own predicates and read the whole
     condition in one place.
     """
-    return [*_mentor_exists(), mentor_is_published()]
+    return [*mentor_exists(), mentor_is_published()]
 
 
-def _mentor_exists() -> list[Any]:
-    """Neither the profile nor the account is soft-deleted — see above for why both."""
+def mentor_exists() -> list[Any]:
+    """Neither the profile nor the account is soft-deleted — see above for why both.
+
+    **Public since the similar-mentors page stopped needing the mentor to be
+    live** (owner, 2026-09-29): it resolves any mentor who exists, in any state,
+    and this is the one statement of what "exists" means.
+    """
     return [MentorProfile.deleted_at.is_(None), User.deleted_at.is_(None)]
 
 
@@ -124,7 +130,7 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
     if viewer is None:
         return mentor_is_live()
     return [
-        *_mentor_exists(),
+        *mentor_exists(),
         or_(and_(*mentor_is_live()), User.id == viewer),
     ]
 

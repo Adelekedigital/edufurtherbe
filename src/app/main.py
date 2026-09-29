@@ -65,7 +65,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "append and silently rewrites history under edit, so a ten-minute "
             "correction window exists and an amendment does not.\n\n"
             "The four mentor questions are a three-point scale published as "
-            "words, not numbers: `not_great`, `great`, `excellent`."
+            "words, not numbers: `poor`, `okay`, `great`."
         ),
     },
     {
