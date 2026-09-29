@@ -536,8 +536,13 @@ async def update_session_type(
     The config `UPDATE` runs only when the payload touches it, so a rename does
     not rewrite `updated_at` on a row nothing changed.
     """
-    scoped = select(SessionType.id).where(
-        *session_type_of(mentor_user_id), SessionType.id == session_type_id
+    # **Locked**, so two edits of one offering serialise: each replaces the
+    # stage and offering sets by delete-then-insert, and two interleaved would
+    # meet on the sets' unique indexes as a 500 rather than last-write-wins.
+    scoped = (
+        select(SessionType.id)
+        .where(*session_type_of(mentor_user_id), SessionType.id == session_type_id)
+        .with_for_update()
     )
     if (await session.execute(scoped)).first() is None:
         return False

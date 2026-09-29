@@ -9,15 +9,17 @@ belongs to the set whenever it holds `other`.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 import httpx
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import add_session_type
 from tests.integration.test_api_me_session_type_writes import URL, as_mentor, body
 
+from app.infra.db.session_type_store import update_session_type
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -317,3 +319,60 @@ async def test_a_patch_with_a_stage_twice_is_a_422_not_a_500(
 
     assert response.status_code == 422, response.text
     assert (await own(api_client, auth, created["id"]))["application_stages"] == [DRAFTING]
+
+
+async def test_patching_reorders_the_same_stages(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The same two stages swapped: the delete-then-insert must not meet the
+    position or pair index halfway."""
+    _, auth = await as_mentor(db_engine, "stages-reorder")
+    headers = bearer(api_token(auth))
+    created = (await create(api_client, auth, application_stages=[DRAFTING, REVISIONS])).json()
+
+    response = await api_client.patch(
+        f"{URL}/{created['id']}",
+        json={"application_stages": [REVISIONS, DRAFTING]},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    row = await own(api_client, auth, created["id"])
+    assert row["application_stages"] == [REVISIONS, DRAFTING]
+    assert row["application_stage"] == REVISIONS
+
+
+async def test_two_concurrent_edits_of_one_offering_serialise(db_engine: AsyncEngine) -> None:
+    """**The row lock in `update_session_type`.** Two edits replacing the set at
+    once: without it the second inserts into rows the first has not committed,
+    waits on the unique index, and fails with an integrity error once the first
+    commits. With it the second waits on the offering row, then replaces the
+    committed set — last write wins, no 500."""
+    mentor, _ = await as_mentor(db_engine, "stages-race")
+    session_type = await add_session_type(db_engine, mentor, application_stage=DRAFTING)
+
+    async with AsyncSession(db_engine) as first, AsyncSession(db_engine) as second:
+        await update_session_type(first, mentor, session_type, {"application_stages": [REVISIONS]})
+        racing = asyncio.create_task(
+            update_session_type(
+                second, mentor, session_type, {"application_stages": [INTERVIEWING]}
+            )
+        )
+        done, _ = await asyncio.wait({racing}, timeout=1)
+        assert not done, "the second edit did not wait for the first"
+        await first.commit()
+        assert await racing is True
+        await second.commit()
+
+    async with db_engine.begin() as conn:
+        stages = [
+            r.stage
+            for r in await conn.execute(
+                text(
+                    "SELECT stage FROM session_type_stages WHERE session_type_id = :t "
+                    "ORDER BY position"
+                ),
+                {"t": session_type},
+            )
+        ]
+    assert stages == [INTERVIEWING]

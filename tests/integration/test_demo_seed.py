@@ -335,7 +335,7 @@ async def test_the_upgrade_keeps_history_on_the_legacy_offering(db_engine: Async
 
 
 async def test_reseeding_writes_the_stage_set_the_reads_prefer(db_engine: AsyncEngine) -> None:
-    """Reads prefer `session_type_stages` over the legacy column (#216), so a
+    """Reads prefer `session_type_stages` over the legacy column (#215), so a
     seed that wrote only the column would leave an edited set standing — and a
     label beside it — with the column saying something else."""
     await seed(db_engine, replace(OPEN, key="demo-stages", session_types=(MOCK, INTRO)))

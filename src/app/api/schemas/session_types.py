@@ -89,7 +89,7 @@ def _refuse_two_set_fields(model: BaseModel) -> None:
         if plural in fields and single in fields:
             raise ValueError(f"send {plural} or {single}, not both")
     # `[]` is any stage and absent is unchanged; `null` would be a third
-    # spelling of one of them, so it is refused rather than guessed at (#216).
+    # spelling of one of them, so it is refused rather than guessed at (#215).
     if "application_stages" in fields and getattr(model, "application_stages", None) is None:
         raise ValueError("application_stages: send [] for any stage, or leave it out")
     ids = getattr(model, "service_offering_ids", None)

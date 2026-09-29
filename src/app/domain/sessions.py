@@ -224,7 +224,7 @@ MAX_SESSION_TYPE_OFFERINGS = 3
 
 
 def named_stages(fields: Mapping[str, object]) -> list[ApplicationStage] | None:
-    """The stage set a write names, or ``None`` when it names none (#216).
+    """The stage set a write names, or ``None`` when it names none (#215).
 
     **The one reading of the pair**, asked by the boundary and by the store.
     `application_stages` is the set; the legacy `application_stage` is a set of

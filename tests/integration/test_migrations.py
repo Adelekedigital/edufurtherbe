@@ -811,7 +811,7 @@ def test_the_stage_set_backfill_carries_every_staged_type(
     disposable_database: str, make_alembic_config: ConfigFactory
 ) -> None:
     """`e0d7461f13ce` backfills one row per type with a stage, at position 0,
-    and none for a type aimed at any stage (#216)."""
+    and none for a type aimed at any stage (#215)."""
     config = make_alembic_config(disposable_database)
     command.upgrade(config, "7b3e91c4a2d6")
     execute(
@@ -890,11 +890,21 @@ def test_the_inherit_downgrade_writes_the_resolved_values(
     )
     execute(
         disposable_database,
-        "UPDATE mentor_profiles SET default_duration_minutes = 30, "
-        "default_min_notice_minutes = NULL; "
+        _MENTOR_WITH_OFFERING.format(
+            email="inherit-notice@example.test", name="Inherits notice", stage="NULL", label="NULL"
+        ),
+    )
+    # Each column once from the mentor's default and once from the platform's:
+    # the first mentor sets only a length, the second only a notice.
+    execute(
+        disposable_database,
+        "UPDATE mentor_profiles SET default_duration_minutes = 30 "
+        "WHERE user_id = (SELECT id FROM users WHERE email = 'inherit@example.test'); "
+        "UPDATE mentor_profiles SET default_min_notice_minutes = 2880 "
+        "WHERE user_id = (SELECT id FROM users WHERE email = 'inherit-notice@example.test'); "
         "INSERT INTO session_type_booking_configs "
         "(session_type_id, duration_minutes, min_notice_minutes) "
-        "SELECT id, NULL, NULL FROM session_types WHERE name = 'Inherits'",
+        "SELECT id, NULL, NULL FROM session_types",
     )
 
     command.downgrade(config, "e0d7461f13ce")
@@ -902,10 +912,11 @@ def test_the_inherit_downgrade_writes_the_resolved_values(
     assert (
         scalar(
             disposable_database,
-            "SELECT duration_minutes || ':' || min_notice_minutes "
-            "FROM session_type_booking_configs",
+            "SELECT string_agg(t.name || '=' || c.duration_minutes || ':' || "
+            "c.min_notice_minutes, ',' ORDER BY t.name) "
+            "FROM session_type_booking_configs c JOIN session_types t ON t.id = c.session_type_id",
         )
-        == "30:1440"
+        == "Inherits=30:1440,Inherits notice=60:2880"
     )
     assert (
         scalar(
