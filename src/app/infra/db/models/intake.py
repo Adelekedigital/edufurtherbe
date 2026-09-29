@@ -326,9 +326,10 @@ class IntakeFile(TimestampMixin, Base):
     session_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("sessions.id", ondelete="SET NULL")
     )
-    #: The object path inside the private intake bucket. Built from this row's
-    #: own id, never from the upload's name, so a retention delete can only
-    #: ever reach this row's object.
+    #: The object path inside the private intake bucket: the uploader's id and
+    #: a fresh random id (`storage_key` in `domain/intake_files.py`), never the
+    #: upload's name — so no two rows share an object, and a retention delete
+    #: can only ever reach this row's.
     storage_key: Mapped[str] = mapped_column(Text, nullable=False)
     #: The name to offer on download, sanitised on the way in.
     filename: Mapped[str] = mapped_column(Text, nullable=False)

@@ -30,7 +30,7 @@ from app.infra.db.credit_reminders import (
     remind_about_expiring_credits,
 )
 from app.infra.db.engine import create_database_engine, create_session_factory
-from app.infra.db.intake_file_store import sweep_intake_files
+from app.infra.db.intake_file_store import sweep_counts, sweep_intake_files
 from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.outbox import drain
 from app.infra.db.session_writer import expire_requests, remind_unreviewed, settle_attendance
@@ -227,7 +227,7 @@ class RuntimeJobs:
                 # No bucket means uploads are refused, so there is nothing to
                 # sweep; a no-op rather than a failure QStash would retry.
                 logger.warning("intake file sweep skipped: intake storage is not configured")
-                return {"unused": 0, "expired": 0, "purged": 0, "failed": 0}
+                return sweep_counts()
             engine = create_database_engine(settings)
             try:
                 factory = create_session_factory(engine)

@@ -657,21 +657,29 @@ WORD_MAIN = "application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 def docx_bytes(
     *,
     main: str = WORD_MAIN,
+    main_part: str = "/word/document.xml",
+    overrides: tuple[tuple[str, str], ...] = (),
     parts: tuple[str, ...] = ("word/document.xml",),
     extra_entries: int = 0,
 ) -> bytes:
     """A zip shaped like a Word document, down to the part that says so.
 
-    ``main`` is the content type `[Content_Types].xml` declares for the main
-    part, so a macro-enabled `.docm` or a spreadsheet is one argument away.
+    ``main`` is the content type `[Content_Types].xml` declares for
+    ``main_part``, so a macro-enabled `.docm` or a spreadsheet is one argument
+    away. ``overrides`` adds further `(PartName, ContentType)` declarations —
+    which is how a decoy Word declaration is planted on some other part.
     """
+    declared = [(main_part, main), *overrides]
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
             "[Content_Types].xml",
             '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/'
-            'package/2006/content-types"><Override PartName="/word/document.xml" '
-            f'ContentType="{main}"/></Types>',
+            'package/2006/content-types">'
+            + "".join(
+                f'<Override PartName="{name}" ContentType="{kind}"/>' for name, kind in declared
+            )
+            + "</Types>",
         )
         for part in parts:
             archive.writestr(part, "<w:document/>")

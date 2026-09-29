@@ -3,8 +3,16 @@
 **The type is decided from the bytes**, never from the filename or the client's
 `Content-Type`: both are the uploader's claim. PDF is its magic number. A `.docx`
 is a zip, so "starts with `PK`" would also admit any zip, a `.docm` with macros,
-or an `.xlsx` — it is accepted only when the archive declares a Word document's
-main part in `[Content_Types].xml` and holds `word/document.xml`.
+or an `.xlsx` — it is accepted only when `[Content_Types].xml` declares
+**`/word/document.xml` itself** as a Word document's main part, the archive
+holds that part, and it carries no VBA project anywhere. Declared, not merely
+mentioned: an earlier substring test was passed by a `.docm` that planted a
+second, decoy Word declaration on some other part.
+
+**The declaration is parsed with `defusedxml`**, which refuses a DTD's entities
+rather than expanding them, so the one XML document read here cannot be a
+billion-laughs bomb. It is a pure parser — no I/O, no framework — which is why
+it may sit in `domain/`.
 
 **Nothing in the archive is decompressed except that one small part**, and only
 up to a bound. A docx is still a zip that a mentor's Word will open, so a zip
@@ -26,6 +34,10 @@ import zipfile
 import zlib
 from urllib.parse import quote
 from uuid import UUID
+from xml.etree.ElementTree import ParseError
+
+from defusedxml import DefusedXmlException
+from defusedxml.ElementTree import fromstring
 
 from app.domain.enums import IntakeFileType
 
@@ -34,9 +46,13 @@ ZIP_MAGIC = b"PK\x03\x04"
 
 #: A Word document's own main part. A macro-enabled `.docm`, a template, a
 #: spreadsheet and a slide deck each declare a different one.
-DOCX_MAIN = b"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+DOCX_MAIN = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
 CONTENT_TYPES = "[Content_Types].xml"
 DOCUMENT_PART = "word/document.xml"
+#: `[Content_Types].xml`'s own namespace — an `Override` in any other is not one.
+OVERRIDE = "{http://schemas.openxmlformats.org/package/2006/content-types}Override"
+#: Where Word keeps macros. A `.docx` never carries one, wherever it is put.
+VBA_PROJECT = "vbaproject.bin"
 
 #: A real CV is a few dozen entries; a few hundred with embedded images.
 MAX_DOCX_ENTRIES = 1000
@@ -77,6 +93,8 @@ def _is_docx(payload: bytes) -> bool:
             names = {entry.filename for entry in entries}
             if CONTENT_TYPES not in names or DOCUMENT_PART not in names:
                 return False
+            if any(name.lower().rsplit("/", 1)[-1] == VBA_PROJECT for name in names):
+                return False
             with archive.open(CONTENT_TYPES) as part:
                 declared = part.read(MAX_CONTENT_TYPES_BYTES + 1)
     except (
@@ -91,7 +109,26 @@ def _is_docx(payload: bytes) -> bool:
         KeyError,
     ):
         return False
-    return len(declared) <= MAX_CONTENT_TYPES_BYTES and DOCX_MAIN in declared
+    return len(declared) <= MAX_CONTENT_TYPES_BYTES and _declares_word_main(declared)
+
+
+def _declares_word_main(content_types: bytes) -> bool:
+    """Whether `/word/document.xml` is declared a Word document's main part.
+
+    Part names compare without regard to case (ECMA-376 Part 2, 9.1.1.1.2).
+    Any declaration of that part that is not Word's — two of them, one a
+    `.docm`'s — refuses, rather than letting the first or last one win.
+    """
+    try:
+        root = fromstring(content_types)
+    except ParseError, DefusedXmlException, ValueError:
+        return False
+    declared = {
+        override.get("ContentType")
+        for override in root.iter(OVERRIDE)
+        if (override.get("PartName") or "").lower() == f"/{DOCUMENT_PART}"
+    }
+    return declared == {DOCX_MAIN}
 
 
 def clean_filename(name: str | None, kind: IntakeFileType) -> str:

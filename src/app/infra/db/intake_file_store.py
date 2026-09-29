@@ -44,6 +44,7 @@ __all__ = [
     "link_files",
     "readable_file",
     "store_intake_file",
+    "sweep_counts",
     "sweep_intake_files",
     "usable_file_ids",
 ]
@@ -52,13 +53,27 @@ __all__ = [
 PURGE_BATCH = 500
 
 
+def _live_unlinked() -> Any:
+    """An upload that is live and answers nothing yet — anyone's.
+
+    **The one statement of "still usable for a booking"**, which the sweep's
+    "abandoned" is built on too. The two must stay each other's complement: if
+    only one gained a condition, the sweep would delete a file a booking can
+    still link, or leave one nothing can.
+    """
+    return and_(IntakeFile.session_id.is_(None), IntakeFile.deleted_at.is_(None))
+
+
 def _unlinked(uploader_id: UUID) -> Any:
     """An upload its owner may still answer with: theirs, live, answering nothing."""
-    return and_(
-        IntakeFile.uploader_id == uploader_id,
-        IntakeFile.session_id.is_(None),
-        IntakeFile.deleted_at.is_(None),
-    )
+    return and_(IntakeFile.uploader_id == uploader_id, _live_unlinked())
+
+
+def sweep_counts(
+    *, unused: int = 0, expired: int = 0, purged: int = 0, failed: int = 0
+) -> dict[str, int]:
+    """What a sweep reports — the one place its keys are named."""
+    return {"unused": unused, "expired": expired, "purged": purged, "failed": failed}
 
 
 async def store_intake_file(
@@ -200,11 +215,7 @@ async def sweep_intake_files(
     it is unset); ``purged`` objects removed; ``failed`` removals left for the
     next run. A dry run counts the first two and changes nothing.
     """
-    abandoned = and_(
-        IntakeFile.deleted_at.is_(None),
-        IntakeFile.session_id.is_(None),
-        IntakeFile.created_at < unused_cutoff(now, unused_hours),
-    )
+    abandoned = and_(_live_unlinked(), IntakeFile.created_at < unused_cutoff(now, unused_hours))
     cutoff = retention_cutoff(now, retention_days)
     past_retention = (
         and_(IntakeFile.deleted_at.is_(None), IntakeFile.created_at < cutoff)
@@ -219,7 +230,7 @@ async def sweep_intake_files(
                 await session.execute(select(func.count()).where(past_retention, ~abandoned))
             ).scalar_one()
         await session.rollback()
-        return {"unused": unused, "expired": expired, "purged": 0, "failed": 0}
+        return sweep_counts(unused=unused, expired=expired)
 
     unused = len(
         (
@@ -269,4 +280,4 @@ async def sweep_intake_files(
     await session.commit()
     if failed:
         logger.warning("intake file sweep left objects for the next run", extra={"failed": failed})
-    return {"unused": unused, "expired": expired, "purged": purged, "failed": failed}
+    return sweep_counts(unused=unused, expired=expired, purged=purged, failed=failed)
