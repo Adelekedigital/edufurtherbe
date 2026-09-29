@@ -71,7 +71,7 @@ class GivenAnswer:
 
 
 def answer_problems(
-    asked: Sequence[AskedQuestion], given: Sequence[GivenAnswer]
+    asked: Sequence[AskedQuestion], given: Sequence[GivenAnswer], *, require_answers: bool
 ) -> list[tuple[str, str]]:
     """Every problem with these answers, as `(pointer, message)` — none if valid.
 
@@ -81,6 +81,11 @@ def answer_problems(
     that question**. Then every required, answerable question must be answered.
     The option check is what stops an option id from another offering's form
     being stored against this one.
+
+    **`require_answers` switches off only the last step** — a required question
+    left unanswered. It is configuration (`require_intake_answers`) because the
+    frontend that collects answers ships after this rule does; an answer that is
+    sent is held to the form regardless.
     """
     questions = {q.id: q for q in asked}
     problems: list[tuple[str, str]] = []
@@ -117,7 +122,8 @@ def answer_problems(
                 problems.append((f"{at}/option_ids", "not an option of this question"))
     for question in asked:
         if (
-            question.is_required
+            require_answers
+            and question.is_required
             and question.question_type in ANSWERABLE
             and question.id not in seen
         ):
