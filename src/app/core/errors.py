@@ -101,7 +101,17 @@ class ReviewIntervalError(ConflictError):
 
 
 class ValidationError(AppError):
-    """Input violated a domain rule, as opposed to failing a schema check."""
+    """Input violated a domain rule, as opposed to failing a schema check.
+
+    `field_errors` names the parts of the request at fault as `(pointer,
+    message)` pairs — RFC 6901 pointers into the body, the shape the 422's
+    `errors` member publishes (#195). Empty for a refusal about the request as
+    a whole, which is most of them.
+    """
+
+    def __init__(self, message: str = "", *, field_errors: tuple[tuple[str, str], ...] = ()):
+        super().__init__(message)
+        self.field_errors = field_errors
 
 
 class ConfigurationError(AppError):

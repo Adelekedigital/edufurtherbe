@@ -142,6 +142,7 @@ from app.infra.db.intake_store import (
     create_question,
     delete_question,
     list_questions,
+    questions_by_type,
     reorder_questions,
     update_question,
 )
@@ -2233,7 +2234,7 @@ async def public_mentor(
     return {
         "row": row,
         "offerings": (await offerings_for(session, [user_id])).get(user_id, []),
-        "session_types": await list_session_types(session, user_id) or [],
+        "session_types": await _with_forms(session, await list_session_types(session, user_id)),
         "education": await list_education(session, user_id),
         "scholarships": await list_awards(session, user_id),
         "languages": await list_languages(session, user_id),
@@ -2430,6 +2431,22 @@ async def mentor_session_types(user_id: UUID, session: SessionDep) -> list[dict[
     rows = await list_session_types(session, user_id)
     if rows is None:
         raise NotFoundError("no such mentor")
+    return await _with_forms(session, rows)
+
+
+async def _with_forms(
+    session: AsyncSession, rows: list[dict[str, Any]] | None
+) -> list[dict[str, Any]]:
+    """Public session types with their intake forms attached (#207).
+
+    One place, for both public reads — `/users/{id}/session-types` and the
+    profile's inlined list — so the two cannot disagree about what a mentee is
+    asked. Two queries for the whole page, whatever its size.
+    """
+    rows = rows or []
+    forms = await questions_by_type(session, [row["id"] for row in rows])
+    for row in rows:
+        row["questions"] = forms.get(row["id"], [])
     return rows
 
 

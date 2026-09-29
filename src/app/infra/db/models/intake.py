@@ -248,8 +248,26 @@ class IntakeAnswer(TimestampMixin, Base):
         # so this and any future pair starting at `submission_id` would collide
         # on one name — the defect `base.py` warns about and
         # `mentor_conferencing_options` already hit.
-        UniqueConstraint(
-            "submission_id", "question_id", name="uq_intake_answers_submission_id_question_id"
+        # **One row per chosen option for a multiple-choice answer** (#207): the
+        # CHECK below allows one `selected_option_id` per row, so several options
+        # are several rows. What the old `UNIQUE (submission_id, question_id)`
+        # protected survives as two partial indexes — one text or file answer
+        # per question, and each option chosen once. Partial, so `alembic check`
+        # cannot compare the predicates; a test asserts them.
+        Index(
+            "ux_intake_answers_one_per_question",
+            "submission_id",
+            "question_id",
+            unique=True,
+            postgresql_where=text("selected_option_id IS NULL"),
+        ),
+        Index(
+            "ux_intake_answers_one_per_option",
+            "submission_id",
+            "question_id",
+            "selected_option_id",
+            unique=True,
+            postgresql_where=text("selected_option_id IS NOT NULL"),
         ),
         Index("ix_intake_answers_submission", "submission_id"),
         CheckConstraint(

@@ -29,13 +29,13 @@ was ever high.
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Self, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.schemas.common import Normalised
-from app.api.schemas.intake import QuestionWrite
+from app.api.schemas.intake import QuestionRead, QuestionWrite
 from app.api.schemas.profile import LookupRef
 from app.domain.availability import BOOKING_WINDOW_DAYS, BREAK_AFTER_MINUTES
 from app.domain.enums import ApplicationStage, ConferencingProvider, SessionTypeIcon
@@ -155,6 +155,14 @@ class SessionTypeRead(BaseModel):
             "and an early joiner walks into the previous one."
         ),
     )
+    questions: list[QuestionRead] = Field(
+        default_factory=list,
+        description=(
+            "The intake form a mentee fills in when booking this offering: its live "
+            "questions in order, choice options included. Empty means no form. "
+            "Answer them as `answers` on `POST /api/v1/sessions` (#207)."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> SessionTypeRead:
@@ -172,6 +180,10 @@ class SessionTypeRead(BaseModel):
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
             ),
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
+            questions=[
+                QuestionRead.from_row(q)
+                for q in cast("list[dict[str, object]]", row.get("questions") or [])
+            ],
         )
 
 
