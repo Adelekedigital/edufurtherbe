@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
 from app.domain.credits import credit_ladder
-from conftest import api_token, bearer, build_api_app
+from conftest import api_token, bearer, build_api_app, client_for
 
 #: Built from explicit settings, so these assertions are about the code
 #: rather than about the machine the suite runs on.
@@ -368,8 +368,7 @@ async def test_the_cap_is_the_configured_monthly_grant(
     app = build_api_app(
         db_engine, api_storage, Settings(_env_file=None, credit_monthly_allowance=9)
     )
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with client_for(app) as client:
         auth = uuid4()
         await a_user(db_engine, auth, role="super_admin")
         target = await a_user(db_engine)

@@ -22,7 +22,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.conftest import build_api_app
+from tests.conftest import build_api_app, client_for
 from tests.integration.test_api_booking import a_bookable_offering, a_mentee, body, first_slot, key
 
 from app.core.config import Settings
@@ -249,8 +249,7 @@ async def enforcing_client(
     app = build_api_app(
         db_engine, api_storage, Settings(_env_file=None, require_intake_answers=True)
     )
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with client_for(app) as client:
         yield client
 
 
@@ -361,16 +360,19 @@ async def test_a_retired_question_cannot_be_answered(
 
 
 async def test_a_required_file_question_does_not_block_booking_yet(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+    enforcing_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """File answers are the next PR; until then a required file question must
-    not make the offering unbookable (#207)."""
+    not make the offering unbookable (#207) — **even where required answers are
+    enforced**, which is why it runs on `enforcing_client`."""
     mentor, session_type = await a_bookable_offering(db_engine, "ans-file-required")
     await add_question(
         db_engine, session_type, "Upload your CV", question_type="file_upload", required=True
     )
 
-    response = await book(api_client, db_engine, "ans-file-required", mentor, session_type, [])
+    response = await book(
+        enforcing_client, db_engine, "ans-file-required", mentor, session_type, []
+    )
 
     assert response.status_code == 201
 
