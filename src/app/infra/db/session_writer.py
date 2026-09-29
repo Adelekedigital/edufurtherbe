@@ -228,6 +228,7 @@ async def book_session(
     scheduler: Any = None,
     callback_url: str | None = None,
     external_busy: Any = None,
+    require_answers: bool,
 ) -> UUID:
     """Book ``starts_at`` on an offering, and return the new session's id.
 
@@ -292,7 +293,8 @@ async def book_session(
             )
             for a in answers
         ],
-        await usable_file_ids(session, mentee_id, file_ids),
+        require_answers=require_answers,
+        usable_files=await usable_file_ids(session, mentee_id, file_ids),
     )
     if problems:
         raise ValidationError(

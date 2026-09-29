@@ -185,6 +185,16 @@ class Settings(BaseSettings):
         default=5, ge=1, le=1440, validation_alias=env_key("next_available_max_age_minutes")
     )
 
+    #: Whether a booking must answer every **required** intake question (#207).
+    #: **Off until the frontend's questions step ships** — the live booking flow
+    #: sends no `answers`, so enforcing would refuse every booking of an offering
+    #: with a required question. Everything else about answers is checked either
+    #: way: an answer that *is* sent must fit the form. Turned on per environment
+    #: once the frontend asks for answers (tracked in #283).
+    require_intake_answers: bool = Field(
+        default=False, validation_alias=env_key("require_intake_answers")
+    )
+
     # ``NoDecode`` is load-bearing, not decoration. Without it pydantic-settings
     # JSON-decodes a complex type *inside the settings source*, before any
     # validator runs, and a bare origin typed into a cloud console fails as

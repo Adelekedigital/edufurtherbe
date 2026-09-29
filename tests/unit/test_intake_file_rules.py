@@ -206,39 +206,53 @@ def file_answer(question: AskedQuestion, file_id: object = MINE) -> GivenAnswer:
 
 
 def test_a_file_the_caller_may_use_answers_a_file_question() -> None:
-    assert answer_problems([UPLOAD], [file_answer(UPLOAD)], frozenset({MINE})) == []
+    assert (
+        answer_problems(
+            [UPLOAD], [file_answer(UPLOAD)], require_answers=True, usable_files=frozenset({MINE})
+        )
+        == []
+    )
 
 
 def test_a_file_the_caller_may_not_use_is_refused() -> None:
-    assert answer_problems([UPLOAD], [file_answer(UPLOAD, uuid4())], frozenset({MINE})) == [
-        ("/answers/0/file_id", "not a file you uploaded, or already used")
-    ]
+    assert answer_problems(
+        [UPLOAD],
+        [file_answer(UPLOAD, uuid4())],
+        require_answers=True,
+        usable_files=frozenset({MINE}),
+    ) == [("/answers/0/file_id", "not a file you uploaded, or already used")]
 
 
 def test_one_file_cannot_answer_two_questions() -> None:
     problems = answer_problems(
         [UPLOAD, SECOND_UPLOAD],
         [file_answer(UPLOAD), file_answer(SECOND_UPLOAD)],
-        frozenset({MINE}),
+        require_answers=True,
+        usable_files=frozenset({MINE}),
     )
     assert problems == [("/answers/1/file_id", "this file already answers another question")]
 
 
 def test_text_for_a_file_question_is_refused() -> None:
     answer = GivenAnswer(question_id=UPLOAD.id, text="my cv", option_ids=None)
-    assert answer_problems([UPLOAD], [answer], frozenset({MINE})) == [
-        ("/answers/0", "this question takes `file_id`")
-    ]
+    assert answer_problems(
+        [UPLOAD], [answer], require_answers=True, usable_files=frozenset({MINE})
+    ) == [("/answers/0", "this question takes `file_id`")]
 
 
 def test_a_file_and_text_together_are_refused() -> None:
     answer = GivenAnswer(question_id=UPLOAD.id, text="x", option_ids=None, file_id=MINE)
-    assert answer_problems([UPLOAD], [answer], frozenset({MINE})) == [
-        ("/answers/0", "give exactly one of `text`, `option_ids` or `file_id`")
-    ]
+    assert answer_problems(
+        [UPLOAD], [answer], require_answers=True, usable_files=frozenset({MINE})
+    ) == [("/answers/0", "give exactly one of `text`, `option_ids` or `file_id`")]
 
 
 def test_a_required_file_question_must_be_answered() -> None:
-    assert answer_problems([UPLOAD], [], frozenset({MINE})) == [
+    assert answer_problems([UPLOAD], [], require_answers=True, usable_files=frozenset({MINE})) == [
         ("/answers", f"question {UPLOAD.id} is required")
     ]
+
+
+def test_a_required_file_question_waits_while_enforcement_is_off() -> None:
+    """The switch (#283) covers file questions through the same final step."""
+    assert answer_problems([UPLOAD], [], require_answers=False, usable_files=frozenset()) == []

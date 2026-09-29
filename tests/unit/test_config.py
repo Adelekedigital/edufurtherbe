@@ -104,12 +104,14 @@ def test_the_unprefixed_keys_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:pw@localhost:5432/db")
     monkeypatch.setenv("CORS_ORIGINS", "https://app.example")
+    monkeypatch.setenv("REQUIRE_INTAKE_ANSWERS", "true")
 
     settings = Settings(_env_file=None)
 
     assert settings.supabase_url == "https://project.supabase.co"
     assert settings.database_url is not None
     assert settings.cors_origins == ["https://app.example"]
+    assert settings.require_intake_answers is True
 
 
 def test_database_url_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:

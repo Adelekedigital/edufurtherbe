@@ -149,6 +149,15 @@ def build_api_app(
     return app
 
 
+def client_for(app: Any) -> httpx.AsyncClient:
+    """An ASGI client for `app` — the one way a test talks to an app it built.
+
+    Used as `async with client_for(app) as client:` by `api_client` and by every
+    test that builds its own app to change what it is configured with.
+    """
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
 @pytest_asyncio.fixture
 async def api_client(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
@@ -165,9 +174,7 @@ async def api_client(
     one.
     """
     app = build_api_app(db_engine, api_storage, Settings(_env_file=None))
-
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+    async with client_for(app) as async_client:
         yield async_client
 
 

@@ -69,6 +69,8 @@ class GivenAnswer:
 def answer_problems(
     asked: Sequence[AskedQuestion],
     given: Sequence[GivenAnswer],
+    *,
+    require_answers: bool,
     usable_files: frozenset[UUID] = frozenset(),
 ) -> list[tuple[str, str]]:
     """Every problem with these answers, as `(pointer, message)` — none if valid.
@@ -81,6 +83,11 @@ def answer_problems(
     every required question must be answered, whatever its type. The option
     and file checks are what stop an id from another form, or another user,
     being stored against this booking.
+
+    **`require_answers` switches off only the last step** — a required question
+    left unanswered, file questions included. It is configuration
+    (`require_intake_answers`) because the frontend that collects answers ships
+    after this rule does; an answer that is sent is held to the form regardless.
     """
     questions = {q.id: q for q in asked}
     problems: list[tuple[str, str]] = []
@@ -125,6 +132,6 @@ def answer_problems(
             elif not set(chosen) <= question.option_ids:
                 problems.append((f"{at}/option_ids", "not an option of this question"))
     for question in asked:
-        if question.is_required and question.id not in seen:
+        if require_answers and question.is_required and question.id not in seen:
             problems.append(("/answers", f"question {question.id} is required"))
     return problems

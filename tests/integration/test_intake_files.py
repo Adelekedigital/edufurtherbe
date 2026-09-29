@@ -20,7 +20,10 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_booking import a_bookable_offering, a_mentee, body, first_slot, key
-from tests.integration.test_booking_answers import add_question
+from tests.integration.test_booking_answers import (  # noqa: F401 - enforcing_client is a fixture
+    add_question,
+    enforcing_client,
+)
 
 from app.core.config import Settings
 from app.domain.enums import IntakeFileType
@@ -33,6 +36,7 @@ from conftest import (
     api_token,
     bearer,
     build_api_app,
+    client_for,
     docx_bytes,
     storage_for,
 )
@@ -52,13 +56,12 @@ def intake_settings(**overrides: Any) -> Settings:
     return Settings(_env_file=None, supabase_intake_bucket=BUCKET, **overrides)
 
 
-async def client_for(
+async def intake_client(
     engine: AsyncEngine, fake: FakeStorage, settings: Settings
 ) -> AsyncIterator[httpx.AsyncClient]:
     app = build_api_app(engine, None, settings)
     app.state.intake_storage = storage_for(fake)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with client_for(app) as client:
         yield client
 
 
@@ -66,7 +69,7 @@ async def client_for(
 async def files_client(
     db_engine: AsyncEngine, intake_fake: FakeStorage
 ) -> AsyncIterator[httpx.AsyncClient]:
-    async for client in client_for(db_engine, intake_fake, intake_settings()):
+    async for client in intake_client(db_engine, intake_fake, intake_settings()):
         yield client
 
 
@@ -182,7 +185,7 @@ async def test_a_file_over_the_configured_limit_is_refused(
 ) -> None:
     _, headers = await a_mentee(db_engine, "file-big")
     settings = intake_settings(intake_file_max_bytes=len(PDF_BYTES))
-    async for client in client_for(db_engine, intake_fake, settings):
+    async for client in intake_client(db_engine, intake_fake, settings):
         exact = await upload(client, headers)
         over = await upload(client, headers, payload=PDF_BYTES + b" ")
 
@@ -196,7 +199,7 @@ async def test_an_unconfigured_bucket_refuses_as_misconfigured(
     db_engine: AsyncEngine, intake_fake: FakeStorage
 ) -> None:
     _, headers = await a_mentee(db_engine, "file-nobucket")
-    async for client in client_for(db_engine, intake_fake, Settings(_env_file=None)):
+    async for client in intake_client(db_engine, intake_fake, Settings(_env_file=None)):
         response = await upload(client, headers)
 
     assert response.status_code == 500
@@ -285,11 +288,13 @@ async def test_a_file_answers_the_question_and_is_linked_to_the_booking(
 
 
 async def test_a_required_file_question_blocks_a_booking_without_one(
-    files_client: httpx.AsyncClient, db_engine: AsyncEngine
+    enforcing_client: httpx.AsyncClient,  # noqa: F811 - the imported fixture
+    db_engine: AsyncEngine,
 ) -> None:
+    """Where required answers are enforced (#283), a file question is one."""
     mentor, session_type, _, headers = await booking_with_file(db_engine, "file-required")
 
-    response = await book(files_client, mentor, session_type, headers, [])
+    response = await book(enforcing_client, mentor, session_type, headers, [])
 
     assert response.status_code == 422, response.text
     assert [e["pointer"] for e in response.json()["errors"]] == ["/answers"]
