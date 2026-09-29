@@ -367,8 +367,10 @@ class MentorProfileWrite(Normalised):
     #: client omits never reaches the writer and the default below is never
     #: read; what `| None` bought was not optionality but the right to send an
     #: explicit `null`, which `_sent` forwarded to a `NOT NULL` column as a 500.
-    #: A 422 is the correct answer to a value the column cannot hold.
-    requires_booking_confirmation: bool = False
+    #: A 422 is the correct answer to a value the column cannot hold. The default
+    #: is the column's (`false`); none is published, because a spec `default`
+    #: makes generated clients type the field as always sent (`test_patch_bodies`).
+    requires_booking_confirmation: bool = Field(default=None)  # type: ignore[assignment]
     #: The defaults every offering inherits unless it sets its own (#204); null
     #: means the platform's — the full horizon, and no break.
     booking_window_days: int | None = Field(
