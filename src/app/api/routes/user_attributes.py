@@ -28,6 +28,7 @@ from app.api.deps import (
     GoalDep,
     MentorProfileDep,
     PausedSelfDep,
+    RemovedBannerDep,
     ReplacedLanguagesDep,
     ResumedSelfDep,
     UpdatedAwardDep,
@@ -461,3 +462,16 @@ async def upload_avatar(uploaded: UploadedAvatarDep) -> AvatarUploadRead:
 )
 async def upload_banner(url: UploadedBannerDep) -> dict[str, str]:
     return {"banner_url": url}
+
+
+@router.delete(
+    "/banner",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove the profile banner",
+    description=(
+        "Unsets the banner, so the cover shows `cover_color` and `cover_art` again, "
+        "and deletes the stored image. `204` whether or not there was one."
+    ),
+)
+async def remove_banner(_: RemovedBannerDep) -> None:
+    return None

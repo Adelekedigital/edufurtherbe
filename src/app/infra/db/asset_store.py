@@ -157,6 +157,24 @@ async def replace_url(
     return previous
 
 
+async def clear_banner(session: AsyncSession, user_id: UUID) -> str | None:
+    """Unset the banner; return the URL it held, or ``None`` if there was none.
+
+    The design's "Remove image": the cover falls back to `cover_color` and
+    `cover_art`. The row is locked while the old URL is read, so two removals
+    cannot both report the same object for deletion — the second finds nothing.
+    Does not commit; the caller deletes the object after it has.
+    """
+    found = await session.execute(
+        select(Profile.banner_url).where(Profile.user_id == user_id).with_for_update()
+    )
+    previous = found.scalar_one_or_none()
+    if previous is None:
+        return None
+    await session.execute(update(Profile).where(Profile.user_id == user_id).values(banner_url=None))
+    return str(previous)
+
+
 async def store_image(
     session: AsyncSession,
     storage: SupabaseStorage,

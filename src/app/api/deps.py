@@ -116,7 +116,7 @@ from app.infra.db.admin_store import (
     pending_institutions,
     pending_mentors,
 )
-from app.infra.db.asset_store import store_image, stored_avatar_focus
+from app.infra.db.asset_store import clear_banner, store_image, stored_avatar_focus
 from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.availability_writer import (
     create_exception,
@@ -1294,17 +1294,24 @@ async def _store_image(
     url, previous = await store_image(session, storage, kind, user_id, payload)
     await session.commit()
 
-    # **After the commit, and never fatal.** The profile already points at the
-    # new object, so a failure here leaves an orphan rather than a broken
-    # profile — and an upload that already succeeded must not report failure
-    # because a cleanup did not.
     if previous and previous != url:
-        old_path = storage.path_of(previous)
-        if old_path is not None:
-            with suppress(StorageError):
-                await run_in_threadpool(storage.delete, old_path)
+        await _drop_object(storage, previous)
 
     return url
+
+
+async def _drop_object(storage: SupabaseStorage, url: str) -> None:
+    """Delete the object an image URL names, **after the commit and never fatal**.
+
+    The profile no longer points at it, so a failure here leaves an orphan
+    rather than a broken profile — and a change that already succeeded must not
+    report failure because a cleanup did not. A URL outside this bucket (a
+    legacy Bubble one) has no path here and is left alone.
+    """
+    path = storage.path_of(url)
+    if path is not None:
+        with suppress(StorageError):
+            await run_in_threadpool(storage.delete, path)
 
 
 async def uploaded_avatar(
@@ -1327,8 +1334,18 @@ async def uploaded_banner(
     return await _store_image(AssetKind.BANNER, file, user_id, session, request)
 
 
+async def removed_banner(request: Request, user_id: OwnerDep, session: SessionDep) -> None:
+    """Unset the owner's banner, then delete its object. Idempotent."""
+    previous = await clear_banner(session, user_id)
+    await session.commit()
+    if previous is not None:
+        storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
+        await _drop_object(storage, previous)
+
+
 UploadedAvatarDep = Annotated[tuple[str, tuple[object, object]], Depends(uploaded_avatar)]
 UploadedBannerDep = Annotated[str, Depends(uploaded_banner)]
+RemovedBannerDep = Annotated[None, Depends(removed_banner)]
 
 
 # --------------------------------------------------------------------------

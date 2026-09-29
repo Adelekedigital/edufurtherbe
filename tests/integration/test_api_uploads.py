@@ -757,3 +757,70 @@ async def test_the_upload_response_reports_what_is_stored_not_what_was_detected(
     ).json()
 
     assert body["avatar_focus"] == pytest.approx({"x": 0.1, "y": 0.9})
+
+
+# --------------------------------------------------------------------------
+# removing the banner
+# --------------------------------------------------------------------------
+
+
+async def test_removing_the_banner_clears_it_and_deletes_the_object(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """The design's "Remove image": the cover falls back to its colour and art."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "unbanner@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(
+        url(user_id, "avatar"), files=upload(image_bytes("JPEG", (300, 300))), headers=headers
+    )
+    await api_client.post(
+        url(user_id, "banner"), files=upload(image_bytes("JPEG", (600, 400))), headers=headers
+    )
+    avatar_path, banner_path = fake_storage.uploads
+
+    response = await api_client.delete(url(user_id, "banner"), headers=headers)
+
+    assert response.status_code == 204, response.text
+    avatar, banner = await stored_urls(db_engine, user_id)
+    assert banner is None
+    assert avatar is not None and avatar.endswith(avatar_path), "the avatar was touched"
+    assert fake_storage.deletes == [banner_path]
+    assert avatar_path in fake_storage.objects
+
+
+async def test_removing_a_banner_that_is_not_there_is_a_quiet_204(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """Idempotent: a double tap, or a user with no profile row yet, is not an error."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "nobanner@example.com")
+
+    response = await api_client.delete(url(user_id, "banner"), headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 204, response.text
+    assert fake_storage.deletes == []
+    assert await stored_urls(db_engine, user_id) == (None, None)
+
+
+async def test_one_user_cannot_remove_another_users_banner(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    victim_auth, attacker_auth = uuid4(), uuid4()
+    victim = await make_user(db_engine, victim_auth, "victim-unbanner@example.com")
+    await make_user(db_engine, attacker_auth, "attacker-unbanner@example.com")
+    await api_client.post(
+        url(victim, "banner"),
+        files=upload(image_bytes("JPEG", (600, 400))),
+        headers=bearer(api_token(victim_auth)),
+    )
+
+    anonymous = await api_client.delete(url(victim, "banner"))
+    response = await api_client.delete(
+        url(victim, "banner"), headers=bearer(api_token(attacker_auth))
+    )
+
+    assert anonymous.status_code == 401, anonymous.text
+    assert response.status_code == 404, response.text
+    assert fake_storage.deletes == []
+    assert (await stored_urls(db_engine, victim))[1] is not None
