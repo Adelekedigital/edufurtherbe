@@ -613,11 +613,16 @@ async def update_session_type(
     # so two requests featuring two different offerings serialise: each clears
     # "the others" and sets its own, and interleaved they would meet on
     # `ix_session_types_one_featured` as a 500. The order is what keeps two of
-    # them from deadlocking on each other's rows.
+    # them from deadlocking on each other's rows. **Scheduled rows are left
+    # out**: they cannot be featured, and locking them would make a feature wait
+    # on — or deadlock with — the settle run finalising them (#218).
     if payload.get("is_featured") is True:
         await session.execute(
             select(SessionType.id)
-            .where(SessionType.mentor_user_id == mentor_user_id, SessionType.deleted_at.is_(None))
+            .where(
+                *session_type_of(mentor_user_id),
+                SessionType.deletion_scheduled_at.is_(None),
+            )
             .order_by(SessionType.id)
             .with_for_update()
         )
@@ -640,10 +645,9 @@ async def update_session_type(
         await session.execute(
             update(SessionType)
             .where(
-                SessionType.mentor_user_id == mentor_user_id,
+                *session_type_of(mentor_user_id),
                 SessionType.id != session_type_id,
                 SessionType.is_featured.is_(True),
-                SessionType.deleted_at.is_(None),
             )
             .values(is_featured=False)
         )
