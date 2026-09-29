@@ -173,7 +173,7 @@ async def test_a_switched_off_offering_can_still_be_deleted(
 
 
 @pytest.mark.parametrize("live_status", ["pending_mentor_approval", "confirmed"])
-async def test_a_live_session_refuses_the_delete(
+async def test_a_live_session_schedules_the_delete(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, live_status: str
 ) -> None:
     """**One test per status, because `LIVE_STATUSES` has two members.**
@@ -187,19 +187,20 @@ async def test_a_live_session_refuses_the_delete(
     session_type = await add_session_type(db_engine, mentor, name="Booked")
     await book(db_engine, mentor, session_type, status=live_status)
 
-    refused = await api_client.delete(f"{URL}/{session_type}", headers=bearer(api_token(auth_id)))
+    scheduled = await api_client.delete(f"{URL}/{session_type}", headers=bearer(api_token(auth_id)))
 
-    assert refused.status_code == 409, refused.text
+    # Scheduled rather than refused since round 4 (#218); was a 409 (#197).
+    assert scheduled.status_code == 202, scheduled.text
 
 
-async def test_a_refused_delete_leaves_the_offering_alone(
+async def test_a_scheduled_delete_keeps_the_offering_for_its_sessions(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """**The silent failure is a 409 that deleted anyway.**
+    """**The silent failure is a schedule that deleted anyway.**
 
-    Asserting the status alone would pass against a store that raised after
-    writing, or that wrote and then raised on the way out — and the offering
-    would be gone from every read while the client believed it had been kept.
+    Asserting the status alone would pass against a store that deleted and then
+    answered `202` — and the offering the booked sessions point at would be gone
+    from the mentor's list while they believed it was waiting (#218).
     """
     mentor, auth_id = await as_mentor(db_engine, "refuse-intact")
     session_type = await add_session_type(db_engine, mentor, name="Booked")

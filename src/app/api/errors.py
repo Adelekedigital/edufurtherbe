@@ -33,7 +33,6 @@ from app.core.errors import (
     NotFoundError,
     OnboardingIncompleteError,
     ReviewIntervalError,
-    SessionTypeHasBookingsError,
     UpstreamError,
 )
 from app.core.errors import ValidationError as DomainValidationError
@@ -84,7 +83,6 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     OnboardingIncompleteError: "/problems/onboarding-incomplete",
     AlreadyReviewedError: "/problems/review-already-exists",
     ReviewIntervalError: "/problems/review-interval-not-elapsed",
-    SessionTypeHasBookingsError: "/problems/session-type-has-bookings",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx
