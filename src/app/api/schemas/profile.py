@@ -19,6 +19,7 @@ from app.api.schemas.availability import validated_zone
 from app.api.schemas.catalogue import CountryRef, InstitutionRead
 from app.api.schemas.common import (
     AvatarFocusRead,
+    AvatarFocusWrite,
     LinkedInWrite,
     Normalised,
     XWrite,
@@ -353,6 +354,10 @@ class MentorProfileWrite(Normalised):
     offering_ids: list[UUID] | None = None
 
 
+#: A person's first or last name, trimmed. Generous: legal names run long.
+MAX_NAME_LENGTH = 100
+
+
 class UserProfileWrite(Normalised):
     """The profile fields a user may set about themselves.
 
@@ -372,9 +377,39 @@ class UserProfileWrite(Normalised):
     candidate for removal alongside the enum conversion.
     """
 
+    #: **`str`, not `str | None`**, so a name can be changed and never cleared:
+    #: an explicit `null` — or a blank, which `Normalised` turns into one — is a
+    #: `422`, the rule `timezone` follows. Omitted leaves it alone. On `users`,
+    #: written in the same transaction; the slug is never derived from it, so a
+    #: rename keeps every shared profile link (#211).
+    #:
+    #: The `None` default is never validated or written — the writer takes
+    #: `exclude_unset` — and it is what lets the spec say "a string, optional"
+    #: rather than "nullable", which is the contract. Hence the three ignores.
+    first_name: str = Field(  # type: ignore[assignment]
+        default=None,
+        max_length=MAX_NAME_LENGTH,
+        description="Your first name, as shown on your profile. Cannot be cleared.",
+    )
+    last_name: str = Field(  # type: ignore[assignment]
+        default=None,
+        max_length=MAX_NAME_LENGTH,
+        description="Your last name. Cannot be cleared.",
+    )
     about_me: str | None = Field(default=None, max_length=5000)
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None
+    #: A mentor's own crop (#212): overrides the detected face and survives the
+    #: backfill. Needs a photo — there is nothing to centre without one — and a
+    #: new photo replaces it, since a crop of the old picture means nothing on
+    #: the new one. `null` is a `422`: a choice is replaced, not unset.
+    avatar_focus: AvatarFocusWrite = Field(  # type: ignore[assignment]
+        default=None,
+        description=(
+            "Where to centre your photo, as 0..1 fractions of the image — the same "
+            "shape `avatar_focus` is read in. Needs a photo; a new photo replaces it."
+        ),
+    )
     cover_color: CoverColor | None = Field(
         default=None,
         description=(

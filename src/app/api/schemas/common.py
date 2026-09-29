@@ -19,7 +19,14 @@ import binascii
 from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 from app.core.errors import ValidationError
 from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
@@ -56,6 +63,17 @@ class AvatarFocusRead(BaseModel):
         if x is None or y is None:
             return None
         return cls(x=float(str(x)), y=float(str(y)))
+
+
+class AvatarFocusWrite(AvatarFocusRead):
+    """A mentor's own choice of where to centre their photo — the read's shape.
+
+    The same bounds as the read, because it *is* the read: a point the client
+    shows is a point it may send back. Stored to the column's precision
+    (`domain.avatar_focus.PLACES`), which is what the read returns.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class Page[T](BaseModel):
