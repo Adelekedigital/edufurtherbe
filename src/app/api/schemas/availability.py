@@ -29,7 +29,7 @@ from app.domain.enums import AvailabilityExceptionType
 DayOfWeek = Annotated[int, Field(ge=0, le=6, description="0 = Sunday, 6 = Saturday")]
 
 
-def _validated_zone(value: str) -> str:
+def validated_zone(value: str) -> str:
     """Validated **at the boundary**, per settled decision #36.
 
     The column is `text` with no CHECK — `pg_timezone_names` is not immutable, so
@@ -55,7 +55,7 @@ class _ZoneMixin(Normalised):
     @field_validator("timezone")
     @classmethod
     def _known_zone(cls, value: str) -> str:
-        return _validated_zone(value)
+        return validated_zone(value)
 
 
 class AvailabilityRuleWrite(_ZoneMixin):
@@ -98,7 +98,7 @@ class AvailabilityRulePatch(BaseModel):
     def _known_zone_if_sent(cls, value: str | None) -> str | None:
         """Absent is not null: a patch that never mentions the zone leaves it
         alone, and one that does gets exactly the check a create gets."""
-        return None if value is None else _validated_zone(value)
+        return None if value is None else validated_zone(value)
 
 
 class AvailabilityRuleRead(BaseModel):
