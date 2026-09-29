@@ -14,6 +14,7 @@ different sequence and look almost right.
 from __future__ import annotations
 
 import base64
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -40,6 +41,15 @@ async def ids(client: httpx.AsyncClient, url: str = URL) -> list[str]:
     response = await client.get(url)
     assert response.status_code == 200, response.text
     return [row["id"] for row in response.json()["data"]]
+
+
+async def card(client: httpx.AsyncClient, mentor: UUID, url: str = URL) -> dict[str, Any]:
+    """The mentor's card on the first page — present, or the test fails."""
+    response = await client.get(url)
+    assert response.status_code == 200, response.text
+    found = [row for row in response.json()["data"] if row["id"] == str(mentor)]
+    assert found, "a listed mentor is missing from Explore (#219)"
+    return dict(found[0])
 
 
 async def give_offering(engine: AsyncEngine, mentor: UUID, slug: str) -> None:
@@ -152,18 +162,23 @@ async def test_a_soft_deleted_mentor_is_absent(
     assert str(mentor) not in await ids(api_client)
 
 
-async def test_a_mentor_with_no_session_type_is_absent(
+# **Listed, but not taking bookings** (#219, amending #192): each is still on
+# Explore, and its card says it cannot be booked rather than disappearing.
+
+
+async def test_a_mentor_with_no_session_type_is_listed_not_taking_bookings(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Nothing to book. `/slots` would 404, and a card linking to a 404 is worse
-    than no card."""
     mentor = await make_public_mentor(db_engine, "no-type")
     await add_availability(db_engine, mentor)
 
-    assert str(mentor) not in await ids(api_client)
+    found = await card(api_client, mentor)
+
+    assert found["taking_bookings"] is False
+    assert found["next_available_state"] == "none"
 
 
-async def test_a_mentor_whose_offering_has_no_booking_config_is_absent(
+async def test_a_mentor_whose_offering_has_no_booking_config_is_not_taking_bookings(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """A session type without a config has no duration, so it has no slot length.
@@ -172,11 +187,11 @@ async def test_a_mentor_whose_offering_has_no_booking_config_is_absent(
     await add_session_type(db_engine, mentor, config=False)
     await add_availability(db_engine, mentor)
 
-    assert str(mentor) not in await ids(api_client)
+    assert (await card(api_client, mentor))["taking_bookings"] is False
 
 
 @pytest.mark.parametrize("how", ["none", "inactive", "deleted"])
-async def test_a_mentor_with_no_live_hours_is_absent(
+async def test_a_mentor_with_no_live_hours_is_not_taking_bookings(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, how: str
 ) -> None:
     """Rules are *recurring weekly*, so having none does not mean "nothing free
@@ -188,18 +203,26 @@ async def test_a_mentor_with_no_live_hours_is_absent(
     elif how == "deleted":
         await add_availability(db_engine, mentor, deleted=True)
 
-    assert str(mentor) not in await ids(api_client)
+    assert (await card(api_client, mentor))["taking_bookings"] is False
 
 
 @pytest.mark.parametrize("how", ["inactive", "deleted"])
-async def test_a_mentor_whose_only_offering_is_gone_is_absent(
+async def test_a_mentor_whose_only_offering_is_gone_is_not_taking_bookings(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, how: str
 ) -> None:
     mentor = await make_public_mentor(db_engine, f"dead-type-{how}")
     await add_session_type(db_engine, mentor, active=how != "inactive", deleted=how == "deleted")
     await add_availability(db_engine, mentor)
 
-    assert str(mentor) not in await ids(api_client)
+    assert (await card(api_client, mentor))["taking_bookings"] is False
+
+
+async def test_a_bookable_mentor_is_taking_bookings(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "taking")
+
+    assert (await card(api_client, mentor))["taking_bookings"] is True
 
 
 # --------------------------------------------------------------------------
@@ -405,7 +428,7 @@ async def test_paging_follows_when_a_mentor_became_one_after_someone_else(
     assert set(seen) == {str(u) for u in users}
 
 
-async def test_no_bookable_mentors_is_an_empty_page_not_an_error(
+async def test_nobody_listed_is_an_empty_page_not_an_error(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """The state a brand-new deployment is in, and the only path that reaches
@@ -418,7 +441,7 @@ async def test_no_bookable_mentors_is_an_empty_page_not_an_error(
     An empty collection is a `200`. A `404` would say the endpoint does not
     exist, which is a different and wrong claim.
     """
-    await make_public_mentor(db_engine, "not-set-up")  # listed, but nothing to book
+    await make_public_mentor(db_engine, "not-listed", listed=False)
 
     response = await api_client.get(URL)
 
@@ -682,13 +705,13 @@ async def test_search_applies_the_same_visibility_as_browse(
     assert str(mentor) not in await ids(api_client, f"{URL}?q=Ada")
 
 
-async def test_search_applies_the_same_bookable_rule_as_browse(
+async def test_search_applies_the_same_visibility_rule_as_browse(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_public_mentor(db_engine, "q-unbookable")
     await add_availability(db_engine, mentor)  # hours, but nothing to book
 
-    assert str(mentor) not in await ids(api_client, f"{URL}?q=Ada")
+    assert (await card(api_client, mentor, f"{URL}?q=Ada"))["taking_bookings"] is False
 
 
 async def test_a_blank_q_browses_rather_than_searching(
@@ -1047,11 +1070,12 @@ async def test_the_total_is_how_many_mentors_the_pages_list(
 ) -> None:
     for n in range(3):
         await make_bookable_mentor(db_engine, f"total-{n}")
-    await make_public_mentor(db_engine, "total-not-bookable")
+    await make_public_mentor(db_engine, "total-not-bookable")  # listed: counted (#219)
+    await make_public_mentor(db_engine, "total-unlisted", listed=False)
 
     total, seen = await walk(api_client, "")
 
-    assert total == len(seen) == 3
+    assert total == len(seen) == 4
 
 
 async def test_the_total_counts_only_what_the_offering_filter_lists(

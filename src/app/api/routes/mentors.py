@@ -51,10 +51,10 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_404_NOT_FOUND: {
         "description": (
             "No such mentor. Covers a handle that is nobody, a user who is not a "
-            "mentor, an unapproved or unlisted one, one who cannot be booked (no "
-            "active offering or no weekly hours), and a soft-deleted profile or "
+            "mentor, an unapproved or unlisted one, and a soft-deleted profile or "
             "account — indistinguishable on purpose, because telling them apart "
-            "says which mentors exist and what state they are in."
+            "says which mentors exist and what state they are in. A mentor who "
+            "cannot be booked is not a `404`: see `taking_bookings`."
         )
     },
 }
@@ -81,14 +81,13 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         "The order is the server's: don't re-sort on the client. Any problem "
         "with the token gives the public list, never an error. Responses send "
         "`Vary: Authorization`, and `Cache-Control: private` when a token came.\n\n"
-        "**Bookable, not available.** A mentor appears while they are approved, "
-        "listed, and set up: at least one active offering with a duration, and "
-        "at least one weekly availability window. It says nothing about *when* "
-        "they are free — a mentor booked solid for a month still appears, "
-        "because they exist and they take this kind of work. Ask "
+        "**Listed, not available.** A mentor appears while they are approved "
+        "and listed, whether or not they can be booked. Each card's "
+        "`taking_bookings` says whether they can: `true` needs an active "
+        'offering with a duration and weekly hours; `false` shows "Not taking '
+        'bookings". It says nothing about *when* they are free — a mentor '
+        "booked solid for a month still appears. Ask "
         "`/users/{id}/availability/slots` for the calendar.\n\n"
-        "A mentor who has not finished setting up does not appear here at all, "
-        "though their profile still resolves by direct link.\n\n"
         "**`next_available_at`** is when the mentor is next bookable, stored and "
         "refreshed every few minutes (ADR 0029) — a display hint; booking always "
         "reads live slots. It is non-null only when `next_available_state` is "
@@ -133,16 +132,16 @@ async def find_mentors(page: MentorPageDep) -> MentorPage:
         "Everything the public may read about one mentor, with what they offer "
         "and what can be booked.\n\n"
         "**Public.** No token is required — a mentee compares mentors before "
-        "signing up. A mentor appears only while they are approved, listed "
-        "**and bookable** — an active offering and weekly hours — the same "
-        "mentors `/mentors` lists; pausing or removing their hours removes them "
-        "from here as well as from search, and setting hours brings them back "
-        "with no other step.\n\n"
+        "signing up. A mentor appears while they are approved and listed — the "
+        "same mentors `/mentors` lists — whether or not they can be booked. "
+        "`taking_bookings` says whether anyone can book them now; when it is "
+        "`false` (no active offering, or no weekly hours) the profile still "
+        'loads and shows "Not taking bookings".\n\n'
         "**Except to themselves.** With a bearer token, a mentor reads their own "
         "profile in any state — pending, declined or unlisted — and the response "
         "adds `approval_status` and `listing_status`, which nobody else ever "
         "receives, plus `setup_needed` (`session_type`, `weekly_hours`) naming "
-        "what stops the profile being live. An unpublished profile's "
+        "what stops them taking bookings. An unpublished profile's "
         "`session_types` is empty and its "
         "`next_available_state` is `none`: strangers can book none of it.\n\n"
         "**`handle` is an id or a slug.** The slug is the legacy public profile "
@@ -180,8 +179,8 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
     description=(
         "One page of published reviews, newest first.\n\n"
         "**Public**, like the profile it belongs to, and scoped the same way: a "
-        "mentor who is paused, unapproved or cannot be booked answers `404` "
-        "here exactly as they do there.\n\n"
+        "mentor who is unlisted or unapproved answers `404` here exactly as they "
+        "do there. One who is not taking bookings is still public.\n\n"
         "**Attribution is a first name and an initial.** The surname is never "
         "sent.\n\n"
         "**A reviewer who has deleted their account stays listed, unnamed.** "
@@ -225,12 +224,12 @@ async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
     response_model=Page[SimilarMentorRead],
     summary="Mentors who give the same kind of help",
     description=(
-        "Up to three bookable mentors who share a service offering with this "
+        "Up to three listed mentors who share a service offering with this "
         "one, as discovery cards, each with the `shared_offering` that makes "
         "them similar.\n\n"
         "**Public, and served for a hidden mentor too.** A visitor who opens the "
-        "link of a mentor who is pending, unlisted or unbookable cannot see the "
-        "profile (`404`), and this page offers similar live mentors in its place. "
+        "link of a mentor who is pending or unlisted cannot see the profile "
+        "(`404`), and this page offers similar listed mentors in its place. "
         "Every viewer gets the same answer.\n\n"
         "**Never a `404`.** A handle that is nobody, a deleted mentor, or a user "
         "who is not a mentor is an empty `data`, so this endpoint cannot say which "
@@ -238,8 +237,9 @@ async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
         'mentors" state.\n\n'
         "**Ranked** by how many offerings are shared, then delivered sessions, "
         "then review count, then newest profile — a total order, so a refresh "
-        "never reshuffles. Candidates are exactly who `/mentors` lists: public "
-        "and bookable, never the mentor themself.\n\n"
+        "never reshuffles. Candidates are exactly who `/mentors` lists: approved "
+        "and listed, each card carrying `taking_bookings`, never the mentor "
+        "themself.\n\n"
         "**An empty `data`** when the mentor gives no offering or nobody "
         "shares one. `next_cursor` is always null: there is no second page."
     ),

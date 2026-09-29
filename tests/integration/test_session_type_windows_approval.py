@@ -254,7 +254,7 @@ async def test_a_mentor_with_only_offering_windows_is_live(
     assert str(mentor) in listed
 
 
-async def test_windows_on_a_switched_off_offering_do_not_make_a_mentor_live(
+async def test_windows_on_a_switched_off_offering_do_not_make_a_mentor_bookable(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = (await as_mentor(db_engine, "windows-inactive"))[0]
@@ -270,7 +270,10 @@ async def test_windows_on_a_switched_off_offering_do_not_make_a_mentor_live(
             {"t": offering, "z": LAGOS},
         )
 
-    assert (await api_client.get(f"/api/v1/mentors/{mentor}")).status_code == 404
+    response = await api_client.get(f"/api/v1/mentors/{mentor}")
+
+    assert response.status_code == 200  # visible either way since #219
+    assert response.json()["taking_bookings"] is False
 
 
 async def test_unknown_offering_id_is_not_found(

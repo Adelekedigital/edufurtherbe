@@ -83,14 +83,14 @@ async def test_the_mentor_is_never_similar_to_themself(
     assert body["data"] == []
 
 
-async def test_only_bookable_public_mentors_are_suggested(
+async def test_only_visible_mentors_are_suggested(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Discovery's own predicates: a suggestion that 404s, or that nobody can
-    book, is worse than no suggestion."""
+    """Discovery's own predicate: a suggestion that 404s is worse than none. One
+    not taking bookings is visible (#219) and says so on its card."""
     me = await mentor_with(db_engine, "gate-me", TEST_PREP)
     shown = await mentor_with(db_engine, "gate-shown", TEST_PREP)
-    await mentor_with(db_engine, "gate-unbookable", TEST_PREP, bookable=False)
+    idle = await mentor_with(db_engine, "gate-unbookable", TEST_PREP, bookable=False)
     hidden = await mentor_with(db_engine, "gate-hidden", TEST_PREP)
     async with db_engine.begin() as conn:
         await conn.execute(
@@ -100,7 +100,9 @@ async def test_only_bookable_public_mentors_are_suggested(
 
     body = (await api_client.get(url(me))).json()
 
-    assert ids(body) == [str(shown)]
+    assert sorted(ids(body)) == sorted([str(shown), str(idle)])
+    taking = {card["id"]: card["taking_bookings"] for card in body["data"]}  # type: ignore[attr-defined]
+    assert taking == {str(shown): True, str(idle): False}
 
 
 async def test_more_shared_offerings_rank_first(
@@ -181,7 +183,6 @@ async def auth_of(engine: AsyncEngine, user: UUID) -> dict[str, str]:
     [
         pytest.param({"approved": False}, id="pending"),
         pytest.param({"listed": False}, id="unlisted"),
-        pytest.param({}, id="unbookable"),
     ],
 )
 async def test_a_hidden_mentor_still_gets_suggestions(
