@@ -22,16 +22,19 @@ from uuid import UUID
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import add_session_type, make_public_mentor
 from tests.integration.test_api_me_session_type_delete import URL, as_mentor, book
 
+from app.core.config import Settings
 from app.infra.db.session_type_store import (
     finalise_scheduled_deletions,
     update_session_type,
 )
+from app.infra.jobs.runner import RuntimeJobs
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -497,3 +500,30 @@ async def test_a_cancelled_booking_moves_the_schedule_up(
     (row,) = await own(api_client, auth)
 
     assert row["pending_deletion"] == {"booked_count": 0, "deletes_after": None}
+
+
+async def test_the_hourly_settle_run_finalises_after_settling_attendance(
+    db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """**The wiring and the order, through the job itself.** The only session on
+    a scheduled offering is over but still `confirmed` — live until attendance
+    is settled. Settled first, it stops holding the offering, and the same run
+    deletes it; finalising before settling would leave it for another hour, and
+    not calling the finaliser at all would leave it forever."""
+    mentor, _ = await as_mentor(db_engine, "sched-job")
+    over = await add_session_type(db_engine, mentor, name="Over")
+    await book(db_engine, mentor, over, status="confirmed", days=-2)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_types SET is_active = false, deletion_scheduled_at = now() "
+                "WHERE id = :t"
+            ),
+            {"t": over},
+        )
+
+    jobs = RuntimeJobs(Settings(_env_file=None, database_url=SecretStr(migrated_database)))
+    result = await jobs.run("settle-sessions")
+
+    assert await column(db_engine, over, "deleted_at") is not None
+    assert result.counts["deleted_session_types"] == 1
