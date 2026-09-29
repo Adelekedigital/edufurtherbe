@@ -10,18 +10,23 @@ import datetime as dt
 
 import pytest
 
+from app.core.config import Settings
 from app.domain.reviews import (
     MENTOR_RATINGS,
     ORDINAL_SCALE,
-    REVIEW_EDIT_WINDOW,
+    OVERALL_STANDS_ALONE_FROM,
     REVIEW_INTERVAL,
     MentorRating,
+    edit_window,
     edit_window_open,
+    editable_until,
     from_ordinal,
     to_ordinal,
 )
 
 WRITTEN_AT = dt.datetime(2026, 8, 22, 12, 0, tzinfo=dt.UTC)
+#: The window as a deployment with nothing set gets it.
+REVIEW_EDIT_WINDOW = edit_window(Settings(_env_file=None))
 
 
 def test_the_scale_is_pinned_to_its_ordinals() -> None:
@@ -35,9 +40,18 @@ def test_the_scale_is_pinned_to_its_ordinals() -> None:
     is why it asserts the pairs rather than the round trip. A round trip passes
     against any consistent ordering, including a wrong one.
     """
-    assert to_ordinal(MentorRating.NOT_GREAT) == 1
-    assert to_ordinal(MentorRating.GREAT) == 2
-    assert to_ordinal(MentorRating.EXCELLENT) == 3
+    assert to_ordinal(MentorRating.POOR) == 1
+    assert to_ordinal(MentorRating.OKAY) == 2
+    assert to_ordinal(MentorRating.GREAT) == 3
+
+
+def test_the_scale_speaks_the_words_the_form_shows() -> None:
+    """ "Poor / Okay / Great" — the design copy, and so the wire (2026-09-29).
+
+    Renamed from `not_great`/`great`/`excellent` with every position kept, so no
+    stored row changes meaning: the pin above is the same three numbers.
+    """
+    assert [rating.value for rating in MentorRating] == ["poor", "okay", "great"]
 
 
 def test_the_scale_has_exactly_the_points_the_column_allows() -> None:
@@ -65,11 +79,13 @@ def test_a_number_off_the_scale_is_refused_rather_than_guessed(value: int) -> No
 
 
 def test_the_edit_window_is_open_immediately_after_writing() -> None:
-    assert edit_window_open(WRITTEN_AT, WRITTEN_AT)
+    assert edit_window_open(WRITTEN_AT, WRITTEN_AT, REVIEW_EDIT_WINDOW)
 
 
 def test_the_edit_window_is_open_just_inside_its_edge() -> None:
-    assert edit_window_open(WRITTEN_AT, WRITTEN_AT + REVIEW_EDIT_WINDOW - dt.timedelta(seconds=1))
+    assert edit_window_open(
+        WRITTEN_AT, WRITTEN_AT + REVIEW_EDIT_WINDOW - dt.timedelta(seconds=1), REVIEW_EDIT_WINDOW
+    )
 
 
 def test_the_edit_window_shuts_exactly_on_its_edge() -> None:
@@ -78,7 +94,35 @@ def test_the_edit_window_shuts_exactly_on_its_edge() -> None:
     A window that is open *at* its edge and shut a microsecond later is a rule
     two readers implement differently.
     """
-    assert not edit_window_open(WRITTEN_AT, WRITTEN_AT + REVIEW_EDIT_WINDOW)
+    assert not edit_window_open(WRITTEN_AT, WRITTEN_AT + REVIEW_EDIT_WINDOW, REVIEW_EDIT_WINDOW)
+
+
+def test_editable_until_is_the_edge_while_the_window_is_open() -> None:
+    """What the client renders as "you can edit it until 4:32 pm"."""
+    now = WRITTEN_AT + dt.timedelta(minutes=3)
+
+    assert editable_until(WRITTEN_AT, now, REVIEW_EDIT_WINDOW) == WRITTEN_AT + REVIEW_EDIT_WINDOW
+
+
+def test_editable_until_is_null_from_the_edge_on() -> None:
+    """Null exactly when the `PATCH` would answer `409` — the same edge."""
+    edge = WRITTEN_AT + REVIEW_EDIT_WINDOW
+
+    assert editable_until(WRITTEN_AT, edge, REVIEW_EDIT_WINDOW) is None
+
+
+def test_the_window_is_ten_minutes_unless_configured() -> None:
+    assert dt.timedelta(minutes=10) == REVIEW_EDIT_WINDOW
+    assert edit_window(Settings(_env_file=None, review_edit_window_minutes=30)) == dt.timedelta(
+        minutes=30
+    )
+
+
+def test_the_overall_rating_stands_alone_from_five_reviews() -> None:
+    """The frontend's rule (2026-09-29): below five, a mentor's figure would
+    swing on one or two new answers, so older reviews count through their
+    `valuable_rating` until then."""
+    assert OVERALL_STANDS_ALONE_FROM == 5
 
 
 def test_the_two_windows_are_not_the_same_order_of_magnitude() -> None:
@@ -89,7 +133,6 @@ def test_the_two_windows_are_not_the_same_order_of_magnitude() -> None:
     over the other is silent: every window still "works", just wrongly.
     """
     assert REVIEW_EDIT_WINDOW < REVIEW_INTERVAL
-    assert dt.timedelta(minutes=10) == REVIEW_EDIT_WINDOW
     assert dt.timedelta(days=30) == REVIEW_INTERVAL
 
 

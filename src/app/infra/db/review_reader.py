@@ -30,7 +30,7 @@ from app.core.errors import ValidationError
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.review_authors import author_columns, with_author
-from app.infra.db.review_stats import published
+from app.infra.db.review_stats import published, review_value
 
 __all__ = ["get_review_row", "list_mentor_reviews"]
 
@@ -56,6 +56,7 @@ async def get_review_row(
                 Review.practicality_rating,
                 Review.support_rating,
                 Review.valuable_rating,
+                Review.overall_rating,
                 Review.nps_recommend_score,
                 Review.public_review,
                 Review.private_review,
@@ -150,7 +151,8 @@ async def list_mentor_reviews(
                 Review.id,
                 Review.created_at,
                 Review.public_review,
-                Review.valuable_rating,
+                Review.overall_rating,
+                review_value().label("session_value"),
                 SessionType.id.label("session_type_id"),
                 SessionType.name.label("session_type_name"),
                 *author_columns(),

@@ -10,13 +10,19 @@ from __future__ import annotations
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
+    AuthoredReviewDep,
     EditedReviewDep,
     MentorRelationshipDep,
     ReviewableSessionsDep,
     WrittenReviewDep,
 )
 from app.api.schemas.common import Page
-from app.api.schemas.reviews import MentorRelationshipRead, ReviewableSessionRead, ReviewRead
+from app.api.schemas.reviews import (
+    AuthoredReviewRead,
+    MentorRelationshipRead,
+    ReviewableSessionRead,
+    ReviewRead,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["reviews"])
 
@@ -43,7 +49,7 @@ WRITE_RESPONSES: dict[int | str, dict[str, str]] = {
             "your review. Terminal; never retry.\n"
             "- `/problems/review-interval-not-elapsed` — you reviewed this "
             "offering recently. Retry once the window passes.\n\n"
-            "`PATCH` also answers `409` once the ten-minute edit window has "
+            "`PATCH` also answers `409` once the edit window has "
             "shut, which carries no type: there is only one way for an edit to "
             "be refused."
         )
@@ -68,7 +74,7 @@ EDIT_RESPONSES: dict[int | str, dict[str, str]] = {
         )
     },
     status.HTTP_409_CONFLICT: {
-        "description": "The ten-minute edit window has shut. The review stands as written."
+        "description": "The edit window has shut. The review stands as written."
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": (
@@ -159,8 +165,8 @@ async def read_mentor_relationship(
         "`/problems/review-already-exists`, which is a true answer rather than "
         "a second row. Booking needs a key because a replay must return the "
         "same session; here the second attempt has nothing new to say.\n\n"
-        "**Ratings are words, not numbers.** `not_great`, `great`, `excellent` "
-        "for the four mentor questions; `valuable_rating` is `1..5` and "
+        "**Ratings are words, not numbers.** `poor`, `okay`, `great` "
+        "for the four mentor questions; `overall_rating` and `valuable_rating` are `1..5` and "
         "`nps_recommend_score` is `1..10`, both genuine point scales."
     ),
     responses=WRITE_RESPONSES,
@@ -175,8 +181,9 @@ async def write(review: WrittenReviewDep, response: Response) -> ReviewRead:
     response_model=ReviewRead,
     summary="Correct a review you just wrote",
     description=(
-        "**A compose grace period, not an amendment.** Ten minutes from when "
-        "the review was written, after which it stands — a mentor's profile is "
+        "**A compose grace period, not an amendment.** Until `editable_until` "
+        "(ten minutes from when the review was written, unless configured "
+        "otherwise), after which it stands — a mentor's profile is "
         "a dated list, and a review that can be rewritten later is a history "
         "that rewrites itself.\n\n"
         "Author only. Every content field may be corrected; **`session_id` "
@@ -191,3 +198,22 @@ async def write(review: WrittenReviewDep, response: Response) -> ReviewRead:
 )
 async def edit(review: EditedReviewDep) -> ReviewRead:
     return ReviewRead.from_row(review)
+
+
+@router.get(
+    "/reviews/{review_id}",
+    response_model=AuthoredReviewRead,
+    summary="Read back a review you wrote",
+    description=(
+        "**Author only**, and the whole review — every rating and the "
+        "platform feedback — so a correction started after a reload can "
+        "pre-fill the form. Readable after the window shuts as well; "
+        "`editable_until` says whether it can still be changed."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: WRITE_RESPONSES[status.HTTP_401_UNAUTHORIZED],
+        status.HTTP_404_NOT_FOUND: EDIT_RESPONSES[status.HTTP_404_NOT_FOUND],
+    },
+)
+async def read(review: AuthoredReviewDep) -> AuthoredReviewRead:
+    return AuthoredReviewRead.from_row(review)

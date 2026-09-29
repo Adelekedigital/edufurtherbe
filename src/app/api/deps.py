@@ -87,6 +87,7 @@ from app.domain.featured import week_start as week_of
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES
 from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
+from app.domain.reviews import edit_window, editable_until
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.clients.meetings import (
     DailyRooms,
@@ -2675,8 +2676,23 @@ SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events
 # --------------------------------------------------------------------------
 
 
+async def _own_review(
+    session: AsyncSession, review_id: UUID, author: UUID, now: dt.datetime, window: dt.timedelta
+) -> dict[str, Any] | None:
+    """The author's review with `editable_until` stamped on, or ``None``.
+
+    Every author read goes through here, so the edge a client is shown comes
+    from the same `editable_until` the `PATCH` guard asks — never a second
+    computation of it.
+    """
+    row = await get_review_row(session, review_id, author)
+    if row is None:
+        return None
+    return row | {"editable_until": editable_until(row["created_at"], now, window)}
+
+
 async def written_review(
-    payload: ReviewWrite, user: CurrentUserDep, session: SessionDep
+    payload: ReviewWrite, user: CurrentUserDep, session: SessionDep, request: Request
 ) -> dict[str, Any]:
     """Write the review and read it back, in one transaction.
 
@@ -2684,10 +2700,9 @@ async def written_review(
     values, following `booked_session`: the response is the shape every other
     review read returns, built by the same code, so the two cannot drift.
     """
-    review_id = await write_review(
-        session, user["id"], payload.to_columns(), now=dt.datetime.now(dt.UTC)
-    )
-    row = await get_review_row(session, review_id, user["id"])
+    now = dt.datetime.now(dt.UTC)
+    review_id = await write_review(session, user["id"], payload.to_columns(), now=now)
+    row = await _own_review(session, review_id, user["id"], now, edit_window(_configured(request)))
     if row is None:  # pragma: no cover - written in this transaction
         raise NotFoundError("no such review of yours")
     await session.commit()
@@ -2695,15 +2710,32 @@ async def written_review(
 
 
 async def edited_review(
-    review_id: UUID, payload: ReviewEdit, user: CurrentUserDep, session: SessionDep
+    review_id: UUID,
+    payload: ReviewEdit,
+    user: CurrentUserDep,
+    session: SessionDep,
+    request: Request,
 ) -> dict[str, Any]:
     """Apply the edit and return the review as it now stands."""
     now = dt.datetime.now(dt.UTC)
-    await edit_review(session, user["id"], review_id, payload.to_columns(), now=now)
-    row = await get_review_row(session, review_id, user["id"])
+    window = edit_window(_configured(request))
+    await edit_review(session, user["id"], review_id, payload.to_columns(), now=now, window=window)
+    row = await _own_review(session, review_id, user["id"], now, window)
     if row is None:  # pragma: no cover - `edit_review` already refused if absent
         raise NotFoundError("no such review of yours")
     await session.commit()
+    return row
+
+
+async def authored_review(
+    review_id: UUID, user: CurrentUserDep, session: SessionDep, request: Request
+) -> dict[str, Any]:
+    """The caller's own review, whole — scoped to them in the query."""
+    row = await _own_review(
+        session, review_id, user["id"], dt.datetime.now(dt.UTC), edit_window(_configured(request))
+    )
+    if row is None:
+        raise NotFoundError("no such review of yours")
     return row
 
 
@@ -2727,6 +2759,7 @@ async def own_reviewable_sessions(
 
 WrittenReviewDep = Annotated[dict[str, Any], Depends(written_review)]
 EditedReviewDep = Annotated[dict[str, Any], Depends(edited_review)]
+AuthoredReviewDep = Annotated[dict[str, Any], Depends(authored_review)]
 ReviewableSessionsDep = Annotated[list[dict[str, Any]], Depends(own_reviewable_sessions)]
 
 

@@ -27,7 +27,7 @@ the ``X/5`` a profile shows are derived at query time and never stored (D56).
     closed set ``text`` + ``CHECK``. These stay ``smallint`` because the display
     must **average** them, and text moves that mapping into every query. The
     ``StrEnum`` still exists at the Pydantic boundary, so the API publishes
-    ``"excellent"`` rather than a magic number.
+    ``"great"`` rather than a magic number.
 
 **A CHECK cannot catch the legacy scaling, and it is important that nobody
 believes otherwise.** ``3.34`` assigned to a ``smallint`` *rounds to 3* and
@@ -91,6 +91,7 @@ from app.domain.enums import SessionRole
 from app.domain.reviews import (
     MENTOR_RATINGS,
     ORDINAL_SCALE,
+    OVERALL_SCALE,
     RECOMMEND_SCALE,
     VALUABLE_SCALE,
 )
@@ -158,6 +159,10 @@ class Review(Base, TimestampMixin):
     practicality_rating: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     support_rating: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     valuable_rating: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    #: "Your rating", step 1's stars (2026-09-29). **Null on every review written
+    #: before it shipped** — nothing is invented for them; the session value
+    #: reads those through `valuable_rating` instead (`review_stats`).
+    overall_rating: Mapped[int | None] = mapped_column(SmallInteger)
     nps_recommend_score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 
     #: "Public review (required)" — the form will not submit without it, so the
@@ -176,6 +181,7 @@ class Review(Base, TimestampMixin):
     __table_args__ = (
         *(_within(column, ORDINAL_SCALE) for column in MENTOR_RATINGS),
         _within("valuable_rating", VALUABLE_SCALE),
+        _within("overall_rating", OVERALL_SCALE),
         _within("nps_recommend_score", RECOMMEND_SCALE),
         CheckConstraint(
             check_is_known("reviewed_for_role", SessionRole),
@@ -205,10 +211,14 @@ class Review(Base, TimestampMixin):
         # arrived. Both halves of the predicate are load-bearing: a withdrawn
         # review must not move a mentor's average, and a mentee-directed one must
         # not enter it at all.
+        #
+        # **`overall_rating` rides in it too**, so the card's session value — which
+        # reads both columns since 2026-09-29 — stays an index-only scan.
         Index(
             "ix_reviews_mentor_valuable",
             "reviewed_for",
             "valuable_rating",
+            "overall_rating",
             postgresql_where=text("deleted_at IS NULL AND reviewed_for_role = 'mentor'"),
         ),
         # The interval window: *has this mentee reviewed this offering recently*.

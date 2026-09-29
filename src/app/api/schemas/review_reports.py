@@ -64,7 +64,11 @@ class OwnReviewRead(BaseModel):
     id: UUID
     created_at: datetime
     public_review: str
-    #: This review's own `valuable_rating`, the `X/5` badge shown beside it.
+    #: The session it is about. Null on a migrated review, which had no link.
+    session_id: UUID | None = None
+    #: Whom it is about — on this list, always the caller.
+    reviewed_for: UUID
+    #: The `X/5` badge shown beside it — `review_stats.review_value()`.
     session_value: int
     #: True once the review has left the profile, whoever removed it.
     withdrawn: bool
@@ -101,7 +105,9 @@ class OwnReviewRead(BaseModel):
             id=row["id"],
             created_at=row["created_at"],
             public_review=row["public_review"],
-            session_value=row["valuable_rating"],
+            session_id=row["session_id"],
+            reviewed_for=row["reviewed_for"],
+            session_value=row["session_value"],
             withdrawn=row["withdrawn"],
             author_first_name=row.get("author_first_name"),
             author_last_initial=row.get("author_last_initial"),
@@ -182,7 +188,7 @@ class ModeratedReviewRead(BaseModel):
             created_at=row["created_at"],
             public_review=row["public_review"],
             private_review=row.get("private_review"),
-            session_value=row["valuable_rating"],
+            session_value=row["session_value"],
             subject_id=row["reviewed_for"],
             withdrawn=row["withdrawn"],
             author_first_name=row.get("author_first_name"),

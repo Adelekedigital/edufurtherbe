@@ -29,6 +29,7 @@ from app.core.errors import ValidationError
 from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
 from app.infra.db.review_authors import author_columns, with_author
+from app.infra.db.review_stats import review_value
 
 __all__ = ["list_reviews_about"]
 
@@ -80,7 +81,9 @@ async def list_reviews_about(
                 Review.id,
                 Review.created_at,
                 Review.public_review,
-                Review.valuable_rating,
+                Review.session_id,
+                Review.reviewed_for,
+                review_value().label("session_value"),
                 # The subject sees that a review went, which the public list cannot
                 # show and which they would otherwise learn only by its absence.
                 (Review.deleted_at.is_not(None)).label("withdrawn"),

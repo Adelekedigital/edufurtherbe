@@ -177,6 +177,15 @@ class Settings(BaseSettings):
         default=5, ge=1, le=1440, validation_alias=env_key("next_available_max_age_minutes")
     )
 
+    #: How long after writing a review its author may still correct it. What the
+    #: rule *means* stays in `domain/reviews.py`, and `edit_window(settings)`
+    #: there is the single reader — the `PATCH` guard and `editable_until` both
+    #: go through it. Capped at a day: a window that runs into weeks is an
+    #: amendment right, which the product decided against.
+    review_edit_window_minutes: int = Field(
+        default=10, ge=1, le=1440, validation_alias=env_key("review_edit_window_minutes")
+    )
+
     # ``NoDecode`` is load-bearing, not decoration. Without it pydantic-settings
     # JSON-decodes a complex type *inside the settings source*, before any
     # validator runs, and a bare origin typed into a cloud console fails as
