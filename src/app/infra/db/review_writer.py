@@ -142,6 +142,7 @@ async def edit_review(
     review_id: UUID,
     changes: dict[str, Any],
     now: dt.datetime,
+    window: dt.timedelta,
 ) -> None:
     """Apply a compose-grace-period edit, or refuse.
 
@@ -169,7 +170,7 @@ async def edit_review(
     if existing is None:
         raise NotFoundError("no such review of yours")
 
-    if not edit_window_open(existing.created_at, now):
+    if not edit_window_open(existing.created_at, now, window):
         raise ConflictError("the edit window for this review has closed")
 
     if not changes:

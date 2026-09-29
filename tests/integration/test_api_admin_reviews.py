@@ -156,7 +156,7 @@ async def test_a_deleted_author_is_not_named_in_the_queue(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     """**A deleted author loses their identity here too** (owner, 2026-09-29;
-    settled decision #211). The review stays in the queue — a complaint about it
+    settled decision #212). The review stays in the queue — a complaint about it
     is still a complaint — but the name, initial and institution go, the
     institution included: correlated on `reviews.reviewed_by` rather than on the
     joined user, it would outlive the name."""

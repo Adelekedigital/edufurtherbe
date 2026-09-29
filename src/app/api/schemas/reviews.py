@@ -1,7 +1,7 @@
 """The review contract: three-point answers in, three-point answers out.
 
 **The wire speaks words, the column stores numbers.** A client sends
-`"excellent"` and the row holds `3`. That split is settled decision #100's
+`"great"` and the row holds `3`. That split is settled decision #100's
 reasoning applied at the only layer where it does not cost anything: the display
 has to *average* these, so text in the column would move the mapping into every
 query — but a magic `3` on the wire is a number whose meaning lives in a
@@ -17,7 +17,7 @@ never mentored them. Same reasoning `SessionBookingWrite` gives for refusing
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.api.schemas.common import Normalised
 from app.domain.reviews import (
     MENTOR_RATINGS,
+    OVERALL_SCALE,
     RECOMMEND_SCALE,
     VALUABLE_SCALE,
     MentorRating,
@@ -35,6 +36,7 @@ from app.domain.reviews import (
 #: Unpacked once so the bounds below read as numbers rather than as subscripts,
 #: and still come from the single declaration in `domain/reviews.py`.
 VALUABLE_MIN, VALUABLE_MAX = VALUABLE_SCALE
+OVERALL_MIN, OVERALL_MAX = OVERALL_SCALE
 RECOMMEND_MIN, RECOMMEND_MAX = RECOMMEND_SCALE
 
 #: The longest a free-text answer may be. Generous — a review is prose somebody
@@ -62,6 +64,16 @@ class ReviewWrite(Normalised):
         )
     )
 
+    overall_rating: int = Field(
+        ge=OVERALL_MIN,
+        le=OVERALL_MAX,
+        description=(
+            "\"Your rating\" — step 1's stars, `1..5`. **What a mentor's "
+            "session value is built from** once they have five of them; see "
+            "`ReviewSummaryRead.session_value`."
+        ),
+    )
+
     communication_rating: MentorRating = Field(
         description="How clearly the mentor communicated their ideas and advice."
     )
@@ -79,7 +91,8 @@ class ReviewWrite(Normalised):
         description=(
             "How valuable the session was in moving the mentee closer to their "
             "study-abroad goals. `1` is *not valuable at all*, `5` is *extremely "
-            "valuable*. **This is the figure a mentor's card shows as `X/5`.**"
+            "valuable*. Stands in for `overall_rating` on reviews written before "
+            "it existed."
         ),
     )
     nps_recommend_score: int = Field(
@@ -110,6 +123,7 @@ class ReviewWrite(Normalised):
         """The row this request becomes, with each word turned back into its point."""
         values: dict[str, Any] = {
             "session_id": self.session_id,
+            "overall_rating": self.overall_rating,
             "valuable_rating": self.valuable_rating,
             "nps_recommend_score": self.nps_recommend_score,
             "public_review": self.public_review,
@@ -127,8 +141,11 @@ class ReviewWrite(Normalised):
 #:
 #: `private_review` is deliberately absent: it is the one genuinely nullable
 #: column, and clearing it is what the route means by "sending null clears it".
+#:
+#: `overall_rating` is nullable in the column — for reviews older than it — but
+#: not for a review that has one: an edit takes the stars off nothing.
 NOT_NULLABLE = frozenset(
-    {*MENTOR_RATINGS, "valuable_rating", "nps_recommend_score", "public_review"}
+    {*MENTOR_RATINGS, "overall_rating", "valuable_rating", "nps_recommend_score", "public_review"}
 )
 
 
@@ -141,6 +158,7 @@ class ReviewEdit(Normalised):
     not. The window is for fixing a typo, not for changing what was reviewed.
     """
 
+    overall_rating: int | None = Field(default=None, ge=OVERALL_MIN, le=OVERALL_MAX)
     communication_rating: MentorRating | None = None
     knowledge_rating: MentorRating | None = None
     practicality_rating: MentorRating | None = None
@@ -187,17 +205,20 @@ class ReviewEdit(Normalised):
 
 
 class ReviewRead(BaseModel):
-    """One review, as the author and the mentor's profile both see it.
+    """One review, as its author writes and corrects it.
 
     ``private_review`` is **absent from this model deliberately**, not merely
     unset: it is feedback about the platform, and a read model that carries it is
-    one refactor away from rendering it on a profile.
+    one refactor away from rendering it on a profile. The author's own `GET`
+    carries it, on `AuthoredReviewRead`.
     """
 
     id: UUID
     session_id: UUID | None
     reviewed_for: UUID
 
+    #: Step 1's stars. **Null on a review written before they existed.**
+    overall_rating: int | None = None
     communication_rating: MentorRating
     knowledge_rating: MentorRating
     practicality_rating: MentorRating
@@ -208,14 +229,50 @@ class ReviewRead(BaseModel):
 
     created_at: datetime
     updated_at: datetime
+    editable_until: datetime | None = Field(
+        description=(
+            'When the edit window shuts, UTC — render "you can edit it until '
+            '…" from this rather than from a fixed length, which is configured '
+            "per environment. **Null once it has shut**, exactly when `PATCH` "
+            "starts answering `409`."
+        ),
+    )
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> ReviewRead:
+    def from_row(cls, row: dict[str, Any]) -> Self:
         """Each stored point turned back into the word the mentee chose."""
         values = dict(row)
         for column in MENTOR_RATINGS:
             values[column] = from_ordinal(int(values[column]))
         return cls.model_validate(values)
+
+
+class AuthoredReviewRead(ReviewRead):
+    """The whole review, **for its author only** — what `GET /reviews/{id}`
+    returns, so an edit started after a reload can pre-fill every step.
+
+    `private_review` is the author's own text; the scope that serves it is the
+    query (`reviewed_by` is the caller), as on every review path.
+    """
+
+    private_review: str | None = None
+
+
+class AuthoredReviewSummaryRead(BaseModel):
+    """One review you wrote, as `GET /me/authored-reviews` lists it — enough
+    to find it again and to know whether it can still be corrected.
+    `GET /reviews/{id}` has the rest, including `private_review`."""
+
+    id: UUID
+    created_at: datetime
+    editable_until: datetime | None = Field(
+        description="As on `ReviewRead`: when the edit window shuts, null once it has."
+    )
+    session_id: UUID | None
+    reviewed_for: UUID
+    #: Null on a review written before the stars existed.
+    overall_rating: int | None = None
+    public_review: str
 
 
 class MentorRelationshipRead(BaseModel):
@@ -317,8 +374,10 @@ class ReviewSummaryRead(BaseModel):
     #: makes every client write the same coalesce while leaving "no data" and
     #: "none yet" indistinguishable. The same call `completed_sessions` makes.
     count: int = 0
-    #: Mean `valuable_rating`, `1..5`. The figure shown as `X/5`, and the one the
-    #: discovery card carries.
+    #: The figure shown as `X/5`, `1..5`, and the one the discovery card carries.
+    #: From five published overall ratings on, their mean; below that, the mean
+    #: over every review of its `overall_rating`, or its `valuable_rating` when
+    #: it has none. Null with no reviews.
     session_value: float | None = None
     #: The **mean** recommend score (1-10) as a percentage of ten: 90 is "an
     #: average of 9/10", not "9 in 10 would recommend" — that is the next field.
@@ -375,7 +434,10 @@ class MentorReviewRead(BaseModel):
     id: UUID
     created_at: datetime
     public_review: str
-    #: This review's own `valuable_rating`, shown as the `X/5` badge beside it.
+    #: This review's own stars. **Null on a review written before they existed.**
+    overall_rating: int | None = None
+    #: The `X/5` badge beside this review: its `overall_rating`, or its
+    #: `valuable_rating` when it has none — `review_stats.review_value()`.
     session_value: int
     author_first_name: str | None = None
     author_last_initial: str | None = None
@@ -395,7 +457,8 @@ class MentorReviewRead(BaseModel):
             id=row["id"],
             created_at=row["created_at"],
             public_review=str(row["public_review"]),
-            session_value=int(row["valuable_rating"]),
+            overall_rating=row["overall_rating"],
+            session_value=int(row["session_value"]),
             author_first_name=row["author_first_name"],
             author_last_initial=row["author_last_initial"],
             author_institution=row["author_institution"],

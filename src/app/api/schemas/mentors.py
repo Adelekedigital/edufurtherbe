@@ -99,7 +99,8 @@ class MentorSummaryRead(BaseModel):
     #: How many published reviews this mentor has. **Never null**, for the
     #: same reason as the count above.
     review_count: int = 0
-    #: Mean `valuable_rating`, `1..5`, rendered `X/5`. **Null** when nobody
+    #: The session value, `1..5`, rendered `X/5` — the rule is on
+    #: `ReviewSummaryRead.session_value`. **Null** when nobody
     #: has reviewed them — a ratio over no rows is unknown, where zero would
     #: read as *rated badly*.
     session_value: float | None = None

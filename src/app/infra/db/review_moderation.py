@@ -26,6 +26,7 @@ from app.domain.enums import ReviewReportOutcome
 from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
 from app.infra.db.review_authors import author_columns, with_author
+from app.infra.db.review_stats import review_value
 
 __all__ = ["decide_report", "list_reviews_for_moderation"]
 
@@ -55,7 +56,7 @@ async def list_reviews_for_moderation(
     that cannot show its result.
 
     **The author through `with_author`, as on every other review read** (settled
-    decision #211). A complaint about a review whose author has since left is
+    decision #212). A complaint about a review whose author has since left is
     still a complaint, so the review stays in the queue; the author's name,
     initial and institution go, and `author_deleted` says so. This read used to
     join the author without `LIVE` — so a deleted author was named here, against
@@ -71,7 +72,7 @@ async def list_reviews_for_moderation(
                 Review.created_at,
                 Review.public_review,
                 Review.private_review,
-                Review.valuable_rating,
+                review_value().label("session_value"),
                 Review.reviewed_for,
                 (Review.deleted_at.is_not(None)).label("withdrawn"),
                 *author_columns(),

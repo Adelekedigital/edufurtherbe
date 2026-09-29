@@ -53,6 +53,8 @@ class Profile:
         practicality: int = 3,
         support: int = 3,
         valuable: int = 5,
+        #: Step 1's stars; `None` is a review written before they existed.
+        overall: int | None = None,
         nps: int = 9,
         text_body: str = "Clear, and the advice was usable.",
         withdrawn: bool = False,
@@ -113,9 +115,9 @@ class Profile:
                     text(
                         "INSERT INTO reviews (session_id, reviewed_by, reviewed_for, "
                         "communication_rating, knowledge_rating, practicality_rating, "
-                        "support_rating, valuable_rating, nps_recommend_score, public_review, "
-                        "deleted_at) "
-                        "VALUES (:s, :a, :m, :c, :k, :p, :su, :v, :n, :body, "
+                        "support_rating, valuable_rating, overall_rating, nps_recommend_score, "
+                        "public_review, deleted_at) "
+                        "VALUES (:s, :a, :m, :c, :k, :p, :su, :v, :o, :n, :body, "
                         "        CASE WHEN :gone THEN now() ELSE NULL END) RETURNING id"
                     ),
                     {
@@ -127,6 +129,7 @@ class Profile:
                         "p": practicality,
                         "su": support,
                         "v": valuable,
+                        "o": overall,
                         "n": nps,
                         "body": text_body,
                         "gone": withdrawn,
@@ -288,7 +291,7 @@ async def test_the_four_questions_are_each_their_own_figure(profile: Profile) ->
 async def test_the_floor_of_the_scale_is_thirty_three_percent(profile: Profile) -> None:
     """Register question 2, asserted rather than assumed.
 
-    "Not great" is the floor of a three-point scale, not zero — the scale has no
+    "Poor" is the floor of a three-point scale, not zero — the scale has no
     zero, and `1/3` is what the app's own `mean/max` scaling produces.
     """
     await profile.reviewed(communication=1)
@@ -318,6 +321,59 @@ async def test_a_withdrawn_review_is_off_the_list(profile: Profile) -> None:
     body = await profile.listed()
 
     assert [row["public_review"] for row in body["data"]] == ["Published."]
+
+
+async def test_session_value_reads_older_reviews_through_valuable(profile: Profile) -> None:
+    """**Below five overall ratings, every review counts once** — as its
+    `overall_rating` if it has one, its `valuable_rating` if not."""
+    await profile.reviewed(overall=5, valuable=1, days_ago=1)
+    await profile.reviewed(valuable=3, days_ago=2)
+
+    assert (await profile.block())["session_value"] == pytest.approx(4.0)
+    assert (await profile.card())["session_value"] == pytest.approx(4.0)
+
+
+async def test_four_overall_ratings_still_blend(profile: Profile) -> None:
+    """The edge's lower side: `(4 * 5 + 1) / 5`, not `5`."""
+    for index in range(4):
+        await profile.reviewed(overall=5, valuable=2, days_ago=index + 1)
+    await profile.reviewed(valuable=1, days_ago=9)
+
+    assert (await profile.block())["session_value"] == pytest.approx(4.2)
+    assert (await profile.card())["session_value"] == pytest.approx(4.2)
+
+
+async def test_from_five_overall_ratings_only_they_count(profile: Profile) -> None:
+    """The edge itself: five overall ratings and the old reviews drop out."""
+    for index in range(5):
+        await profile.reviewed(overall=4, valuable=1, days_ago=index + 1)
+    await profile.reviewed(valuable=1, days_ago=9)
+
+    block = await profile.block()
+
+    assert block["session_value"] == pytest.approx(4.0)
+    assert block["count"] == 6
+    assert (await profile.card())["session_value"] == pytest.approx(4.0)
+
+
+async def test_a_withdrawn_overall_rating_does_not_reach_the_threshold(profile: Profile) -> None:
+    for index in range(4):
+        await profile.reviewed(overall=5, valuable=2, days_ago=index + 1)
+    await profile.reviewed(overall=5, valuable=2, withdrawn=True, days_ago=8)
+    await profile.reviewed(valuable=1, days_ago=9)
+
+    assert (await profile.block())["session_value"] == pytest.approx(4.2)
+
+
+async def test_each_row_carries_its_overall_rating_and_value(profile: Profile) -> None:
+    await profile.reviewed(overall=5, valuable=2, days_ago=1)
+    await profile.reviewed(valuable=3, days_ago=2)
+
+    rows = (await profile.listed())["data"]
+
+    assert sorted(
+        ((r["overall_rating"], r["session_value"]) for r in rows), key=lambda pair: pair[1]
+    ) == [(None, 3), (5, 5)]
 
 
 async def test_the_card_and_the_profile_agree(profile: Profile) -> None:
@@ -407,6 +463,7 @@ async def test_the_platform_feedback_never_reaches_the_list(profile: Profile) ->
         "id",
         "created_at",
         "public_review",
+        "overall_rating",
         "session_value",
         "author_first_name",
         "author_last_initial",
