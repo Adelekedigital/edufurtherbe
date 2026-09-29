@@ -375,8 +375,11 @@ async def _choose_avatar_focus(
 ) -> None:
     """Record the mentor's own crop of the photo they have now (#212).
 
-    **Conditional on there being a photo**, in the same statement that writes,
-    so there is no read-then-write for an upload to slip between.
+    **Conditional on there being a photo**, in the same statement that writes:
+    the existence check is atomic. It proves *a* photo exists, not *which* —
+    an upload landing at the same moment may reset this crop or receive it.
+    Either way the result is cosmetic and visible only to the owner, who can
+    choose again, so identity is not pinned.
     """
     result = await session.execute(
         update(UserProfile)
