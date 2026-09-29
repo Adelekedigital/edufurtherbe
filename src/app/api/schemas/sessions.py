@@ -61,6 +61,10 @@ class PartyRead(BaseModel):
     """
 
     id: str
+    #: The person deleted their account (#93, amended 2026-09-29). Their place in
+    #: the session stays; their name, avatar and focus are null. Render it as a
+    #: deleted account rather than as a missing name, which migrated rows have too.
+    deleted: bool = False
     first_name: str | None = None
     last_name: str | None = None
     avatar_url: str | None = None
@@ -241,6 +245,7 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
     status = row.get(f"{side}_attendance_status")
     return PartyRead(
         id=str(row[f"{side}_id"]),
+        deleted=bool(row.get(f"{side}_deleted")),
         first_name=_text(row.get(f"{side}_first_name")),
         last_name=_text(row.get(f"{side}_last_name")),
         avatar_url=_text(row.get(f"{side}_avatar_url")),

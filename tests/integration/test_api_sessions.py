@@ -565,23 +565,86 @@ async def test_a_party_with_no_name_returns_nulls_rather_than_failing(
     assert body["mentor"]["id"] == str(mentor)
 
 
-async def test_a_soft_deleted_party_is_still_named_in_their_history(
+async def delete_account(engine: AsyncEngine, user_id: UUID) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": user_id}
+        )
+
+
+async def test_a_deleted_mentor_is_not_named_to_the_mentee(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The **absence** of a `deleted_at` predicate, asserted so it is visible.
-
-    This is the opposite of the public endpoints, where a deleted mentor
-    disappears. Here the authorization is the session itself: the mentee had a
-    real session with a real person, and their own record must not decay into a
-    UUID because that person later left the platform.
-
-    Without this test, a future "tidy up: add the soft-delete predicate
-    everywhere" sweep would silently break history and look like an improvement.
-    """
-    mentor, _, mentee, mentee_auth = await pair(db_engine, "gone")
+    """**A deleted party keeps their place in the history and loses their name**
+    (owner, 2026-09-29), as a deleted reviewer does. The session stays, the id
+    stays, and every identity field goes — the avatar included, which a join
+    keyed on the session rather than on the live user would still hand out."""
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "gone-mentor")
+    await give_profile(db_engine, mentor, "https://cdn.test/m.png")
     session_id = await make_session(db_engine, mentor, mentee)
-    async with db_engine.begin() as conn:
-        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+    await delete_account(db_engine, mentor)
+
+    response = await api_client.get(
+        f"/api/v1/sessions/{session_id}", headers=bearer(api_token(mentee_auth))
+    )
+
+    assert response.status_code == 200
+    party = response.json()["mentor"]
+    assert party["id"] == str(mentor)
+    assert party["deleted"] is True
+    assert party["first_name"] is None
+    assert party["last_name"] is None
+    assert party["avatar_url"] is None
+    assert party["avatar_focus"] is None
+
+
+async def test_a_deleted_mentee_is_not_named_to_the_mentor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The case a review's session link reached (#285's review): a reviewer who
+    deleted their account must not be named through the session they reviewed."""
+    mentor, mentor_auth, mentee, _ = await pair(db_engine, "gone-mentee")
+    await give_profile(db_engine, mentee, "https://cdn.test/e.png")
+    session_id = await make_session(db_engine, mentor, mentee)
+    await delete_account(db_engine, mentee)
+
+    body = (
+        await api_client.get(
+            f"/api/v1/sessions/{session_id}", headers=bearer(api_token(mentor_auth))
+        )
+    ).json()
+
+    assert body["mentee"]["deleted"] is True
+    assert body["mentee"]["first_name"] is None
+    assert body["mentee"]["avatar_url"] is None
+    assert body["mentee"]["id"] == str(mentee)
+
+
+async def test_the_list_hides_a_deleted_party_too(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The list and the detail share one join, asserted so they cannot part."""
+    mentor, mentor_auth, mentee, _ = await pair(db_engine, "gone-list")
+    await make_session(db_engine, mentor, mentee)
+    await delete_account(db_engine, mentee)
+
+    body = (
+        await api_client.get(sessions_url(mentor), headers=bearer(api_token(mentor_auth)))
+    ).json()
+
+    assert len(body["data"]) == 1
+    assert body["data"][0]["mentee"]["deleted"] is True
+    assert body["data"][0]["mentee"]["first_name"] is None
+
+
+async def test_a_live_party_is_still_named_beside_a_deleted_one(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The positive case: only the party who left is hidden."""
+    mentor, _, mentee, mentee_auth = await pair(db_engine, "gone-half")
+    await give_profile(db_engine, mentee, "https://cdn.test/e.png")
+    session_id = await make_session(db_engine, mentor, mentee)
+    await delete_account(db_engine, mentor)
 
     body = (
         await api_client.get(
@@ -589,7 +652,9 @@ async def test_a_soft_deleted_party_is_still_named_in_their_history(
         )
     ).json()
 
-    assert body["mentor"]["first_name"] == "Ada"
+    assert body["mentee"]["deleted"] is False
+    assert body["mentee"]["first_name"] == "Ada"
+    assert body["mentee"]["avatar_url"] == "https://cdn.test/e.png"
 
 
 async def test_the_joins_do_not_multiply_rows(
