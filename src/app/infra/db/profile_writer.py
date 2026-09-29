@@ -34,6 +34,7 @@ from sqlalchemy import CursorResult, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
+from app.domain.enums import LanguageProficiency
 from app.domain.notifications import Notification
 from app.infra.db.admin_store import admins_who_can_decide
 from app.infra.db.avatar_focus_store import chosen_focus_columns
@@ -415,18 +416,41 @@ async def replace_languages(
     merge could not express removal: a user unticking their last language would
     have no way to say so.
     """
+    held = {
+        row.language_id: {"proficiency": row.proficiency, "is_primary": row.is_primary}
+        for row in await session.execute(
+            select(UserLanguage.language_id, UserLanguage.proficiency, UserLanguage.is_primary)
+            .where(UserLanguage.user_id == user_id)
+            .with_for_update()
+        )
+    }
+    rows = resolved_languages(entries, held)
     await session.execute(delete(UserLanguage).where(UserLanguage.user_id == user_id))
-    if not entries:
-        return
-    await session.execute(
-        insert(UserLanguage),
-        [
-            {
-                "user_id": user_id,
-                "language_id": entry["language_id"],
-                "proficiency": entry["proficiency"],
-                "is_primary": entry["is_primary"],
-            }
-            for entry in entries
-        ],
-    )
+    if rows:
+        await session.execute(insert(UserLanguage), [{"user_id": user_id, **row} for row in rows])
+
+
+#: What a language newly added to the list starts with.
+NEW_LANGUAGE: dict[str, Any] = {
+    "proficiency": LanguageProficiency.FLUENT,
+    "is_primary": False,
+}
+
+
+def resolved_languages(
+    entries: list[dict[str, Any]], held: dict[Any, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Each entry with its omitted fields filled: stored value, else the default.
+
+    An explicit `is_primary: true` anywhere moves the primary there, so every
+    other entry resolves to `false` — otherwise a kept primary and a new one
+    would both be written, and the one-primary index would refuse the save.
+    """
+    moved = any(entry.get("is_primary") is True for entry in entries)
+    rows = []
+    for entry in entries:
+        row = {**NEW_LANGUAGE, **held.get(entry["language_id"], {}), **entry}
+        if moved and entry.get("is_primary") is not True:
+            row["is_primary"] = False
+        rows.append(row)
+    return rows

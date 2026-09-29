@@ -21,8 +21,17 @@ def spec() -> dict[str, Any]:
     return dict(create_app(Settings(_env_file=None)).openapi())
 
 
-@pytest.mark.parametrize("schema", ["UserProfileWrite", "MentorProfileWrite"])
-def test_a_patch_body_publishes_no_defaults(schema: str) -> None:
+@pytest.mark.parametrize(
+    ("schema", "required"),
+    [
+        ("UserProfileWrite", []),
+        ("MentorProfileWrite", []),
+        # An entry in the languages PUT: the language itself is the one thing
+        # every entry must name; what it omits keeps what is stored.
+        ("UserLanguageWrite", ["language_id"]),
+    ],
+)
+def test_a_patch_body_publishes_no_defaults(schema: str, required: list[str]) -> None:
     """`MentorProfileWrite` is the create body too, and it holds there as well:
     both routes dump with `exclude_unset`, and each column has its own default."""
     body = spec()["components"]["schemas"][schema]
@@ -31,5 +40,5 @@ def test_a_patch_body_publishes_no_defaults(schema: str) -> None:
         name for name, prop in body["properties"].items() if prop.get("default") is not None
     )
 
-    assert body.get("required", []) == []
+    assert body.get("required", []) == required
     assert defaulted == []

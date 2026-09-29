@@ -592,11 +592,18 @@ class AwardPatch(Normalised):
 
 
 class UserLanguageWrite(Normalised):
-    """One language a user speaks, and how well."""
+    """One language a user speaks, and how well.
+
+    **Omitted keeps what is stored**: a language already listed keeps its
+    proficiency and primary flag, a new one takes the defaults
+    (`profile_writer.NEW_LANGUAGE`). The profile editor only picks languages, so
+    a save from it must not reset them. `null` is a `422`: neither column holds
+    one. No default is published, so generated clients type both as optional.
+    """
 
     language_id: UUID
-    proficiency: LanguageProficiency = LanguageProficiency.FLUENT
-    is_primary: bool = False
+    proficiency: LanguageProficiency = Field(default=None)  # type: ignore[assignment]
+    is_primary: bool = Field(default=None)  # type: ignore[assignment]
 
 
 class UserLanguagesWrite(Normalised):
