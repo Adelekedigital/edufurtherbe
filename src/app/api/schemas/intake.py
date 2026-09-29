@@ -1,8 +1,9 @@
 """The intake form, as the mentor who owns it sees it.
 
-No mentee-facing model yet: answering is the next surface. What is here is the
-*definition* — what an offering asks, in what order, whether an answer is
-required, and for a choice question its options (#200).
+Plus `IntakeFileRead`, the one mentee-facing model: a file uploaded to answer a
+`file_upload` question with. The rest is the *definition* — what an offering
+asks, in what order, whether an answer is required, and for a choice question
+its options (#200).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.schemas.common import Normalised
-from app.domain.enums import QuestionType
+from app.domain.enums import IntakeFileType, QuestionType
 from app.domain.intake import MAX_OPTION_LENGTH, MAX_OPTIONS, MIN_OPTIONS
 
 
@@ -159,3 +160,17 @@ class QuestionOrderWrite(BaseModel):
             "Renumbered from zero. Missing, extra or repeated ids are a `422`."
         ),
     )
+
+
+class IntakeFileRead(BaseModel):
+    """A file you uploaded, ready to answer a `file_upload` question with."""
+
+    file_id: UUID = Field(description="Send as `answers[].file_id` when booking.")
+    filename: str = Field(
+        description=(
+            "The name it will download as: your file's name without any path, "
+            "ending in the extension of what the file actually is."
+        )
+    )
+    size: int = Field(description="Bytes.")
+    content_type: IntakeFileType = Field(description="Decided from the file's bytes.")

@@ -44,11 +44,6 @@ MAX_OPTION_LENGTH = 200
 #: One text answer, the same bound a booking message has.
 MAX_ANSWER_LENGTH = 2000
 
-#: The question types a mentee can answer at booking today. `file_upload`
-#: joins with file answers (the next PR); until then a file question is neither
-#: answerable nor enforced, so a required one cannot make an offering unbookable.
-ANSWERABLE = frozenset({QuestionType.FREE_TEXT, QuestionType.MULTI_CHOICE})
-
 
 @dataclass(frozen=True, slots=True)
 class AskedQuestion:
@@ -68,23 +63,29 @@ class GivenAnswer:
     question_id: UUID
     text: str | None
     option_ids: tuple[UUID, ...] | None
+    file_id: UUID | None = None
 
 
 def answer_problems(
-    asked: Sequence[AskedQuestion], given: Sequence[GivenAnswer]
+    asked: Sequence[AskedQuestion],
+    given: Sequence[GivenAnswer],
+    usable_files: frozenset[UUID] = frozenset(),
 ) -> list[tuple[str, str]]:
     """Every problem with these answers, as `(pointer, message)` — none if valid.
 
     **Answers only to the offering's own live questions**, each once, in the
     form its type takes: text for `free_text`; `option_ids` for `multi_choice`,
     exactly one unless the question allows several, every one an option **of
-    that question**. Then every required, answerable question must be answered.
-    The option check is what stops an option id from another offering's form
-    being stored against this one.
+    that question**; `file_id` for `file_upload`, one of ``usable_files`` — the
+    caller's own uploads that answer nothing yet — and each file once. Then
+    every required question must be answered, whatever its type. The option
+    and file checks are what stop an id from another form, or another user,
+    being stored against this booking.
     """
     questions = {q.id: q for q in asked}
     problems: list[tuple[str, str]] = []
     seen: set[UUID] = set()
+    files: set[UUID] = set()
     for index, answer in enumerate(given):
         at = f"/answers/{index}"
         question = questions.get(answer.question_id)
@@ -95,14 +96,22 @@ def answer_problems(
             problems.append((f"{at}/question_id", "this question is answered more than once"))
             continue
         seen.add(answer.question_id)
-        if (answer.text is None) == (answer.option_ids is None):
-            problems.append((at, "give exactly one of `text` or `option_ids`"))
+        forms = (answer.text, answer.option_ids, answer.file_id)
+        if sum(form is not None for form in forms) != 1:
+            problems.append((at, "give exactly one of `text`, `option_ids` or `file_id`"))
             continue
-        if question.question_type not in ANSWERABLE:
-            problems.append((at, f"{question.question_type.value} answers are not accepted yet"))
-        elif question.question_type is QuestionType.FREE_TEXT:
+        if question.question_type is QuestionType.FREE_TEXT:
             if answer.text is None:
                 problems.append((at, "this question takes `text`"))
+        elif question.question_type is QuestionType.FILE_UPLOAD:
+            if answer.file_id is None:
+                problems.append((at, "this question takes `file_id`"))
+            elif answer.file_id not in usable_files:
+                problems.append((f"{at}/file_id", "not a file you uploaded, or already used"))
+            elif answer.file_id in files:
+                problems.append((f"{at}/file_id", "this file already answers another question"))
+            else:
+                files.add(answer.file_id)
         elif answer.option_ids is None:
             problems.append((at, "this question takes `option_ids`"))
         else:
@@ -116,10 +125,6 @@ def answer_problems(
             elif not set(chosen) <= question.option_ids:
                 problems.append((f"{at}/option_ids", "not an option of this question"))
     for question in asked:
-        if (
-            question.is_required
-            and question.question_type in ANSWERABLE
-            and question.id not in seen
-        ):
+        if question.is_required and question.id not in seen:
             problems.append(("/answers", f"question {question.id} is required"))
     return problems

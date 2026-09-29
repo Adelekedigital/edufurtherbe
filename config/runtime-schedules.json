@@ -49,6 +49,14 @@
       "environments": {"local": false, "ci": false, "staging": true, "production": false},
       "timeout": "240s",
       "retries": 1
+    },
+    {
+      "name": "sweep-intake-files",
+      "handler": "/api/v1/internal/jobs/sweep-intake-files",
+      "cron": "0 3 * * *",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "300s",
+      "retries": 3
     }
   ]
 }

@@ -3,8 +3,8 @@
 Booking answers resumed on 2026-09-28 (owner): the questions ride on the public
 `SessionTypeRead`, and `POST /sessions` takes `answers[]` for text and choice
 questions, validated against the offering's live form and saved in the booking's
-own transaction. File answers are the next PR; a required file question is not
-enforced until then (settled decision #207).
+own transaction. File answers, and the required file question they make
+enforceable, are in `test_intake_files.py`.
 """
 
 from __future__ import annotations
@@ -321,21 +321,6 @@ async def test_a_retired_question_cannot_be_answered(
     )
 
     assert response.status_code == 422
-
-
-async def test_a_required_file_question_does_not_block_booking_yet(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """File answers are the next PR; until then a required file question must
-    not make the offering unbookable (#207)."""
-    mentor, session_type = await a_bookable_offering(db_engine, "ans-file-required")
-    await add_question(
-        db_engine, session_type, "Upload your CV", question_type="file_upload", required=True
-    )
-
-    response = await book(api_client, db_engine, "ans-file-required", mentor, session_type, [])
-
-    assert response.status_code == 201
 
 
 async def test_answers_are_part_of_the_idempotency_fingerprint(

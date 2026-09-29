@@ -116,6 +116,19 @@ async def add_answer(
         await conn.execute(text(statement), {"s": submission, "q": question, **forms})
 
 
+async def add_intake_file(engine: AsyncEngine, submission: UUID, key: str) -> None:
+    """The upload an answer's `file_storage_key` names, owned by the submitter."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO intake_files (uploader_id, storage_key, filename, size_bytes, "
+                " content_type) SELECT mentee_id, :k, 'sop.pdf', 10, 'application/pdf' "
+                "FROM intake_submissions WHERE id = :s"
+            ),
+            {"k": key, "s": submission},
+        )
+
+
 @pytest_asyncio.fixture
 async def form(db_engine: AsyncEngine) -> tuple[UUID, UUID, UUID]:
     """A mentor's offering, one question on it, and a booked session's submission.
@@ -148,8 +161,21 @@ async def test_each_answer_form_is_accepted_on_its_own(
     """The positive case, per form — asserted because a constraint that refused
     everything would pass every negative test below."""
     _, question, submission = form
+    if "file_storage_key" in form_field:
+        await add_intake_file(db_engine, submission, str(form_field["file_storage_key"]))
 
     await add_answer(db_engine, submission, question, **form_field)
+
+
+async def test_a_file_answer_must_name_an_uploaded_file(
+    db_engine: AsyncEngine, form: tuple[UUID, UUID, UUID]
+) -> None:
+    """`fk_intake_answers_file_storage_key`: an answer cannot point at an
+    object no `intake_files` row records, so retention can always find it."""
+    _, question, submission = form
+
+    with pytest.raises(IntegrityError):
+        await add_answer(db_engine, submission, question, file_storage_key="intake/nobody.pdf")
 
 
 async def test_a_selected_option_is_accepted_on_its_own(
@@ -187,6 +213,7 @@ async def test_an_answer_carrying_two_forms_is_refused(
     """The other direction: a file upload that also carries prose leaves *which
     one is the answer* a question with two candidates and no rule."""
     _, question, submission = form
+    await add_intake_file(db_engine, submission, "intake/draft.pdf")
 
     with pytest.raises(IntegrityError):
         await add_answer(

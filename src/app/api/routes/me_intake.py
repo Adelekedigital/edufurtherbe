@@ -11,8 +11,8 @@ eight endpoints. The same reasoning that split `me_session_types.py` out of
 whose it is; a flat `/me/questions/{id}` would have to look the question up and
 then check, which is the shape non-negotiable #5 refuses.
 
-There is no mentee-facing surface here yet. Answering is the next release, and
-`intake_submissions` and `intake_answers` are waiting for it.
+The mentee-facing surface is elsewhere: answers arrive with the booking
+(`POST /sessions`), and files are uploaded through `intake_files.py`.
 """
 
 from __future__ import annotations
