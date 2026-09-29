@@ -527,3 +527,67 @@ async def test_the_hourly_settle_run_finalises_after_settling_attendance(
 
     assert await column(db_engine, over, "deleted_at") is not None
     assert result.counts["deleted_session_types"] == 1
+
+
+# --------------------------------------------------------------------------
+# C — the booked figures on every owner row, so the delete confirm can say
+# which of its two things will happen before the mentor chooses
+# --------------------------------------------------------------------------
+
+
+async def test_every_owner_row_carries_its_booked_figures(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor, auth = await as_mentor(db_engine, "figures")
+    booked = await add_session_type(db_engine, mentor, name="Booked")
+    free = await add_session_type(db_engine, mentor, name="Free")
+    await book(db_engine, mentor, booked, status="confirmed", days=1)
+    await book(db_engine, mentor, booked, status="pending_mentor_approval", days=3)
+    await book(db_engine, mentor, booked, status="cancelled", days=5)
+
+    rows = {row["id"]: row for row in await own(api_client, auth)}
+
+    held, empty = rows[str(booked)], rows[str(free)]
+    assert held["booked_count"] == 2, "the cancelled session was counted"
+    last = dt.datetime.fromisoformat(str(held["last_booked_ends_at"]))
+    # The last *live* session starts three days out and runs 45 minutes; the
+    # cancelled one, later still, must not move it.
+    expected = dt.datetime.now(dt.UTC) + dt.timedelta(days=3, minutes=45)
+    assert abs(last - expected) < dt.timedelta(minutes=5)
+    assert held["pending_deletion"] is None, "nothing was scheduled"
+    assert empty["booked_count"] == 0
+    assert empty["last_booked_ends_at"] is None
+
+
+async def test_the_figures_and_the_schedule_agree(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """One derivation: what the confirm promised is what the schedule says."""
+    mentor, auth = await as_mentor(db_engine, "figures-agree")
+    booked = await add_session_type(db_engine, mentor, name="Booked")
+    await book(db_engine, mentor, booked, status="confirmed", days=2)
+    before = (await own(api_client, auth))[0]
+
+    response = await api_client.delete(f"{URL}/{booked}", headers=bearer(api_token(auth)))
+    (after,) = await own(api_client, auth)
+
+    assert response.status_code == 202, response.text
+    assert before["last_booked_ends_at"] == response.json()["deletes_after"]
+    assert after["pending_deletion"] == {
+        "booked_count": after["booked_count"],
+        "deletes_after": after["last_booked_ends_at"],
+    }
+
+
+async def test_the_public_read_has_no_booked_figures(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """How busy a mentor is stays the mentor's to know."""
+    mentor, _ = await as_mentor(db_engine, "figures-public")
+    booked = await add_session_type(db_engine, mentor, name="Booked")
+    await book(db_engine, mentor, booked, status="confirmed")
+
+    (row,) = (await api_client.get(public_url(mentor))).json()["data"]
+
+    assert "booked_count" not in row
+    assert "last_booked_ends_at" not in row

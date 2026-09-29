@@ -382,6 +382,18 @@ class OwnSessionTypeRead(BaseModel):
             "another un-features this, and hiding it un-features it."
         ),
     )
+    #: The live sessions holding it, on every row — so the delete confirm can say
+    #: whether deleting waits for them before the mentor chooses (#218). The same
+    #: two figures `pending_deletion` carries once it does.
+    booked_count: int = Field(
+        description="Sessions booked on it now: awaiting your decision, or agreed."
+    )
+    last_booked_ends_at: dt.datetime | None = Field(
+        description=(
+            "When the last of those ends (UTC), or `null` if none. Deleting it now "
+            "would be scheduled for this time; with none, it is deleted at once."
+        )
+    )
     pending_deletion: PendingDeletionRead | None = Field(
         default=None,
         description=(
@@ -393,6 +405,10 @@ class OwnSessionTypeRead(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> OwnSessionTypeRead:
+        # Read once, used twice: the row's figures and the schedule's are the
+        # same values, so they cannot disagree.
+        booked_count = int(str(row.get("booked_count") or 0))
+        last_booked_ends_at = cast("dt.datetime | None", row.get("deletes_after"))
         return cls(
             id=str(row["id"]),
             name=str(row["name"]),
@@ -419,11 +435,10 @@ class OwnSessionTypeRead(BaseModel):
             ),
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
+            booked_count=booked_count,
+            last_booked_ends_at=last_booked_ends_at,
             pending_deletion=(
-                PendingDeletionRead(
-                    deletes_after=cast("dt.datetime | None", row.get("deletes_after")),
-                    booked_count=int(str(row.get("booked_count") or 0)),
-                )
+                PendingDeletionRead(deletes_after=last_booked_ends_at, booked_count=booked_count)
                 if row.get("deletion_scheduled_at") is not None
                 else None
             ),
