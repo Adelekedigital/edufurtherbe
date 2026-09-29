@@ -59,13 +59,15 @@ from app.api.errors import CONTENT_TYPE
 #: image, this one is a rule about a request, and collapsing them would mean a
 #: change to either silently moving the other.
 MAX_BODY_BYTES = 6 * 1024 * 1024
+#: The same limit as the refusal and the published spec quote it.
+MAX_BODY_MB = MAX_BODY_BYTES // (1024 * 1024)
 
 _REFUSAL = json.dumps(
     {
         "type": "about:blank",
         "title": "Content Too Large",
         "status": status.HTTP_413_CONTENT_TOO_LARGE,
-        "detail": "that request body is larger than 6 MB",
+        "detail": f"that request body is larger than {MAX_BODY_MB} MB",
     }
 ).encode()
 

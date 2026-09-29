@@ -9,6 +9,14 @@ holds that part, and it carries no VBA project anywhere. Declared, not merely
 mentioned: an earlier substring test was passed by a `.docm` that planted a
 second, decoy Word declaration on some other part.
 
+**Macros are refused by their declared type, not only by their name.** Word
+finds a VBA project through its content type, so a `vbaProject.bin` renamed
+`m.dat` is still one; every part a package declares — by `Override` or by
+`Default` extension — is checked, and any macro-enabled type or VBA project
+refuses the file. The name check stays as a second layer. **An archive naming
+one entry twice, in any case, is refused**: which copy a reader takes is the
+reader's choice, so this check and Word could read different declarations.
+
 **The declaration is parsed with `defusedxml`**, which refuses a DTD's entities
 rather than expanding them, so the one XML document read here cannot be a
 billion-laughs bomb. It is a pure parser — no I/O, no framework — which is why
@@ -50,9 +58,15 @@ DOCX_MAIN = "application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 CONTENT_TYPES = "[Content_Types].xml"
 DOCUMENT_PART = "word/document.xml"
 #: `[Content_Types].xml`'s own namespace — an `Override` in any other is not one.
-OVERRIDE = "{http://schemas.openxmlformats.org/package/2006/content-types}Override"
+CONTENT_TYPES_NS = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+OVERRIDE = f"{CONTENT_TYPES_NS}Override"
+DEFAULT = f"{CONTENT_TYPES_NS}Default"
 #: Where Word keeps macros. A `.docx` never carries one, wherever it is put.
 VBA_PROJECT = "vbaproject.bin"
+#: A VBA project's declared type — how Word finds one, whatever it is called.
+VBA_PROJECT_TYPE = "application/vnd.ms-office.vbaproject"
+#: Every macro-enabled Office main part says so in its type.
+MACRO_ENABLED = "macroenabled"
 
 #: A real CV is a few dozen entries; a few hundred with embedded images.
 MAX_DOCX_ENTRIES = 1000
@@ -91,6 +105,8 @@ def _is_docx(payload: bytes) -> bool:
             if sum(entry.file_size for entry in entries) > MAX_DOCX_INFLATED:
                 return False
             names = {entry.filename for entry in entries}
+            if len({name.lower() for name in names}) != len(entries):
+                return False
             if CONTENT_TYPES not in names or DOCUMENT_PART not in names:
                 return False
             if any(name.lower().rsplit("/", 1)[-1] == VBA_PROJECT for name in names):
@@ -117,12 +133,17 @@ def _declares_word_main(content_types: bytes) -> bool:
 
     Part names compare without regard to case (ECMA-376 Part 2, 9.1.1.1.2).
     Any declaration of that part that is not Word's — two of them, one a
-    `.docm`'s — refuses, rather than letting the first or last one win.
+    `.docm`'s — refuses, rather than letting the first or last one win. So
+    does any part of any name declared as a VBA project or macro-enabled.
     """
     try:
         root = fromstring(content_types)
     except ParseError, DefusedXmlException, ValueError:
         return False
+    for declaration in (*root.iter(OVERRIDE), *root.iter(DEFAULT)):
+        kind = (declaration.get("ContentType") or "").lower()
+        if kind == VBA_PROJECT_TYPE or MACRO_ENABLED in kind:
+            return False
     declared = {
         override.get("ContentType")
         for override in root.iter(OVERRIDE)

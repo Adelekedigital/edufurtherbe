@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import warnings
 import zipfile
 from uuid import uuid4
 
@@ -30,6 +31,7 @@ from conftest import PDF_BYTES, WORD_MAIN, docx_bytes
 
 DOCM_MAIN = "application/vnd.ms-word.document.macroEnabled.main+xml"
 XLSX_MAIN = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+VBA_PROJECT_TYPE = "application/vnd.ms-office.vbaProject"
 STYLES = "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"
 CORE_PROPERTIES = "application/vnd.openxmlformats-package.core-properties+xml"
 
@@ -90,11 +92,56 @@ def test_a_word_document_is_known_by_its_declared_main_part() -> None:
             docx_bytes(parts=("word/document.xml", "customXml/VBAPROJECT.BIN")),
             id="vba-project-anywhere-any-case",
         ),
+        pytest.param(
+            docx_bytes(
+                parts=("word/document.xml", "word/m.dat"),
+                overrides=(("/word/m.dat", VBA_PROJECT_TYPE),),
+            ),
+            id="renamed-vba-project-declared-by-override",
+        ),
+        pytest.param(
+            docx_bytes(
+                parts=("word/document.xml", "word/macros.bin"),
+                defaults=(("bin", VBA_PROJECT_TYPE),),
+            ),
+            id="renamed-vba-project-declared-by-default",
+        ),
+        pytest.param(
+            docx_bytes(
+                parts=("word/document.xml", "word/real.xml"),
+                overrides=(("/word/real.xml", DOCM_MAIN),),
+            ),
+            id="a-second-macro-enabled-main-part",
+        ),
         pytest.param(b"PK\x03\x04" + b"\x00" * 40, id="zip-magic-then-garbage"),
     ],
 )
 def test_anything_else_is_refused(payload: bytes) -> None:
     assert file_type(payload) is None
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        pytest.param("[Content_Types].xml", id="same-name"),
+        pytest.param("[content_types].xml", id="same-name-other-case"),
+    ],
+)
+def test_an_archive_naming_one_part_twice_is_refused(second: str) -> None:
+    """Which copy a reader takes is the reader's choice, so no copy is trusted:
+    this check reads the last one, and Word may read another."""
+    buffer = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(docx_bytes())) as source,
+        zipfile.ZipFile(buffer, "w") as archive,
+    ):
+        for entry in source.infolist():
+            archive.writestr(entry.filename, source.read(entry))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # zipfile warns on a duplicate name
+            archive.writestr(second, source.read("[Content_Types].xml"))
+
+    assert file_type(buffer.getvalue()) is None
 
 
 def test_a_word_document_with_other_parts_declared_is_still_accepted() -> None:
