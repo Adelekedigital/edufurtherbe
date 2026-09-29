@@ -227,8 +227,14 @@ async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
         "Up to three bookable mentors who share a service offering with this "
         "one, as discovery cards, each with the `shared_offering` that makes "
         "them similar.\n\n"
-        "**Public.** No token, and no owner view: a paused, unapproved or "
-        "unbookable mentor is a `404` here for everyone.\n\n"
+        "**Public, and served for a hidden mentor too.** A visitor who opens the "
+        "link of a mentor who is pending, unlisted or unbookable cannot see the "
+        "profile (`404`), and this page offers similar live mentors in its place. "
+        "Every viewer gets the same answer.\n\n"
+        "**Never a `404`.** A handle that is nobody, a deleted mentor, or a user "
+        "who is not a mentor is an empty `data`, so this endpoint cannot say which "
+        'hidden mentors exist, and a mistyped link gets the same "see other '
+        'mentors" state.\n\n'
         "**Ranked** by how many offerings are shared, then delivered sessions, "
         "then review count, then newest profile — a total order, so a refresh "
         "never reshuffles. Candidates are exactly who `/mentors` lists: public "
@@ -236,7 +242,6 @@ async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
         "**An empty `data`** when the mentor gives no offering or nobody "
         "shares one. `next_cursor` is always null: there is no second page."
     ),
-    responses=PUBLIC_RESPONSES,
 )
 async def read_similar_mentors(
     similar: SimilarMentorsDep, response: Response

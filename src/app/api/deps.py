@@ -151,7 +151,11 @@ from app.infra.db.intake_store import (
     reorder_questions,
     update_question,
 )
-from app.infra.db.mentor_public_store import get_public_mentor, get_public_mentor_id
+from app.infra.db.mentor_public_store import (
+    get_existing_mentor_id,
+    get_public_mentor,
+    get_public_mentor_id,
+)
 from app.infra.db.mentor_relationship import mentor_relationship
 from app.infra.db.mentor_search_store import (
     count_mentors,
@@ -2513,16 +2517,23 @@ FeaturedMentorDep = Annotated[dict[str, Any] | None, Depends(featured_mentor)]
 
 
 async def similar_to_mentor(handle: str, session: SessionDep) -> list[dict[str, Any]]:
-    """Up to three bookable mentors like this one, or a 404 for a hidden mentor.
+    """Up to three bookable mentors like this one — whatever state this one is in.
 
-    **Resolved as a stranger resolves the profile** — `get_public_mentor_id`
-    with no viewer — so a mentor who is paused or unapproved has no similar
-    list, owner included. Suggestions are for a mentee choosing between
-    mentors, and a profile nobody can visit has nobody to suggest them to.
+    **Resolved for any existing mentor, live or not** (owner, 2026-09-29,
+    superseding #186's 404). A visitor who opens a pending, unlisted or
+    unbookable mentor's link lands on a page that cannot show the profile, and
+    offers mentors with the same expertise instead. The suggestions themselves
+    stay live-only, which `similar_mentors` already guarantees.
+
+    **Nobody is an empty list, not a 404.** Answering "no such mentor" for an
+    unknown handle while answering a hidden one would tell anyone which hidden
+    mentors exist; an empty list is also the "see other mentors" state a
+    mistyped link should get. The same answer for every viewer, so it stays
+    shareable-cacheable.
     """
-    mentor = await get_public_mentor_id(session, handle)
+    mentor = await get_existing_mentor_id(session, handle)
     if mentor is None:
-        raise NotFoundError("no such mentor")
+        return []
     return await similar_mentors(session, mentor)
 
 

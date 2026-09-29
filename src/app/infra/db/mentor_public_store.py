@@ -41,11 +41,12 @@ from app.infra.db.profile_store import top_award
 from app.infra.db.public_visibility import (
     has_live_offering,
     has_weekly_hours,
+    mentor_exists,
     mentor_is_live,
     mentor_is_visible_to,
 )
 
-__all__ = ["get_public_mentor", "get_public_mentor_id"]
+__all__ = ["get_existing_mentor_id", "get_public_mentor", "get_public_mentor_id"]
 
 _STUDY_COUNTRY = Country.__table__.alias("study_country")
 _ORIGIN_COUNTRY = Country.__table__.alias("origin_country")
@@ -161,6 +162,25 @@ async def get_public_mentor(
     """
     row = (await session.execute(_public_profile(handle, viewer))).mappings().first()
     return dict(row) if row else None
+
+
+async def get_existing_mentor_id(session: AsyncSession, handle: str) -> UUID | None:
+    """The user id behind a handle for **any existing mentor**, live or not.
+
+    **Not a visibility check, and not for rendering.** It answers "whose
+    expertise should suggestions be based on" for a mentor nobody may see — the
+    similar-mentors page a visitor lands on in place of a hidden profile. The
+    same `_by_handle`, and `mentor_exists()` rather than a restatement of it, so
+    a deleted profile or account is nobody here too.
+    """
+    return (
+        await session.execute(
+            select(User.id)
+            .select_from(MentorProfile)
+            .join(User, User.id == MentorProfile.user_id)
+            .where(_by_handle(handle), *mentor_exists())
+        )
+    ).scalar_one_or_none()
 
 
 async def get_public_mentor_id(

@@ -4,6 +4,12 @@ Similar means **shares a service offering**: the closed six-row taxonomy is the
 axis matching already runs on. Candidates are exactly who discovery lists —
 public and bookable — so a "similar" card never links to a profile a stranger
 cannot open or a mentor nobody can book.
+
+**The mentor asked about may be hidden** (owner, 2026-09-29): a visitor who
+opens a pending, unlisted or unbookable mentor's link is offered similar live
+mentors instead of a bare 404. The profile itself stays a 404. A handle that is
+nobody is an empty list, never a 404, so this endpoint cannot say which hidden
+mentors exist.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from tests.integration.factories import (
     make_bookable_mentor,
     make_public_mentor,
 )
+from tests.integration.test_api_booking import a_mentee
 from tests.integration.test_api_mentor_search import give_offering
 
 from conftest import api_token, bearer
@@ -161,29 +168,79 @@ async def test_a_mentor_with_no_offerings_has_no_similar_mentors(
     assert response.json()["data"] == []
 
 
-async def test_a_hidden_mentor_is_a_404(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    me = await make_public_mentor(db_engine, "hidden-me", approved=False, slug="hidden-me")
-
-    for handle in (me, "hidden-me", uuid4()):
-        assert (await api_client.get(url(handle))).status_code == 404
-
-
-async def test_the_owner_of_a_hidden_profile_gets_no_suggestions_either(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """No owner view here: similar mentors are for a mentee choosing, and a
-    hidden profile has no visitors to suggest anything to."""
-    me = await make_public_mentor(db_engine, "hidden-owner", approved=False)
-    async with db_engine.begin() as conn:
+async def auth_of(engine: AsyncEngine, user: UUID) -> dict[str, str]:
+    async with engine.begin() as conn:
         auth_id = (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": me})
+            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": user})
         ).scalar_one()
+    return bearer(api_token(auth_id))
 
-    response = await api_client.get(url(me), headers=bearer(api_token(auth_id)))
 
-    assert response.status_code == 404
+@pytest.mark.parametrize(
+    "hidden",
+    [
+        pytest.param({"approved": False}, id="pending"),
+        pytest.param({"listed": False}, id="unlisted"),
+        pytest.param({}, id="unbookable"),
+    ],
+)
+async def test_a_hidden_mentor_still_gets_suggestions(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, hidden: dict[str, bool]
+) -> None:
+    """The profile is a 404, and the page offers similar live mentors instead."""
+    tag = f"hidden-{next(iter(hidden), 'unbookable')}"
+    me = await make_public_mentor(db_engine, tag, slug=tag, **hidden)
+    await give_offering(db_engine, me, TEST_PREP)
+    other = await mentor_with(db_engine, f"{tag}-other", TEST_PREP)
+
+    response = await api_client.get(url(tag))
+
+    assert (await api_client.get(f"/api/v1/mentors/{tag}")).status_code == 404
+    assert response.status_code == 200
+    assert ids(response.json()) == [str(other)]
+
+
+async def test_every_viewer_gets_the_same_suggestions_for_a_hidden_mentor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Anonymous, another mentor, the owner: one answer, so it stays shareable."""
+    me = await make_public_mentor(db_engine, "hidden-viewers", approved=False)
+    await give_offering(db_engine, me, TEST_PREP)
+    other = await mentor_with(db_engine, "hidden-viewers-other", TEST_PREP)
+    another_mentor = await mentor_with(db_engine, "hidden-viewers-mentor")
+
+    anonymous = await api_client.get(url(me))
+    as_mentor = await api_client.get(url(me), headers=await auth_of(db_engine, another_mentor))
+    as_owner = await api_client.get(url(me), headers=await auth_of(db_engine, me))
+
+    for response in (anonymous, as_mentor, as_owner):
+        assert response.status_code == 200
+        assert ids(response.json()) == [str(other)]
+    assert anonymous.headers["cache-control"] == "public, max-age=60"
+
+
+async def test_a_handle_that_is_no_mentor_is_an_empty_list(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Never a 404: telling "nobody" apart from "hidden" would say who exists.
+    A deleted mentor counts as nobody, even with an offering someone shares."""
+    await mentor_with(db_engine, "nobody-other", TEST_PREP)
+    deleted_profile = await mentor_with(db_engine, "nobody-deleted-profile", TEST_PREP)
+    deleted_account = await mentor_with(db_engine, "nobody-deleted-account", TEST_PREP)
+    mentee, _ = await a_mentee(db_engine, "nobody-mentee")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE mentor_profiles SET deleted_at = now() WHERE user_id = :u"),
+            {"u": deleted_profile},
+        )
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": deleted_account}
+        )
+
+    for handle in (uuid4(), "no-such-mentor", mentee, deleted_profile, deleted_account):
+        response = await api_client.get(url(handle))
+        assert response.status_code == 200, handle
+        assert response.json() == {"data": [], "next_cursor": None}
 
 
 async def test_the_list_is_shared_cacheable_unless_a_token_came(
