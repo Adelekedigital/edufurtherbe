@@ -40,22 +40,6 @@ class AccountExistsError(ConflictError):
     """
 
 
-class SessionTypeHasBookingsError(ConflictError):
-    """A session type cannot be deleted while sessions are live on it.
-
-    Carries a problem type and `booked_count` (#197): the client's answer is
-    unlike a name clash — "N booked sessions use this; switch it off instead" —
-    and the count is what lets it say so.
-    """
-
-    def __init__(self, message: str, *, booked_count: int) -> None:
-        super().__init__(message)
-        self.booked_count = booked_count
-
-    def problem_members(self) -> dict[str, object]:
-        return {"booked_count": self.booked_count}
-
-
 class InsufficientCreditError(ConflictError):
     """The caller has no spendable credit left.
 

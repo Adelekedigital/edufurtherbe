@@ -927,3 +927,86 @@ def test_the_inherit_downgrade_writes_the_resolved_values(
         )
         is True
     )
+
+
+def test_featured_and_scheduled_deletion_arrive_as_defaults(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`f3a91d2c7b45` adds both columns under existing rows as un-featured and
+    unscheduled — what every offering was — and the constraints validate over
+    them (#217, #218)."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "228315723d63")
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="round4-up@example.test", name="Existing", stage="NULL", label="NULL"
+        ),
+    )
+
+    command.upgrade(config, "f3a91d2c7b45")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT is_featured::text || ':' || (deletion_scheduled_at IS NULL)::text "
+            "FROM session_types WHERE name = 'Existing'",
+        )
+        == "false:true"
+    )
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT bool_and(convalidated) FROM pg_constraint WHERE conname IN "
+            "('ck_session_types_featured_is_active', "
+            "'ck_session_types_scheduled_deletion_is_hidden')",
+        )
+        is True
+    )
+
+
+def test_the_round_four_downgrade_keeps_a_scheduled_offering_hidden(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """Down, a featured offering keeps its row and loses only its place first,
+    and a scheduled one stays **hidden and undeleted** — the old code's `409`
+    then refuses its `DELETE` again, which is where it was."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "f3a91d2c7b45")
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="round4-feat@example.test", name="Featured", stage="NULL", label="NULL"
+        ),
+    )
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="round4-sched@example.test", name="Scheduled", stage="NULL", label="NULL"
+        ),
+    )
+    execute(
+        disposable_database,
+        "UPDATE session_types SET is_featured = true WHERE name = 'Featured'; "
+        "UPDATE session_types SET is_active = false, deletion_scheduled_at = now() "
+        "WHERE name = 'Scheduled'",
+    )
+
+    command.downgrade(config, "228315723d63")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT string_agg(name || '=' || is_active::text || ':' || "
+            "(deleted_at IS NULL)::text, ',' ORDER BY name) FROM session_types",
+        )
+        == "Featured=true:true,Scheduled=false:true"
+    )
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT count(*) FROM information_schema.columns WHERE table_name = "
+            "'session_types' AND column_name IN ('is_featured', 'deletion_scheduled_at')",
+        )
+        == 0
+    )

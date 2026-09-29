@@ -33,6 +33,7 @@ from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.intake_file_store import sweep_counts, sweep_intake_files
 from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.outbox import drain
+from app.infra.db.session_type_store import finalise_scheduled_deletions
 from app.infra.db.session_writer import expire_requests, remind_unreviewed, settle_attendance
 from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
@@ -166,6 +167,9 @@ class RuntimeJobs:
                 now = dt.datetime.now(dt.UTC)
                 expired = await expire_requests(session, now=now, calendar=self._calendar())
                 settled = await settle_attendance(session, now=now)
+                # After attendance, so a session that ended this hour no longer
+                # holds its scheduled offering open (#218).
+                finalised = await finalise_scheduled_deletions(session)
                 nudged = await remind_unreviewed(session, now=now)
                 oauth = self._calendar_health()
                 health = (
@@ -192,6 +196,7 @@ class RuntimeJobs:
                 return {
                     "expired_requests": expired,
                     "settled_sessions": settled,
+                    "deleted_session_types": finalised,
                     "review_nudges": nudged,
                     "disconnected_calendars": health["disconnected"],
                     "messages": sum(sent.values()),

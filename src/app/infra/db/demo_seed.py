@@ -265,7 +265,11 @@ async def apply_demo_session_types(
                 text(
                     "UPDATE session_types SET name = :n, description = :d, "
                     " service_offering_id = (SELECT id FROM service_offerings WHERE slug = :o), "
-                    " application_stage = :st, custom_stage_label = NULL, is_active = true "
+                    " application_stage = :st, custom_stage_label = NULL, is_active = true, "
+                    # Converges on the template, shown: a schedule a tester left
+                    # must go too, or showing it trips the hidden-while-scheduled
+                    # `CHECK` and aborts the seed (#218).
+                    " deletion_scheduled_at = NULL "
                     "WHERE id = :t"
                 ),
                 {**values, "t": type_id},

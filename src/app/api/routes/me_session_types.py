@@ -29,6 +29,7 @@ from app.api.deps import (
     DeletedOwnSessionTypeDep,
     DeletedSessionTypeWindowDep,
     OwnSessionTypesDep,
+    RestoredOwnSessionTypeDep,
     SessionTypeWindowsDep,
     UpdatedOwnSessionTypeDep,
     UpdatedSessionTypeWindowDep,
@@ -36,7 +37,11 @@ from app.api.deps import (
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.availability import AvailabilityRuleRead
 from app.api.schemas.common import Page
-from app.api.schemas.session_types import OwnSessionTypeRead, SessionTypeCreated
+from app.api.schemas.session_types import (
+    DeletionScheduledRead,
+    OwnSessionTypeRead,
+    SessionTypeCreated,
+)
 from app.core.errors import NotFoundError
 
 router = APIRouter(prefix="/api/v1/me", tags=["session-types"])
@@ -201,33 +206,62 @@ async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> dict[str, 
         "Removes the offering from your list and from everything a mentee can "
         "see or book. Past sessions keep pointing at it, so their history stays "
         "readable — the row survives, marked deleted.\n\n"
-        "**Refused with `409` while sessions are still booked on it.** A session "
-        "awaiting your decision, or already agreed, is somebody's plan; cancel "
-        "them or let them finish first. Cancelled and completed sessions do not "
-        "hold an offering open.\n\n"
+        "**With sessions still booked on it, it is scheduled rather than refused** "
+        "(`202`): hidden at once, un-featured, and deleted automatically once "
+        "the last of them is over — they go ahead. A session awaiting your "
+        "decision, or already agreed, holds it; cancelled and completed ones do "
+        "not. `pending_deletion` on your list says when, and "
+        "`POST .../restore` cancels it. Deleting it again answers the same "
+        "schedule.\n\n"
         "**Switching off is the reversible alternative** and is usually what is "
         "wanted: `PATCH` with `is_active: false` makes an offering invisible and "
-        "unbookable while leaving it to switch back on. Deletion is not "
-        "reversible through this API.\n\n"
+        "unbookable while leaving it to switch back on. A deletion that has "
+        "happened is not reversible through this API.\n\n"
         "The name becomes free immediately — a deleted offering does not reserve "
         "it.\n\n"
         "An offering that is not yours, or is already deleted, gets `404`."
     ),
     responses=WRITE_RESPONSES
     | {
-        status.HTTP_409_CONFLICT: {
+        status.HTTP_202_ACCEPTED: {
+            "model": DeletionScheduledRead,
             "description": (
-                "Sessions are still live on this offering (awaiting a decision or "
-                "agreed). `type` is `/problems/session-type-has-bookings`, and "
-                "`booked_count` says how many — switch the offering off instead, or "
-                "cancel them first."
-            )
+                "Sessions are still booked on this offering, so its deletion is "
+                "scheduled for after the last of them."
+            ),
         }
     },
 )
-async def remove_own_session_type(removed: DeletedOwnSessionTypeDep) -> None:
-    if not removed:
+async def remove_own_session_type(removed: DeletedOwnSessionTypeDep) -> Response:
+    if removed is False:
         raise NotFoundError("no such session type")
+    if removed is True:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    body = DeletionScheduledRead(
+        deletes_after=removed.deletes_after, booked_count=removed.booked_count
+    )
+    return Response(
+        content=body.model_dump_json(),
+        status_code=status.HTTP_202_ACCEPTED,
+        media_type="application/json",
+    )
+
+
+@router.post(
+    "/session-types/{session_type_id}/restore",
+    response_model=OwnSessionTypeRead,
+    summary="Cancel a scheduled deletion",
+    description=(
+        "Cancels the deletion scheduled by a `DELETE` on an offering with booked "
+        "sessions. The offering **stays hidden**; show it again with `PATCH "
+        '{"is_active": true}`. Answers the offering as your list shows it. A '
+        "no-op on an offering with nothing scheduled.\n\n"
+        "An offering that is not yours, or is deleted, gets `404`."
+    ),
+    responses=WRITE_RESPONSES,
+)
+async def restore_own_session_type(restored: RestoredOwnSessionTypeDep) -> OwnSessionTypeRead:
+    return OwnSessionTypeRead.from_row(restored)
 
 
 WINDOW_DESCRIPTION = (

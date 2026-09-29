@@ -42,8 +42,10 @@ than from a primary offering. Venue is unaffected and has no mentor-level home.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -52,7 +54,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.errors import ConflictError, SessionTypeHasBookingsError, ValidationError
+from app.core.errors import ConflictError, ValidationError
 from app.domain.enums import ApplicationStage, ConferencingProvider
 from app.domain.sessions import first_stage, named_stages, stage_label_problem
 from app.infra.db.booking_rules import (
@@ -84,12 +86,65 @@ from app.infra.db.public_visibility import (
 from app.infra.db.stages import stages_for_session_types, write_session_type_stages
 
 __all__ = [
+    "DeletionScheduled",
     "create_session_type",
     "delete_session_type",
+    "finalise_scheduled_deletions",
+    "get_own_session_type",
     "list_own_session_types",
     "list_session_types",
+    "restore_session_type",
     "update_session_type",
 ]
+
+
+def _live_on(session_type_id: Any) -> list[Any]:
+    """The sessions still holding an offering open: awaiting a decision, or agreed.
+
+    `LIVE_STATUSES` reused, never retyped — it is the predicate behind the
+    double-booking constraint and three partial indexes, and the one that decides
+    whether a delete goes now or waits (#218).
+    """
+    return [Session.session_type_id == session_type_id, text(LIVE_STATUSES)]
+
+
+def _booked_count(session_type_id: Any) -> Any:
+    """How many live sessions hold this offering, as a scalar subquery."""
+    return (
+        select(func.count())
+        .select_from(Session)
+        .where(*_live_on(session_type_id))
+        .scalar_subquery()
+    )
+
+
+def _deletes_after(session_type_id: Any) -> Any:
+    """When the last live session on this offering ends, or null if none is left.
+
+    The end is `session_window(...)`'s upper bound — the function the
+    double-booking constraint uses, so "when a session ends" has one definition.
+    """
+    return (
+        select(
+            func.max(func.upper(func.session_window(Session.starts_at, Session.duration_minutes)))
+        )
+        .where(*_live_on(session_type_id))
+        .scalar_subquery()
+    )
+
+
+#: Featured first, then by name — unique per mentor among live rows, so the
+#: order is total (#217).
+_LISTED = (SessionType.is_featured.desc(), SessionType.name)
+
+
+@dataclass(frozen=True, slots=True)
+class DeletionScheduled:
+    """A delete that waits for the offering's booked sessions (#218)."""
+
+    deletes_after: dt.datetime
+    booked_count: int
+
 
 #: The offering's own option, joined on the **composite** key.
 #:
@@ -223,6 +278,7 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             SessionType.application_stage,
             SessionType.custom_stage_label,
             SessionType.icon,
+            SessionType.is_featured,
             # Resolved, not read (#216): the offering's own, else its mentor's
             # default, else the platform's. The field stays an int.
             effective_duration_minutes().label("duration_minutes"),
@@ -241,7 +297,7 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
     return (
         _with_venue(statement)
         .where(*session_type_is_live(user_id), *mentor_is_public())
-        .order_by(SessionType.name)
+        .order_by(*_LISTED)
     )
 
 
@@ -290,6 +346,11 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionType.custom_stage_label,
             SessionType.icon,
             SessionType.is_active,
+            SessionType.is_featured,
+            SessionType.deletion_scheduled_at,
+            # Derived, so a cancellation moves them without a write (#218).
+            _booked_count(SessionType.id).label("booked_count"),
+            _deletes_after(SessionType.id).label("deletes_after"),
             effective_duration_minutes().label("duration_minutes"),
             effective_min_notice_minutes().label("min_notice_minutes"),
             inherits_duration().label("duration_inherited"),
@@ -308,7 +369,7 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
         # `session_types.mentor_user_id` references this table.
         .join(MentorProfile, MentorProfile.user_id == SessionType.mentor_user_id)
     )
-    return _with_venue(statement).where(*session_type_of(mentor_user_id)).order_by(SessionType.name)
+    return _with_venue(statement).where(*session_type_of(mentor_user_id)).order_by(*_LISTED)
 
 
 async def list_own_session_types(
@@ -330,6 +391,17 @@ async def list_own_session_types(
     """
     result = await session.execute(_own_session_types(mentor_user_id))
     return await _with_sets(session, [dict(row) for row in result.mappings()])
+
+
+async def get_own_session_type(
+    session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID
+) -> dict[str, Any] | None:
+    """One of this mentor's offerings, as their list shows it, or ``None``."""
+    result = await session.execute(
+        _own_session_types(mentor_user_id).where(SessionType.id == session_type_id)
+    )
+    rows = await _with_sets(session, [dict(row) for row in result.mappings()])
+    return rows[0] if rows else None
 
 
 async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]] | None:
@@ -504,6 +576,7 @@ SESSION_TYPE_COLUMNS = (
     "custom_stage_label",
     "icon",
     "is_active",
+    "is_featured",
 )
 BOOKING_CONFIG_COLUMNS = (
     "duration_minutes",
@@ -536,18 +609,48 @@ async def update_session_type(
     The config `UPDATE` runs only when the payload touches it, so a rename does
     not rewrite `updated_at` on a row nothing changed.
     """
+    # **Featuring locks every offering of this mentor first, in id order** (#217),
+    # so two requests featuring two different offerings serialise: each clears
+    # "the others" and sets its own, and interleaved they would meet on
+    # `ix_session_types_one_featured` as a 500. The order is what keeps two of
+    # them from deadlocking on each other's rows. **Scheduled rows are left
+    # out**: they cannot be featured, and locking them would make a feature wait
+    # on — or deadlock with — the settle run finalising them (#218).
+    if payload.get("is_featured") is True:
+        await session.execute(
+            select(SessionType.id)
+            .where(
+                *session_type_of(mentor_user_id),
+                SessionType.deletion_scheduled_at.is_(None),
+            )
+            .order_by(SessionType.id)
+            .with_for_update()
+        )
+
     # **Locked**, so two edits of one offering serialise: each replaces the
     # stage and offering sets by delete-then-insert, and two interleaved would
     # meet on the sets' unique indexes as a 500 rather than last-write-wins.
     scoped = (
-        select(SessionType.id)
+        select(SessionType.is_active, SessionType.deletion_scheduled_at)
         .where(*session_type_of(mentor_user_id), SessionType.id == session_type_id)
         .with_for_update()
     )
-    if (await session.execute(scoped)).first() is None:
+    state = (await session.execute(scoped)).first()
+    if state is None:
         return False
 
     own = {key: value for key, value in payload.items() if key in SESSION_TYPE_COLUMNS}
+    _refuse_visibility(own, shown=state.is_active, scheduled=state.deletion_scheduled_at)
+    if own.get("is_featured") is True:
+        await session.execute(
+            update(SessionType)
+            .where(
+                *session_type_of(mentor_user_id),
+                SessionType.id != session_type_id,
+                SessionType.is_featured.is_(True),
+            )
+            .values(is_featured=False)
+        )
     stages = named_stages(payload)
     if stages is not None or "custom_stage_label" in payload:
         current = (
@@ -586,15 +689,42 @@ async def update_session_type(
     return True
 
 
+def _refuse_visibility(own: dict[str, Any], *, shown: bool, scheduled: dt.datetime | None) -> None:
+    """Featured only if shown; shown only if not scheduled to go (#217, #218).
+
+    Judged on the offering's state **after** the write, so `{is_active: true,
+    is_featured: true}` on a hidden one is allowed. Hiding un-features in the
+    same write, and stays un-featured if shown again — featuring is a choice
+    made again, not a state resumed. Mutates ``own``.
+    """
+    if own.get("is_active") is True and scheduled is not None:
+        raise ValidationError(
+            "this offering is scheduled for deletion; restore it before showing it",
+            field_errors=(("/is_active", "restore it before showing it"),),
+        )
+    will_show = own.get("is_active", shown)
+    if own.get("is_featured") is True and (not will_show or scheduled is not None):
+        raise ValidationError(
+            "only an offering that is on offer can be featured",
+            field_errors=(("/is_featured", "show this offering before featuring it"),),
+        )
+    if own.get("is_active") is False:
+        own["is_featured"] = False
+
+
 async def delete_session_type(
     session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID
-) -> bool:
-    """Soft-delete one offering. ``False`` if it is not this mentor's, or is gone.
+) -> bool | DeletionScheduled:
+    """Delete one offering now, or schedule it behind its booked sessions (#218).
 
-    **Refuses while a live session is booked on it**, which is a `409` rather
-    than a `404`: the mentor is entitled to delete their own offering, and the
-    refusal is about state they can resolve — the sessions finish, or they cancel
-    them.
+    ``False`` if it is not this mentor's, or is gone; ``True`` if it was deleted
+    now; a `DeletionScheduled` if live sessions hold it. **Scheduling replaces
+    the `409` this used to be** (#197): the design no longer refuses, it waits.
+    The offering is hidden and un-featured at once — hidden is what makes it
+    unbookable, so nothing new can land on it — and the hourly settle run
+    deletes it once nothing live remains (`finalise_scheduled_deletions`).
+    **Idempotent**: a second call on a scheduled offering answers the same
+    schedule with current figures, and keeps the first request's time.
 
     **`LIVE_STATUSES` is reused, not retyped.** It is the predicate behind the
     double-booking exclusion constraint and three partial indexes, and a
@@ -618,28 +748,86 @@ async def delete_session_type(
     that was ever booked can never be hard-deleted, and the row is what a past
     session's `session_type_id` still points at.
     """
-    scoped = select(SessionType.id).where(
-        *session_type_of(mentor_user_id), SessionType.id == session_type_id
+    scoped = (
+        select(SessionType.id)
+        .where(*session_type_of(mentor_user_id), SessionType.id == session_type_id)
+        .with_for_update()
     )
     if (await session.execute(scoped)).first() is None:
         return False
 
-    booked = (
+    held = (
         await session.execute(
-            select(func.count())
-            .select_from(Session)
-            .where(Session.session_type_id == session_type_id, text(LIVE_STATUSES))
+            select(_booked_count(session_type_id), _deletes_after(session_type_id))
         )
-    ).scalar_one()
-    if booked:
-        # Counted, so the refusal can say how many (#197).
-        raise SessionTypeHasBookingsError(
-            "this session type still has sessions booked on it; cancel them or "
-            "wait for them to finish, or switch the offering off instead",
-            booked_count=int(booked),
+    ).one()
+    if not held[0]:
+        await session.execute(
+            update(SessionType)
+            .where(SessionType.id == session_type_id)
+            .values(deleted_at=func.now(), is_featured=False)
         )
+        return True
 
     await session.execute(
-        update(SessionType).where(SessionType.id == session_type_id).values(deleted_at=func.now())
+        update(SessionType)
+        .where(SessionType.id == session_type_id)
+        .values(
+            is_active=False,
+            is_featured=False,
+            deletion_scheduled_at=func.coalesce(SessionType.deletion_scheduled_at, func.now()),
+        )
     )
-    return True
+    return DeletionScheduled(deletes_after=held[1], booked_count=int(held[0]))
+
+
+async def restore_session_type(
+    session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID
+) -> bool:
+    """Cancel a scheduled deletion; the offering stays hidden (#218).
+
+    ``False`` if it is not this mentor's, or is gone. A no-op on an offering
+    with nothing scheduled — the answer is the same either way, which is what a
+    retried tap needs.
+    """
+    restored = await session.execute(
+        update(SessionType)
+        .where(*session_type_of(mentor_user_id), SessionType.id == session_type_id)
+        .values(deletion_scheduled_at=None)
+        .returning(SessionType.id)
+    )
+    return restored.first() is not None
+
+
+async def finalise_scheduled_deletions(session: AsyncSession) -> int:
+    """Delete every scheduled offering no live session holds any more; how many.
+
+    Run by the hourly `settle-sessions` job, after attendance is settled, so a
+    session that ended this hour no longer counts. Idempotent: a deleted row no
+    longer matches. Does not commit.
+
+    The check here is `NOT EXISTS` at run time rather than the count taken
+    when it was scheduled, so a session that committed before this statement
+    still holds the offering open.
+
+    **Not race-free, and accepted with #197's race** (#218). Scheduling hides
+    the offering and booking reads `session_type_is_live()`, so no *new* booking
+    is offered one — but a booking already past that read when the offering was
+    hidden can still commit, and nothing here waits for it: the booking's
+    foreign key takes `FOR KEY SHARE` on the offering row, which does not
+    conflict with this non-key `UPDATE`. A session can then land on an offering
+    this run deletes; it stays readable through `GET /sessions/{id}`. Closed by
+    the same revisit trigger as the delete's own window: `FOR SHARE` on the
+    offering in `book_session`.
+    """
+    result = await session.execute(
+        update(SessionType)
+        .where(
+            SessionType.deletion_scheduled_at.is_not(None),
+            SessionType.deleted_at.is_(None),
+            ~select(Session.id).where(*_live_on(SessionType.id)).exists(),
+        )
+        .values(deleted_at=func.now())
+        .returning(SessionType.id)
+    )
+    return len(result.all())
