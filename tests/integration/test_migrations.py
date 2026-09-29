@@ -149,6 +149,7 @@ EXPECTED_TABLES = [
     # and landing whole. `session_type_question_options` has no writer yet; see
     # its model for why shipping it early is now cheap.
     "intake_answers",
+    "intake_files",
     "intake_submissions",
     "session_type_question_options",
     "session_type_questions",

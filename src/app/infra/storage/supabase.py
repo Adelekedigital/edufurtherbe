@@ -17,6 +17,7 @@ from collections.abc import Callable
 
 import httpx
 
+from app.core.config import Settings
 from app.core.errors import AppError
 from app.infra.http.retry import send_with_backoff
 
@@ -31,6 +32,26 @@ BUCKET = "/storage/v1/bucket"
 
 class StorageError(AppError):
     """Storage refused, or was unreachable."""
+
+
+def intake_storage_for(settings: Settings, client: httpx.Client) -> SupabaseStorage | None:
+    """The private intake bucket, or ``None`` until all three settings are set.
+
+    One builder for the API and the sweep job, so the two can never disagree
+    about which bucket intake files live in.
+    """
+    if (
+        settings.supabase_url is None
+        or settings.supabase_service_role_key is None
+        or settings.supabase_intake_bucket is None
+    ):
+        return None
+    return SupabaseStorage(
+        base_url=str(settings.supabase_url).rstrip("/"),
+        service_role_key=settings.supabase_service_role_key.get_secret_value(),
+        bucket=settings.supabase_intake_bucket,
+        client=client,
+    )
 
 
 class SupabaseStorage:
@@ -144,6 +165,23 @@ class SupabaseStorage:
         if response.status_code >= httpx.codes.BAD_REQUEST:
             raise StorageError(f"download of {path} failed with {response.status_code}")
         return response.content
+
+    def open_stream(self, path: str) -> httpx.Response:
+        """An object's bytes as a stream; **the caller closes the response**.
+
+        For serving a private object through this API without holding it whole
+        or handing out a signed link (decision #77). Not retried: a 429 here is
+        a download the client can simply ask for again.
+        """
+        request = self._client.build_request(
+            "GET", f"{self._base_url}{OBJECT}/{self._bucket}/{path}", headers=self._headers
+        )
+        response = self._client.send(request, stream=True)
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            status_code = response.status_code
+            response.close()
+            raise StorageError(f"download of {path} failed with {status_code}")
+        return response
 
     def delete(self, path: str) -> bool:
         """Remove an object. ``False`` if it was not there.

@@ -313,11 +313,20 @@ class SessionEventRead(BaseModel):
 
 
 class AnswerWrite(Normalised):
-    """One answer to one intake question — `text` or `option_ids`, never both."""
+    """One answer to one intake question: exactly one of `text`, `option_ids`
+    or `file_id`, whichever the question's type takes."""
 
     question_id: UUID
     text: str | None = Field(default=None, max_length=MAX_ANSWER_LENGTH)
     option_ids: list[UUID] | None = Field(default=None, max_length=MAX_OPTIONS)
+    file_id: UUID | None = Field(
+        default=None,
+        description=(
+            "For a `file_upload` question: the `file_id` `POST /me/intake-files` "
+            "returned. Must be your own upload, not yet used in a booking; the "
+            "booking links it, so it cannot answer a second one."
+        ),
+    )
 
 
 class SessionBookingWrite(BaseModel):
@@ -363,10 +372,11 @@ class SessionBookingWrite(BaseModel):
             "Answers to the offering's intake form (`SessionTypeRead.questions`), "
             "saved with the booking. `text` for a `free_text` question; "
             "`option_ids` for a `multi_choice` one — exactly one unless the "
-            "question `allows_multiple`. Every required question must be answered; "
-            "a `file_upload` question is not answerable yet and not enforced. Any "
-            "problem is a `422` whose `errors` point at the answer "
-            "(`/answers/2/option_ids`) or, for a missing required one, at `/answers`."
+            "question `allows_multiple`; `file_id` for a `file_upload` one — upload "
+            "the file first with `POST /me/intake-files`. Every required question "
+            "must be answered, file questions included. Any problem is a `422` "
+            "whose `errors` point at the answer (`/answers/2/option_ids`, "
+            "`/answers/0/file_id`) or, for a missing required one, at `/answers`."
         ),
     )
 

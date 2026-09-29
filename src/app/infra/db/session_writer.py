@@ -78,6 +78,7 @@ from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.availability_writer import block_session_window
 from app.infra.db.credit_writer import refund_credit, spend_credit
+from app.infra.db.intake_file_store import link_files, usable_file_ids
 from app.infra.db.intake_store import questions_by_type, record_answers
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.platform import OutboxEvent
@@ -271,6 +272,7 @@ async def book_session(
     form = (await questions_by_type(session, [payload["session_type_id"]])).get(
         payload["session_type_id"], []
     )
+    file_ids = [a["file_id"] for a in answers if a.get("file_id") is not None]
     problems = answer_problems(
         [
             AskedQuestion(
@@ -287,10 +289,12 @@ async def book_session(
                 question_id=a["question_id"],
                 text=a.get("text"),
                 option_ids=tuple(a["option_ids"]) if a.get("option_ids") is not None else None,
+                file_id=a.get("file_id"),
             )
             for a in answers
         ],
         require_answers=require_answers,
+        usable_files=await usable_file_ids(session, mentee_id, file_ids),
     )
     if problems:
         raise ValidationError(
@@ -375,6 +379,15 @@ async def book_session(
     # **The answers, in the booking's transaction**: a session without the form
     # its mentee filled in, or a form for a session that was never written, are
     # both states nothing should be able to reach.
+    # A file answer's upload is linked here, and the link is the guard: a file
+    # another booking took since the check above refuses this one whole.
+    keys = await link_files(
+        session, session_id=session_id, uploader_id=mentee_id, file_ids=file_ids
+    )
+    answers = [
+        a | {"file_storage_key": keys[a["file_id"]]} if a.get("file_id") is not None else a
+        for a in answers
+    ]
     await record_answers(session, session_id=session_id, mentee_id=mentee_id, answers=answers)
 
     # **The participant rows, in the same transaction as the session**, which

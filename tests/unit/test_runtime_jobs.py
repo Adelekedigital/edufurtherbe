@@ -19,7 +19,7 @@ class RecordingJobs(RuntimeJobs):
 
 
 @pytest.mark.asyncio
-async def test_all_six_names_dispatch_through_the_same_runner_surface() -> None:
+async def test_all_seven_names_dispatch_through_the_same_runner_surface() -> None:
     jobs = RecordingJobs()
     names = (
         "settle-sessions",
@@ -28,6 +28,7 @@ async def test_all_six_names_dispatch_through_the_same_runner_surface() -> None:
         "expire-credits",
         "sync-institutions",
         "refresh-next-available",
+        "sweep-intake-files",
     )
 
     for name in names:

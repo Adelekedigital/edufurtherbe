@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "config" / "runtime-schedules.json"
 
 
-def test_the_manifest_declares_the_six_runtime_jobs_in_utc() -> None:
+def test_the_manifest_declares_the_seven_runtime_jobs_in_utc() -> None:
     manifest = load_manifest(MANIFEST)
 
     assert manifest.timezone == "UTC"
@@ -32,6 +32,7 @@ def test_the_manifest_declares_the_six_runtime_jobs_in_utc() -> None:
         "expire-credits",
         "sync-institutions",
         "refresh-next-available",
+        "sweep-intake-files",
     }
     assert {job.name: job.cron for job in manifest.jobs} == {
         "settle-sessions": "30 * * * *",
@@ -42,6 +43,9 @@ def test_the_manifest_declares_the_six_runtime_jobs_in_utc() -> None:
         # Every five minutes: 288 QStash messages a day against the free tier's
         # 1,000. Every minute would be 1,440 and past it (ADR 0029).
         "refresh-next-available": "*/5 * * * *",
+        # Daily, off-peak: retention counts in days and abandoned uploads in a
+        # day, so a daily pass is as fine-grained as either needs.
+        "sweep-intake-files": "0 3 * * *",
     }
 
 

@@ -384,7 +384,8 @@ async def record_answers(
     **Called only with answers already checked** by `answer_problems` against
     this offering's form, so every question and option id here is one it asks.
     Nothing is written for no answers — an empty form is not a submission. A
-    multiple-choice answer is one row per chosen option (#207). Does not commit:
+    multiple-choice answer is one row per chosen option (#207); a file answer
+    carries the `file_storage_key` its upload was linked under. Does not commit:
     the booking's transaction owns it, so a session and its answers land
     together or not at all.
     """
@@ -404,7 +405,15 @@ async def record_answers(
     ).scalar_one()
     rows: list[dict[str, Any]] = []
     for answer in answers:
-        if answer.get("option_ids") is not None:
+        if answer.get("file_storage_key") is not None:
+            rows.append(
+                {
+                    "submission_id": submission_id,
+                    "question_id": answer["question_id"],
+                    "file_storage_key": answer["file_storage_key"],
+                }
+            )
+        elif answer.get("option_ids") is not None:
             rows += [
                 {
                     "submission_id": submission_id,

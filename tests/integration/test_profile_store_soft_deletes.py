@@ -48,7 +48,12 @@ SOFT_DELETABLE = {table.name for table in Base.metadata.tables.values() if "dele
 #: refuses before any of these functions is reached, and
 #: `test_a_soft_deleted_user_is_invisible_even_to_an_admin` asserts it. Named
 #: rather than silently absent, so the exemption is a decision and not a gap.
-EXEMPT = {"users"}
+#:
+#: `intake_files` is no profile record: its `deleted_at` means "removed by
+#: retention", read only by `intake_file_store`, and
+#: `test_retention_removes_the_object_and_keeps_the_answer` asserts a deleted
+#: file is neither downloadable nor swept twice.
+EXEMPT = {"users", "intake_files"}
 
 #: Emptied once already, in the pull request that added the availability
 #: endpoints — which is what `test_the_unread_exemption_expires_when_a_reader_

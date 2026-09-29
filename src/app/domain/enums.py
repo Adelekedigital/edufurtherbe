@@ -368,6 +368,19 @@ class IntakeStatus(StrEnum):
     REVIEWED = "reviewed"
 
 
+class IntakeFileType(StrEnum):
+    """What a mentee may upload to answer a `file_upload` question.
+
+    **The value is the media type the file is served with**, decided from the
+    bytes on upload and never from the name or the client's claim. PDF and
+    Word (`.docx`) only: a CV or a draft essay, which is what intake asks for.
+    Legacy `.doc` is a different, binary format and is not accepted.
+    """
+
+    PDF = "application/pdf"
+    DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
 class AvailabilityExceptionType(StrEnum):
     """What an exception does to a mentor's recurring availability.
 

@@ -8,6 +8,7 @@ import os
 import socket
 import threading
 import uuid
+import zipfile
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -648,6 +649,37 @@ def image_bytes(fmt: str = "JPEG", size: tuple[int, int] = (40, 30), *, gps: boo
     return buffer.getvalue()
 
 
+#: The smallest thing every reader accepts as a PDF: its magic number.
+PDF_BYTES = b"%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n"
+WORD_MAIN = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+
+
+def docx_bytes(
+    *,
+    main: str = WORD_MAIN,
+    parts: tuple[str, ...] = ("word/document.xml",),
+    extra_entries: int = 0,
+) -> bytes:
+    """A zip shaped like a Word document, down to the part that says so.
+
+    ``main`` is the content type `[Content_Types].xml` declares for the main
+    part, so a macro-enabled `.docm` or a spreadsheet is one argument away.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/'
+            'package/2006/content-types"><Override PartName="/word/document.xml" '
+            f'ContentType="{main}"/></Types>',
+        )
+        for part in parts:
+            archive.writestr(part, "<w:document/>")
+        for index in range(extra_entries):
+            archive.writestr(f"word/media/{index}.xml", "")
+    return buffer.getvalue()
+
+
 class FakeStorage:
     """Enough of Supabase Storage to be re-run against.
 
@@ -656,7 +688,14 @@ class FakeStorage:
     objects and hide a cleanup that never ran.
     """
 
-    def __init__(self, *, bucket_exists: bool = True, upload_fails: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        bucket_exists: bool = True,
+        upload_fails: bool = False,
+        bucket: str = STORAGE_BUCKET,
+    ) -> None:
+        self.bucket = bucket
         self.objects: dict[str, tuple[bytes, str]] = {}
         self.uploads: list[str] = []
         self.deletes: list[str] = []
@@ -666,7 +705,7 @@ class FakeStorage:
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.startswith("/storage/v1/bucket/"):
             return httpx.Response(200 if self.bucket_exists else 404, json={})
-        path = request.url.path.split(f"/storage/v1/object/{STORAGE_BUCKET}/", 1)[-1]
+        path = request.url.path.split(f"/storage/v1/object/{self.bucket}/", 1)[-1]
         if request.method == "GET":
             if path not in self.objects:
                 return httpx.Response(404, json={})
@@ -691,7 +730,7 @@ def storage_for(fake: FakeStorage) -> SupabaseStorage:
     return SupabaseStorage(
         base_url=SUPABASE_URL,
         service_role_key="test-key",
-        bucket=STORAGE_BUCKET,
+        bucket=fake.bucket,
         client=httpx.Client(transport=httpx.MockTransport(fake.handle)),
         sleep=lambda _: None,
     )
