@@ -331,6 +331,8 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "icon",
         # Featured first, and a deletion waiting on booked sessions (#217, #218).
         "is_featured",
+        "booked_count",
+        "last_booked_ends_at",
         "pending_deletion",
     }
     assert offering["is_active"] is False
