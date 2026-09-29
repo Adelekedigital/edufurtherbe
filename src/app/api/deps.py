@@ -1617,6 +1617,7 @@ async def booked_session(
         scheduler=_scheduler(request),
         callback_url=_reminder_callback_url(request),
         external_busy=_free_busy(request),
+        require_answers=_configured(request).require_intake_answers,
     )
     # **In the booking's own transaction**, so a session cannot be committed
     # without whatever venue it was going to get. It no-ops unless the session

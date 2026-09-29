@@ -5,18 +5,28 @@ Booking answers resumed on 2026-09-28 (owner): the questions ride on the public
 questions, validated against the offering's live form and saved in the booking's
 own transaction. File answers are the next PR; a required file question is not
 enforced until then (settled decision #207).
+
+**A required question is enforced only where `require_intake_answers` is on** —
+off by default until the frontend's questions step ships (#283). The tests that
+need it on build their own app with `enforcing_client`.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.conftest import build_api_app
 from tests.integration.test_api_booking import a_bookable_offering, a_mentee, body, first_slot, key
+
+from app.core.config import Settings
+from app.infra.storage.supabase import SupabaseStorage
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -231,13 +241,40 @@ async def test_no_answers_writes_no_submission(
     assert await submissions(db_engine, mentor) == 0
 
 
-async def test_a_missing_required_answer_is_refused_by_name(
+@pytest_asyncio.fixture
+async def enforcing_client(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> AsyncIterator[httpx.AsyncClient]:
+    """`api_client`, on an app where required questions are enforced."""
+    app = build_api_app(
+        db_engine, api_storage, Settings(_env_file=None, require_intake_answers=True)
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+async def test_a_missing_required_answer_books_while_enforcement_is_off(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The default, and what the live frontend relies on** (#283): it sends no
+    answers yet, so a required question must not refuse the booking."""
+    mentor, session_type = await a_bookable_offering(db_engine, "ans-off")
+    await add_question(db_engine, session_type, "Which programme?", required=True)
+
+    response = await book(api_client, db_engine, "ans-off", mentor, session_type, None)
+
+    assert response.status_code == 201, response.text
+    assert await submissions(db_engine, mentor) == 0
+
+
+async def test_a_missing_required_answer_is_refused_by_name(
+    enforcing_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor, session_type = await a_bookable_offering(db_engine, "ans-missing")
     required, _ = await add_question(db_engine, session_type, "Which programme?", required=True)
 
-    response = await book(api_client, db_engine, "ans-missing", mentor, session_type, [])
+    response = await book(enforcing_client, db_engine, "ans-missing", mentor, session_type, [])
 
     assert response.status_code == 422
     problem = response.json()

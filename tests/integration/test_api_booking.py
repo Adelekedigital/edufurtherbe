@@ -601,11 +601,13 @@ async def test_the_exclusion_constraint_refuses_a_genuine_race(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as first, factory() as second:
-        await book_session(first, winner, payload, now=now)
+        await book_session(first, winner, payload, now=now, require_answers=True)
         # `second` reads the grid while `first`'s row is still uncommitted and
         # therefore invisible, so it passes the same pre-check the winner did —
         # then blocks on the exclusion constraint until the winner commits.
-        racing = asyncio.create_task(book_session(second, loser, payload, now=now))
+        racing = asyncio.create_task(
+            book_session(second, loser, payload, now=now, require_answers=True)
+        )
         await until_blocked(db_engine)
         await first.commit()
         with pytest.raises(ConflictError):
