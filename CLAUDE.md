@@ -80,6 +80,9 @@ make check                     # the full local gate — CI runs it on every pus
     `UNIQUE`. An exception is an ADR superseding 0015, never a local judgement:
     this rule already lived in `persistence-patterns` and was overridden twice
     with every gate green.
+11. **No Python file over 900 code lines** (comments and docstrings excluded;
+    `migrations/` exempt), enforced by `scripts/check_file_size.py`. Split by
+    area; never raise the limit. Keep comments succinct.
 
 ## How we work
 
@@ -201,7 +204,7 @@ migrations/        Alembic chain — outside src/, so unpackaged and unscanned
 docs/adr/          decision records — read before proposing a rewrite
 ```
 
-`api/deps.py` and `main.py` are the sanctioned wiring points inside `src/`.
+`api/deps/` (one module per area) and `main.py` are the sanctioned wiring points inside `src/`.
 `scripts/*.py` is a third composition root — it may construct concrete `infra`
 classes, and it may hold **no business rules and no SQL** (see
 `project-conventions`, which explains why the gates cannot see it).

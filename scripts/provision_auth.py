@@ -78,7 +78,7 @@ def lookup_with(client: SupabaseAdminClient) -> Lookup:
     The domain wants ``str -> UUID | None``; the adapter returns its own
     ``AuthUser``. Narrowing happens here, in the composition root, because that is
     where a vendor shape is allowed to be known — it is the same translation
-    ``api/deps.py`` performs for a token subject.
+    ``api/deps/`` performs for a token subject.
     """
 
     def lookup(email: str) -> UUID | None:

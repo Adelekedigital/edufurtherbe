@@ -11,13 +11,13 @@ reports green.
 
 **One rule, one representation.** ``deleted_at IS NULL`` is the whole of "a
 soft-deleted user is invisible", and it was typed by hand into four statements
-here and one in ``api/deps.py``. Four out of five is not a style problem: the
+here and one in ``api/deps/``. Four out of five is not a style problem: the
 ``UPDATE`` was the one that got missed, so a user soft-deleted mid-run would have
 been handed a live account. It is now ``LIVE``, and ``test_provisioning_store``
 walks ``USER_STATEMENTS`` asserting no statement touching ``users`` omits it.
 
 **Built with SQLAlchemy Core rather than ``text()``, and that is a departure.**
-``etl/loader.py``, ``etl/satellites.py`` and ``api/deps.py`` all write raw SQL,
+``etl/loader.py``, ``etl/satellites.py`` and ``api/deps/`` all write raw SQL,
 which is right for a hand-written statement nobody composes. This module has to
 compose: the whole point is one predicate reused across four statements. Doing
 that with an f-string builds SQL by string concatenation, which ruff's `S608`

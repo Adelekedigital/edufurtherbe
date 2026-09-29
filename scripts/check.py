@@ -28,6 +28,7 @@ STEPS: list[Step] = [
     ("lint", ["ruff", "check", "."]),
     ("types", ["mypy", "src"]),
     ("layers", ["python", "scripts/check_layers.py"]),
+    ("size", ["python", "scripts/check_file_size.py"]),
     (
         "tests",
         [
@@ -59,7 +60,8 @@ STEPS: list[Step] = [
 #: tests, which is where every authorization defect this project has found was
 #: found, and it skips coverage, so it cannot tell you the threshold still holds.
 #: Run it while writing; run the full gate before committing.
-FAST: list[Step] = [step for step in STEPS if step[0] in {"format", "lint", "types", "layers"}] + [
+_FAST_STEPS = {"format", "lint", "types", "layers", "size"}
+FAST: list[Step] = [step for step in STEPS if step[0] in _FAST_STEPS] + [
     ("tests-unit", ["pytest", "tests/unit", "-q"])
 ]
 

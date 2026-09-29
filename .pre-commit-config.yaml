@@ -97,6 +97,12 @@ repos:
         language: system
         pass_filenames: false
         files: ^src/
+      - id: check-file-size
+        name: no file over 900 code lines
+        entry: uv run python scripts/check_file_size.py
+        language: system
+        pass_filenames: false
+        files: ^(src|scripts|tests)/.*\.py$
 
       # Unit tests only — they are the fast tier and must stay that way. If this
       # hook starts costing more than a couple of seconds, the fix is faster

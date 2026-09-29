@@ -218,7 +218,24 @@ exclude_dirs = ["tests", ".venv", "build", "dist"]
 # visible in the repo rather than implied. Do not widen to make a check pass.
 source = "src/app"
 package = "app"
-exempt = ["main.py", "api/deps.py"]
+# The composition roots: main.py and the api/deps/ package, file by file —
+# the same sanctioned wiring point deps.py was, split by area (owner, 2026-09-29).
+# A new module in api/deps/ is listed here deliberately, never by a glob.
+exempt = [
+    "main.py",
+    "api/deps/__init__.py",
+    "api/deps/admin.py",
+    "api/deps/availability.py",
+    "api/deps/calendar.py",
+    "api/deps/core.py",
+    "api/deps/intake.py",
+    "api/deps/jobs.py",
+    "api/deps/mentors.py",
+    "api/deps/profile.py",
+    "api/deps/reviews.py",
+    "api/deps/session_types.py",
+    "api/deps/sessions.py",
+]
 
 [tool.check-layers.allowed]
 api = ["domain", "core"]
@@ -231,7 +248,7 @@ core = []
 domain = [
     "fastapi",
     # Token verification is a transport concern and a vendor-shaped one; the
-    # verifier lives in infra/auth and is wired in api/deps.py.
+    # verifier lives in infra/auth and is wired in api/deps/.
     "jwt",
     "starlette",
     "sqlalchemy",

@@ -38,8 +38,8 @@ jobs:
 
       # Selected from scripts/check.py rather than restated here, so the command
       # strings exist in one place and CI cannot drift from the local gate.
-      - name: Format, lint, types, layers
-        run: uv run python scripts/check.py --only format,lint,types,layers
+      - name: Format, lint, types, layers, size
+        run: uv run python scripts/check.py --only format,lint,types,layers,size
 
   # No interpreter matrix. A matrix earns its keep for a library consumed on many
   # Python versions; this is an application deployed on exactly one, pinned by

@@ -272,7 +272,7 @@ Anything conflicting with a row here is an **ADR**, not an implementation detail
 | **Rate** | What a mentor charges, set by the mentor | Not the pricing guide |
 | **Pricing guide** | A platform-computed *suggestion* derived from the mentor's experience and profile | **Not a price.** Advisory only, never persisted as the agreed amount |
 | **`legacy_bubble_id`** | The Bubble `_id` a row came from. ADR 0002 called it `legacy_id`; renamed by ADR 0007 | Not our primary key, and never exposed in an API |
-| **Port** | An interface `domain/` owns — a Protocol in `domain/ports.py` — implemented by an adapter in `infra/` and wired in `api/deps.py`. Swapping a vendor is a new adapter class and one wiring line | Not a network port. Not a thin wrapper around a vendor SDK either — if the vendor's vocabulary shows through the Protocol, `domain/` is still coupled to it |
+| **Port** | An interface `domain/` owns — a Protocol in `domain/ports.py` — implemented by an adapter in `infra/` and wired in `api/deps/`. Swapping a vendor is a new adapter class and one wiring line | Not a network port. Not a thin wrapper around a vendor SDK either — if the vendor's vocabulary shows through the Protocol, `domain/` is still coupled to it |
 | **`institutions.domain`** | The hipolabs domain for an institution — what "which university" resolves to, and the natural key rows are upserted and deduplicated on. Null only for `source='manual'`, which is why it is not the primary key (ADR 0008) | Not the primary key — that is the surrogate `uuid`, and it is what another row points at. Not a university name either: a name is a display string. **There is no `ror_id`**; ADR 0008 supersedes the settled decision that defined one |
 | **`whatsapp_conversation_id`** | Zernio's WhatsApp thread identifier, stable per participant and sending account, stored on the user record. Renamed by ADR 0007 — a vendor identifier carries the vendor's name | Not a message id. Unrelated to our own `conversation_id`, which is the primary key of our booking-scoped message threads (ADR 0006) and lives in our database |
 | **`slug`** | The public profile handle on `users` — `sakiratu-adeleke`. Lowercase, digits and hyphens, unique among live users, and the thing a profile URL is built from. Carried over from Bubble, where 39 of 43 dev users have one | **Never an identifier to pass between layers, and never an authorization key.** It is user-visible, it is mutable, and it is globally unique in a system that has deliberately deferred multi-tenancy (#28). The primary key is `users.id`, which is the Supabase auth user id |
@@ -344,6 +344,25 @@ product backend and the migration are done.**
   second endpoint exists, not the tenth — the Next.js client will encode whatever
   shape ships first.
 
+## File size
+
+CLAUDE.md non-negotiable 11, adopted 2026-09-29 at the owner's request, when
+`api/deps.py` had grown to 3,111 lines. **No Python file in `src/`, `scripts/` or
+`tests/` over 900 code lines** — blank lines, comments and docstrings are free,
+so explaining a decision never costs budget. `scripts/check_file_size.py`
+enforces it in pre-commit, `scripts/check.py` (`size`, in the fast gate too) and
+CI. `migrations/` is exempt: a migration can carry thousands of lines of
+reference data nobody edits.
+
+- **Approaching the limit:** split the file by area, as `api/deps/` was — one
+  module per surface, a shared `core`, and an `__init__` re-exporting what
+  importers use so call sites do not move.
+- **Never** raise `MAX_CODE_LINES` or add an exemption to pass. Either is an ADR.
+- **Comments stay succinct.** They are free for the counter, not for the reader:
+  say the decision and the reason, once.
+- A new module under `api/deps/` is added to `[tool.check-layers] exempt` by
+  name — the list is explicit on purpose, so the exemption never widens by glob.
+
 ## Deferred work
 
 CLAUDE.md rule 11, adopted 2026-09-29 at the owner's request. **Anything decided
@@ -384,7 +403,7 @@ section of each Definition of Done.
       `[tool.check-layers.forbidden-external]` in the same change.** The list is a
       denylist — default-allow — so an unlisted vendor is unguarded, and a vendor
       that arrives as a *transitive* of an extra is unguarded and unannounced. The
-      guard also skips `main.py` and `api/deps.py`, which is where wiring lives, so
+      guard also skips `main.py` and the `api/deps/` modules, which is where wiring lives, so
       it prevents an accidental import rather than a deliberate one
 - [ ] Secrets never reach a log line, a response body, or git
 - [ ] Bubble snapshots stay out of git — `data/`, `exports/`, `*.csv` are ignored

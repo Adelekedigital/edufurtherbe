@@ -1,7 +1,7 @@
 """Verifying a Supabase access token.
 
 Lives in ``infra`` because it is vendor-shaped: the issuer, the audience and the
-key discovery URL are all Supabase's. ``api/deps.py`` wires it; nothing in
+key discovery URL are all Supabase's. ``api/deps/`` wires it; nothing in
 ``domain`` knows it exists.
 
 **This code fails closed or it is worthless.** An authentication check that
