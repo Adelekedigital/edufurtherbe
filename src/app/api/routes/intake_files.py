@@ -12,10 +12,20 @@ from fastapi import APIRouter, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import IntakeFileDownloadDep, UploadedIntakeFileDep
+from app.api.limits import MAX_BODY_BYTES
 from app.api.schemas.intake import IntakeFileRead
+from app.core.config import Settings
+from app.domain.enums import IntakeFileType
 from app.domain.intake_files import MAX_PENDING_UPLOADS
 
 router = APIRouter(prefix="/api/v1", tags=["intake-files"])
+
+#: The figures the published description quotes, read from where they are set.
+#: The spec is generated from defaults, so these are the defaults — which is
+#: what "unless this deployment configures otherwise" qualifies.
+MAX_FILE_MB = Settings.model_fields["intake_file_max_bytes"].default // (1024 * 1024)
+UNUSED_HOURS = Settings.model_fields["intake_file_unused_hours"].default
+MAX_BODY_MB = MAX_BODY_BYTES // (1024 * 1024)
 
 UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -33,11 +43,12 @@ UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
         "Send one file as `multipart/form-data` under the field name `file`. **PDF "
         "or Word (`.docx`) only, decided from the bytes** — the filename and the "
         "declared `Content-Type` are not consulted, and a macro-enabled `.docm` is "
-        "refused. Up to 5 MB unless this deployment configures otherwise.\n\n"
+        f"refused. Up to {MAX_FILE_MB} MB unless this deployment configures otherwise.\n\n"
         "Returns a `file_id` to send as `answers[].file_id` on `POST /sessions`. "
         "The file is private: only you, the mentor of the session it answers, and "
         "admins can download it.\n\n"
-        "**An upload no booking uses is deleted after about a day**, and you may "
+        f"**An upload no booking uses is deleted after {UNUSED_HOURS} hours** unless this "
+        "deployment configures otherwise, and you may "
         f"hold at most {MAX_PENDING_UPLOADS} unused uploads at once. Files that "
         "answer a booking are kept for the deployment's retention period, which "
         "may be indefinitely."
@@ -47,7 +58,9 @@ UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
         status.HTTP_409_CONFLICT: {
             "description": f"You already hold {MAX_PENDING_UPLOADS} unused uploads."
         },
-        status.HTTP_413_CONTENT_TOO_LARGE: {"description": "The request body exceeds 6 MB."},
+        status.HTTP_413_CONTENT_TOO_LARGE: {
+            "description": f"The request body exceeds {MAX_BODY_MB} MB."
+        },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "description": (
                 "The file is empty, is not a PDF or Word document, or is over the "
@@ -78,10 +91,7 @@ async def upload_intake_file(uploaded: UploadedIntakeFileDep, response: Response
     responses={
         **UNAUTHENTICATED,
         status.HTTP_200_OK: {
-            "content": {
-                "application/pdf": {},
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {},
-            },
+            "content": {kind.value: {} for kind in IntakeFileType},
             "description": "The file's bytes.",
         },
         status.HTTP_404_NOT_FOUND: {

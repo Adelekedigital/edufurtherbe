@@ -6,6 +6,8 @@ Pure rules, so every refusal is a row in a table rather than an upload.
 from __future__ import annotations
 
 import datetime as dt
+import io
+import zipfile
 from uuid import uuid4
 
 import pytest
@@ -24,7 +26,12 @@ from app.domain.intake_files import (
     storage_key,
     unused_cutoff,
 )
-from conftest import PDF_BYTES, docx_bytes
+from conftest import PDF_BYTES, WORD_MAIN, docx_bytes
+
+DOCM_MAIN = "application/vnd.ms-word.document.macroEnabled.main+xml"
+XLSX_MAIN = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+STYLES = "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"
+CORE_PROPERTIES = "application/vnd.openxmlformats-package.core-properties+xml"
 
 # --------------------------------------------------------------------------
 # The type, from the bytes
@@ -58,10 +65,88 @@ def test_a_word_document_is_known_by_its_declared_main_part() -> None:
             id="xlsx",
         ),
         pytest.param(docx_bytes(parts=()), id="no-document-part"),
+        pytest.param(
+            docx_bytes(main=DOCM_MAIN, overrides=(("/decoy.xml", WORD_MAIN),)),
+            id="docm-with-a-decoy-word-declaration",
+        ),
+        pytest.param(
+            docx_bytes(main=DOCM_MAIN, overrides=(("/word/document.xml", WORD_MAIN),)),
+            id="document-part-declared-twice",
+        ),
+        pytest.param(
+            docx_bytes(
+                main=XLSX_MAIN,
+                main_part="/xl/workbook.xml",
+                parts=("xl/workbook.xml", "word/document.xml"),
+                overrides=(("/decoy.xml", WORD_MAIN),),
+            ),
+            id="xlsx-carrying-a-word-part",
+        ),
+        pytest.param(
+            docx_bytes(parts=("word/document.xml", "word/vbaProject.bin")),
+            id="docx-carrying-a-vba-project",
+        ),
+        pytest.param(
+            docx_bytes(parts=("word/document.xml", "customXml/VBAPROJECT.BIN")),
+            id="vba-project-anywhere-any-case",
+        ),
+        pytest.param(b"PK\x03\x04" + b"\x00" * 40, id="zip-magic-then-garbage"),
     ],
 )
 def test_anything_else_is_refused(payload: bytes) -> None:
     assert file_type(payload) is None
+
+
+def test_a_word_document_with_other_parts_declared_is_still_accepted() -> None:
+    """The positive case for the parse: a real `.docx` declares many parts."""
+    payload = docx_bytes(
+        overrides=(
+            ("/word/styles.xml", STYLES),
+            ("/docProps/core.xml", CORE_PROPERTIES),
+        ),
+        parts=("word/document.xml", "word/styles.xml", "docProps/core.xml"),
+    )
+    assert file_type(payload) is IntakeFileType.DOCX
+
+
+def test_the_part_name_is_matched_without_regard_to_case() -> None:
+    """OPC part names are case-insensitive (ECMA-376 Part 2, 9.1.1.1.2)."""
+    assert file_type(docx_bytes(main_part="/Word/Document.XML")) is IntakeFileType.DOCX
+
+
+def test_an_unparseable_content_types_part_is_refused() -> None:
+    assert file_type(docx_bytes(main='"/><broken')) is None
+
+
+def test_a_declaration_outside_the_content_types_namespace_does_not_count() -> None:
+    """Only an `Override` in the OPC namespace declares a part; a look-alike in
+    another namespace is just an element that happens to carry the attributes."""
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+            'content-types" xmlns:x="urn:not-opc"><x:Override PartName="/word/document.xml" '
+            f'ContentType="{WORD_MAIN}"/></Types>',
+        )
+        archive.writestr("word/document.xml", "<w:document/>")
+    assert file_type(payload.getvalue()) is None
+
+
+def test_an_entity_declaration_is_refused_not_expanded() -> None:
+    """defusedxml refuses a DTD's entities outright — no billion laughs."""
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0"?><!DOCTYPE Types [<!ENTITY w "'
+            + WORD_MAIN
+            + '">]><Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+            'content-types"><Override PartName="/word/document.xml" ContentType="&w;"/>'
+            "</Types>",
+        )
+        archive.writestr("word/document.xml", "<w:document/>")
+    assert file_type(payload.getvalue()) is None
 
 
 def test_an_archive_with_too_many_entries_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
