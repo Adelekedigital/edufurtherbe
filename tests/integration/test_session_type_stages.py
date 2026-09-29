@@ -1,4 +1,4 @@
-"""A session type is aimed at several application stages (#212).
+"""A session type is aimed at several application stages (#215).
 
 Session Types frontend round 3 A, approved by the product owner 2026-09-29: "Best
 for mentees who are…" became "Pick all that apply". The set lives in

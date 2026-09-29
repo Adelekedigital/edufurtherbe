@@ -1,4 +1,4 @@
-"""The window, break, length and notice a session type actually uses (#204, #213).
+"""The window, break, length and notice a session type actually uses (#204, #216).
 
 **One rule: the offering's own value, else its mentor's default, else the
 platform's.** `COALESCE` over the config row and the mentor profile — the same
@@ -53,7 +53,7 @@ def effective_break_minutes(
 def effective_duration_minutes(
     config: Any = SessionTypeBookingConfig, mentor: Any = MentorProfile
 ) -> Any:
-    """How long a session of the offering runs, and the step between its slots (#213)."""
+    """How long a session of the offering runs, and the step between its slots (#216)."""
     return func.coalesce(
         config.duration_minutes, mentor.default_duration_minutes, literal(DEFAULT_DURATION_MINUTES)
     )
@@ -62,7 +62,7 @@ def effective_duration_minutes(
 def effective_min_notice_minutes(
     config: Any = SessionTypeBookingConfig, mentor: Any = MentorProfile
 ) -> Any:
-    """How far ahead the offering must be booked (#213)."""
+    """How far ahead the offering must be booked (#216)."""
     return func.coalesce(
         config.min_notice_minutes,
         mentor.default_min_notice_minutes,

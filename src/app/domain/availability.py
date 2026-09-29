@@ -92,7 +92,7 @@ DEFAULT_BREAK_MINUTES = 0
 #: both tables that carry a duration, and pinned to it by a test (#8).
 SESSION_DURATION_MINUTES = (5, 480)
 
-#: How long a session runs when neither the offering nor its mentor says (#213).
+#: How long a session runs when neither the offering nor its mentor says (#216).
 DEFAULT_DURATION_MINUTES = 60
 
 #: How far ahead a booking must be made, in minutes: what an offering or a

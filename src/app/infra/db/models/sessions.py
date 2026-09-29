@@ -160,7 +160,7 @@ class SessionType(TimestampMixin, Base):
         Uuid, ForeignKey("service_offerings.id", ondelete="RESTRICT")
     )
 
-    #: **The first of the offering's stage set** (#212), dual-written by the
+    #: **The first of the offering's stage set** (#215), dual-written by the
     #: store; `session_type_stages` holds the set. Kept for code from before the
     #: set and dropped in the contract step. A closed set (#100), `text` +
     #: `CHECK`, with `ApplicationStage` at the boundary.
@@ -248,7 +248,7 @@ class SessionType(TimestampMixin, Base):
             f"icon IS NULL OR {check_is_known('icon', SessionTypeIcon)}",
             name="icon_is_known",
         ),
-        # **One direction only, since the stage became a set (#212).** It was
+        # **One direction only, since the stage became a set (#215).** It was
         # symmetric while `application_stage` was the offering's only stage; it
         # is now the first of a set, so `[drafting_stage, other]` carries a label
         # beside a first stage that is not `other`, and the old form would refuse
@@ -264,7 +264,7 @@ class SessionType(TimestampMixin, Base):
 
 
 class SessionTypeStage(TimestampMixin, Base):
-    """Which application stages one session type is aimed at (#212).
+    """Which application stages one session type is aimed at (#215).
 
     The set, in the mentor's order, each stage once — the #205 shape of
     `session_type_offerings`, for the other axis. **No rows means any stage.**
@@ -325,12 +325,12 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     )
 
     #: How long the offering runs — **or null, meaning the mentor's default,
-    #: then the platform's** (#213). Read only through
+    #: then the platform's** (#216). Read only through
     #: `booking_rules.effective_duration_minutes`, never raw.
     duration_minutes: Mapped[int | None] = mapped_column(nullable=True)
-    #: How far ahead a mentee must book; **null inherits** like duration (#213).
+    #: How far ahead a mentee must book; **null inherits** like duration (#216).
     #: **The platform rule is 24 hours — no same-day booking.** It lived in this
-    #: column's default until #213, because the ETL never sets the column and no
+    #: column's default until #216, because the ETL never sets the column and no
     #: endpoint could until offering writes shipped; it is now
     #: `DEFAULT_MIN_NOTICE_MINUTES`, reached when neither the offering nor its
     #: mentor sets one. It defaulted to 120 through M2—M4 and every migrated
@@ -343,7 +343,7 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
     #: when that table lands. A `CHECK` carrying it would need a migration every
     #: time the product changed its mind.
     #:
-    #: The server default stays through the expand step: code from before #213
+    #: The server default stays through the expand step: code from before #216
     #: inserts without naming the column and must still get the floor.
     min_notice_minutes: Mapped[int | None] = mapped_column(
         nullable=True, server_default=text("1440")

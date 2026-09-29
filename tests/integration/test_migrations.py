@@ -143,7 +143,7 @@ EXPECTED_TABLES = [
     "session_type_booking_configs",
     # Session Types #9: the offerings one session type covers, up to three.
     "session_type_offerings",
-    # Session Types round 3 A (#212): the stages one session type is aimed at.
+    # Session Types round 3 A (#215): the stages one session type is aimed at.
     "session_type_stages",
     "session_types",
     "sessions",
@@ -811,7 +811,7 @@ def test_the_stage_set_backfill_carries_every_staged_type(
     disposable_database: str, make_alembic_config: ConfigFactory
 ) -> None:
     """`e0d7461f13ce` backfills one row per type with a stage, at position 0,
-    and none for a type aimed at any stage (#213)."""
+    and none for a type aimed at any stage (#216)."""
     config = make_alembic_config(disposable_database)
     command.upgrade(config, "7b3e91c4a2d6")
     execute(
@@ -879,7 +879,7 @@ def test_the_inherit_downgrade_writes_the_resolved_values(
 ) -> None:
     """`228315723d63`'s downgrade restores `NOT NULL`, so an inheriting offering
     must first be given **the value it was resolving to** — its mentor's default,
-    else the platform's — not a column default nobody chose (#213)."""
+    else the platform's — not a column default nobody chose (#216)."""
     config = make_alembic_config(disposable_database)
     command.upgrade(config, "228315723d63")
     execute(

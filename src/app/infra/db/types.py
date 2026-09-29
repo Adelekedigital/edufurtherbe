@@ -116,7 +116,7 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     ApplicationStage: frozenset(
         {
             "ck_session_types_application_stage_is_known",
-            # The stage set (#212); not nullable, so no `IS NULL OR`.
+            # The stage set (#215); not nullable, so no `IS NULL OR`.
             "ck_session_type_stages_stage_is_known",
         }
     ),

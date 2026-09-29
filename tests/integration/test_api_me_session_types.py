@@ -320,7 +320,7 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "requires_booking_confirmation",
         "booking_window_days",
         "break_after_minutes",
-        # Whether length and notice are the offering's own or inherited (#213).
+        # Whether length and notice are the offering's own or inherited (#216).
         "duration_inherited",
         "min_notice_inherited",
         "service_offering",
@@ -374,7 +374,7 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         # is what this test is actually about.
         "service_offering",
         "service_offerings",
-        # The stage set (#212); `application_stage` is its first, for a release.
+        # The stage set (#215); `application_stage` is its first, for a release.
         "application_stages",
         "application_stage",
         "custom_stage_label",

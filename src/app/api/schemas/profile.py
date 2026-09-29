@@ -9,6 +9,7 @@ into two shapes.
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -19,6 +20,7 @@ from app.api.schemas.availability import validated_zone
 from app.api.schemas.catalogue import CountryRef, InstitutionRead
 from app.api.schemas.common import (
     AvatarFocusRead,
+    AvatarFocusWrite,
     LinkedInWrite,
     Normalised,
     XWrite,
@@ -33,6 +35,7 @@ from app.domain.availability import (
     SESSION_DURATION_MINUTES,
 )
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
+from app.domain.text import has_letter, hidden_characters
 
 
 class LookupRef(BaseModel):
@@ -219,7 +222,7 @@ class MentorProfileRead(BaseModel):
     booking_window_days: int | None = None
     break_after_minutes: int | None = None
     #: Your default length and notice for every offering that does not set its
-    #: own (#213); null means the platform's.
+    #: own (#216); null means the platform's.
     default_duration_minutes: int | None = Field(
         default=None,
         description=(
@@ -375,7 +378,7 @@ class MentorProfileWrite(Normalised):
         default=None, ge=BREAK_AFTER_MINUTES[0], le=BREAK_AFTER_MINUTES[1]
     )
     #: The length and notice every offering inherits unless it sets its own
-    #: (#213), in the offering's own ranges. Null means the platform's.
+    #: (#216), in the offering's own ranges. Null means the platform's.
     default_duration_minutes: int | None = Field(
         default=None,
         ge=SESSION_DURATION_MINUTES[0],
@@ -401,6 +404,32 @@ class MentorProfileWrite(Normalised):
     offering_ids: list[UUID] | None = None
 
 
+#: A person's first or last name, trimmed. Generous: legal names run long.
+MAX_NAME_LENGTH = 100
+
+
+def _a_visible_name(value: str) -> str:
+    """A name as a person would read it: composed, with no hidden characters.
+
+    **Refused, not stripped.** A name reaches public cards, email variables and
+    a call's display name; silently removing a right-to-left override or a
+    newline would store something the user did not type. **A joiner between two
+    letters is spelling, not hiding** — Persian and Sinhala names need them —
+    so `hidden_characters` allows exactly that. Composed (NFC) so an accent
+    typed two ways is one spelling, and **measured after composing**, since NFC
+    can lengthen a name and the bound is on what is stored. A name must hold a
+    letter, in any script — `---` is not one.
+    """
+    composed = unicodedata.normalize("NFC", value)
+    if hidden_characters(composed):
+        raise ValueError("a name cannot contain control or invisible characters")
+    if not has_letter(composed):
+        raise ValueError("a name needs at least one letter")
+    if len(composed) > MAX_NAME_LENGTH:
+        raise ValueError(f"a name can be at most {MAX_NAME_LENGTH} characters")
+    return composed
+
+
 class UserProfileWrite(Normalised):
     """The profile fields a user may set about themselves.
 
@@ -420,9 +449,39 @@ class UserProfileWrite(Normalised):
     candidate for removal alongside the enum conversion.
     """
 
+    #: **`str`, not `str | None`**, so a name can be changed and never cleared:
+    #: an explicit `null` — or a blank, which `Normalised` turns into one — is a
+    #: `422`, the rule `timezone` follows. Omitted leaves it alone. On `users`,
+    #: written in the same transaction; the slug is never derived from it, so a
+    #: rename keeps every shared profile link (#213).
+    #:
+    #: The `None` default is never validated or written — the writer takes
+    #: `exclude_unset` — and it is what lets the spec say "a string, optional"
+    #: rather than "nullable", which is the contract. Hence the three ignores.
+    first_name: str = Field(  # type: ignore[assignment]
+        default=None,
+        max_length=MAX_NAME_LENGTH,
+        description="Your first name, as shown on your profile. Cannot be cleared.",
+    )
+    last_name: str = Field(  # type: ignore[assignment]
+        default=None,
+        max_length=MAX_NAME_LENGTH,
+        description="Your last name. Cannot be cleared.",
+    )
     about_me: str | None = Field(default=None, max_length=5000)
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None
+    #: A mentor's own crop (#214): overrides the detected face and survives the
+    #: backfill. Needs a photo — there is nothing to centre without one — and a
+    #: new photo replaces it, since a crop of the old picture means nothing on
+    #: the new one. `null` is a `422`: a choice is replaced, not unset.
+    avatar_focus: AvatarFocusWrite = Field(  # type: ignore[assignment]
+        default=None,
+        description=(
+            "Where to centre your photo, as 0..1 fractions of the image — the same "
+            "shape `avatar_focus` is read in. Needs a photo; a new photo replaces it."
+        ),
+    )
     cover_color: CoverColor | None = Field(
         default=None,
         description=(
@@ -451,6 +510,8 @@ class UserProfileWrite(Normalised):
         ),
         examples=["Africa/Lagos"],
     )
+
+    _names = field_validator("first_name", "last_name")(_a_visible_name)
 
     @field_validator("timezone")
     @classmethod

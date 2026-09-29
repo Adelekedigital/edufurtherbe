@@ -115,7 +115,7 @@ async def test_other_without_a_label_is_refused(db_engine: AsyncEngine) -> None:
 async def test_a_label_beside_a_named_first_stage_is_legal_in_the_database(
     db_engine: AsyncEngine,
 ) -> None:
-    """**The half the database gave up when the stage became a set (#212).**
+    """**The half the database gave up when the stage became a set (#215).**
 
     `[revisions, other]` is a legal set with a label, and its first — the only
     stage the `CHECK` can see — is `revisions`. So the constraint holds one

@@ -303,7 +303,7 @@ class ApplicationStage(StrEnum):
     so being incomplete is the expected case rather than the surprising one.
 
     Its label lives in ``session_types.custom_stage_label``, present exactly
-    when an offering's stage set holds ``OTHER`` (#212): ``OTHER`` with no label
+    when an offering's stage set holds ``OTHER`` (#215): ``OTHER`` with no label
     renders a blank chip, and a label beside a set without it is dead data that
     survives an edit. Both directions, for the same reason the conferencing
     constraint is symmetric — but since the stage became a set the ``CHECK`` can

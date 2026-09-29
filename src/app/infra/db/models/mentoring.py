@@ -185,7 +185,7 @@ class MentorProfile(TimestampMixin, Base):
     booking_window_days: Mapped[int | None] = mapped_column(nullable=True)
     break_after_minutes: Mapped[int | None] = mapped_column(nullable=True)
     #: The mentor's default length and notice for every offering that does not
-    #: set its own (#213). Null means the platform's: 60 minutes, 24 hours.
+    #: set its own (#216). Null means the platform's: 60 minutes, 24 hours.
     default_duration_minutes: Mapped[int | None] = mapped_column(nullable=True)
     default_min_notice_minutes: Mapped[int | None] = mapped_column(nullable=True)
 

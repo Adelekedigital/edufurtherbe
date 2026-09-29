@@ -153,3 +153,19 @@ def test_the_migration_excludes_the_same_mentors_the_etl_does() -> None:
         assert f"approval_status <> '{status.value}'" in backfill, (
             f"the ETL skips {status.value} mentors and the backfill does not"
         )
+
+
+def test_the_live_user_rule_is_written_only_in_predicates() -> None:
+    """`LIVE` is the one spelling of "this account still exists".
+
+    Three stores once typed `User.deleted_at.is_(None)` themselves beside the
+    helper; each was right, and each would have stayed behind when "live" gains
+    a condition (a suspended account, say). Everything else imports `LIVE`.
+    """
+    source = PROJECT_ROOT / "src" / "app"
+    copies = [
+        path.relative_to(PROJECT_ROOT).as_posix()
+        for path in source.rglob("*.py")
+        if path.name != "predicates.py" and "User.deleted_at.is_(None)" in path.read_text("utf-8")
+    ]
+    assert copies == []

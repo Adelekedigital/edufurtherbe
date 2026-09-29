@@ -194,7 +194,7 @@ async def _offering(
         (
             await session.execute(
                 select(
-                    # The length the slot was offered at (#213) — resolved the
+                    # The length the slot was offered at (#216) — resolved the
                     # way `/slots` resolves it, so the two cannot disagree.
                     effective_duration_minutes().label("duration_minutes"),
                     func.coalesce(

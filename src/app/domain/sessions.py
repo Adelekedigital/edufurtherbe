@@ -224,7 +224,7 @@ MAX_SESSION_TYPE_OFFERINGS = 3
 
 
 def named_stages(fields: Mapping[str, object]) -> list[ApplicationStage] | None:
-    """The stage set a write names, or ``None`` when it names none (#213).
+    """The stage set a write names, or ``None`` when it names none (#216).
 
     **The one reading of the pair**, asked by the boundary and by the store.
     `application_stages` is the set; the legacy `application_stage` is a set of
@@ -252,7 +252,7 @@ def stage_label_problem(
     stages: Sequence[ApplicationStage], label: str | None
 ) -> tuple[str, str] | None:
     """What is wrong with this stage set and label together, as ``(pointer,
-    message)``, or ``None`` (#212).
+    message)``, or ``None`` (#215).
 
     **A label exactly when the set holds `other`**, in both directions: `other`
     with no label renders a blank chip, and a label beside a set without `other`

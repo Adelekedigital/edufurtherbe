@@ -232,7 +232,7 @@ async def apply_demo_session_types(
         type_id = existing.get(template.name)
         if type_id is None and index == 0:
             type_id = existing.get(LEGACY_SESSION_TYPE)
-        # Through the stage set (#213), so the rows the reads prefer and the
+        # Through the stage set (#216), so the rows the reads prefer and the
         # legacy column agree; the demo's stages never include `other`, so no
         # label is written.
         stages = [ApplicationStage(template.stage)] if template.stage else []

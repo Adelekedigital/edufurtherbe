@@ -339,7 +339,12 @@ async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> dict[str, boo
         "**`avatar_url` and `banner_url` are not writable.** Images are "
         "content-addressed in Supabase Storage (ADR 0019); accepting a URL would "
         "let a profile point at any host and bypass that entirely. Upload is a "
-        "separate build."
+        "separate build.\n\n"
+        "**`first_name` and `last_name` can be changed, never cleared** — a blank "
+        "or `null` is a `422`. Renaming never changes the profile's link.\n\n"
+        "**`avatar_focus` is your own crop** of the photo you have now: it "
+        "replaces the detected one and needs a photo (`422` at `/avatar_focus` "
+        "without one). A new photo replaces it."
     ),
     responses=WRITE_RESPONSES,
 )
