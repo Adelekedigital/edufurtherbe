@@ -34,7 +34,7 @@ dependencies = [
     # is entirely time-zone conversion. Pinning the data as a dependency makes the
     # three environments agree instead of differing by platform.
     "tzdata>=2025.1",
-    "pyjwt>=2.13.0",
+    "pyjwt>=2.14.0",
     "cryptography>=50.0.0",
     # Decoding, downscaling and re-encoding uploaded images. **The only
     # dependency here that decodes an untrusted *file format*** â€” not the only
