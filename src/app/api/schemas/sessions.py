@@ -29,7 +29,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field
 
-from app.api.schemas.common import AvatarFocusRead
+from app.api.schemas.common import AvatarFocusRead, Normalised
 from app.domain.attendance import join_window
 from app.domain.enums import (
     ActorType,
@@ -38,6 +38,7 @@ from app.domain.enums import (
     SessionReasonCode,
     SessionStatus,
 )
+from app.domain.intake import MAX_ANSWER_LENGTH, MAX_OPTIONS, MAX_QUESTIONS
 
 
 class PartyRead(BaseModel):
@@ -311,6 +312,14 @@ class SessionEventRead(BaseModel):
         )
 
 
+class AnswerWrite(Normalised):
+    """One answer to one intake question — `text` or `option_ids`, never both."""
+
+    question_id: UUID
+    text: str | None = Field(default=None, max_length=MAX_ANSWER_LENGTH)
+    option_ids: list[UUID] | None = Field(default=None, max_length=MAX_OPTIONS)
+
+
 class SessionBookingWrite(BaseModel):
     """What a mentee sends to book an hour.
 
@@ -346,6 +355,19 @@ class SessionBookingWrite(BaseModel):
         default=None,
         max_length=2000,
         description="A note to the mentor. Visible to both parties, like every other message here.",
+    )
+    answers: list[AnswerWrite] = Field(
+        default_factory=list,
+        max_length=MAX_QUESTIONS,
+        description=(
+            "Answers to the offering's intake form (`SessionTypeRead.questions`), "
+            "saved with the booking. `text` for a `free_text` question; "
+            "`option_ids` for a `multi_choice` one — exactly one unless the "
+            "question `allows_multiple`. Every required question must be answered; "
+            "a `file_upload` question is not answerable yet and not enforced. Any "
+            "problem is a `422` whose `errors` point at the answer "
+            "(`/answers/2/option_ids`) or, for a missing required one, at `/answers`."
+        ),
     )
 
 

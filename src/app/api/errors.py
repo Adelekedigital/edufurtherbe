@@ -192,7 +192,14 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
                 # **Every 422 carries `errors`**, empty when the refusal is about
                 # the request as a whole: one shape, so a client reads the list
                 # without first asking whether it is there.
-                errors=[] if code == status.HTTP_422_UNPROCESSABLE_CONTENT else None,
+                errors=(
+                    [
+                        {"pointer": field, "message": message}
+                        for field, message in getattr(exc, "field_errors", ())
+                    ]
+                    if code == status.HTTP_422_UNPROCESSABLE_CONTENT
+                    else None
+                ),
                 members=exc.problem_members() if isinstance(exc, AppError) else None,
             )
 

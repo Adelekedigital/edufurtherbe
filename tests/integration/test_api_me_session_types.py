@@ -373,6 +373,8 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         "application_stage",
         "custom_stage_label",
         "icon",
+        # The intake form a mentee answers when booking (#207).
+        "questions",
     }
     assert "is_active" not in offering
     assert "internal" not in response.text

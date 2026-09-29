@@ -21,10 +21,11 @@ from sqlalchemy import CursorResult, Select, delete, exists, func, insert, selec
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, ValidationError
-from app.domain.enums import QuestionType
+from app.domain.enums import IntakeStatus, QuestionType
 from app.domain.intake import MAX_QUESTIONS
 from app.infra.db.models.intake import (
     IntakeAnswer,
+    IntakeSubmission,
     SessionTypeQuestion,
     SessionTypeQuestionOption,
 )
@@ -35,6 +36,8 @@ __all__ = [
     "create_question",
     "delete_question",
     "list_questions",
+    "questions_by_type",
+    "record_answers",
     "reorder_questions",
     "update_question",
 ]
@@ -52,15 +55,37 @@ QUESTION_COLUMNS = (
 )
 
 
-def _live_questions(session_type_id: UUID) -> Select[Any]:
+def _live_questions(session_type_ids: list[UUID]) -> Select[Any]:
     return (
-        select(*QUESTION_COLUMNS)
+        select(SessionTypeQuestion.session_type_id, *QUESTION_COLUMNS)
         .where(
-            SessionTypeQuestion.session_type_id == session_type_id,
+            SessionTypeQuestion.session_type_id.in_(session_type_ids),
             SessionTypeQuestion.deleted_at.is_(None),
         )
         .order_by(SessionTypeQuestion.display_order, SessionTypeQuestion.id)
     )
+
+
+async def questions_by_type(
+    session: AsyncSession, session_type_ids: list[UUID]
+) -> dict[UUID, list[dict[str, Any]]]:
+    """Each offering's live form, options included — two queries for any number.
+
+    **Unscoped by owner, deliberately**: the owner's list checks ownership
+    before calling this, and the public reads call it only for offerings they
+    already found visible. It is the one loader of a form, so the owner's view,
+    the public view and the booking check cannot disagree about what is asked.
+    """
+    if not session_type_ids:
+        return {}
+    result = await session.execute(_live_questions(session_type_ids))
+    questions = [dict(row) for row in result.mappings()]
+    options = await _options_of(session, [q["id"] for q in questions])
+    grouped: dict[UUID, list[dict[str, Any]]] = {}
+    for question in questions:
+        question["options"] = options.get(question["id"], [])
+        grouped.setdefault(question.pop("session_type_id"), []).append(question)
+    return grouped
 
 
 async def _owns(session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID) -> bool:
@@ -88,12 +113,7 @@ async def list_questions(
     """
     if not await _owns(session, mentor_user_id, session_type_id):
         return None
-    result = await session.execute(_live_questions(session_type_id))
-    questions = [dict(row) for row in result.mappings()]
-    options = await _options_of(session, [q["id"] for q in questions])
-    for question in questions:
-        question["options"] = options.get(question["id"], [])
-    return questions
+    return (await questions_by_type(session, [session_type_id])).get(session_type_id, [])
 
 
 async def _options_of(
@@ -331,7 +351,7 @@ async def reorder_questions(
         return False
     if len(set(question_ids)) != len(question_ids):
         raise ValidationError("a question appears more than once in the order")
-    live = {row.id for row in await session.execute(_live_questions(session_type_id))}
+    live = {row.id for row in await session.execute(_live_questions([session_type_id]))}
     given = set(question_ids)
     if given != live:
         problems = []
@@ -350,3 +370,55 @@ async def reorder_questions(
             .values(display_order=position)
         )
     return True
+
+
+async def record_answers(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    mentee_id: UUID,
+    answers: list[dict[str, Any]],
+) -> None:
+    """Store a booking's answers: one submission, one row per answer or option.
+
+    **Called only with answers already checked** by `answer_problems` against
+    this offering's form, so every question and option id here is one it asks.
+    Nothing is written for no answers — an empty form is not a submission. A
+    multiple-choice answer is one row per chosen option (#207). Does not commit:
+    the booking's transaction owns it, so a session and its answers land
+    together or not at all.
+    """
+    if not answers:
+        return
+    submission_id = (
+        await session.execute(
+            insert(IntakeSubmission)
+            .values(
+                session_id=session_id,
+                mentee_id=mentee_id,
+                status=IntakeStatus.SUBMITTED,
+                submitted_at=func.now(),
+            )
+            .returning(IntakeSubmission.id)
+        )
+    ).scalar_one()
+    rows: list[dict[str, Any]] = []
+    for answer in answers:
+        if answer.get("option_ids") is not None:
+            rows += [
+                {
+                    "submission_id": submission_id,
+                    "question_id": answer["question_id"],
+                    "selected_option_id": option_id,
+                }
+                for option_id in answer["option_ids"]
+            ]
+        else:
+            rows.append(
+                {
+                    "submission_id": submission_id,
+                    "question_id": answer["question_id"],
+                    "answer_text": answer["text"],
+                }
+            )
+    await session.execute(insert(IntakeAnswer), rows)

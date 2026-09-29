@@ -222,13 +222,38 @@ async def test_a_session_has_at_most_one_submission(db_engine: AsyncEngine) -> N
 async def test_a_question_is_answered_once_per_submission(
     db_engine: AsyncEngine, form: tuple[UUID, UUID, UUID]
 ) -> None:
-    """`UNIQUE (submission_id, question_id)`. Two answers to one question is the
-    same failure one level down."""
+    """`ux_intake_answers_one_per_question`: a text or file answer is one row per
+    question. Two is the same failure one level down."""
     _, question, submission = form
     await add_answer(db_engine, submission, question, answer_text="first")
 
     with pytest.raises(IntegrityError):
         await add_answer(db_engine, submission, question, answer_text="second")
+
+
+async def test_a_multiple_choice_answer_is_a_row_per_option(
+    db_engine: AsyncEngine, form: tuple[UUID, UUID, UUID]
+) -> None:
+    """#207: several options chosen are several rows — the positive case the
+    old one-row-per-question constraint refused."""
+    _, question, submission = form
+    first = await add_option(db_engine, question, "IELTS")
+    second = await add_option(db_engine, question, "TOEFL")
+
+    await add_answer(db_engine, submission, question, selected_option_id=first)
+    await add_answer(db_engine, submission, question, selected_option_id=second)
+
+
+async def test_an_option_is_chosen_once_per_submission(
+    db_engine: AsyncEngine, form: tuple[UUID, UUID, UUID]
+) -> None:
+    """`ux_intake_answers_one_per_option`: the same option twice is refused."""
+    _, question, submission = form
+    option = await add_option(db_engine, question, "IELTS")
+    await add_answer(db_engine, submission, question, selected_option_id=option)
+
+    with pytest.raises(IntegrityError):
+        await add_answer(db_engine, submission, question, selected_option_id=option)
 
 
 # --------------------------------------------------------------------------

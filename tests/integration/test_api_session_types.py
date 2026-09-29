@@ -308,6 +308,8 @@ async def test_the_response_carries_nothing_it_should_not(
         "application_stage",
         "custom_stage_label",
         "icon",
+        # The intake form a mentee answers when booking (#207).
+        "questions",
     }
     assert offering["service_offering"] == {
         "code": "document-preparation",

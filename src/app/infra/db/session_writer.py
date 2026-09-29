@@ -50,10 +50,12 @@ from app.domain.enums import (
     AttendanceStatus,
     CreditReason,
     MeetingProvider,
+    QuestionType,
     SessionReasonCode,
     SessionRole,
     SessionStatus,
 )
+from app.domain.intake import AskedQuestion, GivenAnswer, answer_problems
 from app.domain.meetings import plan_for
 from app.domain.notifications import (
     REVIEW_REMINDER_AFTER,
@@ -76,6 +78,7 @@ from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.availability_writer import block_session_window
 from app.infra.db.credit_writer import refund_credit, spend_credit
+from app.infra.db.intake_store import questions_by_type, record_answers
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import (
@@ -260,6 +263,38 @@ async def book_session(
         # malformed request.
         raise ValidationError("you cannot book your own session type")
 
+    # **The answers, checked before anything is written** (#207), against this
+    # offering's own live form — which is what keeps a question or option id
+    # from another offering out of this booking.
+    answers: list[dict[str, Any]] = payload.get("answers") or []
+    form = (await questions_by_type(session, [payload["session_type_id"]])).get(
+        payload["session_type_id"], []
+    )
+    problems = answer_problems(
+        [
+            AskedQuestion(
+                id=q["id"],
+                question_type=QuestionType(str(q["question_type"])),
+                is_required=bool(q["is_required"]),
+                allows_multiple=bool(q["allows_multiple"]),
+                option_ids=frozenset(o["id"] for o in q["options"]),
+            )
+            for q in form
+        ],
+        [
+            GivenAnswer(
+                question_id=a["question_id"],
+                text=a.get("text"),
+                option_ids=tuple(a["option_ids"]) if a.get("option_ids") is not None else None,
+            )
+            for a in answers
+        ],
+    )
+    if problems:
+        raise ValidationError(
+            "; ".join(message for _, message in problems), field_errors=tuple(problems)
+        )
+
     # **The one legality check, and it is a membership test against the public
     # grid.** Asking for a span in the mentor's days and comparing instants
     # keeps the timezone question where it is already answered.
@@ -334,6 +369,11 @@ async def book_session(
     # passing a check-time-of-use test. A double-click cannot buy two sessions
     # with one credit.
     await spend_credit(session, mentee_id, session_id, now=now)
+
+    # **The answers, in the booking's transaction**: a session without the form
+    # its mentee filled in, or a form for a session that was never written, are
+    # both states nothing should be able to reach.
+    await record_answers(session, session_id=session_id, mentee_id=mentee_id, answers=answers)
 
     # **The participant rows, in the same transaction as the session**, which
     # is what `SessionParticipant`'s own docstring promises: written together,
