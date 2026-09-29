@@ -56,7 +56,12 @@ from app.domain.availability import (
     bookable,
 )
 from app.domain.enums import AvailabilityExceptionType
-from app.infra.db.booking_rules import effective_break_minutes, effective_window_days
+from app.infra.db.booking_rules import (
+    effective_break_minutes,
+    effective_duration_minutes,
+    effective_min_notice_minutes,
+    effective_window_days,
+)
 from app.infra.db.calendar_store import NullFreeBusy
 from app.infra.db.models.availability import (
     AvailabilityException,
@@ -104,9 +109,10 @@ def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
     """
     return (
         select(
-            SessionTypeBookingConfig.duration_minutes,
-            SessionTypeBookingConfig.min_notice_minutes,
-            # This offering's window and break, resolved (#204).
+            # This offering's length, notice, window and break, resolved
+            # (#204, #216): its own, else its mentor's default, else the platform's.
+            effective_duration_minutes().label("duration_minutes"),
+            effective_min_notice_minutes().label("min_notice_minutes"),
             effective_window_days().label("window_days"),
             effective_break_minutes().label("break_minutes"),
             # The mentor's own zone, because `start` and `end` are *their* days.

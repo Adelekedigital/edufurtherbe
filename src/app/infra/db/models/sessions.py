@@ -56,6 +56,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     Text,
     UniqueConstraint,
     Uuid,
@@ -159,11 +160,15 @@ class SessionType(TimestampMixin, Base):
         Uuid, ForeignKey("service_offerings.id", ondelete="RESTRICT")
     )
 
-    #: Which stage of an application this offering is aimed at. A closed set
-    #: (#100), `text` + `CHECK`, with `ApplicationStage` at the boundary.
+    #: **The first of the offering's stage set** (#215), dual-written by the
+    #: store; `session_type_stages` holds the set. Kept for code from before the
+    #: set and dropped in the contract step. A closed set (#100), `text` +
+    #: `CHECK`, with `ApplicationStage` at the boundary.
     application_stage: Mapped[ApplicationStage | None] = mapped_column(str_enum(ApplicationStage))
-    #: `OTHER`'s label, and **only** `OTHER`'s — tied by the symmetric `CHECK`
-    #: below. See `ApplicationStage` for why the escape hatch is kept.
+    #: `OTHER`'s label, and **only** when the set holds `OTHER`. The `CHECK`
+    #: below can see only the first stage, so it holds one direction; the whole
+    #: rule is `stage_label_problem`. See `ApplicationStage` for why the escape
+    #: hatch is kept.
     custom_stage_label: Mapped[str | None] = mapped_column(Text)
     #: The icon the client shows (#198), from the design's closed set; `NULL`
     #: is the client's automatic pick.
@@ -243,14 +248,51 @@ class SessionType(TimestampMixin, Base):
             f"icon IS NULL OR {check_is_known('icon', SessionTypeIcon)}",
             name="icon_is_known",
         ),
-        # **Symmetric.** `other` with no label renders a blank chip; a named
-        # stage carrying a stale label is dead data that survives an edit. The
-        # one-directional form is what let `mentor_profiles.custom_meeting_url`
-        # sit on a venue that was not custom.
+        # **One direction only, since the stage became a set (#215).** It was
+        # symmetric while `application_stage` was the offering's only stage; it
+        # is now the first of a set, so `[drafting_stage, other]` carries a label
+        # beside a first stage that is not `other`, and the old form would refuse
+        # it. A `CHECK` cannot see `session_type_stages`, so the other direction
+        # — no label without `other` in the set — is `stage_label_problem`'s,
+        # asked before every write. `other` first with no label is still
+        # impossible here.
         CheckConstraint(
-            "(application_stage = 'other') = (custom_stage_label IS NOT NULL)",
+            "application_stage IS DISTINCT FROM 'other' OR custom_stage_label IS NOT NULL",
             name="custom_stage_label_matches_stage",
         ),
+    )
+
+
+class SessionTypeStage(TimestampMixin, Base):
+    """Which application stages one session type is aimed at (#215).
+
+    The set, in the mentor's order, each stage once — the #205 shape of
+    `session_type_offerings`, for the other axis. **No rows means any stage.**
+    The first is dual-written to `session_types.application_stage` this release,
+    and a type with no rows here falls back to that column on read, which is
+    what code from before the set still writes during the deploy.
+
+    Cascades with the session type: the row means nothing without it.
+    """
+
+    __tablename__ = "session_type_stages"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    session_type_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("session_types.id", ondelete="CASCADE", name="fk_session_type_stages_type"),
+        nullable=False,
+    )
+    stage: Mapped[ApplicationStage] = mapped_column(str_enum(ApplicationStage), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        Index("ix_session_type_stages_pair", "session_type_id", "stage", unique=True),
+        # One stage per place in the order, so the order is total.
+        Index("ix_session_type_stages_position", "session_type_id", "position", unique=True),
+        CheckConstraint(check_is_known("stage", ApplicationStage), name="stage_is_known"),
     )
 
 
@@ -282,20 +324,30 @@ class SessionTypeBookingConfig(TimestampMixin, Base):
         Uuid, ForeignKey("session_types.id", ondelete="CASCADE"), nullable=False
     )
 
-    duration_minutes: Mapped[int] = mapped_column(nullable=False)
-    #: How far ahead a mentee must book. **The platform rule is 24 hours — no
-    #: same-day booking — and this default is where it lives**, because the ETL
-    #: never sets the column and no endpoint could until offering writes shipped.
-    #: It defaulted to 120 through M2—M4 and every migrated offering took it,
-    #: which quietly permitted booking two hours out against a rule of
-    #: twenty-four.
+    #: How long the offering runs — **or null, meaning the mentor's default,
+    #: then the platform's** (#216). Read only through
+    #: `booking_rules.effective_duration_minutes`, never raw.
+    duration_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    #: How far ahead a mentee must book; **null inherits** like duration (#216).
+    #: **The platform rule is 24 hours — no same-day booking.** It lived in this
+    #: column's default until #216, because the ETL never sets the column and no
+    #: endpoint could until offering writes shipped; it is now
+    #: `DEFAULT_MIN_NOTICE_MINUTES`, reached when neither the offering nor its
+    #: mentor sets one. It defaulted to 120 through M2—M4 and every migrated
+    #: offering took it, which quietly permitted booking two hours out against a
+    #: rule of twenty-four.
     #:
     #: **The `CHECK` below is sanity, not policy.** The product rule — 24h floor,
     #: 72h ceiling, the mentor's choice per session type — is enforced at the
     #: Pydantic boundary on the write schema, and moves to `booking_policies`
     #: when that table lands. A `CHECK` carrying it would need a migration every
     #: time the product changed its mind.
-    min_notice_minutes: Mapped[int] = mapped_column(nullable=False, server_default=text("1440"))
+    #:
+    #: The server default stays through the expand step: code from before #216
+    #: inserts without naming the column and must still get the floor.
+    min_notice_minutes: Mapped[int | None] = mapped_column(
+        nullable=True, server_default=text("1440")
+    )
     #: Whether a booking against *this offering* waits for the mentor —
     #: **or null, meaning follow the mentor's own setting.**
     #:

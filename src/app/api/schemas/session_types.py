@@ -37,10 +37,21 @@ from pydantic import BaseModel, Field, model_validator
 from app.api.schemas.common import Normalised
 from app.api.schemas.intake import QuestionRead, QuestionWrite
 from app.api.schemas.profile import LookupRef
-from app.domain.availability import BOOKING_WINDOW_DAYS, BREAK_AFTER_MINUTES
+from app.domain.availability import (
+    BOOKING_WINDOW_DAYS,
+    BREAK_AFTER_MINUTES,
+    DEFAULT_DURATION_MINUTES,
+    MIN_NOTICE_MINUTES,
+    SESSION_DURATION_MINUTES,
+)
 from app.domain.enums import ApplicationStage, ConferencingProvider, SessionTypeIcon
 from app.domain.intake import MAX_QUESTIONS
-from app.domain.sessions import MAX_SESSION_TYPE_OFFERINGS
+from app.domain.sessions import (
+    MAX_SESSION_TYPE_OFFERINGS,
+    first_stage,
+    named_stages,
+    stage_label_problem,
+)
 
 
 def _int_or_none(value: object) -> int | None:
@@ -65,20 +76,40 @@ def _taxonomy(row: dict[str, object]) -> LookupRef | None:
     return offerings[0] if offerings else None
 
 
-def _refuse_two_offering_fields(model: BaseModel) -> None:
-    """`service_offering_ids` is the set and `service_offering_id` a set of one;
-    a request sending both has two answers and no rule for which wins."""
+def _refuse_two_set_fields(model: BaseModel) -> None:
+    """Each set and its legacy single field: `service_offering_ids` beside
+    `service_offering_id` (#205), `application_stages` beside `application_stage`
+    (#215). A request sending both of a pair has two answers and no rule for
+    which wins."""
     fields = model.model_fields_set
-    if "service_offering_ids" in fields and "service_offering_id" in fields:
-        raise ValueError("send service_offering_ids or service_offering_id, not both")
+    for plural, single in (
+        ("service_offering_ids", "service_offering_id"),
+        ("application_stages", "application_stage"),
+    ):
+        if plural in fields and single in fields:
+            raise ValueError(f"send {plural} or {single}, not both")
+    # `[]` is any stage and absent is unchanged; `null` would be a third
+    # spelling of one of them, so it is refused rather than guessed at (#215).
+    if "application_stages" in fields and getattr(model, "application_stages", None) is None:
+        raise ValueError("application_stages: send [] for any stage, or leave it out")
     ids = getattr(model, "service_offering_ids", None)
     if ids is not None and len(set(ids)) != len(ids):
         raise ValueError("service_offering_ids: an offering appears twice")
 
 
+def _stages(row: dict[str, object]) -> list[ApplicationStage]:
+    """The stages a type is aimed at, in the mentor's order (#215); empty is any."""
+    return [ApplicationStage(str(v)) for v in row.get("application_stages") or []]  # type: ignore[attr-defined]
+
+
 def _stage(row: dict[str, object]) -> ApplicationStage | None:
-    value = row.get("application_stage")
-    return None if value is None else ApplicationStage(str(value))
+    """The single `application_stage` kept this release: **the first of the set**
+    (#215), so the old field and the new list can never disagree."""
+    return first_stage(_stages(row))
+
+
+#: What a set of stages may hold: each stage once, so at most all of them.
+MAX_STAGES = len(ApplicationStage)
 
 
 class SessionTypeRead(BaseModel):
@@ -121,20 +152,28 @@ class SessionTypeRead(BaseModel):
             "mentor's order. `service_offering` is the first of these."
         ),
     )
+    application_stages: list[ApplicationStage] = Field(
+        default_factory=list,
+        description=(
+            "Every stage of an application this offering is aimed at, in the "
+            "mentor's order. **Empty means any stage.** When it holds `other`, "
+            "`custom_stage_label` carries the mentor's wording, and it never "
+            "does otherwise."
+        ),
+    )
     application_stage: ApplicationStage | None = Field(
         default=None,
         description=(
-            "Which stage of an application this offering is aimed at. Null means "
-            "any stage. `other` always carries `custom_stage_label`, and no other "
-            "value ever does — the two are tied in the database, so a client can "
-            "render the label whenever the value is `other` without checking."
+            "**Deprecated: read `application_stages`.** The first of "
+            "`application_stages`, kept for one release; null when that list is "
+            "empty."
         ),
     )
     custom_stage_label: str | None = Field(
         default=None,
         description=(
-            "The mentor's own wording, and **only** when `application_stage` is "
-            "`other`. Render it in place of the stage name."
+            "The mentor's own wording, and **only** when `application_stages` "
+            "holds `other`. Render it in place of that stage's name."
         ),
     )
     icon: SessionTypeIcon | None = Field(
@@ -175,6 +214,7 @@ class SessionTypeRead(BaseModel):
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
             service_offering=_taxonomy(row),
             service_offerings=_offerings(row),
+            application_stages=_stages(row),
             application_stage=_stage(row),
             custom_stage_label=(
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
@@ -212,10 +252,29 @@ class OwnSessionTypeRead(BaseModel):
     name: str
     description: str | None = None
     duration_minutes: int = Field(
-        description="How long a session of this type runs, and the step between slots."
+        description=(
+            "How long a session of this type runs, and the step between slots — "
+            "**resolved**: this offering's own, else your default, else "
+            f"{DEFAULT_DURATION_MINUTES}. `duration_inherited` says which."
+        )
     )
     min_notice_minutes: int = Field(
-        description="How far ahead a booking must be made against this offering."
+        description=(
+            "How far ahead a booking must be made against this offering, "
+            "**resolved** like `duration_minutes`; `min_notice_inherited` says which."
+        )
+    )
+    duration_inherited: bool = Field(
+        description=(
+            "`true` when this offering sets no length of its own and "
+            "`duration_minutes` is your default (or the platform's)."
+        )
+    )
+    min_notice_inherited: bool = Field(
+        description=(
+            "`true` when this offering sets no notice of its own and "
+            "`min_notice_minutes` is your default (or the platform's)."
+        )
     )
     meeting_venue: ConferencingProvider = Field(
         description=(
@@ -257,16 +316,22 @@ class OwnSessionTypeRead(BaseModel):
             "order. `service_offering` is the first of these."
         ),
     )
+    application_stages: list[ApplicationStage] = Field(
+        default_factory=list,
+        description=(
+            "Every stage of an application this offering is aimed at, in your "
+            "order; empty means any stage."
+        ),
+    )
     application_stage: ApplicationStage | None = Field(
         default=None,
-        description="Which stage of an application this offering is aimed at.",
+        description=("**Deprecated: read `application_stages`.** Its first, kept for one release."),
     )
     custom_stage_label: str | None = Field(
         default=None,
         description=(
-            "Your own wording, and only when `application_stage` is `other`. "
-            "Sending one with any other stage is refused, and so is `other` "
-            "without one."
+            "Your own wording, and only when `application_stages` holds `other`. "
+            "Sending one without `other` is refused, and so is `other` without one."
         ),
     )
     icon: SessionTypeIcon | None = Field(
@@ -298,6 +363,8 @@ class OwnSessionTypeRead(BaseModel):
             description=str(row["description"]) if row["description"] else None,
             duration_minutes=int(str(row["duration_minutes"])),
             min_notice_minutes=int(str(row["min_notice_minutes"])),
+            duration_inherited=bool(row["duration_inherited"]),
+            min_notice_inherited=bool(row["min_notice_inherited"]),
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
             is_active=bool(row["is_active"]),
             requires_booking_confirmation=(
@@ -309,6 +376,7 @@ class OwnSessionTypeRead(BaseModel):
             break_after_minutes=_int_or_none(row.get("break_after_minutes")),
             service_offering=_taxonomy(row),
             service_offerings=_offerings(row),
+            application_stages=_stages(row),
             application_stage=_stage(row),
             custom_stage_label=(
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
@@ -320,28 +388,27 @@ class OwnSessionTypeRead(BaseModel):
 def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePatch](
     model: Write,
 ) -> Write:
-    """Mirror the symmetric `CHECK` at the boundary.
+    """`stage_label_problem`, asked at the boundary so the answer is a 422 early.
 
-    **One function, called from both write models**, because the rule is one rule
-    — a copy in each would be non-negotiable #8 in its plainest form, and the
-    copy somebody forgets is the one that stops matching the database.
+    **One function, called from both write models**, and the rule itself is the
+    domain's — the store asks it again against the row's final state, because
+    the database's `CHECK` can see only the first stage (#215).
 
-    **Only when both fields are present.** On a `PATCH` an absent field means
+    **On a `PATCH`, only when both halves are sent.** An absent field means
     *leave it alone*, so a request naming only `custom_stage_label` cannot be
-    judged here — the database still refuses the combination the row would end
-    up in, which is the guarantee. Judging it here anyway would refuse a legal
-    edit: setting the label on an offering that is already `other`.
+    judged here; the store judges it against what the row holds. Judging it here
+    anyway would refuse a legal edit: setting the label on an offering whose set
+    already holds `other`.
     """
-    stage = model.application_stage
-    label = model.custom_stage_label
-    if stage is None or (label is None and stage is not ApplicationStage.OTHER):
+    fields = model.model_fields_set
+    if isinstance(model, MentorSessionTypePatch) and not (
+        "custom_stage_label" in fields and ({"application_stages", "application_stage"} & fields)
+    ):
         return model
-    if stage is ApplicationStage.OTHER and label is None:
-        raise ValueError("application_stage 'other' needs custom_stage_label")
-    if stage is not ApplicationStage.OTHER and label is not None:
-        raise ValueError(
-            f"custom_stage_label belongs only to 'other'; this stage is {stage.value!r}"
-        )
+    sent = named_stages(model.model_dump(exclude_unset=True)) or []
+    problem = stage_label_problem(sent, model.custom_stage_label)
+    if problem is not None:
+        raise ValueError(problem[1])
     return model
 
 
@@ -369,7 +436,19 @@ class MentorSessionTypeWrite(Normalised):
     #: 422 naming the field rather than a 500 naming a constraint. Pinned against
     #: the constraint by a test, per non-negotiable #8 — the copy is real and
     #: this is the mechanism that keeps it honest.
-    duration_minutes: int = Field(ge=5, le=480)
+    #:
+    #: **Null, or absent, follows the mentor's default** (#216), then the
+    #: platform's.
+    duration_minutes: int | None = Field(
+        default=None,
+        ge=SESSION_DURATION_MINUTES[0],
+        le=SESSION_DURATION_MINUTES[1],
+        description=(
+            f"Minutes ({SESSION_DURATION_MINUTES[0]}-{SESSION_DURATION_MINUTES[1]}); "
+            "`null` follows your default on your mentor profile, then "
+            f"{DEFAULT_DURATION_MINUTES}."
+        ),
+    )
     #: **The product rule, and the boundary is where it lives** (settled decision
     #: #104). 24 hours is the platform floor and 72 the current ceiling; the
     #: column's `CHECK` is sanity only — `BETWEEN 0 AND 43200` — because a
@@ -377,9 +456,16 @@ class MentorSessionTypeWrite(Normalised):
     #: *disallowed*. When `booking_policies` lands this range moves there and
     #: becomes a config change rather than a migration.
     #:
-    #: The default is the floor rather than a value a mentor picked, which is the
-    #: same thing the column default says and the reason it says it.
-    min_notice_minutes: int = Field(default=1440, ge=1440, le=4320)
+    #: **Null, or absent, follows the mentor's default, then the floor** (#216).
+    min_notice_minutes: int | None = Field(
+        default=None,
+        ge=MIN_NOTICE_MINUTES[0],
+        le=MIN_NOTICE_MINUTES[1],
+        description=(
+            f"Minutes of notice ({MIN_NOTICE_MINUTES[0]}-{MIN_NOTICE_MINUTES[1]}, 24 "
+            "to 72 hours); `null` follows your default, then 24 hours."
+        ),
+    )
     #: The taxonomy row, by id. Optional: an unclassified offering is bookable
     #: and simply matches no filter, and forcing a mentor to classify before they
     #: can sell would put a required field in front of the thing they came to do.
@@ -395,10 +481,21 @@ class MentorSessionTypeWrite(Normalised):
             "`[]` clears them. Send this or `service_offering_id`, not both."
         ),
     )
-    application_stage: ApplicationStage | None = None
-    #: Only with `OTHER`, and required by it. Enforced here **and** by a symmetric
-    #: `CHECK`: the database refuses what is impossible, and this turns the same
-    #: refusal into a 422 naming the field rather than a 500 naming a constraint.
+    #: The stage set, in order, each once (#215). `[]` means any stage; absent
+    #: leaves it. `application_stage` below is a set of one, for one release.
+    application_stages: list[ApplicationStage] | None = Field(
+        default=None,
+        max_length=MAX_STAGES,
+        description=(
+            "Every stage this offering is aimed at, in the order to show them; each "
+            "once. `[]` means any stage. Send this or `application_stage`, not both."
+        ),
+    )
+    application_stage: ApplicationStage | None = Field(
+        default=None,
+        description="**Deprecated: send `application_stages`.** A set of one; `null` clears it.",
+    )
+    #: Only when the set holds `OTHER`, and required by it (`stage_label_problem`).
     custom_stage_label: str | None = Field(default=None, max_length=100)
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
     #: each request, `false` confirms bookings at once (#199). Booking already
@@ -450,7 +547,7 @@ class MentorSessionTypeWrite(Normalised):
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
-        _refuse_two_offering_fields(self)
+        _refuse_two_set_fields(self)
         return _refuse_mismatched_label(self)
 
 
@@ -472,8 +569,22 @@ class MentorSessionTypePatch(Normalised):
 
     name: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
-    duration_minutes: int | None = Field(default=None, ge=5, le=480)
-    min_notice_minutes: int | None = Field(default=None, ge=1440, le=4320)
+    #: `null` switches the offering to inheriting (#216); absent leaves it.
+    duration_minutes: int | None = Field(
+        default=None,
+        ge=SESSION_DURATION_MINUTES[0],
+        le=SESSION_DURATION_MINUTES[1],
+        description="Minutes; `null` follows your default, absent leaves it as it is.",
+    )
+    min_notice_minutes: int | None = Field(
+        default=None,
+        ge=MIN_NOTICE_MINUTES[0],
+        le=MIN_NOTICE_MINUTES[1],
+        description=(
+            "Minutes of notice, 24 to 72 hours; `null` follows your default, absent "
+            "leaves it as it is."
+        ),
+    )
     #: The taxonomy row, by id. Optional: an unclassified offering is bookable
     #: and simply matches no filter, and forcing a mentor to classify before they
     #: can sell would put a required field in front of the thing they came to do.
@@ -489,10 +600,21 @@ class MentorSessionTypePatch(Normalised):
             "`[]` clears them. Send this or `service_offering_id`, not both."
         ),
     )
-    application_stage: ApplicationStage | None = None
-    #: Only with `OTHER`, and required by it. Enforced here **and** by a symmetric
-    #: `CHECK`: the database refuses what is impossible, and this turns the same
-    #: refusal into a 422 naming the field rather than a 500 naming a constraint.
+    #: The stage set, in order, each once (#215). `[]` means any stage; absent
+    #: leaves it. `application_stage` below is a set of one, for one release.
+    application_stages: list[ApplicationStage] | None = Field(
+        default=None,
+        max_length=MAX_STAGES,
+        description=(
+            "Every stage this offering is aimed at, in the order to show them; each "
+            "once. `[]` means any stage. Send this or `application_stage`, not both."
+        ),
+    )
+    application_stage: ApplicationStage | None = Field(
+        default=None,
+        description="**Deprecated: send `application_stages`.** A set of one; `null` clears it.",
+    )
+    #: Only when the set holds `OTHER`, and required by it (`stage_label_problem`).
     custom_stage_label: str | None = Field(default=None, max_length=100)
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
     #: each request, `false` confirms bookings at once (#199). Booking already
@@ -533,7 +655,7 @@ class MentorSessionTypePatch(Normalised):
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
-        _refuse_two_offering_fields(self)
+        _refuse_two_set_fields(self)
         return _refuse_mismatched_label(self)
 
 

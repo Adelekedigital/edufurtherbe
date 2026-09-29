@@ -143,6 +143,8 @@ EXPECTED_TABLES = [
     "session_type_booking_configs",
     # Session Types #9: the offerings one session type covers, up to three.
     "session_type_offerings",
+    # Session Types round 3 A (#215): the stages one session type is aimed at.
+    "session_type_stages",
     "session_types",
     "sessions",
     # M4 — the intake stack, deferred out of `04_sessions.sql` when M4 shipped
@@ -786,4 +788,142 @@ def test_every_schema_identifier_appears_verbatim_in_source(
     assert missing == [], (
         "these identifiers exist in the database but appear nowhere in src/ or "
         f"migrations/ — most likely silently truncated past 63 bytes: {missing}"
+    )
+
+
+#: A mentor with one offering, as the precedent above builds one; the caller
+#: formats in the email, name, stage and label as SQL literals.
+_MENTOR_WITH_OFFERING = """
+    WITH u AS (
+        INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+        VALUES ('{email}', gen_random_uuid(), 'Probe', 'mentor', 'UTC')
+        RETURNING id
+    ), p AS (
+        INSERT INTO mentor_profiles (user_id, headline) SELECT id, 'P' FROM u
+        RETURNING user_id
+    )
+    INSERT INTO session_types (mentor_user_id, name, application_stage, custom_stage_label)
+    SELECT user_id, '{name}', {stage}, {label} FROM p
+"""
+
+
+def test_the_stage_set_backfill_carries_every_staged_type(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`e0d7461f13ce` backfills one row per type with a stage, at position 0,
+    and none for a type aimed at any stage (#215)."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "7b3e91c4a2d6")
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="staged@example.test", name="Staged", stage="'revisions'", label="NULL"
+        ),
+    )
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="any@example.test", name="Any", stage="NULL", label="NULL"
+        ),
+    )
+
+    command.upgrade(config, "e0d7461f13ce")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT string_agg(t.name || ':' || s.stage || ':' || s.position, ',') "
+            "FROM session_type_stages s JOIN session_types t ON t.id = s.session_type_id",
+        )
+        == "Staged:revisions:0"
+    )
+
+
+def test_the_stage_set_downgrade_keeps_the_mentors_label(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """**`[drafting_stage, other]` with a label cannot survive as one stage whole.**
+    The symmetric `CHECK` the downgrade restores needs the label and `other`
+    together, so the single stage becomes `other` and the mentor's wording is
+    kept — the documented choice over keeping `drafting_stage` and dropping the
+    label, which would lose the only thing the mentor typed."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "e0d7461f13ce")
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="set@example.test", name="Set", stage="'drafting_stage'", label="'Gap year'"
+        ),
+    )
+    execute(
+        disposable_database,
+        "INSERT INTO session_type_stages (session_type_id, stage, position) "
+        "SELECT id, 'drafting_stage', 0 FROM session_types WHERE name = 'Set' "
+        "UNION ALL SELECT id, 'other', 1 FROM session_types WHERE name = 'Set'",
+    )
+
+    command.downgrade(config, "7b3e91c4a2d6")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT application_stage || ':' || custom_stage_label FROM session_types "
+            "WHERE name = 'Set'",
+        )
+        == "other:Gap year"
+    )
+
+
+def test_the_inherit_downgrade_writes_the_resolved_values(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`228315723d63`'s downgrade restores `NOT NULL`, so an inheriting offering
+    must first be given **the value it was resolving to** — its mentor's default,
+    else the platform's — not a column default nobody chose (#216)."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "228315723d63")
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="inherit@example.test", name="Inherits", stage="NULL", label="NULL"
+        ),
+    )
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="inherit-notice@example.test", name="Inherits notice", stage="NULL", label="NULL"
+        ),
+    )
+    # Each column once from the mentor's default and once from the platform's:
+    # the first mentor sets only a length, the second only a notice.
+    execute(
+        disposable_database,
+        "UPDATE mentor_profiles SET default_duration_minutes = 30 "
+        "WHERE user_id = (SELECT id FROM users WHERE email = 'inherit@example.test'); "
+        "UPDATE mentor_profiles SET default_min_notice_minutes = 2880 "
+        "WHERE user_id = (SELECT id FROM users WHERE email = 'inherit-notice@example.test'); "
+        "INSERT INTO session_type_booking_configs "
+        "(session_type_id, duration_minutes, min_notice_minutes) "
+        "SELECT id, NULL, NULL FROM session_types",
+    )
+
+    command.downgrade(config, "e0d7461f13ce")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT string_agg(t.name || '=' || c.duration_minutes || ':' || "
+            "c.min_notice_minutes, ',' ORDER BY t.name) "
+            "FROM session_type_booking_configs c JOIN session_types t ON t.id = c.session_type_id",
+        )
+        == "Inherits=30:1440,Inherits notice=60:2880"
+    )
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT bool_and(attnotnull) FROM pg_attribute "
+            "WHERE attrelid = 'session_type_booking_configs'::regclass "
+            "AND attname IN ('duration_minutes', 'min_notice_minutes')",
+        )
+        is True
     )

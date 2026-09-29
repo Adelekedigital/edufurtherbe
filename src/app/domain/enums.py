@@ -302,12 +302,12 @@ class ApplicationStage(StrEnum):
     this vocabulary was drawn from fourteen mock screens rather than from data,
     so being incomplete is the expected case rather than the surprising one.
 
-    Its label lives in ``session_types.custom_stage_label``, tied to it by a
-    **symmetric** ``CHECK``: ``OTHER`` with no label renders a blank chip, and a
-    named stage carrying a stale label is dead data that survives an edit. Both
-    directions, for the same reason the conferencing constraint is symmetric —
-    the one-directional form is what let a mentor be bookable with nowhere to
-    meet.
+    Its label lives in ``session_types.custom_stage_label``, present exactly
+    when an offering's stage set holds ``OTHER`` (#215): ``OTHER`` with no label
+    renders a blank chip, and a label beside a set without it is dead data that
+    survives an edit. Both directions, for the same reason the conferencing
+    constraint is symmetric — but since the stage became a set the ``CHECK`` can
+    see only its first member, so the whole rule is ``stage_label_problem``.
 
     **Not a lookup table**, unlike ``service_offerings`` next door. The handoff's
     test applies: adding a value here requires a code change anyway, because

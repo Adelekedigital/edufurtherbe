@@ -46,8 +46,12 @@ __all__ = [
     "BOOKING_WINDOW_DAYS",
     "BREAK_AFTER_MINUTES",
     "DEFAULT_BREAK_MINUTES",
+    "DEFAULT_DURATION_MINUTES",
+    "DEFAULT_MIN_NOTICE_MINUTES",
     "DEFAULT_PROJECTION_DAYS",
     "MAX_PROJECTION_DAYS",
+    "MIN_NOTICE_MINUTES",
+    "SESSION_DURATION_MINUTES",
     "BlockedWindow",
     "DatedException",
     "UnknownTimezoneError",
@@ -82,6 +86,25 @@ BREAK_AFTER_MINUTES = (0, 120)
 
 #: No break unless a mentor or an offering asks for one.
 DEFAULT_BREAK_MINUTES = 0
+
+#: How long a session may run, in minutes: what an offering or a mentor's
+#: default may set. The same bounds as the `duration_minutes_valid` CHECK on
+#: both tables that carry a duration, and pinned to it by a test (#8).
+SESSION_DURATION_MINUTES = (5, 480)
+
+#: How long a session runs when neither the offering nor its mentor says (#216).
+DEFAULT_DURATION_MINUTES = 60
+
+#: How far ahead a booking must be made, in minutes: what an offering or a
+#: mentor's default may set (#104). **24 hours is the platform floor** — no
+#: same-day booking — and 72 the current ceiling. A 6-hour option was asked for
+#: on 2026-09-29 and declined: #121's approval deadline is six hours before the
+#: start, so at 6 hours' notice a request would expire the moment it was made.
+#: The columns' `CHECK`s are sanity only; this is the product rule.
+MIN_NOTICE_MINUTES = (1440, 4320)
+
+#: The notice when neither the offering nor its mentor says: the floor (#104).
+DEFAULT_MIN_NOTICE_MINUTES = MIN_NOTICE_MINUTES[0]
 
 
 class UnknownTimezoneError(ValueError):

@@ -70,6 +70,8 @@ MENTOR_COLUMNS = (
     "requires_booking_confirmation",
     "booking_window_days",
     "break_after_minutes",
+    "default_duration_minutes",
+    "default_min_notice_minutes",
     "primary_study_country_id",
     "primary_study_program",
 )

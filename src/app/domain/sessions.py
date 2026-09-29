@@ -27,9 +27,10 @@ code is a mentee who can claim a refund by choosing a value.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from app.domain.enums import SessionReasonCode, SessionRole, SessionStatus
+from app.domain.enums import ApplicationStage, SessionReasonCode, SessionRole, SessionStatus
 
 __all__ = [
     "CANCELLATION_CUTOFF",
@@ -37,8 +38,11 @@ __all__ = [
     "RESPONSE_WINDOW",
     "TRANSITIONS",
     "Transition",
+    "first_stage",
+    "named_stages",
     "records_unavailability",
     "respond_by",
+    "stage_label_problem",
     "too_late_to_cancel",
 ]
 
@@ -217,3 +221,53 @@ def too_late_to_cancel(starts_at: dt.datetime, now: dt.datetime) -> bool:
 #: number (2026-09-28); a product rule, so it lives here and both the boundary
 #: and the store read it.
 MAX_SESSION_TYPE_OFFERINGS = 3
+
+
+def named_stages(fields: Mapping[str, object]) -> list[ApplicationStage] | None:
+    """The stage set a write names, or ``None`` when it names none (#215).
+
+    **The one reading of the pair**, asked by the boundary and by the store.
+    `application_stages` is the set; the legacy `application_stage` is a set of
+    one, and `null` there clears it. **`application_stages: null` is refused at
+    the boundary** — `[]` means any stage and leaving it out means unchanged —
+    so a `None` reaching here is a field nobody sent, which is how a full
+    `model_dump()` spells it. The boundary also refuses sending both.
+    """
+    stages = fields.get("application_stages")
+    if stages is not None:
+        return [ApplicationStage(value) for value in stages]  # type: ignore[attr-defined]
+    if "application_stage" in fields:
+        value = fields["application_stage"]
+        return [ApplicationStage(str(value))] if value is not None else []
+    return None
+
+
+def first_stage(stages: Sequence[ApplicationStage]) -> ApplicationStage | None:
+    """The first of a stage set: what `session_types.application_stage` holds and
+    the deprecated single `application_stage` field reports, this release."""
+    return stages[0] if stages else None
+
+
+def stage_label_problem(
+    stages: Sequence[ApplicationStage], label: str | None
+) -> tuple[str, str] | None:
+    """What is wrong with this stage set and label together, as ``(pointer,
+    message)``, or ``None`` (#215).
+
+    **A label exactly when the set holds `other`**, in both directions: `other`
+    with no label renders a blank chip, and a label beside a set without `other`
+    is dead data that survives an edit. The database's `CHECK` can see only the
+    first stage (`session_types.application_stage`), so it holds one direction;
+    this is the whole rule, and the boundary and the store both ask it.
+    """
+    if len(set(stages)) != len(stages):
+        return ("/application_stages", "a stage appears twice")
+    has_other = ApplicationStage.OTHER in stages
+    if has_other and label is None:
+        return ("/custom_stage_label", "a stage set with 'other' needs custom_stage_label")
+    if not has_other and label is not None:
+        return (
+            "/custom_stage_label",
+            "custom_stage_label belongs only to a stage set that includes 'other'",
+        )
+    return None
