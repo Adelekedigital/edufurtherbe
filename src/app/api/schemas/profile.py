@@ -493,17 +493,21 @@ class UserProfileWrite(Normalised):
     #: **`CoverArt`, not `CoverArt | None`**, for the reason
     #: `requires_booking_confirmation` gives: the column is `NOT NULL`, so an
     #: explicit `null` is a `422` rather than a 500. Omitted leaves it alone.
-    cover_art: CoverArt = Field(
-        default=CoverArt.NONE,
-        description="What is drawn over the cover colour. `none` by default.",
+    #: Its default is the column's; published here as `None`, like the names,
+    #: because a spec `default` makes generated clients type the field as always
+    #: sent — a PATCH body must publish none (`test_patch_bodies`).
+    cover_art: CoverArt = Field(  # type: ignore[assignment]
+        default=None,
+        description="What is drawn over the cover colour. `none` for a new profile.",
     )
     #: **The viewer's own zone** (booking request item 7, #206), on `users` rather than
     #: `user_profiles` — the writer updates it in the same transaction. Validated
     #: by the same check availability rules use (#36); an explicit `null` is a
     #: `422`, because the column is `NOT NULL` — the rule
-    #: `requires_booking_confirmation` follows. Omitted leaves it alone.
-    timezone: str = Field(
-        default="UTC",
+    #: `requires_booking_confirmation` follows. Omitted leaves it alone; the
+    #: column's own default (`UTC`) is what a new account starts with.
+    timezone: str = Field(  # type: ignore[assignment]
+        default=None,
         description=(
             "Your IANA timezone, e.g. `Africa/Lagos` — used to show you times in "
             "your own zone. Not an offset: an offset goes stale twice a year."

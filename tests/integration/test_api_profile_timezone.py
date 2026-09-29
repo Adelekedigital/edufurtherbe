@@ -152,3 +152,20 @@ async def test_a_mentor_changing_zone_marks_their_next_free_time_stale(
             )
         ).scalar_one()
     assert logged >= 1
+
+
+async def test_a_patch_without_the_timezone_leaves_it_alone(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The positive half of the spec test: sending only the cover keeps the zone."""
+    user_id, headers = await a_user(db_engine, "partial")
+    await api_client.patch(
+        url(user_id, "profile"), json={"timezone": "Asia/Tokyo"}, headers=headers
+    )
+
+    response = await api_client.patch(
+        url(user_id, "profile"), json={"cover_color": "sky"}, headers=headers
+    )
+
+    assert response.status_code == 204, response.text
+    assert await zone_of(db_engine, user_id) == "Asia/Tokyo"
