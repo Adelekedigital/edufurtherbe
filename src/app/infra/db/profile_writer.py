@@ -71,6 +71,9 @@ MENTOR_COLUMNS = (
     "primary_study_country_id",
     "primary_study_program",
 )
+#: Columns of the profile write that live on `users`, not `user_profiles`.
+USER_COLUMNS = ("timezone",)
+
 PROFILE_COLUMNS = (
     "about_me",
     "gender",
@@ -340,12 +343,20 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     content-addressed in Supabase Storage (ADR 0019); accepting a URL here would
     let a profile point at any host and bypass that scheme.
     """
+    # **`timezone` lives on `users`**, so it is written there, scoped to the
+    # owner's id, in this same transaction (booking request item 7).
+    user_values = {key: value for key, value in payload.items() if key in USER_COLUMNS}
+    if user_values:
+        await session.execute(update(User).where(User.id == user_id).values(**user_values))
     values = {key: value for key, value in payload.items() if key in PROFILE_COLUMNS}
     existing = await session.execute(
         select(UserProfile.user_id).where(UserProfile.user_id == user_id)
     )
     if existing.first() is None:
-        await session.execute(insert(UserProfile).values(user_id=user_id, **values))
+        # A request that only set a `users` column is not starting a profile:
+        # creating an empty row would flip `/me`'s `profile` from null.
+        if values or not user_values:
+            await session.execute(insert(UserProfile).values(user_id=user_id, **values))
         return
     if values:
         await session.execute(

@@ -13,8 +13,9 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.api.schemas.availability import validated_zone
 from app.api.schemas.catalogue import CountryRef, InstitutionRead
 from app.api.schemas.common import (
     AvatarFocusRead,
@@ -389,6 +390,25 @@ class UserProfileWrite(Normalised):
         default=CoverArt.NONE,
         description="What is drawn over the cover colour. `none` by default.",
     )
+    #: **The viewer's own zone** (booking request item 7, #206), on `users` rather than
+    #: `user_profiles` — the writer updates it in the same transaction. Validated
+    #: by the same check availability rules use (#36); an explicit `null` is a
+    #: `422`, because the column is `NOT NULL` — the rule
+    #: `requires_booking_confirmation` follows. Omitted leaves it alone.
+    timezone: str = Field(
+        default="UTC",
+        description=(
+            "Your IANA timezone, e.g. `Africa/Lagos` — used to show you times in "
+            "your own zone. Not an offset: an offset goes stale twice a year."
+        ),
+        examples=["Africa/Lagos"],
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_zone(cls, value: str) -> str:
+        return validated_zone(value)
+
     social_linkedin: LinkedInWrite = Field(
         default=None,
         description=(
