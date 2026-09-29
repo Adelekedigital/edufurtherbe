@@ -52,8 +52,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.errors import ConflictError, SessionTypeHasBookingsError
-from app.domain.enums import ConferencingProvider
+from app.core.errors import ConflictError, SessionTypeHasBookingsError, ValidationError
+from app.domain.enums import ApplicationStage, ConferencingProvider
+from app.domain.sessions import stage_label_problem
+from app.infra.db.booking_rules import (
+    effective_duration_minutes,
+    effective_min_notice_minutes,
+    inherits_duration,
+    inherits_min_notice,
+)
 from app.infra.db.models.mentoring import (
     MentorConferencingOption,
     MentorProfile,
@@ -73,6 +80,11 @@ from app.infra.db.public_visibility import (
     mentor_is_public,
     session_type_is_live,
     session_type_of,
+)
+from app.infra.db.stages import (
+    legacy_stage,
+    stages_for_session_types,
+    write_session_type_stages,
 )
 
 __all__ = [
@@ -215,8 +227,10 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             SessionType.application_stage,
             SessionType.custom_stage_label,
             SessionType.icon,
-            SessionTypeBookingConfig.duration_minutes,
-            SessionTypeBookingConfig.min_notice_minutes,
+            # Resolved, not read (#212): the offering's own, else its mentor's
+            # default, else the platform's. The field stays an int.
+            effective_duration_minutes().label("duration_minutes"),
+            effective_min_notice_minutes().label("min_notice_minutes"),
             # Resolved, not read. See `_resolved_venue`.
             _resolved_venue(),
         )
@@ -280,8 +294,10 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionType.custom_stage_label,
             SessionType.icon,
             SessionType.is_active,
-            SessionTypeBookingConfig.duration_minutes,
-            SessionTypeBookingConfig.min_notice_minutes,
+            effective_duration_minutes().label("duration_minutes"),
+            effective_min_notice_minutes().label("min_notice_minutes"),
+            inherits_duration().label("duration_inherited"),
+            inherits_min_notice().label("min_notice_inherited"),
             SessionTypeBookingConfig.requires_booking_confirmation,
             SessionTypeBookingConfig.booking_window_days,
             SessionTypeBookingConfig.break_after_minutes,
@@ -292,6 +308,9 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             SessionTypeBookingConfig,
             SessionTypeBookingConfig.session_type_id == SessionType.id,
         )
+        # For the inherited length and notice (#212). Inner, because
+        # `session_types.mentor_user_id` references this table.
+        .join(MentorProfile, MentorProfile.user_id == SessionType.mentor_user_id)
     )
     return _with_venue(statement).where(*session_type_of(mentor_user_id)).order_by(SessionType.name)
 
@@ -314,7 +333,7 @@ async def list_own_session_types(
     that found it.
     """
     result = await session.execute(_own_session_types(mentor_user_id))
-    return await _with_offerings(session, [dict(row) for row in result.mappings()])
+    return await _with_sets(session, [dict(row) for row in result.mappings()])
 
 
 async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]] | None:
@@ -331,16 +350,18 @@ async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[
         return None
 
     result = await session.execute(_live_session_types(user_id))
-    return await _with_offerings(session, [dict(row) for row in result.mappings()])
+    return await _with_sets(session, [dict(row) for row in result.mappings()])
 
 
-async def _with_offerings(
-    session: AsyncSession, rows: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Attach each type's offerings (#205) — one extra statement for the list."""
-    by_type = await offerings_for_session_types(session, [row["id"] for row in rows])
+async def _with_sets(session: AsyncSession, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach each type's offerings (#205) and stages (#211) — one extra
+    statement each for the whole list."""
+    ids = [row["id"] for row in rows]
+    offerings = await offerings_for_session_types(session, ids)
+    stages = await stages_for_session_types(session, ids)
     for row in rows:
-        row["service_offerings"] = by_type.get(row["id"], [])
+        row["service_offerings"] = offerings.get(row["id"], [])
+        row["application_stages"] = stages.get(row["id"], [])
     return rows
 
 
@@ -408,6 +429,8 @@ async def create_session_type(
     if owns.first() is None:
         return None
 
+    stages = _requested_stages(payload) or []
+    _refuse_stage_label(stages, payload.get("custom_stage_label"))
     async with _distinct_names():
         session_type_id = (
             await session.execute(
@@ -416,7 +439,7 @@ async def create_session_type(
                     mentor_user_id=mentor_user_id,
                     name=payload["name"],
                     description=payload.get("description"),
-                    application_stage=payload.get("application_stage"),
+                    application_stage=legacy_stage(stages),
                     custom_stage_label=payload.get("custom_stage_label"),
                     icon=payload.get("icon"),
                 )
@@ -430,17 +453,47 @@ async def create_session_type(
         await session.execute(
             insert(SessionTypeBookingConfig).values(
                 session_type_id=session_type_id,
-                duration_minutes=payload["duration_minutes"],
-                min_notice_minutes=payload["min_notice_minutes"],
+                # Null inherits (#212), written explicitly: an absent key would
+                # take `min_notice_minutes`' server default and stop inheriting.
+                duration_minutes=payload.get("duration_minutes"),
+                min_notice_minutes=payload.get("min_notice_minutes"),
                 requires_booking_confirmation=payload.get("requires_booking_confirmation"),
                 booking_window_days=payload.get("booking_window_days"),
                 break_after_minutes=payload.get("break_after_minutes"),
             )
         )
+    if stages:
+        await write_session_type_stages(session, session_type_id, stages)
     offerings = _requested_offerings(payload)
     if offerings is not None:
         await set_session_type_offerings(session, session_type_id, offerings)
     return session_type_id
+
+
+def _requested_stages(payload: dict[str, Any]) -> list[ApplicationStage] | None:
+    """The stage set a write asks for, or `None` when it names none (#211).
+
+    `application_stages` is the set; the legacy `application_stage` is a set of
+    one, and `null` there clears it — the same reading `_requested_offerings`
+    gives the offering pair. The boundary refuses a payload sending both.
+    """
+    if "application_stages" in payload and payload["application_stages"] is not None:
+        return [ApplicationStage(value) for value in payload["application_stages"]]
+    if "application_stage" in payload:
+        value = payload["application_stage"]
+        return [ApplicationStage(value)] if value is not None else []
+    return None
+
+
+def _refuse_stage_label(stages: list[ApplicationStage], label: str | None) -> None:
+    """The stage set and label the row will end up with, judged whole (#211).
+
+    Asked **before** writing, against the final state, because the `CHECK` sees
+    only the first stage and a `PATCH` may change either half alone.
+    """
+    problem = stage_label_problem(stages, label)
+    if problem is not None:
+        raise ValidationError(problem[1], field_errors=(problem,))
 
 
 def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
@@ -461,10 +514,12 @@ def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
 #: Which payload keys belong to which table. Split here rather than at the
 #: boundary because the write model is one shape by design — a mentor edits *an
 #: offering*, and that it spans two tables is this layer's problem.
+#:
+#: `application_stage` is absent on purpose: it is derived from the stage set
+#: and written beside the label in one statement (#211).
 SESSION_TYPE_COLUMNS = (
     "name",
     "description",
-    "application_stage",
     "custom_stage_label",
     "icon",
     "is_active",
@@ -507,6 +562,24 @@ async def update_session_type(
         return False
 
     own = {key: value for key, value in payload.items() if key in SESSION_TYPE_COLUMNS}
+    stages = _requested_stages(payload)
+    if stages is not None or "custom_stage_label" in payload:
+        current = (
+            await session.execute(
+                select(SessionType.custom_stage_label).where(SessionType.id == session_type_id)
+            )
+        ).scalar_one()
+        final = (
+            stages
+            if stages is not None
+            else (await stages_for_session_types(session, [session_type_id])).get(
+                session_type_id, []
+            )
+        )
+        _refuse_stage_label(final, payload.get("custom_stage_label", current))
+    if stages is not None:
+        own["application_stage"] = legacy_stage(stages)
+        await write_session_type_stages(session, session_type_id, stages)
     if own:
         async with _distinct_names():
             await session.execute(

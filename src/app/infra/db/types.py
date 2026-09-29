@@ -113,7 +113,13 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # nullable — `application_stage IS NULL OR ...`, because a `CHECK` rejects
     # only what is false and an offering aimed at no particular stage is
     # ordinary.
-    ApplicationStage: frozenset({"ck_session_types_application_stage_is_known"}),
+    ApplicationStage: frozenset(
+        {
+            "ck_session_types_application_stage_is_known",
+            # The stage set (#211); not nullable, so no `IS NULL OR`.
+            "ck_session_type_stages_stage_is_known",
+        }
+    ),
     # Step 3 — the first shared vocabulary. Two tables whose rows users create
     # and an admin curates; `degree_levels` and `service_offerings` have no
     # status column because nobody can add a row to them.

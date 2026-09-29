@@ -112,21 +112,25 @@ async def test_other_without_a_label_is_refused(db_engine: AsyncEngine) -> None:
         await write_stage(db_engine, session_type, "other", None)
 
 
-async def test_a_label_on_a_named_stage_is_refused(db_engine: AsyncEngine) -> None:
-    """The other half. A one-directional constraint *does* catch this one — the
-    probe above confirms it — so this test is not what the symmetry buys.
+async def test_a_label_beside_a_named_first_stage_is_legal_in_the_database(
+    db_engine: AsyncEngine,
+) -> None:
+    """**The half the database gave up when the stage became a set (#211).**
 
-    It earns its place anyway: a mentor picks `other`, types a label, then
-    changes to `revisions`, and without a constraint in this direction the label
-    survives as dead data that renders nowhere and reappears the day something
-    starts reading it. That is how `custom_meeting_url` outlived the venue it
-    belonged to.
+    `[revisions, other]` is a legal set with a label, and its first — the only
+    stage the `CHECK` can see — is `revisions`. So the constraint holds one
+    direction now, and this pins that it does not quietly hold the other: were
+    the symmetric form restored, every such offering would fail to save.
+
+    The dead-label case this test used to guard — a mentor moves from `other` to
+    `revisions` and the label survives — is refused before the write by
+    `stage_label_problem`, and asserted through the API in
+    `test_session_type_stages.py`.
     """
     mentor = await make_public_mentor(db_engine, "label-no-other")
     session_type = await add_session_type(db_engine, mentor)
 
-    with pytest.raises(IntegrityError):
-        await write_stage(db_engine, session_type, "revisions", "left over")
+    await write_stage(db_engine, session_type, "revisions", "beside other")
 
 
 async def test_an_offering_cannot_point_at_a_service_offering_that_is_not_there(

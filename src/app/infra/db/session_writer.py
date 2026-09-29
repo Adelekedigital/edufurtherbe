@@ -77,6 +77,7 @@ from app.domain.sessions import (
 from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.availability_writer import block_session_window
+from app.infra.db.booking_rules import effective_duration_minutes
 from app.infra.db.credit_writer import refund_credit, spend_credit
 from app.infra.db.intake_file_store import link_files, usable_file_ids
 from app.infra.db.intake_store import questions_by_type, record_answers
@@ -193,7 +194,9 @@ async def _offering(
         (
             await session.execute(
                 select(
-                    SessionTypeBookingConfig.duration_minutes,
+                    # The length the slot was offered at (#212) — resolved the
+                    # way `/slots` resolves it, so the two cannot disagree.
+                    effective_duration_minutes().label("duration_minutes"),
                     func.coalesce(
                         SessionTypeBookingConfig.requires_booking_confirmation,
                         MentorProfile.requires_booking_confirmation,

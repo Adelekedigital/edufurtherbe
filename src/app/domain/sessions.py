@@ -27,9 +27,10 @@ code is a mentee who can claim a refund by choosing a value.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.domain.enums import SessionReasonCode, SessionRole, SessionStatus
+from app.domain.enums import ApplicationStage, SessionReasonCode, SessionRole, SessionStatus
 
 __all__ = [
     "CANCELLATION_CUTOFF",
@@ -39,6 +40,7 @@ __all__ = [
     "Transition",
     "records_unavailability",
     "respond_by",
+    "stage_label_problem",
     "too_late_to_cancel",
 ]
 
@@ -217,3 +219,28 @@ def too_late_to_cancel(starts_at: dt.datetime, now: dt.datetime) -> bool:
 #: number (2026-09-28); a product rule, so it lives here and both the boundary
 #: and the store read it.
 MAX_SESSION_TYPE_OFFERINGS = 3
+
+
+def stage_label_problem(
+    stages: Sequence[ApplicationStage], label: str | None
+) -> tuple[str, str] | None:
+    """What is wrong with this stage set and label together, as ``(pointer,
+    message)``, or ``None`` (#211).
+
+    **A label exactly when the set holds `other`**, in both directions: `other`
+    with no label renders a blank chip, and a label beside a set without `other`
+    is dead data that survives an edit. The database's `CHECK` can see only the
+    first stage (`session_types.application_stage`), so it holds one direction;
+    this is the whole rule, and the boundary and the store both ask it.
+    """
+    if len(set(stages)) != len(stages):
+        return ("/application_stages", "a stage appears twice")
+    has_other = ApplicationStage.OTHER in stages
+    if has_other and label is None:
+        return ("/custom_stage_label", "a stage set with 'other' needs custom_stage_label")
+    if not has_other and label is not None:
+        return (
+            "/custom_stage_label",
+            "custom_stage_label belongs only to a stage set that includes 'other'",
+        )
+    return None

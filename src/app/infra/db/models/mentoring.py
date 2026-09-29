@@ -184,6 +184,10 @@ class MentorProfile(TimestampMixin, Base):
     #: (#204). Null means the platform's: the full horizon, and no break.
     booking_window_days: Mapped[int | None] = mapped_column(nullable=True)
     break_after_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    #: The mentor's default length and notice for every offering that does not
+    #: set its own (#212). Null means the platform's: 60 minutes, 24 hours.
+    default_duration_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    default_min_notice_minutes: Mapped[int | None] = mapped_column(nullable=True)
 
     # `primary_session_type_id` is gone, and with it
     # `trg_refuse_retiring_a_primary_offering`. D88 gave it two jobs: the
@@ -214,6 +218,16 @@ class MentorProfile(TimestampMixin, Base):
         CheckConstraint(
             "break_after_minutes IS NULL OR break_after_minutes BETWEEN 0 AND 1440",
             name="break_after_minutes_sane",
+        ),
+        # The same bounds as the offering's own columns: duration's is the
+        # validity range, notice's is sanity only (#104).
+        CheckConstraint(
+            "default_duration_minutes IS NULL OR default_duration_minutes BETWEEN 5 AND 480",
+            name="default_duration_minutes_valid",
+        ),
+        CheckConstraint(
+            "default_min_notice_minutes IS NULL OR default_min_notice_minutes BETWEEN 0 AND 43200",
+            name="default_min_notice_minutes_sane",
         ),
         # These indexes plus the user_profiles ones ARE the search
         # implementation. No Typesense, no Meilisearch, no synced table.

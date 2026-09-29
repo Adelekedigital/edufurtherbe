@@ -24,7 +24,14 @@ from app.api.schemas.common import (
     XWrite,
     YouTubeWrite,
 )
-from app.domain.availability import BOOKING_WINDOW_DAYS, BREAK_AFTER_MINUTES
+from app.domain.availability import (
+    BOOKING_WINDOW_DAYS,
+    BREAK_AFTER_MINUTES,
+    DEFAULT_DURATION_MINUTES,
+    DEFAULT_MIN_NOTICE_MINUTES,
+    MIN_NOTICE_MINUTES,
+    SESSION_DURATION_MINUTES,
+)
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
 
 
@@ -211,6 +218,23 @@ class MentorProfileRead(BaseModel):
     #: means the platform's: bookable up to 56 days ahead, no break.
     booking_window_days: int | None = None
     break_after_minutes: int | None = None
+    #: Your default length and notice for every offering that does not set its
+    #: own (#212); null means the platform's.
+    default_duration_minutes: int | None = Field(
+        default=None,
+        description=(
+            "Minutes a session runs on every offering that does not set its own; "
+            f"null means the platform's {DEFAULT_DURATION_MINUTES}."
+        ),
+    )
+    default_min_notice_minutes: int | None = Field(
+        default=None,
+        description=(
+            "How far ahead, in minutes, every offering that does not set its own "
+            f"must be booked; null means the platform's {DEFAULT_MIN_NOTICE_MINUTES} "
+            "(24 hours)."
+        ),
+    )
     # `default_meeting_venue` is **removed**, not made optional. It was read
     # through `primary_session_type_id`, which is dropped, and venue has no
     # mentor-level home to fall back to. Keeping the key with a permanent `null`
@@ -239,6 +263,8 @@ class MentorProfileRead(BaseModel):
             requires_booking_confirmation=bool(row["requires_booking_confirmation"]),
             booking_window_days=row.get("booking_window_days"),
             break_after_minutes=row.get("break_after_minutes"),
+            default_duration_minutes=row.get("default_duration_minutes"),
+            default_min_notice_minutes=row.get("default_min_notice_minutes"),
             primary_study_program=row.get("primary_study_program"),
             primary_study_country=country,
             offerings=[
@@ -347,6 +373,28 @@ class MentorProfileWrite(Normalised):
     )
     break_after_minutes: int | None = Field(
         default=None, ge=BREAK_AFTER_MINUTES[0], le=BREAK_AFTER_MINUTES[1]
+    )
+    #: The length and notice every offering inherits unless it sets its own
+    #: (#212), in the offering's own ranges. Null means the platform's.
+    default_duration_minutes: int | None = Field(
+        default=None,
+        ge=SESSION_DURATION_MINUTES[0],
+        le=SESSION_DURATION_MINUTES[1],
+        description=(
+            f"Minutes ({SESSION_DURATION_MINUTES[0]}-{SESSION_DURATION_MINUTES[1]}) "
+            "for every offering that does not set its own; null is the platform's "
+            f"{DEFAULT_DURATION_MINUTES}."
+        ),
+    )
+    default_min_notice_minutes: int | None = Field(
+        default=None,
+        ge=MIN_NOTICE_MINUTES[0],
+        le=MIN_NOTICE_MINUTES[1],
+        description=(
+            f"Minutes of notice ({MIN_NOTICE_MINUTES[0]}-{MIN_NOTICE_MINUTES[1]}, "
+            "24 to 72 hours) for every offering that does not set its own; null is "
+            "the platform's 24 hours."
+        ),
     )
     primary_study_country_id: UUID | None = None
     primary_study_program: str | None = Field(default=None, max_length=300)

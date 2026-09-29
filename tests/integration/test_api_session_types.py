@@ -305,6 +305,7 @@ async def test_the_response_carries_nothing_it_should_not(
         "meeting_venue",
         "service_offering",
         "service_offerings",
+        "application_stages",
         "application_stage",
         "custom_stage_label",
         "icon",
@@ -316,6 +317,8 @@ async def test_the_response_carries_nothing_it_should_not(
         "display_name": "Document Preparation",
     }
     assert offering["application_stage"] == "other"
+    # A single-stage type written before the set reads as a set of one (#211).
+    assert offering["application_stages"] == ["other"]
     assert offering["custom_stage_label"] == "My own wording"
     assert "created_by" not in body
 
