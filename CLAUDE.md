@@ -83,10 +83,11 @@ make check                     # the full local gate — CI runs it on every pus
 
 ## How we work
 
-Ten rules. The first six came out of a retrospective on M1 — each is there
+Eleven rules. The first six came out of a retrospective on M1 — each is there
 because it cost real time, and that count is in `failure-modes.md`. Rules 7–9 were
 added 2026-08-17, when the approval gate itself turned out to be one of the costs;
-rule 10 on 2026-09-27, when the duplicated local gate turned out to be another.
+rule 10 on 2026-09-27, when the duplicated local gate turned out to be another;
+rule 11 on 2026-09-29, when deferred work was found living only in chat.
 
 1. ~~**Never stack pull requests.**~~ **Reversed 2026-08-16, deliberately.**
    Stacking is allowed: branch from the PR you build on, merge in order. The
@@ -165,6 +166,11 @@ rule 10 on 2026-09-27, when the duplicated local gate turned out to be another.
     is green on the PR's exact head commit**. Check the SHA, because a stale
     green has been reported before (#35). A CI failure is fixed on the branch
     like any red gate. Run `make check` locally only to reproduce a CI failure.
+11. **Anything deferred that is worth exploring later becomes a GitHub issue.**
+    Labelled `deferred` plus `roadmap` (a product capability) or `tech-debt` (an
+    engineering follow-up), with what it is, why it was deferred, when to
+    revisit it, and links. Not a chat note, not only a memory, not only a
+    decision row. The how is in `project-conventions` → *Deferred work*.
 
 Working alone in the repository is assumed. When another session may be active,
 use `git worktree` rather than switching the shared checkout.

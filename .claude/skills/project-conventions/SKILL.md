@@ -332,6 +332,34 @@ product backend and the migration are done.**
   second endpoint exists, not the tenth — the Next.js client will encode whatever
   shape ships first.
 
+## Deferred work
+
+CLAUDE.md rule 11, adopted 2026-09-29 at the owner's request. **Anything decided
+"not now" that is worth exploring later is a GitHub issue** — the roadmap is
+`gh issue list --label roadmap`, the engineering backlog `--label tech-debt`,
+and everything waiting on a later call `--label deferred`.
+
+- **When:** the moment something is deferred — an owner "not now", a PR's
+  "follow-up", a known limit accepted in a settled decision, the contract step of
+  an expand/contract change, a frontend item parked as P3. Not when it is
+  declined for good with no reason to revisit (that is a settled-decision row
+  alone), and not for work already in flight.
+- **Labels:** `deferred` on every one, plus exactly one of `roadmap` (a product
+  capability: a feature, a design change) or `tech-debt` (an engineering
+  follow-up: a column to drop, a limit to lift, a refactor).
+- **Title:** `area: summary`, matching the existing issues (`intake: …`,
+  `session-types: …`, `schema: …`).
+- **Body:** four parts — **What** (the capability or change), **Why deferred**
+  (who decided, when, and the settled-decision number), **Revisit when** (the
+  trigger, as concretely as possible), **Links** (PRs, decisions, handoff files).
+  No AI attribution, as for PRs.
+- **Both ways:** the settled-decision row or PR body names the issue number, and
+  the issue names the decision.
+- **Closing:** when the work ships (the PR says `Closes #n`), or as `wontfix`
+  with the reason if it is dropped for good.
+
+Backfilled 2026-09-29: #269–#278, plus the labels added to #12 and #231.
+
 ## Guardrails
 
 Every build preserves these, whatever it is doing. They become the "guardrails"
