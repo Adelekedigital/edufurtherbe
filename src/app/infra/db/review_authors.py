@@ -18,8 +18,8 @@ every column read from it is null. The institution lateral is correlated on the
 a deleted author either — correlating it on `reviewed_by` would publish the
 institution of somebody who is no longer named.
 
-Moderation reads its own join on purpose: an admin needs the author a stranger
-must not see.
+Moderation uses it too (#212): what an admin sees beyond a stranger is the
+private review and the report, never a deleted author's identity.
 """
 
 from __future__ import annotations

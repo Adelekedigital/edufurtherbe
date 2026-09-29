@@ -405,7 +405,7 @@ class UserProfileWrite(Normalised):
     #: an explicit `null` — or a blank, which `Normalised` turns into one — is a
     #: `422`, the rule `timezone` follows. Omitted leaves it alone. On `users`,
     #: written in the same transaction; the slug is never derived from it, so a
-    #: rename keeps every shared profile link (#212).
+    #: rename keeps every shared profile link (#213).
     #:
     #: The `None` default is never validated or written — the writer takes
     #: `exclude_unset` — and it is what lets the spec say "a string, optional"
@@ -423,7 +423,7 @@ class UserProfileWrite(Normalised):
     about_me: str | None = Field(default=None, max_length=5000)
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None
-    #: A mentor's own crop (#213): overrides the detected face and survives the
+    #: A mentor's own crop (#214): overrides the detected face and survives the
     #: backfill. Needs a photo — there is nothing to centre without one — and a
     #: new photo replaces it, since a crop of the old picture means nothing on
     #: the new one. `null` is a `422`: a choice is replaced, not unset.

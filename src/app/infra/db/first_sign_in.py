@@ -44,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AccountExistsError
 from app.domain.emails import normalise_email
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 
 __all__ = ["provision_first_sign_in"]
 
@@ -108,7 +109,7 @@ async def _address_is_taken(session: AsyncSession, address: str, *, auth_id: UUI
     held = await session.execute(
         select(User.id).where(
             User.email == address,
-            User.deleted_at.is_(None),
+            LIVE,
             User.auth_id.is_distinct_from(auth_id),
         )
     )

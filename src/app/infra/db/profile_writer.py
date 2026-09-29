@@ -373,7 +373,7 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
 async def _choose_avatar_focus(
     session: AsyncSession, user_id: UUID, focus: dict[str, float]
 ) -> None:
-    """Record the mentor's own crop of the photo they have now (#213).
+    """Record the mentor's own crop of the photo they have now (#214).
 
     **Conditional on there being a photo**, in the same statement that writes:
     the existence check is atomic. It proves *a* photo exists, not *which* —

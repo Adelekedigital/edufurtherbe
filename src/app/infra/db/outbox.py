@@ -31,6 +31,7 @@ from app.domain.notifications import Channel, Notification
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 
 __all__ = ["MAX_ATTEMPTS", "drain", "enqueue"]
 
@@ -320,7 +321,5 @@ async def _address_for(session: AsyncSession, user_id: UUID, channel: Channel) -
     if channel is not Channel.EMAIL:
         return None
     return (
-        await session.execute(
-            select(User.email).where(User.id == user_id, User.deleted_at.is_(None))
-        )
+        await session.execute(select(User.email).where(User.id == user_id, LIVE))
     ).scalar_one_or_none()
