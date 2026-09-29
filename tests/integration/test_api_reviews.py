@@ -34,12 +34,18 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import add_session_type, make_public_mentor, until_blocked
 
+from app.api.schemas.common import MAX_PAGE_SIZE
+from app.core.config import Settings
 from app.core.errors import AlreadyReviewedError, NotFoundError
-from app.domain.reviews import REVIEW_EDIT_WINDOW, REVIEW_INTERVAL
+from app.domain.reviews import REVIEW_INTERVAL, edit_window
 from app.infra.db.review_writer import edit_review, write_review
-from conftest import api_token, bearer
+from app.infra.storage.supabase import SupabaseStorage
+from conftest import api_token, bearer, build_api_app
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
+
+#: The window a deployment with nothing configured gets.
+REVIEW_EDIT_WINDOW = edit_window(Settings(_env_file=None))
 
 ALREADY = "/problems/review-already-exists"
 TOO_SOON = "/problems/review-interval-not-elapsed"
@@ -47,10 +53,11 @@ TOO_SOON = "/problems/review-interval-not-elapsed"
 #: A well-formed body, as words rather than numbers. Every test that is not
 #: about validation starts from this and changes one thing.
 BODY: dict[str, Any] = {
-    "communication_rating": "excellent",
-    "knowledge_rating": "great",
-    "practicality_rating": "excellent",
-    "support_rating": "great",
+    "overall_rating": 4,
+    "communication_rating": "great",
+    "knowledge_rating": "okay",
+    "practicality_rating": "great",
+    "support_rating": "okay",
     "valuable_rating": 5,
     "nps_recommend_score": 9,
     "public_review": "He showed me what a strong portfolio actually looks like.",
@@ -69,8 +76,16 @@ class World:
     offering_a: UUID
     offering_b: UUID
 
-    async def completed(self, offering: UUID | None, *, days_ago: int = 1) -> str:
-        """A completed session of this mentee's, on this offering."""
+    async def completed(
+        self,
+        offering: UUID | None,
+        *,
+        days_ago: int = 1,
+        mentor: UUID | None = None,
+        mentee: UUID | None = None,
+    ) -> str:
+        """A completed session on this offering — the world's mentor and mentee
+        unless another party is named. The one session insert in this module."""
         async with self.engine.begin() as conn:
             row = await conn.execute(
                 text(
@@ -79,8 +94,8 @@ class World:
                     "VALUES (:m, :e, :t, :starts, 45, 'completed') RETURNING id"
                 ),
                 {
-                    "m": self.mentor,
-                    "e": self.mentee,
+                    "m": mentor or self.mentor,
+                    "e": mentee or self.mentee,
                     "t": offering,
                     "starts": dt.datetime.now(dt.UTC) - dt.timedelta(days=days_ago, hours=days_ago),
                 },
@@ -176,7 +191,7 @@ async def test_a_mentee_reviews_a_completed_session(world: World) -> None:
 
 
 async def test_the_answers_come_back_as_words(world: World) -> None:
-    """The column stores `3`; the contract says `excellent`.
+    """The column stores `3`; the contract says `great`.
 
     A magic number on the wire is a value whose meaning lives in a document,
     which is the half of settled decision #100 that still applies once the
@@ -186,8 +201,8 @@ async def test_the_answers_come_back_as_words(world: World) -> None:
 
     body = (await world.review(session_id)).json()
 
-    assert body["communication_rating"] == "excellent"
-    assert body["knowledge_rating"] == "great"
+    assert body["communication_rating"] == "great"
+    assert body["knowledge_rating"] == "okay"
 
 
 async def test_the_mentor_is_taken_from_the_session_not_the_request(world: World) -> None:
@@ -206,7 +221,8 @@ async def test_the_mentor_is_taken_from_the_session_not_the_request(world: World
 
 
 async def test_the_platform_feedback_is_never_published(world: World) -> None:
-    """`private_review` is accepted, stored, and absent from every read model."""
+    """`private_review` is accepted, stored, and absent from every read model but
+    the author's own `GET` (and moderation's)."""
     session_id = await world.completed(world.offering_a)
 
     body = (
@@ -400,6 +416,139 @@ async def test_a_typo_can_be_fixed_inside_the_window(world: World) -> None:
 
     assert response.status_code == 200
     assert response.json()["public_review"].endswith("portfolio looks like.")
+
+
+async def test_the_overall_rating_is_required(world: World) -> None:
+    """Step 1's stars — the form will not advance without them."""
+    session_id = await world.completed(world.offering_a)
+    body = BODY | {"session_id": session_id}
+    del body["overall_rating"]
+
+    response = await world.client.post("/api/v1/reviews", json=body, headers=world.headers)
+
+    assert response.status_code == 422
+    assert any(e["pointer"] == "/overall_rating" for e in response.json()["errors"])
+
+
+@pytest.mark.parametrize("value", [0, 6])
+async def test_the_overall_rating_is_one_to_five(world: World, value: int) -> None:
+    response = await world.review(await world.completed(world.offering_a), overall_rating=value)
+
+    assert response.status_code == 422
+
+
+async def test_the_overall_rating_comes_back_and_can_be_corrected(world: World) -> None:
+    review = (await world.review(await world.completed(world.offering_a))).json()
+    assert review["overall_rating"] == 4
+
+    response = await world.client.patch(
+        f"/api/v1/reviews/{review['id']}", json={"overall_rating": 5}, headers=world.headers
+    )
+
+    assert response.json()["overall_rating"] == 5
+    assert response.json()["valuable_rating"] == 5
+
+
+async def test_the_overall_rating_may_be_omitted_but_not_emptied(world: World) -> None:
+    review = (await world.review(await world.completed(world.offering_a))).json()
+
+    response = await world.client.patch(
+        f"/api/v1/reviews/{review['id']}", json={"overall_rating": None}, headers=world.headers
+    )
+
+    assert response.status_code == 422
+
+
+async def test_editable_until_is_when_the_window_shuts(world: World) -> None:
+    """The client shows "you can edit it until …" from this, never from a
+    hard-coded ten minutes."""
+    review = (await world.review(await world.completed(world.offering_a))).json()
+
+    until = dt.datetime.fromisoformat(review["editable_until"])
+
+    assert until == dt.datetime.fromisoformat(review["created_at"]) + REVIEW_EDIT_WINDOW
+
+
+async def test_the_author_reads_their_whole_review_back(world: World) -> None:
+    """**What a reload needs to pre-fill step 2**, including the platform
+    feedback — it is the author's own text, and only the author is served it."""
+    review = (
+        await world.review(
+            await world.completed(world.offering_a), private_review="The join button hid"
+        )
+    ).json()
+
+    response = await world.client.get(f"/api/v1/reviews/{review['id']}", headers=world.headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["private_review"] == "The join button hid"
+    assert body["overall_rating"] == 4
+    assert body["communication_rating"] == "great"
+    assert body["nps_recommend_score"] == 9
+    assert body["editable_until"] == review["editable_until"]
+
+
+async def test_editable_until_is_null_once_the_window_has_shut(world: World) -> None:
+    review = (await world.review(await world.completed(world.offering_a))).json()
+    await world.age(review["id"], REVIEW_EDIT_WINDOW + dt.timedelta(minutes=1))
+
+    response = await world.client.get(f"/api/v1/reviews/{review['id']}", headers=world.headers)
+
+    assert response.status_code == 200
+    assert response.json()["editable_until"] is None
+
+
+async def test_the_mentor_it_is_about_cannot_read_it(world: World) -> None:
+    """Scoped in the query: the subject gets `404`, and the platform feedback
+    with it — while the author, asking for the same id, gets it back."""
+    feedback = "The join button hid"
+    review = (
+        await world.review(await world.completed(world.offering_a), private_review=feedback)
+    ).json()
+    async with world.engine.connect() as conn:
+        mentor_auth = (
+            await conn.execute(text("SELECT auth_id FROM users WHERE id = :m"), {"m": world.mentor})
+        ).scalar_one()
+
+    as_mentor = await world.client.get(
+        f"/api/v1/reviews/{review['id']}", headers=bearer(api_token(mentor_auth))
+    )
+    as_author = await world.client.get(f"/api/v1/reviews/{review['id']}", headers=world.headers)
+
+    assert as_mentor.status_code == 404
+    assert feedback not in as_mentor.text
+    assert as_author.status_code == 200
+    assert as_author.json()["private_review"] == feedback
+
+
+async def test_the_window_follows_configuration(
+    world: World, db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """`REVIEW_EDIT_WINDOW_MINUTES` moves the guard and the field together."""
+    app = build_api_app(
+        db_engine, api_storage, Settings(_env_file=None, review_edit_window_minutes=30)
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        review = (
+            await client.post(
+                "/api/v1/reviews",
+                json=BODY | {"session_id": await world.completed(world.offering_a)},
+                headers=world.headers,
+            )
+        ).json()
+        await world.age(review["id"], dt.timedelta(minutes=15))
+
+        response = await client.patch(
+            f"/api/v1/reviews/{review['id']}", json={"overall_rating": 2}, headers=world.headers
+        )
+
+    assert response.status_code == 200
+    created = dt.datetime.fromisoformat(response.json()["created_at"])
+    until = dt.datetime.fromisoformat(response.json()["editable_until"])
+    assert until == created + dt.timedelta(minutes=30)
 
 
 async def test_the_window_shuts(world: World) -> None:
@@ -730,6 +879,7 @@ async def test_a_withdrawal_landing_mid_edit_wins(world: World, db_engine: Async
                 UUID(review["id"]),
                 {"public_review": "Snuck in."},
                 dt.datetime.now(dt.UTC),
+                REVIEW_EDIT_WINDOW,
             )
 
     async with db_engine.begin() as conn:
@@ -806,3 +956,122 @@ async def test_a_refused_review_tells_nobody(world: World) -> None:
 
     assert before.status_code == 409
     assert count == 1
+
+
+# --------------------------------------------------------------------------
+# Finding your own reviews again — `GET /me/authored-reviews`
+# --------------------------------------------------------------------------
+
+AUTHORED = "/api/v1/me/authored-reviews"
+
+
+async def a_second_mentors_session(world: World) -> tuple[UUID, str]:
+    """A completed session of the world's mentee with a different mentor."""
+    other = await make_public_mentor(world.engine, uuid4().hex[:8])
+    return other, await world.completed(None, mentor=other, days_ago=2)
+
+
+async def authored(world: World, query: str = "") -> dict[str, Any]:
+    response = await world.client.get(f"{AUTHORED}{query}", headers=world.headers)
+    assert response.status_code == 200, response.text
+    return dict(response.json())
+
+
+async def test_your_reviews_come_back_newest_first(world: World) -> None:
+    first = (await world.review(await world.completed(world.offering_a))).json()
+    second = (await world.review(await world.completed(world.offering_b))).json()
+
+    rows = (await authored(world))["data"]
+
+    assert [row["id"] for row in rows] == [second["id"], first["id"]]
+    assert set(rows[0]) == {
+        "id",
+        "created_at",
+        "editable_until",
+        "session_id",
+        "reviewed_for",
+        "overall_rating",
+        "public_review",
+    }
+    assert rows[0]["reviewed_for"] == str(world.mentor)
+    assert rows[0]["overall_rating"] == 4
+    assert rows[0]["editable_until"] == second["editable_until"]
+
+
+async def test_somebody_elses_reviews_never_appear(world: World) -> None:
+    """Scoped to the author in the query (non-negotiable #5)."""
+    mine = (await world.review(await world.completed(world.offering_a))).json()
+    stranger = uuid4()
+    async with world.engine.begin() as conn:
+        stranger_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
+                    "VALUES (:e, :a, 'Ada', 'mentee', 'Africa/Lagos') RETURNING id"
+                ),
+                {"e": f"other-{stranger.hex[:8]}@example.test", "a": stranger},
+            )
+        ).scalar_one()
+    theirs = await world.completed(None, mentee=stranger_id)
+    strangers = await world.client.post(
+        "/api/v1/reviews",
+        json=BODY | {"session_id": theirs},
+        headers=bearer(api_token(stranger)),
+    )
+    assert strangers.status_code == 201
+
+    assert [row["id"] for row in (await authored(world))["data"]] == [mine["id"]]
+    other_page = await world.client.get(AUTHORED, headers=bearer(api_token(stranger)))
+    assert [row["id"] for row in other_page.json()["data"]] == [strangers.json()["id"]]
+
+
+async def test_your_reviews_narrow_to_one_mentor(world: World) -> None:
+    here = (await world.review(await world.completed(world.offering_a))).json()
+    other, session_id = await a_second_mentors_session(world)
+    there = (await world.review(session_id)).json()
+
+    narrowed = (await authored(world, f"?mentor_id={other}"))["data"]
+
+    assert [row["id"] for row in narrowed] == [there["id"]]
+    assert narrowed[0]["reviewed_for"] == str(other)
+    assert [row["id"] for row in (await authored(world, f"?mentor_id={world.mentor}"))["data"]] == [
+        here["id"]
+    ]
+
+
+async def test_a_withdrawn_review_is_not_yours_to_find(world: World) -> None:
+    review = (await world.review(await world.completed(world.offering_a))).json()
+    live = (await world.review(await world.completed(world.offering_b, days_ago=2))).json()
+    async with world.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE reviews SET deleted_at = now() WHERE id = :i"), {"i": review["id"]}
+        )
+
+    assert [row["id"] for row in (await authored(world))["data"]] == [live["id"]]
+
+
+async def test_editable_until_shuts_on_the_list_too(world: World) -> None:
+    review = (await world.review(await world.completed(world.offering_a))).json()
+    await world.age(review["id"], REVIEW_EDIT_WINDOW + dt.timedelta(minutes=1))
+
+    assert (await authored(world))["data"][0]["editable_until"] is None
+
+
+async def test_your_reviews_page(world: World) -> None:
+    await world.review(await world.completed(world.offering_a))
+    await world.review(await world.completed(world.offering_b))
+
+    first = await authored(world, "?limit=1")
+    second = await authored(world, f"?limit=1&cursor={first['next_cursor']}")
+
+    assert first["next_cursor"] is not None
+    assert second["next_cursor"] is None
+    assert first["data"][0]["id"] != second["data"][0]["id"]
+
+
+async def test_the_page_size_has_a_hard_max(world: World) -> None:
+    at_max = await world.client.get(f"{AUTHORED}?limit={MAX_PAGE_SIZE}", headers=world.headers)
+    over = await world.client.get(f"{AUTHORED}?limit={MAX_PAGE_SIZE + 1}", headers=world.headers)
+
+    assert at_max.status_code == 200
+    assert over.status_code == 422

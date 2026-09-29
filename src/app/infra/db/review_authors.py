@@ -26,16 +26,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Select, and_, func, true
+from sqlalchemy import Select, and_, case, func, null, true
 
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
 from app.infra.db.qualifications import top_qualification
 
-__all__ = ["author_columns", "with_author"]
+__all__ = ["author_columns", "author_session_id", "with_author"]
 
 _QUALIFICATION = top_qualification(User.id, name="author_qualification")
+
+
+def _author_gone() -> Any:
+    """The joined author is not there — which, since `reviewed_by` is NOT NULL
+    and restricts, means `LIVE` refused them. The one test of it."""
+    return User.id.is_(None)
 
 
 def author_columns() -> tuple[Any, ...]:
@@ -50,8 +56,18 @@ def author_columns() -> tuple[Any, ...]:
         _QUALIFICATION.c.institution.label("author_institution"),
         # `reviewed_by` is NOT NULL and restricts, so the only way the join
         # finds no user is `LIVE` refusing one.
-        User.id.is_(None).label("author_deleted"),
+        _author_gone().label("author_deleted"),
     )
+
+
+def author_session_id() -> Any:
+    """The reviewed session, **null for a deleted author**, as `session_id`.
+
+    The session is identity by another route: the mentor is a party to it, so
+    its id leads to the reviewer the byline withholds. It goes with them, by the
+    same test that empties `author_*`.
+    """
+    return case((_author_gone(), null()), else_=Review.session_id).label("session_id")
 
 
 def with_author(statement: Select[Any]) -> Select[Any]:

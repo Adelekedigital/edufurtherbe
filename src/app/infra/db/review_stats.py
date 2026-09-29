@@ -58,14 +58,26 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Integer, Numeric, Select, and_, cast, func, select
+from sqlalchemy import Integer, Numeric, Select, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import SessionRole
-from app.domain.reviews import MENTOR_RATINGS, ORDINAL_SCALE, RECOMMEND_SCALE, WOULD_RECOMMEND_FROM
+from app.domain.reviews import (
+    MENTOR_RATINGS,
+    ORDINAL_SCALE,
+    OVERALL_STANDS_ALONE_FROM,
+    RECOMMEND_SCALE,
+    WOULD_RECOMMEND_FROM,
+)
 from app.infra.db.models.reviews import Review
 
-__all__ = ["card_summary", "mentor_review_stats", "profile_summary", "published"]
+__all__ = [
+    "card_summary",
+    "mentor_review_stats",
+    "profile_summary",
+    "published",
+    "review_value",
+]
 
 #: The top of each scale, which is what a percentage divides by. Register
 #: question 2, answered from the display: `97% Recommended` over three reviews
@@ -142,6 +154,34 @@ def _in_ten(condition: Any) -> Any:
     return cast(func.round(met * 10 / func.nullif(func.count(), 0)), Integer)
 
 
+def review_value() -> Any:
+    """One review's session value: its `overall_rating`, or its
+    `valuable_rating` when it was written before the stars existed.
+
+    **The one statement of it** — the `X/5` beside a review on every list, and
+    the per-review term of a mentor's blended average below, so the badge and
+    the figure it adds up to cannot disagree.
+    """
+    return func.coalesce(Review.overall_rating, Review.valuable_rating)
+
+
+def _session_value() -> Any:
+    """A mentor's session value, over the rows `published()` selects.
+
+    From `OVERALL_STANDS_ALONE_FROM` published overall ratings on, the mean of
+    those alone; below it, the mean of `review_value()` over every review, each
+    counted once. `count(column)` skips nulls, so it counts overall ratings and
+    nothing else. `NULL` over no rows, as every average here is.
+    """
+    return case(
+        (
+            func.count(Review.overall_rating) >= OVERALL_STANDS_ALONE_FROM,
+            _average(Review.overall_rating),
+        ),
+        else_=_average(review_value()),
+    )
+
+
 def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
     """The two figures a discovery card shows: how many, and how valuable.
 
@@ -158,7 +198,8 @@ def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
     of one. Twenty-one rows pay it; a thousand matches do not.
 
     **Deliberately narrower than the profile's, and the index is why.**
-    `ix_reviews_mentor_valuable` covers `(reviewed_for, valuable_rating)` under
+    `ix_reviews_mentor_valuable` covers `(reviewed_for, valuable_rating,
+    overall_rating)` under
     the same partial predicate `published()` states, so these two are answered by
     an index-only scan — measured at zero heap fetches over 36,000 reviews.
     Adding the four ordinals or the recommend score here would put columns the
@@ -171,7 +212,7 @@ def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
     """
     return (
         select(func.count()).select_from(Review).where(published(mentor)).correlate_except(Review),
-        select(_average(Review.valuable_rating))
+        select(_session_value())
         .select_from(Review)
         .where(published(mentor))
         .correlate_except(Review),
@@ -191,7 +232,7 @@ def profile_summary(mentor: Any) -> Select[Any]:
     """
     columns: list[Any] = [
         func.count().label("review_count"),
-        _average(Review.valuable_rating).label("session_value"),
+        _session_value().label("session_value"),
         _percent(Review.nps_recommend_score, _RECOMMEND_MAX).label("recommended_percent"),
         _in_ten(Review.nps_recommend_score >= WOULD_RECOMMEND_FROM).label("would_recommend_in_10"),
     ]

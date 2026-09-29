@@ -91,6 +91,7 @@ from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES
 from app.domain.intake_files import clean_filename, content_disposition, file_type
 from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
+from app.domain.reviews import edit_window, editable_until
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
 from app.infra.clients.meetings import (
     DailyRooms,
@@ -193,7 +194,11 @@ from app.infra.db.referral_store import list_referrals
 from app.infra.db.referral_writer import claim_referral, create_referral
 from app.infra.db.review_eligibility import reviewable_sessions
 from app.infra.db.review_moderation import decide_report, list_reviews_for_moderation
-from app.infra.db.review_reader import get_review_row, list_mentor_reviews
+from app.infra.db.review_reader import (
+    get_review_row,
+    list_authored_reviews,
+    list_mentor_reviews,
+)
 from app.infra.db.review_report_writer import report_review
 from app.infra.db.review_stats import mentor_review_stats
 from app.infra.db.review_writer import edit_review, write_review
@@ -2788,8 +2793,26 @@ SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events
 # --------------------------------------------------------------------------
 
 
+def _with_deadline(row: dict[str, Any], now: dt.datetime, window: dt.timedelta) -> dict[str, Any]:
+    """An author's review row with `editable_until` stamped on.
+
+    Every author read goes through here — the single review and the list — so
+    the edge a client is shown comes from the same `editable_until` the `PATCH`
+    guard asks, never a second computation of it.
+    """
+    return row | {"editable_until": editable_until(row["created_at"], now, window)}
+
+
+async def _own_review(
+    session: AsyncSession, review_id: UUID, author: UUID, now: dt.datetime, window: dt.timedelta
+) -> dict[str, Any] | None:
+    """The author's review with its deadline, or ``None``."""
+    row = await get_review_row(session, review_id, author)
+    return None if row is None else _with_deadline(row, now, window)
+
+
 async def written_review(
-    payload: ReviewWrite, user: CurrentUserDep, session: SessionDep
+    payload: ReviewWrite, user: CurrentUserDep, session: SessionDep, request: Request
 ) -> dict[str, Any]:
     """Write the review and read it back, in one transaction.
 
@@ -2797,10 +2820,9 @@ async def written_review(
     values, following `booked_session`: the response is the shape every other
     review read returns, built by the same code, so the two cannot drift.
     """
-    review_id = await write_review(
-        session, user["id"], payload.to_columns(), now=dt.datetime.now(dt.UTC)
-    )
-    row = await get_review_row(session, review_id, user["id"])
+    now = dt.datetime.now(dt.UTC)
+    review_id = await write_review(session, user["id"], payload.to_columns(), now=now)
+    row = await _own_review(session, review_id, user["id"], now, edit_window(_configured(request)))
     if row is None:  # pragma: no cover - written in this transaction
         raise NotFoundError("no such review of yours")
     await session.commit()
@@ -2808,25 +2830,47 @@ async def written_review(
 
 
 async def edited_review(
-    review_id: UUID, payload: ReviewEdit, user: CurrentUserDep, session: SessionDep
+    review_id: UUID,
+    payload: ReviewEdit,
+    user: CurrentUserDep,
+    session: SessionDep,
+    request: Request,
 ) -> dict[str, Any]:
     """Apply the edit and return the review as it now stands."""
     now = dt.datetime.now(dt.UTC)
-    await edit_review(session, user["id"], review_id, payload.to_columns(), now=now)
-    row = await get_review_row(session, review_id, user["id"])
+    window = edit_window(_configured(request))
+    await edit_review(session, user["id"], review_id, payload.to_columns(), now=now, window=window)
+    row = await _own_review(session, review_id, user["id"], now, window)
     if row is None:  # pragma: no cover - `edit_review` already refused if absent
         raise NotFoundError("no such review of yours")
     await session.commit()
     return row
 
 
+async def authored_review(
+    review_id: UUID, user: CurrentUserDep, session: SessionDep, request: Request
+) -> dict[str, Any]:
+    """The caller's own review, whole — scoped to them in the query."""
+    row = await _own_review(
+        session, review_id, user["id"], dt.datetime.now(dt.UTC), edit_window(_configured(request))
+    )
+    if row is None:
+        raise NotFoundError("no such review of yours")
+    return row
+
+
+#: `?mentor_id=` on the author's review lists — one declaration, so the two
+#: endpoints that narrow to a mentor cannot describe or validate it differently.
+MentorFilterQuery = Annotated[
+    UUID | None,
+    Query(description="Narrow to one mentor, which is what a profile tab wants."),
+]
+
+
 async def own_reviewable_sessions(
     user: CurrentUserDep,
     session: SessionDep,
-    mentor_id: Annotated[
-        UUID | None,
-        Query(description="Narrow to one mentor's sessions, which is what a profile tab wants."),
-    ] = None,
+    mentor_id: MentorFilterQuery = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
 ) -> list[dict[str, Any]]:
     """What the caller may review right now, newest first."""
@@ -2838,8 +2882,39 @@ async def own_reviewable_sessions(
     return [dict(row) for row in result.mappings()]
 
 
+async def authored_reviews_page(
+    user: CurrentUserDep,
+    session: SessionDep,
+    request: Request,
+    mentor_id: MentorFilterQuery = None,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """One page of the reviews the caller wrote, each with its deadline.
+
+    The two-part codec, minted beside the decode as `own_reviews_page` does.
+    """
+    rows, has_more = await list_authored_reviews(
+        session,
+        user["id"],
+        limit=clamp_limit(limit),
+        after=decode_cursor(cursor),
+        mentor=mentor_id,
+    )
+    now, window = dt.datetime.now(dt.UTC), edit_window(_configured(request))
+    rows = [_with_deadline(row, now, window) for row in rows]
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_cursor(last["created_at"].isoformat(), last["id"])
+
+
 WrittenReviewDep = Annotated[dict[str, Any], Depends(written_review)]
+AuthoredReviewsDep = Annotated[
+    tuple[list[dict[str, Any]], str | None], Depends(authored_reviews_page)
+]
 EditedReviewDep = Annotated[dict[str, Any], Depends(edited_review)]
+AuthoredReviewDep = Annotated[dict[str, Any], Depends(authored_review)]
 ReviewableSessionsDep = Annotated[list[dict[str, Any]], Depends(own_reviewable_sessions)]
 
 

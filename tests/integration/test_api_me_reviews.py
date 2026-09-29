@@ -13,6 +13,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import add_session
 
 from conftest import api_token, bearer
 
@@ -234,6 +235,40 @@ async def test_a_withdrawn_review_is_visible_to_its_subject(
     assert [row["withdrawn"] for row in rows] == [True]
 
 
+async def test_each_row_names_its_subject_and_session(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """`reviewed_for` and `session_id`, as `ReviewRead` carries them."""
+    subject, author = uuid4(), uuid4()
+    subject_id = await a_user(db_engine, subject, role="mentor")
+    review = await a_review(db_engine, about=subject_id, by=await a_user(db_engine, author))
+
+    row = (await listed(api_client, subject))[0]
+
+    assert row["id"] == str(review)
+    assert row["reviewed_for"] == str(subject_id)
+    assert "session_id" in row
+    assert row["session_id"] is None
+
+
+async def test_the_badge_prefers_the_overall_rating(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The same `review_value()` the public list shows — stars when a review
+    has them, `valuable_rating` when it predates them."""
+    subject, author = uuid4(), uuid4()
+    subject_id = await a_user(db_engine, subject, role="mentor")
+    review = await a_review(db_engine, about=subject_id, by=await a_user(db_engine, author))
+    assert (await listed(api_client, subject))[0]["session_value"] == 5
+
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE reviews SET overall_rating = 2 WHERE id = :i"), {"i": review}
+        )
+
+    assert (await listed(api_client, subject))[0]["session_value"] == 2
+
+
 async def test_an_unreported_review_carries_no_report(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -305,6 +340,51 @@ async def test_a_deleted_reviewer_stays_listed_without_their_identity(
     assert row["author_deleted"] is True
     assert row["author_first_name"] is None
     assert row["author_last_initial"] is None
+
+
+async def a_reviewed_session(
+    engine: AsyncEngine, review: UUID, *, mentor: UUID, mentee: UUID
+) -> UUID:
+    """Attach a completed session to a review, as a written one has."""
+    session_id = await add_session(engine, mentor, mentee=mentee, participant=False)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE reviews SET session_id = :s WHERE id = :r"), {"s": session_id, "r": review}
+        )
+    return UUID(str(session_id))
+
+
+async def test_a_live_reviewers_session_is_named(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    subject_auth = uuid4()
+    subject = await a_user(db_engine, subject_auth, role="mentor")
+    author = await a_user(db_engine, uuid4())
+    review = await a_review(db_engine, about=subject, by=author)
+    session_id = await a_reviewed_session(db_engine, review, mentor=subject, mentee=author)
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert row["session_id"] == str(session_id)
+
+
+async def test_a_deleted_reviewers_session_is_not_named(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The session would name them.** The mentor is a party to it, so its id
+    leads straight to the reviewer the byline withholds — it goes with them."""
+    subject_auth = uuid4()
+    subject = await a_user(db_engine, subject_auth, role="mentor")
+    author = await a_user(db_engine, uuid4())
+    review = await a_review(db_engine, about=subject, by=author)
+    await a_reviewed_session(db_engine, review, mentor=subject, mentee=author)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": author})
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert row["author_deleted"] is True
+    assert row["session_id"] is None
 
 
 async def test_a_live_reviewer_is_named_to_the_subject(
