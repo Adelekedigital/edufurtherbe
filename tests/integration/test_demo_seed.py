@@ -342,6 +342,10 @@ async def test_reseeding_writes_the_stage_set_the_reads_prefer(db_engine: AsyncE
     user = await demo_user(db_engine, "demo-stages")
     mock = (await session_types_of(db_engine, user))["Mock interview with feedback"]["id"]
     async with db_engine.begin() as conn:
+        # The mentor edits the set, as the API would: replaced, not appended.
+        await conn.execute(
+            text("DELETE FROM session_type_stages WHERE session_type_id = :t"), {"t": mock}
+        )
         await conn.execute(
             text(
                 "INSERT INTO session_type_stages (session_type_id, stage, position) "

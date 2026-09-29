@@ -290,6 +290,8 @@ class SessionTypeStage(TimestampMixin, Base):
 
     __table_args__ = (
         Index("ix_session_type_stages_pair", "session_type_id", "stage", unique=True),
+        # One stage per place in the order, so the order is total.
+        Index("ix_session_type_stages_position", "session_type_id", "position", unique=True),
         CheckConstraint(check_is_known("stage", ApplicationStage), name="stage_is_known"),
     )
 

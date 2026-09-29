@@ -355,3 +355,27 @@ async def test_changing_a_default_logs_an_availability_change(db_engine: AsyncEn
     await mentor_defaults(db_engine, mentor, duration=30, notice=None)
 
     assert await logged() == before + 1
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"default_duration_minutes": 5},
+        {"default_duration_minutes": 480},
+        {"default_min_notice_minutes": 1440},
+        {"default_min_notice_minutes": 4320},
+    ],
+)
+async def test_defaults_at_the_edges_of_the_range_are_accepted(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fields: dict[str, int]
+) -> None:
+    """The positive side of the range test above: each bound is inclusive."""
+    (column, value) = next(iter(fields.items()))
+    mentor, auth = await as_mentor(db_engine, f"defaults-edge-{column}-{value}")
+    path = f"/api/v1/users/{mentor}/mentor-profile"
+    headers = bearer(api_token(auth))
+
+    written = await api_client.patch(path, json=fields, headers=headers)
+
+    assert written.status_code in (200, 204), written.text
+    assert (await api_client.get(path, headers=headers)).json()[column] == value

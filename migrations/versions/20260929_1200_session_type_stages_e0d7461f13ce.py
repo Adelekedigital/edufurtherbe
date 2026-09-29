@@ -76,6 +76,10 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_session_type_stages_pair", TABLE, ["session_type_id", "stage"], unique=True)
+    # One stage per place in the order, so the order is total.
+    op.create_index(
+        "ix_session_type_stages_position", TABLE, ["session_type_id", "position"], unique=True
+    )
     op.execute(
         "CREATE TRIGGER trg_set_updated_at BEFORE UPDATE ON session_type_stages "
         "FOR EACH ROW EXECUTE FUNCTION set_updated_at()"

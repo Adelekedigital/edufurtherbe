@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import CheckConstraint, Table
 
-from app.domain.availability import MIN_NOTICE_MINUTES, SESSION_DURATION_MINUTES
+from app.domain.availability import SESSION_DURATION_MINUTES
 from app.domain.enums import ApplicationStage
 from app.domain.sessions import stage_label_problem
 from app.infra.db.models.mentoring import MentorProfile
@@ -75,8 +75,3 @@ def test_every_duration_check_is_the_one_range(table: Table, name: str) -> None:
     low, high = SESSION_DURATION_MINUTES
 
     assert f"BETWEEN {low} AND {high}" in _check(table, name)
-
-
-def test_the_notice_floor_is_a_day() -> None:
-    """#104's floor, and the reason a 6-hour option was declined (#213)."""
-    assert MIN_NOTICE_MINUTES == (1440, 4320)
