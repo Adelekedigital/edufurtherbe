@@ -64,7 +64,7 @@ def files(root: Path) -> Iterable[Path]:
 def oversized(root: Path, limit: int = MAX_CODE_LINES) -> list[tuple[Path, int]]:
     found = []
     for path in files(root):
-        count = code_lines(path.read_text(encoding="utf-8"))
+        count = code_lines(path.read_text(encoding="utf-8-sig"))
         if count > limit:
             found.append((path.relative_to(root), count))
     return found

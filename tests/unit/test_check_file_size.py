@@ -88,3 +88,15 @@ def test_scripts_and_tests_are_in_scope(tmp_path: Path) -> None:
 def test_the_repository_is_within_the_limit() -> None:
     """The rule holds today, so a regression names its file here as well as in CI."""
     assert check.oversized(PROJECT_ROOT) == []
+
+
+def test_a_file_saved_with_a_bom_is_counted_not_crashed_on(tmp_path: Path) -> None:
+    """PowerShell 5.1's `Set-Content -Encoding utf8` writes a BOM; Python runs
+    such a file, so the check must read it too rather than fail on U+FEFF."""
+    check = load_check()
+    path = tmp_path / "src" / "bom.py"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\xef\xbb\xbf" + code(3).encode("utf-8"))
+
+    assert check.oversized(tmp_path) == []
+    assert check.oversized(tmp_path, limit=2) == [(Path("src/bom.py"), 3)]
