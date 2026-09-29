@@ -128,6 +128,12 @@ async def test_a_blank_or_overlong_name_is_refused(
         "\u00a0",
         "---",
         "\ue000",
+        "\u200dAda",
+        "Ada\u200c",
+        "Ada \u200d Lovelace",
+        "Ad\u200d\u200da",
+        "Ad\u200c\u202ea",
+        "Ad\u2066a",
     ],
     ids=[
         "zero-width-only",
@@ -136,6 +142,12 @@ async def test_a_blank_or_overlong_name_is_refused(
         "nbsp-only",
         "no-letter",
         "private-use",
+        "leading-zwj",
+        "trailing-zwnj",
+        "lone-zwj-between-spaces",
+        "doubled-zwj",
+        "zwnj-beside-rtl-override",
+        "isolate",
     ],
 )
 async def test_an_invisible_or_letterless_name_is_refused(
@@ -165,8 +177,20 @@ async def test_an_invisible_or_letterless_name_is_refused(
         "Mary-Jane",
         "O'Brien",
         "Jean Paul",
+        "\u062d\u0633\u06cc\u0646\u200c\u0632\u0627\u062f\u0647",
+        "\u0dc1\u0dca\u200d\u0dbb\u0dd3",
     ],
-    ids=["accent", "tilde", "arabic", "cjk", "hyphen", "apostrophe", "space"],
+    ids=[
+        "accent",
+        "tilde",
+        "arabic",
+        "cjk",
+        "hyphen",
+        "apostrophe",
+        "space",
+        "persian-zwnj",
+        "sinhala-zwj",
+    ],
 )
 async def test_a_real_name_in_any_script_is_kept(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, value: str
@@ -192,6 +216,24 @@ async def test_a_decomposed_accent_is_stored_composed(
     )
 
     assert await names_of(db_engine, user_id) == ("Ren\u00e9e", None)
+
+
+async def test_the_length_is_counted_after_composing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """NFC can lengthen a name: U+0958 has no composed form, so it is stored as two
+    code points. The limit applies to what is stored, not to what was sent."""
+    user_id, headers = await a_user(db_engine, "nfc-length")
+
+    response = await api_client.patch(
+        url(user_id, "profile"),
+        json={"first_name": "\u0958" * MAX_NAME_LENGTH},
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert "/first_name" in pointers(response)
+    assert await names_of(db_engine, user_id) == ("Ada", None)
 
 
 async def test_a_name_at_the_limit_is_kept(

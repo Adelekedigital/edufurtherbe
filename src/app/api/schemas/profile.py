@@ -28,7 +28,7 @@ from app.api.schemas.common import (
 )
 from app.domain.availability import BOOKING_WINDOW_DAYS, BREAK_AFTER_MINUTES
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
-from app.domain.text import has_letter, is_invisible
+from app.domain.text import has_letter, hidden_characters
 
 
 class LookupRef(BaseModel):
@@ -365,15 +365,21 @@ def _a_visible_name(value: str) -> str:
 
     **Refused, not stripped.** A name reaches public cards, email variables and
     a call's display name; silently removing a right-to-left override or a
-    newline would store something the user did not type. Composed (NFC) so an
-    accent typed two ways is one spelling. A name must hold a letter, in any
-    script — `---` is not one.
+    newline would store something the user did not type. **A joiner between two
+    letters is spelling, not hiding** — Persian and Sinhala names need them —
+    so `hidden_characters` allows exactly that. Composed (NFC) so an accent
+    typed two ways is one spelling, and **measured after composing**, since NFC
+    can lengthen a name and the bound is on what is stored. A name must hold a
+    letter, in any script — `---` is not one.
     """
-    if any(is_invisible(character) for character in value):
+    composed = unicodedata.normalize("NFC", value)
+    if hidden_characters(composed):
         raise ValueError("a name cannot contain control or invisible characters")
-    if not has_letter(value):
+    if not has_letter(composed):
         raise ValueError("a name needs at least one letter")
-    return unicodedata.normalize("NFC", value)
+    if len(composed) > MAX_NAME_LENGTH:
+        raise ValueError(f"a name can be at most {MAX_NAME_LENGTH} characters")
+    return composed
 
 
 class UserProfileWrite(Normalised):

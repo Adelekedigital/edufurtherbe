@@ -13,7 +13,12 @@ from __future__ import annotations
 
 import unicodedata
 
-__all__ = ["has_letter", "is_invisible", "visible_only"]
+__all__ = ["has_letter", "hidden_characters", "is_invisible", "visible_only"]
+
+#: Zero-width non-joiner and joiner. Format characters, but **orthography** in
+#: several scripts: Persian writes a ZWNJ inside words (Shift+Space on its
+#: keyboard), and Sinhala needs a ZWJ to form conjuncts.
+JOINERS = frozenset({chr(0x200C), chr(0x200D)})
 
 
 def is_invisible(character: str) -> bool:
@@ -25,6 +30,34 @@ def is_invisible(character: str) -> bool:
 def visible_only(text: str) -> str:
     """`text` with every invisible character removed."""
     return "".join(character for character in text if not is_invisible(character))
+
+
+def _joins(before: str, after: str) -> bool:
+    """Whether a joiner between these two characters is joining letters."""
+    return all(unicodedata.category(side)[0] in "LM" for side in (before, after))
+
+
+def hidden_characters(text: str) -> list[str]:
+    """Every invisible character in `text` that is not orthography.
+
+    A ZWNJ or ZWJ counts as orthography only **between two letters or combining
+    marks** — so a leading, trailing, doubled or space-flanked joiner is hidden
+    text, as is every other format character: a bidi override or isolate, a
+    zero-width space. For a name, where a joiner is part of how it is spelled;
+    a filename strips everything with `visible_only`.
+    """
+    hidden = []
+    for index, character in enumerate(text):
+        if not is_invisible(character):
+            continue
+        if (
+            character in JOINERS
+            and 0 < index < len(text) - 1
+            and _joins(text[index - 1], text[index + 1])
+        ):
+            continue
+        hidden.append(character)
+    return hidden
 
 
 def has_letter(text: str) -> bool:
