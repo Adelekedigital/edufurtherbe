@@ -20,7 +20,7 @@ import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.avatar_focus import DETECTED
+from app.domain.avatar_focus import CHOSEN, DETECTED
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.predicates import LIVE
 from app.infra.images.faces import FaceDetectionError, avatar_focus
@@ -29,6 +29,7 @@ from app.infra.storage.supabase import StorageError, SupabaseStorage
 __all__ = [
     "USER_STATEMENTS",
     "backfill_avatar_focus",
+    "chosen_focus_columns",
     "focus_columns",
     "record_focus",
     "unprocessed_avatars",
@@ -62,6 +63,12 @@ def focus_columns(focus: tuple[float, float] | None, *, looked: bool) -> dict[st
         return {"avatar_focus_x": None, "avatar_focus_y": None, "avatar_focus_source": None}
     x, y = focus if focus is not None else (None, None)
     return {"avatar_focus_x": x, "avatar_focus_y": y, "avatar_focus_source": DETECTED}
+
+
+def chosen_focus_columns(x: float, y: float) -> dict[str, object]:
+    """The profile columns for a mentor's own crop — beside `focus_columns`,
+    so the two sources are spelled in one module."""
+    return {"avatar_focus_x": x, "avatar_focus_y": y, "avatar_focus_source": CHOSEN}
 
 
 async def unprocessed_avatars(session: AsyncSession) -> list[tuple[UUID, str]]:

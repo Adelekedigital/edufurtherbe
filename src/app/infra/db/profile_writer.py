@@ -33,8 +33,10 @@ from uuid import UUID
 from sqlalchemy import CursorResult, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ValidationError
 from app.domain.notifications import Notification
 from app.infra.db.admin_store import admins_who_can_decide
+from app.infra.db.avatar_focus_store import chosen_focus_columns
 from app.infra.db.models.mentoring import (
     MenteeGoal,
     MenteeGoalCountry,
@@ -72,7 +74,7 @@ MENTOR_COLUMNS = (
     "primary_study_program",
 )
 #: Columns of the profile write that live on `users`, not `user_profiles`.
-USER_COLUMNS = ("timezone",)
+USER_COLUMNS = ("timezone", "first_name", "last_name")
 
 PROFILE_COLUMNS = (
     "about_me",
@@ -343,8 +345,12 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     content-addressed in Supabase Storage (ADR 0019); accepting a URL here would
     let a profile point at any host and bypass that scheme.
     """
-    # **`timezone` lives on `users`**, so it is written there, scoped to the
-    # owner's id, in this same transaction (booking request item 7).
+    # **The chosen crop first**, because it is the one part that can refuse: a
+    # refusal raised before anything is written leaves nothing to roll back.
+    if "avatar_focus" in payload:
+        await _choose_avatar_focus(session, user_id, payload["avatar_focus"])
+    # **`timezone` and the name live on `users`**, so they are written there,
+    # scoped to the owner's id, in this same transaction (booking request item 7).
     user_values = {key: value for key, value in payload.items() if key in USER_COLUMNS}
     if user_values:
         await session.execute(update(User).where(User.id == user_id).values(**user_values))
@@ -362,6 +368,27 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
         await session.execute(
             update(UserProfile).where(UserProfile.user_id == user_id).values(**values)
         )
+
+
+async def _choose_avatar_focus(
+    session: AsyncSession, user_id: UUID, focus: dict[str, float]
+) -> None:
+    """Record the mentor's own crop of the photo they have now (#214).
+
+    **Conditional on there being a photo**, in the same statement that writes:
+    the existence check is atomic. It proves *a* photo exists, not *which* —
+    an upload landing at the same moment may reset this crop or receive it.
+    Either way the result is cosmetic and visible only to the owner, who can
+    choose again, so identity is not pinned.
+    """
+    result = await session.execute(
+        update(UserProfile)
+        .where(UserProfile.user_id == user_id, UserProfile.avatar_url.is_not(None))
+        .values(**chosen_focus_columns(focus["x"], focus["y"]))
+    )
+    if not _rowcount(result):
+        message = "upload a photo before choosing where to centre it"
+        raise ValidationError(message, field_errors=(("/avatar_focus", message),))
 
 
 # --------------------------------------------------------------------------

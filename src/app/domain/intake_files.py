@@ -48,6 +48,7 @@ from defusedxml import DefusedXmlException
 from defusedxml.ElementTree import fromstring
 
 from app.domain.enums import IntakeFileType
+from app.domain.text import visible_only
 
 PDF_MAGIC = b"%PDF-"
 ZIP_MAGIC = b"PK\x03\x04"
@@ -163,7 +164,7 @@ def clean_filename(name: str | None, kind: IntakeFileType) -> str:
     extension = EXTENSION[kind]
     base = (name or "").replace("\\", "/").rsplit("/", 1)[-1]
     base = unicodedata.normalize("NFC", base)
-    base = "".join(ch for ch in base if not unicodedata.category(ch).startswith("C"))
+    base = visible_only(base)
     base = base.strip()
     if base.lower().endswith(extension):
         base = base[: -len(extension)]
