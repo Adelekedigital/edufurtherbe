@@ -944,3 +944,139 @@ async def test_a_refused_review_tells_nobody(world: World) -> None:
 
     assert before.status_code == 409
     assert count == 1
+
+
+# --------------------------------------------------------------------------
+# Finding your own reviews again — `GET /me/authored-reviews`
+# --------------------------------------------------------------------------
+
+AUTHORED = "/api/v1/me/authored-reviews"
+
+
+async def a_second_mentors_session(world: World) -> tuple[UUID, str]:
+    """A completed session of the world's mentee with a different mentor."""
+    other = await make_public_mentor(world.engine, uuid4().hex[:8])
+    async with world.engine.begin() as conn:
+        session_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO sessions (mentor_id, mentee_id, starts_at, duration_minutes, "
+                    "status) VALUES (:m, :e, now() - interval '2 days', 45, 'completed') "
+                    "RETURNING id"
+                ),
+                {"m": other, "e": world.mentee},
+            )
+        ).scalar_one()
+    return other, str(session_id)
+
+
+async def authored(world: World, query: str = "") -> dict[str, Any]:
+    response = await world.client.get(f"{AUTHORED}{query}", headers=world.headers)
+    assert response.status_code == 200, response.text
+    return dict(response.json())
+
+
+async def test_your_reviews_come_back_newest_first(world: World) -> None:
+    first = (await world.review(await world.completed(world.offering_a))).json()
+    second = (await world.review(await world.completed(world.offering_b))).json()
+
+    rows = (await authored(world))["data"]
+
+    assert [row["id"] for row in rows] == [second["id"], first["id"]]
+    assert set(rows[0]) == {
+        "id",
+        "created_at",
+        "editable_until",
+        "session_id",
+        "reviewed_for",
+        "overall_rating",
+        "public_review",
+    }
+    assert rows[0]["reviewed_for"] == str(world.mentor)
+    assert rows[0]["overall_rating"] == 4
+    assert rows[0]["editable_until"] == second["editable_until"]
+
+
+async def test_somebody_elses_reviews_never_appear(world: World) -> None:
+    """Scoped to the author in the query (non-negotiable #5)."""
+    mine = (await world.review(await world.completed(world.offering_a))).json()
+    stranger = uuid4()
+    async with world.engine.begin() as conn:
+        stranger_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
+                    "VALUES (:e, :a, 'Ada', 'mentee', 'Africa/Lagos') RETURNING id"
+                ),
+                {"e": f"other-{stranger.hex[:8]}@example.test", "a": stranger},
+            )
+        ).scalar_one()
+        theirs = (
+            await conn.execute(
+                text(
+                    "INSERT INTO sessions (mentor_id, mentee_id, starts_at, duration_minutes, "
+                    "status) VALUES (:m, :e, now() - interval '1 day', 45, 'completed') "
+                    "RETURNING id"
+                ),
+                {"m": world.mentor, "e": stranger_id},
+            )
+        ).scalar_one()
+    strangers = await world.client.post(
+        "/api/v1/reviews",
+        json=BODY | {"session_id": str(theirs)},
+        headers=bearer(api_token(stranger)),
+    )
+    assert strangers.status_code == 201
+
+    assert [row["id"] for row in (await authored(world))["data"]] == [mine["id"]]
+    other_page = await world.client.get(AUTHORED, headers=bearer(api_token(stranger)))
+    assert [row["id"] for row in other_page.json()["data"]] == [strangers.json()["id"]]
+
+
+async def test_your_reviews_narrow_to_one_mentor(world: World) -> None:
+    here = (await world.review(await world.completed(world.offering_a))).json()
+    other, session_id = await a_second_mentors_session(world)
+    there = (await world.review(session_id)).json()
+
+    narrowed = (await authored(world, f"?mentor_id={other}"))["data"]
+
+    assert [row["id"] for row in narrowed] == [there["id"]]
+    assert narrowed[0]["reviewed_for"] == str(other)
+    assert [row["id"] for row in (await authored(world, f"?mentor_id={world.mentor}"))["data"]] == [
+        here["id"]
+    ]
+
+
+async def test_a_withdrawn_review_is_not_yours_to_find(world: World) -> None:
+    review = (await world.review(await world.completed(world.offering_a))).json()
+    async with world.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE reviews SET deleted_at = now() WHERE id = :i"), {"i": review["id"]}
+        )
+
+    assert (await authored(world))["data"] == []
+
+
+async def test_editable_until_shuts_on_the_list_too(world: World) -> None:
+    review = (await world.review(await world.completed(world.offering_a))).json()
+    await world.age(review["id"], REVIEW_EDIT_WINDOW + dt.timedelta(minutes=1))
+
+    assert (await authored(world))["data"][0]["editable_until"] is None
+
+
+async def test_your_reviews_page(world: World) -> None:
+    await world.review(await world.completed(world.offering_a))
+    await world.review(await world.completed(world.offering_b))
+
+    first = await authored(world, "?limit=1")
+    second = await authored(world, f"?limit=1&cursor={first['next_cursor']}")
+
+    assert first["next_cursor"] is not None
+    assert second["next_cursor"] is None
+    assert first["data"][0]["id"] != second["data"][0]["id"]
+
+
+async def test_the_page_size_has_a_hard_max(world: World) -> None:
+    response = await world.client.get(f"{AUTHORED}?limit=100000", headers=world.headers)
+
+    assert response.status_code == 422

@@ -23,7 +23,7 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import literal, select, tuple_
+from sqlalchemy import and_, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
@@ -32,7 +32,7 @@ from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.review_authors import author_columns, with_author
 from app.infra.db.review_stats import published, review_value
 
-__all__ = ["get_review_row", "list_mentor_reviews"]
+__all__ = ["get_review_row", "list_authored_reviews", "list_mentor_reviews"]
 
 
 async def get_review_row(
@@ -62,15 +62,20 @@ async def get_review_row(
                 Review.private_review,
                 Review.created_at,
                 Review.updated_at,
-            ).where(
-                Review.id == review_id,
-                Review.reviewed_by == author,
-                Review.deleted_at.is_(None),
-            )
+            ).where(Review.id == review_id, _yours(author))
         )
     ).mappings()
     found = row.one_or_none()
     return dict(found) if found is not None else None
+
+
+def _yours(author: UUID) -> Any:
+    """The author's own live reviews — the scope every read here shares.
+
+    Withdrawn ones are absent: a review taken down by moderation is not the
+    author's to read back, edit or find again.
+    """
+    return and_(Review.reviewed_by == author, Review.deleted_at.is_(None))
 
 
 def _after(cursor: tuple[str, UUID]) -> Any:
@@ -164,6 +169,42 @@ async def list_mentor_reviews(
             published(mentor),
             *([_after(after)] if after is not None else []),
             *([Session.session_type_id == session_type] if session_type is not None else []),
+        )
+        .order_by(Review.created_at.desc(), Review.id.desc())
+        .limit(limit + 1)
+    )
+    rows = [dict(row) for row in (await session.execute(statement)).mappings()]
+    return rows[:limit], len(rows) > limit
+
+
+async def list_authored_reviews(
+    session: AsyncSession,
+    author: UUID,
+    *,
+    limit: int,
+    after: tuple[str, UUID] | None = None,
+    mentor: UUID | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """One page of the reviews ``author`` wrote, newest first.
+
+    What "find my review of this mentor after a reload" needs, so ``mentor``
+    narrows it to one subject. Scoped by `_yours()`, the predicate
+    `get_review_row` uses, and ordered and paged like `list_mentor_reviews`.
+    ``private_review`` is not selected: the single review's own read carries it.
+    """
+    statement = (
+        select(
+            Review.id,
+            Review.created_at,
+            Review.session_id,
+            Review.reviewed_for,
+            Review.overall_rating,
+            Review.public_review,
+        )
+        .where(
+            _yours(author),
+            *([Review.reviewed_for == mentor] if mentor is not None else []),
+            *([_after(after)] if after is not None else []),
         )
         .order_by(Review.created_at.desc(), Review.id.desc())
         .limit(limit + 1)

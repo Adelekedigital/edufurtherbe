@@ -258,6 +258,23 @@ class AuthoredReviewRead(ReviewRead):
     private_review: str | None = None
 
 
+class AuthoredReviewSummaryRead(BaseModel):
+    """One review you wrote, as `GET /me/authored-reviews` lists it — enough
+    to find it again and to know whether it can still be corrected.
+    `GET /reviews/{id}` has the rest, including `private_review`."""
+
+    id: UUID
+    created_at: datetime
+    editable_until: datetime | None = Field(
+        description="As on `ReviewRead`: when the edit window shuts, null once it has."
+    )
+    session_id: UUID | None
+    reviewed_for: UUID
+    #: Null on a review written before the stars existed.
+    overall_rating: int | None = None
+    public_review: str
+
+
 class MentorRelationshipRead(BaseModel):
     """Your history, as a mentee, with one mentor — what a profile's review
     prompts are built from."""

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
     AuthoredReviewDep,
+    AuthoredReviewsDep,
     EditedReviewDep,
     MentorRelationshipDep,
     ReviewableSessionsDep,
@@ -19,6 +20,7 @@ from app.api.deps import (
 from app.api.schemas.common import Page
 from app.api.schemas.reviews import (
     AuthoredReviewRead,
+    AuthoredReviewSummaryRead,
     MentorRelationshipRead,
     ReviewableSessionRead,
     ReviewRead,
@@ -217,3 +219,22 @@ async def edit(review: EditedReviewDep) -> ReviewRead:
 )
 async def read(review: AuthoredReviewDep) -> AuthoredReviewRead:
     return AuthoredReviewRead.from_row(review)
+
+
+@router.get(
+    "/me/authored-reviews",
+    response_model=Page[AuthoredReviewSummaryRead],
+    summary="Reviews you wrote",
+    description=(
+        "Newest first, withdrawn ones left out. `?mentor_id=` narrows to one "
+        "mentor — how a profile finds your review of them again after a "
+        "reload. `editable_until` says whether it can still be corrected; "
+        "`GET /reviews/{id}` has the whole review."
+    ),
+    responses={status.HTTP_401_UNAUTHORIZED: WRITE_RESPONSES[status.HTTP_401_UNAUTHORIZED]},
+)
+async def list_authored_reviews(page: AuthoredReviewsDep) -> Page[AuthoredReviewSummaryRead]:
+    rows, cursor = page
+    return Page(
+        data=[AuthoredReviewSummaryRead.model_validate(row) for row in rows], next_cursor=cursor
+    )
