@@ -1339,6 +1339,11 @@ def _process_intake_storage() -> SupabaseStorage:
     return storage
 
 
+#: The default upload limit in MB, as the published spec quotes it — the upload's
+#: field description here and the route's description in `routes/intake_files`.
+MAX_FILE_MB = Settings.model_fields["intake_file_max_bytes"].default // (1024 * 1024)
+
+
 def intake_storage(request: Request) -> SupabaseStorage:
     """The private intake bucket — refused as misconfigured until it is named.
 
@@ -1356,7 +1361,8 @@ async def uploaded_intake_file(
     user: CurrentUserDep,
     session: SessionDep,
     file: Annotated[
-        UploadFile, File(description="A PDF or Word (.docx) file, up to 5 MB by default.")
+        UploadFile,
+        File(description=f"A PDF or Word (.docx) file, up to {MAX_FILE_MB} MB by default."),
     ],
 ) -> dict[str, Any]:
     """Check the file by its bytes, store it privately, describe it.

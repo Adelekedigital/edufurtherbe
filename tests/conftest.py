@@ -659,6 +659,7 @@ def docx_bytes(
     main: str = WORD_MAIN,
     main_part: str = "/word/document.xml",
     overrides: tuple[tuple[str, str], ...] = (),
+    defaults: tuple[tuple[str, str], ...] = (),
     parts: tuple[str, ...] = ("word/document.xml",),
     extra_entries: int = 0,
 ) -> bytes:
@@ -668,6 +669,8 @@ def docx_bytes(
     ``main_part``, so a macro-enabled `.docm` or a spreadsheet is one argument
     away. ``overrides`` adds further `(PartName, ContentType)` declarations —
     which is how a decoy Word declaration is planted on some other part.
+    ``defaults`` adds `(Extension, ContentType)` declarations, the other way a
+    package gives a part its type.
     """
     declared = [(main_part, main), *overrides]
     buffer = io.BytesIO()
@@ -676,6 +679,10 @@ def docx_bytes(
             "[Content_Types].xml",
             '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/'
             'package/2006/content-types">'
+            + "".join(
+                f'<Default Extension="{extension}" ContentType="{kind}"/>'
+                for extension, kind in defaults
+            )
             + "".join(
                 f'<Override PartName="{name}" ContentType="{kind}"/>' for name, kind in declared
             )

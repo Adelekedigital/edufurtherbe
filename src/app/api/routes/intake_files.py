@@ -11,8 +11,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Response, status
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import IntakeFileDownloadDep, UploadedIntakeFileDep
-from app.api.limits import MAX_BODY_BYTES
+from app.api.deps import MAX_FILE_MB, IntakeFileDownloadDep, UploadedIntakeFileDep
+from app.api.limits import MAX_BODY_MB
 from app.api.schemas.intake import IntakeFileRead
 from app.core.config import Settings
 from app.domain.enums import IntakeFileType
@@ -22,10 +22,9 @@ router = APIRouter(prefix="/api/v1", tags=["intake-files"])
 
 #: The figures the published description quotes, read from where they are set.
 #: The spec is generated from defaults, so these are the defaults — which is
-#: what "unless this deployment configures otherwise" qualifies.
-MAX_FILE_MB = Settings.model_fields["intake_file_max_bytes"].default // (1024 * 1024)
+#: what "unless this deployment configures otherwise" qualifies. The file limit
+#: is `deps.MAX_FILE_MB`, which the upload's own field description also quotes.
 UNUSED_HOURS = Settings.model_fields["intake_file_unused_hours"].default
-MAX_BODY_MB = MAX_BODY_BYTES // (1024 * 1024)
 
 UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
