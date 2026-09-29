@@ -14,9 +14,21 @@ fails any that omits it.
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.infra.db.models.user import User
+
+
+def live(user: Any) -> Any:
+    """``LIVE`` for an aliased ``users`` — a statement joining two people.
+
+    One definition: ``LIVE`` below is this applied to ``User`` itself, so the
+    rule cannot mean one thing for the mentor alias and another everywhere else.
+    """
+    return user.deleted_at.is_(None)
+
 
 #: "This user still exists." An expression object rather than a string, so a
 #: statement that omits it is missing a *name* — something a reader and a test
 #: can both see — rather than missing a substring nobody notices.
-LIVE = User.deleted_at.is_(None)
+LIVE = live(User)

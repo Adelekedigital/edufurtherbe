@@ -34,13 +34,14 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, literal, or_, select, tuple_
+from sqlalchemy import Select, and_, literal, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.errors import ValidationError
 from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant
 from app.infra.db.models.user import User, UserProfile
+from app.infra.db.predicates import live
 from app.infra.db.session_stats import MENTEE, attendance_rate
 
 __all__ = ["get_session", "list_session_events", "list_sessions"]
@@ -87,12 +88,13 @@ _SESSION_COLUMNS = (
 #: none, and an inner join would make their sessions vanish from *both* parties'
 #: lists, which is a data-loss-shaped bug wearing a display bug's clothes.
 #:
-#: **No `deleted_at` predicate, deliberately.** The authorization here is the
-#: session itself: a mentee is a party to it, and their own history should not
-#: decay into a UUID because the mentor later left. That is the opposite of the
-#: public endpoints, where the mentor's lifecycle *is* the control, and it is a
-#: mutation in the batch so a future "add the predicate everywhere" sweep goes red
-#: rather than silently rewriting people's history.
+#: **A party who deleted their account keeps their place and loses their name**
+#: (owner, 2026-09-29; settled decision #93, amended). The session is still the
+#: authorization — both parties keep reading it — but the people are joined
+#: through `live()`, *outer*, exactly as `with_author` joins a review's author:
+#: the row stays, its ids stay, and the leaver's name and avatar come back null
+#: with `{side}_deleted` saying why. Before this, a review's session link named
+#: a reviewer who had deleted their account (#285's review).
 _MENTOR = aliased(User, name="mentor_user")
 _MENTEE = aliased(User, name="mentee_user")
 _MENTOR_PROFILE = aliased(UserProfile, name="mentor_profile")
@@ -126,6 +128,10 @@ def _attendance(side: Any, column: Any, label: str) -> Any:
 
 
 _PARTY_COLUMNS = (
+    # `mentor_id` is NOT NULL with a foreign key, so the only way the outer
+    # join finds no user is `live()` refusing one.
+    _MENTOR.id.is_(None).label("mentor_deleted"),
+    _MENTEE.id.is_(None).label("mentee_deleted"),
     _MENTOR.first_name.label("mentor_first_name"),
     _MENTOR.last_name.label("mentor_last_name"),
     _MENTOR_PROFILE.avatar_url.label("mentor_avatar_url"),
@@ -155,13 +161,18 @@ def _with_parties(statement: Select[Any]) -> Select[Any]:
     on a primary key or a unique `user_id`, so no statement gains a row — which
     matters because the list is keyset-paged and a duplicate would corrupt the
     page rather than merely repeat a name.
+
+    **Outer, through `live()`**, so a deleted party's session is still listed
+    and only their identity goes. The profile is keyed on the *joined* user,
+    not on the session's id column: keyed on the session, the avatar of someone
+    who left would still come back beside their nulled name.
     """
     return (
         statement.select_from(Session)
-        .join(_MENTOR, _MENTOR.id == Session.mentor_id)
-        .join(_MENTEE, _MENTEE.id == Session.mentee_id)
-        .outerjoin(_MENTOR_PROFILE, _MENTOR_PROFILE.user_id == Session.mentor_id)
-        .outerjoin(_MENTEE_PROFILE, _MENTEE_PROFILE.user_id == Session.mentee_id)
+        .outerjoin(_MENTOR, and_(_MENTOR.id == Session.mentor_id, live(_MENTOR)))
+        .outerjoin(_MENTEE, and_(_MENTEE.id == Session.mentee_id, live(_MENTEE)))
+        .outerjoin(_MENTOR_PROFILE, _MENTOR_PROFILE.user_id == _MENTOR.id)
+        .outerjoin(_MENTEE_PROFILE, _MENTEE_PROFILE.user_id == _MENTEE.id)
     )
 
 

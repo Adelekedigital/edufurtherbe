@@ -166,6 +166,9 @@ class ModeratedReviewRead(BaseModel):
     session_value: int
     subject_id: UUID
     withdrawn: bool
+    #: The author deleted their account (#212): the review stays in the queue,
+    #: and the three `author_*` fields below are null, as on every other read.
+    author_deleted: bool = False
     author_first_name: str | None = None
     author_last_initial: str | None = None
     author_institution: str | None = None
@@ -193,6 +196,7 @@ class ModeratedReviewRead(BaseModel):
             session_value=row["session_value"],
             subject_id=row["reviewed_for"],
             withdrawn=row["withdrawn"],
+            author_deleted=bool(row.get("author_deleted")),
             author_first_name=row.get("author_first_name"),
             author_last_initial=row.get("author_last_initial"),
             author_institution=row.get("author_institution"),
