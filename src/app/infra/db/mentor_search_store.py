@@ -3,10 +3,10 @@
 Three public reads existed before this and every one of them needed an id or a
 slug you already had. This is the one that hands them out.
 
-**Bookable, never available.** The scope is `mentor_is_public()` plus
-`mentor_is_bookable()`: approved, listed, not deleted either way, and set up —
-a live session type with a booking config, and a live availability rule. It
-says nothing about *when*, because availability is a computation over projected
+**Visible, never available.** The scope is `mentor_is_live()`: approved,
+listed and not deleted either way — set up to be booked or not, since #219;
+each card says which in `taking_bookings`. It says nothing about *when*,
+because availability is a computation over projected
 windows minus bookings and cannot be a `WHERE` clause. Filtering on it would
 mean computing slots for every candidate before paging, which stops the cursor
 being a database keyset; and caching it in a column is the drift D20 rejected,
@@ -47,7 +47,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import next_available_state
+from app.infra.db.next_available_store import public_next_available_state
 from app.infra.db.offerings import (
     goal_overlap_count,
     offerings_for,
@@ -55,7 +55,7 @@ from app.infra.db.offerings import (
     shared_offering_count,
 )
 from app.infra.db.profile_store import top_award
-from app.infra.db.public_visibility import mentor_is_live
+from app.infra.db.public_visibility import mentor_is_live, taking_bookings
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.review_stats import card_summary
 from app.infra.db.session_stats import delivered
@@ -319,7 +319,8 @@ def _card(scope: Select[Any]) -> Select[Any]:
             session_value.scalar_subquery().label("session_value"),
             MentorNextAvailability.next_available_at,
             MentorNextAvailability.next_available_session_type_id,
-            next_available_state().label("next_available_state"),
+            public_next_available_state().label("next_available_state"),
+            taking_bookings().label("taking_bookings"),
             # When they became a mentor; backfilled from the legacy platform.
             MentorProfile.created_at.label("joined_at"),
             # Per row, after the page limit, like the review subqueries above.
@@ -513,12 +514,12 @@ async def count_mentors(
 
 
 async def mentor_card(session: AsyncSession, user_id: UUID) -> dict[str, Any] | None:
-    """One bookable mentor as a discovery card, with their bio.
+    """One visible mentor as a discovery card, with their bio.
 
     **The same `_card()` over the same `_scope()`** the list reads, so a card
     shown on its own — the featured mentor — cannot differ from the same mentor
-    in the list. `None` when the mentor is not bookable, which is a real answer:
-    the caller must not show them.
+    in the list. `None` when the mentor is not visible. Being bookable is the
+    caller's check: the featured rotation picks only from `bookable_mentors()`.
     """
     statement = (
         _card(_scope(None, ()))

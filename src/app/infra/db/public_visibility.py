@@ -47,6 +47,7 @@ __all__ = [
     "mentor_is_visible_to",
     "session_type_is_live",
     "session_type_of",
+    "taking_bookings",
 ]
 
 
@@ -119,10 +120,9 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
     **Soft deletion is not waived for the owner.** A deleted profile is gone for
     everyone, and the owner reading it back would be a resurrection by URL.
 
-    **What strangers see is `mentor_is_live()`: published and bookable**
-    (settled decision #192). A mentor with no offering or no weekly hours cannot
-    be booked, so their profile is not shown to anyone but them — the same rule
-    that already kept them off Explore, now on the profile too.
+    **What strangers see is `mentor_is_live()`: approved and listed** (owner,
+    2026-09-29, amending #192). Whether they can be booked is `taking_bookings`,
+    read beside the row — not a reason to hide it.
 
     ``None`` is the anonymous viewer and returns `mentor_is_live()` itself, not
     an equivalent spelling, so the anonymous path cannot drift from it. Every
@@ -137,15 +137,26 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
 
 
 def mentor_is_live() -> list[Any]:
-    """Public and bookable: what a stranger may see of a mentor's profile.
+    """What a stranger may see: the profile, its reviews, Explore, similar mentors.
 
-    `mentor_is_public()` plus `mentor_is_bookable()`, spread. Discovery already
-    listed only these mentors; since #192 the profile, its reviews and its
-    similar-mentors page answer the same set, so a mentor who cannot be booked
-    is not findable by a link either. Going live needs no action: the moment
-    both an offering and a weekly window exist, this is true.
+    **Approved and listed, whether or not they can be booked** (owner,
+    2026-09-29, amending #192). Hiding a session type affects only that type; a
+    mentor with none active, or no weekly hours, stays visible and reads
+    `taking_bookings: false`. Booking paths never read this — they check the
+    offering itself — so widening it opens nothing to booking. The away flow
+    this could become is #297; revisiting the rule is #298.
     """
-    return [*mentor_is_public(), *mentor_is_bookable()]
+    return mentor_is_public()
+
+
+def taking_bookings() -> Any:
+    """`mentor_is_bookable()` as one expression, for a row to carry as a column.
+
+    What `taking_bookings` on the profile and the Explore card report, and what
+    gates `next_available_*` on both — one expression, so the flag and the time
+    beside it cannot disagree.
+    """
+    return and_(*mentor_is_bookable())
 
 
 def mentor_is_bookable() -> list[Any]:
@@ -287,15 +298,16 @@ def session_type_is_live(user_id: UUID) -> list[Any]:
 
 
 def bookable_mentors() -> Select[Any]:
-    """Every mentor discovery could show, by user id.
+    """Every visible mentor who can be booked, by user id.
 
-    The two predicates above, joined to what they read. Shared by the
-    next-free-time job, which refreshes exactly these mentors, and the featured
-    pick, which chooses among them — a third spelling of the same join is the
+    `mentor_is_live()` plus `mentor_is_bookable()`, joined to what they read.
+    Shared by the next-free-time job, which refreshes exactly these mentors, and
+    the featured pick, which chooses among them — featuring someone who cannot
+    be booked is a dead end (#219). A third spelling of the same join is the
     copy that drifts (non-negotiable #8).
     """
     return (
         select(MentorProfile.user_id)
         .join(User, User.id == MentorProfile.user_id)
-        .where(*mentor_is_live())
+        .where(*mentor_is_live(), *mentor_is_bookable())
     )

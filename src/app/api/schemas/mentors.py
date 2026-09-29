@@ -107,6 +107,10 @@ class MentorSummaryRead(BaseModel):
 
     offerings: list[ServiceOfferingRead] = Field(default_factory=list)
 
+    #: Whether anything of theirs can be booked: an active session type and
+    #: weekly hours. `false` shows "Not taking bookings" — the mentor stays
+    #: listed either way (owner, 2026-09-29).
+    taking_bookings: bool
     #: The first instant this mentor could be booked, within the booking horizon.
     #: **Non-null only when `next_available_state` is `open`.** Stored and
     #: refreshed by a job (ADR 0029); booking always reads live slots.
@@ -148,6 +152,7 @@ class MentorSummaryRead(BaseModel):
                 None if row["session_value"] is None else float(str(row["session_value"]))
             ),
             offerings=[ServiceOfferingRead(**o) for o in row["offerings"]],
+            taking_bookings=bool(row["taking_bookings"]),
             **_next_available(row),
             **_joined_and_award(row),
         )
@@ -414,9 +419,11 @@ class MentorPublicRead(BaseModel):
         ),
     )
 
+    #: As on the discovery card: `false` shows "Not taking bookings".
+    taking_bookings: bool
     #: The same pair, with the same meaning, as the discovery card's — read from
-    #: the same stored table (ADR 0029) and gated by the same helper. A profile
-    #: the public cannot see has nothing bookable, so its owner reads `none`.
+    #: the same stored table (ADR 0029) and gated by the same helper. Anyone
+    #: not taking bookings, or not public, reads `none`.
     next_available_at: datetime | None = None
     next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
     #: The offering `next_available_at` belongs to — open booking on it. Null
@@ -448,8 +455,8 @@ class MentorPublicRead(BaseModel):
             "**Owner only**, like `approval_status`. What stops this profile being "
             "live: `session_type` (no active offering) and/or `weekly_hours` (no "
             "weekly availability). Empty when nothing is missing. While it is not "
-            "empty, strangers get a `404` for this profile and it is not on "
-            "Explore; it goes live by itself as soon as both exist (#192)."
+            "empty the profile is still public and on Explore, but "
+            "`taking_bookings` is `false`."
         ),
     )
 
@@ -498,6 +505,7 @@ class MentorPublicRead(BaseModel):
                 int(str(stats["attendance_rate"])) if stats["attendance_rate"] is not None else None
             ),
             reviews=ReviewSummaryRead.from_row(reviews),
+            taking_bookings=bool(row["taking_bookings"]),
             **_joined_and_award(row),
             **_next_available(row),
             **_owner_fields(row),

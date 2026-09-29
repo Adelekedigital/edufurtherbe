@@ -1,13 +1,16 @@
-"""A profile is public only while its mentor can be booked (settled decision #192).
+"""An approved, listed mentor is visible whether or not they can be booked.
 
-Frontend #15, product-approved, widened by the owner to one rule: an approved,
-listed mentor with no offering or no weekly hours is left out of Explore — as
-before — **and** their profile and reviews are a 404 to everyone but them. The
-owner still reads it, with `setup_needed` naming what is missing, and going
-live is automatic the moment both exist.
+Owner, 2026-09-29, amending settled decision #192: hiding a session type
+affects only that type. A mentor with no active offering, or no weekly hours,
+stays on Explore and keeps a public profile — with `taking_bookings: false` so
+the page can say "Not taking bookings". Booking itself is unchanged: nothing is
+offered that cannot be booked. Pending and unlisted mentors are still hidden.
+The alternative "away" flow is #297; revisiting this rule is #298.
 """
 
 from __future__ import annotations
+
+from uuid import UUID
 
 import httpx
 import pytest
@@ -20,6 +23,8 @@ from tests.integration.factories import (
 )
 from tests.integration.test_mentor_owner_view import a_stranger, auth_of
 
+from app.api.schemas.common import MAX_PAGE_SIZE
+
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 
@@ -27,7 +32,21 @@ def url(handle: object, tail: str = "") -> str:
     return f"/api/v1/mentors/{handle}{tail}"
 
 
-async def test_a_mentor_with_no_hours_is_hidden_from_strangers(
+async def on_explore(client: httpx.AsyncClient, mentor: UUID) -> dict[str, object] | None:
+    """The mentor's Explore card, paging through the whole list."""
+    cursor: str | None = None
+    while True:
+        query = f"?limit={MAX_PAGE_SIZE}" + (f"&cursor={cursor}" if cursor else "")
+        page = (await client.get(f"/api/v1/mentors{query}")).json()
+        for card in page["data"]:
+            if card["id"] == str(mentor):
+                return dict(card)
+        cursor = page.get("next_cursor")
+        if not cursor:
+            return None
+
+
+async def test_a_mentor_with_no_hours_is_visible_but_not_taking_bookings(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_public_mentor(db_engine, "no-hours")
@@ -36,19 +55,27 @@ async def test_a_mentor_with_no_hours_is_hidden_from_strangers(
     anonymous = await api_client.get(url(mentor))
     signed_in = await api_client.get(url(mentor), headers=await a_stranger(db_engine, "no-hours"))
 
-    assert anonymous.status_code == signed_in.status_code == 404
+    assert anonymous.status_code == signed_in.status_code == 200
+    assert anonymous.json()["taking_bookings"] is False
+    assert anonymous.json()["next_available_state"] == "none"
+    assert anonymous.json()["next_available_at"] is None
 
 
-async def test_a_mentor_with_no_offering_is_hidden_from_strangers(
+async def test_a_mentor_who_hid_their_last_offering_stays_visible(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "no-offering")
+    mentor = await make_public_mentor(db_engine, "hid-last")
     await add_availability(db_engine, mentor)
+    await add_session_type(db_engine, mentor, active=False)
 
-    assert (await api_client.get(url(mentor))).status_code == 404
+    response = await api_client.get(url(mentor))
+
+    assert response.status_code == 200
+    assert response.json()["taking_bookings"] is False
+    assert response.json()["session_types"] == []
 
 
-async def test_a_bookable_mentor_is_public(
+async def test_a_bookable_mentor_is_taking_bookings(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_bookable_mentor(db_engine, "live")
@@ -56,21 +83,53 @@ async def test_a_bookable_mentor_is_public(
     response = await api_client.get(url(mentor))
 
     assert response.status_code == 200
+    assert response.json()["taking_bookings"] is True
     assert "setup_needed" not in response.json()
 
 
-async def test_setting_hours_puts_the_profile_live_at_once(
+async def test_explore_lists_a_mentor_who_is_not_taking_bookings(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor = await make_public_mentor(db_engine, "goes-live")
-    await add_session_type(db_engine, mentor)
-    before = await api_client.get(url(mentor))
+    idle = await make_public_mentor(db_engine, "explore-idle")
+    await add_session_type(db_engine, idle)
+    bookable = await make_bookable_mentor(db_engine, "explore-live")
 
+    idle_card = await on_explore(api_client, idle)
+    live_card = await on_explore(api_client, bookable)
+
+    assert idle_card is not None, "a listed mentor vanished from Explore"
+    assert idle_card["taking_bookings"] is False
+    assert idle_card["next_available_state"] == "none"
+    assert live_card is not None and live_card["taking_bookings"] is True
+
+
+@pytest.mark.parametrize(("approved", "listed"), [(False, True), (True, False)])
+async def test_an_unapproved_or_unlisted_mentor_is_still_hidden(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, approved: bool, listed: bool
+) -> None:
+    mentor = await make_bookable_mentor(
+        db_engine, f"hidden-{approved}-{listed}".lower(), approved=approved, listed=listed
+    )
+
+    assert (await api_client.get(url(mentor))).status_code == 404
+    assert await on_explore(api_client, mentor) is None
+
+
+async def test_a_hidden_offering_still_cannot_be_booked(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Visibility widened; bookability did not. The profile is public, the
+    switched-off offering is still not."""
+    mentor = await make_public_mentor(db_engine, "hidden-offering")
     await add_availability(db_engine, mentor)
-    after = await api_client.get(url(mentor))
+    hidden = await add_session_type(db_engine, mentor, active=False)
 
-    assert before.status_code == 404
-    assert after.status_code == 200
+    slots = await api_client.get(
+        f"/api/v1/users/{mentor}/availability/slots?session_type_id={hidden}"
+    )
+
+    assert (await api_client.get(url(mentor))).status_code == 200
+    assert slots.status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -99,30 +158,15 @@ async def test_the_owner_is_told_what_is_missing(
 
     assert response.status_code == 200
     assert response.json()["setup_needed"] == needed
+    assert response.json()["taking_bookings"] is (offering and hours)
 
 
-async def test_the_reviews_of_a_hidden_mentor_are_hidden_too(
+async def test_the_reviews_of_a_visible_mentor_are_public(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_public_mentor(db_engine, "no-hours-reviews")
     await add_session_type(db_engine, mentor)
 
     anonymous = await api_client.get(url(mentor, "/reviews"))
-    owner = await api_client.get(url(mentor, "/reviews"), headers=await auth_of(db_engine, mentor))
 
-    assert anonymous.status_code == 404
-    assert owner.status_code == 200
-
-
-async def test_a_hidden_mentor_still_has_a_similar_page(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """Superseded #186 (owner, 2026-09-29): the page a visitor lands on offers
-    similar live mentors in place of the profile they cannot open."""
-    mentor = await make_public_mentor(db_engine, "no-hours-similar")
-    await add_session_type(db_engine, mentor)
-
-    response = await api_client.get(url(mentor, "/similar"))
-
-    assert response.status_code == 200
-    assert (await api_client.get(url(mentor, ""))).status_code == 404
+    assert anonymous.status_code == 200

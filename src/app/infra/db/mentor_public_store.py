@@ -6,8 +6,9 @@ is an admin. The middle clause is dropped by product decision: a mentee with a
 session sees *that session*, not the mentor's profile, and the sessions endpoints
 already carry the names they need. The admin clause is dropped because admins
 read the owner-facing endpoint, which names whose records they are reviewing.
-What remains is `mentor_is_live()` — public **and bookable** (#192), the set
+What remains is `mentor_is_live()` — approved and listed (#219), the set
 discovery lists — which is why this module writes no predicate of its own.
+Whether they can be booked is the `taking_bookings` column beside it.
 
 **One viewer is added back: the mentor themself** (product rule, 2026-09-27).
 `mentor_is_visible_to(viewer)` widens the public predicate by exactly the owner,
@@ -28,7 +29,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, case, false, func, literal, select
+from sqlalchemy import Select, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import CoverArt
@@ -36,14 +37,14 @@ from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import NONE, next_available_state
+from app.infra.db.next_available_store import public_next_available_state
 from app.infra.db.profile_store import top_award
 from app.infra.db.public_visibility import (
     has_live_offering,
     has_weekly_hours,
     mentor_exists,
-    mentor_is_live,
     mentor_is_visible_to,
+    taking_bookings,
 )
 
 __all__ = ["get_existing_mentor_id", "get_public_mentor", "get_public_mentor_id"]
@@ -124,18 +125,8 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             has_weekly_hours().label("has_hours"),
             MentorNextAvailability.next_available_at,
             MentorNextAvailability.next_available_session_type_id,
-            # Only a mentor the job refreshes has a time worth reading: the job
-            # covers `bookable_mentors()` and nobody else. Anyone outside it —
-            # hidden, or visible with no bookable offering or no hours — has
-            # nothing a stranger can book, so `none`. Not the `refreshing` an
-            # absent row reads as, which would promise a time that never comes;
-            # and never a left-over row, whose change log the job stops
-            # watching once the mentor leaves its set, and which would read
-            # `open` for a mentor nobody can book.
-            case(
-                (and_(*mentor_is_live()), next_available_state()),
-                else_=literal(NONE),
-            ).label("next_available_state"),
+            taking_bookings().label("taking_bookings"),
+            public_next_available_state().label("next_available_state"),
         )
         .select_from(User)
         .join(MentorProfile, MentorProfile.user_id == User.id)
