@@ -34,6 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import add_session_type, make_public_mentor, until_blocked
 
+from app.api.schemas.common import MAX_PAGE_SIZE
 from app.core.config import Settings
 from app.core.errors import AlreadyReviewedError, NotFoundError
 from app.domain.reviews import REVIEW_INTERVAL, edit_window
@@ -75,8 +76,16 @@ class World:
     offering_a: UUID
     offering_b: UUID
 
-    async def completed(self, offering: UUID | None, *, days_ago: int = 1) -> str:
-        """A completed session of this mentee's, on this offering."""
+    async def completed(
+        self,
+        offering: UUID | None,
+        *,
+        days_ago: int = 1,
+        mentor: UUID | None = None,
+        mentee: UUID | None = None,
+    ) -> str:
+        """A completed session on this offering — the world's mentor and mentee
+        unless another party is named. The one session insert in this module."""
         async with self.engine.begin() as conn:
             row = await conn.execute(
                 text(
@@ -85,8 +94,8 @@ class World:
                     "VALUES (:m, :e, :t, :starts, 45, 'completed') RETURNING id"
                 ),
                 {
-                    "m": self.mentor,
-                    "e": self.mentee,
+                    "m": mentor or self.mentor,
+                    "e": mentee or self.mentee,
                     "t": offering,
                     "starts": dt.datetime.now(dt.UTC) - dt.timedelta(days=days_ago, hours=days_ago),
                 },
@@ -959,18 +968,7 @@ AUTHORED = "/api/v1/me/authored-reviews"
 async def a_second_mentors_session(world: World) -> tuple[UUID, str]:
     """A completed session of the world's mentee with a different mentor."""
     other = await make_public_mentor(world.engine, uuid4().hex[:8])
-    async with world.engine.begin() as conn:
-        session_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO sessions (mentor_id, mentee_id, starts_at, duration_minutes, "
-                    "status) VALUES (:m, :e, now() - interval '2 days', 45, 'completed') "
-                    "RETURNING id"
-                ),
-                {"m": other, "e": world.mentee},
-            )
-        ).scalar_one()
-    return other, str(session_id)
+    return other, await world.completed(None, mentor=other, days_ago=2)
 
 
 async def authored(world: World, query: str = "") -> dict[str, Any]:
@@ -1014,19 +1012,10 @@ async def test_somebody_elses_reviews_never_appear(world: World) -> None:
                 {"e": f"other-{stranger.hex[:8]}@example.test", "a": stranger},
             )
         ).scalar_one()
-        theirs = (
-            await conn.execute(
-                text(
-                    "INSERT INTO sessions (mentor_id, mentee_id, starts_at, duration_minutes, "
-                    "status) VALUES (:m, :e, now() - interval '1 day', 45, 'completed') "
-                    "RETURNING id"
-                ),
-                {"m": world.mentor, "e": stranger_id},
-            )
-        ).scalar_one()
+    theirs = await world.completed(None, mentee=stranger_id)
     strangers = await world.client.post(
         "/api/v1/reviews",
-        json=BODY | {"session_id": str(theirs)},
+        json=BODY | {"session_id": theirs},
         headers=bearer(api_token(stranger)),
     )
     assert strangers.status_code == 201
@@ -1052,12 +1041,13 @@ async def test_your_reviews_narrow_to_one_mentor(world: World) -> None:
 
 async def test_a_withdrawn_review_is_not_yours_to_find(world: World) -> None:
     review = (await world.review(await world.completed(world.offering_a))).json()
+    live = (await world.review(await world.completed(world.offering_b, days_ago=2))).json()
     async with world.engine.begin() as conn:
         await conn.execute(
             text("UPDATE reviews SET deleted_at = now() WHERE id = :i"), {"i": review["id"]}
         )
 
-    assert (await authored(world))["data"] == []
+    assert [row["id"] for row in (await authored(world))["data"]] == [live["id"]]
 
 
 async def test_editable_until_shuts_on_the_list_too(world: World) -> None:
@@ -1080,6 +1070,8 @@ async def test_your_reviews_page(world: World) -> None:
 
 
 async def test_the_page_size_has_a_hard_max(world: World) -> None:
-    response = await world.client.get(f"{AUTHORED}?limit=100000", headers=world.headers)
+    at_max = await world.client.get(f"{AUTHORED}?limit={MAX_PAGE_SIZE}", headers=world.headers)
+    over = await world.client.get(f"{AUTHORED}?limit={MAX_PAGE_SIZE + 1}", headers=world.headers)
 
-    assert response.status_code == 422
+    assert at_max.status_code == 200
+    assert over.status_code == 422

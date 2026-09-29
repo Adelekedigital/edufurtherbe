@@ -42,6 +42,21 @@ INDEX = "ix_reviews_mentor_valuable"
 BUILDING = "ix_reviews_mentor_valuable_next"
 PREDICATE = "deleted_at IS NULL AND reviewed_for_role = 'mentor'"
 
+#: A literal rather than an f-string: the names are fixed, and it keeps the one
+#: DO block free of interpolation. Pinned to `CHECK` below so the two cannot drift.
+_ADD_CHECK = """
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'ck_reviews_overall_rating_range'
+  ) THEN
+    ALTER TABLE reviews ADD CONSTRAINT ck_reviews_overall_rating_range
+      CHECK (overall_rating BETWEEN 1 AND 5) NOT VALID;
+  END IF;
+END $$;
+"""
+if CHECK not in _ADD_CHECK:  # pragma: no cover - a module that disagrees with itself
+    raise RuntimeError(f"_ADD_CHECK does not create {CHECK}")
+
 
 def _swap_index(columns: str) -> None:
     """Replace the card index with one over ``columns``, never going without.
@@ -60,20 +75,7 @@ def _swap_index(columns: str) -> None:
 def upgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
     op.execute(f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS overall_rating smallint")
-    # A literal rather than an f-string: the names are fixed, and it keeps the
-    # one DO block free of interpolation.
-    op.execute(
-        """
-        DO $$ BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint WHERE conname = 'ck_reviews_overall_rating_range'
-          ) THEN
-            ALTER TABLE reviews ADD CONSTRAINT ck_reviews_overall_rating_range
-              CHECK (overall_rating BETWEEN 1 AND 5) NOT VALID;
-          END IF;
-        END $$;
-        """
-    )
+    op.execute(_ADD_CHECK)
     op.execute(f"ALTER TABLE {TABLE} VALIDATE CONSTRAINT {CHECK}")
     _swap_index("reviewed_for, valuable_rating, overall_rating")
 

@@ -13,6 +13,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import add_session
 
 from conftest import api_token, bearer
 
@@ -345,17 +346,8 @@ async def a_reviewed_session(
     engine: AsyncEngine, review: UUID, *, mentor: UUID, mentee: UUID
 ) -> UUID:
     """Attach a completed session to a review, as a written one has."""
+    session_id = await add_session(engine, mentor, mentee=mentee, participant=False)
     async with engine.begin() as conn:
-        session_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO sessions (mentor_id, mentee_id, starts_at, duration_minutes, "
-                    "status) VALUES (:m, :e, now() - interval '1 day', 45, 'completed') "
-                    "RETURNING id"
-                ),
-                {"m": mentor, "e": mentee},
-            )
-        ).scalar_one()
         await conn.execute(
             text("UPDATE reviews SET session_id = :s WHERE id = :r"), {"s": session_id, "r": review}
         )
