@@ -170,3 +170,21 @@ async def test_the_reviews_of_a_visible_mentor_are_public(
     anonymous = await api_client.get(url(mentor, "/reviews"))
 
     assert anonymous.status_code == 200
+
+
+@pytest.mark.parametrize(("approved", "listed"), [(False, True), (True, False)])
+async def test_a_hidden_owner_is_not_taking_bookings_even_when_set_up(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, approved: bool, listed: bool
+) -> None:
+    """`taking_bookings` means someone can book now. A pending or unlisted owner
+    with an offering and hours reads their own profile, and nobody can book them:
+    `/slots` is a 404, so the flag is `false` beside `next_available_state: none`."""
+    mentor = await make_bookable_mentor(
+        db_engine, f"owner-hidden-{approved}-{listed}".lower(), approved=approved, listed=listed
+    )
+
+    response = await api_client.get(url(mentor), headers=await auth_of(db_engine, mentor))
+
+    assert response.status_code == 200
+    assert response.json()["taking_bookings"] is False
+    assert response.json()["next_available_state"] == "none"

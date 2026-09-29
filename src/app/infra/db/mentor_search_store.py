@@ -319,6 +319,8 @@ def _card(scope: Select[Any]) -> Select[Any]:
             session_value.scalar_subquery().label("session_value"),
             MentorNextAvailability.next_available_at,
             MentorNextAvailability.next_available_session_type_id,
+            # Both gated on `taking_bookings()`: a listed mentor nobody can book
+            # reads `none`, never a stale or never-refreshed time.
             public_next_available_state().label("next_available_state"),
             taking_bookings().label("taking_bookings"),
             # When they became a mentor; backfilled from the legacy platform.
@@ -440,7 +442,7 @@ async def search_mentors(
     viewer: UUID | None = None,
     goal_day: dt.date | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """One page of bookable mentors, and whether another follows.
+    """One page of listed mentors, and whether another follows.
 
     **`viewer` is who is asking**, and never appears in their own list.
     **`goal_day` switches browse to the goal ranking** (`_matched`) for that
@@ -548,9 +550,9 @@ async def similar_mentors(
     suggestion explains itself.
 
     **Candidates are exactly who discovery lists**: `_card(_scope(...))`, the
-    same visibility and bookability, narrowed by the same `offers_any` filter
-    `?offering=` uses. A suggestion that links to a 404, or to a mentor nobody
-    can book, is worse than no suggestion.
+    same visibility (#219), narrowed by the same `offers_any` filter
+    `?offering=` uses. A suggestion that links to a 404 is worse than none; one
+    not taking bookings is shown, and its card says so in `taking_bookings`.
 
     **Ranked by how many offerings are shared, then by delivered sessions, then
     by review count** — the two proofs of a working mentor the card already

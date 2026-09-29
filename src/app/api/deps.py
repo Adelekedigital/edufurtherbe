@@ -2521,9 +2521,10 @@ PublicMentorDep = Annotated[dict[str, Any], Depends(public_mentor)]
 async def featured_mentor(session: SessionDep) -> dict[str, Any] | None:
     """This week's featured mentor as a card, or `None` when nobody is.
 
-    `None` too if they stopped being bookable between the pick and the read —
-    the next request picks a replacement, and this one shows nothing rather
-    than a mentor who cannot be booked.
+    `current_featured` only returns someone still taking bookings — the pick and
+    the re-read both filter on `bookable_mentors()` — so a mentor who stopped
+    being bookable is replaced rather than shown. `None` too if they stopped
+    being visible between the pick and the read.
     """
     mentor = await current_featured(session, now=dt.datetime.now(dt.UTC))
     return None if mentor is None else await mentor_card(session, mentor)

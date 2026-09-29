@@ -59,7 +59,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, case, delete, exists, func, literal, or_, select
+from sqlalchemy import case, delete, exists, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,7 +67,7 @@ from app.domain.availability import MAX_PROJECTION_DAYS, UtcInterval
 from app.infra.db.models.availability import MentorAvailabilityChange, MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
-from app.infra.db.public_visibility import bookable_mentors, mentor_is_live, taking_bookings
+from app.infra.db.public_visibility import bookable_mentors, taking_bookings
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import FreeBusyReader, list_slots, mentor_today
 
@@ -119,10 +119,11 @@ def public_next_available_state() -> Any:
     mentor who is not taking bookings — or an owner reading a hidden profile —
     has either no row, which reads `refreshing` and promises a time that never
     comes, or a left-over one the job has stopped watching. Both read `none`.
-    One expression for the profile and the Explore card, so they agree.
+    Gated on `taking_bookings()`, the same expression the flag beside it reads
+    and the job's `bookable_mentors()` filters on, so all three agree.
     """
     return case(
-        (and_(*mentor_is_live(), taking_bookings()), next_available_state()),
+        (taking_bookings(), next_available_state()),
         else_=literal(NONE),
     )
 

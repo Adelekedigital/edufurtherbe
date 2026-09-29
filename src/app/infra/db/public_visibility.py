@@ -150,13 +150,15 @@ def mentor_is_live() -> list[Any]:
 
 
 def taking_bookings() -> Any:
-    """`mentor_is_bookable()` as one expression, for a row to carry as a column.
+    """Someone can book this mentor now: visible **and** set up to be booked.
 
-    What `taking_bookings` on the profile and the Explore card report, and what
-    gates `next_available_*` on both — one expression, so the flag and the time
-    beside it cannot disagree.
+    The one spelling of "live and bookable", as an expression a row can carry as
+    a column. It is `taking_bookings` on the profile and the Explore card, the
+    gate on `next_available_*` beside it, and the filter in `bookable_mentors()`
+    — so the flag, the time and who the job refreshes cannot disagree. A pending
+    or unlisted owner who is set up reads `false`: nobody else can book them.
     """
-    return and_(*mentor_is_bookable())
+    return and_(*mentor_is_live(), *mentor_is_bookable())
 
 
 def mentor_is_bookable() -> list[Any]:
@@ -300,7 +302,7 @@ def session_type_is_live(user_id: UUID) -> list[Any]:
 def bookable_mentors() -> Select[Any]:
     """Every visible mentor who can be booked, by user id.
 
-    `mentor_is_live()` plus `mentor_is_bookable()`, joined to what they read.
+    `taking_bookings()`, joined to what it reads.
     Shared by the next-free-time job, which refreshes exactly these mentors, and
     the featured pick, which chooses among them — featuring someone who cannot
     be booked is a dead end (#219). A third spelling of the same join is the
@@ -309,5 +311,5 @@ def bookable_mentors() -> Select[Any]:
     return (
         select(MentorProfile.user_id)
         .join(User, User.id == MentorProfile.user_id)
-        .where(*mentor_is_live(), *mentor_is_bookable())
+        .where(taking_bookings())
     )
