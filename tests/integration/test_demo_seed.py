@@ -386,3 +386,37 @@ async def test_reseeding_writes_the_stage_set_the_reads_prefer(db_engine: AsyncE
         ).one()
     assert rows == ["post_submission"]
     assert (column, label) == ("post_submission", None)
+
+
+async def test_reseeding_restores_a_type_a_tester_scheduled_for_deletion(
+    db_engine: AsyncEngine,
+) -> None:
+    """The seed converges each type on its template, shown. A tester who
+    deleted a booked demo type left it scheduled and hidden (#218); showing it
+    without clearing the schedule trips `ck_session_types_scheduled_deletion_is_hidden`
+    and aborts the whole seed."""
+    await seed(db_engine, replace(OPEN, key="demo-sched", session_types=(MOCK, INTRO)))
+    user = await demo_user(db_engine, "demo-sched")
+    mock = (await session_types_of(db_engine, user))["Mock interview with feedback"]["id"]
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_types SET is_active = false, deletion_scheduled_at = now() "
+                "WHERE id = :t"
+            ),
+            {"t": mock},
+        )
+
+    async with AsyncSession(db_engine) as session:
+        await apply_demo_session_types(session, user, (MOCK, INTRO))
+        await session.commit()
+
+    async with db_engine.begin() as conn:
+        shown, scheduled = (
+            await conn.execute(
+                text("SELECT is_active, deletion_scheduled_at FROM session_types WHERE id = :t"),
+                {"t": mock},
+            )
+        ).one()
+    assert shown is True
+    assert scheduled is None
