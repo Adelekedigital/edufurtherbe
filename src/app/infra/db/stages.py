@@ -17,12 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.enums import ApplicationStage
 from app.infra.db.models.sessions import SessionType, SessionTypeStage
 
-__all__ = ["legacy_stage", "stages_for_session_types", "write_session_type_stages"]
-
-
-def legacy_stage(stages: Sequence[ApplicationStage]) -> ApplicationStage | None:
-    """What `session_types.application_stage` holds for this set: its first."""
-    return stages[0] if stages else None
+__all__ = ["stages_for_session_types", "write_session_type_stages"]
 
 
 async def stages_for_session_types(
@@ -64,7 +59,7 @@ async def write_session_type_stages(
     """Replace one session type's rows, in order.
 
     **Only the rows.** The legacy column is written by the caller in the same
-    statement as `custom_stage_label` — `legacy_stage` says what — because the
+    statement as `custom_stage_label` — `first_stage` says what — because the
     `CHECK` tying the two is immediate: writing the stage and the label in two
     statements refuses a legal change halfway through it.
     """

@@ -258,3 +258,62 @@ async def test_the_old_column_holds_the_first_of_the_set(
 
     assert first == INTERVIEWING
     assert await column() is None
+
+
+async def test_an_explicit_null_set_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`[]` means any stage and leaving it out means unchanged; `null` would be
+    a third spelling of one of them, so it is a 422 rather than a guess."""
+    _, auth = await as_mentor(db_engine, "stages-null")
+    headers = bearer(api_token(auth))
+    created = (await create(api_client, auth, application_stages=[DRAFTING])).json()
+
+    patched = await api_client.patch(
+        f"{URL}/{created['id']}", json={"application_stages": None}, headers=headers
+    )
+    posted = await create(api_client, auth, name="Null set", application_stages=None)
+
+    assert patched.status_code == 422, patched.text
+    assert posted.status_code == 422, posted.text
+    assert (await own(api_client, auth, created["id"]))["application_stages"] == [DRAFTING]
+
+
+async def test_a_label_alone_relabels_a_set_holding_other_behind_a_named_stage(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The label is judged against the **stored** set, whose first stage is not
+    `other` — the case a check on the first stage alone would refuse."""
+    _, auth = await as_mentor(db_engine, "stages-relabel")
+    created = (
+        await create(
+            api_client, auth, application_stages=[DRAFTING, OTHER], custom_stage_label="Gap year"
+        )
+    ).json()
+
+    response = await api_client.patch(
+        f"{URL}/{created['id']}", json={"custom_stage_label": "x"}, headers=bearer(api_token(auth))
+    )
+
+    assert response.status_code == 200, response.text
+    row = await own(api_client, auth, created["id"])
+    assert row["custom_stage_label"] == "x"
+    assert row["application_stages"] == [DRAFTING, OTHER]
+
+
+async def test_a_patch_with_a_stage_twice_is_a_422_not_a_500(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Without a label in the request the boundary does not judge the set, so
+    the store's final-state check is what stops the unique index answering."""
+    _, auth = await as_mentor(db_engine, "stages-patch-dup")
+    created = (await create(api_client, auth, application_stages=[DRAFTING])).json()
+
+    response = await api_client.patch(
+        f"{URL}/{created['id']}",
+        json={"application_stages": [REVISIONS, REVISIONS]},
+        headers=bearer(api_token(auth)),
+    )
+
+    assert response.status_code == 422, response.text
+    assert (await own(api_client, auth, created["id"]))["application_stages"] == [DRAFTING]

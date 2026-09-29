@@ -27,7 +27,7 @@ code is a mentee who can claim a refund by choosing a value.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from app.domain.enums import ApplicationStage, SessionReasonCode, SessionRole, SessionStatus
@@ -38,6 +38,8 @@ __all__ = [
     "RESPONSE_WINDOW",
     "TRANSITIONS",
     "Transition",
+    "first_stage",
+    "named_stages",
     "records_unavailability",
     "respond_by",
     "stage_label_problem",
@@ -219,6 +221,31 @@ def too_late_to_cancel(starts_at: dt.datetime, now: dt.datetime) -> bool:
 #: number (2026-09-28); a product rule, so it lives here and both the boundary
 #: and the store read it.
 MAX_SESSION_TYPE_OFFERINGS = 3
+
+
+def named_stages(fields: Mapping[str, object]) -> list[ApplicationStage] | None:
+    """The stage set a write names, or ``None`` when it names none (#213).
+
+    **The one reading of the pair**, asked by the boundary and by the store.
+    `application_stages` is the set; the legacy `application_stage` is a set of
+    one, and `null` there clears it. **`application_stages: null` is refused at
+    the boundary** — `[]` means any stage and leaving it out means unchanged —
+    so a `None` reaching here is a field nobody sent, which is how a full
+    `model_dump()` spells it. The boundary also refuses sending both.
+    """
+    stages = fields.get("application_stages")
+    if stages is not None:
+        return [ApplicationStage(value) for value in stages]  # type: ignore[attr-defined]
+    if "application_stage" in fields:
+        value = fields["application_stage"]
+        return [ApplicationStage(str(value))] if value is not None else []
+    return None
+
+
+def first_stage(stages: Sequence[ApplicationStage]) -> ApplicationStage | None:
+    """The first of a stage set: what `session_types.application_stage` holds and
+    the deprecated single `application_stage` field reports, this release."""
+    return stages[0] if stages else None
 
 
 def stage_label_problem(

@@ -46,7 +46,12 @@ from app.domain.availability import (
 )
 from app.domain.enums import ApplicationStage, ConferencingProvider, SessionTypeIcon
 from app.domain.intake import MAX_QUESTIONS
-from app.domain.sessions import MAX_SESSION_TYPE_OFFERINGS, stage_label_problem
+from app.domain.sessions import (
+    MAX_SESSION_TYPE_OFFERINGS,
+    first_stage,
+    named_stages,
+    stage_label_problem,
+)
 
 
 def _int_or_none(value: object) -> int | None:
@@ -83,6 +88,10 @@ def _refuse_two_set_fields(model: BaseModel) -> None:
     ):
         if plural in fields and single in fields:
             raise ValueError(f"send {plural} or {single}, not both")
+    # `[]` is any stage and absent is unchanged; `null` would be a third
+    # spelling of one of them, so it is refused rather than guessed at (#213).
+    if "application_stages" in fields and getattr(model, "application_stages", None) is None:
+        raise ValueError("application_stages: send [] for any stage, or leave it out")
     ids = getattr(model, "service_offering_ids", None)
     if ids is not None and len(set(ids)) != len(ids):
         raise ValueError("service_offering_ids: an offering appears twice")
@@ -96,8 +105,7 @@ def _stages(row: dict[str, object]) -> list[ApplicationStage]:
 def _stage(row: dict[str, object]) -> ApplicationStage | None:
     """The single `application_stage` kept this release: **the first of the set**
     (#212), so the old field and the new list can never disagree."""
-    stages = _stages(row)
-    return stages[0] if stages else None
+    return first_stage(_stages(row))
 
 
 #: What a set of stages may hold: each stage once, so at most all of them.
@@ -377,13 +385,6 @@ class OwnSessionTypeRead(BaseModel):
         )
 
 
-def _sent_stages(model: MentorSessionTypeWrite | MentorSessionTypePatch) -> list[ApplicationStage]:
-    """The stage set a write names: the set, else the legacy single as a set of one."""
-    if model.application_stages is not None:
-        return list(model.application_stages)
-    return [model.application_stage] if model.application_stage is not None else []
-
-
 def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePatch](
     model: Write,
 ) -> Write:
@@ -404,7 +405,8 @@ def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePa
         "custom_stage_label" in fields and ({"application_stages", "application_stage"} & fields)
     ):
         return model
-    problem = stage_label_problem(_sent_stages(model), model.custom_stage_label)
+    sent = named_stages(model.model_dump(exclude_unset=True)) or []
+    problem = stage_label_problem(sent, model.custom_stage_label)
     if problem is not None:
         raise ValueError(problem[1])
     return model

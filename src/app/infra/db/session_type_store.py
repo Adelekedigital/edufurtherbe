@@ -54,7 +54,7 @@ from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError, SessionTypeHasBookingsError, ValidationError
 from app.domain.enums import ApplicationStage, ConferencingProvider
-from app.domain.sessions import stage_label_problem
+from app.domain.sessions import first_stage, named_stages, stage_label_problem
 from app.infra.db.booking_rules import (
     effective_duration_minutes,
     effective_min_notice_minutes,
@@ -81,11 +81,7 @@ from app.infra.db.public_visibility import (
     session_type_is_live,
     session_type_of,
 )
-from app.infra.db.stages import (
-    legacy_stage,
-    stages_for_session_types,
-    write_session_type_stages,
-)
+from app.infra.db.stages import stages_for_session_types, write_session_type_stages
 
 __all__ = [
     "create_session_type",
@@ -429,7 +425,7 @@ async def create_session_type(
     if owns.first() is None:
         return None
 
-    stages = _requested_stages(payload) or []
+    stages = named_stages(payload) or []
     _refuse_stage_label(stages, payload.get("custom_stage_label"))
     async with _distinct_names():
         session_type_id = (
@@ -439,7 +435,7 @@ async def create_session_type(
                     mentor_user_id=mentor_user_id,
                     name=payload["name"],
                     description=payload.get("description"),
-                    application_stage=legacy_stage(stages),
+                    application_stage=first_stage(stages),
                     custom_stage_label=payload.get("custom_stage_label"),
                     icon=payload.get("icon"),
                 )
@@ -468,21 +464,6 @@ async def create_session_type(
     if offerings is not None:
         await set_session_type_offerings(session, session_type_id, offerings)
     return session_type_id
-
-
-def _requested_stages(payload: dict[str, Any]) -> list[ApplicationStage] | None:
-    """The stage set a write asks for, or `None` when it names none (#212).
-
-    `application_stages` is the set; the legacy `application_stage` is a set of
-    one, and `null` there clears it — the same reading `_requested_offerings`
-    gives the offering pair. The boundary refuses a payload sending both.
-    """
-    if "application_stages" in payload and payload["application_stages"] is not None:
-        return [ApplicationStage(value) for value in payload["application_stages"]]
-    if "application_stage" in payload:
-        value = payload["application_stage"]
-        return [ApplicationStage(value)] if value is not None else []
-    return None
 
 
 def _refuse_stage_label(stages: list[ApplicationStage], label: str | None) -> None:
@@ -562,7 +543,7 @@ async def update_session_type(
         return False
 
     own = {key: value for key, value in payload.items() if key in SESSION_TYPE_COLUMNS}
-    stages = _requested_stages(payload)
+    stages = named_stages(payload)
     if stages is not None or "custom_stage_label" in payload:
         current = (
             await session.execute(
@@ -578,7 +559,7 @@ async def update_session_type(
         )
         _refuse_stage_label(final, payload.get("custom_stage_label", current))
     if stages is not None:
-        own["application_stage"] = legacy_stage(stages)
+        own["application_stage"] = first_stage(stages)
         await write_session_type_stages(session, session_type_id, stages)
     if own:
         async with _distinct_names():
