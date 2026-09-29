@@ -57,7 +57,6 @@ from app.infra.db.demo_seed import (
 )
 from app.infra.db.engine import create_database_engine
 from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
-from app.infra.storage.supabase import StorageError
 
 DAY = 1440
 Q = DemoQuestion
@@ -379,11 +378,7 @@ async def _upgrade_session_types(engine: object) -> int:
 
 async def _delete_avatars(storage: object, urls: list[str]) -> None:
     for url in urls:
-        if (path := storage.path_of(url)) is not None:  # type: ignore[attr-defined]
-            try:
-                await asyncio.to_thread(storage.delete, path)  # type: ignore[attr-defined]
-            except StorageError as exc:
-                print(f"could not delete old avatar {path}: {exc}")
+        await asyncio.to_thread(storage.drop_url, url)  # type: ignore[attr-defined]
 
 
 async def _avatar(session: AsyncSession, storage: object, user_id: UUID, file: Path) -> None:

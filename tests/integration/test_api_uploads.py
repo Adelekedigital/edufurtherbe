@@ -23,6 +23,7 @@ import pytest
 from PIL import Image
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.test_api_admin import make_user as make_user_with_role
 
 from app.api.limits import MAX_BODY_BYTES
 from app.domain.images import MAX_UPLOAD_BYTES
@@ -757,3 +758,135 @@ async def test_the_upload_response_reports_what_is_stored_not_what_was_detected(
     ).json()
 
     assert body["avatar_focus"] == pytest.approx({"x": 0.1, "y": 0.9})
+
+
+# --------------------------------------------------------------------------
+# removing the banner
+# --------------------------------------------------------------------------
+
+
+async def test_removing_the_banner_clears_it_and_deletes_the_object(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """The design's "Remove image": the cover falls back to its colour and art."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "unbanner@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(
+        url(user_id, "avatar"), files=upload(image_bytes("JPEG", (300, 300))), headers=headers
+    )
+    await api_client.post(
+        url(user_id, "banner"), files=upload(image_bytes("JPEG", (600, 400))), headers=headers
+    )
+    avatar_path, banner_path = fake_storage.uploads
+
+    response = await api_client.delete(url(user_id, "banner"), headers=headers)
+
+    assert response.status_code == 204, response.text
+    avatar, banner = await stored_urls(db_engine, user_id)
+    assert banner is None
+    assert avatar is not None and avatar.endswith(avatar_path), "the avatar was touched"
+    assert fake_storage.deletes == [banner_path]
+    assert avatar_path in fake_storage.objects
+
+
+async def test_removing_a_banner_that_is_not_there_is_a_quiet_204(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """Idempotent: a double tap, or a user with no profile row yet, is not an error."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "nobanner@example.com")
+
+    response = await api_client.delete(url(user_id, "banner"), headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 204, response.text
+    assert fake_storage.deletes == []
+    assert await stored_urls(db_engine, user_id) == (None, None)
+
+
+async def test_one_user_cannot_remove_another_users_banner(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    victim_auth, attacker_auth = uuid4(), uuid4()
+    victim = await make_user(db_engine, victim_auth, "victim-unbanner@example.com")
+    await make_user(db_engine, attacker_auth, "attacker-unbanner@example.com")
+    await api_client.post(
+        url(victim, "banner"),
+        files=upload(image_bytes("JPEG", (600, 400))),
+        headers=bearer(api_token(victim_auth)),
+    )
+
+    anonymous = await api_client.delete(url(victim, "banner"))
+    response = await api_client.delete(
+        url(victim, "banner"), headers=bearer(api_token(attacker_auth))
+    )
+
+    assert anonymous.status_code == 401, anonymous.text
+    assert response.status_code == 404, response.text
+    assert fake_storage.deletes == []
+    assert (await stored_urls(db_engine, victim))[1] is not None
+
+
+async def test_an_admin_cannot_remove_someone_elses_banner(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """Owner only, as the upload is: an admin role is no licence to edit a profile."""
+    owner_auth, admin_auth = uuid4(), uuid4()
+    owner = await make_user(db_engine, owner_auth, "owner-unbanner@example.com")
+    await make_user_with_role(
+        db_engine, admin_auth, "admin-unbanner@example.com", role="super_admin"
+    )
+    await api_client.post(
+        url(owner, "banner"),
+        files=upload(image_bytes("JPEG", (600, 400))),
+        headers=bearer(api_token(owner_auth)),
+    )
+
+    response = await api_client.delete(url(owner, "banner"), headers=bearer(api_token(admin_auth)))
+
+    assert response.status_code == 404, response.text
+    assert fake_storage.deletes == []
+    assert (await stored_urls(db_engine, owner))[1] is not None
+
+
+async def test_a_legacy_banner_is_cleared_but_nothing_is_deleted(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """A URL this bucket did not build names no object here to delete."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "legacy-unbanner@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, banner_url) "
+                "VALUES (:u, 'https://legacy.bubble.io/banner.jpg')"
+            ),
+            {"u": user_id},
+        )
+
+    response = await api_client.delete(url(user_id, "banner"), headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 204, response.text
+    assert (await stored_urls(db_engine, user_id))[1] is None
+    assert fake_storage.deletes == []
+
+
+@pytest.mark.parametrize("failure", ["status", "transport"])
+async def test_a_cleanup_that_fails_after_the_commit_is_still_a_204(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage, failure: str
+) -> None:
+    """The banner is already gone when the delete runs; a bucket that errors or
+    never answers leaves an orphan, and must not turn a done change into a 500."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, f"{failure}-unbanner@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(
+        url(user_id, "banner"), files=upload(image_bytes("JPEG", (600, 400))), headers=headers
+    )
+    fake_storage.delete_fails = failure
+
+    response = await api_client.delete(url(user_id, "banner"), headers=headers)
+
+    assert response.status_code == 204, response.text
+    assert (await stored_urls(db_engine, user_id))[1] is None
+    assert len(fake_storage.deletes) >= 1

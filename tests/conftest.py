@@ -708,6 +708,7 @@ class FakeStorage:
         *,
         bucket_exists: bool = True,
         upload_fails: bool = False,
+        delete_fails: str | None = None,
         bucket: str = STORAGE_BUCKET,
     ) -> None:
         self.bucket = bucket
@@ -716,6 +717,9 @@ class FakeStorage:
         self.deletes: list[str] = []
         self.bucket_exists = bucket_exists
         self.upload_fails = upload_fails
+        #: ``"status"`` answers a delete with a 500; ``"transport"`` never
+        #: answers — the two ways a cleanup after a commit can fail.
+        self.delete_fails = delete_fails
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.startswith("/storage/v1/bucket/"):
@@ -727,6 +731,10 @@ class FakeStorage:
             return httpx.Response(200, content=self.objects[path][0])
         if request.method == "DELETE":
             self.deletes.append(path)
+            if self.delete_fails == "transport":
+                raise httpx.ConnectTimeout("storage did not answer", request=request)
+            if self.delete_fails == "status":
+                return httpx.Response(500, json={"message": "storage is down"})
             if path not in self.objects:
                 return httpx.Response(404, json={})
             del self.objects[path]
