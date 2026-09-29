@@ -29,6 +29,7 @@ was ever high.
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Self, cast
 from uuid import UUID
 
@@ -194,6 +195,10 @@ class SessionTypeRead(BaseModel):
             "and an early joiner walks into the previous one."
         ),
     )
+    is_featured: bool = Field(
+        default=False,
+        description=("The one offering this mentor puts first (at most one); it is listed first."),
+    )
     questions: list[QuestionRead] = Field(
         default_factory=list,
         description=(
@@ -220,11 +225,27 @@ class SessionTypeRead(BaseModel):
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
             ),
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
+            is_featured=bool(row.get("is_featured")),
             questions=[
                 QuestionRead.from_row(q)
                 for q in cast("list[dict[str, object]]", row.get("questions") or [])
             ],
         )
+
+
+class PendingDeletionRead(BaseModel):
+    """When a scheduled offering goes, and what holds it (#218). Derived from its
+    sessions each read, so a cancellation moves both."""
+
+    deletes_after: dt.datetime | None = Field(
+        description=(
+            "When the last booked session on it ends (UTC). `null` once none is "
+            "left: it is deleted at the next hourly run."
+        )
+    )
+    booked_count: int = Field(
+        description="Sessions still booked on it: awaiting your decision, or agreed."
+    )
 
 
 class OwnSessionTypeRead(BaseModel):
@@ -354,6 +375,21 @@ class OwnSessionTypeRead(BaseModel):
     break_after_minutes: int | None = Field(
         default=None, description="This offering's own break in minutes; `null` inherits."
     )
+    is_featured: bool = Field(
+        default=False,
+        description=(
+            "Whether this is the offering you put first. At most one; featuring "
+            "another un-features this, and hiding it un-features it."
+        ),
+    )
+    pending_deletion: PendingDeletionRead | None = Field(
+        default=None,
+        description=(
+            "Set when you deleted this offering while sessions were booked on it: it "
+            "is hidden, and goes once the last of them is over. `null` otherwise. "
+            "`POST .../restore` cancels it."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> OwnSessionTypeRead:
@@ -382,6 +418,15 @@ class OwnSessionTypeRead(BaseModel):
                 str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
             ),
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
+            is_featured=bool(row.get("is_featured")),
+            pending_deletion=(
+                PendingDeletionRead(
+                    deletes_after=cast("dt.datetime | None", row.get("deletes_after")),
+                    booked_count=int(str(row.get("booked_count") or 0)),
+                )
+                if row.get("deletion_scheduled_at") is not None
+                else None
+            ),
         )
 
 
@@ -652,11 +697,29 @@ class MentorSessionTypePatch(Normalised):
     #: One of the design's icons, or `null` for the automatic pick (#198).
     icon: SessionTypeIcon | None = None
     is_active: bool | None = None
+    #: **`bool`, not `bool | None`** — an explicit `null` is a `422`, and the
+    #: `None` default is never written (`exclude_unset`); it keeps the spec from
+    #: publishing a default a generated client would type as always sent (#217).
+    is_featured: bool = Field(  # type: ignore[assignment]
+        default=None,
+        description=(
+            "`true` puts this offering first and un-features your current one; "
+            "`false` un-features it. Only an offering on offer can be featured."
+        ),
+    )
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
         _refuse_two_set_fields(self)
         return _refuse_mismatched_label(self)
+
+
+class DeletionScheduledRead(BaseModel):
+    """What `DELETE` answers when booked sessions hold an offering: `202` (#218)."""
+
+    scheduled: bool = Field(default=True, description="Always `true` on a `202`.")
+    deletes_after: dt.datetime = Field(description="When the last booked session on it ends (UTC).")
+    booked_count: int = Field(description="Sessions still booked on it.")
 
 
 class SessionTypeCreated(BaseModel):

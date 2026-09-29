@@ -220,10 +220,13 @@ from app.infra.db.session_store import (
     list_sessions,
 )
 from app.infra.db.session_type_store import (
+    DeletionScheduled,
     create_session_type,
     delete_session_type,
+    get_own_session_type,
     list_own_session_types,
     list_session_types,
+    restore_session_type,
     update_session_type,
 )
 from app.infra.db.session_type_window_store import (
@@ -2685,23 +2688,33 @@ async def updated_own_session_type(
 
 async def deleted_own_session_type(
     session_type_id: UUID, user: CurrentUserDep, session: SessionDep
-) -> bool:
-    """Soft-delete, or a `409` raised from the store when sessions are booked.
-
-    The refusal is raised rather than returned because it is not the absence of a
-    row: `False` already means *not yours or already gone*, and folding a second
-    meaning into one boolean is how a 409 becomes a 404 at the route.
-    """
+) -> bool | DeletionScheduled:
+    """Delete now (`True`), schedule behind booked sessions (a `DeletionScheduled`),
+    or `False` for not yours or already gone (#218)."""
     removed = await delete_session_type(session, user["id"], session_type_id)
     await session.commit()
     return removed
+
+
+async def restored_own_session_type(
+    session_type_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
+    """Cancel a scheduled deletion and answer the offering as the list shows it."""
+    if not await restore_session_type(session, user["id"], session_type_id):
+        raise NotFoundError("no such session type")
+    await session.commit()
+    row = await get_own_session_type(session, user["id"], session_type_id)
+    if row is None:  # pragma: no cover - found and restored in this request
+        raise NotFoundError("no such session type")
+    return row
 
 
 CreatedOwnSessionTypeDep = Annotated[
     tuple[dict[str, Any], int, bool], Depends(created_own_session_type)
 ]
 UpdatedOwnSessionTypeDep = Annotated[bool, Depends(updated_own_session_type)]
-DeletedOwnSessionTypeDep = Annotated[bool, Depends(deleted_own_session_type)]
+DeletedOwnSessionTypeDep = Annotated[bool | DeletionScheduled, Depends(deleted_own_session_type)]
+RestoredOwnSessionTypeDep = Annotated[dict[str, Any], Depends(restored_own_session_type)]
 
 
 async def own_questions(

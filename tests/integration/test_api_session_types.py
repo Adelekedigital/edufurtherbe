@@ -311,6 +311,8 @@ async def test_the_response_carries_nothing_it_should_not(
         "icon",
         # The intake form a mentee answers when booking (#207).
         "questions",
+        # Which one the mentor puts first (#217).
+        "is_featured",
     }
     assert offering["service_offering"] == {
         "code": "document-preparation",

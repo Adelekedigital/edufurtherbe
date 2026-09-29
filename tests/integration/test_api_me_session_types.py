@@ -329,6 +329,9 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "application_stage",
         "custom_stage_label",
         "icon",
+        # Featured first, and a deletion waiting on booked sessions (#217, #218).
+        "is_featured",
+        "pending_deletion",
     }
     assert offering["is_active"] is False
     # `category` was a free-text string of the mentor's own and is now a
@@ -381,10 +384,14 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         "icon",
         # The intake form a mentee answers when booking (#207).
         "questions",
+        # Which one the mentor puts first (#217); mentees see the order.
+        "is_featured",
     }
     assert "is_active" not in offering
     # Resolved length and notice are public; whether they were inherited is not.
     assert "duration_inherited" not in offering
+    # A scheduled deletion is the owner's business; the public never sees one.
+    assert "pending_deletion" not in offering
     assert "internal" not in response.text
     assert "postgrad" not in response.text
 

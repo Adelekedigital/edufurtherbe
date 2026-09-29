@@ -175,6 +175,18 @@ class SessionType(TimestampMixin, Base):
     icon: Mapped[SessionTypeIcon | None] = mapped_column(str_enum(SessionTypeIcon))
 
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
+    #: **The one offering a mentor puts first** (#217): first on both lists. At
+    #: most one per mentor (`ix_session_types_one_featured`), and only a shown
+    #: one (`ck_session_types_featured_is_active`) — hiding un-features.
+    is_featured: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    #: **When the mentor asked for this offering to go while sessions were still
+    #: booked on it** (#218). Hidden meanwhile; the hourly settle run deletes it
+    #: once nothing live remains. When it will go, and how many sessions hold
+    #: it, are derived from the sessions at read time rather than stored, so a
+    #: cancellation moves them without a write here.
+    deletion_scheduled_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
 
     #: Which of this mentor's conferencing options this offering is held on, or
     #: **null meaning use my default** — the same inherit-from-the-mentor shape
@@ -235,6 +247,20 @@ class SessionType(TimestampMixin, Base):
             "name",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # **One featured offering per mentor** (#217). The store un-features the
+        # others first; this is what a second writer cannot get past.
+        Index(
+            "ix_session_types_one_featured",
+            "mentor_user_id",
+            unique=True,
+            postgresql_where=text("is_featured AND deleted_at IS NULL"),
+        ),
+        CheckConstraint("NOT is_featured OR is_active", name="featured_is_active"),
+        # A scheduled deletion is hidden until it goes (#218); showing it again
+        # needs a restore first.
+        CheckConstraint(
+            "deletion_scheduled_at IS NULL OR NOT is_active", name="scheduled_deletion_is_hidden"
         ),
         # `IS NULL OR` because the column is nullable and a `CHECK` rejects only
         # what is *false* — `NULL IN (...)` is unknown and would pass anyway, but

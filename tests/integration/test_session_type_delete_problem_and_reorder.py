@@ -2,9 +2,10 @@
 
 Session Types frontend #4 and #8 (owner go-ahead 2026-09-28).
 
-#4: a delete refused because sessions are still live on the offering is a `409`
-typed `/problems/session-type-has-bookings`, with `booked_count` — so the confirm
-can say "2 booked sessions use this" instead of guessing from the status.
+#4: a delete refused because sessions are still live on the offering was a
+`409` typed `/problems/session-type-has-bookings`. Round 4 (#218) replaced the
+refusal with a scheduled deletion — see
+`test_session_type_featured_and_scheduled_deletion.py`.
 
 #8: `PUT .../questions/order` takes the whole id list and renumbers the form in
 one transaction, instead of one `PATCH` per moved question.
@@ -19,31 +20,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session_type
-from tests.integration.test_api_me_session_type_delete import URL, as_mentor, book
+from tests.integration.test_api_me_session_type_delete import URL, as_mentor
 
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
-
-HAS_BOOKINGS = "/problems/session-type-has-bookings"
-
-
-async def test_a_refused_delete_is_typed_and_counts_the_bookings(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    mentor, auth = await as_mentor(db_engine, "typed-409")
-    session_type = await add_session_type(db_engine, mentor, name="Booked")
-    await book(db_engine, mentor, session_type, status="confirmed", days=1)
-    await book(db_engine, mentor, session_type, status="pending_mentor_approval", days=2)
-    # A finished one does not block, so it is not counted.
-    await book(db_engine, mentor, session_type, status="completed", days=-3)
-
-    refused = await api_client.delete(f"{URL}/{session_type}", headers=bearer(api_token(auth)))
-
-    assert refused.status_code == 409
-    problem = refused.json()
-    assert problem["type"] == HAS_BOOKINGS
-    assert problem["booked_count"] == 2
 
 
 async def test_other_conflicts_carry_no_booked_count(
@@ -59,7 +40,6 @@ async def test_other_conflicts_carry_no_booked_count(
 
     assert clash.status_code == 409
     assert "booked_count" not in clash.json()
-    assert clash.json()["type"] != HAS_BOOKINGS
 
 
 # --------------------------------------------------------------------------
