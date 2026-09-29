@@ -47,6 +47,7 @@ from app.domain.enums import (
     CreditSource,
     CreditState,
     FeaturedSource,
+    IntakeFileType,
     IntakeStatus,
     LanguageProficiency,
     LegalDocumentType,
@@ -144,6 +145,7 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # writes yet — see the enum for why shipping it early is now cheap.
     QuestionType: frozenset({"ck_session_type_questions_question_type_is_known"}),
     IntakeStatus: frozenset({"ck_intake_submissions_status_is_known"}),
+    IntakeFileType: frozenset({"ck_intake_files_content_type_is_known"}),
     # The second table to carry this vocabulary. `reviews.reviewed_for_role` is
     # the capacity a user was reviewed in, which `reviewed_for` cannot say on its
     # own and the migrated rows have no session to derive.

@@ -19,6 +19,7 @@ RUNTIME_JOB_NAMES = frozenset(
         "expire-credits",
         "sync-institutions",
         "refresh-next-available",
+        "sweep-intake-files",
     }
 )
 

@@ -19,11 +19,13 @@ from uuid import UUID
 
 import httpx
 from fastapi import Depends, File, Header, Path, Query, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, BaseModel, ConfigDict, StringConstraints
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from app.api.schemas.admin import DeclineRequest, FeaturedWrite, MergeRequest
@@ -76,6 +78,7 @@ from app.core.errors import (
     ConfigurationError,
     ConflictError,
     NotFoundError,
+    UpstreamError,
     ValidationError,
 )
 from app.domain.assets import AssetKind
@@ -86,6 +89,7 @@ from app.domain.enums import AdminRole, MeetingProvider, MentorStatusType
 from app.domain.featured import week_start as week_of
 from app.domain.idempotency import request_fingerprint
 from app.domain.images import MAX_UPLOAD_BYTES
+from app.domain.intake_files import clean_filename, content_disposition, file_type
 from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
 from app.domain.reviews import edit_window, editable_until
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
@@ -139,6 +143,7 @@ from app.infra.db.featured_store import (
 )
 from app.infra.db.first_sign_in import provision_first_sign_in
 from app.infra.db.idempotency import Held, Mismatched, Replayed, record_response, reserve
+from app.infra.db.intake_file_store import readable_file, store_intake_file
 from app.infra.db.intake_store import (
     create_question,
     delete_question,
@@ -233,7 +238,7 @@ from app.infra.db.session_writer import (
 from app.infra.db.slot_store import list_slots
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES, schedule_id
 from app.infra.jobs.runner import RuntimeJobs
-from app.infra.storage.supabase import StorageError, SupabaseStorage
+from app.infra.storage.supabase import StorageError, SupabaseStorage, intake_storage_for
 
 logger = logging.getLogger(__name__)
 
@@ -1319,6 +1324,107 @@ UploadedBannerDep = Annotated[str, Depends(uploaded_banner)]
 
 
 # --------------------------------------------------------------------------
+# Intake files
+# --------------------------------------------------------------------------
+#
+# **A private bucket of its own**, never `get_storage()`'s public one: a CV is
+# personal data. Uploaded to and downloaded through this API, never by a signed
+# link (decision #77), so every read passes the reader check in the query.
+
+
+@lru_cache(maxsize=1)
+def _process_intake_storage() -> SupabaseStorage:
+    storage = intake_storage_for(get_settings(), httpx.Client(timeout=UPLOAD_TIMEOUT))
+    if storage is None:
+        raise ConfigurationError("Supabase intake storage is not configured")
+    return storage
+
+
+def intake_storage(request: Request) -> SupabaseStorage:
+    """The private intake bucket — refused as misconfigured until it is named.
+
+    The setting is checked before any injected client, so an app without the
+    bucket configured refuses even where a test double is present.
+    """
+    if _configured(request).supabase_intake_bucket is None:
+        raise ConfigurationError("SUPABASE_INTAKE_BUCKET is not set")
+    injected: SupabaseStorage | None = getattr(request.app.state, "intake_storage", None)
+    return injected or _process_intake_storage()
+
+
+async def uploaded_intake_file(
+    request: Request,
+    user: CurrentUserDep,
+    session: SessionDep,
+    file: Annotated[
+        UploadFile, File(description="A PDF or Word (.docx) file, up to 5 MB by default.")
+    ],
+) -> dict[str, Any]:
+    """Check the file by its bytes, store it privately, describe it.
+
+    The body limit in `api/limits.py` has already bounded the transfer; the
+    limit here is the configured one on the *file*, read one byte past so no
+    header is trusted.
+    """
+    storage = intake_storage(request)
+    limit = _configured(request).intake_file_max_bytes
+    payload = await file.read(limit + 1)
+    if len(payload) > limit:
+        raise ValidationError(
+            f"that file is larger than {limit / (1024 * 1024):g} MB",
+            field_errors=(("/file", "too large"),),
+        )
+    kind = file_type(payload)
+    if kind is None:
+        raise ValidationError(
+            "only PDF and Word (.docx) files are accepted",
+            field_errors=(("/file", "not a PDF or Word document"),),
+        )
+    return await store_intake_file(
+        session,
+        storage,
+        uploader_id=user["id"],
+        filename=clean_filename(file.filename, kind),
+        payload=payload,
+        kind=kind,
+    )
+
+
+UploadedIntakeFileDep = Annotated[dict[str, Any], Depends(uploaded_intake_file)]
+
+
+async def intake_file_download(
+    file_id: UUID, request: Request, user: CurrentUserDep, session: SessionDep
+) -> StreamingResponse:
+    """The file as an attachment, streamed, for its three readers only."""
+    row = await readable_file(
+        session, file_id=file_id, caller_id=user["id"], caller_is_admin=bool(user["is_admin"])
+    )
+    if row is None:
+        raise NotFoundError("no such file")
+    storage = intake_storage(request)
+    try:
+        upstream = await run_in_threadpool(storage.open_stream, row["storage_key"])
+    except StorageError as exc:
+        raise UpstreamError("the file could not be read from storage") from exc
+    return StreamingResponse(
+        upstream.iter_bytes(),
+        media_type=str(row["content_type"]),
+        headers={
+            "Content-Disposition": content_disposition(row["filename"]),
+            # Never rendered inline and never re-guessed: a PDF is a document a
+            # browser would otherwise open in this API's origin.
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+        background=BackgroundTask(upstream.close),
+    )
+
+
+IntakeFileDownloadDep = Annotated[StreamingResponse, Depends(intake_file_download)]
+
+
+# --------------------------------------------------------------------------
 # Availability
 # --------------------------------------------------------------------------
 #
@@ -1618,6 +1724,7 @@ async def booked_session(
         scheduler=_scheduler(request),
         callback_url=_reminder_callback_url(request),
         external_busy=_free_busy(request),
+        require_answers=_configured(request).require_intake_answers,
     )
     # **In the booking's own transaction**, so a session cannot be committed
     # without whatever venue it was going to get. It no-ops unless the session

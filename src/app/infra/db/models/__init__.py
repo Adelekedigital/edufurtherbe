@@ -25,6 +25,7 @@ from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTrans
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.intake import (
     IntakeAnswer,
+    IntakeFile,
     IntakeSubmission,
     SessionTypeQuestion,
     SessionTypeQuestionOption,
@@ -79,6 +80,7 @@ __all__ = [
     "IdempotencyKey",
     "Institution",
     "IntakeAnswer",
+    "IntakeFile",
     "IntakeSubmission",
     "Language",
     "LegalDocument",

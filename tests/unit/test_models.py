@@ -99,6 +99,7 @@ EXPECTED_MODELS = {
     "SessionTypeQuestionOption",
     "IntakeSubmission",
     "IntakeAnswer",
+    "IntakeFile",
     "Session",
     "SessionParticipant",
     "SessionEvent",

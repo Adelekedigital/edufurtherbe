@@ -30,12 +30,14 @@ from app.infra.db.credit_reminders import (
     remind_about_expiring_credits,
 )
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.intake_file_store import sweep_intake_files
 from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.outbox import drain
 from app.infra.db.session_writer import expire_requests, remind_unreviewed, settle_attendance
 from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
+from app.infra.storage.supabase import intake_storage_for
 
 logger = logging.getLogger(__name__)
 INSTITUTION_TABLES = ("institutions", "education_entries")
@@ -57,7 +59,7 @@ class JobResult:
 
 
 class RuntimeJobs:
-    """Dispatch the six supported jobs through one reusable surface."""
+    """Dispatch the seven supported jobs through one reusable surface."""
 
     def __init__(
         self,
@@ -101,6 +103,7 @@ class RuntimeJobs:
             "expire-credits": self._expire_credits,
             "sync-institutions": self._sync_institutions,
             "refresh-next-available": self._refresh_next_available,
+            "sweep-intake-files": self._sweep_intake_files,
         }
         counts = await methods[name](dry_run=dry_run)
         status = "no-op" if not any(counts.values()) else "completed"
@@ -215,6 +218,30 @@ class RuntimeJobs:
                 )
         finally:
             await engine.dispose()
+
+    async def _sweep_intake_files(self, *, dry_run: bool) -> dict[str, int]:
+        settings = self.settings
+        with httpx.Client(timeout=CATALOGUE_TIMEOUT) as client:
+            storage = intake_storage_for(settings, client)
+            if storage is None:
+                # No bucket means uploads are refused, so there is nothing to
+                # sweep; a no-op rather than a failure QStash would retry.
+                logger.warning("intake file sweep skipped: intake storage is not configured")
+                return {"unused": 0, "expired": 0, "purged": 0, "failed": 0}
+            engine = create_database_engine(settings)
+            try:
+                factory = create_session_factory(engine)
+                async with factory() as session:
+                    return await sweep_intake_files(
+                        session,
+                        storage,
+                        now=dt.datetime.now(dt.UTC),
+                        retention_days=settings.intake_file_retention_days,
+                        unused_hours=settings.intake_file_unused_hours,
+                        dry_run=dry_run,
+                    )
+            finally:
+                await engine.dispose()
 
     async def _credit_reminders(self, *, dry_run: bool) -> dict[str, int]:
         engine = create_database_engine(self.settings)

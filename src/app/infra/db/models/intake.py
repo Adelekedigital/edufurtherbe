@@ -8,6 +8,7 @@ feature nobody can use.
     session_type_question_options   the choices, for a multi-choice question
     intake_submissions              one per booking, the mentee's form
     intake_answers                  one per question answered
+    intake_files                    a file a mentee uploaded to answer with
 
 **Its own module rather than more of `sessions.py`.** That module holds five
 models and is past the ~500-line tripwire settled decision #54 sets; nine would
@@ -34,6 +35,7 @@ import uuid
 
 from sqlalchemy import (
     TIMESTAMP,
+    BigInteger,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -44,7 +46,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.enums import IntakeStatus, QuestionType
+from app.domain.enums import IntakeFileType, IntakeStatus, QuestionType
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -224,10 +226,19 @@ class IntakeAnswer(TimestampMixin, Base):
     )
 
     answer_text: Mapped[str | None] = mapped_column(Text)
-    #: The object path in Supabase Storage, never a URL. Images and uploads are
-    #: keyed on their own content (ADR 0019), and a stored URL would be a bearer
-    #: link that outlives whatever produced it.
-    file_storage_key: Mapped[str | None] = mapped_column(Text)
+    #: The object path in Supabase Storage, never a URL — a stored URL would be
+    #: a bearer link that outlives whatever produced it. **A foreign key to
+    #: `intake_files.storage_key`**, so the answer and the file it names cannot
+    #: disagree about which object that is; the key stays after retention
+    #: removes the object, and `intake_files.deleted_at` says it has gone.
+    file_storage_key: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey(
+            "intake_files.storage_key",
+            ondelete="RESTRICT",
+            name="fk_intake_answers_file_storage_key",
+        ),
+    )
     #: Named by hand for the same reason as the option's own key: the rendered
     #: convention is 66 characters.
     selected_option_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -276,4 +287,70 @@ class IntakeAnswer(TimestampMixin, Base):
             "+ (selected_option_id IS NOT NULL)::int = 1",
             name="exactly_one_answer_form",
         ),
+    )
+
+
+class IntakeFile(TimestampMixin, Base):
+    """A file a mentee uploaded, before and after it answers a question.
+
+    **Uploaded first, linked at booking.** `POST /me/intake-files` writes this
+    row with `session_id` null; the booking that answers with it sets
+    `session_id` in its own transaction, and only a row that is still unlinked
+    and still the caller's can be linked — which is what stops one upload
+    answering two bookings, or somebody else's.
+
+    **`created_at` is the upload time**, so retention counts from it (settled
+    decision on intake files). A second `uploaded_at` would hold the same
+    instant under another name.
+
+    **Never hard-deleted once linked.** Retention removes the *object* and sets
+    `deleted_at`; the row stays, because an answer's `file_storage_key` names it
+    and the answer is evidence of what the mentee sent. `purged_at` records that
+    the object is confirmed gone, so the sweep stops retrying it. An upload
+    nobody linked is deleted outright once its object is.
+
+    **`session_id` is `SET NULL`**, not cascade: were a session ever removed,
+    its file becomes an unlinked upload and the sweep deletes the object, where
+    a cascade would drop the row and leave the object behind with nothing
+    pointing at it.
+    """
+
+    __tablename__ = "intake_files"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    uploader_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("sessions.id", ondelete="SET NULL")
+    )
+    #: The object path inside the private intake bucket. Built from this row's
+    #: own id, never from the upload's name, so a retention delete can only
+    #: ever reach this row's object.
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The name to offer on download, sanitised on the way in.
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_type: Mapped[IntakeFileType] = mapped_column(str_enum(IntakeFileType), nullable=False)
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    purged_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("storage_key"),
+        Index("ix_intake_files_uploader", "uploader_id"),
+        Index("ix_intake_files_session", "session_id"),
+        # What the sweep asks every run: live files, oldest first.
+        Index(
+            "ix_intake_files_live_created",
+            "created_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        CheckConstraint(
+            check_is_known("content_type", IntakeFileType), name="content_type_is_known"
+        ),
+        CheckConstraint("size_bytes > 0", name="size_is_positive"),
+        CheckConstraint("char_length(filename) BETWEEN 1 AND 255", name="filename_length"),
+        CheckConstraint("purged_at IS NULL OR deleted_at IS NOT NULL", name="purged_after_deleted"),
     )

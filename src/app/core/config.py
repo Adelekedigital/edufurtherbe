@@ -90,6 +90,14 @@ QSTASH_EU = "https://qstash.upstash.io"
 #: 32767 is safe from the database's point of view.
 CREDIT_CEILING = 100
 
+#: The largest intake file this service can be configured to accept.
+#:
+#: **Below the request-body limit, with room for the multipart envelope.**
+#: `api/limits.py` refuses any body over 6 MB before the route runs, so a file
+#: limit at or above it would promise a size the transport never delivers;
+#: `tests/unit/test_intake_file_rules.py` pins the two together.
+INTAKE_FILE_CEILING = 6 * 1024 * 1024 - 64 * 1024
+
 
 def env_key(field: str) -> str:
     """The environment variable a field is read from.
@@ -175,6 +183,16 @@ class Settings(BaseSettings):
     #: job's cron interval, or every run recomputes every mentor.
     next_available_max_age_minutes: int = Field(
         default=5, ge=1, le=1440, validation_alias=env_key("next_available_max_age_minutes")
+    )
+
+    #: Whether a booking must answer every **required** intake question (#207).
+    #: **Off until the frontend's questions step ships** — the live booking flow
+    #: sends no `answers`, so enforcing would refuse every booking of an offering
+    #: with a required question. Everything else about answers is checked either
+    #: way: an answer that *is* sent must fit the form. Turned on per environment
+    #: once the frontend asks for answers (tracked in #283).
+    require_intake_answers: bool = Field(
+        default=False, validation_alias=env_key("require_intake_answers")
     )
 
     #: How long after writing a review its author may still correct it. What the
@@ -532,6 +550,44 @@ class Settings(BaseSettings):
     supabase_storage_bucket: str = Field(
         default="profile-images", validation_alias=env_key("supabase_storage_bucket")
     )
+
+    # ------------------------------------------------------------------
+    # Intake files — what a mentee uploads to answer a `file_upload` question
+    #
+    # **A second, PRIVATE bucket**, never the profile-images one: that bucket is
+    # public, and a CV is personal data. Created once in the dashboard as a
+    # private bucket. Unset means the upload endpoint refuses as misconfigured,
+    # so the feature ships inert until an operator has made the bucket.
+    supabase_intake_bucket: str | None = Field(
+        default=None, validation_alias=env_key("supabase_intake_bucket")
+    )
+    #: The largest file accepted, in bytes. 5 MB unless configured otherwise.
+    intake_file_max_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        ge=1,
+        le=INTAKE_FILE_CEILING,
+        validation_alias=env_key("intake_file_max_bytes"),
+    )
+    #: Days after upload an intake file is deleted. **Empty keeps it
+    #: indefinitely**, which is the default until the owner sets a period.
+    intake_file_retention_days: int | None = Field(
+        default=None, ge=1, validation_alias=env_key("intake_file_retention_days")
+    )
+    #: Hours an upload may wait unlinked to any booking before the sweep
+    #: deletes it — a mentee who uploaded and then never booked.
+    intake_file_unused_hours: int = Field(
+        default=24, ge=1, le=720, validation_alias=env_key("intake_file_unused_hours")
+    )
+
+    @field_validator("supabase_intake_bucket", "intake_file_retention_days", mode="before")
+    @classmethod
+    def blank_means_unset(cls, value: object) -> object:
+        """An empty variable is "not set", not a zero or an empty name.
+
+        A deployment dashboard leaves a cleared variable as `""`, and retention
+        read as `0` days would delete every file on the next sweep.
+        """
+        return None if isinstance(value, str) and not value.strip() else value
 
     @model_validator(mode="after")
     def reject_stale_and_unknown_prefixed_variables(self) -> Settings:

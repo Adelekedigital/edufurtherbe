@@ -16,6 +16,7 @@ from app.api.routes import (
     catalogue,
     featured,
     health,
+    intake_files,
     internal_jobs,
     me_calendar,
     me_intake,
@@ -138,6 +139,16 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "confirmed session. Asking for one that is not yours gets `404` — "
             "the action's URL does not exist for you — where being the right "
             "party in the wrong state gets `409` naming the state."
+        ),
+    },
+    {
+        "name": "intake-files",
+        "description": (
+            "Files a mentee uploads to answer an offering's `file_upload` "
+            "questions: upload first for a `file_id`, answer with it on "
+            "`POST /sessions`, download through the API. PDF and Word only, "
+            "private, and readable by the uploader, the session's mentor and "
+            "admins alone."
         ),
     },
     {
@@ -343,6 +354,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_calendar.router)
     application.include_router(me_calendar.callback_router)
     application.include_router(me_intake.router)
+    application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)
     application.include_router(me_referrals.router)
     application.include_router(me_reviews.router)
