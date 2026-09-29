@@ -388,7 +388,9 @@ UpsertedProfileDep = Annotated[None, Depends(upserted_profile)]
 async def replaced_languages(
     payload: UserLanguagesWrite, user_id: OwnerDep, session: SessionDep
 ) -> None:
-    await replace_languages(session, user_id, [entry.model_dump() for entry in payload.languages])
+    await replace_languages(
+        session, user_id, [entry.model_dump(exclude_unset=True) for entry in payload.languages]
+    )
     await session.commit()
 
 

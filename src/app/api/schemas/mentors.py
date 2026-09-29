@@ -360,6 +360,14 @@ class MentorPublicRead(BaseModel):
         default=None, description="Where they studied, resolved to a name."
     )
     origin_country: str | None = None
+    primary_study_country_id: UUID | None = Field(
+        default=None,
+        description="The `/catalog/countries` id behind `primary_study_country`, for prefilling "
+        "a picker; names are not unique.",
+    )
+    origin_country_id: UUID | None = Field(
+        default=None, description="The `/catalog/countries` id behind `origin_country`."
+    )
     #: Canonical `https://` links or `null` — render them, never parse them (#182).
     social_linkedin: LinkedInRead = None
     social_twitter: XRead = None
@@ -490,6 +498,8 @@ class MentorPublicRead(BaseModel):
             primary_study_program=_text(row["primary_study_program"]),
             primary_study_country=_text(row["primary_study_country"]),
             origin_country=_text(row["origin_country"]),
+            primary_study_country_id=_uuid(row.get("primary_study_country_id")),
+            origin_country_id=_uuid(row.get("origin_country_id")),
             social_linkedin=_text(row["social_linkedin"]),
             social_twitter=_text(row["social_twitter"]),
             social_youtube=_text(row["social_youtube"]),
@@ -556,6 +566,10 @@ def _owner_fields(row: dict[str, Any]) -> dict[str, Any]:
 def _joined_and_award(row: dict[str, Any]) -> dict[str, Any]:
     """`joined_at` and `top_award`, mapped once for the card and the profile."""
     return {"joined_at": row["joined_at"], "top_award": _text(row["top_award"])}
+
+
+def _uuid(value: object) -> UUID | None:
+    return None if value is None else UUID(str(value))
 
 
 def _text(value: object) -> str | None:

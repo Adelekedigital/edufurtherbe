@@ -114,6 +114,9 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             UserProfile.social_youtube,
             _STUDY_COUNTRY.c.display_name.label("primary_study_country"),
             _ORIGIN_COUNTRY.c.display_name.label("origin_country"),
+            # The ids too: the names are not unique, and the profile writes take ids.
+            _STUDY_COUNTRY.c.id.label("primary_study_country_id"),
+            _ORIGIN_COUNTRY.c.id.label("origin_country_id"),
             MentorProfile.approval_status,
             MentorProfile.listing_status,
             # Only the owner can reach a row that is not published, and only the

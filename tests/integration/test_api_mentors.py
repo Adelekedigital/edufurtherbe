@@ -258,18 +258,23 @@ async def test_offerings_are_scoped_to_the_mentor_asked_for(
     assert [o["slug"] for o in body["offerings"]] == ["test-preparation"]
 
 
-async def test_countries_are_names_not_identifiers(
+async def test_countries_come_as_names_and_as_catalogue_ids(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Returning a `countries.id` would reproduce exactly the gap the party
-    identity change closed: correct, and unusable without a call this API does
-    not offer."""
+    """The name to show, and the `/catalog/countries` id to prefill a picker
+    with: names are not unique, and the profile writes take ids. An id alone
+    was once refused as unusable; the catalogue now publishes it."""
     mentor = await make_bookable_mentor(db_engine, "country", slug="country")
     await set_study_country(db_engine, mentor, "GB")
+    async with db_engine.connect() as conn:
+        gb = (await conn.execute(text("SELECT id FROM countries WHERE code = 'GB'"))).scalar_one()
 
     body = (await api_client.get(url(mentor))).json()
 
     assert body["primary_study_country"] == "United Kingdom"
+    assert body["primary_study_country_id"] == str(gb)
+    assert body["origin_country"] is None
+    assert body["origin_country_id"] is None
 
 
 async def test_no_private_field_reaches_the_public_profile(
