@@ -341,6 +341,60 @@ async def test_a_deleted_reviewer_stays_listed_without_their_identity(
     assert row["author_last_initial"] is None
 
 
+async def a_reviewed_session(
+    engine: AsyncEngine, review: UUID, *, mentor: UUID, mentee: UUID
+) -> UUID:
+    """Attach a completed session to a review, as a written one has."""
+    async with engine.begin() as conn:
+        session_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO sessions (mentor_id, mentee_id, starts_at, duration_minutes, "
+                    "status) VALUES (:m, :e, now() - interval '1 day', 45, 'completed') "
+                    "RETURNING id"
+                ),
+                {"m": mentor, "e": mentee},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text("UPDATE reviews SET session_id = :s WHERE id = :r"), {"s": session_id, "r": review}
+        )
+    return UUID(str(session_id))
+
+
+async def test_a_live_reviewers_session_is_named(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    subject_auth = uuid4()
+    subject = await a_user(db_engine, subject_auth, role="mentor")
+    author = await a_user(db_engine, uuid4())
+    review = await a_review(db_engine, about=subject, by=author)
+    session_id = await a_reviewed_session(db_engine, review, mentor=subject, mentee=author)
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert row["session_id"] == str(session_id)
+
+
+async def test_a_deleted_reviewers_session_is_not_named(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The session would name them.** The mentor is a party to it, so its id
+    leads straight to the reviewer the byline withholds — it goes with them."""
+    subject_auth = uuid4()
+    subject = await a_user(db_engine, subject_auth, role="mentor")
+    author = await a_user(db_engine, uuid4())
+    review = await a_review(db_engine, about=subject, by=author)
+    await a_reviewed_session(db_engine, review, mentor=subject, mentee=author)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": author})
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert row["author_deleted"] is True
+    assert row["session_id"] is None
+
+
 async def test_a_live_reviewer_is_named_to_the_subject(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

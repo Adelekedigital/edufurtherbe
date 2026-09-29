@@ -64,7 +64,9 @@ class OwnReviewRead(BaseModel):
     id: UUID
     created_at: datetime
     public_review: str
-    #: The session it is about. Null on a migrated review, which had no link.
+    #: The session it is about. Null on a migrated review, which had no link,
+    #: **and when the reviewer has deleted their account** — the session would
+    #: name them.
     session_id: UUID | None = None
     #: Whom it is about — on this list, always the caller.
     reviewed_for: UUID
