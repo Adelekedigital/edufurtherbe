@@ -18,15 +18,14 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, literal, select, true, tuple_, update
+from sqlalchemy import func, literal, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.enums import ReviewReportOutcome
 from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
-from app.infra.db.models.user import User
-from app.infra.db.qualifications import top_qualification
+from app.infra.db.review_authors import author_columns, with_author
 
 __all__ = ["decide_report", "list_reviews_for_moderation"]
 
@@ -55,37 +54,35 @@ async def list_reviews_for_moderation(
     hiding it here would mean the only view of a moderation decision is the one
     that cannot show its result.
 
-    **No `LIVE` join either.** The public list drops a review whose author
-    deleted their account, because a deleted user must stop being named on a
-    public page. A moderator is not a public page, and a complaint about a
-    review whose author has since left is still a complaint — so the author
-    join is outer, and the name is simply absent when there is no live user.
+    **The author through `with_author`, as on every other review read** (settled
+    decision #211). A complaint about a review whose author has since left is
+    still a complaint, so the review stays in the queue; the author's name,
+    initial and institution go, and `author_deleted` says so. This read used to
+    join the author without `LIVE` — so a deleted author was named here, against
+    what this docstring already promised — and correlated the institution on
+    `reviewed_by`, which would have outlived the name.
     """
-    author = top_qualification(Review.reviewed_by, name="author_qualification")
     report = ReviewReport.__table__.alias("report")
 
     statement = (
-        select(
-            Review.id,
-            Review.created_at,
-            Review.public_review,
-            Review.private_review,
-            Review.valuable_rating,
-            Review.reviewed_for,
-            (Review.deleted_at.is_not(None)).label("withdrawn"),
-            User.first_name.label("author_first_name"),
-            func.nullif(func.left(User.last_name, 1), "").label("author_last_initial"),
-            author.c.institution.label("author_institution"),
-            report.c.id.label("report_id"),
-            report.c.reason.label("report_reason"),
-            report.c.detail.label("report_detail"),
-            report.c.created_at.label("report_created_at"),
-            report.c.resolved_at.label("report_resolved_at"),
-            report.c.outcome.label("report_outcome"),
+        with_author(
+            select(
+                Review.id,
+                Review.created_at,
+                Review.public_review,
+                Review.private_review,
+                Review.valuable_rating,
+                Review.reviewed_for,
+                (Review.deleted_at.is_not(None)).label("withdrawn"),
+                *author_columns(),
+                report.c.id.label("report_id"),
+                report.c.reason.label("report_reason"),
+                report.c.detail.label("report_detail"),
+                report.c.created_at.label("report_created_at"),
+                report.c.resolved_at.label("report_resolved_at"),
+                report.c.outcome.label("report_outcome"),
+            ).select_from(Review)
         )
-        .select_from(Review)
-        .outerjoin(User, User.id == Review.reviewed_by)
-        .outerjoin(author, true())
         .outerjoin(report, report.c.review_id == Review.id)
         .where(
             *([report.c.id.is_not(None)] if reported_only else []),

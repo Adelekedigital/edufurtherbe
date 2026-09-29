@@ -14,6 +14,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import add_education
 
 from conftest import api_token, bearer
 
@@ -130,6 +131,52 @@ async def test_the_queue_lists_every_review(
     await a_review(db_engine, about=subject_id, by=author_id)
 
     assert len(await queue(api_client, admin)) == 2
+
+
+async def test_a_live_author_is_named_in_the_queue(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The positive case: a moderator sees who wrote a review, institution included."""
+    admin, subject, author = uuid4(), uuid4(), uuid4()
+    await a_user(db_engine, admin, admin="super_admin")
+    subject_id = await a_user(db_engine, subject, role="mentor")
+    author_id = await a_user(db_engine, author)
+    await add_education(db_engine, author_id, school="York St John University")
+    await a_review(db_engine, about=subject_id, by=author_id)
+
+    (row,) = await queue(api_client, admin)
+
+    assert row["author_deleted"] is False
+    assert row["author_first_name"] == "Ada"
+    assert row["author_last_initial"] == "L"
+    assert row["author_institution"] == "York St John University"
+
+
+async def test_a_deleted_author_is_not_named_in_the_queue(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**A deleted author loses their identity here too** (owner, 2026-09-29;
+    settled decision #211). The review stays in the queue — a complaint about it
+    is still a complaint — but the name, initial and institution go, the
+    institution included: correlated on `reviews.reviewed_by` rather than on the
+    joined user, it would outlive the name."""
+    admin, subject, author = uuid4(), uuid4(), uuid4()
+    await a_user(db_engine, admin, admin="super_admin")
+    subject_id = await a_user(db_engine, subject, role="mentor")
+    author_id = await a_user(db_engine, author)
+    await add_education(db_engine, author_id, school="York St John University")
+    await a_review(db_engine, about=subject_id, by=author_id)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": author_id}
+        )
+
+    (row,) = await queue(api_client, admin)
+
+    assert row["author_deleted"] is True
+    assert row["author_first_name"] is None
+    assert row["author_last_initial"] is None
+    assert row["author_institution"] is None
 
 
 async def test_the_queue_can_be_narrowed_to_reported(
