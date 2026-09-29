@@ -806,10 +806,19 @@ async def finalise_scheduled_deletions(session: AsyncSession) -> int:
     session that ended this hour no longer counts. Idempotent: a deleted row no
     longer matches. Does not commit.
 
-    **A booking cannot land on a scheduled offering** — scheduling hides it, and
-    booking reads `session_type_is_live()` — and the check here is `NOT EXISTS`
-    at run time rather than the count taken when it was scheduled, so a session
-    that committed in between still holds it open.
+    The check here is `NOT EXISTS` at run time rather than the count taken
+    when it was scheduled, so a session that committed before this statement
+    still holds the offering open.
+
+    **Not race-free, and accepted with #197's race** (#218). Scheduling hides
+    the offering and booking reads `session_type_is_live()`, so no *new* booking
+    is offered one — but a booking already past that read when the offering was
+    hidden can still commit, and nothing here waits for it: the booking's
+    foreign key takes `FOR KEY SHARE` on the offering row, which does not
+    conflict with this non-key `UPDATE`. A session can then land on an offering
+    this run deletes; it stays readable through `GET /sessions/{id}`. Closed by
+    the same revisit trigger as the delete's own window: `FOR SHARE` on the
+    offering in `book_session`.
     """
     result = await session.execute(
         update(SessionType)

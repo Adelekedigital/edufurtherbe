@@ -14,15 +14,22 @@ step**, and all of it additive.
 * ``ck_session_types_scheduled_deletion_is_hidden``: a scheduled offering is
   hidden until it goes or is restored.
 
-The two `CHECK`s are added ``NOT VALID`` then validated. Every existing row
-satisfies both (the columns are new and all-default), so the scan finds
-nothing; the split keeps the `ACCESS EXCLUSIVE` window to the metadata change.
+The two `CHECK`s are added ``NOT VALID`` then validated **in the same
+transaction**, so ``ACCESS EXCLUSIVE`` is held through the validating scan —
+the split buys nothing here and is kept only as the house form. It costs
+nothing either: every existing row satisfies both (the columns are new and
+all-default), and `session_types` is small.
 
 **Rolling deploy:** old code neither reads nor writes either column, and the
-defaults satisfy both constraints, so an old pod's inserts and updates pass.
-The one exposure is an old pod **showing** an offering the new code scheduled
-(`PATCH {"is_active": true}`): the `CHECK` refuses it as an integrity error,
-a 500, for the length of one swap. Accepted on the same terms as #216's.
+defaults satisfy both constraints, so an old pod's inserts pass. Two updates
+from an old pod meet a `CHECK` as an integrity error — a 500 — for the length
+of one swap, both accepted on #216's terms (no production traffic yet):
+
+* **showing** an offering the new code scheduled (`PATCH {"is_active": true}`)
+  trips ``ck_session_types_scheduled_deletion_is_hidden``;
+* **hiding** an offering the new code featured (`PATCH {"is_active": false}`)
+  trips ``ck_session_types_featured_is_active``, since old code does not
+  un-feature on hide.
 
 **Downgrade** drops both columns and the constraints. A scheduled offering
 stays hidden and undeleted — the old code refuses its `DELETE` with the `409`
