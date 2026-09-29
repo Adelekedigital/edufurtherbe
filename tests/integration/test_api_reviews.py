@@ -182,7 +182,7 @@ async def test_a_mentee_reviews_a_completed_session(world: World) -> None:
 
 
 async def test_the_answers_come_back_as_words(world: World) -> None:
-    """The column stores `3`; the contract says `excellent`.
+    """The column stores `3`; the contract says `great`.
 
     A magic number on the wire is a value whose meaning lives in a document,
     which is the half of settled decision #100 that still applies once the
@@ -490,24 +490,27 @@ async def test_editable_until_is_null_once_the_window_has_shut(world: World) -> 
     assert response.json()["editable_until"] is None
 
 
-async def test_somebody_elses_review_cannot_be_read(world: World) -> None:
-    """Scoped in the query: the mentor it is about gets `404`, not the text."""
-    review = (await world.review(await world.completed(world.offering_a))).json()
-    stranger = uuid4()
-    async with world.engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                "VALUES (:e, :a, 'Ada', 'mentee', 'Africa/Lagos')"
-            ),
-            {"e": f"reader-{stranger.hex[:8]}@example.test", "a": stranger},
-        )
+async def test_the_mentor_it_is_about_cannot_read_it(world: World) -> None:
+    """Scoped in the query: the subject gets `404`, and the platform feedback
+    with it — while the author, asking for the same id, gets it back."""
+    feedback = "The join button hid"
+    review = (
+        await world.review(await world.completed(world.offering_a), private_review=feedback)
+    ).json()
+    async with world.engine.connect() as conn:
+        mentor_auth = (
+            await conn.execute(text("SELECT auth_id FROM users WHERE id = :m"), {"m": world.mentor})
+        ).scalar_one()
 
-    response = await world.client.get(
-        f"/api/v1/reviews/{review['id']}", headers=bearer(api_token(stranger))
+    as_mentor = await world.client.get(
+        f"/api/v1/reviews/{review['id']}", headers=bearer(api_token(mentor_auth))
     )
+    as_author = await world.client.get(f"/api/v1/reviews/{review['id']}", headers=world.headers)
 
-    assert response.status_code == 404
+    assert as_mentor.status_code == 404
+    assert feedback not in as_mentor.text
+    assert as_author.status_code == 200
+    assert as_author.json()["private_review"] == feedback
 
 
 async def test_the_window_follows_configuration(

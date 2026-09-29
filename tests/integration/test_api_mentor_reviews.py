@@ -291,7 +291,7 @@ async def test_the_four_questions_are_each_their_own_figure(profile: Profile) ->
 async def test_the_floor_of_the_scale_is_thirty_three_percent(profile: Profile) -> None:
     """Register question 2, asserted rather than assumed.
 
-    "Not great" is the floor of a three-point scale, not zero — the scale has no
+    "Poor" is the floor of a three-point scale, not zero — the scale has no
     zero, and `1/3` is what the app's own `mean/max` scaling produces.
     """
     await profile.reviewed(communication=1)

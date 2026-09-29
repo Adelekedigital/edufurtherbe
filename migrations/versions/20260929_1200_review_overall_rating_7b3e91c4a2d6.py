@@ -7,9 +7,16 @@ value reads those through ``valuable_rating`` instead (``review_stats``).
 
 Nullable and default-free, so adding it is metadata-only and old code, which
 never names it, runs unchanged against the new table. The ``CHECK`` is added
-``NOT VALID`` and validated separately, so no scan runs under the
-``ACCESS EXCLUSIVE`` lock the ``ALTER`` takes — though over a column that is
-null on every row the validation has nothing to find.
+``NOT VALID`` and then validated, **but in the same transaction**, so the
+validating scan does run while the ``ACCESS EXCLUSIVE`` lock from the ``ALTER``
+is still held. That is accepted rather than split out: the column is null on
+every row, so there is nothing to find, and ``reviews`` is tens of thousands
+of rows — a short scan, bounded by ``lock_timeout`` getting the lock at all.
+
+**Re-runnable after a failed index swap.** ``autocommit_block`` commits the
+column before the concurrent build starts, so a build that fails leaves the
+column in place with the revision unstamped. The column and the constraint are
+therefore added only if absent, and the swap clears any half-built index first.
 
 **The card index is rebuilt to carry the column.** The card's session value
 reads ``overall_rating`` beside ``valuable_rating`` from now on, and
@@ -52,10 +59,20 @@ def _swap_index(columns: str) -> None:
 
 def upgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
-    op.execute(f"ALTER TABLE {TABLE} ADD COLUMN overall_rating smallint")
+    op.execute(f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS overall_rating smallint")
+    # A literal rather than an f-string: the names are fixed, and it keeps the
+    # one DO block free of interpolation.
     op.execute(
-        f"ALTER TABLE {TABLE} ADD CONSTRAINT {CHECK} "
-        "CHECK (overall_rating BETWEEN 1 AND 5) NOT VALID"
+        """
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'ck_reviews_overall_rating_range'
+          ) THEN
+            ALTER TABLE reviews ADD CONSTRAINT ck_reviews_overall_rating_range
+              CHECK (overall_rating BETWEEN 1 AND 5) NOT VALID;
+          END IF;
+        END $$;
+        """
     )
     op.execute(f"ALTER TABLE {TABLE} VALIDATE CONSTRAINT {CHECK}")
     _swap_index("reviewed_for, valuable_rating, overall_rating")
@@ -67,4 +84,4 @@ def downgrade() -> None:
     carry them."""
     _swap_index("reviewed_for, valuable_rating")
     op.execute("SET lock_timeout = '3s'")
-    op.execute(f"ALTER TABLE {TABLE} DROP COLUMN overall_rating")
+    op.execute(f"ALTER TABLE {TABLE} DROP COLUMN IF EXISTS overall_rating")
