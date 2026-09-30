@@ -31,6 +31,19 @@ from tests.integration.factories import add_session_type, make_public_mentor
 
 from conftest import api_token, bearer
 
+
+async def offering_id(engine: AsyncEngine, slug: str) -> str:
+    """The catalogue id a `LookupRef` carries, so a form can write it back."""
+    async with engine.connect() as conn:
+        return str(
+            (
+                await conn.execute(
+                    text("SELECT id FROM service_offerings WHERE slug = :s"), {"s": slug}
+                )
+            ).scalar_one()
+        )
+
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 URL = "/api/v1/me/session-types"
@@ -241,7 +254,11 @@ async def test_classifying_an_offering_shows_the_taxonomy_on_both_reads(
     owner = (await api_client.get(URL, headers=bearer(api_token(auth_id)))).json()["data"]
     public = (await api_client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
 
-    expected = {"code": "interview-preparation", "display_name": "Interview Preparation"}
+    expected = {
+        "id": await offering_id(db_engine, "interview-preparation"),
+        "code": "interview-preparation",
+        "display_name": "Interview Preparation",
+    }
     assert owner[0]["service_offering"] == expected
     assert public[0]["service_offering"] == expected
 

@@ -187,6 +187,7 @@ async def offerings_for(
     result = await session.execute(
         select(
             MentorServiceOffering.mentor_user_id,
+            ServiceOffering.id,
             ServiceOffering.slug,
             ServiceOffering.display_name,
         )
@@ -202,14 +203,14 @@ async def offerings_for(
     grouped: dict[UUID, list[dict[str, Any]]] = {}
     for row in result.mappings():
         grouped.setdefault(row["mentor_user_id"], []).append(
-            {"slug": row["slug"], "display_name": row["display_name"]}
+            {"id": row["id"], "slug": row["slug"], "display_name": row["display_name"]}
         )
     return grouped
 
 
 async def offerings_for_session_types(
     session: AsyncSession, session_type_ids: Sequence[Any]
-) -> dict[Any, list[dict[str, str]]]:
+) -> dict[Any, list[dict[str, Any]]]:
     """Each session type's offerings, in the mentor's order, as `code`/`display_name`.
 
     **One statement for a whole list**, keyed by session type. A type with rows
@@ -224,6 +225,7 @@ async def offerings_for_session_types(
     joined = (
         select(
             SessionTypeOffering.session_type_id.label("type_id"),
+            ServiceOffering.id.label("offering_id"),
             ServiceOffering.slug,
             ServiceOffering.display_name,
             SessionTypeOffering.position,
@@ -234,6 +236,7 @@ async def offerings_for_session_types(
     legacy = (
         select(
             SessionType.id.label("type_id"),
+            ServiceOffering.id.label("offering_id"),
             ServiceOffering.slug,
             ServiceOffering.display_name,
             literal(0).label("position"),
@@ -245,10 +248,10 @@ async def offerings_for_session_types(
         )
     )
     rows = await session.execute(joined.union_all(legacy).order_by("type_id", "position"))
-    result: dict[Any, list[dict[str, str]]] = {}
+    result: dict[Any, list[dict[str, Any]]] = {}
     for row in rows:
         result.setdefault(row.type_id, []).append(
-            {"code": str(row.slug), "display_name": str(row.display_name)}
+            {"id": row.offering_id, "code": str(row.slug), "display_name": str(row.display_name)}
         )
     return result
 

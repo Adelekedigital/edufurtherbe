@@ -39,19 +39,28 @@ from app.domain.text import has_letter, hidden_characters
 
 
 class LookupRef(BaseModel):
-    """A resolved lookup value: the stable code, and what to show."""
+    """A resolved lookup value: its id, the stable code, and what to show.
+
+    `id` is what a write takes (`degree_level_id`, `service_offering_ids`), so a
+    form can send back what it was read without joining a catalogue first.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
+    id: UUID
     code: str
     display_name: str
 
     @classmethod
-    def maybe(cls, code: Any, display_name: Any) -> LookupRef | None:
-        """Both columns or neither — an outer join gives two nulls together."""
-        if code is None or display_name is None:
+    def maybe(cls, id_: Any, code: Any, display_name: Any) -> LookupRef | None:
+        """All three columns or none — an outer join gives nulls together."""
+        if id_ is None or code is None or display_name is None:
             return None
-        return cls(code=str(code), display_name=str(display_name))
+        return cls(id=id_, code=str(code), display_name=str(display_name))
+
+
+#: The longest degree abbreviation a user may enter ("MSc", "MPhil", "Ph.D").
+MAX_DEGREE_ABBREVIATION = 20
 
 
 class EducationRead(BaseModel):
@@ -69,6 +78,9 @@ class EducationRead(BaseModel):
     school_name_raw: str
     institution: InstitutionRead | None = None
     degree_level: LookupRef | None = None
+    #: The user's own abbreviation ("MSc"); the public profile shows it before the
+    #: level's short name.
+    degree_abbreviation: str | None = None
     #: The unmapped legacy string, kept beside the resolved level for the same
     #: reason `school_name_raw` is kept beside the institution.
     degree_category: str | None = None
@@ -96,8 +108,11 @@ class EducationRead(BaseModel):
             school_name_raw=row["school_name_raw"],
             institution=institution,
             degree_level=LookupRef.maybe(
-                row.get("degree_level_slug"), row.get("degree_level_name")
+                row.get("degree_level_ref_id"),
+                row.get("degree_level_slug"),
+                row.get("degree_level_name"),
             ),
+            degree_abbreviation=row.get("degree_abbreviation"),
             degree_category=row.get("degree_category"),
             study_course=row.get("study_course"),
             study_program=row.get("study_program"),
@@ -136,7 +151,11 @@ class GoalRead(BaseModel):
     def from_row(cls, row: dict[str, Any]) -> GoalRead:
         return cls(
             id=row["id"],
-            degree_goal=LookupRef.maybe(row.get("degree_goal_slug"), row.get("degree_goal_name")),
+            degree_goal=LookupRef.maybe(
+                row.get("degree_goal_ref_id"),
+                row.get("degree_goal_slug"),
+                row.get("degree_goal_name"),
+            ),
             degree_goal_raw=row.get("degree_goal_raw"),
             target_start_term=row.get("target_start_term"),
             notes=row.get("notes"),
@@ -147,7 +166,7 @@ class GoalRead(BaseModel):
                 for c in row.get("countries", [])
             ],
             needs=[
-                LookupRef(code=n["slug"], display_name=n["display_name"])
+                LookupRef(id=n["id"], code=n["slug"], display_name=n["display_name"])
                 for n in row.get("needs", [])
             ],
         )
@@ -271,7 +290,7 @@ class MentorProfileRead(BaseModel):
             primary_study_program=row.get("primary_study_program"),
             primary_study_country=country,
             offerings=[
-                LookupRef(code=o["slug"], display_name=o["display_name"])
+                LookupRef(id=o["id"], code=o["slug"], display_name=o["display_name"])
                 for o in row.get("offerings", [])
             ],
         )
@@ -303,6 +322,7 @@ class EducationWrite(Normalised):
     school_name_raw: str = Field(min_length=1, max_length=300)
     institution_id: UUID | None = None
     degree_level_id: UUID | None = None
+    degree_abbreviation: str | None = Field(default=None, max_length=MAX_DEGREE_ABBREVIATION)
     degree_category: str | None = Field(default=None, max_length=100)
     study_course: str | None = Field(default=None, max_length=300)
     study_program: str | None = Field(default=None, max_length=300)
@@ -563,6 +583,7 @@ class EducationPatch(Normalised):
     school_name_raw: str | None = Field(default=None, min_length=1, max_length=300)
     institution_id: UUID | None = None
     degree_level_id: UUID | None = None
+    degree_abbreviation: str | None = Field(default=None, max_length=MAX_DEGREE_ABBREVIATION)
     degree_category: str | None = Field(default=None, max_length=100)
     study_course: str | None = Field(default=None, max_length=300)
     study_program: str | None = Field(default=None, max_length=300)
