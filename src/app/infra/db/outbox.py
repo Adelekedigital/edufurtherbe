@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
-from app.domain.messages import MessageContext
+from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.notifications import Channel, Notification
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session
@@ -264,8 +264,8 @@ async def _context_for(
     return MessageContext(
         recipient_name=parties.get(recipient, ("", "UTC"))[0],
         recipient_timezone=parties.get(recipient, ("", "UTC"))[1],
-        mentor_name=parties.get(found["mentor_id"], ("", "UTC"))[0],
-        mentee_name=parties.get(found["mentee_id"], ("", "UTC"))[0],
+        mentor_name=_party_name(parties, found["mentor_id"], "mentor"),
+        mentee_name=_party_name(parties, found["mentee_id"], "mentee"),
         starts_at=found["starts_at"],
         topic=found["topic"],
         detail=found["booking_message"],
@@ -290,14 +290,30 @@ VENUE_LABELS = {
 }
 
 
+def _party_name(people: dict[UUID, tuple[str, str]], user_id: UUID, role: str) -> str:
+    """A session party's name, or "your mentor" / "your mentee" once they are gone.
+
+    Absent from ``people`` means `_names_for` did not see them live: the account
+    was deleted after the message was queued (#288). The message still goes to
+    the recipient; it just names nobody who left.
+    """
+    found = people.get(user_id)
+    return found[0] if found is not None else DELETED_PARTY_LABELS[role]
+
+
 async def _names_for(
     session: AsyncSession, user_ids: tuple[UUID, ...]
 ) -> dict[UUID, tuple[str, str]]:
-    """Display name and timezone for each person, in one statement."""
+    """Display name and timezone for each **live** person, in one statement.
+
+    Through `LIVE`, like every other read of a person's identity (#212, #288):
+    names are read when the outbox drains, which can be after an account was
+    deleted, so a deleted person is simply absent here.
+    """
     rows = (
         await session.execute(
             select(User.id, User.first_name, User.last_name, User.timezone).where(
-                User.id.in_(set(user_ids))
+                User.id.in_(set(user_ids)), LIVE
             )
         )
     ).mappings()

@@ -22,6 +22,24 @@ gitleaks and the full suite on every push. Do not comment on style, naming, impo
 order, docstrings, or anything those tools decide. Never suggest lowering a
 threshold, adding an ignore, or raising a limit to make a check pass.
 
+### How to write a finding
+
+Each finding is read by the author once and acted on. Spend words only on what
+changes the fix.
+
+- Plain text. No emoji, no badges or icons of your own, no praise, no greeting
+  or closing line.
+- Title: the defect in one line, stated as fact ("Retry after a lowered maximum
+  returns 422 instead of the stored replay"), not advice ("Consider ...").
+- Body: at most three sentences — the triggering input or state, the wrong
+  result, and the safe path. Name the file and symbol; do not restate the diff
+  or explain code the author just wrote.
+- One finding per root cause. If the same defect appears in several places,
+  report it once and list the other locations.
+- Only code this pull request changes, or behaviour it changes. Nothing
+  speculative: if you cannot name the input that triggers it, leave it out.
+- No findings at all is a valid review. Do not pad it with minor points.
+
 ### Authorization and visibility
 
 - **Ownership is scoped in the SQL statement itself**, on reads *and* writes

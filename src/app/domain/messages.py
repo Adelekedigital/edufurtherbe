@@ -33,11 +33,21 @@ from app.core.errors import AppError
 
 __all__ = [
     "ALIASES",
+    "DELETED_PARTY_LABELS",
     "RESOLVERS",
     "MessageContext",
     "UnresolvedVariableError",
     "build_variables",
 ]
+
+
+#: What a message says in place of someone who has deleted their account (#288).
+#:
+#: Owner, 2026-09-30: a queued message about them is **still sent** — the
+#: recipient still needs the reminder — but names nobody who left. Keyed by the
+#: role the deleted person had in the session, so the recipient reads "your
+#: mentor" or "your mentee". The one place these words live.
+DELETED_PARTY_LABELS = {"mentor": "your mentor", "mentee": "your mentee"}
 
 
 class UnresolvedVariableError(AppError):
