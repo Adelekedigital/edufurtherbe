@@ -189,7 +189,9 @@ async def test_the_profile_carries_the_cards_next_available_time(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_bookable_mentor(db_engine, "profile-next")
-    at = dt.datetime(2030, 1, 7, 9, tzinfo=dt.UTC)
+    # Inside the booking window: a cached time past it is not advertised (#221),
+    # and the job could never have stored one there.
+    at = (dt.datetime.now(dt.UTC) + dt.timedelta(days=3)).replace(microsecond=0)
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
