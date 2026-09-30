@@ -119,7 +119,8 @@ MAX_STAGES = len(ApplicationStage)
 WINDOW_WRITE_DESCRIPTION = (
     "How many days ahead this offering can be booked: 1 to the platform maximum "
     "(`max_booking_window_days` on your mentor profile; above it is a 422 at "
-    "`/booking_window_days`). `null` follows your default on your mentor profile."
+    "`/booking_window_days`, except that resending the value already stored for "
+    "this offering is accepted). `null` follows your default on your mentor profile."
 )
 
 

@@ -10,9 +10,11 @@ through `booking_rules.effective_window_days`, so they cannot disagree.
 from __future__ import annotations
 
 import datetime as dt
+from uuid import uuid4
 
 import httpx
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tests.integration.test_api_booking import a_mentee
 from tests.integration.test_api_me_session_type_writes import URL, as_mentor, body
@@ -307,3 +309,85 @@ async def test_a_replayed_create_is_not_revalidated_against_a_lowered_max(
     assert first.status_code == 201, first.text
     assert retried.status_code == 201, retried.text
     assert retried.json() == first.json()
+
+
+# --------------------------------------------------------------------------
+# A form resending the stored window after the maximum was lowered
+# --------------------------------------------------------------------------
+
+
+async def test_resending_the_stored_window_is_accepted_after_the_max_drops(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """A form sends back every field it shows. A mentor who only renamed the
+    offering must not be refused for a window they set while it was allowed."""
+    _, auth = await as_mentor(db_engine, "resend-type")
+    headers = bearer(api_token(auth))
+    created = (
+        await api_client.post(URL, json=body(booking_window_days=40), headers=headers)
+    ).json()
+    url = f"{URL}/{created['id']}"
+
+    async with fortnight_client(db_engine, api_storage) as client:
+        kept = await client.patch(
+            url, json={"name": "Renamed", "booking_window_days": 40}, headers=headers
+        )
+        raised = await client.patch(url, json={"booking_window_days": 41}, headers=headers)
+        own = (await client.get(URL, headers=headers)).json()["data"]
+    restored = (await api_client.get(URL, headers=headers)).json()["data"]
+
+    assert kept.status_code == 200, kept.text
+    assert raised.status_code == 422, raised.text
+    assert raised.json()["errors"][0]["pointer"] == "/booking_window_days"
+    (mine,) = [t for t in own if t["id"] == created["id"]]
+    assert (mine["name"], mine["booking_window_days"]) == ("Renamed", 40)
+    assert mine["effective_booking_window_days"] == 14
+    (back,) = [t for t in restored if t["id"] == created["id"]]
+    assert back["effective_booking_window_days"] == 40
+
+
+async def test_resending_the_stored_mentor_default_is_accepted_after_the_max_drops(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    mentor, auth = await as_mentor(db_engine, "resend-profile")
+    headers = bearer(api_token(auth))
+    url = f"/api/v1/users/{mentor}/mentor-profile"
+    await api_client.patch(url, json={"booking_window_days": 40}, headers=headers)
+
+    async with fortnight_client(db_engine, api_storage) as client:
+        kept = await client.patch(
+            url, json={"headline": "New line", "booking_window_days": 40}, headers=headers
+        )
+        raised = await client.patch(url, json={"booking_window_days": 41}, headers=headers)
+        profile = (await client.get(url, headers=headers)).json()
+
+    assert kept.status_code == 200, kept.text
+    assert raised.status_code == 422, raised.text
+    assert (profile["headline"], profile["booking_window_days"]) == ("New line", 40)
+
+
+async def test_a_new_mentor_profile_over_the_max_is_refused(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """POST has no stored row to resend, so it keeps the plain check."""
+    auth = uuid4()
+    async with db_engine.begin() as conn:
+        user = (
+            await conn.execute(
+                text(
+                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
+                    "VALUES (:e, :a, 'Ada', 'mentee', 'UTC') RETURNING id"
+                ),
+                {"e": f"new-mentor-{auth}@example.test", "a": auth},
+            )
+        ).scalar_one()
+
+    async with fortnight_client(db_engine, api_storage) as client:
+        response = await client.post(
+            f"/api/v1/users/{user}/mentor-profile",
+            json={"booking_window_days": 30},
+            headers=bearer(api_token(auth)),
+        )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["errors"][0]["pointer"] == "/booking_window_days"

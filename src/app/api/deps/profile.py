@@ -19,6 +19,7 @@ from app.api.deps.core import (
     TargetUserDep,
     get_storage,
     refuse_window_over_max,
+    window_over_max,
 )
 from app.api.schemas.common import (
     LOOKUP_PAGE_SIZE,
@@ -363,7 +364,11 @@ async def created_mentor_profile(
 async def updated_mentor_profile(
     payload: MentorProfileWrite, user_id: OwnerDep, session: SessionDep, window: BookingWindowDep
 ) -> bool:
-    refuse_window_over_max(payload.booking_window_days, window)
+    stored = None
+    if window_over_max(payload.booking_window_days, window):
+        current = await get_mentor_profile(session, user_id)
+        stored = current["booking_window_days"] if current else None
+    refuse_window_over_max(payload.booking_window_days, window, stored=stored)
     changed = await update_mentor_profile(session, user_id, payload.model_dump(exclude_unset=True))
     await session.commit()
     return changed

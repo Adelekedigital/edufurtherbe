@@ -498,13 +498,25 @@ def _booking_window(request: Request) -> BookingWindow:
 BookingWindowDep = Annotated[BookingWindow, Depends(_booking_window)]
 
 
-def refuse_window_over_max(days: int | None, window: BookingWindow) -> None:
+def window_over_max(days: int | None, window: BookingWindow) -> bool:
+    """Whether a sent window exceeds the configured maximum."""
+    return days is not None and days > window.max_days
+
+
+def refuse_window_over_max(
+    days: int | None, window: BookingWindow, *, stored: int | None = None
+) -> None:
     """A window above the configured maximum is a `422` at `/booking_window_days`.
 
     Here rather than in the schema, because a `Field(le=...)` is fixed at import
     and the maximum is configuration. The one check every write shares.
+
+    **Resending the stored value is not a change**, so it passes: a form sends
+    back every field it shows, and a mentor who set 40 while it was allowed must
+    be able to edit something else after the maximum drops to 14. Reads clamp it
+    meanwhile. A PATCH passes ``stored``; a create has no row, so it does not.
     """
-    if days is not None and days > window.max_days:
+    if window_over_max(days, window) and days != stored:
         message = f"booking_window_days may be at most {window.max_days}"
         raise ValidationError(message, field_errors=(("/booking_window_days", message),))
 

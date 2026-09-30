@@ -18,6 +18,7 @@ from app.api.deps.core import (
     SessionDep,
     claim_idempotency_key,
     refuse_window_over_max,
+    window_over_max,
 )
 from app.api.schemas.availability import (
     AvailabilityRulePatch,
@@ -239,7 +240,11 @@ async def updated_own_session_type(
     """`exclude_unset` is what makes this a PATCH: a field the client did not send
     is absent, not null. Without it every omitted field is written as its default
     and a one-field edit blanks the rest."""
-    refuse_window_over_max(payload.booking_window_days, window)
+    stored = None
+    if window_over_max(payload.booking_window_days, window):
+        own = await get_own_session_type(session, user["id"], session_type_id, window=window)
+        stored = own["booking_window_days"] if own else None
+    refuse_window_over_max(payload.booking_window_days, window, stored=stored)
     changed = await update_session_type(
         session, user["id"], session_type_id, payload.model_dump(exclude_unset=True)
     )

@@ -410,7 +410,8 @@ class MentorProfileWrite(Normalised):
         le=BOOKING_WINDOW_CEILING,
         description=(
             "Days ahead your offerings can be booked unless one sets its own: 1 to "
-            "`max_booking_window_days` (above it is a 422); null is the platform default."
+            "`max_booking_window_days` (above it is a 422, except that a PATCH resending "
+            "the value already stored is accepted); null is the platform default."
         ),
     )
     break_after_minutes: int | None = Field(
