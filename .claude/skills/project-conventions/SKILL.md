@@ -492,6 +492,7 @@ skip into a failure.
 | `docs/bubble-data-model.md` | Legacy Bubble shape, fields, and row counts | repo root |
 | `docs/edufurther-migration/` | The **target** schema, field mapping and runbook | repo root — **received, never edited here** (ADR 0007) |
 | `README.md` | Human-facing setup and layout | repo root |
+| `AGENTS.md` | Codex PR review rules (`## Code Review Rules`) — a **restatement** of this file for a reviewer that does not load it; this file wins | repo root |
 
 **Canonical copy rule.** Where a doc is duplicated, **name the one that wins** and
 edit only that. Duplicated facts drift, and the copy you forget becomes wrong.
@@ -592,7 +593,7 @@ State a gate's blind spots next to its coverage, every time.
   fires on every update, so any statement that touches a migrated row rewrites
   it to the import clock — silently, with nothing to restore it from. The ETL
   and the provisioning CLI both hold the trigger off via
-  `infra/etl/loader.timestamps_from_source`; **nothing makes the next writer do
+  `infra/db/triggers.timestamps_from_source`; **nothing makes the next writer do
   the same.** It is caught only by a per-caller test asserting a known past
   timestamp survives, and only where somebody thought to write one.
 - **Bubble field completeness cannot be fully automated** — the authority for
