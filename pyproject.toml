@@ -94,7 +94,7 @@ dev = [
 # Floors for transitive dependencies with published vulnerabilities, so a
 # re-lock can never resolve back to them. urllib3 arrives through requests and
 # sentry-sdk (runtime); 2.8.0 fixes CVE-2026-97687, -97688 and -97689.
-constraint-dependencies = ["urllib3>=2.8.0"]
+constraint-dependencies = ["urllib3>=2.8.0", "virtualenv>=21.7.13"]
 
 [build-system]
 requires = ["hatchling"]
