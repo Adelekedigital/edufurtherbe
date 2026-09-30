@@ -64,6 +64,10 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "`mentee_completed_sessions` counts sessions the caller **received** as "
         "a mentee with status `completed` — never null, and not the mentor "
         "card's `completed_sessions`, which counts sessions given.\n\n"
+        "`mentor_pending_bookings` counts requests still waiting on the caller's "
+        "answer as a mentor — `pending_mentor_approval` with the answer deadline "
+        "not yet passed — for the sidebar's Bookings badge. `null` when the caller "
+        "has no mentor profile. Computed live on each request.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -102,4 +106,5 @@ async def read_me(
         # from somebody who can book.
         credits=(CreditsRead.model_validate(attributes["credits"]) if goal is not None else None),
         mentee_completed_sessions=attributes["mentee_completed_sessions"],
+        mentor_pending_bookings=attributes["mentor_pending_bookings"],
     )

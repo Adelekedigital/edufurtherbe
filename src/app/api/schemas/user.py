@@ -130,3 +130,9 @@ class UserRead(NormalisedEmail):
     #: card's `completed_sessions`, which counts sessions a mentor *gave*; a
     #: dual-role user has both and they are different numbers.
     mentee_completed_sessions: int = 0
+
+    #: Requests still waiting on the caller's answer **as a mentor** — the
+    #: sidebar's Bookings badge. `null` when the caller has no mentor profile.
+    #: A request past its deadline is not counted, since it can no longer be
+    #: answered (`pending_requests.awaiting_mentor`).
+    mentor_pending_bookings: int | None = None

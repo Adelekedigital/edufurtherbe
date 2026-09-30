@@ -37,6 +37,7 @@ from app.infra.db.models.sessions import (
 )
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
+from app.infra.db.pending_requests import lapsed_request
 from app.infra.db.session_writer.meetings import release_meeting
 
 #: What a mentor reads beside this block in their own availability.
@@ -261,11 +262,7 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime, calendar: 
         (
             await session.execute(
                 update(Session)
-                .where(
-                    Session.status == SessionStatus.PENDING_MENTOR_APPROVAL,
-                    Session.respond_by.is_not(None),
-                    Session.respond_by <= now,
-                )
+                .where(*lapsed_request(now))
                 .values(status=SessionStatus.EXPIRED)
                 .returning(Session.id, Session.mentor_id, Session.mentee_id)
             )

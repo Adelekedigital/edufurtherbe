@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Sequence
 from typing import Annotated, Any
 from uuid import UUID
@@ -52,6 +53,7 @@ from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
 from app.infra.db.onboarding_store import get_onboarding
 from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
+from app.infra.db.pending_requests import mentor_pending_bookings
 from app.infra.db.profile_store import (
     get_goal,
     get_mentor_profile,
@@ -174,11 +176,18 @@ async def own_attributes(
     target to check.
     """
     user_id = user["id"]
+    mentor_profile = await get_mentor_profile(session, user_id)
     return {
         "education": await list_education(session, user_id),
         "goal": await get_goal(session, user_id),
         "awards": await list_awards(session, user_id),
-        "mentor_profile": await get_mentor_profile(session, user_id),
+        "mentor_profile": mentor_profile,
+        # Only for a mentor: `null` means "not a mentor", `0` "nothing waiting".
+        "mentor_pending_bookings": (
+            await mentor_pending_bookings(session, user_id, dt.datetime.now(dt.UTC))
+            if mentor_profile is not None
+            else None
+        ),
         # Fetched unconditionally and rendered conditionally. The predicate is
         # "has a mentee goal", which the `goal` fetch above already answers, so
         # branching here would mean ordering these two against each other for
