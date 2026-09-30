@@ -25,10 +25,12 @@ from tests.integration.test_booking_window_break import (
     mentor_with_hours,
     offering,
 )
+from tests.integration.test_mentor_next_available import FakeCalendar, card
 
 from app.core.config import Settings
 from app.core.errors import ValidationError
 from app.domain.availability import BookingWindow
+from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.session_writer import book_session
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import SupabaseStorage
@@ -391,3 +393,95 @@ async def test_a_new_mentor_profile_over_the_max_is_refused(
 
     assert response.status_code == 422, response.text
     assert response.json()["errors"][0]["pointer"] == "/booking_window_days"
+
+
+# --------------------------------------------------------------------------
+# Next-available honours the window (Codex re-review of #309)
+# --------------------------------------------------------------------------
+
+
+async def stored_next(engine: AsyncEngine, mentor: object) -> dt.datetime | None:
+    async with engine.connect() as conn:
+        return (
+            await conn.execute(
+                text(
+                    "SELECT next_available_at FROM mentor_next_availability "
+                    "WHERE mentor_user_id = :m"
+                ),
+                {"m": mentor},
+            )
+        ).scalar_one_or_none()
+
+
+async def test_the_refresh_projects_through_the_windows_last_partial_day(
+    db_engine: AsyncEngine,
+) -> None:
+    """A two-day window from Monday 15:00 ends at Wednesday 15:00, so Wednesday
+    09:00 is bookable — the projection must reach into Wednesday to find it."""
+    mentor = await mentor_with_hours(db_engine, "partial-day")
+    session_type = await offering(db_engine, mentor, "Two days")
+    async with db_engine.begin() as conn:
+        # 26 hours' notice: Tuesday's last slots are too soon, Wednesday's first is not.
+        await conn.execute(
+            text(
+                "UPDATE session_type_booking_configs SET min_notice_minutes = 1560 "
+                "WHERE session_type_id = :t"
+            ),
+            {"t": session_type},
+        )
+    now = NOW + dt.timedelta(hours=15)
+
+    async with AsyncSession(db_engine) as session:
+        await refresh_next_available(
+            session,
+            now=now,
+            max_age=dt.timedelta(minutes=5),
+            reader=FakeCalendar(),
+            window=TWO_DAYS,
+        )
+        slots = await list_slots(
+            session,
+            mentor,
+            session_type,
+            start=now.date(),
+            end=now.date() + dt.timedelta(days=4),
+            now=now,
+            window=TWO_DAYS,
+        )
+
+    assert await stored_next(db_engine, mentor) == at(2, 9)
+    assert slots is not None
+    assert at(2, 14) in [slot.start for slot in slots]
+    assert all(slot.start < now + dt.timedelta(days=2) for slot in slots)
+
+
+async def test_a_cached_slot_beyond_a_lowered_window_is_not_advertised(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """The cache was vouched for under the old maximum; `/slots` and booking
+    refuse that time under the new one, so the card and profile must not offer it."""
+    mentor = await mentor_with_hours(db_engine, "cached-far")
+    await offering(db_engine, mentor, "Any")
+    async with AsyncSession(db_engine) as session:
+        await refresh_next_available(
+            session, max_age=dt.timedelta(minutes=5), reader=FakeCalendar(), window=PLATFORM_WINDOW
+        )
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE mentor_next_availability SET "
+                "next_available_at = now() + interval '40 days', "
+                "bookable_until = now() + interval '39 days' WHERE mentor_user_id = :m"
+            ),
+            {"m": mentor},
+        )
+
+    wide = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
+    async with fortnight_client(db_engine, api_storage) as client:
+        profile = (await client.get(f"/api/v1/mentors/{mentor}")).json()
+        listed = await card(client, mentor)
+
+    assert wide["next_available_state"] == "open"
+    for shown in (profile, listed):
+        assert shown["next_available_state"] != "open"
+        assert shown["next_available_at"] is None

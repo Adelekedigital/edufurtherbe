@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -71,7 +72,7 @@ from app.infra.db.public_visibility import bookable_mentors, taking_bookings
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import FreeBusyReader, list_slots, mentor_today
 
-__all__ = ["next_available_state", "refresh_next_available"]
+__all__ = ["next_available_state", "refresh_next_available", "within_window"]
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,34 @@ def next_available_state() -> Any:
         (MentorNextAvailability.next_available_at.is_(None), NONE),
         else_=REFRESHING,
     )
+
+
+def within_window(
+    row: Mapping[str, Any], window: BookingWindow, now: dt.datetime
+) -> dict[str, Any]:
+    """The row, with an `open` time past the current window read as `refreshing`.
+
+    **The cache was vouched for under the window it was computed with.** Lower
+    the maximum and a stored day-40 slot stays `open` until the age-based
+    refresh, while `/slots` and booking already refuse it — so every read of a
+    card or profile passes through here. `refreshing` is the state the SQL
+    already gives a time it no longer vouches for; nothing new is invented.
+
+    Only the maximum can move without a change-log entry (an offering's or a
+    mentor's own window logs one), so the maximum is what is checked. Raising it
+    can leave a cached `none` until the next refresh — at most
+    `NEXT_AVAILABLE_MAX_AGE_MINUTES` — which a config change's restart and the
+    next run correct (#221).
+    """
+    out = dict(row)
+    at = out.get("next_available_at")
+    if (
+        out.get("next_available_state") == OPEN
+        and at is not None
+        and at > now + dt.timedelta(days=window.max_days)
+    ):
+        out["next_available_state"] = REFRESHING
+    return out
 
 
 def public_next_available_state() -> Any:
