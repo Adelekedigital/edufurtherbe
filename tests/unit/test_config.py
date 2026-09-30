@@ -105,6 +105,8 @@ def test_the_unprefixed_keys_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:pw@localhost:5432/db")
     monkeypatch.setenv("CORS_ORIGINS", "https://app.example")
     monkeypatch.setenv("REQUIRE_INTAKE_ANSWERS", "true")
+    monkeypatch.setenv("MAX_BOOKING_WINDOW_DAYS", "90")
+    monkeypatch.setenv("DEFAULT_BOOKING_WINDOW_DAYS", "30")
 
     settings = Settings(_env_file=None)
 
@@ -112,6 +114,12 @@ def test_the_unprefixed_keys_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.database_url is not None
     assert settings.cors_origins == ["https://app.example"]
     assert settings.require_intake_answers is True
+    assert (settings.max_booking_window_days, settings.default_booking_window_days) == (90, 30)
+
+
+def test_a_default_window_above_the_max_is_refused() -> None:
+    with pytest.raises(ValueError, match="DEFAULT_BOOKING_WINDOW_DAYS"):
+        Settings(_env_file=None, max_booking_window_days=14, default_booking_window_days=30)
 
 
 def test_database_url_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:

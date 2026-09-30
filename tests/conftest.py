@@ -32,6 +32,7 @@ from starlette.types import ASGIApp
 
 from app.api.limits import BodyLimitMiddleware
 from app.core.config import Settings, get_settings
+from app.domain.availability import booking_window
 from app.domain.credits import CreditLadder, credit_ladder
 from app.infra.auth.admin import SupabaseAdminClient
 from app.infra.auth.dev_tokens import mint_dev_token
@@ -56,6 +57,12 @@ _SKIP_REASON = (
     f"No database. Start one with `docker compose up -d` and set "
     f"{DB_URL_ENV}=postgresql://edufurther:edufurther@localhost:55432/edufurther"
 )
+
+
+#: The booking window an unconfigured deployment runs with — read from the
+#: settings defaults, never retyped, so a test calling a store directly uses
+#: exactly what the app would (Round 5).
+PLATFORM_WINDOW = booking_window(Settings(_env_file=None))
 
 
 @pytest.fixture

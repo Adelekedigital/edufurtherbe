@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.api.deps import CurrentUserDep, OwnAttributesDep
+from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep
 from app.api.schemas.common import AvatarFocusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import CreditsRead, UserProfileRead, UserRead
@@ -69,7 +69,9 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=ME_RESPONSES,
 )
-async def read_me(user: CurrentUserDep, attributes: OwnAttributesDep) -> UserRead:
+async def read_me(
+    user: CurrentUserDep, attributes: OwnAttributesDep, window: BookingWindowDep
+) -> UserRead:
     profile = (
         UserProfileRead(
             **user,
@@ -90,7 +92,9 @@ async def read_me(user: CurrentUserDep, attributes: OwnAttributesDep) -> UserRea
         goal=(GoalRead.from_row(goal) if goal is not None else None),
         awards=[AwardRead.from_row(row) for row in attributes["awards"]],
         mentor_profile=(
-            MentorProfileRead.from_row(mentor_profile) if mentor_profile is not None else None
+            MentorProfileRead.from_row(mentor_profile, window)
+            if mentor_profile is not None
+            else None
         ),
         # The card belongs to a mentee. The predicate is *having a mentee goal*,
         # not *not being a mentor* — authorization here is profile existence, so

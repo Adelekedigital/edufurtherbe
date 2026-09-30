@@ -27,10 +27,12 @@ cannot replace a newer one, and cannot clear a change it never saw.
 WHY THE SLOTS ARE `list_slots`
 ==============================
 The card's time is the first instant `list_slots` offers for any of the
-mentor's live offerings, from `mentor_today()` over `MAX_PROJECTION_DAYS` —
-exactly the range `/slots` answers. `bookable_until` is that slot's start less
-the offering's notice: past it `/slots` no longer offers the slot, so the card
-stops showing it rather than promise a time booking refuses.
+mentor's live offerings, from `mentor_today()` through the configured maximum
+window's last day (`BookingWindow.max_days`, #221) — the furthest any slot can be
+offered, with `list_slots`' instant cutoff dropping what falls past it.
+`bookable_until` is that slot's start less the offering's notice: past it
+`/slots` no longer offers the slot, so the card stops showing it rather than
+promise a time booking refuses.
 
 **The job's calendar reader does not fail open.** `/slots` answers one request
 from declared hours when Google is down; stored, that answer would be shown to
@@ -62,10 +64,13 @@ from uuid import UUID
 from sqlalchemy import case, delete, exists, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.domain.availability import MAX_PROJECTION_DAYS, UtcInterval
+from app.domain.availability import BookingWindow, UtcInterval
+from app.infra.db.booking_rules import effective_window_days
 from app.infra.db.models.availability import MentorAvailabilityChange, MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
+from app.infra.db.models.sessions import SessionTypeBookingConfig
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import bookable_mentors, taking_bookings
 from app.infra.db.session_type_store import list_session_types
@@ -94,7 +99,22 @@ def _unchanged() -> Any:
     return MentorNextAvailability.id.is_not(None) & ~changed
 
 
-def next_available_state() -> Any:
+def _cached_window_days(window: BookingWindow) -> Any:
+    """The cached offering's effective window **now** — `effective_window_days`
+    over its own config and its mentor's default, under the current settings."""
+    config = aliased(SessionTypeBookingConfig)
+    return (
+        select(effective_window_days(window, config, MentorProfile))
+        .where(
+            config.session_type_id == MentorNextAvailability.next_available_session_type_id,
+            MentorProfile.user_id == MentorNextAvailability.mentor_user_id,
+        )
+        .correlate(MentorNextAvailability)
+        .scalar_subquery()
+    )
+
+
+def next_available_state(window: BookingWindow) -> Any:
     """`open`, `none` or `refreshing` — the three things a null time can hide.
 
     **One `CASE`, so the change log is probed once per card.** The time itself
@@ -103,16 +123,27 @@ def next_available_state() -> Any:
 
     A slot whose booking window has closed reads as `refreshing`, not `none`:
     something *was* free, and the next run will say what is free now.
+
+    **So does a cached time past the cached offering's window as it is now**
+    (#221). The cache was vouched for under the settings it was computed with;
+    lower the maximum or the platform default and `/slots` and booking refuse
+    a time the card would still offer. Compared through `effective_window_days`,
+    the one resolution, so an offering with its own longer window keeps its time.
     """
     return case(
         (~_unchanged(), REFRESHING),
+        (
+            MentorNextAvailability.next_available_at
+            > func.now() + func.make_interval(0, 0, 0, _cached_window_days(window)),
+            REFRESHING,
+        ),
         (MentorNextAvailability.bookable_until > func.now(), OPEN),
         (MentorNextAvailability.next_available_at.is_(None), NONE),
         else_=REFRESHING,
     )
 
 
-def public_next_available_state() -> Any:
+def public_next_available_state(window: BookingWindow) -> Any:
     """`next_available_state()`, but `none` for anyone a stranger cannot book.
 
     **The job refreshes `bookable_mentors()` and nobody else**, so a visible
@@ -123,7 +154,7 @@ def public_next_available_state() -> Any:
     and the job's `bookable_mentors()` filters on, so all three agree.
     """
     return case(
-        (taking_bookings(), next_available_state()),
+        (taking_bookings(), next_available_state(window)),
         else_=literal(NONE),
     )
 
@@ -149,19 +180,35 @@ class _OneReadPerMentor:
 
 
 async def _first_free(
-    session: AsyncSession, mentor: UUID, *, now: dt.datetime, reader: FreeBusyReader
+    session: AsyncSession,
+    mentor: UUID,
+    *,
+    now: dt.datetime,
+    reader: FreeBusyReader,
+    window: BookingWindow,
 ) -> tuple[dt.datetime | None, dt.datetime | None, UUID | None]:
     """The earliest instant any offering could be booked, until when, and which
     offering it is — the one whose slot is kept, so the three always agree."""
-    offerings = await list_session_types(session, mentor) or []
+    offerings = await list_session_types(session, mentor, window=window) or []
     zone = (await session.execute(select(User.timezone).where(User.id == mentor))).scalar_one()
     start = mentor_today(zone, now)
-    end = start + dt.timedelta(days=MAX_PROJECTION_DAYS)
+    # Through the window's last, partial day: the cutoff is the instant
+    # `now + max_days`, which usually falls mid-day, so ending at that date's
+    # start would skip slots that are legally bookable. `list_slots` drops the
+    # ones past the instant itself.
+    end = start + dt.timedelta(days=window.projection_days)
     once = _OneReadPerMentor(reader)
     best: tuple[dt.datetime, dt.datetime, UUID] | None = None
     for offering in offerings:
         slots = await list_slots(
-            session, mentor, offering["id"], start=start, end=end, now=now, external_busy=once
+            session,
+            mentor,
+            offering["id"],
+            start=start,
+            end=end,
+            now=now,
+            window=window,
+            external_busy=once,
         )
         if not slots:
             continue
@@ -218,6 +265,7 @@ async def refresh_next_available(
     *,
     max_age: dt.timedelta,
     reader: FreeBusyReader,
+    window: BookingWindow,
     now: dt.datetime | None = None,
     dry_run: bool = False,
 ) -> dict[str, int]:
@@ -265,7 +313,7 @@ async def refresh_next_available(
                 ).scalars()
             )
             first, until, session_type = await _first_free(
-                session, mentor, now=moment, reader=reader
+                session, mentor, now=moment, reader=reader, window=window
             )
             if dry_run:
                 written = True

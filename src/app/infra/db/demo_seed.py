@@ -25,6 +25,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import BOOKING_WINDOW_CEILING
 from app.domain.enums import ApplicationStage
 from app.domain.sessions import first_stage
 from app.infra.db.stages import write_session_type_stages
@@ -192,14 +193,20 @@ async def create_demo_mentor(
             {"u": user, "d": day, "z": mentor.timezone},
         )
     if not mentor.open:
-        # Past the 56-day booking horizon, so nothing is free inside it.
+        # Past the widest window this service can be configured with, so
+        # nothing is free inside it whatever MAX_BOOKING_WINDOW_DAYS is (#221).
         today = now.date()
         await session.execute(
             text(
                 "INSERT INTO availability_exceptions (mentor_user_id, type, date_range, timezone) "
                 "VALUES (:u, 'block', daterange(:d, :e), :z)"
             ),
-            {"u": user, "d": today, "e": today + dt.timedelta(days=70), "z": mentor.timezone},
+            {
+                "u": user,
+                "d": today,
+                "e": today + dt.timedelta(days=BOOKING_WINDOW_CEILING + 1),
+                "z": mentor.timezone,
+            },
         )
 
     await _history(session, user, session_type, mentor, now=now)

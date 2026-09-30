@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import make_bookable_mentor
 from tests.integration.test_api_mentors import give_offering
 
-from conftest import api_token, bearer
+from conftest import PLATFORM_WINDOW, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -238,6 +238,7 @@ async def test_the_shuffle_changes_with_the_day(db_engine: AsyncEngine) -> None:
         for day in range(4):
             rows, _ = await search_mentors(
                 session,
+                window=PLATFORM_WINDOW,
                 limit=50,
                 viewer=viewer,
                 goal_day=dt.date(2030, 1, 1) + dt.timedelta(days=day),

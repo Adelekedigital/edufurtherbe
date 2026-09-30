@@ -314,6 +314,8 @@ async def test_the_response_carries_nothing_it_should_not(
         "questions",
         # Which one the mentor puts first (#217).
         "is_featured",
+        # How far ahead it can be booked, resolved and clamped (Round 5).
+        "booking_window_days",
     }
     assert offering["service_offering"] == {
         "id": await offering_id(db_engine, "document-preparation"),

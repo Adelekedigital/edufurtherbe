@@ -45,6 +45,7 @@ from app.domain.attendance import (
     join_window,
     within_join_window,
 )
+from app.domain.availability import BookingWindow
 from app.domain.enums import (
     ActorType,
     AttendanceStatus,
@@ -232,6 +233,7 @@ async def book_session(
     callback_url: str | None = None,
     external_busy: Any = None,
     require_answers: bool,
+    window: BookingWindow,
 ) -> UUID:
     """Book ``starts_at`` on an offering, and return the new session's id.
 
@@ -315,6 +317,7 @@ async def book_session(
         start=day - dt.timedelta(days=SPAN_DAYS),
         end=day + dt.timedelta(days=SPAN_DAYS + 1),
         now=now,
+        window=window,
         external_busy=external_busy,
     )
     if not slots or not any(slot.start == starts_at for slot in slots):

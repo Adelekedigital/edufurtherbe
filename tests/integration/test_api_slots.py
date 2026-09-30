@@ -26,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.infra.db.slot_store import list_slots
+from conftest import PLATFORM_WINDOW
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -452,7 +453,8 @@ async def test_a_mentor_with_no_windows_is_bookable_but_has_nothing_free(
     [
         ("inverted", FIRST_DAY + dt.timedelta(days=3), FIRST_DAY),
         ("equal", FIRST_DAY, FIRST_DAY),
-        ("too-wide", FIRST_DAY, FIRST_DAY + dt.timedelta(days=57)),
+        # The platform window's 56 days plus its partial last day (#221).
+        ("too-wide", FIRST_DAY, FIRST_DAY + dt.timedelta(days=58)),
     ],
 )
 async def test_an_unusable_range_is_a_client_error(
@@ -472,7 +474,7 @@ async def test_the_widest_allowed_range_is_accepted(
     mentor, session_type = await make_mentor(db_engine, "range-max")
 
     response = await api_client.get(
-        slots_url(mentor, session_type, start=FIRST_DAY, end=FIRST_DAY + dt.timedelta(days=56))
+        slots_url(mentor, session_type, start=FIRST_DAY, end=FIRST_DAY + dt.timedelta(days=57))
     )
 
     assert response.status_code == 200
@@ -733,7 +735,15 @@ async def test_the_default_start_resolves_in_the_mentors_zone_at_a_fixed_clock(
     # 2026-08-20 02:00Z is 2026-08-19 22:00 in New York.
     now = dt.datetime(2026, 8, 20, 2, 0, tzinfo=dt.UTC)
     async with AsyncSession(db_engine) as session:
-        slots = await list_slots(session, mentor, session_type, start=None, end=None, now=now)
+        slots = await list_slots(
+            session,
+            mentor,
+            session_type,
+            start=None,
+            end=None,
+            now=now,
+            window=PLATFORM_WINDOW,
+        )
 
     assert slots is not None
     first = min(slot.start for slot in slots)

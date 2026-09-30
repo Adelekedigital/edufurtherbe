@@ -25,14 +25,16 @@ from app.api.schemas.common import (
     Normalised,
     XWrite,
     YouTubeWrite,
+    publish_window_minimum,
 )
+from app.core.config import BOOKING_WINDOW_CEILING, MIN_BOOKING_WINDOW_DAYS
 from app.domain.availability import (
-    BOOKING_WINDOW_DAYS,
     BREAK_AFTER_MINUTES,
     DEFAULT_DURATION_MINUTES,
     DEFAULT_MIN_NOTICE_MINUTES,
     MIN_NOTICE_MINUTES,
     SESSION_DURATION_MINUTES,
+    BookingWindow,
 )
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
 from app.domain.text import has_letter, hidden_characters
@@ -237,7 +239,7 @@ class MentorProfileRead(BaseModel):
     # validates a bool, and the field never stops being present.
     requires_booking_confirmation: bool
     #: Your defaults for every offering that does not set its own (#204); null
-    #: means the platform's: bookable up to 56 days ahead, no break.
+    #: means the platform's: `default_booking_window_days` ahead, no break.
     booking_window_days: int | None = None
     break_after_minutes: int | None = None
     #: Your default length and notice for every offering that does not set its
@@ -267,9 +269,17 @@ class MentorProfileRead(BaseModel):
     primary_study_program: str | None = None
     primary_study_country: CountryRef | None = None
     offerings: list[LookupRef] = []
+    #: The platform's window, so the "Bookable up to" options come from it
+    #: rather than a hard-coded list (Round 5). Configuration, not the mentor's.
+    max_booking_window_days: int = Field(
+        description="The most days ahead any offering may be booked on this platform."
+    )
+    default_booking_window_days: int = Field(
+        description="What an offering uses when neither it nor you set a window."
+    )
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> MentorProfileRead:
+    def from_row(cls, row: dict[str, Any], window: BookingWindow) -> MentorProfileRead:
         country = None
         if row.get("primary_study_country_code") is not None:
             country = CountryRef(
@@ -293,6 +303,8 @@ class MentorProfileRead(BaseModel):
                 LookupRef(id=o["id"], code=o["slug"], display_name=o["display_name"])
                 for o in row.get("offerings", [])
             ],
+            max_booking_window_days=window.max_days,
+            default_booking_window_days=window.default_days,
         )
 
 
@@ -394,7 +406,16 @@ class MentorProfileWrite(Normalised):
     #: The defaults every offering inherits unless it sets its own (#204); null
     #: means the platform's — the full horizon, and no break.
     booking_window_days: int | None = Field(
-        default=None, ge=BOOKING_WINDOW_DAYS[0], le=BOOKING_WINDOW_DAYS[1]
+        default=None,
+        ge=1,
+        le=BOOKING_WINDOW_CEILING,
+        json_schema_extra=publish_window_minimum,
+        description=(
+            "Days ahead your offerings can be booked unless one sets its own: "
+            f"{MIN_BOOKING_WINDOW_DAYS} to "
+            "`max_booking_window_days` (outside that range is a 422, except that a PATCH "
+            "resending the value already stored is accepted); null is the platform default."
+        ),
     )
     break_after_minutes: int | None = Field(
         default=None, ge=BREAK_AFTER_MINUTES[0], le=BREAK_AFTER_MINUTES[1]

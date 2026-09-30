@@ -40,45 +40,76 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.core.config import NOTICE_CEILING_MINUTES, NOTICE_FLOOR_MINUTES, Settings
 from app.domain.enums import AvailabilityExceptionType
 
 __all__ = [
-    "BOOKING_WINDOW_DAYS",
     "BREAK_AFTER_MINUTES",
     "DEFAULT_BREAK_MINUTES",
     "DEFAULT_DURATION_MINUTES",
     "DEFAULT_MIN_NOTICE_MINUTES",
     "DEFAULT_PROJECTION_DAYS",
-    "MAX_PROJECTION_DAYS",
     "MIN_NOTICE_MINUTES",
     "SESSION_DURATION_MINUTES",
     "BlockedWindow",
+    "BookingWindow",
     "DatedException",
     "UnknownTimezoneError",
     "UtcInterval",
     "WeeklyWindow",
     "bookable",
+    "booking_window",
     "normalise_timezone",
     "project",
     "unavailable_windows",
 ]
 
 
-#: The widest span one projection may cover. Every day in the range is resolved,
-#: subtracted and sliced on demand, and the endpoint that does it is public — so
-#: without a bound a single request can ask the server to compute a decade.
-#: Measured at this bound: 1,792 slots and 4ms for the worst realistic shape.
-MAX_PROJECTION_DAYS = 56
-
 #: How far ahead a caller who does not say wants to look. A week is the booking
 #: horizon most people actually use, and it keeps the default answer small; a
 #: client planning further out asks for further out.
 DEFAULT_PROJECTION_DAYS = 7
 
-#: How far ahead a session type may be booked, in days (#204): what a mentor or
-#: an offering may set. The ceiling is the projection bound — nothing further is
-#: ever computed — and it is also the platform default when neither sets one.
-BOOKING_WINDOW_DAYS = (1, MAX_PROJECTION_DAYS)
+
+@dataclass(frozen=True, slots=True)
+class BookingWindow:
+    """How far ahead offerings may be booked, as this deployment configures it.
+
+    ``max_days`` is what any offering or mentor may set, and the widest span one
+    `/slots` range may cover — every day in a range is resolved on demand by a
+    public endpoint, so the bound is also the guard against a request asking for
+    a decade (measured at 56: 1,792 slots, 4ms). ``default_days`` is what an
+    offering gets when neither it nor its mentor sets one. A stored window above
+    ``max_days`` is clamped on read (`booking_rules.effective_window_days`).
+    """
+
+    max_days: int
+    default_days: int
+
+    @property
+    def projection_days(self) -> int:
+        """Calendar days to project to see every slot the window can offer.
+
+        The cutoff is the instant `now + max_days`, which usually falls mid-day,
+        so the window touches `max_days + 1` calendar dates. Projecting one day
+        fewer misses bookable slots on the last, partial day; the instant cutoff
+        then drops whatever on that day starts too late. One rule for the
+        refresh, the implicit `/slots` range and the cap on an explicit one.
+        """
+        return self.max_days + 1
+
+
+def booking_window(settings: Settings) -> BookingWindow:
+    """The configured window, from settings the caller already holds.
+
+    Required rather than fetched, for the reason `credit_ladder` gives: an app
+    built with explicit settings must run on them, not on the process's.
+    """
+    return BookingWindow(
+        max_days=settings.max_booking_window_days,
+        default_days=settings.default_booking_window_days,
+    )
+
 
 #: The break after each session, in minutes (#204): what may be set. The design
 #: offers 0/10/15/30; two hours leaves room without letting a typo hide a day.
@@ -101,7 +132,7 @@ DEFAULT_DURATION_MINUTES = 60
 #: on 2026-09-29 and declined: #121's approval deadline is six hours before the
 #: start, so at 6 hours' notice a request would expire the moment it was made.
 #: The columns' `CHECK`s are sanity only; this is the product rule.
-MIN_NOTICE_MINUTES = (1440, 4320)
+MIN_NOTICE_MINUTES = (NOTICE_FLOOR_MINUTES, NOTICE_CEILING_MINUTES)
 
 #: The notice when neither the offering nor its mentor says: the floor (#104).
 DEFAULT_MIN_NOTICE_MINUTES = MIN_NOTICE_MINUTES[0]

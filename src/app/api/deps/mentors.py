@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from fastapi import Depends, Query
 from pydantic import StringConstraints
 
-from app.api.deps.core import OptionalViewerDep, SessionDep
+from app.api.deps.core import BookingWindowDep, OptionalViewerDep, SessionDep
 from app.api.deps.session_types import _with_forms
 from app.api.schemas.common import (
     MAX_PAGE_SIZE,
@@ -63,7 +63,7 @@ from app.infra.db.session_type_store import (
 
 
 async def public_mentor(
-    handle: str, session: SessionDep, viewer: OptionalViewerDep
+    handle: str, session: SessionDep, viewer: OptionalViewerDep, window: BookingWindowDep
 ) -> dict[str, Any]:
     """One mentor, as a stranger sees them, or a 404 that says nothing about why.
 
@@ -83,7 +83,7 @@ async def public_mentor(
     widened: `session_types` is what a stranger can book, so a hidden profile
     shows none, and the mentor's own list is `/me/session-types`.
     """
-    row = await get_public_mentor(session, handle, viewer)
+    row = await get_public_mentor(session, handle, viewer, window=window)
     if row is None:
         raise NotFoundError("no such mentor")
 
@@ -97,7 +97,9 @@ async def public_mentor(
     return {
         "row": row,
         "offerings": (await offerings_for(session, [user_id])).get(user_id, []),
-        "session_types": await _with_forms(session, await list_session_types(session, user_id)),
+        "session_types": await _with_forms(
+            session, await list_session_types(session, user_id, window=window)
+        ),
         "education": await list_education(session, user_id),
         "scholarships": await list_awards(session, user_id),
         "languages": await list_languages(session, user_id),
@@ -119,6 +121,7 @@ MAX_SLUG_LENGTH = 60
 async def mentor_page(
     session: SessionDep,
     viewer: OptionalViewerDep,
+    window: BookingWindowDep,
     q: Annotated[
         str | None,
         Query(description="Search mentors by name, school, programme or country."),
@@ -203,6 +206,7 @@ async def mentor_page(
         offset = decode_goal_cursor(cursor) if cursor is not None else 0
         rows, has_more = await search_mentors(
             session,
+            window=window,
             limit=clamp_limit(limit),
             offset=offset,
             offerings=slugs,
@@ -218,6 +222,7 @@ async def mentor_page(
         offset = decode_offset_cursor(cursor)
         rows, has_more = await search_mentors(
             session,
+            window=window,
             limit=clamp_limit(limit),
             q=term,
             offset=offset,
@@ -233,6 +238,7 @@ async def mentor_page(
 
     rows, has_more = await search_mentors(
         session,
+        window=window,
         limit=clamp_limit(limit),
         after=decode_browse_cursor(cursor),
         offerings=slugs,
@@ -253,7 +259,7 @@ MentorPageDep = Annotated[
 PublicMentorDep = Annotated[dict[str, Any], Depends(public_mentor)]
 
 
-async def featured_mentor(session: SessionDep) -> dict[str, Any] | None:
+async def featured_mentor(session: SessionDep, window: BookingWindowDep) -> dict[str, Any] | None:
     """This week's featured mentor as a card, or `None` when nobody is.
 
     `current_featured` only returns someone still taking bookings — the pick and
@@ -262,13 +268,17 @@ async def featured_mentor(session: SessionDep) -> dict[str, Any] | None:
     being visible between the pick and the read.
     """
     mentor = await current_featured(session, now=dt.datetime.now(dt.UTC))
-    return None if mentor is None else await mentor_card(session, mentor)
+    if mentor is None:
+        return None
+    return await mentor_card(session, mentor, window=window)
 
 
 FeaturedMentorDep = Annotated[dict[str, Any] | None, Depends(featured_mentor)]
 
 
-async def similar_to_mentor(handle: str, session: SessionDep) -> list[dict[str, Any]]:
+async def similar_to_mentor(
+    handle: str, session: SessionDep, window: BookingWindowDep
+) -> list[dict[str, Any]]:
     """Up to three bookable mentors like this one — whatever state this one is in.
 
     **Resolved for any existing mentor, live or not** (owner, 2026-09-29,
@@ -286,7 +296,7 @@ async def similar_to_mentor(handle: str, session: SessionDep) -> list[dict[str, 
     mentor = await get_existing_mentor_id(session, handle)
     if mentor is None:
         return []
-    return await similar_mentors(session, mentor)
+    return await similar_mentors(session, mentor, window=window)
 
 
 SimilarMentorsDep = Annotated[list[dict[str, Any]], Depends(similar_to_mentor)]

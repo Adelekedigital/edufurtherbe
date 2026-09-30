@@ -28,7 +28,7 @@ from tests.integration.test_api_me_session_type_writes import URL, as_mentor, bo
 from tests.integration.test_booking_window_break import NOW, at, mentor_with_hours
 
 from app.infra.db.slot_store import list_slots
-from conftest import api_token, bearer
+from conftest import PLATFORM_WINDOW, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -74,6 +74,7 @@ async def starts(engine: AsyncEngine, mentor: UUID, session_type: UUID) -> list[
             start=NOW.date(),
             end=NOW.date() + dt.timedelta(days=7),
             now=NOW,
+            window=PLATFORM_WINDOW,
         )
     assert slots is not None
     return [slot.start for slot in slots]
@@ -307,7 +308,7 @@ async def test_the_availability_trigger_watches_every_mentor_column_slots_read(
         for rule in (
             effective_duration_minutes(),
             effective_min_notice_minutes(),
-            effective_window_days(),
+            effective_window_days(PLATFORM_WINDOW),
             effective_break_minutes(),
         )
         for element in visitors.iterate(rule)

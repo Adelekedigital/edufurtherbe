@@ -31,6 +31,7 @@ from app.infra.db.demo_seed import (
     remove_demo,
 )
 from app.infra.db.next_available_store import refresh_next_available
+from conftest import PLATFORM_WINDOW
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -76,7 +77,10 @@ async def seed(engine: AsyncEngine, *mentors: DemoMentor) -> None:
             await create_demo_mentor(session, mentor, now=NOW)
         await session.commit()
         await refresh_next_available(
-            session, max_age=dt.timedelta(minutes=5), reader=NullFreeBusy()
+            session,
+            max_age=dt.timedelta(minutes=5),
+            reader=NullFreeBusy(),
+            window=PLATFORM_WINDOW,
         )
 
 

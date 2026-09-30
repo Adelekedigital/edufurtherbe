@@ -18,6 +18,7 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
     AwardsDep,
+    BookingWindowDep,
     CreatedAwardDep,
     CreatedEducationDep,
     CreatedMentorProfileDep,
@@ -134,10 +135,10 @@ async def awards(rows: AwardsDep) -> Page[AwardRead]:
     ),
     responses=SCOPED_RESPONSES,
 )
-async def mentor_profile(row: MentorProfileDep) -> MentorProfileRead:
+async def mentor_profile(row: MentorProfileDep, window: BookingWindowDep) -> MentorProfileRead:
     if row is None:
         raise NotFoundError("this user has no mentor profile")
-    return MentorProfileRead.from_row(row)
+    return MentorProfileRead.from_row(row, window)
 
 
 # --------------------------------------------------------------------------

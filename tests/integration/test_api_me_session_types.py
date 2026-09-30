@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import add_session_type, make_public_mentor
 
 from app.infra.db.session_type_store import _own_session_types, list_own_session_types
-from conftest import add_user, api_token, bearer
+from conftest import PLATFORM_WINDOW, add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -319,6 +319,8 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "is_active",
         "requires_booking_confirmation",
         "booking_window_days",
+        # The window it actually uses, resolved and clamped (Round 5).
+        "effective_booking_window_days",
         "break_after_minutes",
         # Whether length and notice are the offering's own or inherited (#216).
         "duration_inherited",
@@ -388,6 +390,8 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         "questions",
         # Which one the mentor puts first (#217); mentees see the order.
         "is_featured",
+        # How far ahead it can be booked, resolved and clamped (Round 5).
+        "booking_window_days",
     }
     assert "is_active" not in offering
     # Resolved length and notice are public; whether they were inherited is not.
@@ -453,7 +457,7 @@ async def test_the_order_comes_from_the_query_and_not_from_the_index(
     async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
         await session.execute(text("SET enable_indexscan = off"))
         await session.execute(text("SET enable_bitmapscan = off"))
-        rows = await list_own_session_types(session, mentor)
+        rows = await list_own_session_types(session, mentor, window=PLATFORM_WINDOW)
 
     assert [row["name"] for row in rows] == [
         "Application review",
@@ -477,7 +481,7 @@ async def test_the_owner_read_can_use_the_mentor_index(db_engine: AsyncEngine) -
     mentor = await make_public_mentor(db_engine, "own-plan")
     await add_session_type(db_engine, mentor, name="Planned")
 
-    statement = _own_session_types(mentor).compile(
+    statement = _own_session_types(mentor, PLATFORM_WINDOW).compile(
         dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
     )
 

@@ -41,6 +41,7 @@ from uuid import UUID
 from sqlalchemy import Select, Text, cast, func, literal, literal_column, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.availability import BookingWindow
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
@@ -290,7 +291,7 @@ def _who(offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
     )
 
 
-def _card(scope: Select[Any]) -> Select[Any]:
+def _card(scope: Select[Any], window: BookingWindow) -> Select[Any]:
     """`scope`'s mentors with the columns a search result renders."""
     qualification = top_qualification(MentorProfile.user_id)
     # **Scalar subqueries, not a lateral.** They run per output row, after the
@@ -321,7 +322,7 @@ def _card(scope: Select[Any]) -> Select[Any]:
             MentorNextAvailability.next_available_session_type_id,
             # Both gated on `taking_bookings()`: a listed mentor nobody can book
             # reads `none`, never a stale or never-refreshed time.
-            public_next_available_state().label("next_available_state"),
+            public_next_available_state(window).label("next_available_state"),
             taking_bookings().label("taking_bookings"),
             # When they became a mentor; backfilled from the legacy platform.
             MentorProfile.created_at.label("joined_at"),
@@ -351,6 +352,7 @@ def _page(
     after: tuple[bool, UUID] | None,
     limit: int,
     offerings: Sequence[str],
+    window: BookingWindow,
     viewer: UUID | None = None,
     offset: int = 0,
 ) -> Select[Any]:
@@ -362,7 +364,7 @@ def _page(
     reach for the visible one when building the next token.
     """
     return (
-        _card(_scope(None, offerings, viewer))
+        _card(_scope(None, offerings, viewer), window)
         .where(
             *(
                 [
@@ -395,7 +397,12 @@ def _scope(term: str | None, offerings: Sequence[str], viewer: UUID | None = Non
 
 
 def _matched(
-    viewer: UUID, day: dt.date, offset: int, limit: int, offerings: Sequence[str]
+    viewer: UUID,
+    day: dt.date,
+    offset: int,
+    limit: int,
+    offerings: Sequence[str],
+    window: BookingWindow,
 ) -> Select[Any]:
     """One page of mentors for a mentee with goals: most goals covered first.
 
@@ -412,7 +419,7 @@ def _matched(
     overlap = goal_overlap_count(MentorProfile.user_id, viewer)
     shuffle = func.md5(literal(f"{viewer}:{day.isoformat()}:").concat(cast(MentorProfile.id, Text)))
     return (
-        _card(_scope(None, offerings, viewer))
+        _card(_scope(None, offerings, viewer), window)
         .order_by(_bookable_first(), overlap.desc(), shuffle, MentorProfile.id.desc())
         .offset(offset)
         .limit(limit + 1)
@@ -420,7 +427,12 @@ def _matched(
 
 
 def _ranked(
-    term: str, offset: int, limit: int, offerings: Sequence[str], viewer: UUID | None = None
+    term: str,
+    offset: int,
+    limit: int,
+    offerings: Sequence[str],
+    window: BookingWindow,
+    viewer: UUID | None = None,
 ) -> Select[Any]:
     """One page of mentors matching `term`, best first.
 
@@ -437,7 +449,7 @@ def _ranked(
     """
     rank = func.ts_rank_cd(_document(), _matches(term))
     return (
-        _card(_scope(term, offerings, viewer))
+        _card(_scope(term, offerings, viewer), window)
         .add_columns(rank.label("rank"))
         .order_by(_bookable_first(), rank.desc(), MentorProfile.id.desc())
         .offset(offset)
@@ -455,6 +467,7 @@ async def search_mentors(
     offerings: Sequence[str] = (),
     viewer: UUID | None = None,
     goal_day: dt.date | None = None,
+    window: BookingWindow,
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of listed mentors, and whether another follows.
 
@@ -491,11 +504,11 @@ async def search_mentors(
     #
     # `offerings` arrives validated as live slugs; the store only applies them.
     if q is not None:
-        statement = _ranked(q, offset, limit, offerings, viewer)
+        statement = _ranked(q, offset, limit, offerings, window, viewer)
     elif viewer is not None and goal_day is not None:
-        statement = _matched(viewer, goal_day, offset, limit, offerings)
+        statement = _matched(viewer, goal_day, offset, limit, offerings, window)
     else:
-        statement = _page(after, limit, offerings, viewer, offset)
+        statement = _page(after, limit, offerings, window, viewer, offset)
 
     rows = [dict(r) for r in (await session.execute(statement)).mappings()]
     page, has_more = rows[:limit], len(rows) > limit
@@ -529,7 +542,9 @@ async def count_mentors(
     return int((await session.execute(statement)).scalar_one())
 
 
-async def mentor_card(session: AsyncSession, user_id: UUID) -> dict[str, Any] | None:
+async def mentor_card(
+    session: AsyncSession, user_id: UUID, *, window: BookingWindow
+) -> dict[str, Any] | None:
     """One visible mentor as a discovery card, with their bio.
 
     **The same `_card()` over the same `_scope()`** the list reads, so a card
@@ -538,7 +553,7 @@ async def mentor_card(session: AsyncSession, user_id: UUID) -> dict[str, Any] | 
     caller's check: the featured rotation picks only from `bookable_mentors()`.
     """
     statement = (
-        _card(_scope(None, ()))
+        _card(_scope(None, ()), window)
         .add_columns(UserProfile.about_me)
         .where(MentorProfile.user_id == user_id)
     )
@@ -555,7 +570,11 @@ SIMILAR_LIMIT = 3
 
 
 async def similar_mentors(
-    session: AsyncSession, mentor_user_id: UUID, *, limit: int = SIMILAR_LIMIT
+    session: AsyncSession,
+    mentor_user_id: UUID,
+    *,
+    window: BookingWindow,
+    limit: int = SIMILAR_LIMIT,
 ) -> list[dict[str, Any]]:
     """Bookable mentors who give the same kind of help as this one, best first.
 
@@ -586,7 +605,7 @@ async def similar_mentors(
 
     shared = shared_offering_count(MentorProfile.user_id, mine).label("shared_offerings")
     statement = (
-        _card(_scope(None, mine))
+        _card(_scope(None, mine), window)
         .add_columns(shared)
         .where(MentorProfile.user_id != mentor_user_id)
         .order_by(

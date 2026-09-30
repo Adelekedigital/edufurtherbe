@@ -15,7 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import Settings, get_settings
+from app.core.config import MIN_BOOKING_WINDOW_DAYS, Settings, get_settings
 from app.core.errors import (
     AccountExistsError,
     AuthenticationError,
@@ -24,6 +24,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole
 from app.domain.idempotency import request_fingerprint
@@ -487,6 +488,38 @@ def _ladder(request: Request) -> CreditLadder:
 
 
 LadderDep = Annotated[CreditLadder, Depends(_ladder)]
+
+
+def _booking_window(request: Request) -> BookingWindow:
+    """This app's booking window (Round 5), through the same settings seam."""
+    return booking_window(_configured(request))
+
+
+BookingWindowDep = Annotated[BookingWindow, Depends(_booking_window)]
+
+
+def window_out_of_range(days: int | None, window: BookingWindow) -> bool:
+    """Whether a sent window is shorter than the minimum or longer than the maximum."""
+    return days is not None and not MIN_BOOKING_WINDOW_DAYS <= days <= window.max_days
+
+
+def refuse_window_out_of_range(
+    days: int | None, window: BookingWindow, *, stored: int | None = None
+) -> None:
+    """A window outside `MIN_BOOKING_WINDOW_DAYS`..the configured maximum is a
+    `422` at `/booking_window_days`.
+
+    Here rather than in the schema, because a `Field(le=...)` is fixed at import
+    and the maximum is configuration. The one check every write shares.
+
+    **Resending the stored value is not a change**, so it passes: a form sends
+    back every field it shows, and a mentor who set 40 while it was allowed must
+    be able to edit something else after the maximum drops to 14. Reads clamp it
+    meanwhile. A PATCH passes ``stored``; a create has no row, so it does not.
+    """
+    if window_out_of_range(days, window) and days != stored:
+        message = f"booking_window_days must be {MIN_BOOKING_WINDOW_DAYS} to {window.max_days}"
+        raise ValidationError(message, field_errors=(("/booking_window_days", message),))
 
 
 def _configured(request: Request) -> Settings:

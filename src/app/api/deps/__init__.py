@@ -38,7 +38,13 @@ from app.api.deps.calendar import (
     DisconnectedCalendarDep,
     OwnCalendarDep,
 )
-from app.api.deps.core import CurrentUserDep, SettingsDep, _configured, get_storage
+from app.api.deps.core import (
+    BookingWindowDep,
+    CurrentUserDep,
+    SettingsDep,
+    _configured,
+    get_storage,
+)
 from app.api.deps.intake import MAX_FILE_MB, IntakeFileDownloadDep, UploadedIntakeFileDep
 from app.api.deps.jobs import ReminderCallbackDep, RuntimeJobDep
 from app.api.deps.mentors import (
@@ -133,6 +139,7 @@ __all__ = [
     "AvailabilityRulesDep",
     "AwardsDep",
     "BookedSessionDep",
+    "BookingWindowDep",
     "CalendarConnectedDep",
     "CalendarConsentDep",
     "CancelledSessionDep",
