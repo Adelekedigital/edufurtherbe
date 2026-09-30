@@ -38,7 +38,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, Text, cast, func, literal, literal_column, select, true
+from sqlalchemy import Select, Text, cast, func, literal, literal_column, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.availability import MentorNextAvailability
@@ -341,25 +341,39 @@ def _card(scope: Select[Any]) -> Select[Any]:
     )
 
 
+def _bookable_first() -> Any:
+    """The leading sort key of every Explore order (#220): mentors taking
+    bookings before those who are not, by the one `taking_bookings()` rule."""
+    return taking_bookings().desc()
+
+
 def _page(
-    after: UUID | None,
+    after: tuple[bool, UUID] | None,
     limit: int,
     offerings: Sequence[str],
     viewer: UUID | None = None,
     offset: int = 0,
 ) -> Select[Any]:
-    """One page of mentors, newest first.
+    """One page of mentors, bookable first, then newest first (#220).
 
-    `mentor_profiles.id` is both the sort key and the cursor, which is ADR 0016's
-    base case — *"the id is the cursor when the display order is the id order"* —
-    and it is returned as `cursor_id` rather than left implicit. The row's own
+    The cursor is the group and `mentor_profiles.id`, ADR 0016's two-part form,
+    returned as `taking_bookings` and `cursor_id` rather than left implicit. The row's own
     `id` is the **user**, so the two are different values and the caller must not
     reach for the visible one when building the next token.
     """
     return (
         _card(_scope(None, offerings, viewer))
-        .where(*([MentorProfile.id < after] if after is not None else []))
-        .order_by(MentorProfile.id.desc())
+        .where(
+            *(
+                [
+                    tuple_(taking_bookings(), MentorProfile.id)
+                    < tuple_(literal(after[0]), literal(after[1]))
+                ]
+                if after is not None
+                else []
+            )
+        )
+        .order_by(_bookable_first(), MentorProfile.id.desc())
         # Only ever non-zero when a goal-ranked page's offset cursor comes back
         # for a viewer who no longer has goals (a token that lapsed, or a last
         # goal removed): newest first from that position, so paging goes on —
@@ -399,7 +413,7 @@ def _matched(
     shuffle = func.md5(literal(f"{viewer}:{day.isoformat()}:").concat(cast(MentorProfile.id, Text)))
     return (
         _card(_scope(None, offerings, viewer))
-        .order_by(overlap.desc(), shuffle, MentorProfile.id.desc())
+        .order_by(_bookable_first(), overlap.desc(), shuffle, MentorProfile.id.desc())
         .offset(offset)
         .limit(limit + 1)
     )
@@ -425,7 +439,7 @@ def _ranked(
     return (
         _card(_scope(term, offerings, viewer))
         .add_columns(rank.label("rank"))
-        .order_by(rank.desc(), MentorProfile.id.desc())
+        .order_by(_bookable_first(), rank.desc(), MentorProfile.id.desc())
         .offset(offset)
         .limit(limit + 1)
     )
@@ -435,7 +449,7 @@ async def search_mentors(
     session: AsyncSession,
     *,
     limit: int,
-    after: UUID | None = None,
+    after: tuple[bool, UUID] | None = None,
     q: str | None = None,
     offset: int = 0,
     offerings: Sequence[str] = (),
@@ -447,8 +461,8 @@ async def search_mentors(
     **`viewer` is who is asking**, and never appears in their own list.
     **`goal_day` switches browse to the goal ranking** (`_matched`) for that
     viewer and day; the caller passes it only for a viewer who has goals, so a
-    mentee without any still browses newest first. `q` outranks both: a search
-    is ranked by the search.
+    mentee without any browses bookable first, then newest (#220). `q` outranks
+    both: a search is ranked by the search.
 
     **Two modes behind one signature.** Without `q` this is a browse list, newest
     first, keyset-paged on `mentor_profiles.id`. With `q` it is a ranked search,
