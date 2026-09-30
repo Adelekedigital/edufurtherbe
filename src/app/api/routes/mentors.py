@@ -66,7 +66,9 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
     summary="Find a mentor",
     openapi_extra=OPTIONAL_TOKEN,
     description=(
-        "Every mentor a mentee could actually book, newest first.\n\n"
+        "Every approved, listed mentor. **Mentors taking bookings come first**, "
+        "then those who are not (`taking_bookings`); inside each group the order "
+        "below applies, newest first by default.\n\n"
         "**Public.** No token — this is the page somebody lands on before they "
         "have an account.\n\n"
         "**Signed in, it is ordered for you.** Send the bearer token when you "
@@ -78,7 +80,9 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         "- With `q`, best match first: a search is ranked by the search.\n"
         "- A signed-in mentor never appears in their own list, and `total` "
         "agrees.\n\n"
-        "The order is the server's: don't re-sort on the client. Any problem "
+        "The order is the server's: don't re-sort on the client. A browse "
+        "cursor minted before bookable-first ordering is a `422`; start again "
+        "from page 1. Any problem "
         "with the token gives the public list, never an error. Responses send "
         "`Vary: Authorization`, and `Cache-Control: private` when a token came.\n\n"
         "**Listed, not available.** A mentor appears while they are approved "

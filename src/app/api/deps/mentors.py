@@ -14,10 +14,10 @@ from app.api.schemas.common import (
     MAX_PAGE_SIZE,
     StorableText,
     clamp_limit,
+    decode_browse_cursor,
     decode_goal_cursor,
-    decode_id_cursor,
     decode_offset_cursor,
-    encode_id_cursor,
+    encode_browse_cursor,
     is_goal_cursor,
     next_goal_cursor,
     next_offset_cursor,
@@ -233,11 +233,15 @@ async def mentor_page(
     rows, has_more = await search_mentors(
         session,
         limit=clamp_limit(limit),
-        after=decode_id_cursor(cursor),
+        after=decode_browse_cursor(cursor),
         offerings=slugs,
         viewer=viewer,
     )  # `goal_day` is not passed: an id cursor continues newest first.
-    next_cursor = encode_id_cursor(rows[-1]["cursor_id"]) if has_more and rows else None
+    next_cursor = (
+        encode_browse_cursor(rows[-1]["taking_bookings"], rows[-1]["cursor_id"])
+        if has_more and rows
+        else None
+    )
     return rows, has_more, next_cursor, total
 
 
