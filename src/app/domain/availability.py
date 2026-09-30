@@ -100,8 +100,8 @@ class BookingWindow:
 
     @property
     def range_cap_days(self) -> int:
-        """The widest `/slots` range a client may ask for: the window plus a day
-        of margin on each side.
+        """The widest `/slots` range a client may ask for: every date the window
+        touches (`projection_days`) plus a day of margin on each side.
 
         A client asks in the *viewer's* calendar dates and `/slots` reads them in
         the mentor's zone, which can be up to 26 hours apart, so covering the
@@ -109,7 +109,7 @@ class BookingWindow:
         (frontend request, 2026-09-30). Wider than `projection_days` and still
         safe: the instant cutoff, not the range, decides what is bookable.
         """
-        return self.max_days + 2
+        return self.projection_days + 2
 
 
 def booking_window(settings: Settings) -> BookingWindow:

@@ -454,7 +454,7 @@ async def test_a_mentor_with_no_windows_is_bookable_but_has_nothing_free(
         ("inverted", FIRST_DAY + dt.timedelta(days=3), FIRST_DAY),
         ("equal", FIRST_DAY, FIRST_DAY),
         # The platform window's 56 days plus a day of margin each side (#221).
-        ("too-wide", FIRST_DAY, FIRST_DAY + dt.timedelta(days=59)),
+        ("too-wide", FIRST_DAY, FIRST_DAY + dt.timedelta(days=60)),
     ],
 )
 async def test_an_unusable_range_is_a_client_error(
@@ -474,7 +474,7 @@ async def test_the_widest_allowed_range_is_accepted(
     mentor, session_type = await make_mentor(db_engine, "range-max")
 
     response = await api_client.get(
-        slots_url(mentor, session_type, start=FIRST_DAY, end=FIRST_DAY + dt.timedelta(days=58))
+        slots_url(mentor, session_type, start=FIRST_DAY, end=FIRST_DAY + dt.timedelta(days=59))
     )
 
     assert response.status_code == 200

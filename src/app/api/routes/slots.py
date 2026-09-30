@@ -44,8 +44,9 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": "`end` is not after `start`, or the range is longer than the platform's "
         "maximum booking window plus a day of margin each side, so a viewer in any zone "
-        "can cover the whole window in their own dates (`MAX_BOOKING_WINDOW_DAYS` + 2 "
-        "days; 58 by default)."
+        "can cover the whole window in their own dates (`MAX_BOOKING_WINDOW_DAYS` + 3 "
+        "days: the window's dates, its partial last day, and one day each side; 59 by "
+        "default)."
     },
 }
 
