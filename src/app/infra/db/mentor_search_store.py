@@ -462,8 +462,7 @@ async def search_mentors(
     **`goal_day` switches browse to the goal ranking** (`_matched`) for that
     viewer and day; the caller passes it only for a viewer who has goals, so a
     mentee without any browses bookable first, then newest (#220). `q` outranks
-    both: a search
-    is ranked by the search.
+    both: a search is ranked by the search.
 
     **Two modes behind one signature.** Without `q` this is a browse list, newest
     first, keyset-paged on `mentor_profiles.id`. With `q` it is a ranked search,
