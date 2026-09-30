@@ -142,15 +142,15 @@ async def test_a_slots_range_wider_than_the_max_is_refused(
     async with fortnight_client(db_engine, api_storage) as client:
         wide = await client.get(
             f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
-            f"&start={start}&end={start + dt.timedelta(days=18)}"
+            f"&start={start}&end={start + dt.timedelta(days=19)}"
         )
         fits = await client.get(
             f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
-            f"&start={start}&end={start + dt.timedelta(days=17)}"
+            f"&start={start}&end={start + dt.timedelta(days=18)}"
         )
 
     assert wide.status_code == 422, wide.text
-    assert "at most 17 days" in wide.text
+    assert "at most 18 days" in wide.text
     assert fits.status_code == 200, fits.text
 
 
@@ -568,8 +568,8 @@ async def test_an_explicit_range_through_the_last_partial_day_is_allowed(
     base = f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
 
     async with client_for(build_api_app(db_engine, api_storage, settings)) as client:
-        fits = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=7)}")
-        wide = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=8)}")
+        fits = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=8)}")
+        wide = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=9)}")
 
     assert fits.status_code == 200, fits.text
     assert wide.status_code == 422, wide.text

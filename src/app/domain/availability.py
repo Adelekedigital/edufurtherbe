@@ -71,6 +71,11 @@ __all__ = [
 DEFAULT_PROJECTION_DAYS = 7
 
 
+#: The most two IANA zones' local dates can differ by: UTC-12 and UTC+14 are 26
+#: hours apart, which spans two date boundaries.
+ZONE_DATE_GAP = 2
+
+
 @dataclass(frozen=True, slots=True)
 class BookingWindow:
     """How far ahead offerings may be booked, as this deployment configures it.
@@ -101,15 +106,18 @@ class BookingWindow:
     @property
     def range_cap_days(self) -> int:
         """The widest `/slots` range a client may ask for: every date the window
-        touches (`projection_days`) plus a day of margin on each side.
+        touches (`projection_days`), a day of margin before, and room for the
+        largest local-date gap between two zones.
 
         A client asks in the *viewer's* calendar dates and `/slots` reads them in
-        the mentor's zone, which can be up to 26 hours apart, so covering the
-        whole window from any zone pair takes a day before and a day after
-        (frontend request, 2026-09-30). Wider than `projection_days` and still
-        safe: the instant cutoff, not the range, decides what is bookable.
+        the mentor's zone. The two furthest-apart zones (UTC-12 and UTC+14) are
+        26 hours apart, which can put their dates two days apart, so reaching
+        the mentor's last window day from the viewer's margin day takes
+        `projection_days + ZONE_DATE_GAP + 1` (`test_slots_range_cap` checks the
+        worst pair at every hour). Wider than `projection_days` and still safe:
+        the instant cutoff, not the range, decides what is bookable.
         """
-        return self.projection_days + 2
+        return self.projection_days + ZONE_DATE_GAP + 1
 
 
 def booking_window(settings: Settings) -> BookingWindow:
