@@ -58,23 +58,25 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import case, delete, exists, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.domain.availability import BookingWindow, UtcInterval
+from app.infra.db.booking_rules import effective_window_days
 from app.infra.db.models.availability import MentorAvailabilityChange, MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
+from app.infra.db.models.sessions import SessionTypeBookingConfig
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import bookable_mentors, taking_bookings
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import FreeBusyReader, list_slots, mentor_today
 
-__all__ = ["next_available_state", "refresh_next_available", "within_window"]
+__all__ = ["next_available_state", "refresh_next_available"]
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +99,22 @@ def _unchanged() -> Any:
     return MentorNextAvailability.id.is_not(None) & ~changed
 
 
-def next_available_state() -> Any:
+def _cached_window_days(window: BookingWindow) -> Any:
+    """The cached offering's effective window **now** — `effective_window_days`
+    over its own config and its mentor's default, under the current settings."""
+    config = aliased(SessionTypeBookingConfig)
+    return (
+        select(effective_window_days(window, config, MentorProfile))
+        .where(
+            config.session_type_id == MentorNextAvailability.next_available_session_type_id,
+            MentorProfile.user_id == MentorNextAvailability.mentor_user_id,
+        )
+        .correlate(MentorNextAvailability)
+        .scalar_subquery()
+    )
+
+
+def next_available_state(window: BookingWindow) -> Any:
     """`open`, `none` or `refreshing` — the three things a null time can hide.
 
     **One `CASE`, so the change log is probed once per card.** The time itself
@@ -106,44 +123,27 @@ def next_available_state() -> Any:
 
     A slot whose booking window has closed reads as `refreshing`, not `none`:
     something *was* free, and the next run will say what is free now.
+
+    **So does a cached time past the cached offering's window as it is now**
+    (#221). The cache was vouched for under the settings it was computed with;
+    lower the maximum or the platform default and `/slots` and booking refuse
+    a time the card would still offer. Compared through `effective_window_days`,
+    the one resolution, so an offering with its own longer window keeps its time.
     """
     return case(
         (~_unchanged(), REFRESHING),
+        (
+            MentorNextAvailability.next_available_at
+            > func.now() + func.make_interval(0, 0, 0, _cached_window_days(window)),
+            REFRESHING,
+        ),
         (MentorNextAvailability.bookable_until > func.now(), OPEN),
         (MentorNextAvailability.next_available_at.is_(None), NONE),
         else_=REFRESHING,
     )
 
 
-def within_window(
-    row: Mapping[str, Any], window: BookingWindow, now: dt.datetime
-) -> dict[str, Any]:
-    """The row, with an `open` time past the current window read as `refreshing`.
-
-    **The cache was vouched for under the window it was computed with.** Lower
-    the maximum and a stored day-40 slot stays `open` until the age-based
-    refresh, while `/slots` and booking already refuse it — so every read of a
-    card or profile passes through here. `refreshing` is the state the SQL
-    already gives a time it no longer vouches for; nothing new is invented.
-
-    Only the maximum can move without a change-log entry (an offering's or a
-    mentor's own window logs one), so the maximum is what is checked. Raising it
-    can leave a cached `none` until the next refresh — at most
-    `NEXT_AVAILABLE_MAX_AGE_MINUTES` — which a config change's restart and the
-    next run correct (#221).
-    """
-    out = dict(row)
-    at = out.get("next_available_at")
-    if (
-        out.get("next_available_state") == OPEN
-        and at is not None
-        and at > now + dt.timedelta(days=window.max_days)
-    ):
-        out["next_available_state"] = REFRESHING
-    return out
-
-
-def public_next_available_state() -> Any:
+def public_next_available_state(window: BookingWindow) -> Any:
     """`next_available_state()`, but `none` for anyone a stranger cannot book.
 
     **The job refreshes `bookable_mentors()` and nobody else**, so a visible
@@ -154,7 +154,7 @@ def public_next_available_state() -> Any:
     and the job's `bookable_mentors()` filters on, so all three agree.
     """
     return case(
-        (taking_bookings(), next_available_state()),
+        (taking_bookings(), next_available_state(window)),
         else_=literal(NONE),
     )
 

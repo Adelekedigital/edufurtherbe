@@ -37,6 +37,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.infra.db.mentor_search_store import _page, _ranked
 from app.infra.db.profile_store import _education_statement
+from conftest import PLATFORM_WINDOW
 
 #: The column that makes the mentor orders total. It is the cursor for browse and
 #: the tiebreak for search, which is why both modes name it.
@@ -84,8 +85,8 @@ def order_by(statement: object) -> str:
 @pytest.mark.parametrize(
     ("mode", "statement", "unique_key"),
     [
-        ("browse", _page(None, 20, ()), MENTOR_KEY),
-        ("search", _ranked("ada", 0, 20, ()), MENTOR_KEY),
+        ("browse", _page(None, 20, (), PLATFORM_WINDOW), MENTOR_KEY),
+        ("search", _ranked("ada", 0, 20, (), PLATFORM_WINDOW), MENTOR_KEY),
         ("education", _education_statement(uuid4()), EDUCATION_KEY),
     ],
 )
@@ -113,7 +114,7 @@ def test_search_ranks_before_it_breaks_the_tie() -> None:
     become browse, returning the right rows in the wrong order, and every
     relevance test would still pass because each of them asserts on a set.
     """
-    clause = order_by(_ranked("ada", 0, 20, ()))
+    clause = order_by(_ranked("ada", 0, 20, (), PLATFORM_WINDOW))
 
     assert clause.index("ts_rank_cd") < clause.index(MENTOR_KEY)
 

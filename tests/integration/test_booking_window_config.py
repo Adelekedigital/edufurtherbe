@@ -485,3 +485,45 @@ async def test_a_cached_slot_beyond_a_lowered_window_is_not_advertised(
     for shown in (profile, listed):
         assert shown["next_available_state"] != "open"
         assert shown["next_available_at"] is None
+
+
+async def cache_far_slot(engine: AsyncEngine, mentor: object, days: int) -> None:
+    """Refresh under the platform window, then push the cached time out."""
+    async with AsyncSession(engine) as session:
+        await refresh_next_available(
+            session, max_age=dt.timedelta(minutes=5), reader=FakeCalendar(), window=PLATFORM_WINDOW
+        )
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE mentor_next_availability SET "
+                "next_available_at = now() + make_interval(days => :d), "
+                "bookable_until = now() + make_interval(days => :d - 1) "
+                "WHERE mentor_user_id = :m"
+            ),
+            {"m": mentor, "d": days},
+        )
+
+
+async def test_a_lowered_default_hides_a_cached_slot_the_inheriting_type_refuses(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """The cache is checked against the cached type's **effective** window, not
+    only the maximum: with the default at 14, a type that inherits it refuses
+    day 40, while a type that sets its own 56 still offers it."""
+    inherits = await mentor_with_hours(db_engine, "default-inherits")
+    await offering(db_engine, inherits, "Inherits")
+    own = await mentor_with_hours(db_engine, "default-own")
+    await offering(db_engine, own, "Own", window=56)
+    await cache_far_slot(db_engine, inherits, 40)
+    await cache_far_slot(db_engine, own, 40)
+    settings = Settings(_env_file=None, max_booking_window_days=56, default_booking_window_days=14)
+
+    async with client_for(build_api_app(db_engine, api_storage, settings)) as client:
+        inheriting = (await client.get(f"/api/v1/mentors/{inherits}")).json()
+        owning = (await client.get(f"/api/v1/mentors/{own}")).json()
+        inheriting_card = await card(client, inherits)
+
+    assert inheriting["next_available_state"] != "open"
+    assert inheriting_card["next_available_state"] != "open"
+    assert owning["next_available_state"] == "open"

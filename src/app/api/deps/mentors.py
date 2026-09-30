@@ -26,7 +26,6 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
-from app.domain.availability import BookingWindow
 from app.infra.db.featured_store import (
     current_featured,
 )
@@ -40,7 +39,6 @@ from app.infra.db.mentor_search_store import (
     search_mentors,
     similar_mentors,
 )
-from app.infra.db.next_available_store import within_window
 from app.infra.db.offerings import has_live_goals, live_offering_slugs, offerings_for
 from app.infra.db.profile_store import (
     list_awards,
@@ -85,10 +83,9 @@ async def public_mentor(
     widened: `session_types` is what a stranger can book, so a hidden profile
     shows none, and the mentor's own list is `/me/session-types`.
     """
-    row = await get_public_mentor(session, handle, viewer)
+    row = await get_public_mentor(session, handle, viewer, window=window)
     if row is None:
         raise NotFoundError("no such mentor")
-    row = within_window(row, window, dt.datetime.now(dt.UTC))
 
     user_id = row["user_id"]
     # Six statements for one profile, and that is a decision rather than an
@@ -119,12 +116,6 @@ MAX_OFFERING_FILTERS = 10
 #: platform-authored slugs are all far shorter, and this only keeps a 422's echo
 #: of what the caller sent short.
 MAX_SLUG_LENGTH = 60
-
-
-def _vouched(rows: list[dict[str, Any]], window: BookingWindow) -> list[dict[str, Any]]:
-    """Every card through `within_window`, against one clock."""
-    now = dt.datetime.now(dt.UTC)
-    return [within_window(row, window, now) for row in rows]
 
 
 async def mentor_page(
@@ -215,6 +206,7 @@ async def mentor_page(
         offset = decode_goal_cursor(cursor) if cursor is not None else 0
         rows, has_more = await search_mentors(
             session,
+            window=window,
             limit=clamp_limit(limit),
             offset=offset,
             offerings=slugs,
@@ -222,7 +214,7 @@ async def mentor_page(
             goal_day=goal_day,
         )
         next_cursor = next_goal_cursor(offset + len(rows)) if has_more else None
-        return _vouched(rows, window), has_more, next_cursor, total
+        return rows, has_more, next_cursor, total
 
     # Search pages by offset too — its order is not a column in the row — and
     # shares the depth cap.
@@ -230,6 +222,7 @@ async def mentor_page(
         offset = decode_offset_cursor(cursor)
         rows, has_more = await search_mentors(
             session,
+            window=window,
             limit=clamp_limit(limit),
             q=term,
             offset=offset,
@@ -241,10 +234,11 @@ async def mentor_page(
         # there is no next page, and minting one the decoder then refuses ends a
         # deep search on a 422 for a client that followed the envelope exactly.
         next_cursor = next_offset_cursor(offset + len(rows)) if has_more else None
-        return _vouched(rows, window), has_more, next_cursor, total
+        return rows, has_more, next_cursor, total
 
     rows, has_more = await search_mentors(
         session,
+        window=window,
         limit=clamp_limit(limit),
         after=decode_browse_cursor(cursor),
         offerings=slugs,
@@ -255,7 +249,7 @@ async def mentor_page(
         if has_more and rows
         else None
     )
-    return _vouched(rows, window), has_more, next_cursor, total
+    return rows, has_more, next_cursor, total
 
 
 MentorPageDep = Annotated[
@@ -276,8 +270,7 @@ async def featured_mentor(session: SessionDep, window: BookingWindowDep) -> dict
     mentor = await current_featured(session, now=dt.datetime.now(dt.UTC))
     if mentor is None:
         return None
-    card = await mentor_card(session, mentor)
-    return None if card is None else _vouched([card], window)[0]
+    return await mentor_card(session, mentor, window=window)
 
 
 FeaturedMentorDep = Annotated[dict[str, Any] | None, Depends(featured_mentor)]
@@ -303,7 +296,7 @@ async def similar_to_mentor(
     mentor = await get_existing_mentor_id(session, handle)
     if mentor is None:
         return []
-    return _vouched(await similar_mentors(session, mentor), window)
+    return await similar_mentors(session, mentor, window=window)
 
 
 SimilarMentorsDep = Annotated[list[dict[str, Any]], Depends(similar_to_mentor)]

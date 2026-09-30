@@ -32,6 +32,7 @@ from uuid import UUID
 from sqlalchemy import Select, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.availability import BookingWindow
 from app.domain.enums import CoverArt
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
@@ -77,7 +78,7 @@ def _by_handle(handle: str) -> Any:
         return User.slug == handle
 
 
-def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
+def _public_profile(handle: str, viewer: UUID | None, window: BookingWindow) -> Select[Any]:
     """Everything the public may read about one mentor, in a single statement.
 
     The three country columns are **resolved to names here**, not returned as
@@ -129,7 +130,7 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
             MentorNextAvailability.next_available_at,
             MentorNextAvailability.next_available_session_type_id,
             taking_bookings().label("taking_bookings"),
-            public_next_available_state().label("next_available_state"),
+            public_next_available_state(window).label("next_available_state"),
         )
         .select_from(User)
         .join(MentorProfile, MentorProfile.user_id == User.id)
@@ -144,7 +145,7 @@ def _public_profile(handle: str, viewer: UUID | None) -> Select[Any]:
 
 
 async def get_public_mentor(
-    session: AsyncSession, handle: str, viewer: UUID | None = None
+    session: AsyncSession, handle: str, viewer: UUID | None = None, *, window: BookingWindow
 ) -> dict[str, Any] | None:
     """One publicly visible mentor, or ``None`` if there is no such thing.
 
@@ -154,7 +155,7 @@ async def get_public_mentor(
     Telling them apart would say which mentors exist and what state they
     are in, which is the thing a public endpoint most easily gives away.
     """
-    row = (await session.execute(_public_profile(handle, viewer))).mappings().first()
+    row = (await session.execute(_public_profile(handle, viewer, window))).mappings().first()
     return dict(row) if row else None
 
 
