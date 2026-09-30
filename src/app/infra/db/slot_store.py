@@ -210,6 +210,7 @@ async def list_slots(
     now: dt.datetime,
     window: BookingWindow,
     external_busy: FreeBusyReader | None = None,
+    range_cap: int | None = None,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
 
@@ -217,6 +218,13 @@ async def list_slots(
     **empty list** means the offering exists and has nothing free, which is a
     different and true statement — collapsing the two would tell a caller that a
     fully booked mentor does not exist.
+
+    ``range_cap`` is the widest range a **client** may ask for, and only
+    `/slots` passes it. The booking window is a different rule — how far ahead a
+    slot may start — and applies to every caller through the cutoff below; the
+    internal lookups (booking legality's few-day span, next-available) must not
+    be refused by a cap meant for request size, or a small window refuses every
+    booking.
 
     ``now`` is passed in rather than read here. The notice window makes this
     answer depend on the clock, and a function that reads its own clock cannot be
@@ -246,15 +254,15 @@ async def list_slots(
     if start is None:
         start = mentor_today(offering["timezone"], now)
     if end is None:
-        end = start + dt.timedelta(days=DEFAULT_PROJECTION_DAYS)
+        end = start + dt.timedelta(days=min(DEFAULT_PROJECTION_DAYS, window.max_days))
 
     # Validated *after* defaulting, not before. A caller may send `end` alone,
     # and whether that range is legal depends on the `start` we just chose — so
     # checking at the edge would check a value the request did not have.
     if end <= start:
         raise ValidationError("`end` must be after `start`")
-    if (end - start).days > window.max_days:
-        raise ValidationError(f"a range may span at most {window.max_days} days")
+    if range_cap is not None and (end - start).days > range_cap:
+        raise ValidationError(f"a range may span at most {range_cap} days")
 
     # **The offering's own windows replace general availability; they do not
     # intersect it.** Asked first, and only if it has none does the mentor's

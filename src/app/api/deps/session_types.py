@@ -194,7 +194,6 @@ async def created_own_session_type(
     `CurrentUserDep` rather than `OwnerDep`: there is no `{user_id}` in the path
     to resolve, so the caller *is* the scope, matching `own_session_types` above.
     """
-    refuse_window_over_max(payload.booking_window_days, window)
     reservation = (
         await claim_idempotency_key(
             session,
@@ -208,6 +207,9 @@ async def created_own_session_type(
     )
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
+    # After the replay lookup: a retry of a create that already succeeded gets
+    # its stored answer, whatever the configured maximum became since.
+    refuse_window_over_max(payload.booking_window_days, window)
 
     session_type_id = await create_session_type(session, user["id"], payload.model_dump())
     if session_type_id is None:

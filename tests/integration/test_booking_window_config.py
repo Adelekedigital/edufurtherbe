@@ -106,12 +106,28 @@ async def test_the_default_window_applies_when_nothing_sets_one(db_engine: Async
     assert max(found) < NOW + dt.timedelta(days=7)
 
 
-async def test_a_slots_range_wider_than_the_max_is_refused(db_engine: AsyncEngine) -> None:
+async def test_a_slots_range_wider_than_the_max_is_refused(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """The cap on what a client may request follows the maximum; it is `/slots`
+    that applies it, not the store's internal lookups."""
     mentor = await mentor_with_hours(db_engine, "range-cap")
     session_type = await offering(db_engine, mentor, "Any")
+    start = NOW.date()
 
-    with pytest.raises(ValidationError, match="at most 14 days"):
-        await starts(db_engine, mentor, session_type, FORTNIGHT, days=15)
+    async with fortnight_client(db_engine, api_storage) as client:
+        wide = await client.get(
+            f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
+            f"&start={start}&end={start + dt.timedelta(days=15)}"
+        )
+        fits = await client.get(
+            f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
+            f"&start={start}&end={start + dt.timedelta(days=14)}"
+        )
+
+    assert wide.status_code == 422, wide.text
+    assert "at most 14 days" in wide.text
+    assert fits.status_code == 200, fits.text
 
 
 async def test_booking_beyond_a_lowered_max_is_refused(db_engine: AsyncEngine) -> None:
@@ -219,3 +235,75 @@ async def test_with_the_defaults_nothing_changes(
     (listed,) = [t for t in public if t["id"] == str(session_type)]
     assert listed["booking_window_days"] == PLATFORM_WINDOW.default_days
     assert profile["max_booking_window_days"] == PLATFORM_WINDOW.max_days
+
+
+# --------------------------------------------------------------------------
+# A small maximum must not break the internal lookups (review of #309)
+# --------------------------------------------------------------------------
+
+#: The smallest window that still leaves a slot: the notice floor is 24 hours,
+#: so with a one-day window nothing is ever offered.
+TWO_DAYS = BookingWindow(max_days=2, default_days=2)
+
+
+async def test_booking_inside_a_two_day_window_is_legal(db_engine: AsyncEngine) -> None:
+    """Legality asks the grid over its own few-day span; the client range cap
+    must not apply to that internal lookup, or every booking fails."""
+    mentor = await mentor_with_hours(db_engine, "tiny-book")
+    session_type = await offering(db_engine, mentor, "Tiny")
+    mentee, _ = await a_mentee(db_engine, "tiny-book")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session:
+        booked = await book_session(
+            session,
+            mentee,
+            {"session_type_id": session_type, "starts_at": at(1, 9)},
+            now=NOW,
+            require_answers=False,
+            window=TWO_DAYS,
+        )
+        assert booked is not None
+        with pytest.raises(ValidationError, match="not available"):
+            await book_session(
+                session,
+                mentee,
+                {"session_type_id": session_type, "starts_at": at(3, 9)},
+                now=NOW,
+                require_answers=False,
+                window=TWO_DAYS,
+            )
+
+
+async def test_slots_without_an_end_fit_a_small_maximum(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """The implicit range is the default week, cut to the maximum."""
+    mentor = await mentor_with_hours(db_engine, "tiny-slots")
+    session_type = await offering(db_engine, mentor, "Tiny")
+    settings = Settings(_env_file=None, max_booking_window_days=3, default_booking_window_days=3)
+
+    async with client_for(build_api_app(db_engine, api_storage, settings)) as client:
+        response = await client.get(
+            f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
+        )
+
+    assert response.status_code == 200, response.text
+
+
+async def test_a_replayed_create_is_not_revalidated_against_a_lowered_max(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """A retry of a create that already succeeded must get its stored answer,
+    whatever the configuration became in between."""
+    _, auth = await as_mentor(db_engine, "replay-window")
+    headers = bearer(api_token(auth)) | {"Idempotency-Key": "window-replay-1"}
+    payload = body(booking_window_days=56)
+
+    first = await api_client.post(URL, json=payload, headers=headers)
+    async with fortnight_client(db_engine, api_storage) as client:
+        retried = await client.post(URL, json=payload, headers=headers)
+
+    assert first.status_code == 201, first.text
+    assert retried.status_code == 201, retried.text
+    assert retried.json() == first.json()
