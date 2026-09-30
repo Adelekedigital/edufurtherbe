@@ -82,7 +82,10 @@ async def a_request(
         f"/api/v1/users/{mentor}/availability/slots",
         params={"session_type_id": str(session_type)},
     )
-    when = str(slots.json()["data"][0]["start"])
+    # The last slot, not the first: a request's answer deadline is six hours
+    # before it starts, and the soonest slot on a zero-notice test offering is
+    # already past it — a request the mentor could no longer answer.
+    when = str(slots.json()["data"][-1]["start"])
     booked = await client.post(
         SESSIONS,
         json={"session_type_id": str(session_type), "starts_at": when},

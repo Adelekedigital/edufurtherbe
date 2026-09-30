@@ -7,7 +7,7 @@ from fastapi import APIRouter, status
 from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep
 from app.api.schemas.common import AvatarFocusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
-from app.api.schemas.user import CreditsRead, UserProfileRead, UserRead
+from app.api.schemas.user import BookingCountsRead, CreditsRead, UserProfileRead, UserRead
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
@@ -64,6 +64,15 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "`mentee_completed_sessions` counts sessions the caller **received** as "
         "a mentee with status `completed` — never null, and not the mentor "
         "card's `completed_sessions`, which counts sessions given.\n\n"
+        "`booking_counts` is `{as_mentor, as_mentee}`, computed live on each "
+        "request. `as_mentor` (null without a mentor profile) carries "
+        "`awaiting_your_response`, requests waiting on the caller's accept or "
+        "decline before their deadline, and `upcoming`, confirmed sessions not yet "
+        "started. `as_mentee` (null without a mentee goal, the `credits` "
+        "predicate) carries `awaiting_mentor`, the caller's own requests still "
+        "waiting on a mentor, and `upcoming`. **Badge only the action counts** "
+        "(`awaiting_your_response`, `awaiting_mentor`); `upcoming` is information "
+        "and would almost always be lit.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -102,4 +111,9 @@ async def read_me(
         # from somebody who can book.
         credits=(CreditsRead.model_validate(attributes["credits"]) if goal is not None else None),
         mentee_completed_sessions=attributes["mentee_completed_sessions"],
+        booking_counts=BookingCountsRead.of(
+            attributes["booking_counts"],
+            mentor=mentor_profile is not None,
+            mentee=goal is not None,
+        ),
     )
