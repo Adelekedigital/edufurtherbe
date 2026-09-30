@@ -196,7 +196,7 @@ async def _first_free(
     # `now + max_days`, which usually falls mid-day, so ending at that date's
     # start would skip slots that are legally bookable. `list_slots` drops the
     # ones past the instant itself.
-    end = start + dt.timedelta(days=window.max_days + 1)
+    end = start + dt.timedelta(days=window.projection_days)
     once = _OneReadPerMentor(reader)
     best: tuple[dt.datetime, dt.datetime, UUID] | None = None
     for offering in offerings:

@@ -254,7 +254,7 @@ async def list_slots(
     if start is None:
         start = mentor_today(offering["timezone"], now)
     if end is None:
-        end = start + dt.timedelta(days=min(DEFAULT_PROJECTION_DAYS, window.max_days))
+        end = start + dt.timedelta(days=min(DEFAULT_PROJECTION_DAYS, window.projection_days))
 
     # Validated *after* defaulting, not before. A caller may send `end` alone,
     # and whether that range is legal depends on the `start` we just chose — so

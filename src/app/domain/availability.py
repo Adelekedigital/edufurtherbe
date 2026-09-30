@@ -86,6 +86,18 @@ class BookingWindow:
     max_days: int
     default_days: int
 
+    @property
+    def projection_days(self) -> int:
+        """Calendar days to project to see every slot the window can offer.
+
+        The cutoff is the instant `now + max_days`, which usually falls mid-day,
+        so the window touches `max_days + 1` calendar dates. Projecting one day
+        fewer misses bookable slots on the last, partial day; the instant cutoff
+        then drops whatever on that day starts too late. One rule for the
+        refresh, the implicit `/slots` range and the cap on an explicit one.
+        """
+        return self.max_days + 1
+
 
 def booking_window(settings: Settings) -> BookingWindow:
     """The configured window, from settings the caller already holds.
