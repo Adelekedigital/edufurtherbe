@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, XRead, YouTubeRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
@@ -78,6 +78,53 @@ class CreditsRead(BaseModel):
     next_reset_at: datetime
 
 
+class MentorBookingCounts(BaseModel):
+    """The caller's bookings as a mentor."""
+
+    #: Requests waiting on their accept or decline, before the deadline.
+    awaiting_your_response: int
+    #: Confirmed sessions that have not started yet.
+    upcoming: int
+
+
+class MenteeBookingCounts(BaseModel):
+    """The caller's bookings as a mentee."""
+
+    #: Their own requests still waiting on the mentor's answer.
+    awaiting_mentor: int
+    #: Confirmed sessions that have not started yet.
+    upcoming: int
+
+
+class BookingCountsRead(BaseModel):
+    """Both roles' counts; a half is null when the caller lacks that role."""
+
+    as_mentor: MentorBookingCounts | None = None
+    as_mentee: MenteeBookingCounts | None = None
+
+    @classmethod
+    def of(cls, counts: dict[str, int] | None, *, mentor: bool, mentee: bool) -> BookingCountsRead:
+        if counts is None:
+            return cls()
+        return cls(
+            as_mentor=(
+                MentorBookingCounts(
+                    awaiting_your_response=counts["mentor_awaiting"],
+                    upcoming=counts["mentor_upcoming"],
+                )
+                if mentor
+                else None
+            ),
+            as_mentee=(
+                MenteeBookingCounts(
+                    awaiting_mentor=counts["mentee_awaiting"], upcoming=counts["mentee_upcoming"]
+                )
+                if mentee
+                else None
+            ),
+        )
+
+
 class UserRead(NormalisedEmail):
     """A user as returned to themselves.
 
@@ -131,8 +178,6 @@ class UserRead(NormalisedEmail):
     #: dual-role user has both and they are different numbers.
     mentee_completed_sessions: int = 0
 
-    #: Requests still waiting on the caller's answer **as a mentor** — the
-    #: sidebar's Bookings badge. `null` when the caller has no mentor profile.
-    #: A request past its deadline is not counted, since it can no longer be
-    #: answered (`pending_requests.awaiting_mentor`).
-    mentor_pending_bookings: int | None = None
+    #: The caller's booking counts, per role — the sidebar's Bookings badge and
+    #: dashboard headings. Each half is null when the caller lacks that role.
+    booking_counts: BookingCountsRead = Field(default_factory=lambda: BookingCountsRead())

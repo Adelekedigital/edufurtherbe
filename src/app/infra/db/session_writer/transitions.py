@@ -8,7 +8,7 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import insert, or_, select, update
+from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
@@ -118,6 +118,10 @@ async def transition(
                     # appears on their calendar beside the ones they wrote by
                     # hand, so it is stored the way those are.
                     User.timezone,
+                    # The deadline, from the one clause the sweep and `/me`
+                    # also read — so a request the badge no longer counts is
+                    # one the mentor can no longer answer.
+                    and_(*lapsed_request(now)).label("lapsed"),
                 )
                 .join(User, User.id == Session.mentor_id)
                 .where(Session.id == session_id)
@@ -146,6 +150,13 @@ async def transition(
     role = SessionRole.MENTOR if row["mentor_id"] == actor_id else SessionRole.MENTEE
     if SessionStatus(row["status"]) not in rule.allowed_from:
         raise ConflictError(f"a {row['status']} session cannot be {_past(action)}")
+    if role is SessionRole.MENTOR and row["lapsed"]:
+        # Past `respond_by` the request is expired in all but the stored word,
+        # which the hourly sweep writes; answering it now would confirm an hour
+        # the mentee was told had lapsed.
+        raise ConflictError(
+            f"this request passed its answer deadline and cannot be {_past(action)}"
+        )
     if rule.honours_cutoff and too_late_to_cancel(row["starts_at"], now):
         minutes = int(CANCELLATION_CUTOFF.total_seconds() // 60)
         raise ConflictError(f"a session cannot be cancelled within {minutes} minutes of its start")
