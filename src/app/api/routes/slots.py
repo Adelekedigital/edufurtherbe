@@ -25,6 +25,14 @@ from fastapi import APIRouter, status
 from app.api.deps import SlotsDep
 from app.api.schemas.common import Page
 from app.api.schemas.slots import SlotRead
+from app.core.config import Settings
+from app.domain.availability import BookingWindow
+
+#: The range cap as the published text quotes it, from the one rule that enforces
+#: it (`BookingWindow.range_cap_days`) at the configured default maximum.
+_DEFAULT_MAX = Settings.model_fields["max_booking_window_days"].default
+_DEFAULT_CAP = BookingWindow(max_days=_DEFAULT_MAX, default_days=_DEFAULT_MAX).range_cap_days
+_CAP_MARGIN = _DEFAULT_CAP - _DEFAULT_MAX
 
 router = APIRouter(prefix="/api/v1/users/{user_id}/availability", tags=["public"])
 
@@ -43,8 +51,9 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": "`end` is not after `start`, or the range is longer than the platform's "
-        "maximum booking window plus its partial last day (`MAX_BOOKING_WINDOW_DAYS` + 1 "
-        "days; 57 by default)."
+        "maximum booking window plus enough margin for a viewer in any zone to cover the "
+        f"whole window in their own dates (`MAX_BOOKING_WINDOW_DAYS` + {_CAP_MARGIN} days; "
+        f"{_DEFAULT_CAP} by default)."
     },
 }
 
