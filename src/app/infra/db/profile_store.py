@@ -71,6 +71,7 @@ def _education_statement(user_id: UUID) -> Select[Any]:
             EducationEntry.date_end,
             EducationEntry.is_most_recent,
             EducationEntry.degree_abbreviation,
+            DegreeLevel.id.label("degree_level_ref_id"),
             DegreeLevel.slug.label("degree_level_slug"),
             DegreeLevel.display_name.label("degree_level_name"),
             DegreeLevel.short_name.label("degree_level_short_name"),
@@ -122,6 +123,7 @@ async def get_goal(session: AsyncSession, user_id: UUID) -> dict[str, Any] | Non
                 MenteeGoal.degree_goal_raw,
                 MenteeGoal.target_start_term,
                 MenteeGoal.notes,
+                DegreeLevel.id.label("degree_goal_ref_id"),
                 DegreeLevel.slug.label("degree_goal_slug"),
                 DegreeLevel.display_name.label("degree_goal_name"),
             )
@@ -146,7 +148,7 @@ async def get_goal(session: AsyncSession, user_id: UUID) -> dict[str, Any] | Non
 
     needs = (
         await session.execute(
-            select(ServiceOffering.slug, ServiceOffering.display_name)
+            select(ServiceOffering.id, ServiceOffering.slug, ServiceOffering.display_name)
             .select_from(MenteeGoalNeed)
             .join(ServiceOffering, ServiceOffering.id == MenteeGoalNeed.service_offering_id)
             .where(MenteeGoalNeed.user_id == user_id)

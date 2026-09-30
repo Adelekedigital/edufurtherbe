@@ -39,6 +39,7 @@ from app.infra.db.models.education import EducationEntry, Institution
 WRITABLE = (
     "school_name_raw",
     "degree_level_id",
+    "degree_abbreviation",
     "degree_category",
     "study_course",
     "study_program",
