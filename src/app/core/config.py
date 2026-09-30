@@ -104,6 +104,17 @@ INTAKE_FILE_CEILING = 6 * 1024 * 1024 - 64 * 1024
 #: follows the configured maximum.
 BOOKING_WINDOW_CEILING = 365
 
+#: The platform's notice floor, in minutes: no booking inside 24 hours (#104).
+#: Here rather than in `domain/availability.py`, which imports this module, so
+#: the smallest window below can be derived from it without an import cycle;
+#: `MIN_NOTICE_MINUTES` there is built from it.
+NOTICE_FLOOR_MINUTES = 1440
+
+#: The shortest window that can hold a slot. Every slot starts at least the
+#: notice floor from now and before `now + window`, so a window no longer than
+#: the floor offers nothing at all. Derived, so the two cannot drift.
+MIN_BOOKING_WINDOW_DAYS = NOTICE_FLOOR_MINUTES // (24 * 60) + 1
+
 
 def env_key(field: str) -> str:
     """The environment variable a field is read from.
@@ -198,13 +209,13 @@ class Settings(BaseSettings):
     #: clamps stored windows on read, and raising it back restores them.
     max_booking_window_days: int = Field(
         default=56,
-        ge=1,
+        ge=MIN_BOOKING_WINDOW_DAYS,
         le=BOOKING_WINDOW_CEILING,
         validation_alias=env_key("max_booking_window_days"),
     )
     default_booking_window_days: int = Field(
         default=56,
-        ge=1,
+        ge=MIN_BOOKING_WINDOW_DAYS,
         le=BOOKING_WINDOW_CEILING,
         validation_alias=env_key("default_booking_window_days"),
     )
