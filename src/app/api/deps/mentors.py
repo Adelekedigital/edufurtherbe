@@ -192,9 +192,10 @@ async def mentor_page(
     # mentee can add a first goal: re-deciding from the viewer would hand one
     # kind of cursor to the other's decoder and answer a list anyone may read
     # with a 422. A goal cursor continues by offset — goal-ranked if the viewer
-    # still has goals, else newest first from that position; an id cursor
-    # continues newest first. A *search* cursor without its `q` is still
-    # refused: that is a client that dropped its query, not a changed viewer.
+    # still has goals, else newest first from that position; a browse
+    # cursor continues bookable first, then newest (#220). A *search* cursor
+    # without its `q` is still refused: that is a client that dropped its query,
+    # not a changed viewer.
     goal_paging = term is None and (
         is_goal_cursor(cursor) if cursor is not None else goal_day is not None
     )
@@ -236,7 +237,7 @@ async def mentor_page(
         after=decode_browse_cursor(cursor),
         offerings=slugs,
         viewer=viewer,
-    )  # `goal_day` is not passed: an id cursor continues newest first.
+    )  # `goal_day` is not passed: a browse cursor continues bookable first, then newest.
     next_cursor = (
         encode_browse_cursor(rows[-1]["taking_bookings"], rows[-1]["cursor_id"])
         if has_more and rows
