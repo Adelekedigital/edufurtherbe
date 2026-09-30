@@ -23,7 +23,7 @@ import logging
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, func, insert, literal, or_, select, update
+from sqlalchemy import and_, delete, exists, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, ValidationError
@@ -36,6 +36,8 @@ from app.domain.intake_files import (
 )
 from app.infra.db.models.intake import IntakeFile
 from app.infra.db.models.sessions import Session
+from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
 logger = logging.getLogger(__name__)
@@ -70,10 +72,16 @@ def _unlinked(uploader_id: UUID) -> Any:
 
 
 def sweep_counts(
-    *, unused: int = 0, expired: int = 0, purged: int = 0, failed: int = 0
+    *, unused: int = 0, expired: int = 0, departed: int = 0, purged: int = 0, failed: int = 0
 ) -> dict[str, int]:
     """What a sweep reports — the one place its keys are named."""
-    return {"unused": unused, "expired": expired, "purged": purged, "failed": failed}
+    return {
+        "unused": unused,
+        "expired": expired,
+        "departed": departed,
+        "purged": purged,
+        "failed": failed,
+    }
 
 
 async def store_intake_file(
@@ -212,8 +220,14 @@ async def sweep_intake_files(
 
     Counts: ``unused`` uploads never used in a booking and older than
     ``unused_hours``; ``expired`` files older than ``retention_days`` (none when
-    it is unset); ``purged`` objects removed; ``failed`` removals left for the
-    next run. A dry run counts the first two and changes nothing.
+    it is unset); ``departed`` files whose uploader has deleted their account,
+    whatever the retention (#280); ``purged`` objects removed; ``failed``
+    removals left for the next run. A dry run counts the first three and
+    changes nothing. Each file is counted once, in the first of those it meets.
+
+    **Departed is the uploader's account only**: a deleted mentor does not take
+    a mentee's file. There is no account-deletion hook to call, so the daily
+    sweep is where a deletion reaches the bucket, at most a day later.
     """
     abandoned = and_(_live_unlinked(), IntakeFile.created_at < unused_cutoff(now, unused_hours))
     cutoff = retention_cutoff(now, retention_days)
@@ -222,15 +236,22 @@ async def sweep_intake_files(
         if cutoff is not None
         else None
     )
+    departed = and_(
+        IntakeFile.deleted_at.is_(None),
+        ~exists(select(User.id).where(User.id == IntakeFile.uploader_id, LIVE)),
+    )
     if dry_run:
         unused = (await session.execute(select(func.count()).where(abandoned))).scalar_one()
         expired = 0
+        earlier = ~abandoned
         if past_retention is not None:
             expired = (
                 await session.execute(select(func.count()).where(past_retention, ~abandoned))
             ).scalar_one()
+            earlier = and_(earlier, ~past_retention)
+        gone = (await session.execute(select(func.count()).where(departed, earlier))).scalar_one()
         await session.rollback()
-        return sweep_counts(unused=unused, expired=expired)
+        return sweep_counts(unused=unused, expired=expired, departed=gone)
 
     unused = len(
         (
@@ -251,6 +272,14 @@ async def sweep_intake_files(
                 )
             ).all()
         )
+    # After the two above, so each file is counted in the first that takes it.
+    gone = len(
+        (
+            await session.execute(
+                update(IntakeFile).where(departed).values(deleted_at=now).returning(IntakeFile.id)
+            )
+        ).all()
+    )
     await session.commit()
 
     purged = failed = 0
@@ -280,4 +309,4 @@ async def sweep_intake_files(
     await session.commit()
     if failed:
         logger.warning("intake file sweep left objects for the next run", extra={"failed": failed})
-    return sweep_counts(unused=unused, expired=expired, purged=purged, failed=failed)
+    return sweep_counts(unused=unused, expired=expired, departed=gone, purged=purged, failed=failed)

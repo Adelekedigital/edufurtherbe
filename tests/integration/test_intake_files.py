@@ -488,3 +488,71 @@ async def test_retention_removes_the_object_and_keeps_the_answer(
     gone = await files_client.get(f"/api/v1/intake-files/{file_id}", headers=headers)
     assert gone.status_code == 404
     assert (await sweep(db_engine, intake_fake, retention_days=30))["expired"] == 0
+
+
+async def delete_account(engine: AsyncEngine, user_id: Any) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": user_id}
+        )
+
+
+async def test_a_deleted_uploaders_files_go_whatever_the_retention(
+    files_client: httpx.AsyncClient, db_engine: AsyncEngine, intake_fake: FakeStorage
+) -> None:
+    """#280: an account deleted takes its files with it, used or not, even with
+    retention unset. The answer row stays, as retention leaves it."""
+    linked, mentor, headers = await a_linked_file(files_client, db_engine, "sweep-gone")
+    unlinked = (await upload(files_client, headers)).json()["file_id"]
+    _, other = await a_mentee(db_engine, "sweep-gone-live")
+    kept = (await upload(files_client, other)).json()["file_id"]
+    linked_row = await file_row(db_engine, linked) or {}
+    keys = {
+        "linked": linked_row["storage_key"],
+        "unlinked": (await file_row(db_engine, unlinked) or {})["storage_key"],
+        "kept": (await file_row(db_engine, kept) or {})["storage_key"],
+    }
+    await delete_account(db_engine, linked_row["uploader_id"])
+
+    dry = await sweep(db_engine, intake_fake, retention_days=None, dry_run=True)
+    assert dry["departed"] == 2
+    assert keys["linked"] in intake_fake.objects
+
+    counts = await sweep(db_engine, intake_fake, retention_days=None)
+
+    assert counts["departed"] == 2
+    assert keys["linked"] not in intake_fake.objects
+    assert keys["unlinked"] not in intake_fake.objects
+    row = await file_row(db_engine, linked)
+    assert row is not None and row["deleted_at"] is not None and row["purged_at"] is not None
+    assert await file_row(db_engine, unlinked) is None
+    async with db_engine.connect() as conn:
+        answers = (
+            await conn.execute(
+                text("SELECT count(*) FROM intake_answers WHERE file_storage_key = :k"),
+                {"k": keys["linked"]},
+            )
+        ).scalar_one()
+    assert answers == 1
+    as_mentor = await files_client.get(
+        f"/api/v1/intake-files/{linked}", headers=await signed_in(db_engine, mentor)
+    )
+    assert as_mentor.status_code == 404
+    assert keys["kept"] in intake_fake.objects
+    assert (await file_row(db_engine, kept) or {})["deleted_at"] is None
+    assert (await sweep(db_engine, intake_fake, retention_days=None))["departed"] == 0
+
+
+async def test_a_deleted_mentor_leaves_the_mentees_file_alone(
+    files_client: httpx.AsyncClient, db_engine: AsyncEngine, intake_fake: FakeStorage
+) -> None:
+    """Only the uploader's account decides: the file is the mentee's."""
+    linked, mentor, _ = await a_linked_file(files_client, db_engine, "sweep-mentor-gone")
+    key_ = (await file_row(db_engine, linked) or {})["storage_key"]
+    await delete_account(db_engine, mentor)
+
+    counts = await sweep(db_engine, intake_fake, retention_days=None)
+
+    assert counts["departed"] == 0
+    assert key_ in intake_fake.objects
+    assert (await file_row(db_engine, linked) or {})["deleted_at"] is None
