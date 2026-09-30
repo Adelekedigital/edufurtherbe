@@ -35,6 +35,7 @@ from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, Y
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 from app.domain.enums import ApprovalStatus, AwardFunding, CoverArt, CoverColor, ListingStatus
+from app.domain.profile_strength import COMPLETENESS_ORDER, completeness
 
 
 class ServiceOfferingRead(BaseModel):
@@ -319,6 +320,20 @@ class LanguageRead(BaseModel):
         )
 
 
+class CompletenessRead(BaseModel):
+    """How complete the mentor's own profile is, and what to do next (#223)."""
+
+    percent: int = Field(ge=0, le=100, description="The share of steps done, rounded.")
+    missing: list[str] = Field(
+        description=(
+            "The steps not done yet, **most important first**: "
+            + ", ".join(f"`{code}`" for code in COMPLETENESS_ORDER)
+            + ". The first two are what stop anyone booking. A client should "
+            "skip a code it does not know: more may be added."
+        )
+    )
+
+
 class MentorPublicRead(BaseModel):
     """Everything the public may read about one mentor."""
 
@@ -467,6 +482,14 @@ class MentorPublicRead(BaseModel):
             "`taking_bookings` is `false`."
         ),
     )
+    completeness: CompletenessRead | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "**Owner only**, like `approval_status`: the Profile strength card. "
+            "`setup_needed` is its bookability steps, from the same rule."
+        ),
+    )
 
     @classmethod
     def from_row(
@@ -518,7 +541,13 @@ class MentorPublicRead(BaseModel):
             taking_bookings=bool(row["taking_bookings"]),
             **_joined_and_award(row),
             **_next_available(row),
-            **_owner_fields(row),
+            **_owner_fields(
+                row,
+                offerings=offerings,
+                education=education,
+                scholarships=scholarships,
+                languages=languages,
+            ),
         )
 
 
@@ -548,19 +577,47 @@ def _next_available(row: dict[str, Any]) -> dict[str, Any]:
 OWNER_ONLY = ("approval_status", "listing_status")
 
 
-def _owner_fields(row: dict[str, Any]) -> dict[str, Any]:
-    """The owner-only fields, when the row says the caller is the owner."""
+def _owner_fields(
+    row: dict[str, Any],
+    *,
+    offerings: list[dict[str, object]],
+    education: list[dict[str, object]],
+    scholarships: list[dict[str, object]],
+    languages: list[dict[str, object]],
+) -> dict[str, Any]:
+    """The owner-only fields, when the row says the caller is the owner.
+
+    `completeness` and `setup_needed` come from one rule
+    (`domain.profile_strength`), and the lists are the same live ones the
+    profile renders — so a deleted award or education entry counts for neither.
+    """
     if not row.get("is_owner"):
         return {}
-    missing = [
-        need
-        for need, present in (
-            ("session_type", row["has_offering"]),
-            ("weekly_hours", row["has_hours"]),
-        )
-        if not present
-    ]
-    return {**{key: row[key] for key in OWNER_ONLY}, "setup_needed": missing}
+    strength = completeness(
+        {
+            "session_type": bool(row["has_offering"]),
+            "weekly_hours": bool(row["has_hours"]),
+            "photo": _filled(row["avatar_url"]),
+            "headline": _filled(row["headline"]),
+            "about": _filled(row["about_me"]),
+            "topics": bool(offerings),
+            "background": bool(
+                row["origin_country_id"] and row["primary_study_country_id"] and languages
+            ),
+            "education": bool(education),
+            "award": bool(scholarships),
+        }
+    )
+    return {
+        **{key: row[key] for key in OWNER_ONLY},
+        "setup_needed": strength.setup_needed,
+        "completeness": CompletenessRead(percent=strength.percent, missing=list(strength.missing)),
+    }
+
+
+def _filled(value: object) -> bool:
+    """Set and not blank. Writes store a blank as null, but migrated text may not."""
+    return value is not None and bool(str(value).strip())
 
 
 def _joined_and_award(row: dict[str, Any]) -> dict[str, Any]:
