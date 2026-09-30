@@ -23,7 +23,7 @@ from tests.integration.factories import add_availability, add_session_type, make
 from tests.integration.test_api_me_session_type_writes import URL, as_mentor, body
 
 from app.infra.db.slot_store import list_slots
-from conftest import api_token, bearer
+from conftest import PLATFORM_WINDOW, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -104,6 +104,7 @@ async def starts(
             start=NOW.date(),
             end=NOW.date() + dt.timedelta(days=days),
             now=NOW,
+            window=PLATFORM_WINDOW,
         )
     assert slots is not None
     return [slot.start for slot in slots]

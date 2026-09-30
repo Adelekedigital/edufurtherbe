@@ -17,7 +17,7 @@ from app.domain.availability import (
     DEFAULT_BREAK_MINUTES,
     DEFAULT_DURATION_MINUTES,
     DEFAULT_MIN_NOTICE_MINUTES,
-    MAX_PROJECTION_DAYS,
+    BookingWindow,
 )
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionTypeBookingConfig
@@ -33,11 +33,21 @@ __all__ = [
 
 
 def effective_window_days(
-    config: Any = SessionTypeBookingConfig, mentor: Any = MentorProfile
+    window: BookingWindow, config: Any = SessionTypeBookingConfig, mentor: Any = MentorProfile
 ) -> Any:
-    """Days ahead the offering may be booked. Pass aliases when a query joins twice."""
-    return func.coalesce(
-        config.booking_window_days, mentor.booking_window_days, literal(MAX_PROJECTION_DAYS)
+    """Days ahead the offering may be booked. Pass aliases when a query joins twice.
+
+    **Clamped to the configured maximum on read**, never rewritten: lowering the
+    maximum shortens every longer window at once, and raising it back restores
+    what each mentor chose — no migration either way.
+    """
+    return func.least(
+        func.coalesce(
+            config.booking_window_days,
+            mentor.booking_window_days,
+            literal(window.default_days),
+        ),
+        literal(window.max_days),
     )
 
 

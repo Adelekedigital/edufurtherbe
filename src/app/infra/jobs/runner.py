@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ValidationError
+from app.domain.availability import booking_window
 from app.domain.credits import credit_ladder
 from app.domain.institutions import CatalogueError, CatalogueRow, to_catalogue_row
 from app.infra.clients.hipolabs import FileCatalogue, HipolabsCatalogue
@@ -214,6 +215,7 @@ class RuntimeJobs:
                 return await refresh_next_available(
                     session,
                     max_age=dt.timedelta(minutes=self.settings.next_available_max_age_minutes),
+                    window=booking_window(self.settings),
                     # No factory on a dry run: the reader then records a dead
                     # grant in this session, which the dry run rolls back.
                     reader=free_busy_reader(

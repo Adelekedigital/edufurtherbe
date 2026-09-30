@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import Depends, Query, Request
 
 from app.api.deps.calendar import _free_busy
-from app.api.deps.core import OwnerDep, SessionDep, TargetUserDep
+from app.api.deps.core import BookingWindowDep, OwnerDep, SessionDep, TargetUserDep
 from app.api.schemas.availability import (
     AvailabilityExceptionWrite,
     AvailabilityRulePatch,
@@ -128,6 +128,7 @@ async def mentor_slots(
     request: Request,
     user_id: UUID,
     session: SessionDep,
+    window: BookingWindowDep,
     session_type_id: Annotated[UUID, Query(description="Which offering to price the slots for.")],
     start: Annotated[
         dt.date | None,
@@ -169,6 +170,7 @@ async def mentor_slots(
         start=start,
         end=end,
         now=dt.datetime.now(dt.UTC),
+        window=window,
         external_busy=_free_busy(request),
     )
     if slots is None:

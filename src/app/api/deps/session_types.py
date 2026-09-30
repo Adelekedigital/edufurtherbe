@@ -12,10 +12,12 @@ from app.api.deps.core import (
     CREATED,
     ENDPOINT_QUESTION,
     ENDPOINT_SESSION_TYPE,
+    BookingWindowDep,
     CurrentUserDep,
     IdempotencyKeyHeader,
     SessionDep,
     claim_idempotency_key,
+    refuse_window_over_max,
 )
 from app.api.schemas.availability import (
     AvailabilityRulePatch,
@@ -107,7 +109,9 @@ UpdatedSessionTypeWindowDep = Annotated[bool, Depends(updated_session_type_windo
 DeletedSessionTypeWindowDep = Annotated[bool, Depends(deleted_session_type_window)]
 
 
-async def mentor_session_types(user_id: UUID, session: SessionDep) -> list[dict[str, Any]]:
+async def mentor_session_types(
+    user_id: UUID, session: SessionDep, window: BookingWindowDep
+) -> list[dict[str, Any]]:
     """What a mentor offers, or a 404 that does not say which kind of 404 it is.
 
     No `CurrentUserDep`, and that absence is the whole authorization decision —
@@ -117,7 +121,7 @@ async def mentor_session_types(user_id: UUID, session: SessionDep) -> list[dict[
     list** means they are, and are offering nothing bookable — a different claim,
     and one that must not be used to answer the first.
     """
-    rows = await list_session_types(session, user_id)
+    rows = await list_session_types(session, user_id, window=window)
     if rows is None:
         raise NotFoundError("no such mentor")
     return await _with_forms(session, rows)
@@ -142,7 +146,9 @@ async def _with_forms(
 SessionTypesDep = Annotated[list[dict[str, Any]], Depends(mentor_session_types)]
 
 
-async def own_session_types(user: CurrentUserDep, session: SessionDep) -> list[dict[str, Any]]:
+async def own_session_types(
+    user: CurrentUserDep, session: SessionDep, window: BookingWindowDep
+) -> list[dict[str, Any]]:
     """The caller's own offerings, including the ones they have switched off.
 
     **No authorization argument, and no `TargetUserDep`.** `CurrentUserDep` *is*
@@ -157,7 +163,7 @@ async def own_session_types(user: CurrentUserDep, session: SessionDep) -> list[d
     present whenever this runs — the same assumption every other dependency in
     this module already makes.
     """
-    return await list_own_session_types(session, user["id"])
+    return await list_own_session_types(session, user["id"], window=window)
 
 
 OwnSessionTypesDep = Annotated[list[dict[str, Any]], Depends(own_session_types)]
@@ -167,6 +173,7 @@ async def created_own_session_type(
     payload: MentorSessionTypeWrite,
     user: CurrentUserDep,
     session: SessionDep,
+    window: BookingWindowDep,
     idempotency_key: Annotated[str | None, IdempotencyKeyHeader] = None,
 ) -> tuple[dict[str, Any], int, bool]:
     """The offering, its booking config and its questions, in one transaction.
@@ -187,6 +194,7 @@ async def created_own_session_type(
     `CurrentUserDep` rather than `OwnerDep`: there is no `{user_id}` in the path
     to resolve, so the caller *is* the scope, matching `own_session_types` above.
     """
+    refuse_window_over_max(payload.booking_window_days, window)
     reservation = (
         await claim_idempotency_key(
             session,
@@ -224,10 +232,12 @@ async def updated_own_session_type(
     payload: MentorSessionTypePatch,
     user: CurrentUserDep,
     session: SessionDep,
+    window: BookingWindowDep,
 ) -> bool:
     """`exclude_unset` is what makes this a PATCH: a field the client did not send
     is absent, not null. Without it every omitted field is written as its default
     and a one-field edit blanks the rest."""
+    refuse_window_over_max(payload.booking_window_days, window)
     changed = await update_session_type(
         session, user["id"], session_type_id, payload.model_dump(exclude_unset=True)
     )
@@ -246,13 +256,13 @@ async def deleted_own_session_type(
 
 
 async def restored_own_session_type(
-    session_type_id: UUID, user: CurrentUserDep, session: SessionDep
+    session_type_id: UUID, user: CurrentUserDep, session: SessionDep, window: BookingWindowDep
 ) -> dict[str, Any]:
     """Cancel a scheduled deletion and answer the offering as the list shows it."""
     if not await restore_session_type(session, user["id"], session_type_id):
         raise NotFoundError("no such session type")
     await session.commit()
-    row = await get_own_session_type(session, user["id"], session_type_id)
+    row = await get_own_session_type(session, user["id"], session_type_id, window=window)
     if row is None:  # pragma: no cover - found and restored in this request
         raise NotFoundError("no such session type")
     return row

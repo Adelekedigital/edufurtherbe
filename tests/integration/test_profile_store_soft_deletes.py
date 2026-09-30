@@ -35,7 +35,7 @@ from app.infra.db.profile_store import get_mentor_profile, list_awards, list_edu
 from app.infra.db.review_reader import get_review_row
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import list_slots
-from conftest import PROJECT_ROOT
+from conftest import PLATFORM_WINDOW, PROJECT_ROOT
 
 # `asyncio` is applied per test rather than to the module: the coverage check
 # below is synchronous, and a module-level mark makes pytest warn about it.
@@ -249,6 +249,7 @@ async def read_scheduling_windows(session: AsyncSession, user_id: UUID) -> list[
         start=day,
         end=day + dt.timedelta(days=1),
         now=dt.datetime.now(dt.UTC),
+        window=PLATFORM_WINDOW,
     )
     return ["LIVE" for _ in (slots or [])]
 
@@ -271,7 +272,7 @@ async def read_session_type_questions(session: AsyncSession, user_id: UUID) -> l
 
 
 async def read_session_types_for(session: AsyncSession, user_id: UUID) -> list[str]:
-    rows = await list_session_types(session, user_id)
+    rows = await list_session_types(session, user_id, window=PLATFORM_WINDOW)
     return [] if rows is None else [str(row["name"]) for row in rows]
 
 

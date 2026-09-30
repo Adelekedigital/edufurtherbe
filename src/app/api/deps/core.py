@@ -24,6 +24,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole
 from app.domain.idempotency import request_fingerprint
@@ -487,6 +488,25 @@ def _ladder(request: Request) -> CreditLadder:
 
 
 LadderDep = Annotated[CreditLadder, Depends(_ladder)]
+
+
+def _booking_window(request: Request) -> BookingWindow:
+    """This app's booking window (Round 5), through the same settings seam."""
+    return booking_window(_configured(request))
+
+
+BookingWindowDep = Annotated[BookingWindow, Depends(_booking_window)]
+
+
+def refuse_window_over_max(days: int | None, window: BookingWindow) -> None:
+    """A window above the configured maximum is a `422` at `/booking_window_days`.
+
+    Here rather than in the schema, because a `Field(le=...)` is fixed at import
+    and the maximum is configuration. The one check every write shares.
+    """
+    if days is not None and days > window.max_days:
+        message = f"booking_window_days may be at most {window.max_days}"
+        raise ValidationError(message, field_errors=(("/booking_window_days", message),))
 
 
 def _configured(request: Request) -> Settings:

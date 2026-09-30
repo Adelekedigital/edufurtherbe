@@ -39,6 +39,7 @@ from app.infra.clients.meetings import VenueUnavailableError
 from app.infra.db.calendar_store import MentorFreeBusy
 from app.infra.db.next_available_store import JITTER, refresh_next_available
 from app.infra.db.public_visibility import mentor_is_public
+from conftest import PLATFORM_WINDOW
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -106,6 +107,7 @@ async def refresh(
             now=now or dt.datetime.now(dt.UTC),
             max_age=MAX_AGE,
             reader=calendar or FakeCalendar(),
+            window=PLATFORM_WINDOW,
             dry_run=dry_run,
         )
 

@@ -63,7 +63,7 @@ from sqlalchemy import case, delete, exists, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.availability import MAX_PROJECTION_DAYS, UtcInterval
+from app.domain.availability import BookingWindow, UtcInterval
 from app.infra.db.models.availability import MentorAvailabilityChange, MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
@@ -149,19 +149,31 @@ class _OneReadPerMentor:
 
 
 async def _first_free(
-    session: AsyncSession, mentor: UUID, *, now: dt.datetime, reader: FreeBusyReader
+    session: AsyncSession,
+    mentor: UUID,
+    *,
+    now: dt.datetime,
+    reader: FreeBusyReader,
+    window: BookingWindow,
 ) -> tuple[dt.datetime | None, dt.datetime | None, UUID | None]:
     """The earliest instant any offering could be booked, until when, and which
     offering it is — the one whose slot is kept, so the three always agree."""
-    offerings = await list_session_types(session, mentor) or []
+    offerings = await list_session_types(session, mentor, window=window) or []
     zone = (await session.execute(select(User.timezone).where(User.id == mentor))).scalar_one()
     start = mentor_today(zone, now)
-    end = start + dt.timedelta(days=MAX_PROJECTION_DAYS)
+    end = start + dt.timedelta(days=window.max_days)
     once = _OneReadPerMentor(reader)
     best: tuple[dt.datetime, dt.datetime, UUID] | None = None
     for offering in offerings:
         slots = await list_slots(
-            session, mentor, offering["id"], start=start, end=end, now=now, external_busy=once
+            session,
+            mentor,
+            offering["id"],
+            start=start,
+            end=end,
+            now=now,
+            window=window,
+            external_busy=once,
         )
         if not slots:
             continue
@@ -218,6 +230,7 @@ async def refresh_next_available(
     *,
     max_age: dt.timedelta,
     reader: FreeBusyReader,
+    window: BookingWindow,
     now: dt.datetime | None = None,
     dry_run: bool = False,
 ) -> dict[str, int]:
@@ -265,7 +278,7 @@ async def refresh_next_available(
                 ).scalars()
             )
             first, until, session_type = await _first_free(
-                session, mentor, now=moment, reader=reader
+                session, mentor, now=moment, reader=reader, window=window
             )
             if dry_run:
                 written = True

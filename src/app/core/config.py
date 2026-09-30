@@ -98,6 +98,12 @@ CREDIT_CEILING = 100
 #: `tests/unit/test_intake_file_rules.py` pins the two together.
 INTAKE_FILE_CEILING = 6 * 1024 * 1024 - 64 * 1024
 
+#: The widest booking window this service can be configured to allow, in days —
+#: the `booking_window_days_sane` CHECK's bound, so a configured maximum can
+#: never exceed what the columns hold. It also bounds one `/slots` range, which
+#: follows the configured maximum.
+BOOKING_WINDOW_CEILING = 365
+
 
 def env_key(field: str) -> str:
     """The environment variable a field is read from.
@@ -183,6 +189,24 @@ class Settings(BaseSettings):
     #: job's cron interval, or every run recomputes every mentor.
     next_available_max_age_minutes: int = Field(
         default=5, ge=1, le=1440, validation_alias=env_key("next_available_max_age_minutes")
+    )
+
+    #: How far ahead any offering may be booked, and what one inherits when
+    #: neither it nor its mentor sets a window (#204, Round 5). Configuration so
+    #: product can move them without a code change; `booking_window(settings)`
+    #: in `domain/availability.py` is the single reader. Lowering the maximum
+    #: clamps stored windows on read, and raising it back restores them.
+    max_booking_window_days: int = Field(
+        default=56,
+        ge=1,
+        le=BOOKING_WINDOW_CEILING,
+        validation_alias=env_key("max_booking_window_days"),
+    )
+    default_booking_window_days: int = Field(
+        default=56,
+        ge=1,
+        le=BOOKING_WINDOW_CEILING,
+        validation_alias=env_key("default_booking_window_days"),
     )
 
     #: Whether a booking must answer every **required** intake question (#207).
@@ -588,6 +612,13 @@ class Settings(BaseSettings):
         read as `0` days would delete every file on the next sweep.
         """
         return None if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def default_window_within_max(self) -> Settings:
+        """A default the maximum would clamp is a misconfiguration, not a value."""
+        if self.default_booking_window_days > self.max_booking_window_days:
+            raise ValueError("DEFAULT_BOOKING_WINDOW_DAYS must not exceed MAX_BOOKING_WINDOW_DAYS")
+        return self
 
     @model_validator(mode="after")
     def reject_stale_and_unknown_prefixed_variables(self) -> Settings:

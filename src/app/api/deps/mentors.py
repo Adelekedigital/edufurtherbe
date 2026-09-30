@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from fastapi import Depends, Query
 from pydantic import StringConstraints
 
-from app.api.deps.core import OptionalViewerDep, SessionDep
+from app.api.deps.core import BookingWindowDep, OptionalViewerDep, SessionDep
 from app.api.deps.session_types import _with_forms
 from app.api.schemas.common import (
     MAX_PAGE_SIZE,
@@ -63,7 +63,7 @@ from app.infra.db.session_type_store import (
 
 
 async def public_mentor(
-    handle: str, session: SessionDep, viewer: OptionalViewerDep
+    handle: str, session: SessionDep, viewer: OptionalViewerDep, window: BookingWindowDep
 ) -> dict[str, Any]:
     """One mentor, as a stranger sees them, or a 404 that says nothing about why.
 
@@ -97,7 +97,9 @@ async def public_mentor(
     return {
         "row": row,
         "offerings": (await offerings_for(session, [user_id])).get(user_id, []),
-        "session_types": await _with_forms(session, await list_session_types(session, user_id)),
+        "session_types": await _with_forms(
+            session, await list_session_types(session, user_id, window=window)
+        ),
         "education": await list_education(session, user_id),
         "scholarships": await list_awards(session, user_id),
         "languages": await list_languages(session, user_id),

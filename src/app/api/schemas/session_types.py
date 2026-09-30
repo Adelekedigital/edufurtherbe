@@ -38,8 +38,8 @@ from pydantic import BaseModel, Field, model_validator
 from app.api.schemas.common import Normalised
 from app.api.schemas.intake import QuestionRead, QuestionWrite
 from app.api.schemas.profile import LookupRef
+from app.core.config import BOOKING_WINDOW_CEILING
 from app.domain.availability import (
-    BOOKING_WINDOW_DAYS,
     BREAK_AFTER_MINUTES,
     DEFAULT_DURATION_MINUTES,
     MIN_NOTICE_MINUTES,
@@ -111,6 +111,16 @@ def _stage(row: dict[str, object]) -> ApplicationStage | None:
 
 #: What a set of stages may hold: each stage once, so at most all of them.
 MAX_STAGES = len(ApplicationStage)
+
+
+#: One description for both writes. The static bound is the ceiling the column
+#: holds; the configured maximum is checked where settings are known
+#: (`deps.core.refuse_window_over_max`), because a `Field(le=...)` is fixed at import.
+WINDOW_WRITE_DESCRIPTION = (
+    "How many days ahead this offering can be booked: 1 to the platform maximum "
+    "(`max_booking_window_days` on your mentor profile; above it is a 422 at "
+    "`/booking_window_days`). `null` follows your default on your mentor profile."
+)
 
 
 class SessionTypeRead(BaseModel):
@@ -199,6 +209,13 @@ class SessionTypeRead(BaseModel):
         default=False,
         description=("The one offering this mentor puts first (at most one); it is listed first."),
     )
+    booking_window_days: int = Field(
+        description=(
+            "How many days ahead this offering can be booked, **resolved**: its own "
+            "window, else its mentor's, else the platform default — and never more "
+            "than the platform maximum. Show dates up to this in the booking modal."
+        ),
+    )
     questions: list[QuestionRead] = Field(
         default_factory=list,
         description=(
@@ -226,6 +243,7 @@ class SessionTypeRead(BaseModel):
             ),
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
+            booking_window_days=int(str(row["booking_window_days"])),
             questions=[
                 QuestionRead.from_row(q)
                 for q in cast("list[dict[str, object]]", row.get("questions") or [])
@@ -372,6 +390,12 @@ class OwnSessionTypeRead(BaseModel):
     booking_window_days: int | None = Field(
         default=None, description="This offering's own window in days; `null` inherits."
     )
+    effective_booking_window_days: int = Field(
+        description=(
+            "The window this offering actually uses: its own, else yours, else the "
+            "platform default, capped at the platform maximum."
+        ),
+    )
     break_after_minutes: int | None = Field(
         default=None, description="This offering's own break in minutes; `null` inherits."
     )
@@ -425,6 +449,7 @@ class OwnSessionTypeRead(BaseModel):
                 else bool(row["requires_booking_confirmation"])
             ),
             booking_window_days=_int_or_none(row.get("booking_window_days")),
+            effective_booking_window_days=int(str(row["effective_booking_window_days"])),
             break_after_minutes=_int_or_none(row.get("break_after_minutes")),
             service_offering=_taxonomy(row),
             service_offerings=_offerings(row),
@@ -572,13 +597,9 @@ class MentorSessionTypeWrite(Normalised):
     #: the mentor's default, then the platform's (the full horizon, no break).
     booking_window_days: int | None = Field(
         default=None,
-        ge=BOOKING_WINDOW_DAYS[0],
-        le=BOOKING_WINDOW_DAYS[1],
-        description=(
-            "How many days ahead this offering can be booked "
-            f"({BOOKING_WINDOW_DAYS[0]}-{BOOKING_WINDOW_DAYS[1]}); `null` follows your "
-            "default on your mentor profile."
-        ),
+        ge=1,
+        le=BOOKING_WINDOW_CEILING,
+        description=WINDOW_WRITE_DESCRIPTION,
     )
     break_after_minutes: int | None = Field(
         default=None,
@@ -691,13 +712,9 @@ class MentorSessionTypePatch(Normalised):
     #: the mentor's default, then the platform's (the full horizon, no break).
     booking_window_days: int | None = Field(
         default=None,
-        ge=BOOKING_WINDOW_DAYS[0],
-        le=BOOKING_WINDOW_DAYS[1],
-        description=(
-            "How many days ahead this offering can be booked "
-            f"({BOOKING_WINDOW_DAYS[0]}-{BOOKING_WINDOW_DAYS[1]}); `null` follows your "
-            "default on your mentor profile."
-        ),
+        ge=1,
+        le=BOOKING_WINDOW_CEILING,
+        description=WINDOW_WRITE_DESCRIPTION,
     )
     break_after_minutes: int | None = Field(
         default=None,

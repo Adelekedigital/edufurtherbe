@@ -55,11 +55,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError, ValidationError
+from app.domain.availability import BookingWindow
 from app.domain.enums import ApplicationStage, ConferencingProvider
 from app.domain.sessions import first_stage, named_stages, stage_label_problem
 from app.infra.db.booking_rules import (
     effective_duration_minutes,
     effective_min_notice_minutes,
+    effective_window_days,
     inherits_duration,
     inherits_min_notice,
 )
@@ -253,7 +255,7 @@ def _public_mentor(user_id: UUID) -> Select[Any]:
     )
 
 
-def _live_session_types(user_id: UUID) -> Select[Any]:
+def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
     """This mentor's session types, as a stranger sees them.
 
     **`created_by` is absent on purpose** — internal attribution, null on every
@@ -283,6 +285,8 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
             # default, else the platform's. The field stays an int.
             effective_duration_minutes().label("duration_minutes"),
             effective_min_notice_minutes().label("min_notice_minutes"),
+            # Resolved and clamped (Round 5): what the booking modal may show.
+            effective_window_days(window).label("booking_window_days"),
             # Resolved, not read. See `_resolved_venue`.
             _resolved_venue(),
         )
@@ -301,7 +305,7 @@ def _live_session_types(user_id: UUID) -> Select[Any]:
     )
 
 
-def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
+def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[Any]:
     """This mentor's session types, as **they** see them.
 
     **No `mentor_is_public()`, and that absence is the whole point.** The public
@@ -357,6 +361,7 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
             inherits_min_notice().label("min_notice_inherited"),
             SessionTypeBookingConfig.requires_booking_confirmation,
             SessionTypeBookingConfig.booking_window_days,
+            effective_window_days(window).label("effective_booking_window_days"),
             SessionTypeBookingConfig.break_after_minutes,
             _resolved_venue(),
         )
@@ -373,7 +378,7 @@ def _own_session_types(mentor_user_id: UUID) -> Select[Any]:
 
 
 async def list_own_session_types(
-    session: AsyncSession, mentor_user_id: UUID
+    session: AsyncSession, mentor_user_id: UUID, *, window: BookingWindow
 ) -> list[dict[str, Any]]:
     """Everything this mentor has, switched on or off.
 
@@ -389,22 +394,24 @@ async def list_own_session_types(
     this mentor never sees the row at all, and the reason is the same statement
     that found it.
     """
-    result = await session.execute(_own_session_types(mentor_user_id))
+    result = await session.execute(_own_session_types(mentor_user_id, window))
     return await _with_sets(session, [dict(row) for row in result.mappings()])
 
 
 async def get_own_session_type(
-    session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID
+    session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID, *, window: BookingWindow
 ) -> dict[str, Any] | None:
     """One of this mentor's offerings, as their list shows it, or ``None``."""
     result = await session.execute(
-        _own_session_types(mentor_user_id).where(SessionType.id == session_type_id)
+        _own_session_types(mentor_user_id, window).where(SessionType.id == session_type_id)
     )
     rows = await _with_sets(session, [dict(row) for row in result.mappings()])
     return rows[0] if rows else None
 
 
-async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]] | None:
+async def list_session_types(
+    session: AsyncSession, user_id: UUID, *, window: BookingWindow
+) -> list[dict[str, Any]] | None:
     """Everything this mentor currently offers, or ``None`` if they are not public.
 
     ``None`` becomes a 404 covering an unapproved mentor, an unlisted one, and a
@@ -417,7 +424,7 @@ async def list_session_types(session: AsyncSession, user_id: UUID) -> list[dict[
     if (await session.execute(_public_mentor(user_id))).first() is None:
         return None
 
-    result = await session.execute(_live_session_types(user_id))
+    result = await session.execute(_live_session_types(user_id, window))
     return await _with_sets(session, [dict(row) for row in result.mappings()])
 
 

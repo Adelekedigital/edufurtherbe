@@ -49,7 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ValidationError
 from app.domain.availability import (
     DEFAULT_PROJECTION_DAYS,
-    MAX_PROJECTION_DAYS,
+    BookingWindow,
     DatedException,
     UtcInterval,
     WeeklyWindow,
@@ -94,7 +94,7 @@ class FreeBusyReader(Protocol):
     ) -> tuple[UtcInterval, ...]: ...
 
 
-def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
+def _publicly_bookable(user_id: UUID, session_type_id: UUID, window: BookingWindow) -> Select[Any]:
     """The offering, if the public may see it at all.
 
     Returns nothing — and therefore a 404 — when the mentor is unapproved, is
@@ -113,7 +113,7 @@ def _publicly_bookable(user_id: UUID, session_type_id: UUID) -> Select[Any]:
             # (#204, #216): its own, else its mentor's default, else the platform's.
             effective_duration_minutes().label("duration_minutes"),
             effective_min_notice_minutes().label("min_notice_minutes"),
-            effective_window_days().label("window_days"),
+            effective_window_days(window).label("window_days"),
             effective_break_minutes().label("break_minutes"),
             # The mentor's own zone, because `start` and `end` are *their* days.
             # Fetched here rather than in a second statement: a caller who omits
@@ -208,6 +208,7 @@ async def list_slots(
     start: dt.date | None,
     end: dt.date | None,
     now: dt.datetime,
+    window: BookingWindow,
     external_busy: FreeBusyReader | None = None,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
@@ -235,7 +236,9 @@ async def list_slots(
     """
     external_busy = external_busy or NullFreeBusy()
     offering = (
-        (await session.execute(_publicly_bookable(user_id, session_type_id))).mappings().first()
+        (await session.execute(_publicly_bookable(user_id, session_type_id, window)))
+        .mappings()
+        .first()
     )
     if offering is None:
         return None
@@ -250,8 +253,8 @@ async def list_slots(
     # checking at the edge would check a value the request did not have.
     if end <= start:
         raise ValidationError("`end` must be after `start`")
-    if (end - start).days > MAX_PROJECTION_DAYS:
-        raise ValidationError(f"a range may span at most {MAX_PROJECTION_DAYS} days")
+    if (end - start).days > window.max_days:
+        raise ValidationError(f"a range may span at most {window.max_days} days")
 
     # **The offering's own windows replace general availability; they do not
     # intersect it.** Asked first, and only if it has none does the mentor's

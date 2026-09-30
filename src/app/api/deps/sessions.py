@@ -37,6 +37,7 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.domain.attendance import join_window
+from app.domain.availability import booking_window
 from app.domain.enums import MeetingProvider
 from app.infra.clients.meetings import (
     DailyRooms,
@@ -233,6 +234,7 @@ async def booked_session(
         callback_url=_reminder_callback_url(request),
         external_busy=_free_busy(request),
         require_answers=_configured(request).require_intake_answers,
+        window=booking_window(_configured(request)),
     )
     # **In the booking's own transaction**, so a session cannot be committed
     # without whatever venue it was going to get. It no-ops unless the session

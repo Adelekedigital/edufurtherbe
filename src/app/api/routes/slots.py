@@ -42,7 +42,8 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         )
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
-        "description": "`end` is not after `start`, or the range is longer than 56 days."
+        "description": "`end` is not after `start`, or the range is longer than the platform's "
+        "maximum booking window (`MAX_BOOKING_WINDOW_DAYS`, 56 by default)."
     },
 }
 

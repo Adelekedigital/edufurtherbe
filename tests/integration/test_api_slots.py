@@ -26,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.infra.db.slot_store import list_slots
+from conftest import PLATFORM_WINDOW
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -733,7 +734,15 @@ async def test_the_default_start_resolves_in_the_mentors_zone_at_a_fixed_clock(
     # 2026-08-20 02:00Z is 2026-08-19 22:00 in New York.
     now = dt.datetime(2026, 8, 20, 2, 0, tzinfo=dt.UTC)
     async with AsyncSession(db_engine) as session:
-        slots = await list_slots(session, mentor, session_type, start=None, end=None, now=now)
+        slots = await list_slots(
+            session,
+            mentor,
+            session_type,
+            start=None,
+            end=None,
+            now=now,
+            window=PLATFORM_WINDOW,
+        )
 
     assert slots is not None
     first = min(slot.start for slot in slots)
