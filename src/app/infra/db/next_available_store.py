@@ -27,10 +27,12 @@ cannot replace a newer one, and cannot clear a change it never saw.
 WHY THE SLOTS ARE `list_slots`
 ==============================
 The card's time is the first instant `list_slots` offers for any of the
-mentor's live offerings, from `mentor_today()` over `MAX_PROJECTION_DAYS` —
-exactly the range `/slots` answers. `bookable_until` is that slot's start less
-the offering's notice: past it `/slots` no longer offers the slot, so the card
-stops showing it rather than promise a time booking refuses.
+mentor's live offerings, from `mentor_today()` through the configured maximum
+window's last day (`BookingWindow.max_days`, #221) — the furthest any slot can be
+offered, with `list_slots`' instant cutoff dropping what falls past it.
+`bookable_until` is that slot's start less the offering's notice: past it
+`/slots` no longer offers the slot, so the card stops showing it rather than
+promise a time booking refuses.
 
 **The job's calendar reader does not fail open.** `/slots` answers one request
 from declared hours when Google is down; stored, that answer would be shown to
