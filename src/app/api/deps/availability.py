@@ -172,7 +172,7 @@ async def mentor_slots(
         now=dt.datetime.now(dt.UTC),
         window=window,
         external_busy=_free_busy(request),
-        range_cap=window.projection_days,
+        range_cap=window.range_cap_days,
     )
     if slots is None:
         raise NotFoundError("no such bookable session type")

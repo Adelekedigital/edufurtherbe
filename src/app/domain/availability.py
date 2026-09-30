@@ -94,9 +94,22 @@ class BookingWindow:
         so the window touches `max_days + 1` calendar dates. Projecting one day
         fewer misses bookable slots on the last, partial day; the instant cutoff
         then drops whatever on that day starts too late. One rule for the
-        refresh, the implicit `/slots` range and the cap on an explicit one.
+        refresh and the implicit `/slots` range.
         """
         return self.max_days + 1
+
+    @property
+    def range_cap_days(self) -> int:
+        """The widest `/slots` range a client may ask for: the window plus a day
+        of margin on each side.
+
+        A client asks in the *viewer's* calendar dates and `/slots` reads them in
+        the mentor's zone, which can be up to 26 hours apart, so covering the
+        whole window from any zone pair takes a day before and a day after
+        (frontend request, 2026-09-30). Wider than `projection_days` and still
+        safe: the instant cutoff, not the range, decides what is bookable.
+        """
+        return self.max_days + 2
 
 
 def booking_window(settings: Settings) -> BookingWindow:
