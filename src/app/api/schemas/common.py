@@ -130,35 +130,29 @@ def decode_cursor(cursor: str | None) -> tuple[str, UUID] | None:
         raise ValidationError("cursor is not a cursor this endpoint issued") from exc
 
 
-def encode_id_cursor(row_id: UUID) -> str:
-    """The keyset position when the id **is** the sort order.
+def encode_browse_cursor(taking_bookings: bool, row_id: UUID) -> str:
+    """The Explore browse position: the group, then the id (#220).
 
-    ADR 0016's base case, unimplemented until now: *"the id is the cursor when
-    the display order is the id order. Otherwise the cursor is the sort column
-    plus the id."* Both existing list endpoints sort by something else — a
-    display name, a start time — so only the amended two-part form had ever been
-    written.
-
-    Kept separate rather than passing the id twice to `encode_cursor`. That works
-    and reads as a mistake forever, and the first person to tidy it would change
-    the sort key rather than delete the duplication.
+    Browse orders bookable mentors first, so the group is the leading sort
+    column and ADR 0016's two-part form applies — a cursor on the id alone
+    would compare across the boundary and skip or repeat mentors.
     """
-    return base64.urlsafe_b64encode(str(row_id).encode()).decode()
+    return encode_cursor("1" if taking_bookings else "0", row_id)
 
 
-def decode_id_cursor(cursor: str | None) -> UUID | None:
-    """An id cursor back into a position, or a refusal.
+def decode_browse_cursor(cursor: str | None) -> tuple[bool, UUID] | None:
+    """A browse cursor back into `(taking_bookings, id)`, or a `422`.
 
-    A malformed cursor is a **client** error and not something to silently treat
-    as "start from the beginning" — that answers a paging bug with page one
-    forever, which looks like working software and loses rows.
+    A cursor minted before the group was in it (the id alone) is refused, not
+    guessed at: the frontend restarts from page 1 on a `422`, which is agreed.
     """
-    if cursor is None:
+    decoded = decode_cursor(cursor)
+    if decoded is None:
         return None
-    try:
-        return UUID(base64.urlsafe_b64decode(cursor.encode()).decode())
-    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
-        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+    group, row_id = decoded
+    if group not in {"0", "1"}:
+        raise ValidationError("cursor is not a cursor this endpoint issued")
+    return group == "1", row_id
 
 
 #: How deep a search may be paged. Elasticsearch refuses past 10,000 results by
