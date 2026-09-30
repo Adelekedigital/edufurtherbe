@@ -13,36 +13,41 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.domain.availability import BookingWindow
+from app.domain.availability import ZONE_DATE_GAP, BookingWindow
 
 #: The westernmost and easternmost zones: UTC-12 and UTC+14.
 WEST, EAST = ZoneInfo("Etc/GMT+12"), ZoneInfo("Pacific/Kiritimati")
 
 
-def span_needed(now: dt.datetime, viewer: ZoneInfo, mentor: ZoneInfo, max_days: int) -> int:
-    """Days from the viewer's margin day to the day after the mentor's last window day."""
-    viewer_start = now.astimezone(viewer).date() - dt.timedelta(days=1)
-    mentor_last = (now + dt.timedelta(days=max_days)).astimezone(mentor).date()
-    return (mentor_last + dt.timedelta(days=1) - viewer_start).days
+def padded_request(now: dt.datetime, viewer: ZoneInfo, max_days: int) -> tuple[dt.date, dt.date]:
+    """The range a client sends in its own dates: `ZONE_DATE_GAP` days of padding
+    before its today and after the window's last date, `end` exclusive."""
+    today = now.astimezone(viewer).date()
+    start = today - dt.timedelta(days=ZONE_DATE_GAP)
+    end = today + dt.timedelta(days=max_days + ZONE_DATE_GAP + 1)
+    return start, end
 
 
 @pytest.mark.parametrize("max_days", [4, 14, 56])
 @pytest.mark.parametrize("hour", range(24))
-def test_the_cap_covers_the_furthest_apart_zones(max_days: int, hour: int) -> None:
-    """Codex's case is 11:00 UTC with 56 days: 60 days needed. Every hour is
-    checked, both ways round, because which pair is worst depends on the hour."""
+@pytest.mark.parametrize(("viewer", "mentor"), [(WEST, EAST), (EAST, WEST)])
+def test_a_padded_request_covers_the_whole_window_from_any_zone(
+    max_days: int, hour: int, viewer: ZoneInfo, mentor: ZoneInfo
+) -> None:
+    """Both edges, both ways round, every hour: the request starts on or before
+    the mentor's today, ends after the mentor's last window date, and fits the
+    cap. Codex's cases are 11:00 UTC, west-to-east (trailing) and east-to-west
+    (leading)."""
     window = BookingWindow(max_days=max_days, default_days=max_days)
     now = dt.datetime(2026, 9, 30, hour, tzinfo=dt.UTC)
+    mentor_first = now.astimezone(mentor).date()
+    mentor_last = (now + dt.timedelta(days=max_days)).astimezone(mentor).date()
 
-    worst = max(span_needed(now, WEST, EAST, max_days), span_needed(now, EAST, WEST, max_days))
+    start, end = padded_request(now, viewer, max_days)
 
-    assert worst <= window.range_cap_days
-
-
-def test_codexs_example_needs_sixty_days() -> None:
-    now = dt.datetime(2026, 9, 30, 11, tzinfo=dt.UTC)
-
-    assert span_needed(now, WEST, EAST, 56) == 60
+    assert start <= mentor_first
+    assert end > mentor_last
+    assert (end - start).days <= window.range_cap_days
 
 
 def test_the_published_422_quotes_the_enforced_cap() -> None:

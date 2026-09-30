@@ -106,18 +106,18 @@ class BookingWindow:
     @property
     def range_cap_days(self) -> int:
         """The widest `/slots` range a client may ask for: every date the window
-        touches (`projection_days`), a day of margin before, and room for the
-        largest local-date gap between two zones.
+        touches (`projection_days`) plus `ZONE_DATE_GAP` days of padding on each
+        side.
 
         A client asks in the *viewer's* calendar dates and `/slots` reads them in
-        the mentor's zone. The two furthest-apart zones (UTC-12 and UTC+14) are
-        26 hours apart, which can put their dates two days apart, so reaching
-        the mentor's last window day from the viewer's margin day takes
-        `projection_days + ZONE_DATE_GAP + 1` (`test_slots_range_cap` checks the
-        worst pair at every hour). Wider than `projection_days` and still safe:
-        the instant cutoff, not the range, decides what is bookable.
+        the mentor's zone. Two zones' dates can differ by up to `ZONE_DATE_GAP`
+        either way, so a request padded by that much before the viewer's today
+        and after the window's last date covers the mentor's whole window from
+        any zone (`test_slots_range_cap` checks both edges for the worst pair at
+        every hour). Wider than `projection_days` and still safe: the instant
+        cutoff, not the range, decides what is bookable.
         """
-        return self.projection_days + ZONE_DATE_GAP + 1
+        return self.projection_days + 2 * ZONE_DATE_GAP
 
 
 def booking_window(settings: Settings) -> BookingWindow:

@@ -132,8 +132,8 @@ async def test_a_slots_range_wider_than_the_max_is_refused(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:
     """The cap on what a client may request follows the maximum: its calendar
-    days plus a day of margin each side (`range_cap_days`), so a viewer up to 26
-    hours from the mentor can cover the whole window in their own dates. `/slots`
+    dates plus two days of padding each side (`range_cap_days`), so a viewer in
+    any zone can cover the mentor's whole window in their own dates. `/slots`
     applies it, not the store's internal lookups."""
     mentor = await mentor_with_hours(db_engine, "range-cap")
     session_type = await offering(db_engine, mentor, "Any")
@@ -142,15 +142,15 @@ async def test_a_slots_range_wider_than_the_max_is_refused(
     async with fortnight_client(db_engine, api_storage) as client:
         wide = await client.get(
             f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
-            f"&start={start}&end={start + dt.timedelta(days=19)}"
+            f"&start={start}&end={start + dt.timedelta(days=20)}"
         )
         fits = await client.get(
             f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
-            f"&start={start}&end={start + dt.timedelta(days=18)}"
+            f"&start={start}&end={start + dt.timedelta(days=19)}"
         )
 
     assert wide.status_code == 422, wide.text
-    assert "at most 18 days" in wide.text
+    assert "at most 19 days" in wide.text
     assert fits.status_code == 200, fits.text
 
 
@@ -568,8 +568,8 @@ async def test_an_explicit_range_through_the_last_partial_day_is_allowed(
     base = f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
 
     async with client_for(build_api_app(db_engine, api_storage, settings)) as client:
-        fits = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=8)}")
-        wide = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=9)}")
+        fits = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=9)}")
+        wide = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=10)}")
 
     assert fits.status_code == 200, fits.text
     assert wide.status_code == 422, wide.text
