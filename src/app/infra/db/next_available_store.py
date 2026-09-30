@@ -161,7 +161,11 @@ async def _first_free(
     offerings = await list_session_types(session, mentor, window=window) or []
     zone = (await session.execute(select(User.timezone).where(User.id == mentor))).scalar_one()
     start = mentor_today(zone, now)
-    end = start + dt.timedelta(days=window.max_days)
+    # Through the window's last, partial day: the cutoff is the instant
+    # `now + max_days`, which usually falls mid-day, so ending at that date's
+    # start would skip slots that are legally bookable. `list_slots` drops the
+    # ones past the instant itself.
+    end = start + dt.timedelta(days=window.max_days + 1)
     once = _OneReadPerMentor(reader)
     best: tuple[dt.datetime, dt.datetime, UUID] | None = None
     for offering in offerings:
