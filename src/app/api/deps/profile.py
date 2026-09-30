@@ -18,8 +18,8 @@ from app.api.deps.core import (
     SessionDep,
     TargetUserDep,
     get_storage,
-    refuse_window_over_max,
-    window_over_max,
+    refuse_window_out_of_range,
+    window_out_of_range,
 )
 from app.api.schemas.common import (
     LOOKUP_PAGE_SIZE,
@@ -346,7 +346,7 @@ async def created_mentor_profile(
     checks first so the caller gets a considered answer rather than a constraint
     violation surfacing as a 500.
     """
-    refuse_window_over_max(payload.booking_window_days, window)
+    refuse_window_out_of_range(payload.booking_window_days, window)
     existing = await session.execute(
         text("SELECT 1 FROM mentor_profiles WHERE user_id = :u AND deleted_at IS NULL"),
         {"u": user_id},
@@ -365,10 +365,10 @@ async def updated_mentor_profile(
     payload: MentorProfileWrite, user_id: OwnerDep, session: SessionDep, window: BookingWindowDep
 ) -> bool:
     stored = None
-    if window_over_max(payload.booking_window_days, window):
+    if window_out_of_range(payload.booking_window_days, window):
         current = await get_mentor_profile(session, user_id)
         stored = current["booking_window_days"] if current else None
-    refuse_window_over_max(payload.booking_window_days, window, stored=stored)
+    refuse_window_out_of_range(payload.booking_window_days, window, stored=stored)
     changed = await update_mentor_profile(session, user_id, payload.model_dump(exclude_unset=True))
     await session.commit()
     return changed

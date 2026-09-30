@@ -40,7 +40,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.core.config import NOTICE_FLOOR_MINUTES, Settings
+from app.core.config import NOTICE_CEILING_MINUTES, NOTICE_FLOOR_MINUTES, Settings
 from app.domain.enums import AvailabilityExceptionType
 
 __all__ = [
@@ -132,7 +132,7 @@ DEFAULT_DURATION_MINUTES = 60
 #: on 2026-09-29 and declined: #121's approval deadline is six hours before the
 #: start, so at 6 hours' notice a request would expire the moment it was made.
 #: The columns' `CHECK`s are sanity only; this is the product rule.
-MIN_NOTICE_MINUTES = (NOTICE_FLOOR_MINUTES, 4320)
+MIN_NOTICE_MINUTES = (NOTICE_FLOOR_MINUTES, NOTICE_CEILING_MINUTES)
 
 #: The notice when neither the offering nor its mentor says: the floor (#104).
 DEFAULT_MIN_NOTICE_MINUTES = MIN_NOTICE_MINUTES[0]

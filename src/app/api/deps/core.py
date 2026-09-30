@@ -15,7 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import Settings, get_settings
+from app.core.config import MIN_BOOKING_WINDOW_DAYS, Settings, get_settings
 from app.core.errors import (
     AccountExistsError,
     AuthenticationError,
@@ -498,15 +498,16 @@ def _booking_window(request: Request) -> BookingWindow:
 BookingWindowDep = Annotated[BookingWindow, Depends(_booking_window)]
 
 
-def window_over_max(days: int | None, window: BookingWindow) -> bool:
-    """Whether a sent window exceeds the configured maximum."""
-    return days is not None and days > window.max_days
+def window_out_of_range(days: int | None, window: BookingWindow) -> bool:
+    """Whether a sent window is shorter than the minimum or longer than the maximum."""
+    return days is not None and not MIN_BOOKING_WINDOW_DAYS <= days <= window.max_days
 
 
-def refuse_window_over_max(
+def refuse_window_out_of_range(
     days: int | None, window: BookingWindow, *, stored: int | None = None
 ) -> None:
-    """A window above the configured maximum is a `422` at `/booking_window_days`.
+    """A window outside `MIN_BOOKING_WINDOW_DAYS`..the configured maximum is a
+    `422` at `/booking_window_days`.
 
     Here rather than in the schema, because a `Field(le=...)` is fixed at import
     and the maximum is configuration. The one check every write shares.
@@ -516,8 +517,8 @@ def refuse_window_over_max(
     be able to edit something else after the maximum drops to 14. Reads clamp it
     meanwhile. A PATCH passes ``stored``; a create has no row, so it does not.
     """
-    if window_over_max(days, window) and days != stored:
-        message = f"booking_window_days may be at most {window.max_days}"
+    if window_out_of_range(days, window) and days != stored:
+        message = f"booking_window_days must be {MIN_BOOKING_WINDOW_DAYS} to {window.max_days}"
         raise ValidationError(message, field_errors=(("/booking_window_days", message),))
 
 

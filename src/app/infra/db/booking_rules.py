@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import func, literal
 
+from app.core.config import MIN_BOOKING_WINDOW_DAYS
 from app.domain.availability import (
     DEFAULT_BREAK_MINUTES,
     DEFAULT_DURATION_MINUTES,
@@ -39,15 +40,20 @@ def effective_window_days(
 
     **Clamped to the configured maximum on read**, never rewritten: lowering the
     maximum shortens every longer window at once, and raising it back restores
-    what each mentor chose — no migration either way.
+    what each mentor chose — no migration either way. **Floored at
+    `MIN_BOOKING_WINDOW_DAYS`** the same way, so a window stored before that
+    minimum existed can never hold nothing at the longest notice (#311).
     """
-    return func.least(
-        func.coalesce(
-            config.booking_window_days,
-            mentor.booking_window_days,
-            literal(window.default_days),
+    return func.greatest(
+        func.least(
+            func.coalesce(
+                config.booking_window_days,
+                mentor.booking_window_days,
+                literal(window.default_days),
+            ),
+            literal(window.max_days),
         ),
-        literal(window.max_days),
+        literal(MIN_BOOKING_WINDOW_DAYS),
     )
 
 

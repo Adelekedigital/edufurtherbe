@@ -35,14 +35,9 @@ def test_a_maximum_above_the_ceiling_is_refused() -> None:
 
 
 @pytest.mark.parametrize("field", ["max_booking_window_days", "default_booking_window_days"])
-def test_a_window_too_short_to_hold_any_slot_is_refused(field: str) -> None:
-    """With a 24-hour notice floor, a one-day window offers nothing at all: every
-    slot starts at or after its cutoff. The smallest window that can hold a slot
-    is derived from the floor, so the two cannot drift."""
+def test_a_window_below_the_minimum_is_refused_at_startup(field: str) -> None:
     from app.core.config import MIN_BOOKING_WINDOW_DAYS
-    from app.domain.availability import MIN_NOTICE_MINUTES
 
-    assert MIN_BOOKING_WINDOW_DAYS == MIN_NOTICE_MINUTES[0] // (24 * 60) + 1 == 2
     too_short = {field: MIN_BOOKING_WINDOW_DAYS - 1}
     if field == "max_booking_window_days":
         too_short["default_booking_window_days"] = MIN_BOOKING_WINDOW_DAYS - 1
@@ -53,3 +48,13 @@ def test_a_window_too_short_to_hold_any_slot_is_refused(field: str) -> None:
         max_booking_window_days=MIN_BOOKING_WINDOW_DAYS,
         default_booking_window_days=MIN_BOOKING_WINDOW_DAYS,
     )
+
+
+def test_the_minimum_window_is_derived_from_the_longest_notice() -> None:
+    """Every allowed notice leaves a slot in every allowed window (#311)."""
+    from app.core.config import MIN_BOOKING_WINDOW_DAYS
+    from app.domain.availability import MIN_NOTICE_MINUTES
+
+    assert MIN_BOOKING_WINDOW_DAYS == MIN_NOTICE_MINUTES[1] // (24 * 60) + 1 == 4
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, max_booking_window_days=3, default_booking_window_days=3)

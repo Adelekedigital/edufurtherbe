@@ -35,10 +35,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.api.schemas.common import Normalised
+from app.api.schemas.common import Normalised, publish_window_minimum
 from app.api.schemas.intake import QuestionRead, QuestionWrite
 from app.api.schemas.profile import LookupRef
-from app.core.config import BOOKING_WINDOW_CEILING
+from app.core.config import BOOKING_WINDOW_CEILING, MIN_BOOKING_WINDOW_DAYS
 from app.domain.availability import (
     BREAK_AFTER_MINUTES,
     DEFAULT_DURATION_MINUTES,
@@ -115,12 +115,13 @@ MAX_STAGES = len(ApplicationStage)
 
 #: One description for both writes. The static bound is the ceiling the column
 #: holds; the configured maximum is checked where settings are known
-#: (`deps.core.refuse_window_over_max`), because a `Field(le=...)` is fixed at import.
+#: (`deps.core.refuse_window_out_of_range`), because a `Field(le=...)` is fixed at import.
 WINDOW_WRITE_DESCRIPTION = (
-    "How many days ahead this offering can be booked: 1 to the platform maximum "
-    "(`max_booking_window_days` on your mentor profile; above it is a 422 at "
-    "`/booking_window_days`, except that resending the value already stored for "
-    "this offering is accepted). `null` follows your default on your mentor profile."
+    f"How many days ahead this offering can be booked: {MIN_BOOKING_WINDOW_DAYS} to the "
+    "platform maximum "
+    "(`max_booking_window_days` on your mentor profile); outside that range is a 422 "
+    "at `/booking_window_days`, except that resending the value already stored for "
+    "this offering is accepted. `null` follows your default on your mentor profile."
 )
 
 
@@ -600,6 +601,7 @@ class MentorSessionTypeWrite(Normalised):
         default=None,
         ge=1,
         le=BOOKING_WINDOW_CEILING,
+        json_schema_extra=publish_window_minimum,
         description=WINDOW_WRITE_DESCRIPTION,
     )
     break_after_minutes: int | None = Field(
@@ -715,6 +717,7 @@ class MentorSessionTypePatch(Normalised):
         default=None,
         ge=1,
         le=BOOKING_WINDOW_CEILING,
+        json_schema_extra=publish_window_minimum,
         description=WINDOW_WRITE_DESCRIPTION,
     )
     break_after_minutes: int | None = Field(

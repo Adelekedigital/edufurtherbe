@@ -17,8 +17,8 @@ from app.api.deps.core import (
     IdempotencyKeyHeader,
     SessionDep,
     claim_idempotency_key,
-    refuse_window_over_max,
-    window_over_max,
+    refuse_window_out_of_range,
+    window_out_of_range,
 )
 from app.api.schemas.availability import (
     AvailabilityRulePatch,
@@ -210,7 +210,7 @@ async def created_own_session_type(
         return reservation.body, reservation.status_code, True
     # After the replay lookup: a retry of a create that already succeeded gets
     # its stored answer, whatever the configured maximum became since.
-    refuse_window_over_max(payload.booking_window_days, window)
+    refuse_window_out_of_range(payload.booking_window_days, window)
 
     session_type_id = await create_session_type(session, user["id"], payload.model_dump())
     if session_type_id is None:
@@ -241,10 +241,10 @@ async def updated_own_session_type(
     is absent, not null. Without it every omitted field is written as its default
     and a one-field edit blanks the rest."""
     stored = None
-    if window_over_max(payload.booking_window_days, window):
+    if window_out_of_range(payload.booking_window_days, window):
         own = await get_own_session_type(session, user["id"], session_type_id, window=window)
         stored = own["booking_window_days"] if own else None
-    refuse_window_over_max(payload.booking_window_days, window, stored=stored)
+    refuse_window_out_of_range(payload.booking_window_days, window, stored=stored)
     changed = await update_session_type(
         session, user["id"], session_type_id, payload.model_dump(exclude_unset=True)
     )

@@ -104,16 +104,19 @@ INTAKE_FILE_CEILING = 6 * 1024 * 1024 - 64 * 1024
 #: follows the configured maximum.
 BOOKING_WINDOW_CEILING = 365
 
-#: The platform's notice floor, in minutes: no booking inside 24 hours (#104).
+#: The notice an offering may require, in minutes: 24 to 72 hours (#104).
 #: Here rather than in `domain/availability.py`, which imports this module, so
 #: the smallest window below can be derived from it without an import cycle;
-#: `MIN_NOTICE_MINUTES` there is built from it.
+#: `MIN_NOTICE_MINUTES` there is built from these two.
 NOTICE_FLOOR_MINUTES = 1440
+NOTICE_CEILING_MINUTES = 4320
 
-#: The shortest window that can hold a slot. Every slot starts at least the
-#: notice floor from now and before `now + window`, so a window no longer than
-#: the floor offers nothing at all. Derived, so the two cannot drift.
-MIN_BOOKING_WINDOW_DAYS = NOTICE_FLOOR_MINUTES // (24 * 60) + 1
+#: The shortest booking window anything may use (#221, #311). Every slot starts
+#: at least its notice from now and before `now + window`, so a window no longer
+#: than the notice offers nothing. Derived from the **longest** allowed notice,
+#: so no allowed pair of window and notice is empty, and clamping to the
+#: platform maximum can never silently switch an offering off.
+MIN_BOOKING_WINDOW_DAYS = NOTICE_CEILING_MINUTES // (24 * 60) + 1
 
 
 def env_key(field: str) -> str:

@@ -25,8 +25,9 @@ from app.api.schemas.common import (
     Normalised,
     XWrite,
     YouTubeWrite,
+    publish_window_minimum,
 )
-from app.core.config import BOOKING_WINDOW_CEILING
+from app.core.config import BOOKING_WINDOW_CEILING, MIN_BOOKING_WINDOW_DAYS
 from app.domain.availability import (
     BREAK_AFTER_MINUTES,
     DEFAULT_DURATION_MINUTES,
@@ -408,10 +409,12 @@ class MentorProfileWrite(Normalised):
         default=None,
         ge=1,
         le=BOOKING_WINDOW_CEILING,
+        json_schema_extra=publish_window_minimum,
         description=(
-            "Days ahead your offerings can be booked unless one sets its own: 1 to "
-            "`max_booking_window_days` (above it is a 422, except that a PATCH resending "
-            "the value already stored is accepted); null is the platform default."
+            "Days ahead your offerings can be booked unless one sets its own: "
+            f"{MIN_BOOKING_WINDOW_DAYS} to "
+            "`max_booking_window_days` (outside that range is a 422, except that a PATCH "
+            "resending the value already stored is accepted); null is the platform default."
         ),
     )
     break_after_minutes: int | None = Field(

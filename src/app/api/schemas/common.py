@@ -28,6 +28,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.core.config import MIN_BOOKING_WINDOW_DAYS
 from app.core.errors import ValidationError
 from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
 
@@ -404,3 +405,16 @@ YouTubeWrite = Annotated[
 LinkedInRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.LINKEDIN))]
 XRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.X))]
 YouTubeRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.YOUTUBE))]
+
+
+def publish_window_minimum(schema: dict[str, Any]) -> None:
+    """Publish `MIN_BOOKING_WINDOW_DAYS` as a booking window's minimum (#311).
+
+    Validation keeps `ge=1`, so a window stored before the minimum existed can
+    be resent unchanged; the write dependency enforces the minimum on anything
+    new. The published contract is the minimum a client should offer. Set on
+    the integer branch, where an optional field's bound lives.
+    """
+    for branch in schema.get("anyOf", [schema]):
+        if branch.get("type") == "integer":
+            branch["minimum"] = MIN_BOOKING_WINDOW_DAYS
