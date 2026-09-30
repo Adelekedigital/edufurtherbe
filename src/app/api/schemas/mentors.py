@@ -35,7 +35,7 @@ from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, Y
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 from app.domain.enums import ApprovalStatus, AwardFunding, CoverArt, CoverColor, ListingStatus
-from app.domain.profile_strength import COMPLETENESS_ORDER, completeness
+from app.domain.profile_strength import COMPLETENESS_ORDER, ProfileFacts, completeness
 
 
 class ServiceOfferingRead(BaseModel):
@@ -594,30 +594,25 @@ def _owner_fields(
     if not row.get("is_owner"):
         return {}
     strength = completeness(
-        {
-            "session_type": bool(row["has_offering"]),
-            "weekly_hours": bool(row["has_hours"]),
-            "photo": _filled(row["avatar_url"]),
-            "headline": _filled(row["headline"]),
-            "about": _filled(row["about_me"]),
-            "topics": bool(offerings),
-            "background": bool(
-                row["origin_country_id"] and row["primary_study_country_id"] and languages
-            ),
-            "education": bool(education),
-            "award": bool(scholarships),
-        }
+        ProfileFacts(
+            has_session_type=bool(row["has_offering"]),
+            has_weekly_hours=bool(row["has_hours"]),
+            photo_url=_text(row["avatar_url"]),
+            headline=_text(row["headline"]),
+            about=_text(row["about_me"]),
+            topic_count=len(offerings),
+            has_origin_country=row["origin_country_id"] is not None,
+            has_study_country=row["primary_study_country_id"] is not None,
+            language_count=len(languages),
+            education_count=len(education),
+            award_count=len(scholarships),
+        )
     )
     return {
         **{key: row[key] for key in OWNER_ONLY},
         "setup_needed": strength.setup_needed,
         "completeness": CompletenessRead(percent=strength.percent, missing=list(strength.missing)),
     }
-
-
-def _filled(value: object) -> bool:
-    """Set and not blank. Writes store a blank as null, but migrated text may not."""
-    return value is not None and bool(str(value).strip())
 
 
 def _joined_and_award(row: dict[str, Any]) -> dict[str, Any]:
