@@ -43,3 +43,22 @@ def test_codexs_example_needs_sixty_days() -> None:
     now = dt.datetime(2026, 9, 30, 11, tzinfo=dt.UTC)
 
     assert span_needed(now, WEST, EAST, 56) == 60
+
+
+def test_the_published_422_quotes_the_enforced_cap() -> None:
+    """The spec's number comes from `range_cap_days`, not a retyped literal."""
+    from app.core.config import Settings
+    from app.main import create_app
+
+    settings = Settings(_env_file=None)
+    cap = BookingWindow(
+        max_days=settings.max_booking_window_days,
+        default_days=settings.default_booking_window_days,
+    ).range_cap_days
+    spec = create_app(settings).openapi()
+    slots = next(ops["get"] for path, ops in spec["paths"].items() if path.endswith("/slots"))
+
+    text = slots["responses"]["422"]["description"]
+
+    assert f"+ {cap - settings.max_booking_window_days} days" in text
+    assert f"{cap} by default" in text
