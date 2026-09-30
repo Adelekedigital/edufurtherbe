@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session_type, make_public_mentor
+from tests.integration.test_session_type_vocabularies import offering_id
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -315,6 +316,7 @@ async def test_the_response_carries_nothing_it_should_not(
         "is_featured",
     }
     assert offering["service_offering"] == {
+        "id": await offering_id(db_engine, "document-preparation"),
         "code": "document-preparation",
         "display_name": "Document Preparation",
     }
