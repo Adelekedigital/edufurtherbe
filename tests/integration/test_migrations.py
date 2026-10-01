@@ -633,8 +633,17 @@ def test_the_conferencing_backfill_seeds_before_it_drops(
         scalar(disposable_database, resolved.format(fallback=fallback, email="venue-custom%"))
         == "daily"
     ), "a mentor whose only venue was `custom` is not on the platform default"
+    # The pointed row itself, not a resolution: a `coalesce` onto the `daily`
+    # fallback would pass even if the mentor's own row had been deleted.
     assert (
-        scalar(disposable_database, resolved.format(fallback=fallback, email="venue-daily%"))
+        scalar(
+            disposable_database,
+            "SELECT o.provider FROM session_types st "
+            "  JOIN mentor_conferencing_options o "
+            "    ON o.id = st.conferencing_option_id AND o.user_id = st.mentor_user_id "
+            "  JOIN users u ON u.id = st.mentor_user_id "
+            " WHERE u.email LIKE 'venue-daily%'",
+        )
         == "daily"
     ), "a carried `daily` choice did not survive to head"
 

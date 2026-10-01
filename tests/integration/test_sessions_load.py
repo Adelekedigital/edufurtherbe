@@ -48,7 +48,7 @@ from app.domain.transform.sessions import (
     SessionRow,
     SessionTypeRow,
 )
-from app.infra.etl.sessions import SessionLoader
+from app.infra.etl.sessions import UPSERT_CONFERENCING_OPTION, SessionLoader
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -452,6 +452,32 @@ async def test_a_reload_with_no_venue_clears_the_old_pointer(
 
     pointer = await conn.execute(text("SELECT conferencing_option_id FROM session_types"))
     assert pointer.scalar_one() is None
+
+
+async def test_a_reload_never_takes_back_a_choice_the_mentor_made(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """The load's upsert on `(user_id, provider)` must not rewrite `source`: a
+    mentor who set Meet through `/me/conferencing` keeps `mentor`, so the cleanup
+    of imported rows can never remove it after a reload."""
+    conn, users = seeded
+    mentor = users[MENTOR]
+    await conn.execute(
+        text(
+            "INSERT INTO mentor_conferencing_options (user_id, provider, is_default, source) "
+            "VALUES (:u, 'google_meet', true, 'mentor')"
+        ),
+        {"u": mentor},
+    )
+
+    await conn.execute(
+        text(UPSERT_CONFERENCING_OPTION), {"user_id": mentor, "provider": "google_meet"}
+    )
+
+    source = await conn.execute(
+        text("SELECT source FROM mentor_conferencing_options WHERE user_id = :u"), {"u": mentor}
+    )
+    assert source.scalar_one() == "mentor"
 
 
 async def test_the_load_leaves_every_offering_inheriting_its_confirmation(
