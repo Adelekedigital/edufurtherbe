@@ -103,6 +103,24 @@ async def test_to_is_exclusive(api_client: httpx.AsyncClient, db_engine: AsyncEn
     assert str(on_the_fifth) not in ids(response)
 
 
+async def test_from_includes_a_session_at_its_local_midnight(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The inclusive edge: 23:00 UTC on the 30th is 00:00 on the 1st in Lagos."""
+    mentor, _, mentee, auth = await pair(db_engine, "f-incl")
+    at_midnight = await make_session(
+        db_engine, mentor, mentee, starts_at=datetime(2026, 9, 30, 23, 0, tzinfo=UTC)
+    )
+    just_before = await make_session(
+        db_engine, mentor, mentee, starts_at=datetime(2026, 9, 30, 22, 59, tzinfo=UTC)
+    )
+
+    response = await listed(api_client, mentee, auth, "from=2026-10-01&to=2026-10-05")
+
+    assert ids(response) == {str(at_midnight)}
+    assert str(just_before) not in ids(response)
+
+
 async def test_status_repeats_and_keeps_only_those(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -164,8 +182,10 @@ async def test_filters_page_with_the_cursor(
         "from=2026-10-05&to=2026-10-05",
         "from=2026-10-06&to=2026-10-05",
         "status=not_a_status",
+        "from=0001-01-01",
+        "to=9999-12-31",
     ],
-    ids=["empty-range", "inverted-range", "unknown-status"],
+    ids=["empty-range", "inverted-range", "unknown-status", "year-one", "year-9999"],
 )
 async def test_an_unusable_filter_is_a_client_error(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, query: str

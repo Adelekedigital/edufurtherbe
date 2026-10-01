@@ -93,6 +93,12 @@ from app.infra.db.session_writer import (
 # narrowing would be breaking.
 
 
+#: The dates a session filter accepts. Wide enough for any real calendar, and
+#: away from the ends of `date`, where converting a local midnight to UTC
+#: overflows into year 0 or 10000 and would surface as a 500, not a 422.
+SESSION_FILTER_DATES = {"ge": dt.date(1900, 1, 1), "le": dt.date(9999, 12, 30)}
+
+
 async def target_sessions(
     user_id: TargetUserDep,
     user: CurrentUserDep,
@@ -101,11 +107,15 @@ async def target_sessions(
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
     from_: Annotated[
         dt.date | None,
-        Query(alias="from", description="First date, inclusive, in the caller's zone."),
+        Query(
+            alias="from",
+            description="First date, inclusive, in the caller's zone.",
+            **SESSION_FILTER_DATES,
+        ),
     ] = None,
     to: Annotated[
         dt.date | None,
-        Query(description="Last date, exclusive, in the caller's zone."),
+        Query(description="Last date, exclusive, in the caller's zone.", **SESSION_FILTER_DATES),
     ] = None,
     status: Annotated[
         list[SessionStatus] | None,
