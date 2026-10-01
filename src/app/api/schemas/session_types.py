@@ -47,6 +47,7 @@ from app.domain.availability import (
 )
 from app.domain.enums import ApplicationStage, ConferencingProvider, SessionTypeIcon
 from app.domain.intake import MAX_QUESTIONS
+from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
 from app.domain.sessions import (
     MAX_SESSION_TYPE_OFFERINGS,
     first_stage,
@@ -200,7 +201,7 @@ class SessionTypeRead(BaseModel):
         description=(
             "Where the session happens, **resolved** from the mentor's "
             "conferencing options: this offering's own, else the mentor's "
-            "default, else `google_meet`. Required, and never null — the "
+            f"default, else `{PLATFORM_DEFAULT_PROVIDER.value}`. Required, and never null — the "
             "platform fallback is the last step precisely so this field cannot "
             "be absent. The meeting **link** is generated per session and never "
             "appears here: a static room means back-to-back sessions share it "
@@ -321,7 +322,7 @@ class OwnSessionTypeRead(BaseModel):
         description=(
             "Where this offering is held, **resolved** the same way the public "
             "endpoint resolves it: this offering's own conferencing option, "
-            "else your default, else `google_meet`. Never null. The meeting "
+            f"else your default, else `{PLATFORM_DEFAULT_PROVIDER.value}`. Never null. The meeting "
             "**link** is generated per session and never appears here."
         ),
     )

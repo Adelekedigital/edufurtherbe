@@ -225,7 +225,7 @@ async def test_a_new_offering_resolves_a_venue_without_choosing_one(
 
     listed = await api_client.get(URL, headers=bearer(api_token(auth_id)))
     (offering,) = listed.json()["data"]
-    assert offering["meeting_venue"] == "google_meet"
+    assert offering["meeting_venue"] == "daily"
 
 
 # --------------------------------------------------------------------------

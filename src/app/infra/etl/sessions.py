@@ -82,15 +82,16 @@ RETURNING id
 # `custom` never reaches here: `mentor_conferencing_options` requires a URL for it
 # and the legacy export carries none — `mentor_profiles.custom_meeting_url` was
 # removed as a removal rather than a move, because nothing had ever written it.
-# `_conferencing_option_id` maps those mentors to `google_meet` and reports them,
-# matching the quarantine `d9e2b74c1f36` performs for rows that predate the load.
+# The transform leaves those mentors, and those who never chose, on the platform
+# default with no option at all (`a7c4e2d91f3b` removed the `google_meet` rows
+# older loads created for them).
 #
 # `DO UPDATE SET provider = EXCLUDED.provider` is a no-op write that exists so
 # `RETURNING id` yields a row on conflict — the same reason `UPSERT_SESSION_TYPE`
 # uses it. `DO NOTHING` returns nothing and the id is what the offering needs.
 UPSERT_CONFERENCING_OPTION = """
-INSERT INTO mentor_conferencing_options (user_id, provider, is_default)
-VALUES (:user_id, :provider, true)
+INSERT INTO mentor_conferencing_options (user_id, provider, is_default, source)
+VALUES (:user_id, :provider, true, 'import')
 ON CONFLICT (user_id, provider) DO UPDATE SET provider = EXCLUDED.provider
 RETURNING id
 """
@@ -115,6 +116,8 @@ ON CONFLICT (session_type_id) DO UPDATE SET
     duration_minutes = EXCLUDED.duration_minutes
 """
 
+# `:option_id` is null for a mentor who never chose: the offering follows the
+# platform default, and a re-run clears a pointer an older load left.
 SET_CONFERENCING_OPTION = """
 UPDATE session_types
    SET conferencing_option_id = :option_id
@@ -224,9 +227,10 @@ class SessionLoader:
         is preferable to picking silently — the transform is where a rule about
         *which* default belongs, and it has no basis to choose one.
 
-        ``venue`` is never ``CUSTOM``: the transform maps those to
-        ``GOOGLE_MEET`` and reports them, because the symmetric ``CHECK``
-        requires a URL the export does not carry.
+        ``venue`` is never ``CUSTOM``: the transform leaves those on the
+        platform default and reports them, because the symmetric ``CHECK``
+        requires a URL the export does not carry. A mentor who never chose has
+        no venue, and this is not called for them.
         """
         result = await self._connection.execute(
             text(UPSERT_CONFERENCING_OPTION),
@@ -255,8 +259,12 @@ class SessionLoader:
                     "duration_minutes": row.duration_minutes,
                 },
             )
-            option_id = await self._conferencing_option_id(
-                user_id(row.mentor_bubble_id, "session type"), row.meeting_venue
+            option_id = (
+                await self._conferencing_option_id(
+                    user_id(row.mentor_bubble_id, "session type"), row.meeting_venue
+                )
+                if row.meeting_venue is not None
+                else None
             )
             await self._connection.execute(
                 text(SET_CONFERENCING_OPTION),

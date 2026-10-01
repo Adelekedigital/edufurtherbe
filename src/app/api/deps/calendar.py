@@ -8,9 +8,11 @@ from uuid import UUID
 from fastapi import Depends, Request
 
 from app.api.deps.core import CurrentUserDep, SessionDep, _configured, get_session_factory
+from app.api.schemas.conferencing import ConferencingWrite
 from app.core.errors import (
     AuthenticationError,
     ConfigurationError,
+    NotFoundError,
     ValidationError,
 )
 from app.infra.clients.meetings import (
@@ -25,6 +27,7 @@ from app.infra.db.calendar_store import (
     disconnect,
     free_busy_reader,
 )
+from app.infra.db.conferencing_store import own_default_option, set_default_option
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -185,3 +188,26 @@ CalendarConsentDep = Annotated[str, Depends(calendar_consent_url)]
 CalendarConnectedDep = Annotated[UUID, Depends(calendar_connected)]
 OwnCalendarDep = Annotated[dict[str, Any] | None, Depends(own_calendar)]
 DisconnectedCalendarDep = Annotated[bool, Depends(disconnected_calendar)]
+
+
+async def own_conferencing(user: CurrentUserDep, session: SessionDep) -> dict[str, Any] | None:
+    """The caller's saved default video provider, or ``None`` if never chosen.
+    `404` for a caller with no live mentor profile."""
+    is_mentor, saved = await own_default_option(session, user["id"])
+    if not is_mentor:
+        raise NotFoundError("this user has no mentor profile")
+    return saved
+
+
+async def updated_conferencing(
+    payload: ConferencingWrite, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
+    """Make the caller's choice their default and return it as saved."""
+    if not await set_default_option(session, user["id"], payload.provider, payload.custom_url):
+        raise NotFoundError("this user has no mentor profile")
+    await session.commit()
+    return {"provider": payload.provider, "custom_url": payload.custom_url}
+
+
+OwnConferencingDep = Annotated[dict[str, Any] | None, Depends(own_conferencing)]
+UpdatedConferencingDep = Annotated[dict[str, Any], Depends(updated_conferencing)]

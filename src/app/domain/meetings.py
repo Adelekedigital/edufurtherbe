@@ -22,10 +22,26 @@ refusal if you only read the response.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from app.domain.enums import ConferencingProvider
 
-__all__ = ["MeetingPlan", "plan_for"]
+__all__ = [
+    "MAX_MEETING_LINK_LENGTH",
+    "PLATFORM_DEFAULT_PROVIDER",
+    "MeetingPlan",
+    "meeting_link",
+    "plan_for",
+]
+
+#: Where a mentor who never chose is held: EduFurther video (owner, 2026-10-01).
+#: It needs only the platform's Daily key, where Meet needs the platform's Google
+#: calendar. The last step of venue resolution and the default `/me/conferencing`
+#: reports, so the two cannot disagree.
+PLATFORM_DEFAULT_PROVIDER = ConferencingProvider.DAILY
+
+#: A personal room link's longest allowed form.
+MAX_MEETING_LINK_LENGTH = 2048
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,3 +85,25 @@ def plan_for(provider: ConferencingProvider) -> MeetingPlan:
         wants_conference=provider is ConferencingProvider.GOOGLE_MEET,
         reuses_a_static_room=provider is ConferencingProvider.CUSTOM,
     )
+
+
+def meeting_link(url: str) -> str:
+    """A personal room link, as a mentor may set it: `https`, with a host, and no
+    credentials in it. Raises `ValueError` otherwise.
+
+    The link is a bearer credential to the room, so it is never printed back in
+    an error; a `user:password@` part would leak a second secret to every mentee.
+    """
+    link = url.strip()
+    if len(link) > MAX_MEETING_LINK_LENGTH:
+        raise ValueError(f"a link is at most {MAX_MEETING_LINK_LENGTH} characters")
+    parts = urlsplit(link)
+    if parts.scheme != "https" or not parts.hostname:
+        raise ValueError("a link must be an https:// address with a host")
+    try:
+        parts.port  # noqa: B018 - parsing the port is the check: it raises if malformed
+    except ValueError:
+        raise ValueError("a link's port must be a number from 0 to 65535") from None
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("a link must not carry a username or password")
+    return link

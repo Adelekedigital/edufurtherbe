@@ -287,6 +287,18 @@ class ConferencingProvider(StrEnum):
     CUSTOM = "custom"
 
 
+class OptionSource(StrEnum):
+    """Who wrote a conferencing option: the legacy load, or the mentor.
+
+    Provenance, not preference: an imported `daily` is a genuine legacy choice.
+    What it decides is which rows a cleanup of imported data may remove — never
+    one the mentor set through `/me/conferencing` (#224).
+    """
+
+    IMPORT = "import"
+    MENTOR = "mentor"
+
+
 class ApplicationStage(StrEnum):
     """Where in their application a mentee is, for an offering aimed at a stage.
 

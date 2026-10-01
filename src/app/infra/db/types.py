@@ -55,6 +55,7 @@ from app.domain.enums import (
     LookupStatus,
     MeetingProvider,
     MentorStatusType,
+    OptionSource,
     PrimaryRole,
     QuestionType,
     ReviewReportOutcome,
@@ -146,6 +147,8 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # keeps `zoom` for history even though nothing can select it.
     MeetingProvider: frozenset({"ck_sessions_meeting_provider_is_known"}),
     ConferencingProvider: frozenset({"ck_mentor_conferencing_options_provider_is_known"}),
+    # Who wrote the option (#224): the cleanup of imported rows reads it.
+    OptionSource: frozenset({"ck_mentor_conferencing_options_source_is_known"}),
     # Step 6 — `role` carries the first **unique** partial index to move.
     # The intake stack. `question_type` carries `multi_choice`, which nothing
     # writes yet — see the enum for why shipping it early is now cheap.
