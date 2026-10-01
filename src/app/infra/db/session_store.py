@@ -31,6 +31,7 @@ mentor left"*. A client cannot tell those apart from the session alone.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -222,8 +223,18 @@ async def list_sessions(
     *,
     limit: int,
     cursor: tuple[str, UUID] | None = None,
+    starts_from: dt.datetime | None = None,
+    starts_before: dt.datetime | None = None,
+    statuses: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], bool]:
     """Every session one user is a party to, newest first.
+
+    **Optionally narrowed** to sessions starting in ``[starts_from,
+    starts_before)`` and to some statuses — the month view's booked days. The
+    filters sit in the same statement the cursor pages, so a page is a page of
+    the filtered list. With live statuses the partial per-party indexes serve
+    the filter; a range over every status walks ``ix_sessions_starts_at``,
+    which is the unfiltered list's own plan.
 
     **Either party, in one list.** A user may be a mentor and a mentee — dual
     roles are free by design, since authorization is profile existence rather
@@ -248,6 +259,12 @@ async def list_sessions(
         .where(_is_a_party(user_id))
         .order_by(Session.starts_at.desc(), Session.id.desc())
     )
+    if starts_from is not None:
+        statement = statement.where(Session.starts_at >= starts_from)
+    if starts_before is not None:
+        statement = statement.where(Session.starts_at < starts_before)
+    if statuses:
+        statement = statement.where(Session.status.in_(list(statuses)))
     if cursor is not None:
         statement = statement.where(_after(cursor))
 
