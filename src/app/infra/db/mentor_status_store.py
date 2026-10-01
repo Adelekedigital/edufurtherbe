@@ -28,7 +28,6 @@ from sqlalchemy import (
     insert,
     literal,
     not_,
-    or_,
     select,
     update,
 )
@@ -39,6 +38,10 @@ from app.core.errors import ValidationError
 from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
 from app.domain.listing import RETURN_ON_POINTER, return_on_problem
 from app.domain.notifications import Notification
+from app.infra.db.mentor_listing import (
+    newest_unlisting_is_self,
+    paused_by_mentor,
+)
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
@@ -111,9 +114,13 @@ async def _lock(session: AsyncSession, user_id: UUID) -> bool:
     other and a decision read before writing — the pause guard — cannot be
     overtaken by an admin's unlisting committing in between (#224).
     """
+    # The account's row as well as the profile's: a mentor whose account is
+    # soft-deleted after the caller was authenticated has no transition left
+    # to make, and holding the user row stops the delete crossing the write.
     found = await session.execute(
         select(MentorProfile.user_id)
-        .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
+        .join(User, User.id == MentorProfile.user_id)
+        .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None), LIVE)
         .with_for_update()
     )
     return found.first() is not None
@@ -212,49 +219,6 @@ async def set_listing(
     )
 
 
-def _newest_unlisting_id() -> Any:
-    """The id of this mentor's newest unlisting, correlated to `MentorProfile`."""
-    newest = aliased(MentorStatusEvent)
-    return (
-        select(newest.id)
-        .where(
-            newest.mentor_user_id == MentorProfile.user_id,
-            newest.status_type == MentorStatusType.UNLISTED,
-        )
-        .order_by(newest.created_at.desc(), newest.id.desc())
-        .limit(1)
-        .correlate(MentorProfile)
-        .scalar_subquery()
-    )
-
-
-def newest_unlisting_is_self() -> ColumnElement[bool]:
-    """**The one definition of "the mentor took themselves off".**
-
-    The newest unlisting says `mentor_paused` **and** was written by the mentor —
-    or by the migration, which acted for nobody (`created_by` NULL) and carried
-    legacy self-pauses. The actor matters, not just the spelling: an admin's
-    reason is free text, and an admin who typed `mentor_paused` must not hand the
-    mentor the resume button. Correlated to `MentorProfile`; it is what resume,
-    the pause guard and `paused_by_mentor` all read (#75).
-    """
-    event = aliased(MentorStatusEvent)
-    return exists(
-        select(event.id)
-        .where(
-            event.id == _newest_unlisting_id(),
-            event.reason == UnlistedReason.MENTOR_PAUSED.value,
-            or_(event.created_by.is_(None), event.created_by == event.mentor_user_id),
-        )
-        .correlate(MentorProfile)
-    )
-
-
-def paused_by_mentor() -> ColumnElement[bool]:
-    """Currently unlisted, and by their own pause. Correlated to `MentorProfile`."""
-    return and_(MentorProfile.listing_status == ListingStatus.UNLISTED, newest_unlisting_is_self())
-
-
 def _unlisted_by_someone_else() -> ColumnElement[bool]:
     """Currently unlisted by an admin (or a decline): the pause guard's refusal.
 
@@ -326,7 +290,9 @@ async def pause(
     # **The write flow enforces the date rule, not the transport** — any caller
     # of `pause` gets it. The mentor's today is theirs, so it is read here.
     today = await local_today(session, user_id, now)
-    problem = None if today is None else return_on_problem(return_on, today)
+    if today is None:
+        return "absent"
+    problem = return_on_problem(return_on, today)
     if problem is not None:
         raise ValidationError(problem, field_errors=((RETURN_ON_POINTER, problem),))
     already = await _profile_flag(session, user_id, paused_by_mentor())

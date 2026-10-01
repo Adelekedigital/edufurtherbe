@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.notifications import Channel, Notification
+from app.infra.db.mentor_listing import return_reminder_still_due
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
@@ -156,6 +157,13 @@ async def drain(
     counts = {"sent": 0, "failed": 0, "skipped": 0}
     for row in pending:
         recipient = UUID(str(row["payload"]["recipient_id"]))
+        still_due = STILL_DUE.get(Notification(str(row["event_type"])))
+        if still_due is not None and not await still_due(
+            session, row["entity_id"], dict(row["payload"])
+        ):
+            await _finish(session, row["id"], "skipped", row["attempts"], "superseded")
+            counts["skipped"] += 1
+            continue
         address = await _address_for(session, recipient, Channel(str(row["destination"])))
         if address is None:
             await _finish(session, row["id"], "skipped", row["attempts"], "no address")
@@ -185,6 +193,15 @@ async def drain(
             await _finish(session, row["id"], "sent", row["attempts"], None, sent_at=now)
             counts["sent"] += 1
     return counts
+
+
+#: Messages whose truth can lapse while they wait to be sent, and how to ask.
+#:
+#: **Checked at send time**, because a row queued now can be retried an hour
+#: later: a return reminder for a mentor who has since resumed, or set a new
+#: date, would be a false instruction. Every other message is about something
+#: that already happened and stays true. Skipped, not failed: nothing went wrong.
+STILL_DUE = {Notification.MENTOR_RETURN_REMINDER: return_reminder_still_due}
 
 
 async def _finish(

@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.test_mentor_status_log import ADMIN, add_mentor, make_user
 
 from app.core.config import Settings
-from app.infra.db.mentor_status_store import remind_returning_mentors
+from app.infra.db.mentor_status_store import pause, remind_returning_mentors
+from app.infra.db.outbox import drain
 from app.infra.jobs import runner
 from app.infra.jobs.runner import RuntimeJobs
 from conftest import api_token, bearer
@@ -380,3 +381,97 @@ async def test_a_claimed_reminder_survives_a_send_that_fails_its_commit(
         ).scalar_one()
     assert reminded is not None, "the claim was rolled back with the failed run"
     assert await reminders(db_engine, mentor) == 1
+
+
+class Recorder:
+    """A notifier that sends nothing and remembers what it was asked to send."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    def send(self, **kwargs: Any) -> None:
+        self.sent.append(str(kwargs["notification"]))
+
+
+async def drained(engine: AsyncEngine, migrated_database: str) -> list[str]:
+    notifier = Recorder()
+    async with AsyncSession(engine) as session:
+        await drain(
+            session,
+            notifier=notifier,
+            now=dt.datetime.now(dt.UTC),
+            settings=Settings(_env_file=None, database_url=SecretStr(migrated_database)),
+        )
+        await session.commit()
+    return [n for n in notifier.sent if n == "mentor_return_reminder"]
+
+
+async def test_a_queued_reminder_still_due_is_sent(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """The positive half of the send-time check."""
+    back = local_today() - dt.timedelta(days=1)
+    await paused_until(db_engine, api_client, "still-due", back)
+    assert await sweep(db_engine, dt.datetime.now(dt.UTC)) == 1
+
+    assert await drained(db_engine, migrated_database) == ["mentor_return_reminder"]
+
+
+async def test_a_queued_reminder_is_not_sent_after_a_resume(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """Queued, then the mentor came back before it went out: telling a listed
+    mentor to switch back on would be false."""
+    back = local_today() - dt.timedelta(days=1)
+    mentor = await paused_until(db_engine, api_client, "resumed-queued", back)
+    assert await sweep(db_engine, dt.datetime.now(dt.UTC)) == 1
+    await api_client.post(
+        f"/api/v1/users/{mentor}/mentor-profile/resume",
+        headers=await headers_of(db_engine, mentor),
+    )
+
+    assert await drained(db_engine, migrated_database) == []
+
+
+async def test_a_queued_reminder_is_not_sent_for_an_old_date(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """Queued for one date, then the mentor moved it: the old one is stale."""
+    back = local_today() - dt.timedelta(days=1)
+    mentor = await paused_until(db_engine, api_client, "moved-queued", back)
+    assert await sweep(db_engine, dt.datetime.now(dt.UTC)) == 1
+    later = local_today() + dt.timedelta(days=9)
+    await api_client.post(
+        pause_url(mentor),
+        json={"return_on": later.isoformat()},
+        headers=await headers_of(db_engine, mentor),
+    )
+
+    assert await drained(db_engine, migrated_database) == []
+
+
+async def test_a_deleted_account_cannot_be_paused(db_engine: AsyncEngine) -> None:
+    """Soft-deleted after the caller was authenticated: nothing to write to."""
+    mentor = await make_user(db_engine, uuid4(), "deleted-pause@example.com")
+    await add_mentor(db_engine, mentor, approved=True)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+
+    async with AsyncSession(db_engine) as session:
+        outcome = await pause(session, user_id=mentor, now=dt.datetime.now(dt.UTC))
+        await session.commit()
+
+    assert outcome == "absent"
+    assert await unlistings(db_engine, mentor) == 0
+
+
+async def test_the_pause_publishes_its_conflict() -> None:
+    """The generated client must have a branch for the admin-unlisted refusal."""
+    from app.main import create_app
+
+    spec = create_app(Settings(_env_file=None)).openapi()
+    operation = next(
+        ops["post"] for path, ops in spec["paths"].items() if path.endswith("/mentor-profile/pause")
+    )
+
+    assert "409" in operation["responses"]

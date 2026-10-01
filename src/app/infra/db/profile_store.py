@@ -34,7 +34,7 @@ from uuid import UUID
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infra.db.mentor_status_store import paused_by_mentor
+from app.infra.db.mentor_listing import paused_by_mentor
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.mentoring import (
     MenteeGoal,

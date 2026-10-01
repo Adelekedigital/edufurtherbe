@@ -1027,9 +1027,19 @@ def test_the_return_date_downgrade_keeps_the_pause(
     )
     execute(
         disposable_database,
-        "UPDATE mentor_profiles SET return_on = DATE '2026-12-01', return_reminded_at = now(); "
+        # Listed first, so the downgrade's preserving the pause is something the
+        # assertions can see go wrong rather than the profile's default.
+        "INSERT INTO mentor_status_events (mentor_user_id, status_type) "
+        "SELECT user_id, 'listed' FROM mentor_profiles",
+    )
+    assert scalar(disposable_database, "SELECT listing_status::text FROM mentor_profiles") == (
+        "listed"
+    )
+    execute(
+        disposable_database,
         "INSERT INTO mentor_status_events (mentor_user_id, status_type, reason) "
-        "SELECT user_id, 'unlisted', 'mentor_paused' FROM mentor_profiles",
+        "SELECT user_id, 'unlisted', 'mentor_paused' FROM mentor_profiles; "
+        "UPDATE mentor_profiles SET return_on = DATE '2026-12-01', return_reminded_at = now()",
     )
 
     command.downgrade(config, "f3a91d2c7b45")
@@ -1045,6 +1055,13 @@ def test_the_return_date_downgrade_keeps_the_pause(
     )
     assert scalar(disposable_database, "SELECT listing_status::text FROM mentor_profiles") == (
         "unlisted"
+    )
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT count(*) FROM mentor_status_events WHERE reason = 'mentor_paused'",
+        )
+        == 1
     )
     command.upgrade(config, "b7c41e9a2d58")
     assert scalar(disposable_database, "SELECT return_on FROM mentor_profiles") is None
