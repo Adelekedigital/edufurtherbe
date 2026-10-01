@@ -17,6 +17,7 @@ from sqlalchemy.orm import aliased
 from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 
 #: The local hour from which a mentor's return-day reminder may go out.
 RETURN_REMINDER_HOUR = 8
@@ -114,6 +115,8 @@ async def return_reminder_state(
             .where(
                 MentorProfile.user_id == user_id,
                 MentorProfile.deleted_at.is_(None),
+                # A deleted account is stale, not waiting: nobody is left to tell.
+                LIVE,
                 MentorProfile.approval_status == ApprovalStatus.APPROVED,
                 MentorProfile.return_on == dt.date.fromisoformat(str(queued_for)),
                 paused_by_mentor(),

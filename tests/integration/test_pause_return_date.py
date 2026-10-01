@@ -523,3 +523,35 @@ async def test_a_decision_on_a_deleted_account_is_absent(db_engine: AsyncEngine)
         ).scalar_one()
     assert decided is False
     assert queued == 0
+
+
+async def test_a_deleted_accounts_queued_reminder_is_dropped_not_kept(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """Moved to a zone where it is still early, then the account was deleted:
+    stale, not waiting, so it is not re-selected ahead of live mail forever."""
+    back = dt.date(2026, 10, 21)
+    mentor = await paused_until(db_engine, api_client, "deleted-queued", back)
+    queued_at = local(back, 9)
+    assert await sweep(db_engine, queued_at) == 1
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE users SET timezone = 'Pacific/Honolulu', deleted_at = now() WHERE id = :u"
+            ),
+            {"u": mentor},
+        )
+
+    await drained(db_engine, migrated_database, queued_at)
+
+    async with db_engine.connect() as conn:
+        status = (
+            await conn.execute(
+                text(
+                    "SELECT status FROM outbox_events "
+                    "WHERE event_type = 'mentor_return_reminder' AND entity_id = :u"
+                ),
+                {"u": mentor},
+            )
+        ).scalar_one()
+    assert status == "skipped"
