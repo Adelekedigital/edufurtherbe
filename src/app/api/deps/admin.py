@@ -54,7 +54,6 @@ from app.infra.db.idempotency import Replayed, record_response
 from app.infra.db.mentor_status_store import (
     decide,
     history,
-    local_today,
     may_self_resume,
     pause,
     resume,
@@ -327,13 +326,12 @@ async def paused_self(
 ) -> bool:
     """Refused while an admin's unlisting stands: pausing over it would make the
     newest unlisting the mentor's own, and their resume would then undo it (#75)."""
-    return_on = payload.return_on if payload else None
-    if return_on is not None:
-        today = await local_today(session, user_id, dt.datetime.now(dt.UTC))
-        if today is not None and return_on <= today:
-            message = "return_on must be after today in your time zone"
-            raise ValidationError(message, field_errors=(("/return_on", message),))
-    outcome = await pause(session, user_id=user_id, return_on=return_on)
+    outcome = await pause(
+        session,
+        user_id=user_id,
+        return_on=payload.return_on if payload else None,
+        now=dt.datetime.now(dt.UTC),
+    )
     if outcome == "refused":
         raise ConflictError(
             "an admin has unlisted this profile; only an admin can change its listing"

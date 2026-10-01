@@ -14,11 +14,15 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.test_mentor_status_log import ADMIN, add_mentor, make_user
 
+from app.core.config import Settings
 from app.infra.db.mentor_status_store import remind_returning_mentors
+from app.infra.jobs import runner
+from app.infra.jobs.runner import RuntimeJobs
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -344,3 +348,35 @@ async def test_a_listing_written_any_way_ends_the_return_date(
         ).one()
 
     assert tuple(row) == ("listed", None, None)
+
+
+async def test_a_claimed_reminder_survives_a_send_that_fails_its_commit(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    migrated_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**Claimed and queued before anything is sent.** If the run dies after the
+    provider accepted the email but before it committed, a single transaction
+    would roll the marker and the outbox row back, and the retried run would
+    queue and send the reminder again under a new idempotency key."""
+    back = local_today() - dt.timedelta(days=1)
+    mentor = await paused_until(db_engine, api_client, "durable", back)
+
+    async def sent_then_lost(*_: Any, **__: Any) -> dict[str, int]:
+        raise RuntimeError("the provider accepted it, then the run died")
+
+    monkeypatch.setattr(runner, "drain", sent_then_lost)
+    jobs = RuntimeJobs(Settings(_env_file=None, database_url=SecretStr(migrated_database)))
+    with pytest.raises(RuntimeError):
+        await jobs.run("settle-sessions")
+
+    async with db_engine.connect() as conn:
+        reminded = (
+            await conn.execute(
+                text("SELECT return_reminded_at FROM mentor_profiles WHERE user_id = :u"),
+                {"u": mentor},
+            )
+        ).scalar_one()
+    assert reminded is not None, "the claim was rolled back with the failed run"
+    assert await reminders(db_engine, mentor) == 1

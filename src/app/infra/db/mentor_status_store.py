@@ -35,7 +35,9 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.core.errors import ValidationError
 from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
+from app.domain.listing import RETURN_ON_POINTER, return_on_problem
 from app.domain.notifications import Notification
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
@@ -296,7 +298,11 @@ PauseOutcome = Literal["paused", "refused", "absent"]
 
 
 async def pause(
-    session: AsyncSession, *, user_id: UUID, return_on: dt.date | None = None
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    now: dt.datetime,
+    return_on: dt.date | None = None,
 ) -> PauseOutcome:
     """A mentor taking themselves out of the listing, optionally saying when
     they expect to be back.
@@ -317,6 +323,12 @@ async def pause(
         return "absent"
     if await unlisted_by_someone_else(session, user_id):
         return "refused"
+    # **The write flow enforces the date rule, not the transport** — any caller
+    # of `pause` gets it. The mentor's today is theirs, so it is read here.
+    today = await local_today(session, user_id, now)
+    problem = None if today is None else return_on_problem(return_on, today)
+    if problem is not None:
+        raise ValidationError(problem, field_errors=((RETURN_ON_POINTER, problem),))
     already = await _profile_flag(session, user_id, paused_by_mentor())
     if not already:
         await record(

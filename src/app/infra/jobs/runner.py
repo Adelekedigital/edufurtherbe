@@ -188,6 +188,14 @@ class RuntimeJobs:
                         key=oauth["key"],
                     )
                 )
+                # **Commit what was queued before anything is sent.** If the run
+                # died after the provider accepted a message but before one final
+                # commit, the claims and outbox rows would roll back and the
+                # retried run would queue and send them again under a new
+                # idempotency key. Committed first, a failed drain leaves them
+                # pending for the next run instead.
+                if not dry_run:
+                    await session.commit()
                 sent = await drain(
                     session,
                     notifier=NullNotifier() if dry_run else self._notifier(),
