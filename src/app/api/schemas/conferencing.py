@@ -28,7 +28,7 @@ class ConferencingRead(BaseModel):
     is_default_choice: bool = Field(
         description=(
             "True while the mentor has never chosen and gets the platform's "
-            "default, EduFurther video."
+            f"default, `{PLATFORM_DEFAULT_PROVIDER.value}`."
         )
     )
 

@@ -174,3 +174,10 @@ async def test_every_published_fallback_names_the_platform_default() -> None:
 
     for text_ in texts:
         assert f"else `{PLATFORM_DEFAULT_PROVIDER.value}`" in text_
+
+    own = [
+        schemas["ConferencingRead"]["properties"]["is_default_choice"]["description"],
+        spec["paths"]["/api/v1/me/conferencing"]["get"]["description"],
+    ]
+    for text_ in own:
+        assert f"`{PLATFORM_DEFAULT_PROVIDER.value}`" in text_

@@ -157,14 +157,16 @@ PROGRAM_DEGREE_LEVELS: dict[str, str] = {
 
 #: Legacy venue selection to ``meeting_provider``.
 #:
-#: A blank is the majority and means the mentor never chose, which is the
-#: platform default rather than a missing value. ``meetingVenueLink`` is not
+#: A blank is the majority and means the mentor never chose, so it maps to
+#: ``None``: no venue of the mentor's own, and the platform default applies
+#: (owner, 2026-10-01). It used to map to ``GOOGLE_MEET``, which loaded as a saved
+#: choice the mentor never made. ``meetingVenueLink`` is not
 #: mapped at all: selecting a venue auto-created a per-session link that lived on
 #: the session record, so what remains on the mentor row is residue.
-MEETING_VENUES: dict[str, MeetingProvider] = {
+MEETING_VENUES: dict[str, MeetingProvider | None] = {
     "edufurther video (recommended)": MeetingProvider.DAILY,
     "external video tool": MeetingProvider.CUSTOM,
-    "": MeetingProvider.GOOGLE_MEET,
+    "": None,
 }
 
 APPROVALS: dict[str, ApprovalStatus] = {
@@ -191,7 +193,9 @@ def _lookup[T](table: dict[str, T], raw: Any, *, field: str, bubble_id: str) -> 
     return table[key]
 
 
-def booking_defaults(record: dict[str, Any], *, bubble_id: str) -> tuple[MeetingProvider, bool]:
+def booking_defaults(
+    record: dict[str, Any], *, bubble_id: str
+) -> tuple[MeetingProvider | None, bool]:
     """A mentor's venue and confirmation setting, read from their legacy record.
 
     **Public, and shared with the session transform**, because D88 moved both onto

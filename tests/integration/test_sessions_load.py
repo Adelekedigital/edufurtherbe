@@ -390,8 +390,9 @@ async def test_the_load_points_the_offering_at_a_conferencing_option(
 
     The migration's backfill runs **once**, so a database built fresh — migrate,
     then load — is exactly the path that would otherwise take the platform
-    fallback instead of the mentor's real choice. `daily` is non-default, so a
-    loader that dropped it resolves to `google_meet` and fails here.
+    fallback instead of the mentor's real choice. The join below needs the
+    pointer, so a loader that dropped the option fails here even though `daily`
+    is now also the platform fallback.
 
     Loaded from the real export this is not hypothetical: the twelve mentors
     split `google_meet` 5, `daily` 5, `custom` 2.
@@ -415,6 +416,42 @@ async def test_the_load_points_the_offering_at_a_conferencing_option(
     # clears its pointer still resolves to what they chose rather than to the
     # platform fallback.
     assert row.is_default is True
+
+
+async def test_a_mentor_who_never_chose_gets_no_option(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """A blank legacy venue is "never chose" (owner, 2026-10-01): no option row,
+    and the offering points at nothing, so it follows the platform default and
+    `GET /me/conferencing` reports `is_default_choice: true`. It used to create a
+    `google_meet` default that read as the mentor's own choice."""
+    conn, users = seeded
+    plan = plan_of(session_types=(SessionTypeRow(MENTOR, "General Mentorship", 45, None),))
+
+    await SessionLoader(conn).load(users=users, plan=plan)
+
+    options = await conn.execute(text("SELECT count(*) FROM mentor_conferencing_options"))
+    assert options.scalar_one() == 0
+    pointer = await conn.execute(text("SELECT conferencing_option_id FROM session_types"))
+    assert pointer.scalar_one() is None
+
+
+async def test_a_reload_with_no_venue_clears_the_old_pointer(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """The load converges on the plan: an offering a previous run pointed at an
+    option follows the platform default once the plan says the mentor never chose."""
+    conn, users = seeded
+    loader = SessionLoader(conn)
+    await loader.load(users=users, plan=plan_of())
+
+    await loader.load(
+        users=users,
+        plan=plan_of(session_types=(SessionTypeRow(MENTOR, "General Mentorship", 45, None),)),
+    )
+
+    pointer = await conn.execute(text("SELECT conferencing_option_id FROM session_types"))
+    assert pointer.scalar_one() is None
 
 
 async def test_the_load_leaves_every_offering_inheriting_its_confirmation(

@@ -12,6 +12,7 @@ from fastapi import APIRouter, status
 
 from app.api.deps import OwnConferencingDep, UpdatedConferencingDep
 from app.api.schemas.conferencing import ConferencingRead
+from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
 
 router = APIRouter(prefix="/api/v1/me/conferencing", tags=["availability"])
 
@@ -29,8 +30,8 @@ RESPONSES: dict[int | str, dict[str, str]] = {
     summary="Your default video provider",
     description=(
         "Where your sessions are held unless an offering says otherwise. "
-        "`is_default_choice` is true while you have never chosen and get "
-        "EduFurther video."
+        "`is_default_choice` is true while you have never chosen and get the "
+        f"platform default, `{PLATFORM_DEFAULT_PROVIDER.value}`."
     ),
     responses=RESPONSES,
 )

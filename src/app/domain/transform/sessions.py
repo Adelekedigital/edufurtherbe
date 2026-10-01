@@ -293,7 +293,9 @@ class SessionTypeRow:
     mentor_bubble_id: str
     name: str
     duration_minutes: int
-    meeting_venue: MeetingProvider
+    #: ``None`` is "never chose": the offering gets no option of its own and
+    #: follows the platform default.
+    meeting_venue: MeetingProvider | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -482,7 +484,7 @@ class SessionPlan:
             ("duration defaulted to the legacy mode", self.duration_defaulted),
             ("venue and confirmation defaulted (no mentor record)", self.booking_defaulted),
             (
-                "CUSTOM VENUE, NO URL - loaded on google_meet, needs re-declaring",
+                "CUSTOM VENUE, NO URL - loaded on the platform default, needs re-declaring",
                 self.custom_venue_quarantined,
             ),
             ("reschedule evidence, unlinkable", self.reschedule_evidence),
@@ -758,7 +760,7 @@ def plan_sessions(
         legacy_anchor(record) for record in user_records if record.get(MENTOR_LINK_FIELD)
     }
     # Keyed on the mentor's *user* anchor, because that is what a session names.
-    booking_by_mentor: dict[str, tuple[MeetingProvider, bool]] = {}
+    booking_by_mentor: dict[str, tuple[MeetingProvider | None, bool]] = {}
     # A mentor record nobody points at is skipped rather than raising: the profile
     # load already reports those as unattached, and reporting the same orphan from
     # a second phase would double-count it.
@@ -1045,17 +1047,18 @@ def plan_sessions(
         booking = booking_by_mentor.get(mentor)
         if booking is None:
             booking_missing.append(mentor)
-            booking = (MeetingProvider.GOOGLE_MEET, False)
+            booking = (None, False)
         # The confirmation half is `MentorProfileRow`'s now, written by the
         # profile load. Unpacked and dropped rather than indexed, so the shape of
         # `booking_defaults` stays visible at the point it is consumed.
         venue, _confirmation = booking
         if venue is MeetingProvider.CUSTOM:
             # No URL exists to carry, and `custom` without one is
-            # unrepresentable. Reported, not guessed — see
+            # unrepresentable. Reported, not guessed, and left on the platform
+            # default rather than a `google_meet` nobody chose — see
             # `SessionPlan.custom_venue_quarantined`.
             custom_quarantined.append(mentor)
-            venue = MeetingProvider.GOOGLE_MEET
+            venue = None
         session_types.append(
             SessionTypeRow(
                 mentor_bubble_id=mentor,
