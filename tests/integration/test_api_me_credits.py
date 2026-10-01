@@ -265,7 +265,10 @@ async def test_a_migrated_balance_renders_on_the_card(
     """
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id)
-    end_of_cutover_month = datetime(2026, 10, 1, tzinfo=UTC)
+    # Relative to now, not a literal: a fixed "end of the cutover month" expired
+    # on 2026-10-01 and turned this test red for every run after it.
+    now = datetime.now(UTC)
+    end_of_cutover_month = datetime(now.year + (now.month == 12), now.month % 12 + 1, 1, tzinfo=UTC)
     await grant(
         db_engine,
         user_id,
