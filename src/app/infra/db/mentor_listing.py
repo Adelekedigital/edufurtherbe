@@ -66,6 +66,23 @@ def paused_by_mentor() -> ColumnElement[bool]:
     return and_(MentorProfile.listing_status == ListingStatus.UNLISTED, newest_unlisting_is_self())
 
 
+def reminder_eligible() -> ColumnElement[bool]:
+    """**The one definition of "this mentor can still be told to come back".**
+
+    A live account and profile, approved (resume needs approval), still paused
+    by themselves, with a return date. Read by the claim and by the send-time
+    check alike, so the two cannot drift: they did once, when only one of them
+    read `LIVE`. Needs `User` joined to `MentorProfile`.
+    """
+    return and_(
+        LIVE,
+        MentorProfile.deleted_at.is_(None),
+        MentorProfile.return_on.is_not(None),
+        MentorProfile.approval_status == ApprovalStatus.APPROVED,
+        paused_by_mentor(),
+    )
+
+
 def return_reminder_due(now: dt.datetime) -> ColumnElement[bool]:
     """**The one definition of "the return morning has come".**
 
@@ -114,12 +131,8 @@ async def return_reminder_state(
             .join(User, User.id == MentorProfile.user_id)
             .where(
                 MentorProfile.user_id == user_id,
-                MentorProfile.deleted_at.is_(None),
-                # A deleted account is stale, not waiting: nobody is left to tell.
-                LIVE,
-                MentorProfile.approval_status == ApprovalStatus.APPROVED,
+                reminder_eligible(),
                 MentorProfile.return_on == dt.date.fromisoformat(str(queued_for)),
-                paused_by_mentor(),
             )
         )
     ).first()

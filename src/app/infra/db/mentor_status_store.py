@@ -39,6 +39,7 @@ from app.domain.notifications import Notification
 from app.infra.db.mentor_listing import (
     newest_unlisting_is_self,
     paused_by_mentor,
+    reminder_eligible,
     return_reminder_due,
 )
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
@@ -345,14 +346,8 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
             update(MentorProfile)
             .where(
                 User.id == MentorProfile.user_id,
-                LIVE,
-                MentorProfile.deleted_at.is_(None),
-                MentorProfile.return_on.is_not(None),
+                reminder_eligible(),
                 MentorProfile.return_reminded_at.is_(None),
-                # Only someone who can act on it: resume needs approval, so a
-                # pending applicant who paused is not told to switch back on.
-                MentorProfile.approval_status == ApprovalStatus.APPROVED,
-                paused_by_mentor(),
                 return_reminder_due(now),
             )
             .values(return_reminded_at=now)
