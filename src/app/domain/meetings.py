@@ -100,6 +100,10 @@ def meeting_link(url: str) -> str:
     parts = urlsplit(link)
     if parts.scheme != "https" or not parts.hostname:
         raise ValueError("a link must be an https:// address with a host")
+    try:
+        parts.port  # noqa: B018 - parsing the port is the check: it raises if malformed
+    except ValueError:
+        raise ValueError("a link's port must be a number from 0 to 65535") from None
     if parts.username is not None or parts.password is not None:
         raise ValueError("a link must not carry a username or password")
     return link

@@ -74,6 +74,14 @@ async def test_a_mentor_sets_a_personal_link_and_reads_it_back(
             {"provider": "custom", "custom_url": "https://ada:pw@x.org/r"}, id="credentials"
         ),
         pytest.param({"provider": "custom", "custom_url": "https:///r"}, id="no-host"),
+        pytest.param(
+            {"provider": "custom", "custom_url": "https://rooms.example.org:notaport/a"},
+            id="bad-port",
+        ),
+        pytest.param(
+            {"provider": "custom", "custom_url": "https://rooms.example.org:99999/a"},
+            id="port-out-of-range",
+        ),
         pytest.param({"provider": "zoom", "custom_url": None}, id="zoom"),
     ],
 )
@@ -147,3 +155,22 @@ async def test_the_routes_name_no_user_but_the_caller() -> None:
     from app.api.routes.me_conferencing import router
 
     assert {route.path for route in router.routes} == {URL}  # type: ignore[attr-defined]
+
+
+async def test_every_published_fallback_names_the_platform_default() -> None:
+    """The offering descriptions quote the fallback from the constant that
+    resolves it, so the spec cannot promise a provider the runtime no longer uses."""
+    from app.core.config import Settings
+    from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
+    from app.main import create_app
+
+    spec = create_app(Settings(_env_file=None)).openapi()
+    schemas = spec["components"]["schemas"]
+    texts = [
+        schemas["SessionTypeRead"]["properties"]["meeting_venue"]["description"],
+        schemas["OwnSessionTypeRead"]["properties"]["meeting_venue"]["description"],
+        spec["paths"]["/api/v1/users/{user_id}/session-types"]["get"]["description"],
+    ]
+
+    for text_ in texts:
+        assert f"else `{PLATFORM_DEFAULT_PROVIDER.value}`" in text_
