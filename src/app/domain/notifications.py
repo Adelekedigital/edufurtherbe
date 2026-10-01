@@ -207,6 +207,13 @@ class Notification(StrEnum):
     #: needs QStash and a callback endpoint, which arrive together.
     MENTOR_RESPONSE_REMINDER = "mentor_response_reminder"
 
+    #: **A paused mentor's return day has come.** Once, on the morning of the
+    #: date they gave, in their own zone, and only while they are still paused
+    #: by themselves. A nudge to switch back on — never a switch: nobody is
+    #: relisted by it (Calendar request, 2026-10-01). Not in `AUDIENCE`: about a
+    #: mentor's own listing, not a party to a session.
+    MENTOR_RETURN_REMINDER = "mentor_return_reminder"
+
 
 class Audience(StrEnum):
     """Who hears a session message.

@@ -229,7 +229,11 @@ addresses the mentee alone.
 ### Messages with no template
 
 `request_expired`, `calendar_disconnected`, `mentor_approved`, `mentor_declined`,
-**`review_requested`**, **`review_received`**.
+**`review_requested`**, **`review_received`**, `mentor_return_reminder`.
+
+`mentor_return_reminder` (2026-10-01) goes to a self-paused mentor on the
+morning of the return date they gave. Its template may use `recipientName`,
+`returnDate` (the date, in words) and `calendarUrl` (where they switch back on).
 
 **The last two are the operationally urgent ones**, and this list is where an
 operator would look.

@@ -34,6 +34,7 @@ from uuid import UUID
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.infra.db.mentor_status_store import paused_by_mentor
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.mentoring import (
     MenteeGoal,
@@ -257,6 +258,8 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
                     MentorProfile.break_after_minutes,
                     MentorProfile.default_duration_minutes,
                     MentorProfile.default_min_notice_minutes,
+                    MentorProfile.return_on,
+                    paused_by_mentor().label("paused_by_mentor"),
                     MentorProfile.primary_study_program,
                     Country.code.label("primary_study_country_code"),
                     Country.display_name.label("primary_study_country_name"),

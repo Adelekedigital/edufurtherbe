@@ -98,6 +98,7 @@ class MessageContext:
 #: would send a mentor to the API.
 SESSION_PATH = "/sessions/{session_id}"
 DASHBOARD_PATH = "/dashboard"
+CALENDAR_PATH = "/calendar"
 
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
@@ -161,6 +162,10 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "location": lambda c: _needs(c.venue, "location"),
     "sessionUrl": _session_url,
     "dashboardUrl": lambda c: f"{c.app_base_url.rstrip('/')}{DASHBOARD_PATH}",
+    "calendarUrl": lambda c: f"{c.app_base_url.rstrip('/')}{CALENDAR_PATH}",
+    "returnDate": lambda c: dt.date.fromisoformat(
+        _needs(c.extras.get("return_on"), "returnDate")
+    ).strftime("%A %d %B %Y"),
     "hours": _hours_left,
     "reasonTitle": lambda c: _needs(c.extras.get("reason_title"), "reasonTitle"),
     "reasonMessage": lambda c: _needs(c.extras.get("reason_text"), "reasonMessage"),

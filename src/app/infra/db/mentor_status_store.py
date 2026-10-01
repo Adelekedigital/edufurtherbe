@@ -19,7 +19,19 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, exists, insert, not_, or_, select
+from sqlalchemy import (
+    ColumnElement,
+    Time,
+    and_,
+    exists,
+    func,
+    insert,
+    literal,
+    not_,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -28,6 +40,7 @@ from app.domain.notifications import Notification
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
+from app.infra.db.predicates import LIVE
 
 
 async def _mentor_exists(session: AsyncSession, user_id: UUID) -> bool:
@@ -87,7 +100,21 @@ async def record(
             created_by=created_by,
         )
     )
+    if status_type is MentorStatusType.LISTED:
+        # **Any listing ends a pause**, whoever wrote it — a mentor resuming, an
+        # admin relisting, an approval. Here rather than in `resume`, so no
+        # listing path can leave a stale return date behind.
+        await _set_return(session, user_id, None)
     return True
+
+
+async def _set_return(session: AsyncSession, user_id: UUID, return_on: dt.date | None) -> None:
+    """Set the pause's return date, re-arming its one reminder."""
+    await session.execute(
+        update(MentorProfile)
+        .where(MentorProfile.user_id == user_id)
+        .values(return_on=return_on, return_reminded_at=None)
+    )
 
 
 async def decide(
@@ -254,21 +281,93 @@ async def unlisted_by_someone_else(session: AsyncSession, user_id: UUID) -> bool
     return bool(await _profile_flag(session, user_id, _unlisted_by_someone_else()))
 
 
-async def pause(session: AsyncSession, *, user_id: UUID) -> bool:
-    """A mentor taking themselves out of the listing.
+async def pause(session: AsyncSession, *, user_id: UUID, return_on: dt.date | None = None) -> bool:
+    """A mentor taking themselves out of the listing, optionally saying when
+    they expect to be back.
 
     `created_by` is the mentor: they are the actor, and with the reason that is
     what distinguishes this from an admin unlisting the same row. The caller
     checks `unlisted_by_someone_else` first — pausing over an admin's unlisting
     would make the newest unlisting the mentor's and launder it into a resume.
+
+    **Already paused by themselves: only the date changes.** "Change return
+    date" calls this again, and a second `unlisted` event would record a
+    transition that never happened.
     """
-    return await record(
-        session,
-        user_id=user_id,
-        status_type=MentorStatusType.UNLISTED,
-        created_by=user_id,
-        reason=UnlistedReason.MENTOR_PAUSED.value,
-    )
+    already = await _profile_flag(session, user_id, paused_by_mentor())
+    if already is None:
+        return False
+    if not already:
+        await record(
+            session,
+            user_id=user_id,
+            status_type=MentorStatusType.UNLISTED,
+            created_by=user_id,
+            reason=UnlistedReason.MENTOR_PAUSED.value,
+        )
+    await _set_return(session, user_id, return_on)
+    return True
+
+
+async def local_today(session: AsyncSession, user_id: UUID, now: dt.datetime) -> dt.date | None:
+    """This user's calendar date in their own zone, or ``None`` with no live account.
+
+    A return date is a date in the mentor's zone, so "after today" has to be
+    their today — UTC's would refuse a mentor in Auckland their own tomorrow.
+    """
+    row = (
+        await session.execute(
+            select(func.date(func.timezone(User.timezone, now))).where(User.id == user_id, LIVE)
+        )
+    ).first()
+    return None if row is None else row[0]
+
+
+#: The local hour from which a mentor's return-day reminder may go out.
+RETURN_REMINDER_HOUR = 8
+
+
+async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -> int:
+    """Queue one "switch back on" email per mentor whose return day has come.
+
+    **A reminder, never a switch** (Calendar request, 2026-10-01): nobody is
+    relisted here. Due from `RETURN_REMINDER_HOUR` on the return date in the
+    mentor's own zone — the first hourly run at or after it — and only while
+    they are still paused by themselves.
+
+    **Claimed in one `UPDATE … RETURNING`**, which is what makes it send once:
+    two overlapping runs cannot both claim a row, and a re-run finds the marker
+    set. Does not commit.
+    """
+    local_now = func.timezone(User.timezone, now)
+    # `date + time` is a local timestamp, compared with the mentor's local now.
+    due = MentorProfile.return_on + literal(dt.time(RETURN_REMINDER_HOUR), Time)
+    claimed = (
+        await session.execute(
+            update(MentorProfile)
+            .where(
+                User.id == MentorProfile.user_id,
+                LIVE,
+                MentorProfile.deleted_at.is_(None),
+                MentorProfile.return_on.is_not(None),
+                MentorProfile.return_reminded_at.is_(None),
+                paused_by_mentor(),
+                local_now >= due,
+            )
+            .values(return_reminded_at=now)
+            .returning(MentorProfile.user_id, MentorProfile.return_on)
+        )
+    ).all()
+    for user_id, return_on in claimed:
+        await enqueue(
+            session,
+            Notification.MENTOR_RETURN_REMINDER,
+            entity_type="mentor_profile",
+            entity_id=user_id,
+            recipient_ids=(user_id,),
+            variables={"return_on": return_on.isoformat()},
+        )
+    return len(claimed)
 
 
 async def may_self_resume(session: AsyncSession, user_id: UUID) -> bool:

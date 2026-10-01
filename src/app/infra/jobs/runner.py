@@ -32,6 +32,7 @@ from app.infra.db.credit_reminders import (
 )
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.intake_file_store import sweep_counts, sweep_intake_files
+from app.infra.db.mentor_status_store import remind_returning_mentors
 from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.outbox import drain
 from app.infra.db.session_type_store import finalise_scheduled_deletions
@@ -172,6 +173,8 @@ class RuntimeJobs:
                 # holds its scheduled offering open (#218).
                 finalised = await finalise_scheduled_deletions(session)
                 nudged = await remind_unreviewed(session, now=now)
+                # Before the drain, so the reminder goes out in this same run.
+                returning = await remind_returning_mentors(session, now=now)
                 oauth = self._calendar_health()
                 health = (
                     {"checked": 0, "healthy": 0, "disconnected": 0, "unreachable": 0}
@@ -199,6 +202,7 @@ class RuntimeJobs:
                     "settled_sessions": settled,
                     "deleted_session_types": finalised,
                     "review_nudges": nudged,
+                    "return_reminders": returning,
                     "disconnected_calendars": health["disconnected"],
                     "messages": sum(sent.values()),
                 }

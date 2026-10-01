@@ -188,6 +188,15 @@ class MentorProfile(TimestampMixin, Base):
     #: set its own (#216). Null means the platform's: 60 minutes, 24 hours.
     default_duration_minutes: Mapped[int | None] = mapped_column(nullable=True)
     default_min_notice_minutes: Mapped[int | None] = mapped_column(nullable=True)
+    #: The date a self-paused mentor expects to be back, in their own zone, or
+    #: null for "not sure yet". **A reminder, never a switch**: nothing relists
+    #: them on it (Calendar request, 2026-10-01). Cleared by any listing.
+    return_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: When the reminder for this `return_on` was queued, so it is sent once.
+    #: Reset whenever a pause sets a new date.
+    return_reminded_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
 
     # `primary_session_type_id` is gone, and with it
     # `trg_refuse_retiring_a_primary_offering`. D88 gave it two jobs: the
