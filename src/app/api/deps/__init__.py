@@ -37,6 +37,8 @@ from app.api.deps.calendar import (
     CalendarConsentDep,
     DisconnectedCalendarDep,
     OwnCalendarDep,
+    OwnConferencingDep,
+    UpdatedConferencingDep,
 )
 from app.api.deps.core import (
     BookingWindowDep,
@@ -189,6 +191,7 @@ __all__ = [
     "ModerationQueueDep",
     "OwnAttributesDep",
     "OwnCalendarDep",
+    "OwnConferencingDep",
     "OwnOnboardingDep",
     "OwnQuestionsDep",
     "OwnReferralsDep",
@@ -218,6 +221,7 @@ __all__ = [
     "SlotsDep",
     "UpdatedAvailabilityRuleDep",
     "UpdatedAwardDep",
+    "UpdatedConferencingDep",
     "UpdatedEducationDep",
     "UpdatedMentorProfileDep",
     "UpdatedOwnQuestionDep",

@@ -230,19 +230,21 @@ async def test_a_custom_venue_creates_nothing_and_keeps_the_mentors_url(
     assert (await venue_of(db_engine, session["id"]))["meeting_url"] == CUSTOM_URL
 
 
-async def test_a_mentor_with_no_option_falls_back_to_meet(
+async def test_a_mentor_with_no_option_falls_back_to_edufurther_video(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, fakes: tuple[FakeRooms, FakeCalendar]
 ) -> None:
     """The third step of the resolution, and not padding: every mentor is seeded
     a default, which makes the fallback look unreachable — and that is precisely
-    the reasoning that failed for `primary_session_type_id`."""
-    _, calendar = fakes
+    the reasoning that failed for `primary_session_type_id`. The fallback is
+    `daily` (owner, 2026-10-01): a room is made, and no Meet conference asked for."""
+    rooms, calendar = fakes
     setup = await a_mentor_on(db_engine, "mp-none", None)
 
     session = await book(api_client, setup)
 
-    assert calendar.calls[0]["wants_conference"] is True
-    assert (await venue_of(db_engine, session["id"]))["meeting_provider"] == "google_meet"
+    assert len(rooms.calls) == 1
+    assert calendar.calls[0]["wants_conference"] is False
+    assert (await venue_of(db_engine, session["id"]))["meeting_provider"] == "daily"
 
 
 async def test_the_offerings_own_choice_beats_the_mentors_default(

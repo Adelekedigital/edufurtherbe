@@ -57,6 +57,7 @@ from sqlalchemy.orm import aliased
 from app.core.errors import ConflictError, ValidationError
 from app.domain.availability import BookingWindow
 from app.domain.enums import ApplicationStage, ConferencingProvider
+from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
 from app.domain.sessions import first_stage, named_stages, stage_label_problem
 from app.infra.db.booking_rules import (
     effective_duration_minutes,
@@ -177,13 +178,14 @@ def _resolved_venue() -> Any:
     resolution that can return null is a 500 waiting for the first mentor who
     slips through. Seed *and* fall back.
 
-    The literal is the enum member's value rather than a bare string, so renaming
-    the member moves this with it.
+    The literal is `PLATFORM_DEFAULT_PROVIDER` (EduFurther video since
+    2026-10-01), the same constant `/me/conferencing` reports for a mentor who
+    never chose.
     """
     return func.coalesce(
         _chosen.provider,
         _default.provider,
-        literal(ConferencingProvider.GOOGLE_MEET.value),
+        literal(PLATFORM_DEFAULT_PROVIDER.value),
     ).label("meeting_venue")
 
 
