@@ -1,4 +1,4 @@
-"""A self-paused mentor's return date, and when its reminder went out.
+"""A self-paused mentor's return date, and which of its reminders is next.
 
 Calendar request item 1, 2026-10-01. **Expand only**: two nullable columns on
 `mentor_profiles`, metadata-only on PostgreSQL 11+, with no rewrite and nothing
@@ -41,7 +41,7 @@ BEGIN
         UPDATE mentor_profiles
            SET listing_status = NEW.status_type,
                return_on = NULL,
-               return_reminded_at = NULL
+               return_reminder_stage = NULL
          WHERE user_id = NEW.mentor_user_id;
     ELSE
         UPDATE mentor_profiles
@@ -75,14 +75,12 @@ $$ LANGUAGE plpgsql;
 def upgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
     op.add_column(TABLE, sa.Column("return_on", sa.Date(), nullable=True))
-    op.add_column(
-        TABLE, sa.Column("return_reminded_at", sa.TIMESTAMP(timezone=True), nullable=True)
-    )
+    op.add_column(TABLE, sa.Column("return_reminder_stage", sa.SmallInteger(), nullable=True))
     op.execute(APPLY_MENTOR_STATUS)
 
 
 def downgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
     op.execute(APPLY_MENTOR_STATUS_PREVIOUS)
-    op.drop_column(TABLE, "return_reminded_at")
+    op.drop_column(TABLE, "return_reminder_stage")
     op.drop_column(TABLE, "return_on")

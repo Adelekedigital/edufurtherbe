@@ -1080,7 +1080,7 @@ def test_the_return_date_downgrade_keeps_the_pause(
         disposable_database,
         "INSERT INTO mentor_status_events (mentor_user_id, status_type, reason) "
         "SELECT user_id, 'unlisted', 'mentor_paused' FROM mentor_profiles; "
-        "UPDATE mentor_profiles SET return_on = DATE '2026-12-01', return_reminded_at = now()",
+        "UPDATE mentor_profiles SET return_on = DATE '2026-12-01', return_reminder_stage = 0",
     )
 
     command.downgrade(config, "a7c4e2d91f3b")
@@ -1090,7 +1090,7 @@ def test_the_return_date_downgrade_keeps_the_pause(
             disposable_database,
             "SELECT count(*) FROM information_schema.columns "
             "WHERE table_name = 'mentor_profiles' "
-            "AND column_name IN ('return_on', 'return_reminded_at')",
+            "AND column_name IN ('return_on', 'return_reminder_stage')",
         )
         == 0
     )

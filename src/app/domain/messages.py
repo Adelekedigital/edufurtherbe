@@ -163,9 +163,10 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "sessionUrl": _session_url,
     "dashboardUrl": lambda c: f"{c.app_base_url.rstrip('/')}{DASHBOARD_PATH}",
     "calendarUrl": lambda c: f"{c.app_base_url.rstrip('/')}{CALENDAR_PATH}",
-    "returnDate": lambda c: dt.date.fromisoformat(
-        _needs(c.extras.get("return_on"), "returnDate")
+    "returnOn": lambda c: dt.date.fromisoformat(
+        _needs(c.extras.get("return_on"), "returnOn")
     ).strftime("%A %d %B %Y"),
+    "daysUntilReturn": lambda c: _needs(c.extras.get("stage"), "daysUntilReturn"),
     "hours": _hours_left,
     "reasonTitle": lambda c: _needs(c.extras.get("reason_title"), "reasonTitle"),
     "reasonMessage": lambda c: _needs(c.extras.get("reason_text"), "reasonMessage"),

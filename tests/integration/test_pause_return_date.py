@@ -194,16 +194,19 @@ async def test_an_admins_unlisting_is_not_a_pause_on_the_read(
 
 
 async def paused_until(
-    engine: AsyncEngine, client: httpx.AsyncClient, tag: str, back: dt.date
+    engine: AsyncEngine, client: httpx.AsyncClient, tag: str, back: dt.date, stage: int = 0
 ) -> UUID:
-    """A self-paused mentor whose return date is `back`, set directly so a test
-    may use a fixed calendar date."""
+    """A self-paused mentor whose return date is `back` with `stage` pending
+    (the day-of by default), set directly so a test may use a fixed date."""
     mentor, headers = await a_mentor(engine, tag)
     await client.post(pause_url(mentor), headers=headers)
     async with engine.begin() as conn:
         await conn.execute(
-            text("UPDATE mentor_profiles SET return_on = :d WHERE user_id = :u"),
-            {"d": back, "u": mentor},
+            text(
+                "UPDATE mentor_profiles SET return_on = :d, return_reminder_stage = :s "
+                "WHERE user_id = :u"
+            ),
+            {"d": back, "s": stage, "u": mentor},
         )
     return mentor
 
@@ -341,7 +344,7 @@ async def test_a_listing_written_any_way_ends_the_return_date(
         row = (
             await conn.execute(
                 text(
-                    "SELECT listing_status, return_on, return_reminded_at "
+                    "SELECT listing_status, return_on, return_reminder_stage "
                     "FROM mentor_profiles WHERE user_id = :u"
                 ),
                 {"u": mentor},
@@ -375,11 +378,11 @@ async def test_a_claimed_reminder_survives_a_send_that_fails_its_commit(
     async with db_engine.connect() as conn:
         reminded = (
             await conn.execute(
-                text("SELECT return_reminded_at FROM mentor_profiles WHERE user_id = :u"),
+                text("SELECT return_reminder_stage FROM mentor_profiles WHERE user_id = :u"),
                 {"u": mentor},
             )
         ).scalar_one()
-    assert reminded is not None, "the claim was rolled back with the failed run"
+    assert reminded is None, "the claim was rolled back with the failed run"
     assert await reminders(db_engine, mentor) == 1
 
 
@@ -555,3 +558,128 @@ async def test_a_deleted_accounts_queued_reminder_is_dropped_not_kept(
             )
         ).scalar_one()
     assert status == "skipped"
+
+
+# --------------------------------------------------------------------------
+# Three stages: a week, three days, the day (owner, 2026-10-01)
+# --------------------------------------------------------------------------
+
+
+async def sent_stages(engine: AsyncEngine, mentor: UUID) -> list[str]:
+    """The `daysUntilReturn` each queued reminder carries, in order."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT payload->>'stage' FROM outbox_events "
+                "WHERE event_type = 'mentor_return_reminder' AND entity_id = :u "
+                "ORDER BY created_at"
+            ),
+            {"u": mentor},
+        )
+        return [str(r[0]) for r in rows]
+
+
+async def stage_of(engine: AsyncEngine, mentor: UUID) -> int | None:
+    async with engine.connect() as conn:
+        value = (
+            await conn.execute(
+                text("SELECT return_reminder_stage FROM mentor_profiles WHERE user_id = :u"),
+                {"u": mentor},
+            )
+        ).scalar_one()
+    return None if value is None else int(value)
+
+
+async def test_a_pause_ten_days_out_sends_each_stage_once_on_its_morning(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor, headers = await a_mentor(db_engine, "three-stages")
+    back = local_today() + dt.timedelta(days=10)
+    await api_client.post(pause_url(mentor), json={"return_on": back.isoformat()}, headers=headers)
+    week, three = back - dt.timedelta(days=7), back - dt.timedelta(days=3)
+
+    runs = [
+        await sweep(db_engine, local(week, 7, 59)),
+        await sweep(db_engine, local(week, 8)),
+        await sweep(db_engine, local(week, 9)),
+        await sweep(db_engine, local(three, 8)),
+        await sweep(db_engine, local(three, 9)),
+        await sweep(db_engine, local(back, 8)),
+        await sweep(db_engine, local(back, 9)),
+    ]
+
+    assert runs == [0, 1, 0, 1, 0, 1, 0]
+    assert await sent_stages(db_engine, mentor) == ["7", "3", "0"]
+
+
+async def test_a_two_day_pause_gets_only_the_day_of_email(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The week and three-day stages are already behind it: no late sends."""
+    mentor, headers = await a_mentor(db_engine, "short-pause")
+    back = local_today() + dt.timedelta(days=2)
+    await api_client.post(pause_url(mentor), json={"return_on": back.isoformat()}, headers=headers)
+
+    assert await stage_of(db_engine, mentor) == 0
+    await sweep(db_engine, local(back, 8))
+    assert await sent_stages(db_engine, mentor) == ["0"]
+
+
+async def test_a_new_date_restarts_the_stages_and_drops_the_old_ones(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    mentor, headers = await a_mentor(db_engine, "restart")
+    first = local_today() + dt.timedelta(days=10)
+    await api_client.post(pause_url(mentor), json={"return_on": first.isoformat()}, headers=headers)
+    first_week = first - dt.timedelta(days=7)
+    assert await sweep(db_engine, local(first_week, 8)) == 1
+    second = local_today() + dt.timedelta(days=12)
+    await api_client.post(
+        pause_url(mentor), json={"return_on": second.isoformat()}, headers=headers
+    )
+
+    stale = await drained(db_engine, migrated_database, local(first_week, 9))
+    restarted = await stage_of(db_engine, mentor)
+    second_week = second - dt.timedelta(days=7)
+    assert await sweep(db_engine, local(second_week, 8)) == 1
+    fresh = await drained(db_engine, migrated_database, local(second_week, 9))
+
+    assert stale == []
+    assert restarted == 7
+    assert fresh == ["mentor_return_reminder"]
+    assert (await sent_stages(db_engine, mentor))[-1] == "7"
+
+
+async def test_a_resume_cancels_every_pending_stage(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    mentor, headers = await a_mentor(db_engine, "cancel-all")
+    back = local_today() + dt.timedelta(days=10)
+    await api_client.post(pause_url(mentor), json={"return_on": back.isoformat()}, headers=headers)
+    week = back - dt.timedelta(days=7)
+    assert await sweep(db_engine, local(week, 8)) == 1
+    await api_client.post(f"/api/v1/users/{mentor}/mentor-profile/resume", headers=headers)
+
+    assert await stage_of(db_engine, mentor) is None
+    assert await drained(db_engine, migrated_database, local(week, 9)) == []
+    assert await sweep(db_engine, local(back, 9)) == 0
+
+
+async def test_a_same_date_re_pause_sends_the_rearmed_stage_once(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """Pausing again with the same date re-arms the stages. A stage queued
+    before that must not also go out, or the mentor hears it twice."""
+    mentor, headers = await a_mentor(db_engine, "same-date")
+    back = local_today() + dt.timedelta(days=10)
+    body = {"return_on": back.isoformat()}
+    await api_client.post(pause_url(mentor), json=body, headers=headers)
+    week = back - dt.timedelta(days=7)
+    assert await sweep(db_engine, local(week, 8)) == 1
+    await api_client.post(pause_url(mentor), json=body, headers=headers)
+
+    first = await drained(db_engine, migrated_database, local(week, 9))
+    assert await sweep(db_engine, local(week, 9)) == 1
+    second = await drained(db_engine, migrated_database, local(week, 10))
+
+    assert first + second == ["mentor_return_reminder"]

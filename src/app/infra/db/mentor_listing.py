@@ -10,17 +10,15 @@ import datetime as dt
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Time, and_, exists, func, literal, or_, select
+from sqlalchemy import ColumnElement, Integer, Time, and_, exists, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
+from app.domain.listing import RETURN_REMINDER_HOUR
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
-
-#: The local hour from which a mentor's return-day reminder may go out.
-RETURN_REMINDER_HOUR = 8
 
 
 def _newest_unlisting_id() -> Any:
@@ -83,18 +81,23 @@ def reminder_eligible() -> ColumnElement[bool]:
     )
 
 
-def return_reminder_due(now: dt.datetime) -> ColumnElement[bool]:
-    """**The one definition of "the return morning has come".**
+def stage_due(now: dt.datetime, offset: Any) -> ColumnElement[bool]:
+    """**The one definition of "this stage's morning has come".**
 
-    `RETURN_REMINDER_HOUR` on the return date, in the mentor's **current** zone:
-    `date + time` is a local timestamp, compared with their local now. Read by
-    the claim and again at send time, so a zone changed in between moves the
-    reminder rather than sending it on the wrong local day. Needs `User` joined
-    to `MentorProfile`.
+    `RETURN_REMINDER_HOUR` on the day `offset` days before the return date, in
+    the mentor's **current** zone: a local timestamp compared with their local
+    now. Read by the claim (offset: the pending stage) and again at send time
+    (offset: the stage queued), so a zone changed in between moves the email
+    rather than sending it on the wrong local day. Needs `User` joined.
     """
     local_now = func.timezone(User.timezone, now)
     due = MentorProfile.return_on + literal(dt.time(RETURN_REMINDER_HOUR), Time)
-    return local_now >= due
+    return local_now >= due - func.make_interval(0, 0, 0, offset)
+
+
+def return_reminder_due(now: dt.datetime) -> ColumnElement[bool]:
+    """The pending stage's morning has come — what the claim selects on."""
+    return stage_due(now, MentorProfile.return_reminder_stage)
 
 
 #: What a queued return reminder should do now.
@@ -110,8 +113,9 @@ async def return_reminder_state(
     retry, and by then the mentor may have resumed, been unlisted by an admin,
     set a new date, or moved to another zone.
 
-    * `stale`: no longer approved, no longer paused by themselves, or returning
-      on a different date than the one queued. The message would be false.
+    * `stale`: no longer approved, no longer paused by themselves, returning on
+      a different date than the one queued, or that stage re-armed by a new
+      pause. The message would be false or sent twice.
     * `wait`: still true, but not yet the return morning in their current
       zone. Left pending for a later run rather than sent a day early.
     * `due`: send it.
@@ -121,12 +125,13 @@ async def return_reminder_state(
     mean holding the profile row across the email provider's HTTP call, which
     blocks every transition on the mentor for the whole drain (#226).
     """
-    queued_for = payload.get("return_on")
-    if queued_for is None:
+    queued_for, stage = payload.get("return_on"), payload.get("stage")
+    if queued_for is None or stage is None:
         return "stale"
+    offset = int(stage)
     row = (
         await session.execute(
-            select(return_reminder_due(now))
+            select(stage_due(now, literal(offset, Integer)), MentorProfile.return_reminder_stage)
             .select_from(MentorProfile)
             .join(User, User.id == MentorProfile.user_id)
             .where(
@@ -136,6 +141,9 @@ async def return_reminder_state(
             )
         )
     ).first()
-    if row is None:
+    # Claiming a stage moves the pending one past it; a pending stage at or
+    # before this one means a later pause re-armed it, and the claim will send
+    # it again for the current date.
+    if row is None or (row[1] is not None and row[1] >= offset):
         return "stale"
     return "due" if row[0] else "wait"

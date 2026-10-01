@@ -207,11 +207,15 @@ class Notification(StrEnum):
     #: needs QStash and a callback endpoint, which arrive together.
     MENTOR_RESPONSE_REMINDER = "mentor_response_reminder"
 
-    #: **A paused mentor's return day has come.** Once, on the morning of the
-    #: date they gave, in their own zone, and only while they are still paused
-    #: by themselves. A nudge to switch back on — never a switch: nobody is
-    #: relisted by it (Calendar request, 2026-10-01). Not in `AUDIENCE`: about a
-    #: mentor's own listing, not a party to a session.
+    #: **A paused mentor's return is coming up.** One template sent on a
+    #: three-step cadence — a week before, three days before, and on the
+    #: morning of the date they gave, in their own zone — while they are still
+    #: paused by themselves. Each send carries `daysUntilReturn` so the one email
+    #: says how far away it is. Nudges to switch back on, never a switch: nobody
+    #: is relisted by them (Calendar request, 2026-10-01; cadence and the single
+    #: template by the owner, same day). Not in `AUDIENCE`: about a mentor's own
+    #: listing, not a party to a session. The cadence is
+    #: `domain.listing.RETURN_REMINDER_OFFSETS`.
     MENTOR_RETURN_REMINDER = "mentor_return_reminder"
 
 
