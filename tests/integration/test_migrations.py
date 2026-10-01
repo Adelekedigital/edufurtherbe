@@ -15,6 +15,8 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
+from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
+
 pytestmark = pytest.mark.db
 
 #: Every function the chain creates, at head — the exact set, not a count.
@@ -540,6 +542,12 @@ def test_the_conferencing_backfill_seeds_before_it_drops(
     `sessions.meeting_provider` is asserted untouched in the same test: it is a
     different column on a different table with a *wider* vocabulary, and the
     cheap mistake is a migration that tidies both.
+
+    **Asserted at `d9e2b74c1f36`, then at head.** The quarantine's `google_meet`
+    was right when the fallback was Meet. `a7c4e2d91f3b` removes imported Meet
+    rows because the fallback is now `daily`, which keeps the mentor bookable with
+    no option at all. So the old guarantee is checked at its own revision, and
+    head checks that the same mentor resolves to the platform default.
     """
     config = make_alembic_config(disposable_database)
     command.upgrade(config, "c8f1a3e2b904")
@@ -567,7 +575,7 @@ def test_the_conferencing_backfill_seeds_before_it_drops(
         """,
     )
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "d9e2b74c1f36")
 
     # The faithful path: the option exists and the offering points at it.
     assert (
@@ -605,6 +613,30 @@ def test_the_conferencing_backfill_seeds_before_it_drops(
     assert scalar(disposable_database, "SELECT count(*) FROM mentor_conferencing_options") == 2, (
         "one option per mentor, and the quarantine must not create a second"
     )
+
+    command.upgrade(config, "head")
+
+    # At head the quarantined mentor holds no option and resolves the same way
+    # `_resolved_venue` does: chosen, else default, else the platform default.
+    resolved = (
+        "SELECT coalesce(c.provider, d.provider, '{fallback}') FROM session_types st "
+        "  JOIN users u ON u.id = st.mentor_user_id "
+        "  LEFT JOIN mentor_conferencing_options c "
+        "    ON c.id = st.conferencing_option_id AND c.user_id = st.mentor_user_id "
+        "  LEFT JOIN mentor_conferencing_options d "
+        "    ON d.user_id = st.mentor_user_id AND d.is_default "
+        " WHERE u.email LIKE '{email}'"
+    )
+    fallback = PLATFORM_DEFAULT_PROVIDER.value
+    assert fallback == "daily"
+    assert (
+        scalar(disposable_database, resolved.format(fallback=fallback, email="venue-custom%"))
+        == "daily"
+    ), "a mentor whose only venue was `custom` is not on the platform default"
+    assert (
+        scalar(disposable_database, resolved.format(fallback=fallback, email="venue-daily%"))
+        == "daily"
+    ), "a carried `daily` choice did not survive to head"
 
 
 def test_the_primary_pointer_downgrade_restores_data_not_just_a_column(
@@ -1084,6 +1116,42 @@ def test_imported_meet_options_go_so_nobody_is_held_to_a_choice_they_never_made(
         "venue-a@example.test=->none,"
         "venue-b@example.test=daily*>daily,"
         "venue-c@example.test=daily*>none"
+    )
+
+
+def test_a_meet_the_mentor_chose_survives_a_downgrade_and_upgrade(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """Provenance, not provider, decides what the cleanup removes: `source`
+    records who wrote the row, so a Meet set through `/me/conferencing` is kept
+    when `a7c4e2d91f3b` runs again after a downgrade, and an imported one goes."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "a7c4e2d91f3b")
+    for email in ("venue-chose@example.test", "venue-import@example.test"):
+        execute(
+            disposable_database,
+            _MENTOR_WITH_OFFERING.format(email=email, name=email, stage="NULL", label="NULL"),
+        )
+    execute(
+        disposable_database,
+        "INSERT INTO mentor_conferencing_options (user_id, provider, is_default, source) "
+        "SELECT id, 'google_meet', true, 'mentor' FROM users "
+        "WHERE email = 'venue-chose@example.test'; "
+        "INSERT INTO mentor_conferencing_options (user_id, provider, is_default) "
+        "SELECT id, 'google_meet', true FROM users WHERE email = 'venue-import@example.test'",
+    )
+
+    command.downgrade(config, "-1")
+    command.upgrade(config, "a7c4e2d91f3b")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT string_agg(u.email || '=' || o.source, ',' ORDER BY u.email) "
+            "FROM mentor_conferencing_options o JOIN users u ON u.id = o.user_id "
+            "WHERE u.email LIKE 'venue-%'",
+        )
+        == "venue-chose@example.test=mentor"
     )
 
 

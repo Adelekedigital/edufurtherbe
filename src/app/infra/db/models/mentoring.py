@@ -31,6 +31,7 @@ from app.domain.enums import (
     FeaturedSource,
     ListingStatus,
     MentorStatusType,
+    OptionSource,
 )
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
@@ -499,6 +500,13 @@ class MentorConferencingOption(TimestampMixin, Base):
     is_default: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     #: Only for `CUSTOM`, and required for it — see the symmetric CHECK below.
     custom_url: Mapped[str | None] = mapped_column(Text)
+    #: Who wrote the row: the legacy load (`import`, the default every existing
+    #: row was backfilled with) or the mentor through `/me/conferencing`. The
+    #: cleanup of imported Meet rows deletes only `import`, so a mentor's own
+    #: choice survives it being run again (#224).
+    source: Mapped[OptionSource] = mapped_column(
+        str_enum(OptionSource), nullable=False, server_default=text("'import'")
+    )
 
     #: Declared now, written by nothing. The table exists to hold a connection
     #: the moment a provider needs authenticating, and `zoom` joins the
@@ -529,6 +537,7 @@ class MentorConferencingOption(TimestampMixin, Base):
             check_is_known("provider", ConferencingProvider),
             name="provider_is_known",
         ),
+        CheckConstraint(check_is_known("source", OptionSource), name="source_is_known"),
         # **Symmetric, and that is the whole point.** The old
         # `ck_mentor_profiles_custom_url_requires_custom_venue` ran one direction
         # only — `custom_url IS NULL OR venue = 'custom'` — so it permitted

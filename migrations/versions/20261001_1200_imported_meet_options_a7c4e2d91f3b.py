@@ -10,7 +10,10 @@ without a URL (the quarantine), and a mentor with no legacy record. In none of
 them did the mentor choose Meet. Yet they read `is_default_choice: false` and
 held those mentors on Meet instead of the platform default, EduFurther video.
 
-**So every `google_meet` row goes, with the offering pointers to it.** Those
+**So every imported `google_meet` row goes, with the offering pointers to it.**
+Provenance is `source` (added by `5e8d1b7c3a29`), not the provider: a Meet the
+mentor set through `/me/conferencing` is `source = 'mentor'` and is kept, so a
+downgrade followed by an upgrade cannot erase a real choice. Those
 offerings and mentors then follow the platform default. A genuine `daily` choice
 is untouched. The load no longer creates them (the transform maps those three
 sources to "no venue").
@@ -26,7 +29,7 @@ option the old seeding made default is not recoverable, and their offering
 follows the default they kept. The dropped rows themselves are not recovered.
 
 Revision ID: a7c4e2d91f3b
-Revises: f3a91d2c7b45
+Revises: 5e8d1b7c3a29
 Create Date: 2026-10-01 12:00:00
 """
 
@@ -36,7 +39,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a7c4e2d91f3b"
-down_revision: str | Sequence[str] | None = "f3a91d2c7b45"
+down_revision: str | Sequence[str] | None = "5e8d1b7c3a29"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -49,10 +52,12 @@ UPDATE session_types st
  WHERE o.id = st.conferencing_option_id
    AND o.user_id = st.mentor_user_id
    AND o.provider = 'google_meet'
+   AND o.source = 'import'
 """
 
 DELETE_IMPORTED = """
-DELETE FROM mentor_conferencing_options WHERE provider = 'google_meet'
+DELETE FROM mentor_conferencing_options
+ WHERE provider = 'google_meet' AND source = 'import'
 """
 
 #: The old load rule: a mentor with a live offering and no default got a

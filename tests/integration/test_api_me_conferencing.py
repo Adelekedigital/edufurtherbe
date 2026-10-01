@@ -36,6 +36,15 @@ async def defaults_of(engine: AsyncEngine, mentor: UUID) -> list[tuple[str, str 
         return [(str(row[0]), row[1]) for row in rows]
 
 
+async def sources_of(engine: AsyncEngine, mentor: UUID) -> list[str]:
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text("SELECT source FROM mentor_conferencing_options WHERE user_id = :u"),
+            {"u": mentor},
+        )
+        return [str(row[0]) for row in rows]
+
+
 async def test_a_mentor_who_never_chose_gets_edufurther_video(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -61,6 +70,24 @@ async def test_a_mentor_sets_a_personal_link_and_reads_it_back(
     assert written.status_code == 200, written.text
     assert read.json() == {"provider": "custom", "custom_url": ROOM, "is_default_choice": False}
     assert await defaults_of(db_engine, mentor) == [("custom", ROOM)]
+    assert await sources_of(db_engine, mentor) == ["mentor"]
+
+
+async def test_re_choosing_an_imported_provider_makes_it_the_mentors_own(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A PATCH onto an option the load created records the mentor as its source,
+    so a later cleanup of imported rows cannot take back a choice they made."""
+    mentor, auth_id = await as_mentor(db_engine, "conf-reclaim")
+    await add_option(db_engine, mentor, provider="google_meet", is_default=True)
+
+    await api_client.patch(
+        URL,
+        json={"provider": "google_meet", "custom_url": None},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert await sources_of(db_engine, mentor) == ["mentor"]
 
 
 @pytest.mark.parametrize(

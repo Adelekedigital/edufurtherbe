@@ -19,7 +19,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.enums import ConferencingProvider
+from app.domain.enums import ConferencingProvider, OptionSource
 from app.infra.db.models.mentoring import MentorConferencingOption as Option
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
@@ -77,12 +77,21 @@ async def set_default_option(
         update(Option).where(Option.user_id == user_id, Option.is_default).values(is_default=False)
     )
     statement = insert(Option).values(
-        user_id=user_id, provider=provider, custom_url=custom_url, is_default=True
+        user_id=user_id,
+        provider=provider,
+        custom_url=custom_url,
+        is_default=True,
+        source=OptionSource.MENTOR,
     )
     await session.execute(
         statement.on_conflict_do_update(
             constraint="uq_mentor_conferencing_options_user_id_provider",
-            set_={"custom_url": statement.excluded.custom_url, "is_default": True},
+            # Re-choosing an imported row makes it the mentor's own.
+            set_={
+                "custom_url": statement.excluded.custom_url,
+                "is_default": True,
+                "source": OptionSource.MENTOR,
+            },
         )
     )
     return True

@@ -90,8 +90,8 @@ RETURNING id
 # `RETURNING id` yields a row on conflict — the same reason `UPSERT_SESSION_TYPE`
 # uses it. `DO NOTHING` returns nothing and the id is what the offering needs.
 UPSERT_CONFERENCING_OPTION = """
-INSERT INTO mentor_conferencing_options (user_id, provider, is_default)
-VALUES (:user_id, :provider, true)
+INSERT INTO mentor_conferencing_options (user_id, provider, is_default, source)
+VALUES (:user_id, :provider, true, 'import')
 ON CONFLICT (user_id, provider) DO UPDATE SET provider = EXCLUDED.provider
 RETURNING id
 """
