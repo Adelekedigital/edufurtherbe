@@ -249,7 +249,7 @@ async def test_step_three_the_platform_fallback_when_the_mentor_has_no_default(
 
     body = (await api_client.get(f"/api/v1/users/{mentor}/session-types")).json()
 
-    assert resolved(body) == "google_meet"
+    assert resolved(body) == "daily"
 
 
 async def test_a_non_default_option_is_not_borrowed(
@@ -262,12 +262,12 @@ async def test_a_non_default_option_is_not_borrowed(
     nobody selected.
     """
     mentor = await make_public_mentor(db_engine, "resolve-nondefault")
-    await add_option(db_engine, mentor, provider="daily", is_default=False)
+    await add_option(db_engine, mentor, provider="google_meet", is_default=False)
     await add_session_type(db_engine, mentor, name="SOP review")
 
     body = (await api_client.get(f"/api/v1/users/{mentor}/session-types")).json()
 
-    assert resolved(body) == "google_meet"
+    assert resolved(body) == "daily"
 
 
 async def test_the_custom_url_never_reaches_the_public_payload(

@@ -103,7 +103,7 @@ async def record(
         )
     )
     # A `listed` event also clears the pause's return date — in the projection
-    # trigger, so a listing written by any path ends the pause (#225).
+    # trigger, so a listing written by any path ends the pause (#226).
     return True
 
 
@@ -112,7 +112,7 @@ async def _lock(session: AsyncSession, user_id: UUID) -> bool:
 
     **Every transition takes it first**, so two on one mentor run one after the
     other and a decision read before writing — the pause guard — cannot be
-    overtaken by an admin's unlisting committing in between (#224).
+    overtaken by an admin's unlisting committing in between (#225).
     """
     # The account's row as well as the profile's: a mentor whose account is
     # soft-deleted after the caller was authenticated has no transition left
@@ -279,7 +279,7 @@ async def pause(
     `created_by` is the mentor: they are the actor, and with the reason that is
     what distinguishes this from an admin unlisting the same row.
 
-    **`refused` while an admin's unlisting stands** (#224): pausing over it would
+    **`refused` while an admin's unlisting stands** (#225): pausing over it would
     make the newest unlisting the mentor's own and launder it into a resume. The
     profile row is locked **before** that check and held through the write, so
     an admin's unlisting cannot commit in between.

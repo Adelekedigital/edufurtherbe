@@ -20,6 +20,7 @@ from fastapi import APIRouter, status
 from app.api.deps import SessionTypesDep
 from app.api.schemas.common import Page
 from app.api.schemas.session_types import SessionTypeRead
+from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
 
 router = APIRouter(prefix="/api/v1/users/{user_id}", tags=["public"])
 
@@ -55,7 +56,8 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         "exists and is what matching joins on; this is one mentor's own "
         "bookable product.\n\n"
         "`meeting_venue` is resolved from the mentor's conferencing options — "
-        "the offering's own, else the mentor's default, else `google_meet`. It "
+        "the offering's own, else the mentor's default, else "
+        f"`{PLATFORM_DEFAULT_PROVIDER.value}`. It "
         "is **never null**, so a client needs no fallback of its own. The "
         "meeting link itself is generated per session and never appears here.\n\n"
         "Switched-off and deleted offerings are absent; `is_active` covers off, "

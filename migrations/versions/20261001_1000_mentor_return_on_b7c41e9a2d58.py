@@ -9,7 +9,7 @@ mutable state: changing it must not append an event.
 **`apply_mentor_status` also clears both on a `listed` event**, so the event
 projection stays the single writer of a mentor's listing state: a resume, an
 admin relisting, an approval and an event inserted directly all end the pause
-alike (#225).
+alike (#226).
 
 **Downgrade** restores the previous function body, then drops both columns. A
 paused mentor stays paused and loses only the date and whether it was reminded.
@@ -22,7 +22,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b7c41e9a2d58"
-down_revision: str | Sequence[str] | None = "f3a91d2c7b45"
+down_revision: str | Sequence[str] | None = "a7c4e2d91f3b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

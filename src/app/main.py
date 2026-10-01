@@ -19,6 +19,7 @@ from app.api.routes import (
     intake_files,
     internal_jobs,
     me_calendar,
+    me_conferencing,
     me_intake,
     me_onboarding,
     me_referrals,
@@ -353,6 +354,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_session_types.router)
     application.include_router(me_calendar.router)
     application.include_router(me_calendar.callback_router)
+    application.include_router(me_conferencing.router)
     application.include_router(me_intake.router)
     application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)

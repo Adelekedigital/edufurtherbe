@@ -166,7 +166,7 @@ async def test_the_venue_is_never_null(
 
     (offering,) = (await api_client.get(url(mentor))).json()["data"]
 
-    assert offering["meeting_venue"] == "google_meet"
+    assert offering["meeting_venue"] == "daily"
 
 
 async def test_an_offering_takes_the_platform_notice_floor(db_engine: AsyncEngine) -> None:

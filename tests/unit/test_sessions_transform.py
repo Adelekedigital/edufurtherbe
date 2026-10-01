@@ -550,8 +550,10 @@ def test_a_custom_venue_is_quarantined_rather_than_carried() -> None:
     export carries no such URL: `mentor_profiles.custom_meeting_url` was removed
     *as a removal rather than a move, because nothing had ever written it*.
 
-    So the offering loads on `google_meet`, which keeps the mentor bookable, and
-    the mentor is named for a human to follow up. The three alternatives were
+    So the offering loads with **no venue of its own**, which is the platform
+    default and keeps the mentor bookable, and the mentor is named for a human
+    to follow up. It used to load on `google_meet`, which every re-run kept
+    re-creating as if the mentor had chosen it. The three alternatives were
     inventing a URL, relaxing the constraint the table exists to enforce, and
     silently rewriting the venue — the last of which is what this assertion
     distinguishes itself from: **the value is the same either way**, and only the
@@ -563,7 +565,7 @@ def test_a_custom_venue_is_quarantined_rather_than_carried() -> None:
     )
 
     (offering,) = result.session_types
-    assert offering.meeting_venue is MeetingProvider.GOOGLE_MEET
+    assert offering.meeting_venue is None
     assert result.custom_venue_quarantined == (MENTOR,)
 
 
@@ -575,7 +577,7 @@ def test_an_offering_whose_mentor_has_no_record_takes_the_column_defaults() -> N
     result = plan([booking()], mentors=[])
 
     (offering,) = result.session_types
-    assert offering.meeting_venue is MeetingProvider.GOOGLE_MEET
+    assert offering.meeting_venue is None
     # **And it is reported.** Falling back silently is what made reading the
     # wrong Bubble Thing invisible: it parsed, matched no anchor, and produced a
     # load where every count reconciled and every mentor was on `google_meet`.

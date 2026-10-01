@@ -119,7 +119,7 @@ async def return_reminder_state(
     **Not locked, deliberately.** A resume committing in the instant between
     this check and the send can still let one reminder out: closing that would
     mean holding the profile row across the email provider's HTTP call, which
-    blocks every transition on the mentor for the whole drain (#225).
+    blocks every transition on the mentor for the whole drain (#226).
     """
     queued_for = payload.get("return_on")
     if queued_for is None:

@@ -192,10 +192,12 @@ def test_a_listed_mentor_has_no_unlisted_reason() -> None:
     [
         ("Edufurther Video (Recommended)", MeetingProvider.DAILY),
         ("External Video Tool", MeetingProvider.CUSTOM),
-        ("", MeetingProvider.GOOGLE_MEET),
+        # Blank is "never chose": no venue, so the platform default applies
+        # (owner, 2026-10-01). It used to load as `google_meet`, a choice nobody made.
+        ("", None),
     ],
 )
-def test_the_venue_mapping(legacy: str, venue: MeetingProvider) -> None:
+def test_the_venue_mapping(legacy: str, venue: MeetingProvider | None) -> None:
     """**Asserted against `booking_defaults`, not against a mentor row.**
 
     These two values left `MentorProfileRow` in D88's contract step — nothing
