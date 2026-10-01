@@ -293,3 +293,54 @@ async def test_a_new_date_rearms_the_reminder(
 
     assert await sweep(db_engine, local(later, 8)) == 1
     assert await reminders(db_engine, mentor) == 2
+
+
+async def test_a_pending_applicant_is_not_reminded(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Resume needs approval, so a pending applicant who paused with a date is
+    not told to switch back on: the action in the message is not theirs."""
+    auth_id = uuid4()
+    mentor = await make_user(db_engine, auth_id, "pending-remind@example.com")
+    await add_mentor(db_engine, mentor)
+    await api_client.post(pause_url(mentor), headers=bearer(api_token(auth_id)))
+    back = dt.date(2026, 10, 14)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE mentor_profiles SET return_on = :d WHERE user_id = :u"),
+            {"d": back, "u": mentor},
+        )
+        await conn.execute(
+            text("UPDATE users SET timezone = :z WHERE id = :u"), {"z": ZONE, "u": mentor}
+        )
+
+    assert await sweep(db_engine, local(back, 9)) == 0
+    assert await reminders(db_engine, mentor) == 0
+
+
+async def test_a_listing_written_any_way_ends_the_return_date(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The projection trigger clears it, so even an event inserted directly,
+    as a migration or an operator might, leaves no stale date behind."""
+    back = dt.date(2026, 10, 15)
+    mentor = await paused_until(db_engine, api_client, "direct-list", back)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_status_events (mentor_user_id, status_type) "
+                "VALUES (:u, 'listed')"
+            ),
+            {"u": mentor},
+        )
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT listing_status, return_on, return_reminded_at "
+                    "FROM mentor_profiles WHERE user_id = :u"
+                ),
+                {"u": mentor},
+            )
+        ).one()
+
+    assert tuple(row) == ("listed", None, None)

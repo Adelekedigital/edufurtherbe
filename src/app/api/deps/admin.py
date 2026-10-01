@@ -59,7 +59,6 @@ from app.infra.db.mentor_status_store import (
     pause,
     resume,
     set_listing,
-    unlisted_by_someone_else,
 )
 
 # `get_session` is aliased: this module already has one, and it is the **database
@@ -328,19 +327,19 @@ async def paused_self(
 ) -> bool:
     """Refused while an admin's unlisting stands: pausing over it would make the
     newest unlisting the mentor's own, and their resume would then undo it (#75)."""
-    if await unlisted_by_someone_else(session, user_id):
-        raise ConflictError(
-            "an admin has unlisted this profile; only an admin can change its listing"
-        )
     return_on = payload.return_on if payload else None
     if return_on is not None:
         today = await local_today(session, user_id, dt.datetime.now(dt.UTC))
         if today is not None and return_on <= today:
             message = "return_on must be after today in your time zone"
             raise ValidationError(message, field_errors=(("/return_on", message),))
-    paused = await pause(session, user_id=user_id, return_on=return_on)
+    outcome = await pause(session, user_id=user_id, return_on=return_on)
+    if outcome == "refused":
+        raise ConflictError(
+            "an admin has unlisted this profile; only an admin can change its listing"
+        )
     await session.commit()
-    return paused
+    return outcome == "paused"
 
 
 async def resumed_self(user_id: OwnerDep, session: SessionDep) -> bool:

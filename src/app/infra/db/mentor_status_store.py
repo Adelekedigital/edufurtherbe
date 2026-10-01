@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import (
@@ -41,15 +41,6 @@ from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.predicates import LIVE
-
-
-async def _mentor_exists(session: AsyncSession, user_id: UUID) -> bool:
-    found = await session.execute(
-        select(MentorProfile.user_id).where(
-            MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
-        )
-    )
-    return found.first() is not None
 
 
 async def _approval_before(session: AsyncSession, user_id: UUID) -> str | None:
@@ -89,7 +80,7 @@ async def record(
     the test for this inserts an event directly rather than calling this
     function — otherwise a broken trigger and a working caller look identical.
     """
-    if not await _mentor_exists(session, user_id):
+    if not await _lock(session, user_id):
         return False
 
     await session.execute(
@@ -98,23 +89,42 @@ async def record(
             status_type=status_type,
             reason=reason,
             created_by=created_by,
+            # **Clock time, not the transaction's start.** Transitions on one
+            # mentor are serialised by the row lock above, and stamping when the
+            # event is written — after the lock — keeps "newest" equal to "last
+            # committed". `now()` would let a transaction that started first but
+            # waited on the lock look older than the one it followed.
+            created_at=func.clock_timestamp(),
         )
     )
-    if status_type is MentorStatusType.LISTED:
-        # **Any listing ends a pause**, whoever wrote it — a mentor resuming, an
-        # admin relisting, an approval. Here rather than in `resume`, so no
-        # listing path can leave a stale return date behind.
-        await _set_return(session, user_id, None)
+    # A `listed` event also clears the pause's return date — in the projection
+    # trigger, so a listing written by any path ends the pause (#225).
     return True
 
 
-async def _set_return(session: AsyncSession, user_id: UUID, return_on: dt.date | None) -> None:
-    """Set the pause's return date, re-arming its one reminder."""
-    await session.execute(
+async def _lock(session: AsyncSession, user_id: UUID) -> bool:
+    """Lock this mentor's live profile row for the transition. ``False`` if none.
+
+    **Every transition takes it first**, so two on one mentor run one after the
+    other and a decision read before writing — the pause guard — cannot be
+    overtaken by an admin's unlisting committing in between (#224).
+    """
+    found = await session.execute(
+        select(MentorProfile.user_id)
+        .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
+        .with_for_update()
+    )
+    return found.first() is not None
+
+
+async def _set_return(session: AsyncSession, user_id: UUID, return_on: dt.date | None) -> bool:
+    """Set the pause's return date, re-arming its one reminder. ``False`` if gone."""
+    changed = await session.execute(
         update(MentorProfile)
-        .where(MentorProfile.user_id == user_id)
+        .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
         .values(return_on=return_on, return_reminded_at=None)
     )
+    return bool(changed.rowcount)  # type: ignore[attr-defined]
 
 
 async def decide(
@@ -281,22 +291,33 @@ async def unlisted_by_someone_else(session: AsyncSession, user_id: UUID) -> bool
     return bool(await _profile_flag(session, user_id, _unlisted_by_someone_else()))
 
 
-async def pause(session: AsyncSession, *, user_id: UUID, return_on: dt.date | None = None) -> bool:
+#: What a pause attempt came to.
+PauseOutcome = Literal["paused", "refused", "absent"]
+
+
+async def pause(
+    session: AsyncSession, *, user_id: UUID, return_on: dt.date | None = None
+) -> PauseOutcome:
     """A mentor taking themselves out of the listing, optionally saying when
     they expect to be back.
 
     `created_by` is the mentor: they are the actor, and with the reason that is
-    what distinguishes this from an admin unlisting the same row. The caller
-    checks `unlisted_by_someone_else` first — pausing over an admin's unlisting
-    would make the newest unlisting the mentor's and launder it into a resume.
+    what distinguishes this from an admin unlisting the same row.
+
+    **`refused` while an admin's unlisting stands** (#224): pausing over it would
+    make the newest unlisting the mentor's own and launder it into a resume. The
+    profile row is locked **before** that check and held through the write, so
+    an admin's unlisting cannot commit in between.
 
     **Already paused by themselves: only the date changes.** "Change return
     date" calls this again, and a second `unlisted` event would record a
     transition that never happened.
     """
+    if not await _lock(session, user_id):
+        return "absent"
+    if await unlisted_by_someone_else(session, user_id):
+        return "refused"
     already = await _profile_flag(session, user_id, paused_by_mentor())
-    if already is None:
-        return False
     if not already:
         await record(
             session,
@@ -305,8 +326,9 @@ async def pause(session: AsyncSession, *, user_id: UUID, return_on: dt.date | No
             created_by=user_id,
             reason=UnlistedReason.MENTOR_PAUSED.value,
         )
-    await _set_return(session, user_id, return_on)
-    return True
+    if not await _set_return(session, user_id, return_on):
+        return "absent"
+    return "paused"
 
 
 async def local_today(session: AsyncSession, user_id: UUID, now: dt.datetime) -> dt.date | None:
@@ -351,6 +373,9 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
                 MentorProfile.deleted_at.is_(None),
                 MentorProfile.return_on.is_not(None),
                 MentorProfile.return_reminded_at.is_(None),
+                # Only someone who can act on it: resume needs approval, so a
+                # pending applicant who paused is not told to switch back on.
+                MentorProfile.approval_status == ApprovalStatus.APPROVED,
                 paused_by_mentor(),
                 local_now >= due,
             )
