@@ -41,13 +41,14 @@ from app.api.schemas.profile import (
 )
 from app.api.schemas.referrals import ReferralClaim, ReferralWrite
 from app.core.errors import (
+    ConfigurationError,
     ConflictError,
     NotFoundError,
     ValidationError,
 )
 from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
-from app.infra.db.asset_store import clear_banner, store_image, stored_avatar_focus
+from app.infra.db.asset_store import clear_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
@@ -469,20 +470,38 @@ async def uploaded_banner(
     return await _store_image(AssetKind.BANNER, file, user_id, session, request)
 
 
-async def removed_banner(request: Request, user_id: OwnerDep, session: SessionDep) -> None:
-    """Unset the owner's banner, then delete its object. Idempotent.
+async def _removed_image(
+    kind: AssetKind, request: Request, user_id: OwnerDep, session: SessionDep
+) -> None:
+    """Unset the owner's image of this kind, then delete its object. Idempotent.
 
-    Storage is resolved **before** the write, as the upload does: an app with no
-    storage configured refuses up front rather than clearing the banner and then
-    failing after the commit.
+    **Clear and commit first; the object is a best-effort clean-up after.** So a
+    removal with nothing to delete — no image, or a legacy URL — is the promised
+    `204` even on a deployment with no storage configured, and a clean-up that
+    cannot run (no storage settings, or the bucket failing) leaves an orphan
+    rather than failing a change that is already done. `drop_url` already never
+    raises; a missing configuration is the same kind of skip.
     """
-    storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
-    previous = await clear_banner(session, user_id)
+    previous = await clear_image(session, user_id, kind)
     await session.commit()
-    if previous is not None:
-        await run_in_threadpool(storage.drop_url, previous)
+    if previous is None:
+        return
+    try:
+        storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
+    except ConfigurationError:
+        return
+    await run_in_threadpool(storage.drop_url, previous)
+
+
+async def removed_banner(request: Request, user_id: OwnerDep, session: SessionDep) -> None:
+    await _removed_image(AssetKind.BANNER, request, user_id, session)
+
+
+async def removed_avatar(request: Request, user_id: OwnerDep, session: SessionDep) -> None:
+    await _removed_image(AssetKind.AVATAR, request, user_id, session)
 
 
 UploadedAvatarDep = Annotated[tuple[str, tuple[object, object]], Depends(uploaded_avatar)]
 UploadedBannerDep = Annotated[str, Depends(uploaded_banner)]
 RemovedBannerDep = Annotated[None, Depends(removed_banner)]
+RemovedAvatarDep = Annotated[None, Depends(removed_avatar)]

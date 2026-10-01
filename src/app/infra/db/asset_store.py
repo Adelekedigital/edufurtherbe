@@ -18,6 +18,7 @@ from uuid import UUID
 from sqlalchemy import bindparam, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app.core.errors import NotFoundError
 from app.domain.assets import AssetKind, object_path
 from app.domain.images import process
 from app.infra.db.avatar_focus_store import focus_columns
@@ -157,21 +158,37 @@ async def replace_url(
     return previous
 
 
-async def clear_banner(session: AsyncSession, user_id: UUID) -> str | None:
-    """Unset the banner; return the URL it held, or ``None`` if there was none.
+async def clear_image(session: AsyncSession, user_id: UUID, kind: AssetKind) -> str | None:
+    """Unset one image; return the URL it held, or ``None`` if there was none.
 
-    The design's "Remove image": the cover falls back to `cover_color` and
-    `cover_art`. The row is locked while the old URL is read, so two removals
-    cannot both report the same object for deletion — the second finds nothing.
-    Does not commit; the caller deletes the object after it has.
+    The design's "Remove image" for the banner (the cover falls back to
+    `cover_color` and `cover_art`) and "Remove photo" for the avatar (the UI
+    falls back to initials). Removing the avatar clears its focus too, and that
+    is **the trigger's job, not this function's**: `trg_clear_stale_avatar_focus`
+    nulls the focus whenever `avatar_url` changes without the focus being set in
+    the same write — the one rule for "a crop belongs to its photo".
+
+    The row is locked while the old URL is read, so two removals cannot both
+    report the same object for deletion — the second finds nothing. Does not
+    commit; the caller deletes the object after it has.
     """
-    found = await session.execute(
-        select(Profile.banner_url).where(Profile.user_id == user_id).with_for_update()
-    )
+    column = Profile.avatar_url if kind is AssetKind.AVATAR else Profile.banner_url
+    # **Scoped to the live owner in the statement itself**, as every owner write
+    # must be: `OwnerDep` resolved the caller a moment ago, but an account
+    # soft-deleted since then must not have its profile written. The user row
+    # is locked too, so the deletion cannot land between this read and the write.
+    owner = (
+        await session.execute(select(User.id).where(User.id == user_id, LIVE).with_for_update())
+    ).scalar_one_or_none()
+    if owner is None:
+        raise NotFoundError("no such user")
+    found = await session.execute(select(column).where(Profile.user_id == owner).with_for_update())
     previous = found.scalar_one_or_none()
     if previous is None:
         return None
-    await session.execute(update(Profile).where(Profile.user_id == user_id).values(banner_url=None))
+    await session.execute(
+        update(Profile).where(Profile.user_id == owner).values({column.key: None})
+    )
     return str(previous)
 
 

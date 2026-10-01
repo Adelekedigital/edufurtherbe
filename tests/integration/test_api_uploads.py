@@ -23,6 +23,7 @@ import pytest
 from PIL import Image
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import make_bookable_mentor
 from tests.integration.test_api_admin import make_user as make_user_with_role
 
 from app.api.limits import MAX_BODY_BYTES
@@ -890,3 +891,245 @@ async def test_a_cleanup_that_fails_after_the_commit_is_still_a_204(
     assert response.status_code == 204, response.text
     assert (await stored_urls(db_engine, user_id))[1] is None
     assert len(fake_storage.deletes) >= 1
+
+
+# --------------------------------------------------------------------------
+# removing the photo (FE #98): the avatar's twin of the banner removal
+# --------------------------------------------------------------------------
+
+
+async def auth_of(engine: AsyncEngine, user_id: UUID) -> UUID:
+    async with engine.connect() as conn:
+        return (
+            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": user_id})
+        ).scalar_one()
+
+
+async def test_removing_the_photo_clears_it_its_focus_and_the_object(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """The banner is a different column and a different object: both survive."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "unavatar@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
+    await api_client.post(
+        url(user_id, "banner"), files=upload(image_bytes("JPEG", (600, 400))), headers=headers
+    )
+    avatar_path, banner_path = fake_storage.uploads
+    assert (await focus_of(db_engine, user_id))[2] == "detected"
+
+    response = await api_client.delete(url(user_id, "avatar"), headers=headers)
+
+    assert response.status_code == 204, response.text
+    avatar, banner = await stored_urls(db_engine, user_id)
+    assert avatar is None
+    assert banner is not None and banner.endswith(banner_path), "the banner was touched"
+    assert await focus_of(db_engine, user_id) == (None, None, None)
+    assert fake_storage.deletes == [avatar_path]
+    assert banner_path in fake_storage.objects
+
+
+async def test_removing_a_photo_that_is_not_there_is_a_quiet_204(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "noavatar@example.com")
+
+    response = await api_client.delete(url(user_id, "avatar"), headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 204, response.text
+    assert fake_storage.deletes == []
+    assert await stored_urls(db_engine, user_id) == (None, None)
+
+
+async def test_only_the_owner_may_remove_the_photo(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """404, not 403, for another user and for an admin alike; 401 with no token."""
+    owner_auth, other_auth, admin_auth = uuid4(), uuid4(), uuid4()
+    owner = await make_user(db_engine, owner_auth, "owner-unavatar@example.com")
+    await make_user(db_engine, other_auth, "other-unavatar@example.com")
+    await make_user_with_role(
+        db_engine, admin_auth, "admin-unavatar@example.com", role="super_admin"
+    )
+    await api_client.post(
+        url(owner, "avatar"), files=upload(FACE), headers=bearer(api_token(owner_auth))
+    )
+
+    anonymous = await api_client.delete(url(owner, "avatar"))
+    other = await api_client.delete(url(owner, "avatar"), headers=bearer(api_token(other_auth)))
+    admin = await api_client.delete(url(owner, "avatar"), headers=bearer(api_token(admin_auth)))
+
+    assert anonymous.status_code == 401, anonymous.text
+    assert other.status_code == 404, other.text
+    assert admin.status_code == 404, admin.text
+    assert fake_storage.deletes == []
+    assert (await stored_urls(db_engine, owner))[0] is not None
+    assert (await focus_of(db_engine, owner))[2] == "detected"
+
+
+async def test_a_legacy_photo_is_cleared_but_nothing_is_deleted(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "legacy-unavatar@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, avatar_url, avatar_focus_x, "
+                " avatar_focus_y, avatar_focus_source) "
+                "VALUES (:u, 'https://legacy.bubble.io/me.jpg', 0.5, 0.4, 'detected')"
+            ),
+            {"u": user_id},
+        )
+
+    response = await api_client.delete(url(user_id, "avatar"), headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 204, response.text
+    assert (await stored_urls(db_engine, user_id))[0] is None
+    assert await focus_of(db_engine, user_id) == (None, None, None)
+    assert fake_storage.deletes == []
+
+
+@pytest.mark.parametrize("failure", ["status", "transport"])
+async def test_a_photo_cleanup_that_fails_after_the_commit_is_still_a_204(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage, failure: str
+) -> None:
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, f"{failure}-unavatar@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
+    fake_storage.delete_fails = failure
+
+    response = await api_client.delete(url(user_id, "avatar"), headers=headers)
+
+    assert response.status_code == 204, response.text
+    assert (await stored_urls(db_engine, user_id))[0] is None
+    assert len(fake_storage.deletes) >= 1
+
+
+async def test_a_new_photo_after_removal_gets_its_own_detected_focus(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A chosen crop of the removed photo must not carry over to the next one."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "rephoto@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(
+        url(user_id, "avatar"), files=upload(image_bytes("JPEG", (300, 300))), headers=headers
+    )
+    await choose_focus(db_engine, user_id)
+
+    await api_client.delete(url(user_id, "avatar"), headers=headers)
+    await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
+
+    x, y, source = await focus_of(db_engine, user_id)
+    assert source == "detected"
+    assert (x, y) != (0.1, 0.9)
+
+
+async def test_me_reads_no_photo_after_removal(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "me-unavatar@example.com")
+    headers = bearer(api_token(auth_id))
+    await api_client.post(url(user_id, "avatar"), files=upload(FACE), headers=headers)
+
+    await api_client.delete(url(user_id, "avatar"), headers=headers)
+
+    me = (await api_client.get("/api/v1/me", headers=headers)).json()
+    assert me["profile"]["avatar_url"] is None
+    assert me["profile"]["avatar_focus"] is None
+
+
+async def test_the_public_profile_reads_no_photo_after_removal(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "unavatar-read")
+    headers = bearer(api_token(await auth_of(db_engine, mentor)))
+    await api_client.post(url(mentor, "avatar"), files=upload(FACE), headers=headers)
+    before = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
+    assert before["avatar_url"] is not None and before["avatar_focus"] is not None
+
+    await api_client.delete(url(mentor, "avatar"), headers=headers)
+
+    public = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
+    assert public["avatar_url"] is None
+    assert public["avatar_focus"] is None
+
+
+#: A legacy (non-bucket) image of each kind, as fixed SQL rather than a built string.
+LEGACY_IMAGE = {
+    "avatar": "INSERT INTO user_profiles (user_id, avatar_url) VALUES (:u, :url)",
+    "banner": "INSERT INTO user_profiles (user_id, banner_url) VALUES (:u, :url)",
+}
+
+
+@pytest.mark.parametrize("kind", ["avatar", "banner"])
+async def test_removal_needs_no_storage_when_there_is_nothing_to_delete(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    """A deployment without storage settings still answers the idempotent 204:
+    the URL is cleared and committed first, and a legacy URL names nothing in a
+    bucket this deployment could ever have written to."""
+    from app.api.deps import profile
+    from app.core.errors import ConfigurationError
+
+    def unconfigured() -> object:
+        raise ConfigurationError("Supabase storage is not configured")
+
+    api_client._transport.app.state.storage = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(profile, "get_storage", unconfigured)
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, f"nostorage-{kind}@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(LEGACY_IMAGE[kind]),
+            {"u": user_id, "url": f"https://legacy.bubble.io/{kind}.jpg"},
+        )
+    headers = bearer(api_token(auth_id))
+
+    removed = await api_client.delete(url(user_id, kind), headers=headers)
+    again = await api_client.delete(url(user_id, kind), headers=headers)
+
+    assert removed.status_code == 204, removed.text
+    assert again.status_code == 204, again.text
+    column = 0 if kind == "avatar" else 1
+    assert (await stored_urls(db_engine, user_id))[column] is None
+
+
+@pytest.mark.parametrize("kind", ["avatar", "banner"])
+async def test_an_owner_deleted_after_auth_has_nothing_cleared(
+    db_engine: AsyncEngine, kind: str
+) -> None:
+    """`clear_image` scopes its read and write to the LIVE owner in SQL, so an
+    account soft-deleted between `OwnerDep` and the write is refused (404), and
+    its profile keeps its image."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core.errors import NotFoundError
+    from app.domain.assets import AssetKind
+    from app.infra.db.asset_store import clear_image
+
+    user_id = await make_user(db_engine, uuid4(), f"gone-{kind}@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(LEGACY_IMAGE[kind]),
+            {"u": user_id, "url": f"https://legacy.bubble.io/{kind}.jpg"},
+        )
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": user_id}
+        )
+
+    async with AsyncSession(db_engine) as session:
+        with pytest.raises(NotFoundError):
+            await clear_image(session, user_id, AssetKind(kind))
+        await session.rollback()
+
+    column = 0 if kind == "avatar" else 1
+    assert (await stored_urls(db_engine, user_id))[column] is not None
