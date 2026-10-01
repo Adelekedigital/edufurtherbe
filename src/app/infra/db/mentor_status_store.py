@@ -21,12 +21,10 @@ from uuid import UUID
 
 from sqlalchemy import (
     ColumnElement,
-    Time,
     and_,
     exists,
     func,
     insert,
-    literal,
     not_,
     select,
     update,
@@ -41,6 +39,7 @@ from app.domain.notifications import Notification
 from app.infra.db.mentor_listing import (
     newest_unlisting_is_self,
     paused_by_mentor,
+    return_reminder_due,
 )
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
@@ -151,6 +150,11 @@ async def decide(
     concurrent transitions record a state that never existed. Writing them as
     two facts costs one insert and keeps every row true on its own.
     """
+    # Locked before the approval is read, so an account deleted meanwhile is
+    # absent here rather than a decision that reports success and records
+    # nothing (`record` would then refuse both events).
+    if not await _lock(session, user_id):
+        return False
     before = await _approval_before(session, user_id)
     if before is None:
         return False
@@ -323,10 +327,6 @@ async def local_today(session: AsyncSession, user_id: UUID, now: dt.datetime) ->
     return None if row is None else row[0]
 
 
-#: The local hour from which a mentor's return-day reminder may go out.
-RETURN_REMINDER_HOUR = 8
-
-
 async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -> int:
     """Queue one "switch back on" email per mentor whose return day has come.
 
@@ -339,9 +339,7 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
     two overlapping runs cannot both claim a row, and a re-run finds the marker
     set. Does not commit.
     """
-    local_now = func.timezone(User.timezone, now)
     # `date + time` is a local timestamp, compared with the mentor's local now.
-    due = MentorProfile.return_on + literal(dt.time(RETURN_REMINDER_HOUR), Time)
     claimed = (
         await session.execute(
             update(MentorProfile)
@@ -355,7 +353,7 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
                 # pending applicant who paused is not told to switch back on.
                 MentorProfile.approval_status == ApprovalStatus.APPROVED,
                 paused_by_mentor(),
-                local_now >= due,
+                return_reminder_due(now),
             )
             .values(return_reminded_at=now)
             .returning(MentorProfile.user_id, MentorProfile.return_on)

@@ -7,15 +7,19 @@ whether a queued return reminder is still due without importing the store back.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, exists, or_, select
+from sqlalchemy import ColumnElement, Time, and_, exists, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
+from app.infra.db.models.user import User
+
+#: The local hour from which a mentor's return-day reminder may go out.
+RETURN_REMINDER_HOUR = 8
 
 
 def _newest_unlisting_id() -> Any:
@@ -61,26 +65,61 @@ def paused_by_mentor() -> ColumnElement[bool]:
     return and_(MentorProfile.listing_status == ListingStatus.UNLISTED, newest_unlisting_is_self())
 
 
-async def return_reminder_still_due(
-    session: AsyncSession, user_id: UUID, payload: dict[str, Any]
-) -> bool:
-    """Whether a queued return reminder still says something true.
+def return_reminder_due(now: dt.datetime) -> ColumnElement[bool]:
+    """**The one definition of "the return morning has come".**
+
+    `RETURN_REMINDER_HOUR` on the return date, in the mentor's **current** zone:
+    `date + time` is a local timestamp, compared with their local now. Read by
+    the claim and again at send time, so a zone changed in between moves the
+    reminder rather than sending it on the wrong local day. Needs `User` joined
+    to `MentorProfile`.
+    """
+    local_now = func.timezone(User.timezone, now)
+    due = MentorProfile.return_on + literal(dt.time(RETURN_REMINDER_HOUR), Time)
+    return local_now >= due
+
+
+#: What a queued return reminder should do now.
+ReminderState = Literal["due", "wait", "stale"]
+
+
+async def return_reminder_state(
+    session: AsyncSession, user_id: UUID, payload: dict[str, Any], now: dt.datetime
+) -> ReminderState:
+    """Whether a queued return reminder should be sent, kept, or dropped.
 
     Checked **at send time**: a reminder claimed and queued can wait for a
     retry, and by then the mentor may have resumed, been unlisted by an admin,
-    or set a new date. Due only if they are still approved, still paused by
-    themselves, and still returning on the date the message was queued for.
+    set a new date, or moved to another zone.
+
+    * `stale`: no longer approved, no longer paused by themselves, or returning
+      on a different date than the one queued. The message would be false.
+    * `wait`: still true, but not yet the return morning in their current
+      zone. Left pending for a later run rather than sent a day early.
+    * `due`: send it.
+
+    **Not locked, deliberately.** A resume committing in the instant between
+    this check and the send can still let one reminder out: closing that would
+    mean holding the profile row across the email provider's HTTP call, which
+    blocks every transition on the mentor for the whole drain (#225).
     """
     queued_for = payload.get("return_on")
     if queued_for is None:
-        return False
-    found = await session.execute(
-        select(MentorProfile.user_id).where(
-            MentorProfile.user_id == user_id,
-            MentorProfile.deleted_at.is_(None),
-            MentorProfile.approval_status == ApprovalStatus.APPROVED,
-            MentorProfile.return_on == dt.date.fromisoformat(str(queued_for)),
-            paused_by_mentor(),
+        return "stale"
+    row = (
+        await session.execute(
+            select(return_reminder_due(now))
+            .select_from(MentorProfile)
+            .join(User, User.id == MentorProfile.user_id)
+            .where(
+                MentorProfile.user_id == user_id,
+                MentorProfile.deleted_at.is_(None),
+                MentorProfile.approval_status == ApprovalStatus.APPROVED,
+                MentorProfile.return_on == dt.date.fromisoformat(str(queued_for)),
+                paused_by_mentor(),
+            )
         )
-    )
-    return found.first() is not None
+    ).first()
+    if row is None:
+        return "stale"
+    return "due" if row[0] else "wait"

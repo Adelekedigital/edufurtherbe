@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.test_mentor_status_log import ADMIN, add_mentor, make_user
 
 from app.core.config import Settings
-from app.infra.db.mentor_status_store import pause, remind_returning_mentors
+from app.infra.db.mentor_status_store import decide, pause, remind_returning_mentors
 from app.infra.db.outbox import drain
 from app.infra.jobs import runner
 from app.infra.jobs.runner import RuntimeJobs
@@ -393,13 +393,15 @@ class Recorder:
         self.sent.append(str(kwargs["notification"]))
 
 
-async def drained(engine: AsyncEngine, migrated_database: str) -> list[str]:
+async def drained(
+    engine: AsyncEngine, migrated_database: str, now: dt.datetime | None = None
+) -> list[str]:
     notifier = Recorder()
     async with AsyncSession(engine) as session:
         await drain(
             session,
             notifier=notifier,
-            now=dt.datetime.now(dt.UTC),
+            now=now or dt.datetime.now(dt.UTC),
             settings=Settings(_env_file=None, database_url=SecretStr(migrated_database)),
         )
         await session.commit()
@@ -475,3 +477,49 @@ async def test_the_pause_publishes_its_conflict() -> None:
     )
 
     assert "409" in operation["responses"]
+
+
+async def test_a_zone_moved_after_queueing_waits_for_the_new_morning(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """Queued on the Auckland morning, then the mentor moved to Honolulu, where
+    it is still the day before: it waits for their new morning, not sent early
+    and not dropped."""
+    back = dt.date(2026, 10, 20)
+    mentor = await paused_until(db_engine, api_client, "moved-zone", back)
+    queued_at = local(back, 9)
+    assert await sweep(db_engine, queued_at) == 1
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET timezone = 'Pacific/Honolulu' WHERE id = :u"), {"u": mentor}
+        )
+
+    early = await drained(db_engine, migrated_database, queued_at)
+    honolulu_morning = dt.datetime.combine(back, dt.time(8), tzinfo=ZoneInfo("Pacific/Honolulu"))
+    later = await drained(db_engine, migrated_database, honolulu_morning)
+
+    assert early == []
+    assert later == ["mentor_return_reminder"]
+
+
+async def test_a_decision_on_a_deleted_account_is_absent(db_engine: AsyncEngine) -> None:
+    """An account deleted before the decision locks it: absent, not a decision
+    that reports success, records nothing and queues a message anyway."""
+    admin = await make_user(db_engine, uuid4(), "decider@example.com", role="super_admin")
+    mentor = await make_user(db_engine, uuid4(), "decided-deleted@example.com")
+    await add_mentor(db_engine, mentor)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+
+    async with AsyncSession(db_engine) as session:
+        decided = await decide(session, user_id=mentor, admin_id=admin, approved=True)
+        await session.commit()
+
+    async with db_engine.connect() as conn:
+        queued = (
+            await conn.execute(
+                text("SELECT count(*) FROM outbox_events WHERE entity_id = :u"), {"u": mentor}
+            )
+        ).scalar_one()
+    assert decided is False
+    assert queued == 0
