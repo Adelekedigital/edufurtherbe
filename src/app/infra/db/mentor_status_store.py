@@ -19,10 +19,11 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import insert, select
+from sqlalchemy import ColumnElement, and_, exists, insert, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.domain.enums import ApprovalStatus, MentorStatusType, UnlistedReason
+from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
 from app.domain.notifications import Notification
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
@@ -172,30 +173,94 @@ async def set_listing(
     )
 
 
-async def last_unlisting_reason(session: AsyncSession, user_id: UUID) -> str | None:
-    """Why this mentor is currently unlisted, from the newest unlisting.
-
-    Read rather than stored: `unlisted_reason` was a column describing only the
-    most recent unlisting, which is the duplication the log replaced.
-    """
-    found = await session.execute(
-        select(MentorStatusEvent.reason)
+def _newest_unlisting_id() -> Any:
+    """The id of this mentor's newest unlisting, correlated to `MentorProfile`."""
+    newest = aliased(MentorStatusEvent)
+    return (
+        select(newest.id)
         .where(
-            MentorStatusEvent.mentor_user_id == user_id,
-            MentorStatusEvent.status_type == MentorStatusType.UNLISTED,
+            newest.mentor_user_id == MentorProfile.user_id,
+            newest.status_type == MentorStatusType.UNLISTED,
         )
-        .order_by(MentorStatusEvent.created_at.desc())
+        .order_by(newest.created_at.desc(), newest.id.desc())
         .limit(1)
+        .correlate(MentorProfile)
+        .scalar_subquery()
     )
-    row = found.first()
-    return None if row is None else row[0]
+
+
+def newest_unlisting_is_self() -> ColumnElement[bool]:
+    """**The one definition of "the mentor took themselves off".**
+
+    The newest unlisting says `mentor_paused` **and** was written by the mentor —
+    or by the migration, which acted for nobody (`created_by` NULL) and carried
+    legacy self-pauses. The actor matters, not just the spelling: an admin's
+    reason is free text, and an admin who typed `mentor_paused` must not hand the
+    mentor the resume button. Correlated to `MentorProfile`; it is what resume,
+    the pause guard and `paused_by_mentor` all read (#75).
+    """
+    event = aliased(MentorStatusEvent)
+    return exists(
+        select(event.id)
+        .where(
+            event.id == _newest_unlisting_id(),
+            event.reason == UnlistedReason.MENTOR_PAUSED.value,
+            or_(event.created_by.is_(None), event.created_by == event.mentor_user_id),
+        )
+        .correlate(MentorProfile)
+    )
+
+
+def paused_by_mentor() -> ColumnElement[bool]:
+    """Currently unlisted, and by their own pause. Correlated to `MentorProfile`."""
+    return and_(MentorProfile.listing_status == ListingStatus.UNLISTED, newest_unlisting_is_self())
+
+
+def _unlisted_by_someone_else() -> ColumnElement[bool]:
+    """Currently unlisted by an admin (or a decline): the pause guard's refusal.
+
+    A new profile's default `unlisted` has no unlisting event at all, so a
+    pending applicant may still pause — the guard refuses an *admin's* unlisting,
+    not the starting state.
+    """
+    event = aliased(MentorStatusEvent)
+    has_unlisting = exists(
+        select(event.id)
+        .where(
+            event.mentor_user_id == MentorProfile.user_id,
+            event.status_type == MentorStatusType.UNLISTED,
+        )
+        .correlate(MentorProfile)
+    )
+    return and_(
+        MentorProfile.listing_status == ListingStatus.UNLISTED,
+        has_unlisting,
+        not_(newest_unlisting_is_self()),
+    )
+
+
+async def _profile_flag(session: AsyncSession, user_id: UUID, flag: Any) -> bool | None:
+    """One flag about this mentor's live profile, or ``None`` with no profile."""
+    row = (
+        await session.execute(
+            select(flag).where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
+        )
+    ).first()
+    return None if row is None else bool(row[0])
+
+
+async def unlisted_by_someone_else(session: AsyncSession, user_id: UUID) -> bool:
+    """Whether a pause must be refused: an admin's unlisting stands (#75)."""
+    return bool(await _profile_flag(session, user_id, _unlisted_by_someone_else()))
 
 
 async def pause(session: AsyncSession, *, user_id: UUID) -> bool:
     """A mentor taking themselves out of the listing.
 
-    `created_by` is the mentor: they are the actor, and the reason distinguishes
-    this from an admin unlisting the same row.
+    `created_by` is the mentor: they are the actor, and with the reason that is
+    what distinguishes this from an admin unlisting the same row. The caller
+    checks `unlisted_by_someone_else` first — pausing over an admin's unlisting
+    would make the newest unlisting the mentor's and launder it into a resume.
     """
     return await record(
         session,
@@ -209,23 +274,18 @@ async def pause(session: AsyncSession, *, user_id: UUID) -> bool:
 async def may_self_resume(session: AsyncSession, user_id: UUID) -> bool:
     """Whether this mentor may put themselves back on the list.
 
-    **Only if they were the one who took themselves off.** Otherwise a
-    suspension is a button the suspended person can press — and an admin
-    unlisting somebody for review would be undone by the person under review.
+    **Only if they were the one who took themselves off** (`newest_unlisting_is_self`).
+    Otherwise a suspension is a button the suspended person can press — and an
+    admin unlisting somebody for review would be undone by the person under
+    review.
 
     Approval matters too: a mentor who was never approved has nothing to return
     to, and relisting them would put an unapproved profile in the directory.
     """
-    approved = await session.execute(
-        select(MentorProfile.approval_status).where(
-            MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
-        )
+    allowed = and_(
+        MentorProfile.approval_status == ApprovalStatus.APPROVED, newest_unlisting_is_self()
     )
-    row = approved.first()
-    if row is None or row[0] is not ApprovalStatus.APPROVED:
-        return False
-
-    return await last_unlisting_reason(session, user_id) == UnlistedReason.MENTOR_PAUSED.value
+    return bool(await _profile_flag(session, user_id, allowed))
 
 
 async def resume(session: AsyncSession, *, user_id: UUID) -> bool:

@@ -442,3 +442,75 @@ async def test_a_mentor_cannot_pause_somebody_else(
 
     assert response.status_code == 404
     assert await status_of(db_engine, other) == ("approved", "listed")
+
+
+async def test_a_mentor_cannot_pause_over_an_admin_unlisting(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Pausing would launder the admin's unlisting into their own.**
+
+    The newest unlisting decides who may resume. Before this guard, a mentor an
+    admin had unlisted could pause — making the newest unlisting `mentor_paused`
+    — and then resume, undoing the suspension (#75).
+    """
+    admin_auth, mentor_auth = uuid4(), uuid4()
+    await make_user(db_engine, admin_auth, "admin@example.com", role="super_admin")
+    mentor = await make_user(db_engine, mentor_auth, "mentor@example.com")
+    await add_mentor(db_engine, mentor, approved=True)
+    headers = bearer(api_token(mentor_auth))
+    await api_client.post(
+        f"{ADMIN}/mentors/{mentor}/listing",
+        params={"listed": "false"},
+        json={"reason": "admin_review"},
+        headers=bearer(api_token(admin_auth)),
+    )
+
+    paused = await api_client.post(f"/api/v1/users/{mentor}/mentor-profile/pause", headers=headers)
+    resumed = await api_client.post(
+        f"/api/v1/users/{mentor}/mentor-profile/resume", headers=headers
+    )
+
+    assert paused.status_code == 409, paused.text
+    assert resumed.status_code == 404, resumed.text
+    assert await status_of(db_engine, mentor) == ("approved", "unlisted")
+
+
+async def test_an_admin_reason_spelled_like_a_pause_is_still_the_admins(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The reason is free text on an admin's unlisting, so an admin who typed
+    `mentor_paused` must not hand the mentor the resume button. The actor
+    decides, not the spelling."""
+    admin_auth, mentor_auth = uuid4(), uuid4()
+    await make_user(db_engine, admin_auth, "admin@example.com", role="super_admin")
+    mentor = await make_user(db_engine, mentor_auth, "mentor@example.com")
+    await add_mentor(db_engine, mentor, approved=True)
+    await api_client.post(
+        f"{ADMIN}/mentors/{mentor}/listing",
+        params={"listed": "false"},
+        json={"reason": "mentor_paused"},
+        headers=bearer(api_token(admin_auth)),
+    )
+
+    response = await api_client.post(
+        f"/api/v1/users/{mentor}/mentor-profile/resume", headers=bearer(api_token(mentor_auth))
+    )
+
+    assert response.status_code == 404, response.text
+    assert await status_of(db_engine, mentor) == ("approved", "unlisted")
+
+
+async def test_a_pending_mentor_with_no_unlisting_may_still_pause(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The guard refuses an *admin's* unlisting, not the default one a new
+    profile starts with — pausing works whatever the approval status."""
+    auth_id = uuid4()
+    mentor = await make_user(db_engine, auth_id, "mentor@example.com")
+    await add_mentor(db_engine, mentor)
+
+    response = await api_client.post(
+        f"/api/v1/users/{mentor}/mentor-profile/pause", headers=bearer(api_token(auth_id))
+    )
+
+    assert response.status_code == 200, response.text

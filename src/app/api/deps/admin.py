@@ -32,6 +32,7 @@ from app.api.schemas.common import (
     encode_cursor,
 )
 from app.core.errors import (
+    ConflictError,
     ValidationError,
 )
 from app.domain.enums import MentorStatusType
@@ -56,6 +57,7 @@ from app.infra.db.mentor_status_store import (
     pause,
     resume,
     set_listing,
+    unlisted_by_someone_else,
 )
 
 # `get_session` is aliased: this module already has one, and it is the **database
@@ -318,6 +320,12 @@ async def mentor_history(
 
 
 async def paused_self(user_id: OwnerDep, session: SessionDep) -> bool:
+    """Refused while an admin's unlisting stands: pausing over it would make the
+    newest unlisting the mentor's own, and their resume would then undo it (#75)."""
+    if await unlisted_by_someone_else(session, user_id):
+        raise ConflictError(
+            "an admin has unlisted this profile; only an admin can change its listing"
+        )
     paused = await pause(session, user_id=user_id)
     await session.commit()
     return paused
