@@ -41,6 +41,7 @@ from app.api.schemas.profile import (
 )
 from app.api.schemas.referrals import ReferralClaim, ReferralWrite
 from app.core.errors import (
+    ConfigurationError,
     ConflictError,
     NotFoundError,
     ValidationError,
@@ -474,15 +475,22 @@ async def _removed_image(
 ) -> None:
     """Unset the owner's image of this kind, then delete its object. Idempotent.
 
-    Storage is resolved **before** the write, as the upload does: an app with no
-    storage configured refuses up front rather than clearing the image and then
-    failing after the commit.
+    **Clear and commit first; the object is a best-effort clean-up after.** So a
+    removal with nothing to delete — no image, or a legacy URL — is the promised
+    `204` even on a deployment with no storage configured, and a clean-up that
+    cannot run (no storage settings, or the bucket failing) leaves an orphan
+    rather than failing a change that is already done. `drop_url` already never
+    raises; a missing configuration is the same kind of skip.
     """
-    storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
     previous = await clear_image(session, user_id, kind)
     await session.commit()
-    if previous is not None:
-        await run_in_threadpool(storage.drop_url, previous)
+    if previous is None:
+        return
+    try:
+        storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
+    except ConfigurationError:
+        return
+    await run_in_threadpool(storage.drop_url, previous)
 
 
 async def removed_banner(request: Request, user_id: OwnerDep, session: SessionDep) -> None:

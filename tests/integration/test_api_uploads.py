@@ -1058,3 +1058,78 @@ async def test_the_public_profile_reads_no_photo_after_removal(
     public = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
     assert public["avatar_url"] is None
     assert public["avatar_focus"] is None
+
+
+#: A legacy (non-bucket) image of each kind, as fixed SQL rather than a built string.
+LEGACY_IMAGE = {
+    "avatar": "INSERT INTO user_profiles (user_id, avatar_url) VALUES (:u, :url)",
+    "banner": "INSERT INTO user_profiles (user_id, banner_url) VALUES (:u, :url)",
+}
+
+
+@pytest.mark.parametrize("kind", ["avatar", "banner"])
+async def test_removal_needs_no_storage_when_there_is_nothing_to_delete(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    """A deployment without storage settings still answers the idempotent 204:
+    the URL is cleared and committed first, and a legacy URL names nothing in a
+    bucket this deployment could ever have written to."""
+    from app.api.deps import profile
+    from app.core.errors import ConfigurationError
+
+    def unconfigured() -> object:
+        raise ConfigurationError("Supabase storage is not configured")
+
+    api_client._transport.app.state.storage = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(profile, "get_storage", unconfigured)
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, f"nostorage-{kind}@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(LEGACY_IMAGE[kind]),
+            {"u": user_id, "url": f"https://legacy.bubble.io/{kind}.jpg"},
+        )
+    headers = bearer(api_token(auth_id))
+
+    removed = await api_client.delete(url(user_id, kind), headers=headers)
+    again = await api_client.delete(url(user_id, kind), headers=headers)
+
+    assert removed.status_code == 204, removed.text
+    assert again.status_code == 204, again.text
+    column = 0 if kind == "avatar" else 1
+    assert (await stored_urls(db_engine, user_id))[column] is None
+
+
+@pytest.mark.parametrize("kind", ["avatar", "banner"])
+async def test_an_owner_deleted_after_auth_has_nothing_cleared(
+    db_engine: AsyncEngine, kind: str
+) -> None:
+    """`clear_image` scopes its read and write to the LIVE owner in SQL, so an
+    account soft-deleted between `OwnerDep` and the write is refused (404), and
+    its profile keeps its image."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core.errors import NotFoundError
+    from app.domain.assets import AssetKind
+    from app.infra.db.asset_store import clear_image
+
+    user_id = await make_user(db_engine, uuid4(), f"gone-{kind}@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(LEGACY_IMAGE[kind]),
+            {"u": user_id, "url": f"https://legacy.bubble.io/{kind}.jpg"},
+        )
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": user_id}
+        )
+
+    async with AsyncSession(db_engine) as session:
+        with pytest.raises(NotFoundError):
+            await clear_image(session, user_id, AssetKind(kind))
+        await session.rollback()
+
+    column = 0 if kind == "avatar" else 1
+    assert (await stored_urls(db_engine, user_id))[column] is not None
