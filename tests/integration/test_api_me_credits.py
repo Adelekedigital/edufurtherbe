@@ -28,7 +28,7 @@ LONG_PAST = datetime(2020, 1, 1, tzinfo=UTC)
 
 
 async def seed_mentee(engine: AsyncEngine, auth_id: UUID, *, with_goal: bool = True) -> UUID:
-    """A mentee with a goal, which is the predicate the card is gated on."""
+    """A mentee, with a goal unless told otherwise."""
     async with engine.begin() as conn:
         user_id = (
             await conn.execute(
@@ -213,18 +213,21 @@ async def test_the_next_reset_is_the_first_of_the_next_month(
     assert (reset - now) <= timedelta(days=32)
 
 
-async def test_a_user_without_a_mentee_goal_gets_no_card(
+async def test_a_mentee_without_a_goal_still_gets_the_card(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """**The predicate is having a mentee goal, not "not being a mentor".**
-
-    Authorization here is profile existence, so a dual-role user is both — a
-    negative predicate would hide the card from somebody who can book.
+    """**Every caller gets the card.** Booking needs no goal and no role, so
+    a mentee who skipped onboarding spends credits and must see them; a mentor
+    who books does too (`test_api_me_pending_bookings`).
     """
     auth_id = uuid4()
-    await seed_mentee(db_engine, auth_id, with_goal=False)
+    user_id = await seed_mentee(db_engine, auth_id, with_goal=False)
+    await grant(db_engine, user_id, quantity=2)
 
-    assert await credits_of(api_client, auth_id) is None
+    card = await credits_of(api_client, auth_id)
+
+    assert card is not None
+    assert card["balance"] == 2
 
 
 async def test_the_block_carries_exactly_four_fields(

@@ -97,15 +97,14 @@ class MenteeBookingCounts(BaseModel):
 
 
 class BookingCountsRead(BaseModel):
-    """Both roles' counts; a half is null when the caller lacks that role."""
+    """Both roles' counts. `as_mentor` is null without a mentor profile;
+    `as_mentee` is always filled on `/me`, since anyone signed in may book."""
 
     as_mentor: MentorBookingCounts | None = None
     as_mentee: MenteeBookingCounts | None = None
 
     @classmethod
-    def of(cls, counts: dict[str, int] | None, *, mentor: bool, mentee: bool) -> BookingCountsRead:
-        if counts is None:
-            return cls()
+    def of(cls, counts: dict[str, int], *, mentor: bool) -> BookingCountsRead:
         return cls(
             as_mentor=(
                 MentorBookingCounts(
@@ -115,12 +114,8 @@ class BookingCountsRead(BaseModel):
                 if mentor
                 else None
             ),
-            as_mentee=(
-                MenteeBookingCounts(
-                    awaiting_mentor=counts["mentee_awaiting"], upcoming=counts["mentee_upcoming"]
-                )
-                if mentee
-                else None
+            as_mentee=MenteeBookingCounts(
+                awaiting_mentor=counts["mentee_awaiting"], upcoming=counts["mentee_upcoming"]
             ),
         )
 
@@ -165,11 +160,9 @@ class UserRead(NormalisedEmail):
     #: Null for the great majority of users, who are not mentors.
     mentor_profile: MentorProfileRead | None = None
 
-    #: **Null unless the caller has a mentee goal**, which is the same predicate
-    #: the monthly grant uses. Deliberately not "is not a mentor": authorization
-    #: here is profile existence, so a dual-role user is both a mentor and a
-    #: mentee, and a negative predicate would hide the card from somebody who
-    #: can book.
+    #: **Present for every caller on `/me`** (decision 228): anyone signed in may
+    #: book, a mentor included, and every booking spends a credit. Nullable only
+    #: in the schema; the monthly grant, not this card, requires a goal.
     credits: CreditsRead | None = None
 
     #: Sessions the caller has **received** as a mentee with status `completed`.
@@ -179,5 +172,6 @@ class UserRead(NormalisedEmail):
     mentee_completed_sessions: int = 0
 
     #: The caller's booking counts, per role — the sidebar's Bookings badge and
-    #: dashboard headings. Each half is null when the caller lacks that role.
+    #: dashboard headings. `as_mentee` is always present; only `as_mentor` needs
+    #: a mentor profile (decision 228).
     booking_counts: BookingCountsRead = Field(default_factory=lambda: BookingCountsRead())

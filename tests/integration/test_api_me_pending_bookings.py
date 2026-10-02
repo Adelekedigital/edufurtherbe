@@ -1,7 +1,8 @@
 """`booking_counts` on ``GET /api/v1/me`` — the sidebar's Bookings badge.
 
 `{as_mentor: {awaiting_your_response, upcoming}, as_mentee: {awaiting_mentor,
-upcoming}}`, each half null without its role. Each test builds what must not
+upcoming}}`. `as_mentor` is null without a mentor profile; `as_mentee` is always
+filled, since anyone signed in may book. Each test builds what must not
 count beside what must — a lapsed request, a past or cancelled session, and the
 caller's sessions in their other role.
 """
@@ -101,7 +102,10 @@ async def test_a_mentor_counts_what_waits_on_them_and_what_is_coming(
     accepted = await api_client.post(f"/api/v1/sessions/{first}/accept", headers=headers)
     after = await counts(api_client, headers)
 
-    assert before == {"as_mentor": {"awaiting_your_response": 2, "upcoming": 1}, "as_mentee": None}
+    assert before == {
+        "as_mentor": {"awaiting_your_response": 2, "upcoming": 1},
+        "as_mentee": {"awaiting_mentor": 0, "upcoming": 0},
+    }
     assert accepted.status_code == 200, accepted.text
     assert after["as_mentor"] == {"awaiting_your_response": 1, "upcoming": 2}
 
@@ -141,13 +145,54 @@ async def test_a_dual_role_user_gets_both_halves_kept_apart(
     }
 
 
-async def test_somebody_with_neither_role_gets_both_halves_null(
+async def test_a_mentee_without_a_goal_still_counts_their_requests(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    nobody = await a_user(db_engine)
-    headers = await sign_in(db_engine, nobody)
+    """Booking needs no goal, so the badge must not either (app-shell Round 2)."""
+    mentor = await make_bookable_mentor(db_engine, "counts-goalless")
+    mentee = await a_user(db_engine)
+    await a_session(db_engine, mentor, mentee, days_ahead=3)
+    headers = await sign_in(db_engine, mentee)
 
-    assert await counts(api_client, headers) == {"as_mentor": None, "as_mentee": None}
+    me = await api_client.get(URL, headers=headers)
+
+    assert me.status_code == 200, me.text
+    assert me.json()["booking_counts"] == {
+        "as_mentor": None,
+        "as_mentee": {"awaiting_mentor": 1, "upcoming": 0},
+    }
+    assert me.json()["credits"] is not None
+
+
+async def test_a_mentor_without_a_goal_who_books_sees_their_request(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Any signed-in user may book, a mentor included (Codex on #332)."""
+    mentor = await make_bookable_mentor(db_engine, "counts-mentor-books")
+    other = await make_bookable_mentor(db_engine, "counts-mentor-booked")
+    await a_session(db_engine, other, mentor, days_ahead=3)
+    headers = await sign_in(db_engine, mentor)
+
+    me = await api_client.get(URL, headers=headers)
+
+    assert me.status_code == 200, me.text
+    assert me.json()["booking_counts"] == {
+        "as_mentor": {"awaiting_your_response": 0, "upcoming": 0},
+        "as_mentee": {"awaiting_mentor": 1, "upcoming": 0},
+    }
+    assert me.json()["credits"] is not None
+
+
+async def test_only_the_mentor_half_needs_a_mentor_profile(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentee = await a_user(db_engine)
+    headers = await sign_in(db_engine, mentee)
+
+    assert await counts(api_client, headers) == {
+        "as_mentor": None,
+        "as_mentee": {"awaiting_mentor": 0, "upcoming": 0},
+    }
 
 
 async def test_a_mentor_cannot_answer_a_request_past_its_deadline(
