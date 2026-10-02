@@ -35,13 +35,36 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Sequence
+from functools import reduce
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, Text, cast, func, literal, literal_column, select, true, tuple_
+from sqlalchemy import (
+    Select,
+    Text,
+    and_,
+    case,
+    cast,
+    func,
+    literal,
+    literal_column,
+    not_,
+    or_,
+    select,
+    true,
+    tuple_,
+)
+from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.availability import BookingWindow
+from app.domain.search import (
+    FUZZY_FLOOR,
+    fuzzy_terms,
+    has_operators,
+    prefix_terms,
+    search_groups,
+)
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
@@ -80,6 +103,46 @@ _STUDY_COUNTRY = Country.__table__.alias("study_country")
 
 #: The mentor's origin country, aliased separately from where they studied.
 _ORIGIN_COUNTRY = Country.__table__.alias("origin_country")
+
+
+def _education_text() -> Any:
+    """Every live education entry's school, course and programme, as one string.
+
+    Read by the full-text document and by the near-spelling text alike, so the
+    two cannot disagree about what a mentor studied.
+    """
+    return (
+        select(
+            func.string_agg(
+                func.coalesce(Institution.name, EducationEntry.school_name_raw, "")
+                + " "
+                # **Both course and programme, and they are not the same field.**
+                # `study_course` is what a mentee means by a subject —
+                # "Mathematics", "Physics" — and it is what the card prints;
+                # `study_program` holds degree *names* like "BSc (Bachelor of
+                # Science)". The document indexed only the latter, so the word
+                # displayed on every card found nobody, and every existing search
+                # test missed it by searching a name, a school or a country.
+                # Added rather than swapped: 8 export rows carry a programme and
+                # "Bachelor of Engineering" is a real query.
+                + func.coalesce(EducationEntry.study_course, "")
+                + " "
+                + func.coalesce(EducationEntry.study_program, ""),
+                " ",
+            )
+        )
+        .select_from(EducationEntry)
+        .outerjoin(Institution, Institution.id == EducationEntry.institution_id)
+        .where(
+            EducationEntry.user_id == MentorProfile.user_id,
+            # Without this a mentor stays findable by a school they deleted. It
+            # is the sixth soft-delete of this milestone and the only one in a
+            # subquery, where nothing else in the diff would show it.
+            EducationEntry.deleted_at.is_(None),
+        )
+        .correlate(MentorProfile)
+        .scalar_subquery()
+    )
 
 
 def _document() -> Any:
@@ -150,38 +213,6 @@ def _document() -> Any:
     this document and the qualification lateral, and only the document is what a
     stored column removes.
     """
-    education = (
-        select(
-            func.string_agg(
-                func.coalesce(Institution.name, EducationEntry.school_name_raw, "")
-                + " "
-                # **Both course and programme, and they are not the same field.**
-                # `study_course` is what a mentee means by a subject —
-                # "Mathematics", "Physics" — and it is what the card prints;
-                # `study_program` holds degree *names* like "BSc (Bachelor of
-                # Science)". The document indexed only the latter, so the word
-                # displayed on every card found nobody, and every existing search
-                # test missed it by searching a name, a school or a country.
-                # Added rather than swapped: 8 export rows carry a programme and
-                # "Bachelor of Engineering" is a real query.
-                + func.coalesce(EducationEntry.study_course, "")
-                + " "
-                + func.coalesce(EducationEntry.study_program, ""),
-                " ",
-            )
-        )
-        .select_from(EducationEntry)
-        .outerjoin(Institution, Institution.id == EducationEntry.institution_id)
-        .where(
-            EducationEntry.user_id == MentorProfile.user_id,
-            # Without this a mentor stays findable by a school they deleted. It
-            # is the sixth soft-delete of this milestone and the only one in a
-            # subquery, where nothing else in the diff would show it.
-            EducationEntry.deleted_at.is_(None),
-        )
-        .correlate(MentorProfile)
-        .scalar_subquery()
-    )
 
     def weight(vector: Any, label: str) -> Any:
         """`setweight` takes Postgres's internal `"char"`, not `varchar`.
@@ -194,21 +225,29 @@ def _document() -> Any:
         """
         return func.setweight(vector, literal_column(f"'{label}'"))
 
-    def simple(column: Any) -> Any:
-        return func.to_tsvector(SIMPLE, func.coalesce(column, ""))
+    fields = [*_card_fields(), (UserProfile.about_me, "D", ENGLISH)]
+    vectors = [weight(func.to_tsvector(c, func.coalesce(f, "")), w) for f, w, c in fields]
+    return reduce(lambda a, b: a.op("||")(b), vectors)
 
-    def english(column: Any) -> Any:
-        return func.to_tsvector(ENGLISH, func.coalesce(column, ""))
 
-    return (
-        weight(simple(User.first_name + literal(" ") + User.last_name), "A")
-        .op("||")(weight(english(MentorProfile.headline), "B"))
-        .op("||")(weight(english(MentorProfile.primary_study_program), "B"))
-        .op("||")(weight(simple(education), "C"))
-        .op("||")(weight(simple(_STUDY_COUNTRY.c.display_name), "C"))
-        .op("||")(weight(simple(_ORIGIN_COUNTRY.c.display_name), "C"))
-        .op("||")(weight(english(UserProfile.about_me), "D"))
-    )
+def _card_fields() -> list[tuple[Any, str, str]]:
+    """Every searchable field but the bio, as `(text, weight, configuration)`.
+
+    The one list both the full-text document and the near-spelling text read,
+    so a field cannot be searchable one way and not the other. The document adds
+    the bio; the near tier leaves it out, because long prose is near-similar to
+    almost anything.
+    """
+    return [
+        # `concat_ws`, not `+`: both names are nullable, and one null made the
+        # whole name unsearchable.
+        (func.concat_ws(" ", User.first_name, User.last_name), "A", SIMPLE),
+        (MentorProfile.headline, "B", ENGLISH),
+        (MentorProfile.primary_study_program, "B", ENGLISH),
+        (_education_text(), "C", SIMPLE),
+        (_STUDY_COUNTRY.c.display_name, "C", SIMPLE),
+        (_ORIGIN_COUNTRY.c.display_name, "C", SIMPLE),
+    ]
 
 
 def _matches(term: str) -> Any:
@@ -222,6 +261,97 @@ def _matches(term: str) -> Any:
     return func.websearch_to_tsquery(SIMPLE, term).op("||")(
         func.websearch_to_tsquery(ENGLISH, term)
     )
+
+
+def _fuzzy_text() -> Any:
+    """What a near spelling is compared with: the card fields, without the bio."""
+    return func.concat_ws(" ", *(field for field, _, _ in _card_fields()))
+
+
+def _prefix(terms: list[str]) -> Any:
+    """Every term as a prefix, each under both configurations, ANDed (#227).
+
+    Per term, so a course indexed `simple` and a word in a prose field indexed
+    `english` can both satisfy one query. A term `english` reads as a stop word
+    ("at") is dropped: the prose fields never indexed it, so requiring it would
+    fail any match there. An empty tsquery is the identity for `&&`.
+    """
+    parts: list[Any] = []
+    for pattern in prefix_terms(terms):
+        parts.append(
+            case(
+                (_stop_word(pattern), cast(literal(""), TSQUERY)),
+                else_=func.to_tsquery(SIMPLE, pattern).op("||")(func.to_tsquery(ENGLISH, pattern)),
+            )
+        )
+    return reduce(lambda a, b: a.op("&&")(b), parts)
+
+
+def _stop_word(pattern: str) -> Any:
+    """Whether `english` parses `pattern` to nothing: a stop word, which the
+    prose fields never indexed. The prefix and near tiers both skip one."""
+    return func.numnode(func.to_tsquery(ENGLISH, pattern)) == 0
+
+
+def _tiers(term: str) -> list[tuple[Any, Any]]:
+    """Each way `term` can match, best first, as `(condition, score)` pairs (#227).
+
+    Exact full-text, then every word as a prefix, then a near spelling — or
+    exact alone for a query with a negation or a phrase (`has_operators`). The
+    prefix and near tiers are built from sanitised terms (`domain.search`), so
+    no query syntax a user types reaches `to_tsquery`; both are bound.
+    """
+    document = _document()
+    tiers = [(document.op("@@")(_matches(term)), func.ts_rank_cd(document, _matches(term)))]
+    if has_operators(term):
+        return tiers
+    groups = search_groups(term)
+    if groups:
+        query = reduce(lambda a, b: a.op("||")(b), (_prefix(group) for group in groups))
+        tiers.append((document.op("@@")(query), func.ts_rank_cd(document, query)))
+    near = [n for n in (_near(group, document) for group in groups) if n is not None]
+    if near:
+        tiers.append(
+            (
+                or_(*(condition for condition, _ in near)),
+                func.greatest(*(case((condition, score), else_=0) for condition, score in near)),
+            )
+        )
+    return tiers
+
+
+def _near(group: list[str], document: Any) -> tuple[Any, Any] | None:
+    """One `or` group as a near spelling, or None when it has no long word.
+
+    Per word, like the other tiers: every long word must clear the floor (a
+    single close word must not carry an absent one) and every short word must be
+    present as a prefix (`MIT Harvrd` needs MIT); an english stop word is skipped
+    in both, as in the prefix tier. Scored by the weakest word.
+    """
+    long, short = fuzzy_terms(group)
+    if not long:
+        return None
+    text = _fuzzy_text()
+    stops = [_stop_word(word) for word in long]
+    # A stop word ("with") is no requirement and does not lower the score, but
+    # a group of nothing else must not match everybody.
+    scores = [
+        case((stop, 1.0), else_=func.strict_word_similarity(word, text))
+        for word, stop in zip(long, stops, strict=True)
+    ]
+    conditions = [score >= FUZZY_FLOOR for score in scores]
+    conditions.append(or_(*(not_(stop) for stop in stops)))
+    if short:
+        # Short words that are all stop words make an empty query, which
+        # matches nothing; they are no requirement at all.
+        query = _prefix(short)
+        conditions.append(or_(func.numnode(query) == 0, document.op("@@")(query)))
+    return and_(*conditions), func.least(*scores)
+
+
+def _search_match(term: str) -> Any:
+    """A mentor matches `term` on any tier. The page and the count both read it."""
+    return or_(*(condition for condition, _ in _tiers(term)))
 
 
 def completed_sessions() -> Any:
@@ -393,7 +523,7 @@ def _scope(term: str | None, offerings: Sequence[str], viewer: UUID | None = Non
     match or the filter would still return a plausible number.
     """
     base = _who(offerings, viewer)
-    return base if term is None else base.where(_document().op("@@")(_matches(term)))
+    return base if term is None else base.where(_search_match(term))
 
 
 def _matched(
@@ -447,11 +577,15 @@ def _ranked(
     Without it two mentors scoring the same could swap between pages and one would
     be shown twice while the other vanished.
     """
-    rank = func.ts_rank_cd(_document(), _matches(term))
+    tiers = _tiers(term)
+    # The tier (exact, prefix, near) orders before the score within it, so a
+    # strong prefix match never outranks a weak exact one (#227).
+    tier = case(*((condition, len(tiers) - n) for n, (condition, _) in enumerate(tiers)), else_=0)
+    rank = case(*((condition, score) for condition, score in tiers), else_=0)
     return (
         _card(_scope(term, offerings, viewer), window)
         .add_columns(rank.label("rank"))
-        .order_by(_bookable_first(), rank.desc(), MentorProfile.id.desc())
+        .order_by(_bookable_first(), tier.desc(), rank.desc(), MentorProfile.id.desc())
         .offset(offset)
         .limit(limit + 1)
     )
