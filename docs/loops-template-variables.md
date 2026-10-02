@@ -241,8 +241,9 @@ a self-paused mentor at 08:00 in their own zone. **The template must word both.*
   began. `daysPaused` is `30` or `59`; `daysUntilReturn` and `returnOn` are
   empty.
 
-A step already past when the pause is set is skipped, and a run after a gap
-sends only the latest step due, so a short pause may get only the last. The
+A step already past when the pause is set is skipped, a run after a gap sends
+only the latest step due, and a step not sent on its own day is never sent, so
+a short pause may get only the last. The
 template may use:
 
 - `recipientName`

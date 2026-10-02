@@ -15,6 +15,7 @@ from app.domain.listing import (
     return_on_problem,
     stage_after,
     stage_before,
+    stage_missed,
 )
 
 TODAY = dt.date(2026, 10, 1)
@@ -73,6 +74,23 @@ def test_the_latest_due_stage_is_the_one_a_late_run_sends(
     now = at(back - dt.timedelta(days=days_before), 9)
 
     assert latest_due_stage(return_on=back, paused_on=TODAY, local_now=now) == latest
+
+
+@pytest.mark.parametrize(
+    ("days_paused", "latest"), [(29, None), (30, 30), (58, 30), (59, 59), (61, 59)]
+)
+def test_an_undated_late_run_finds_the_latest_nudge(days_paused: int, latest: int | None) -> None:
+    now = at(TODAY + dt.timedelta(days=days_paused), 9)
+
+    assert latest_due_stage(return_on=None, paused_on=TODAY, local_now=now) == latest
+
+
+@pytest.mark.parametrize(("days_after", "missed"), [(0, False), (1, True)])
+def test_a_stage_is_missed_once_its_day_has_gone(days_after: int, missed: bool) -> None:
+    back = TODAY + dt.timedelta(days=10)
+    now = at(back - dt.timedelta(days=3 - days_after), 23, 59)
+
+    assert stage_missed(3, return_on=back, paused_on=TODAY, local_now=now) is missed
 
 
 @pytest.mark.parametrize("dated", [True, False])

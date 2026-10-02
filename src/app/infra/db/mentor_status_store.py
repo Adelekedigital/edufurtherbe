@@ -39,6 +39,7 @@ from app.domain.listing import (
     first_reminder_stage,
     return_on_problem,
     stage_before,
+    stage_missed,
 )
 from app.domain.notifications import Notification
 from app.infra.db.mentor_listing import (
@@ -364,7 +365,8 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
     **Claimed in one `UPDATE … RETURNING`**, which is what makes each stage
     send once: the claim moves the pending stage past the latest due one, so
     two overlapping runs cannot both claim it, a re-run finds it moved on, and
-    a run after a gap sends only the current stage. Does not commit.
+    a run after a gap sends only the current stage — and nothing at all if
+    that stage's day has gone. Returns how many were queued. Does not commit.
     """
     claimed = (
         await session.execute(
@@ -382,12 +384,19 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
                 MentorProfile.user_id,
                 MentorProfile.return_on,
                 MentorProfile.return_reminder_stage,
+                paused_on(),
+                func.timezone(User.timezone, now),
             )
         )
     ).all()
-    for user_id, return_on, pending in claimed:
+    queued = 0
+    for user_id, return_on, pending, began, local_now in claimed:
         dated = return_on is not None
         sent = stage_before(pending, dated=dated)
+        # Its day already gone (the job was down): claimed past, never sent.
+        if stage_missed(sent, return_on=return_on, paused_on=began, local_now=local_now):
+            continue
+        queued += 1
         variables = (
             {"return_on": return_on.isoformat(), "stage": str(sent), "days_until_return": str(sent)}
             if dated
@@ -401,7 +410,7 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
             recipient_ids=(user_id,),
             variables=variables,
         )
-    return len(claimed)
+    return queued
 
 
 async def may_self_resume(session: AsyncSession, user_id: UUID) -> bool:

@@ -20,6 +20,7 @@ __all__ = [
     "return_on_problem",
     "stage_after",
     "stage_before",
+    "stage_missed",
 ]
 
 #: **A dated pause's reminders, in the order they fire**: days *before*
@@ -101,6 +102,19 @@ def latest_due_stage(
         if reminder_due_at(offset, return_on=return_on, paused_on=paused_on) <= local_now:
             latest = offset
     return latest
+
+
+def stage_missed(
+    offset: int, *, return_on: dt.date | None, paused_on: dt.date, local_now: dt.datetime
+) -> bool:
+    """Whether this stage's **day** is already behind the mentor's today.
+
+    **No late sends, through an outage too**: a stage not sent on its own day
+    is never sent — "3 days to go" the day after says the wrong thing. The
+    claim moves past it and the send-time check drops it.
+    """
+    due = reminder_due_at(offset, return_on=return_on, paused_on=paused_on)
+    return due.date() < local_now.date()
 
 
 def stage_after(offset: int, *, dated: bool) -> int | None:

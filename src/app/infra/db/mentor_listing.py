@@ -21,6 +21,7 @@ from app.domain.listing import (
     latest_due_stage,
     reminder_due_at,
     stage_after,
+    stage_missed,
 )
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
@@ -162,8 +163,8 @@ async def return_reminder_state(
 
     * `stale`: no longer approved, no longer paused by themselves, a different
       date (or none) than the one queued, that stage re-armed by a new pause,
-      or a later stage already due. The message would be false, twice, or
-      count the wrong number of days.
+      a later stage already due, or its day already behind them. The message
+      would be false, twice, or count the wrong number of days.
     * `wait`: still true, but not yet the return morning in their current
       zone. Left pending for a later run rather than sent a day early.
     * `due`: send it.
@@ -208,6 +209,8 @@ async def return_reminder_state(
     # A later stage already due: this one would say the wrong count.
     latest = latest_due_stage(return_on=return_on, paused_on=began, local_now=local_now)
     if latest is not None and stages.index(latest) > stages.index(offset):
+        return "stale"
+    if stage_missed(offset, return_on=return_on, paused_on=began, local_now=local_now):
         return "stale"
     due_at = reminder_due_at(offset, return_on=return_on, paused_on=began)
     return "due" if due_at <= local_now else "wait"
