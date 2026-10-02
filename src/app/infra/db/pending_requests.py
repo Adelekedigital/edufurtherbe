@@ -7,8 +7,10 @@ requests still awaiting an answer. Awaiting and lapsed are complements among
 `pending_mentor_approval` rows, so they share `_past_deadline` rather than
 restating it — a request is never both, and never neither.
 
-A request with no `respond_by` never lapses: the sweep has always skipped it,
-so it counts as awaiting for as long as it stays pending.
+**The deadline is `COALESCE(respond_by, starts_at)`.** A request with no
+`respond_by` — every migrated one — lapses when its session starts. It used to
+never lapse, so a legacy request whose session had long passed counted as
+awaiting forever, was never expired, and could still be accepted.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ __all__ = ["awaiting_mentor", "booking_counts", "lapsed_request", "upcoming_sess
 
 
 def _past_deadline(now: dt.datetime) -> Any:
-    return and_(Session.respond_by.is_not(None), Session.respond_by <= now)
+    return func.coalesce(Session.respond_by, Session.starts_at) <= now
 
 
 def lapsed_request(now: dt.datetime) -> list[Any]:
