@@ -48,6 +48,7 @@ from sqlalchemy import (
     func,
     literal,
     literal_column,
+    not_,
     or_,
     select,
     true,
@@ -277,14 +278,19 @@ def _prefix(terms: list[str]) -> Any:
     """
     parts: list[Any] = []
     for pattern in prefix_terms(terms):
-        english = func.to_tsquery(ENGLISH, pattern)
         parts.append(
             case(
-                (func.numnode(english) == 0, cast(literal(""), TSQUERY)),
-                else_=func.to_tsquery(SIMPLE, pattern).op("||")(english),
+                (_stop_word(pattern), cast(literal(""), TSQUERY)),
+                else_=func.to_tsquery(SIMPLE, pattern).op("||")(func.to_tsquery(ENGLISH, pattern)),
             )
         )
     return reduce(lambda a, b: a.op("&&")(b), parts)
+
+
+def _stop_word(pattern: str) -> Any:
+    """Whether `english` parses `pattern` to nothing: a stop word, which the
+    prose fields never indexed. The prefix and near tiers both skip one."""
+    return func.numnode(func.to_tsquery(ENGLISH, pattern)) == 0
 
 
 def _tiers(term: str) -> list[tuple[Any, Any]]:
@@ -319,14 +325,22 @@ def _near(group: list[str], document: Any) -> tuple[Any, Any] | None:
 
     Per word, like the other tiers: every long word must clear the floor (a
     single close word must not carry an absent one) and every short word must be
-    present as a prefix (`MIT Harvrd` needs MIT). Scored by the weakest word.
+    present as a prefix (`MIT Harvrd` needs MIT); an english stop word is skipped
+    in both, as in the prefix tier. Scored by the weakest word.
     """
     long, short = fuzzy_terms(group)
     if not long:
         return None
     text = _fuzzy_text()
-    scores = [func.strict_word_similarity(word, text) for word in long]
+    stops = [_stop_word(word) for word in long]
+    # A stop word ("with") is no requirement and does not lower the score, but
+    # a group of nothing else must not match everybody.
+    scores = [
+        case((stop, 1.0), else_=func.strict_word_similarity(word, text))
+        for word, stop in zip(long, stops, strict=True)
+    ]
     conditions = [score >= FUZZY_FLOOR for score in scores]
+    conditions.append(or_(*(not_(stop) for stop in stops)))
     if short:
         # Short words that are all stop words make an empty query, which
         # matches nothing; they are no requirement at all.

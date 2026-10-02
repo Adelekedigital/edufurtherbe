@@ -349,3 +349,22 @@ async def test_or_keeps_typo_tolerance_on_each_side(
 
     assert str(harvard) in found
     assert str(oxford) in found
+
+
+async def test_a_long_stop_word_does_not_block_a_near_spelling(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """ "with" is long enough to be near-matched but is an english stop word,
+    which the prefix tier already drops (Codex on #328)."""
+    mentor = await make_bookable_mentor(db_engine, "fz-near-long-stop")
+    await add_education(db_engine, mentor, school="Oxford University", course="Chemistry")
+
+    assert str(mentor) in await ids(api_client, "chemistry with oxforrd")
+
+
+async def test_stop_words_alone_do_not_match_everyone(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    await make_bookable_mentor(db_engine, "fz-only-stops")
+
+    assert await ids(api_client, "with about") == []
