@@ -103,3 +103,11 @@ def test_a_possessive_belongs_to_its_word() -> None:
     assert search_terms("Harvrd's") == ["harvrd"]
     assert search_terms("Harvrd\u2019s course") == ["harvrd", "course"]
     assert search_terms("it's") == ["it"]
+
+
+def test_a_lone_mark_before_a_dash_does_not_hide_a_negation() -> None:
+    """A mark with no letter under it is not a word, so the dash still starts
+    one (Codex on #331)."""
+    assert has_operators("́-Harvard")
+    assert has_operators("x ́́-Harvard")
+    assert not has_operators("Á́-Be")

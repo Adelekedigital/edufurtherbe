@@ -50,12 +50,17 @@ def has_operators(q: str) -> bool:
     if '"' in text:
         return True
     return any(
-        char == "-"
-        and (n == 0 or not _in_word(text[n - 1]))
-        and n + 1 < len(text)
-        and _in_word(text[n + 1])
+        char == "-" and not _ends_word(text[:n]) and n + 1 < len(text) and _in_word(text[n + 1])
         for n, char in enumerate(text)
     )
+
+
+def _ends_word(text: str) -> bool:
+    """Whether `text` ends inside a word: its trailing marks sit on a letter or
+    digit. Marks with no base are dropped by `search_terms`, so they are no word
+    and a dash after them still starts one."""
+    stripped = text.rstrip("".join(c for c in set(text) if unicodedata.category(c)[0] == "M"))
+    return bool(stripped) and unicodedata.category(stripped[-1])[0] in "LN"
 
 
 def _in_word(char: str) -> bool:
