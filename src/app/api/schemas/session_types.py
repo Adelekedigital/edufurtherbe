@@ -409,6 +409,13 @@ class OwnSessionTypeRead(BaseModel):
             "another un-features this, and hiding it un-features it."
         ),
     )
+    uses_own_windows: bool = Field(
+        default=False,
+        description=(
+            "True when this offering books into its own scheduling windows and "
+            "nowhere else; false when it follows your Calendar weekly hours."
+        ),
+    )
     #: The live sessions holding it, on every row — so the delete confirm can say
     #: whether deleting waits for them before the mentor chooses (#218). The same
     #: two figures `pending_deletion` carries once it does.
@@ -463,6 +470,7 @@ class OwnSessionTypeRead(BaseModel):
             ),
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
+            uses_own_windows=bool(row.get("uses_own_windows")),
             booked_count=booked_count,
             last_booked_ends_at=last_booked_ends_at,
             pending_deletion=(

@@ -38,7 +38,9 @@ from app.infra.db.predicates import LIVE
 __all__ = [
     "bookable_mentors",
     "has_live_offering",
+    "has_own_windows",
     "has_weekly_hours",
+    "live_window",
     "mentor_exists",
     "mentor_is_bookable",
     "mentor_is_live",
@@ -247,13 +249,34 @@ def has_weekly_hours() -> Any:
             SessionType.mentor_user_id == MentorProfile.user_id,
             SessionType.is_active.is_(True),
             SessionType.deleted_at.is_(None),
-            SessionTypeSchedulingWindow.is_active.is_(True),
-            SessionTypeSchedulingWindow.deleted_at.is_(None),
+            *live_window(),
         )
         .correlate(MentorProfile)
         .exists()
     )
     return or_(general, dedicated)
+
+
+def live_window() -> list[Any]:
+    """A scheduling window that counts: switched on and not deleted (#199).
+
+    The one definition. Slots replace a mentor's hours with an offering's live
+    windows, liveness reads them, and the owner's read reports them as
+    `uses_own_windows`, so the three cannot disagree about which windows exist.
+    """
+    return [
+        SessionTypeSchedulingWindow.is_active.is_(True),
+        SessionTypeSchedulingWindow.deleted_at.is_(None),
+    ]
+
+
+def has_own_windows(session_type_id: Any) -> Any:
+    """`EXISTS`: this offering books into its own windows, not its mentor's hours."""
+    return (
+        select(SessionTypeSchedulingWindow.id)
+        .where(SessionTypeSchedulingWindow.session_type_id == session_type_id, *live_window())
+        .exists()
+    )
 
 
 def session_type_of(user_id: UUID) -> list[Any]:

@@ -76,7 +76,7 @@ from app.infra.db.models.sessions import (
     SessionTypeBookingConfig,
 )
 from app.infra.db.models.user import User
-from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
+from app.infra.db.public_visibility import live_window, mentor_is_public, session_type_is_live
 
 __all__ = ["FreeBusyReader", "list_slots", "mentor_today"]
 
@@ -287,8 +287,7 @@ async def list_slots(
                 SessionTypeSchedulingWindow.timezone,
             ).where(
                 SessionTypeSchedulingWindow.session_type_id == session_type_id,
-                SessionTypeSchedulingWindow.is_active.is_(True),
-                SessionTypeSchedulingWindow.deleted_at.is_(None),
+                *live_window(),
             )
         )
     ).mappings()
