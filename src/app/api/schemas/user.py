@@ -97,15 +97,14 @@ class MenteeBookingCounts(BaseModel):
 
 
 class BookingCountsRead(BaseModel):
-    """Both roles' counts; a half is null when the caller lacks that role."""
+    """Both roles' counts. `as_mentor` is null without a mentor profile;
+    `as_mentee` is always filled on `/me`, since anyone signed in may book."""
 
     as_mentor: MentorBookingCounts | None = None
     as_mentee: MenteeBookingCounts | None = None
 
     @classmethod
-    def of(cls, counts: dict[str, int] | None, *, mentor: bool, mentee: bool) -> BookingCountsRead:
-        if counts is None:
-            return cls()
+    def of(cls, counts: dict[str, int], *, mentor: bool) -> BookingCountsRead:
         return cls(
             as_mentor=(
                 MentorBookingCounts(
@@ -115,12 +114,8 @@ class BookingCountsRead(BaseModel):
                 if mentor
                 else None
             ),
-            as_mentee=(
-                MenteeBookingCounts(
-                    awaiting_mentor=counts["mentee_awaiting"], upcoming=counts["mentee_upcoming"]
-                )
-                if mentee
-                else None
+            as_mentee=MenteeBookingCounts(
+                awaiting_mentor=counts["mentee_awaiting"], upcoming=counts["mentee_upcoming"]
             ),
         )
 

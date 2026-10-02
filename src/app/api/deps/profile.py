@@ -184,11 +184,10 @@ async def own_attributes(
         "goal": goal,
         "awards": await list_awards(session, user_id),
         "mentor_profile": mentor_profile,
-        # One grouped query. Every caller has a role (`domain/roles.py`), so it
-        # always runs; the route renders each half on its own predicate.
+        # One grouped query. Every caller may book, so it always runs; the
+        # route gates only the mentor half.
         "booking_counts": await booking_counts(session, user_id, dt.datetime.now(dt.UTC)),
-        # Fetched unconditionally and rendered on `is_mentee`, which the two
-        # fetches above already answer.
+        # Everyone's: anyone signed in may book and spend.
         "credits": await get_credit_summary(session, user_id, ladder=ladder),
         "mentee_completed_sessions": await mentee_completed_sessions(session, user_id),
     }

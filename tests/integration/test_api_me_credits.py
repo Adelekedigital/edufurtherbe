@@ -28,7 +28,7 @@ LONG_PAST = datetime(2020, 1, 1, tzinfo=UTC)
 
 
 async def seed_mentee(engine: AsyncEngine, auth_id: UUID, *, with_goal: bool = True) -> UUID:
-    """A mentee with a goal, which is the predicate the card is gated on."""
+    """A mentee, with a goal unless told otherwise."""
     async with engine.begin() as conn:
         user_id = (
             await conn.execute(
@@ -216,11 +216,9 @@ async def test_the_next_reset_is_the_first_of_the_next_month(
 async def test_a_mentee_without_a_goal_still_gets_the_card(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """**A goal is not what makes somebody a mentee** (`domain/roles.py`).
-
-    Booking needs no goal, so a mentee who skipped onboarding spends credits
-    and must see them. Only a mentor without a goal gets no card, which
-    `test_api_me_pending_bookings` asserts.
+    """**Every caller gets the card.** Booking needs no goal and no role, so
+    a mentee who skipped onboarding spends credits and must see them; a mentor
+    who books does too (`test_api_me_pending_bookings`).
     """
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id, with_goal=False)

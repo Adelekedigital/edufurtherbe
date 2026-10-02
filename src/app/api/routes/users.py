@@ -8,7 +8,6 @@ from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep
 from app.api.schemas.common import AvatarFocusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import BookingCountsRead, CreditsRead, UserProfileRead, UserRead
-from app.domain.roles import is_mentee
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
@@ -52,10 +51,9 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "authorization claim — permissions come from whether the relevant profile "
         "row exists, never from this field. `is_admin` reflects a live, unrevoked "
         "grant in `admin_users`.\n\n"
-        "`credits` is the dashboard card's block. It is **null only for a mentor "
-        "without a mentee goal**: anyone with a goal, or without a mentor "
-        "profile, is a mentee, since booking needs no goal and a dual-role user "
-        "is both. It carries `balance`, `allowance`, `state` and `next_reset_at`; the "
+        "`credits` is the dashboard card's block, **present for every caller**: "
+        "anyone signed in may book, a mentor included, and every booking spends "
+        "a credit. It carries `balance`, `allowance`, `state` and `next_reset_at`; the "
         "client draws the progress bar, so no percentage is published. "
         "`allowance` is `max(steady_state, balance)` — the steady-state "
         "ceiling rather than the monthly grant, so the bar moves when a "
@@ -69,8 +67,8 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "request. `as_mentor` (null without a mentor profile) carries "
         "`awaiting_your_response`, requests waiting on the caller's accept or "
         "decline before their deadline, and `upcoming`, confirmed sessions not yet "
-        "started. `as_mentee` (null on the same rule as `credits`: a mentor "
-        "without a mentee goal) carries `awaiting_mentor`, the caller's own requests still "
+        "started. `as_mentee` (always present, on the same rule as `credits`) "
+        "carries `awaiting_mentor`, the caller's own requests still "
         "waiting on a mentor, and `upcoming`. **Badge only the action counts** "
         "(`awaiting_your_response`, `awaiting_mentor`); `upcoming` is information "
         "and would almost always be lit.\n\n"
@@ -91,11 +89,7 @@ async def read_me(
         else None
     )
     mentor_profile = attributes["mentor_profile"]
-    # Bound before the call rather than walrused inside it: `credits` reads it
-    # too, and a keyword argument that depends on an earlier argument's
-    # side effect breaks silently the first time somebody reorders them.
     goal = attributes["goal"]
-    mentee = is_mentee(has_goal=goal is not None, has_mentor_profile=mentor_profile is not None)
     return UserRead(
         **user,
         profile=profile,
@@ -107,12 +101,12 @@ async def read_me(
             if mentor_profile is not None
             else None
         ),
-        # The card and `as_mentee` are the mentee half, on one rule.
-        credits=(CreditsRead.model_validate(attributes["credits"]) if mentee else None),
+        # Anyone signed in may book (`booked_session` asks for no role), so the
+        # mentee half is everyone's: the card and `as_mentee`.
+        credits=CreditsRead.model_validate(attributes["credits"]),
         mentee_completed_sessions=attributes["mentee_completed_sessions"],
         booking_counts=BookingCountsRead.of(
             attributes["booking_counts"],
             mentor=mentor_profile is not None,
-            mentee=mentee,
         ),
     )
