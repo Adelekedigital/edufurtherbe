@@ -7,7 +7,7 @@ import uuid
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, Query
+from fastapi import Body, Depends, Query
 from pydantic import AwareDatetime
 
 from app.api.deps.core import (
@@ -31,7 +31,9 @@ from app.api.schemas.common import (
     decode_cursor,
     encode_cursor,
 )
+from app.api.schemas.profile import PauseRequest
 from app.core.errors import (
+    ConflictError,
     ValidationError,
 )
 from app.domain.enums import MentorStatusType
@@ -317,10 +319,25 @@ async def mentor_history(
     )
 
 
-async def paused_self(user_id: OwnerDep, session: SessionDep) -> bool:
-    paused = await pause(session, user_id=user_id)
+async def paused_self(
+    user_id: OwnerDep,
+    session: SessionDep,
+    payload: Annotated[PauseRequest | None, Body()] = None,
+) -> bool:
+    """Refused while an admin's unlisting stands: pausing over it would make the
+    newest unlisting the mentor's own, and their resume would then undo it (#75)."""
+    outcome = await pause(
+        session,
+        user_id=user_id,
+        return_on=payload.return_on if payload else None,
+        now=dt.datetime.now(dt.UTC),
+    )
+    if outcome == "refused":
+        raise ConflictError(
+            "an admin has unlisted this profile; only an admin can change its listing"
+        )
     await session.commit()
-    return paused
+    return outcome == "paused"
 
 
 async def resumed_self(user_id: OwnerDep, session: SessionDep) -> bool:

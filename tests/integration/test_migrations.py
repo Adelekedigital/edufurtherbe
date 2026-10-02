@@ -1053,6 +1053,61 @@ def test_the_round_four_downgrade_keeps_a_scheduled_offering_hidden(
     )
 
 
+def test_the_return_date_downgrade_keeps_the_pause(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`b7c41e9a2d58` drops the return date and its reminder marker, and a paused
+    mentor stays paused: the pause lives in the event log, not in these columns."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "b7c41e9a2d58")
+    execute(
+        disposable_database,
+        _MENTOR_WITH_OFFERING.format(
+            email="returning@example.test", name="Back soon", stage="NULL", label="NULL"
+        ),
+    )
+    execute(
+        disposable_database,
+        # Listed first, so the downgrade's preserving the pause is something the
+        # assertions can see go wrong rather than the profile's default.
+        "INSERT INTO mentor_status_events (mentor_user_id, status_type) "
+        "SELECT user_id, 'listed' FROM mentor_profiles",
+    )
+    assert scalar(disposable_database, "SELECT listing_status::text FROM mentor_profiles") == (
+        "listed"
+    )
+    execute(
+        disposable_database,
+        "INSERT INTO mentor_status_events (mentor_user_id, status_type, reason) "
+        "SELECT user_id, 'unlisted', 'mentor_paused' FROM mentor_profiles; "
+        "UPDATE mentor_profiles SET return_on = DATE '2026-12-01', return_reminder_stage = 0",
+    )
+
+    command.downgrade(config, "a7c4e2d91f3b")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name = 'mentor_profiles' "
+            "AND column_name IN ('return_on', 'return_reminder_stage')",
+        )
+        == 0
+    )
+    assert scalar(disposable_database, "SELECT listing_status::text FROM mentor_profiles") == (
+        "unlisted"
+    )
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT count(*) FROM mentor_status_events WHERE reason = 'mentor_paused'",
+        )
+        == 1
+    )
+    command.upgrade(config, "b7c41e9a2d58")
+    assert scalar(disposable_database, "SELECT return_on FROM mentor_profiles") is None
+
+
 _OPTION = """
     INSERT INTO mentor_conferencing_options (user_id, provider, is_default)
     SELECT id, '{provider}', {default} FROM users WHERE email = '{email}'

@@ -213,6 +213,20 @@ class AwardRead(BaseModel):
         )
 
 
+class PauseRequest(Normalised):
+    """An optional return date when a mentor pauses themselves."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    return_on: date | None = Field(
+        default=None,
+        description=(
+            "When you expect to be back, a date in your own zone after today; null "
+            "or omitted means not sure yet. Sending it again while paused changes it."
+        ),
+    )
+
+
 class MentorProfileRead(BaseModel):
     """A mentor's profile.
 
@@ -269,6 +283,18 @@ class MentorProfileRead(BaseModel):
     primary_study_program: str | None = None
     primary_study_country: CountryRef | None = None
     offerings: list[LookupRef] = []
+    #: True only while you are unlisted **by your own pause** — an admin's
+    #: unlisting reads `listing_status: unlisted` with this false (#75).
+    paused_by_mentor: bool = Field(
+        description="You paused yourself; only then can you resume (Busy, I'm back)."
+    )
+    return_on: date | None = Field(
+        default=None,
+        description=(
+            "The date you expect to be back, in your own zone, or null. A reminder "
+            "only: you are emailed that morning and stay paused until you resume."
+        ),
+    )
     #: The platform's window, so the "Bookable up to" options come from it
     #: rather than a hard-coded list (Round 5). Configuration, not the mentor's.
     max_booking_window_days: int = Field(
@@ -303,6 +329,8 @@ class MentorProfileRead(BaseModel):
                 LookupRef(id=o["id"], code=o["slug"], display_name=o["display_name"])
                 for o in row.get("offerings", [])
             ],
+            paused_by_mentor=bool(row.get("paused_by_mentor")),
+            return_on=row.get("return_on"),
             max_booking_window_days=window.max_days,
             default_booking_window_days=window.default_days,
         )

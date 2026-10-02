@@ -127,6 +127,7 @@ def test_every_session_message_has_an_audience() -> None:
             Notification.MENTOR_DECLINED,
             Notification.CALENDAR_DISCONNECTED,
             Notification.MENTOR_APPLICATION_RECEIVED,
+            Notification.MENTOR_RETURN_REMINDER,
             # A credit belongs to a *user*. There is no session it hangs off
             # and no second party with a stake in it, so each of these is
             # enqueued with its one recipient named directly.

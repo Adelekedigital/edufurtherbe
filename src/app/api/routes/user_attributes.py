@@ -165,6 +165,12 @@ WRITE_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "The body failed validation."},
 }
 
+PAUSE_CONFLICT: dict[int | str, dict[str, str]] = {
+    status.HTTP_409_CONFLICT: {
+        "description": "An admin has unlisted this profile; only an admin can change it."
+    }
+}
+
 CONFLICT_RESPONSE: dict[int | str, dict[str, str]] = {
     status.HTTP_409_CONFLICT: {"description": "This user already has a mentor profile."}
 }
@@ -381,9 +387,12 @@ async def set_languages(_: ReplacedLanguagesDep) -> None:
         "Removes the mentor from the directory and leaves their approval "
         "untouched — a pause, not a withdrawal.\n\n"
         "Recorded with the mentor as the actor and `mentor_paused` as the "
-        "reason, which is what lets them undo it."
+        "reason, which is what lets them undo it.\n\n"
+        "**`409` while an admin's unlisting stands.** Pausing over it would make "
+        "the newest unlisting your own, and resuming would then undo the admin's "
+        "decision — so only an admin can change that listing."
     ),
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | PAUSE_CONFLICT,
 )
 async def pause_listing(paused: PausedSelfDep) -> dict[str, bool]:
     if not paused:

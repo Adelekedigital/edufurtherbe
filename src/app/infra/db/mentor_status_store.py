@@ -16,26 +16,44 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import insert, select
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    exists,
+    func,
+    insert,
+    not_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.domain.enums import ApprovalStatus, MentorStatusType, UnlistedReason
+from app.core.errors import ValidationError
+from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
+from app.domain.listing import (
+    RETURN_ON_POINTER,
+    first_reminder_stage,
+    return_on_problem,
+    stage_before,
+    stage_missed,
+)
 from app.domain.notifications import Notification
+from app.infra.db.mentor_listing import (
+    newest_unlisting_is_self,
+    paused_by_mentor,
+    paused_on,
+    pending_after_claim,
+    reminder_eligible,
+    return_reminder_due,
+)
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
-
-
-async def _mentor_exists(session: AsyncSession, user_id: UUID) -> bool:
-    found = await session.execute(
-        select(MentorProfile.user_id).where(
-            MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
-        )
-    )
-    return found.first() is not None
+from app.infra.db.predicates import LIVE
 
 
 async def _approval_before(session: AsyncSession, user_id: UUID) -> str | None:
@@ -75,7 +93,7 @@ async def record(
     the test for this inserts an event directly rather than calling this
     function — otherwise a broken trigger and a working caller look identical.
     """
-    if not await _mentor_exists(session, user_id):
+    if not await _lock(session, user_id):
         return False
 
     await session.execute(
@@ -84,9 +102,48 @@ async def record(
             status_type=status_type,
             reason=reason,
             created_by=created_by,
+            # **Clock time, not the transaction's start.** Transitions on one
+            # mentor are serialised by the row lock above, and stamping when the
+            # event is written — after the lock — keeps "newest" equal to "last
+            # committed". `now()` would let a transaction that started first but
+            # waited on the lock look older than the one it followed.
+            created_at=func.clock_timestamp(),
         )
     )
+    # A `listed` event also clears the pause's return date — in the projection
+    # trigger, so a listing written by any path ends the pause (#226).
     return True
+
+
+async def _lock(session: AsyncSession, user_id: UUID) -> bool:
+    """Lock this mentor's live profile row for the transition. ``False`` if none.
+
+    **Every transition takes it first**, so two on one mentor run one after the
+    other and a decision read before writing — the pause guard — cannot be
+    overtaken by an admin's unlisting committing in between (#225).
+    """
+    # The account's row as well as the profile's: a mentor whose account is
+    # soft-deleted after the caller was authenticated has no transition left
+    # to make, and holding the user row stops the delete crossing the write.
+    found = await session.execute(
+        select(MentorProfile.user_id)
+        .join(User, User.id == MentorProfile.user_id)
+        .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None), LIVE)
+        .with_for_update()
+    )
+    return found.first() is not None
+
+
+async def _set_return(
+    session: AsyncSession, user_id: UUID, return_on: dt.date | None, stage: int | None
+) -> bool:
+    """Set the pause's return date and its first pending reminder. ``False`` if gone."""
+    changed = await session.execute(
+        update(MentorProfile)
+        .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
+        .values(return_on=return_on, return_reminder_stage=stage)
+    )
+    return bool(changed.rowcount)  # type: ignore[attr-defined]
 
 
 async def decide(
@@ -104,6 +161,11 @@ async def decide(
     concurrent transitions record a state that never existed. Writing them as
     two facts costs one insert and keeps every row true on its own.
     """
+    # Locked before the approval is read, so an account deleted meanwhile is
+    # absent here rather than a decision that reports success and records
+    # nothing (`record` would then refuse both events).
+    if not await _lock(session, user_id):
+        return False
     before = await _approval_before(session, user_id)
     if before is None:
         return False
@@ -172,60 +234,200 @@ async def set_listing(
     )
 
 
-async def last_unlisting_reason(session: AsyncSession, user_id: UUID) -> str | None:
-    """Why this mentor is currently unlisted, from the newest unlisting.
+def _unlisted_by_someone_else() -> ColumnElement[bool]:
+    """Currently unlisted by an admin (or a decline): the pause guard's refusal.
 
-    Read rather than stored: `unlisted_reason` was a column describing only the
-    most recent unlisting, which is the duplication the log replaced.
+    A new profile's default `unlisted` has no unlisting event at all, so a
+    pending applicant may still pause — the guard refuses an *admin's* unlisting,
+    not the starting state.
     """
-    found = await session.execute(
-        select(MentorStatusEvent.reason)
+    event = aliased(MentorStatusEvent)
+    has_unlisting = exists(
+        select(event.id)
         .where(
-            MentorStatusEvent.mentor_user_id == user_id,
-            MentorStatusEvent.status_type == MentorStatusType.UNLISTED,
+            event.mentor_user_id == MentorProfile.user_id,
+            event.status_type == MentorStatusType.UNLISTED,
         )
-        .order_by(MentorStatusEvent.created_at.desc())
-        .limit(1)
+        .correlate(MentorProfile)
     )
-    row = found.first()
+    return and_(
+        MentorProfile.listing_status == ListingStatus.UNLISTED,
+        has_unlisting,
+        not_(newest_unlisting_is_self()),
+    )
+
+
+async def _profile_flag(session: AsyncSession, user_id: UUID, flag: Any) -> bool | None:
+    """One flag about this mentor's live profile, or ``None`` with no profile."""
+    row = (
+        await session.execute(
+            select(flag).where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
+        )
+    ).first()
+    return None if row is None else bool(row[0])
+
+
+async def unlisted_by_someone_else(session: AsyncSession, user_id: UUID) -> bool:
+    """Whether a pause must be refused: an admin's unlisting stands (#75)."""
+    return bool(await _profile_flag(session, user_id, _unlisted_by_someone_else()))
+
+
+#: What a pause attempt came to.
+PauseOutcome = Literal["paused", "refused", "absent"]
+
+
+async def pause(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    now: dt.datetime,
+    return_on: dt.date | None = None,
+) -> PauseOutcome:
+    """A mentor taking themselves out of the listing, optionally saying when
+    they expect to be back.
+
+    `created_by` is the mentor: they are the actor, and with the reason that is
+    what distinguishes this from an admin unlisting the same row.
+
+    **`refused` while an admin's unlisting stands** (#225): pausing over it would
+    make the newest unlisting the mentor's own and launder it into a resume. The
+    profile row is locked **before** that check and held through the write, so
+    an admin's unlisting cannot commit in between.
+
+    **Already paused by themselves: only the date changes.** "Change return
+    date" calls this again, and a second `unlisted` event would record a
+    transition that never happened.
+    """
+    if not await _lock(session, user_id):
+        return "absent"
+    if await unlisted_by_someone_else(session, user_id):
+        return "refused"
+    # **The write flow enforces the date rule, not the transport** — any caller
+    # of `pause` gets it. The mentor's today is theirs, so it is read here.
+    local_now = await local_time(session, user_id, now)
+    if local_now is None:
+        return "absent"
+    problem = return_on_problem(return_on, local_now.date())
+    if problem is not None:
+        raise ValidationError(problem, field_errors=((RETURN_ON_POINTER, problem),))
+    already = await _profile_flag(session, user_id, paused_by_mentor())
+    if not already:
+        await record(
+            session,
+            user_id=user_id,
+            status_type=MentorStatusType.UNLISTED,
+            created_by=user_id,
+            reason=UnlistedReason.MENTOR_PAUSED.value,
+        )
+    # The stages start again for this pause, dated or not, skipping any
+    # already behind us. An undated pause counts from when it began, which the
+    # event log holds — so re-pausing keeps the original start.
+    began = (
+        await session.execute(
+            select(paused_on())
+            .select_from(MentorProfile)
+            .join(User, User.id == MentorProfile.user_id)
+            .where(MentorProfile.user_id == user_id)
+        )
+    ).scalar_one()
+    stage = first_reminder_stage(return_on=return_on, paused_on=began, local_now=local_now)
+    if not await _set_return(session, user_id, return_on, stage):
+        return "absent"
+    return "paused"
+
+
+async def local_time(session: AsyncSession, user_id: UUID, now: dt.datetime) -> dt.datetime | None:
+    """This user's wall-clock time in their own zone (naive), or ``None`` with no
+    live account.
+
+    A return date is a date in the mentor's zone, so "after today" has to be
+    their today — UTC's would refuse a mentor in Auckland their own tomorrow —
+    and which reminder stages are still ahead is measured on the same clock.
+    """
+    row = (
+        await session.execute(
+            select(func.timezone(User.timezone, now)).where(User.id == user_id, LIVE)
+        )
+    ).first()
     return None if row is None else row[0]
 
 
-async def pause(session: AsyncSession, *, user_id: UUID) -> bool:
-    """A mentor taking themselves out of the listing.
+async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -> int:
+    """Queue each self-paused mentor's return reminder whose stage has come.
 
-    `created_by` is the mentor: they are the actor, and the reason distinguishes
-    this from an admin unlisting the same row.
+    **A reminder, never a switch** (Calendar request, 2026-10-01): nobody is
+    relisted here. One template on two cadences (`domain.listing`): a dated
+    pause at 7, 3 and 0 days before its date, an undated one at 30 and 59 days
+    after it began — each at `RETURN_REMINDER_HOUR` in the mentor's own zone,
+    the first hourly run at or after it, while they are still paused by
+    themselves.
+
+    **Claimed in one `UPDATE … RETURNING`**, which is what makes each stage
+    send once: the claim moves the pending stage past the latest due one, so
+    two overlapping runs cannot both claim it, a re-run finds it moved on, and
+    a run after a gap sends only the current stage — and nothing at all if
+    that stage's day has gone. Returns how many were queued. Does not commit.
     """
-    return await record(
-        session,
-        user_id=user_id,
-        status_type=MentorStatusType.UNLISTED,
-        created_by=user_id,
-        reason=UnlistedReason.MENTOR_PAUSED.value,
-    )
+    claimed = (
+        await session.execute(
+            update(MentorProfile)
+            .where(
+                User.id == MentorProfile.user_id,
+                reminder_eligible(),
+                MentorProfile.return_reminder_stage.is_not(None),
+                return_reminder_due(now),
+            )
+            # Past the **latest** due stage, so a run after a gap sends only
+            # the current one: never "7 days" late with "3 days" an hour after.
+            .values(return_reminder_stage=pending_after_claim(now))
+            .returning(
+                MentorProfile.user_id,
+                MentorProfile.return_on,
+                MentorProfile.return_reminder_stage,
+                paused_on(),
+                func.timezone(User.timezone, now),
+            )
+        )
+    ).all()
+    queued = 0
+    for user_id, return_on, pending, began, local_now in claimed:
+        dated = return_on is not None
+        sent = stage_before(pending, dated=dated)
+        # Its day already gone (the job was down): claimed past, never sent.
+        if stage_missed(sent, return_on=return_on, paused_on=began, local_now=local_now):
+            continue
+        queued += 1
+        variables = (
+            {"return_on": return_on.isoformat(), "stage": str(sent), "days_until_return": str(sent)}
+            if dated
+            else {"return_on": "", "stage": str(sent), "days_paused": str(sent)}
+        )
+        await enqueue(
+            session,
+            Notification.MENTOR_RETURN_REMINDER,
+            entity_type="mentor_profile",
+            entity_id=user_id,
+            recipient_ids=(user_id,),
+            variables=variables,
+        )
+    return queued
 
 
 async def may_self_resume(session: AsyncSession, user_id: UUID) -> bool:
     """Whether this mentor may put themselves back on the list.
 
-    **Only if they were the one who took themselves off.** Otherwise a
-    suspension is a button the suspended person can press — and an admin
-    unlisting somebody for review would be undone by the person under review.
+    **Only if they were the one who took themselves off** (`newest_unlisting_is_self`).
+    Otherwise a suspension is a button the suspended person can press — and an
+    admin unlisting somebody for review would be undone by the person under
+    review.
 
     Approval matters too: a mentor who was never approved has nothing to return
     to, and relisting them would put an unapproved profile in the directory.
     """
-    approved = await session.execute(
-        select(MentorProfile.approval_status).where(
-            MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
-        )
+    allowed = and_(
+        MentorProfile.approval_status == ApprovalStatus.APPROVED, newest_unlisting_is_self()
     )
-    row = approved.first()
-    if row is None or row[0] is not ApprovalStatus.APPROVED:
-        return False
-
-    return await last_unlisting_reason(session, user_id) == UnlistedReason.MENTOR_PAUSED.value
+    return bool(await _profile_flag(session, user_id, allowed))
 
 
 async def resume(session: AsyncSession, *, user_id: UUID) -> bool:

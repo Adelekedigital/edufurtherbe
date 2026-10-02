@@ -229,7 +229,28 @@ addresses the mentee alone.
 ### Messages with no template
 
 `request_expired`, `calendar_disconnected`, `mentor_approved`, `mentor_declined`,
-**`review_requested`**, **`review_received`**.
+**`review_requested`**, **`review_received`**, `mentor_return_reminder`.
+
+`mentor_return_reminder` (2026-10-01) is **one template for two cases**, sent to
+a self-paused mentor at 08:00 in their own zone. **The template must word both.**
+
+- **A pause with a return date:** sent a week before the date, three days
+  before, and on the day. `daysUntilReturn` is `7`, `3` or `0` and `returnOn` is
+  the date in words; `daysPaused` is empty.
+- **A pause with no date ("Not sure yet"):** sent 30 and 59 days after the pause
+  began. `daysPaused` is `30` or `59`; `daysUntilReturn` and `returnOn` are
+  empty.
+
+A step already past when the pause is set is skipped, a run after a gap sends
+only the latest step due, and a step not sent on its own day is never sent, so
+a short pause may get only the last. The
+template may use:
+
+- `recipientName`
+- `daysUntilReturn`: `7`, `3` or `0` (`0` is "today"), or empty with no date
+- `returnOn`: the return date in words (e.g. `Saturday 03 October 2026`), or empty
+- `daysPaused`: `30` or `59` with no date, else empty
+- `calendarUrl`: where they switch back on
 
 **The last two are the operationally urgent ones**, and this list is where an
 operator would look.
