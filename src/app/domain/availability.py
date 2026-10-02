@@ -59,6 +59,7 @@ __all__ = [
     "WeeklyWindow",
     "bookable",
     "booking_window",
+    "local_day_start",
     "normalise_timezone",
     "project",
     "unavailable_windows",
@@ -383,6 +384,15 @@ def _resolve(day: dt.date, moment: dt.time, zone: ZoneInfo) -> dt.datetime:
     it enforces the rule instead of assuming it.
     """
     return dt.datetime.combine(day, moment.replace(fold=0), tzinfo=zone).astimezone(dt.UTC)
+
+
+def local_day_start(day: dt.date, timezone: str) -> dt.datetime:
+    """The instant a calendar date begins in a zone — its local midnight, in UTC.
+
+    The one way a client's calendar date becomes an instant (`_resolve`'s fold
+    rule included), so a date range a person picks means their own midnights.
+    """
+    return _resolve(day, dt.time(0), ZoneInfo(timezone))
 
 
 @dataclass(frozen=True, slots=True)

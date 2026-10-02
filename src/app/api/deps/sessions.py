@@ -35,10 +35,11 @@ from app.api.schemas.sessions import (
 )
 from app.core.errors import (
     NotFoundError,
+    ValidationError,
 )
 from app.domain.attendance import join_window
-from app.domain.availability import booking_window
-from app.domain.enums import MeetingProvider
+from app.domain.availability import booking_window, local_day_start
+from app.domain.enums import MeetingProvider, SessionStatus
 from app.infra.clients.meetings import (
     DailyRooms,
     GoogleCalendar,
@@ -92,15 +93,54 @@ from app.infra.db.session_writer import (
 # narrowing would be breaking.
 
 
+#: The dates a session filter accepts. Wide enough for any real calendar, and
+#: away from the ends of `date`, where converting a local midnight to UTC
+#: overflows into year 0 or 10000 and would surface as a 500, not a 422.
+SESSION_FILTER_DATES = {"ge": dt.date(1900, 1, 1), "le": dt.date(9999, 12, 30)}
+
+
 async def target_sessions(
     user_id: TargetUserDep,
+    user: CurrentUserDep,
     session: SessionDep,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+    from_: Annotated[
+        dt.date | None,
+        Query(
+            alias="from",
+            description="First date, inclusive, in the caller's zone.",
+            **SESSION_FILTER_DATES,
+        ),
+    ] = None,
+    to: Annotated[
+        dt.date | None,
+        Query(description="Last date, exclusive, in the caller's zone.", **SESSION_FILTER_DATES),
+    ] = None,
+    status: Annotated[
+        list[SessionStatus] | None,
+        Query(description="Only these statuses; repeat the parameter for several."),
+    ] = None,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """One page of the sessions a user is a party to."""
+    """One page of the sessions a user is a party to, optionally narrowed.
+
+    Dates are the **caller's** calendar dates — the person looking at a month —
+    turned into instants at their local midnight, so a session late on the
+    last evening of the month lands in that month for them.
+    """
+    if from_ is not None and to is not None and to <= from_:
+        raise ValidationError(
+            "to is exclusive and must be after from", field_errors=(("/to", "must be after from"),)
+        )
+    zone = str(user["timezone"])
     return await list_sessions(
-        session, user_id, limit=clamp_limit(limit), cursor=decode_cursor(cursor)
+        session,
+        user_id,
+        limit=clamp_limit(limit),
+        cursor=decode_cursor(cursor),
+        starts_from=local_day_start(from_, zone) if from_ is not None else None,
+        starts_before=local_day_start(to, zone) if to is not None else None,
+        statuses=[s.value for s in status or ()],
     )
 
 

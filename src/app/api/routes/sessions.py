@@ -66,7 +66,10 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
         )
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
-        "description": "The `cursor` was not one this endpoint issued."
+        "description": (
+            "The `cursor` was not one this endpoint issued, `to` is not after "
+            "`from`, or a `status` is not a session status."
+        )
     },
 }
 
@@ -84,7 +87,12 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
         "**Cancelled and missed sessions are included.** They are still that "
         "person's history, and omitting them would silently shorten it.\n\n"
         "Each row carries `mentor_id` and `mentee_id`, so a client can tell "
-        "which side of the session this user was on without a second call."
+        "which side of the session this user was on without a second call.\n\n"
+        "**Optional filters** for a month view: `from` (inclusive) and `to` "
+        "(exclusive) are calendar dates in the **caller's** time zone, matched "
+        "on the session's start; `status` repeats "
+        "(`status=confirmed&status=pending_mentor_approval`). Ordering and "
+        "`cursor` paging are unchanged and apply within the filter."
     ),
     responses=LIST_RESPONSES,
 )
