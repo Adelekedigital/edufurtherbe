@@ -416,6 +416,14 @@ class OwnSessionTypeRead(BaseModel):
             "nowhere else; false when it follows your Calendar weekly hours."
         ),
     )
+    question_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "How many questions this offering's booking form asks: the length of "
+            "`GET /me/session-types/{id}/questions` for it."
+        ),
+    )
     #: The live sessions holding it, on every row — so the delete confirm can say
     #: whether deleting waits for them before the mentor chooses (#218). The same
     #: two figures `pending_deletion` carries once it does.
@@ -471,6 +479,7 @@ class OwnSessionTypeRead(BaseModel):
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
             uses_own_windows=bool(row.get("uses_own_windows")),
+            question_count=int(str(row.get("question_count") or 0)),
             booked_count=booked_count,
             last_booked_ends_at=last_booked_ends_at,
             pending_deletion=(
