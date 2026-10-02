@@ -82,6 +82,7 @@ from app.infra.db.offerings import (
     set_session_type_offerings,
 )
 from app.infra.db.public_visibility import (
+    has_own_windows,
     mentor_is_public,
     session_type_is_live,
     session_type_of,
@@ -365,6 +366,8 @@ def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[An
             SessionTypeBookingConfig.booking_window_days,
             effective_window_days(window).label("effective_booking_window_days"),
             SessionTypeBookingConfig.break_after_minutes,
+            # Its own windows, or its mentor's Calendar hours (#199, frontend #146).
+            has_own_windows(SessionType.id).label("uses_own_windows"),
             _resolved_venue(),
         )
         .select_from(SessionType)

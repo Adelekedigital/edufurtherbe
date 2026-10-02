@@ -336,6 +336,8 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "booked_count",
         "last_booked_ends_at",
         "pending_deletion",
+        # Its own windows, or the Calendar's hours (#199, frontend #146).
+        "uses_own_windows",
     }
     assert offering["is_active"] is False
     # `category` was a free-text string of the mentor's own and is now a
