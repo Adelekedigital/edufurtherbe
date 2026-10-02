@@ -66,6 +66,7 @@ from app.infra.db.booking_rules import (
     inherits_duration,
     inherits_min_notice,
 )
+from app.infra.db.intake_store import live_question_count
 from app.infra.db.models.mentoring import (
     MentorConferencingOption,
     MentorProfile,
@@ -368,6 +369,8 @@ def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[An
             SessionTypeBookingConfig.break_after_minutes,
             # Its own windows, or its mentor's Calendar hours (#199, frontend #146).
             has_own_windows(SessionType.id).label("uses_own_windows"),
+            # The form's size, so the list needs no per-type call (frontend #147).
+            live_question_count(SessionType.id).label("question_count"),
             _resolved_venue(),
         )
         .select_from(SessionType)

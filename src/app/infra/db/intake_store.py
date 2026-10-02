@@ -36,6 +36,8 @@ __all__ = [
     "create_question",
     "delete_question",
     "list_questions",
+    "live_question",
+    "live_question_count",
     "questions_by_type",
     "record_answers",
     "reorder_questions",
@@ -55,13 +57,29 @@ QUESTION_COLUMNS = (
 )
 
 
+def live_question() -> list[Any]:
+    """A question still on its offering's form: not deleted.
+
+    The one definition. The form loader, the five-question cap and the owner's
+    `question_count` all read it, so the count can never disagree with the list
+    `GET /me/session-types/{id}/questions` returns (frontend #147).
+    """
+    return [SessionTypeQuestion.deleted_at.is_(None)]
+
+
+def live_question_count(session_type_id: Any) -> Any:
+    """Scalar subquery: how many questions this offering's form asks."""
+    return (
+        select(func.count(SessionTypeQuestion.id))
+        .where(SessionTypeQuestion.session_type_id == session_type_id, *live_question())
+        .scalar_subquery()
+    )
+
+
 def _live_questions(session_type_ids: list[UUID]) -> Select[Any]:
     return (
         select(SessionTypeQuestion.session_type_id, *QUESTION_COLUMNS)
-        .where(
-            SessionTypeQuestion.session_type_id.in_(session_type_ids),
-            SessionTypeQuestion.deleted_at.is_(None),
-        )
+        .where(SessionTypeQuestion.session_type_id.in_(session_type_ids), *live_question())
         .order_by(SessionTypeQuestion.display_order, SessionTypeQuestion.id)
     )
 
@@ -168,14 +186,7 @@ async def create_question(
     if not await _owns(session, mentor_user_id, session_type_id):
         return None
 
-    live = await session.execute(
-        select(func.count())
-        .select_from(SessionTypeQuestion)
-        .where(
-            SessionTypeQuestion.session_type_id == session_type_id,
-            SessionTypeQuestion.deleted_at.is_(None),
-        )
-    )
+    live = await session.execute(select(live_question_count(session_type_id)))
     if live.scalar_one() >= MAX_QUESTIONS:
         raise ConflictError(
             f"a session type may ask at most {MAX_QUESTIONS} questions; "
@@ -223,7 +234,7 @@ async def update_question(
             select(SessionTypeQuestion.question_type).where(
                 SessionTypeQuestion.id == question_id,
                 SessionTypeQuestion.session_type_id == session_type_id,
-                SessionTypeQuestion.deleted_at.is_(None),
+                *live_question(),
             )
         )
     ).scalar_one_or_none()
@@ -325,7 +336,7 @@ async def delete_question(
         .where(
             SessionTypeQuestion.id == question_id,
             SessionTypeQuestion.session_type_id == session_type_id,
-            SessionTypeQuestion.deleted_at.is_(None),
+            *live_question(),
         )
         .values(deleted_at=func.now())
     )

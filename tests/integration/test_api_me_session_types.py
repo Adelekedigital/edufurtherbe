@@ -338,6 +338,8 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "pending_deletion",
         # Its own windows, or the Calendar's hours (#199, frontend #146).
         "uses_own_windows",
+        # The form's size, for the list without a per-type call (frontend #147).
+        "question_count",
     }
     assert offering["is_active"] is False
     # `category` was a free-text string of the mentor's own and is now a
