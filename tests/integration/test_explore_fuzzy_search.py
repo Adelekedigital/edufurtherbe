@@ -368,3 +368,12 @@ async def test_stop_words_alone_do_not_match_everyone(
     await make_bookable_mentor(db_engine, "fz-only-stops")
 
     assert await ids(api_client, "with about") == []
+
+
+async def test_a_misspelt_possessive_finds_the_mentor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "fz-possessive")
+    await add_education(db_engine, mentor, school="Harvard University")
+
+    assert str(mentor) in await ids(api_client, "Harvrd's")

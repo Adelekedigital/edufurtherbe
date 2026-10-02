@@ -89,3 +89,17 @@ def test_or_at_either_end_is_a_word_as_websearch_reads_it() -> None:
     assert search_groups("or harvard") == [["or", "harvard"]]
     assert search_groups("harvard or") == [["harvard", "or"]]
     assert search_groups("") == []
+
+
+def test_a_decomposed_hyphenated_word_is_not_a_negation() -> None:
+    """The same word composed or not must read the same (Codex on #328)."""
+    assert not has_operators("Á-Be")
+    assert not has_operators("Á-Be")
+    assert has_operators("x -Á")
+
+
+def test_a_possessive_belongs_to_its_word() -> None:
+    """A stray "s" would be required as a word of its own (Codex on #328)."""
+    assert search_terms("Harvrd's") == ["harvrd"]
+    assert search_terms("Harvrd\u2019s course") == ["harvrd", "course"]
+    assert search_terms("it's") == ["it"]
