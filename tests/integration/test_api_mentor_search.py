@@ -623,17 +623,26 @@ async def test_a_name_is_not_stemmed(api_client: httpx.AsyncClient, db_engine: A
     """`simple` on the name fields, pinned by the reason for choosing it.
 
     `english` reduces "Harding" to the lexeme `hard`, so a search for **hard**
-    would return a mentor with that surname. Four of the seven fields are proper
-    nouns, which is why they are not stemmed.
+    would *exactly* match a mentor with that surname. Four of the seven fields
+    are proper nouns, which is why they are not stemmed.
+
+    Since #227 "hard" does find Harding — as a prefix, the second tier — so the
+    guarantee is now ranking: somebody who actually wrote "hard" outranks the
+    surname that merely starts with it. Stemming the name would make both exact
+    and could put Harding first.
     """
-    mentor = await make_bookable_mentor(db_engine, "q-harding")
+    # Created first, so it can only lead by tier: ties break on id descending.
+    exact = await make_bookable_mentor(db_engine, "q-hard-exact")
+    await set_headline(db_engine, exact, "Hard work pays")
+    harding = await make_bookable_mentor(db_engine, "q-harding")
     async with db_engine.begin() as conn:
         await conn.execute(
-            text("UPDATE users SET last_name = 'Harding' WHERE id = :u"), {"u": mentor}
+            text("UPDATE users SET last_name = 'Harding' WHERE id = :u"), {"u": harding}
         )
 
-    assert str(mentor) in await ids(api_client, f"{URL}?q=Harding")
-    assert str(mentor) not in await ids(api_client, f"{URL}?q=hard")
+    assert str(harding) in await ids(api_client, f"{URL}?q=Harding")
+    found = await ids(api_client, f"{URL}?q=hard")
+    assert found.index(str(exact)) < found.index(str(harding))
 
 
 async def test_prose_is_stemmed(api_client: httpx.AsyncClient, db_engine: AsyncEngine) -> None:

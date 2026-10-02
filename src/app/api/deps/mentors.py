@@ -124,7 +124,13 @@ async def mentor_page(
     window: BookingWindowDep,
     q: Annotated[
         str | None,
-        Query(description="Search mentors by name, school, programme or country."),
+        Query(
+            description=(
+                "Search mentors by name, school, programme or country. Forgiving: a "
+                "half-typed word matches as a prefix and a near spelling still finds "
+                "them, ranked after exact matches."
+            )
+        ),
         StorableText,
     ] = None,
     cursor: Annotated[str | None, Query()] = None,
