@@ -174,6 +174,8 @@ async def test_total_and_paging_agree_with_the_fuzzy_match_set(
         "<-> !!",
         "Ñandú São Paulo",
         "राम",
+        "́",
+        "́ ́x x́",
         "lovelace (-harvard",
         "x" * 200,
     ],
@@ -293,3 +295,15 @@ async def test_an_inflected_word_beside_a_partial_one_matches_stemmed_prose(
         )
 
     assert str(mentor) in await ids(api_client, "studying harv")
+
+
+async def test_every_word_of_a_near_spelling_must_be_near(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Joined into one string, a single close word scored 0.55 for both and let
+    the absent one ride along (Codex on #328)."""
+    mentor = await make_bookable_mentor(db_engine, "fz-all-terms")
+    await set_headline(db_engine, mentor, "Scholarship mentor for engineers")
+
+    assert str(mentor) not in await ids(api_client, "scholarship zebrafish")
+    assert str(mentor) in await ids(api_client, "scholarshp enginers")

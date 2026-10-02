@@ -42,6 +42,7 @@ from uuid import UUID
 from sqlalchemy import (
     Select,
     Text,
+    and_,
     case,
     cast,
     func,
@@ -58,7 +59,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.availability import BookingWindow
 from app.domain.search import (
     FUZZY_FLOOR,
-    fuzzy_text,
+    fuzzy_terms,
     has_operators,
     prefix_terms,
     search_terms,
@@ -302,10 +303,14 @@ def _tiers(term: str) -> list[tuple[Any, Any]]:
     if terms:
         query = _prefix(terms)
         tiers.append((document.op("@@")(query), func.ts_rank_cd(document, query)))
-    near = fuzzy_text(terms)
-    if near is not None:
-        similarity = func.strict_word_similarity(near, _fuzzy_text())
-        tiers.append((similarity >= FUZZY_FLOOR, similarity))
+    near = fuzzy_terms(terms)
+    if near:
+        # Per word, like the other tiers: joined into one string, a single
+        # close word carried an absent one past the floor. Scored by the
+        # weakest word.
+        text = _fuzzy_text()
+        scores = [func.strict_word_similarity(word, text) for word in near]
+        tiers.append((and_(*(score >= FUZZY_FLOOR for score in scores)), func.least(*scores)))
     return tiers
 
 

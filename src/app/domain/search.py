@@ -18,7 +18,7 @@ import unicodedata
 MAX_SEARCH_TERMS = 8
 #: Longer than any real name, school or subject word.
 MAX_TERM_LENGTH = 40
-#: Below four characters a query has too few trigrams to tell a typo from
+#: Below four characters a word has too few trigrams to tell a typo from
 #: noise — "abc" is near-similar to half the directory.
 MIN_FUZZY_CHARS = 4
 #: The `strict_word_similarity` floor for the near-spelling tier, explicit
@@ -56,6 +56,9 @@ def search_terms(q: str) -> list[str]:
     digits and the marks inside them."""
     text = unicodedata.normalize("NFC", q.lower())
     words = "".join(c if _in_word(c) else " " for c in text).split()
+    # A word of marks alone yields no lexeme, and `:*` with no operand is a
+    # `to_tsquery` syntax error.
+    words = [w for w in words if any(unicodedata.category(c)[0] in "LN" for c in w)]
     return [w[:MAX_TERM_LENGTH] for w in words][:MAX_SEARCH_TERMS]
 
 
@@ -64,7 +67,8 @@ def prefix_terms(terms: list[str]) -> list[str]:
     return [f"{term}:*" for term in terms]
 
 
-def fuzzy_text(terms: list[str]) -> str | None:
-    """The text compared for near spellings, or None when too short to be useful."""
-    text = " ".join(terms)
-    return text if len(text) >= MIN_FUZZY_CHARS else None
+def fuzzy_terms(terms: list[str]) -> list[str]:
+    """The terms long enough to be matched as near spellings, each of which must
+    be near. A shorter word has too few trigrams to tell a typo from noise, so
+    the near tier leaves it to the exact and prefix tiers."""
+    return [term for term in terms if len(term) >= MIN_FUZZY_CHARS]

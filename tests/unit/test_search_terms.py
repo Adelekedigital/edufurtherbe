@@ -6,7 +6,7 @@ from app.domain.search import (
     MAX_SEARCH_TERMS,
     MAX_TERM_LENGTH,
     MIN_FUZZY_CHARS,
-    fuzzy_text,
+    fuzzy_terms,
     has_operators,
     prefix_terms,
     search_terms,
@@ -45,15 +45,15 @@ def test_every_term_becomes_a_prefix_pattern() -> None:
     assert prefix_terms([]) == []
 
 
-def test_a_short_query_is_not_matched_fuzzily() -> None:
+def test_a_short_word_is_not_matched_fuzzily() -> None:
     """Three letters are too few trigrams to tell a typo from noise."""
-    assert fuzzy_text(["abc"]) is None
-    assert fuzzy_text(["abcd"]) == "abcd"
+    assert fuzzy_terms(["abc"]) == []
+    assert fuzzy_terms(["abcd"]) == ["abcd"]
     assert len("abcd") == MIN_FUZZY_CHARS
 
 
-def test_fuzzy_text_joins_the_terms() -> None:
-    assert fuzzy_text(["harvrd", "univ"]) == "harvrd univ"
+def test_each_long_word_is_its_own_fuzzy_term() -> None:
+    assert fuzzy_terms(["harvrd", "at", "univ"]) == ["harvrd", "univ"]
 
 
 def test_a_negation_or_phrase_is_an_operator_query() -> None:
@@ -69,3 +69,11 @@ def test_a_negation_after_punctuation_is_still_a_negation() -> None:
 def test_a_hyphenated_word_is_not_a_negation() -> None:
     assert not has_operators("Smith-Jones")
     assert not has_operators("harv univ")
+
+
+def test_a_mark_with_no_letter_is_not_a_term() -> None:
+    """A lone combining mark yields no lexeme, and `:*` with no operand is a
+    `to_tsquery` syntax error (Codex on #328)."""
+    assert search_terms("́") == []
+    assert search_terms("́́ ok") == ["ok"]
+    assert search_terms("á") == ["á"]
