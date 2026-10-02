@@ -62,13 +62,31 @@ def search_terms(q: str) -> list[str]:
     return [w[:MAX_TERM_LENGTH] for w in words][:MAX_SEARCH_TERMS]
 
 
+def search_groups(q: str) -> list[list[str]]:
+    """The query's terms, split on `or` the way `websearch_to_tsquery` reads it.
+
+    An `or` between two words is a disjunction; at either end it is a word. Each
+    group must match in full and any group will do, so the forgiving tiers keep
+    the boolean shape the exact tier already has.
+    """
+    terms = search_terms(q)
+    groups: list[list[str]] = [[]]
+    for n, term in enumerate(terms):
+        if term == "or" and groups[-1] and n < len(terms) - 1:
+            groups.append([])
+        else:
+            groups[-1].append(term)
+    return [group for group in groups if group]
+
+
 def prefix_terms(terms: list[str]) -> list[str]:
     """Each term as a `to_tsquery` prefix pattern; the store ANDs them."""
     return [f"{term}:*" for term in terms]
 
 
-def fuzzy_terms(terms: list[str]) -> list[str]:
-    """The terms long enough to be matched as near spellings, each of which must
-    be near. A shorter word has too few trigrams to tell a typo from noise, so
-    the near tier leaves it to the exact and prefix tiers."""
-    return [term for term in terms if len(term) >= MIN_FUZZY_CHARS]
+def fuzzy_terms(terms: list[str]) -> tuple[list[str], list[str]]:
+    """`(near, present)`: the terms long enough to be matched as near spellings,
+    and the shorter ones, which have too few trigrams to tell a typo from noise
+    and so must be present as a prefix instead."""
+    near = [term for term in terms if len(term) >= MIN_FUZZY_CHARS]
+    return near, [term for term in terms if len(term) < MIN_FUZZY_CHARS]

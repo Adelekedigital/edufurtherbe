@@ -307,3 +307,45 @@ async def test_every_word_of_a_near_spelling_must_be_near(
 
     assert str(mentor) not in await ids(api_client, "scholarship zebrafish")
     assert str(mentor) in await ids(api_client, "scholarshp enginers")
+
+
+async def test_a_short_word_still_binds_a_near_spelling(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Too short to be near-matched, "MIT" must still be present as a prefix
+    (Codex on #328)."""
+    harvard_only = await make_bookable_mentor(db_engine, "fz-mit-no")
+    await add_education(db_engine, harvard_only, school="Harvard University")
+    both = await make_bookable_mentor(db_engine, "fz-mit-yes")
+    await add_education(db_engine, both, school="Harvard University")
+    await set_headline(db_engine, both, "MIT alumni mentor")
+
+    found = await ids(api_client, "MIT Harvrd")
+
+    assert str(both) in found
+    assert str(harvard_only) not in found
+
+
+async def test_a_stop_word_does_not_block_a_near_spelling(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "fz-near-stop")
+    await add_education(db_engine, mentor, school="Oxford University", course="Chemistry")
+
+    assert str(mentor) in await ids(api_client, "chemistry at oxforrd")
+
+
+async def test_or_keeps_typo_tolerance_on_each_side(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`OR` is a disjunction to the exact parser; the forgiving tiers must not
+    AND it away (Codex on #328)."""
+    harvard = await make_bookable_mentor(db_engine, "fz-or-harvard")
+    await add_education(db_engine, harvard, school="Harvard University")
+    oxford = await make_bookable_mentor(db_engine, "fz-or-oxford")
+    await add_education(db_engine, oxford, school="Oxford University")
+
+    found = await ids(api_client, "Harvrd OR Oxford")
+
+    assert str(harvard) in found
+    assert str(oxford) in found

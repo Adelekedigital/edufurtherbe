@@ -62,7 +62,7 @@ from app.domain.search import (
     fuzzy_terms,
     has_operators,
     prefix_terms,
-    search_terms,
+    search_groups,
 )
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.education import EducationEntry, Institution
@@ -299,19 +299,40 @@ def _tiers(term: str) -> list[tuple[Any, Any]]:
     tiers = [(document.op("@@")(_matches(term)), func.ts_rank_cd(document, _matches(term)))]
     if has_operators(term):
         return tiers
-    terms = search_terms(term)
-    if terms:
-        query = _prefix(terms)
+    groups = search_groups(term)
+    if groups:
+        query = reduce(lambda a, b: a.op("||")(b), (_prefix(group) for group in groups))
         tiers.append((document.op("@@")(query), func.ts_rank_cd(document, query)))
-    near = fuzzy_terms(terms)
+    near = [n for n in (_near(group, document) for group in groups) if n is not None]
     if near:
-        # Per word, like the other tiers: joined into one string, a single
-        # close word carried an absent one past the floor. Scored by the
-        # weakest word.
-        text = _fuzzy_text()
-        scores = [func.strict_word_similarity(word, text) for word in near]
-        tiers.append((and_(*(score >= FUZZY_FLOOR for score in scores)), func.least(*scores)))
+        tiers.append(
+            (
+                or_(*(condition for condition, _ in near)),
+                func.greatest(*(case((condition, score), else_=0) for condition, score in near)),
+            )
+        )
     return tiers
+
+
+def _near(group: list[str], document: Any) -> tuple[Any, Any] | None:
+    """One `or` group as a near spelling, or None when it has no long word.
+
+    Per word, like the other tiers: every long word must clear the floor (a
+    single close word must not carry an absent one) and every short word must be
+    present as a prefix (`MIT Harvrd` needs MIT). Scored by the weakest word.
+    """
+    long, short = fuzzy_terms(group)
+    if not long:
+        return None
+    text = _fuzzy_text()
+    scores = [func.strict_word_similarity(word, text) for word in long]
+    conditions = [score >= FUZZY_FLOOR for score in scores]
+    if short:
+        # Short words that are all stop words make an empty query, which
+        # matches nothing; they are no requirement at all.
+        query = _prefix(short)
+        conditions.append(or_(func.numnode(query) == 0, document.op("@@")(query)))
+    return and_(*conditions), func.least(*scores)
 
 
 def _search_match(term: str) -> Any:
