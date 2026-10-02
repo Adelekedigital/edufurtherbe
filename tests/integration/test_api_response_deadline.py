@@ -229,15 +229,12 @@ async def test_a_confirmed_session_is_never_expired(
     assert await status_of(db_engine, request["id"]) == "confirmed"
 
 
-async def test_a_session_with_no_deadline_is_never_expired(
+async def test_a_request_with_no_deadline_is_not_expired_before_it_starts(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Auto-confirmed sessions and every migrated row carry a null `respond_by`.
-
-    `NULL <= now()` is unknown rather than true, so the comparison alone would
-    already exclude them — the explicit `IS NOT NULL` is there so a reader does
-    not have to work that out, and so the index predicate and the query agree.
-    """
+    """Every migrated request carries a null `respond_by`. Its deadline is its
+    start (`COALESCE(respond_by, starts_at)`), so one still ahead is left alone;
+    `test_undated_requests` covers the one whose session has begun."""
     request = await a_request(db_engine, api_client, "rb-nodeadline", confirmation=False)
     async with db_engine.begin() as conn:
         await conn.execute(
