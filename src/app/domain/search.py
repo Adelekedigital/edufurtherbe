@@ -3,8 +3,8 @@
 Explore matches a query three ways, and ranks them in this order: the exact
 word (full-text, stemmed for prose), a prefix of it ("harv" → Harvard), and a
 near spelling ("Harvrd" → Harvard). The last two are built from **terms**: the
-query's words, lowercased, with every character that is not a letter or a
-digit dropped. That is what makes them safe to hand to `to_tsquery`, whose
+query's words, lowercased, with every character that is not a letter, a
+digit or a combining mark dropped. That is what makes them safe to hand to `to_tsquery`, whose
 syntax (`& | ! ( ) : * <->`) would otherwise be user-controlled, and it is
 bound as a parameter besides.
 """
@@ -12,6 +12,7 @@ bound as a parameter besides.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 #: More words than this adds nothing a mentee means and only costs the query.
 MAX_SEARCH_TERMS = 8
@@ -20,19 +21,18 @@ MAX_TERM_LENGTH = 40
 #: Below four characters a query has too few trigrams to tell a typo from
 #: noise — "abc" is near-similar to half the directory.
 MIN_FUZZY_CHARS = 4
-#: The `word_similarity` floor for the near-spelling tier, explicit rather than
-#: `pg_trgm.word_similarity_threshold`, which nothing in this repository sets.
-#: Measured: "harvrd" scores 0.71 against "harvard university" and
-#: "scholarshp" 0.73 against "scholarship", while an unrelated word
-#: ("zebrafish") stays under 0.3 against a typical card.
-FUZZY_FLOOR = 0.5
+#: The `strict_word_similarity` floor for the near-spelling tier, explicit
+#: rather than `pg_trgm.strict_word_similarity_threshold`, which nothing in this
+#: repository sets. Strict scoring compares whole words, so a word inside
+#: another one is not a near spelling. Measured: "harvrd" scores 0.50 against
+#: "harvard university", "scholarshp" 0.64 and "oxforrd" 0.67 against their
+#: words, while "mark" in "nigeria denmark" and "hard" in "richard dawson" are
+#: 0.30 (both 0.60 under plain `word_similarity`).
+FUZZY_FLOOR = 0.45
 
-#: A letter or digit in any script; underscore is the one `\w` character that
-#: is neither, and `to_tsquery` would split on it.
-_TERM = re.compile(r"[^\W_]+")
-#: `websearch_to_tsquery`'s operators: a word-leading `-` negates and a quote
-#: makes a phrase. A hyphen inside a word ("Smith-Jones") is neither.
-_OPERATOR = re.compile(r'(?:^|\s)-\S|"')
+#: `websearch_to_tsquery`'s operators: a `-` that starts a word negates it and a
+#: quote makes a phrase. A hyphen inside a word ("Smith-Jones") is neither.
+_OPERATOR = re.compile(r'(?:^|[^\w])-\w|"')
 
 
 def has_operators(q: str) -> bool:
@@ -45,15 +45,23 @@ def has_operators(q: str) -> bool:
     return _OPERATOR.search(q) is not None
 
 
+def _in_word(char: str) -> bool:
+    """A letter, a digit, or a combining mark: Devanagari vowel signs and Arabic
+    harakat are marks, and dropping them splits a word into its letters."""
+    return unicodedata.category(char)[0] in "LNM"
+
+
 def search_terms(q: str) -> list[str]:
-    """The query's words, lowercased and stripped to letters and digits."""
-    terms = [t[:MAX_TERM_LENGTH] for t in _TERM.findall(q.lower())]
-    return terms[:MAX_SEARCH_TERMS]
+    """The query's words, NFC-composed, lowercased, and stripped to letters,
+    digits and the marks inside them."""
+    text = unicodedata.normalize("NFC", q.lower())
+    words = "".join(c if _in_word(c) else " " for c in text).split()
+    return [w[:MAX_TERM_LENGTH] for w in words][:MAX_SEARCH_TERMS]
 
 
-def prefix_query(terms: list[str]) -> str | None:
-    """A `to_tsquery` that matches every term as a prefix, or None for no terms."""
-    return " & ".join(f"{term}:*" for term in terms) if terms else None
+def prefix_terms(terms: list[str]) -> list[str]:
+    """Each term as a `to_tsquery` prefix pattern; the store ANDs them."""
+    return [f"{term}:*" for term in terms]
 
 
 def fuzzy_text(terms: list[str]) -> str | None:

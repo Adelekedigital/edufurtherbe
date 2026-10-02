@@ -173,6 +173,8 @@ async def test_total_and_paging_agree_with_the_fuzzy_match_set(
         "))) (((",
         "<-> !!",
         "Ñandú São Paulo",
+        "राम",
+        "lovelace (-harvard",
         "x" * 200,
     ],
 )
@@ -183,7 +185,7 @@ async def test_hostile_input_never_breaks_the_search(
 
     response = await api_client.get(URL, params={"q": query})
 
-    assert response.status_code in (200, 422), response.text
+    assert response.status_code == 200, response.text
 
 
 async def test_a_negated_word_still_excludes_the_mentor(
@@ -228,3 +230,66 @@ async def test_a_stop_word_does_not_block_a_prefix_match_in_prose(
         )
 
     assert str(mentor) in await ids(api_client, "at harv")
+
+
+async def test_a_word_inside_another_word_is_not_a_near_spelling(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`word_similarity` scored "mark" 0.6 against "denmark"; strict scoring
+    compares whole words and puts it at 0.3, under the floor."""
+    mentor = await make_bookable_mentor(db_engine, "fz-denmark")
+    await set_headline(db_engine, mentor, "Nigeria Denmark")
+
+    assert str(mentor) not in await ids(api_client, "mark")
+
+
+async def test_near_spellings_still_match_under_strict_scoring(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    oxford = await make_bookable_mentor(db_engine, "fz-strict-oxford")
+    await set_headline(db_engine, oxford, "Oxforrd admissions")
+
+    assert str(oxford) in await ids(api_client, "oxford")
+
+
+async def test_a_phrase_spanning_fields_matches_and_outranks_a_weaker_prefix(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Each word is a prefix under both configurations, and the stop word "at"
+    is dropped, so a course and a school in different fields both count.
+
+    Created first, so it can only lead by rank: ties break on id descending.
+    """
+    strong = await make_bookable_mentor(db_engine, "fz-phrase-strong")
+    await add_education(db_engine, strong, school="Oxford University", course="Chemistry")
+    weak = await make_bookable_mentor(db_engine, "fz-phrase-weak")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, about_me) "
+                "VALUES (:u, 'Chemistryland near Oxfordshire')"
+            ),
+            {"u": weak},
+        )
+
+    found = await ids(api_client, "chemistry at oxford")
+
+    assert str(strong) in found
+    assert found.index(str(strong)) < found.index(str(weak))
+
+
+async def test_an_inflected_word_beside_a_partial_one_matches_stemmed_prose(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The bio indexed "studied" as `studi`. A `simple` prefix "studying:*"
+    cannot reach it; the `english` half of the term, `studi:*`, does."""
+    mentor = await make_bookable_mentor(db_engine, "fz-inflected")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, about_me) VALUES (:u, 'I studied at Harvard')"
+            ),
+            {"u": mentor},
+        )
+
+    assert str(mentor) in await ids(api_client, "studying harv")

@@ -8,7 +8,7 @@ from app.domain.search import (
     MIN_FUZZY_CHARS,
     fuzzy_text,
     has_operators,
-    prefix_query,
+    prefix_terms,
     search_terms,
 )
 
@@ -24,6 +24,14 @@ def test_query_syntax_never_survives_into_a_term() -> None:
 
 def test_letters_from_any_script_are_kept() -> None:
     assert search_terms("Ñandú São") == ["ñandú", "são"]
+    # Combining marks are part of the word: the vowel signs in Devanagari and
+    # the harakat in vocalised Arabic.
+    assert search_terms("राम शर्मा") == ["राम", "शर्मा"]
+    assert search_terms("مُحَمَّد") == ["مُحَمَّد"]
+
+
+def test_a_decomposed_accent_is_composed() -> None:
+    assert search_terms("São") == ["são"]
 
 
 def test_terms_are_bounded_in_number_and_length() -> None:
@@ -32,12 +40,9 @@ def test_terms_are_bounded_in_number_and_length() -> None:
     assert all(len(t) <= MAX_TERM_LENGTH for t in search_terms("z" * 500))
 
 
-def test_the_prefix_query_ands_every_term_as_a_prefix() -> None:
-    assert prefix_query(["harv", "univ"]) == "harv:* & univ:*"
-
-
-def test_no_terms_means_no_prefix_query() -> None:
-    assert prefix_query([]) is None
+def test_every_term_becomes_a_prefix_pattern() -> None:
+    assert prefix_terms(["harv", "univ"]) == ["harv:*", "univ:*"]
+    assert prefix_terms([]) == []
 
 
 def test_a_short_query_is_not_matched_fuzzily() -> None:
@@ -55,6 +60,10 @@ def test_a_negation_or_phrase_is_an_operator_query() -> None:
     assert has_operators("Lovelace -Harvard")
     assert has_operators("-Harvard")
     assert has_operators('"harvard university"')
+
+
+def test_a_negation_after_punctuation_is_still_a_negation() -> None:
+    assert has_operators("lovelace (-harvard")
 
 
 def test_a_hyphenated_word_is_not_a_negation() -> None:

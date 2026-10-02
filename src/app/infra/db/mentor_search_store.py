@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Sequence
+from functools import reduce
 from typing import Any
 from uuid import UUID
 
@@ -51,6 +52,7 @@ from sqlalchemy import (
     true,
     tuple_,
 )
+from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.availability import BookingWindow
@@ -58,7 +60,7 @@ from app.domain.search import (
     FUZZY_FLOOR,
     fuzzy_text,
     has_operators,
-    prefix_query,
+    prefix_terms,
     search_terms,
 )
 from app.infra.db.models.availability import MentorNextAvailability
@@ -209,7 +211,6 @@ def _document() -> Any:
     this document and the qualification lateral, and only the document is what a
     stored column removes.
     """
-    education = _education_text()
 
     def weight(vector: Any, label: str) -> Any:
         """`setweight` takes Postgres's internal `"char"`, not `varchar`.
@@ -222,23 +223,29 @@ def _document() -> Any:
         """
         return func.setweight(vector, literal_column(f"'{label}'"))
 
-    def simple(column: Any) -> Any:
-        return func.to_tsvector(SIMPLE, func.coalesce(column, ""))
+    fields = [*_card_fields(), (UserProfile.about_me, "D", ENGLISH)]
+    vectors = [weight(func.to_tsvector(c, func.coalesce(f, "")), w) for f, w, c in fields]
+    return reduce(lambda a, b: a.op("||")(b), vectors)
 
-    def english(column: Any) -> Any:
-        return func.to_tsvector(ENGLISH, func.coalesce(column, ""))
 
-    return (
+def _card_fields() -> list[tuple[Any, str, str]]:
+    """Every searchable field but the bio, as `(text, weight, configuration)`.
+
+    The one list both the full-text document and the near-spelling text read,
+    so a field cannot be searchable one way and not the other. The document adds
+    the bio; the near tier leaves it out, because long prose is near-similar to
+    almost anything.
+    """
+    return [
         # `concat_ws`, not `+`: both names are nullable, and one null made the
         # whole name unsearchable.
-        weight(simple(func.concat_ws(" ", User.first_name, User.last_name)), "A")
-        .op("||")(weight(english(MentorProfile.headline), "B"))
-        .op("||")(weight(english(MentorProfile.primary_study_program), "B"))
-        .op("||")(weight(simple(education), "C"))
-        .op("||")(weight(simple(_STUDY_COUNTRY.c.display_name), "C"))
-        .op("||")(weight(simple(_ORIGIN_COUNTRY.c.display_name), "C"))
-        .op("||")(weight(english(UserProfile.about_me), "D"))
-    )
+        (func.concat_ws(" ", User.first_name, User.last_name), "A", SIMPLE),
+        (MentorProfile.headline, "B", ENGLISH),
+        (MentorProfile.primary_study_program, "B", ENGLISH),
+        (_education_text(), "C", SIMPLE),
+        (_STUDY_COUNTRY.c.display_name, "C", SIMPLE),
+        (_ORIGIN_COUNTRY.c.display_name, "C", SIMPLE),
+    ]
 
 
 def _matches(term: str) -> Any:
@@ -255,20 +262,28 @@ def _matches(term: str) -> Any:
 
 
 def _fuzzy_text() -> Any:
-    """What a near spelling is compared with: names, headline, programme,
-    schools and countries. The bio is left out — long prose is near-similar to
-    almost anything, which is the noise the floor exists to keep out.
+    """What a near spelling is compared with: the card fields, without the bio."""
+    return func.concat_ws(" ", *(field for field, _, _ in _card_fields()))
+
+
+def _prefix(terms: list[str]) -> Any:
+    """Every term as a prefix, each under both configurations, ANDed (#227).
+
+    Per term, so a course indexed `simple` and a word in a prose field indexed
+    `english` can both satisfy one query. A term `english` reads as a stop word
+    ("at") is dropped: the prose fields never indexed it, so requiring it would
+    fail any match there. An empty tsquery is the identity for `&&`.
     """
-    return func.concat_ws(
-        " ",
-        User.first_name,
-        User.last_name,
-        MentorProfile.headline,
-        MentorProfile.primary_study_program,
-        _education_text(),
-        _STUDY_COUNTRY.c.display_name,
-        _ORIGIN_COUNTRY.c.display_name,
-    )
+    parts: list[Any] = []
+    for pattern in prefix_terms(terms):
+        english = func.to_tsquery(ENGLISH, pattern)
+        parts.append(
+            case(
+                (func.numnode(english) == 0, cast(literal(""), TSQUERY)),
+                else_=func.to_tsquery(SIMPLE, pattern).op("||")(english),
+            )
+        )
+    return reduce(lambda a, b: a.op("&&")(b), parts)
 
 
 def _tiers(term: str) -> list[tuple[Any, Any]]:
@@ -284,15 +299,12 @@ def _tiers(term: str) -> list[tuple[Any, Any]]:
     if has_operators(term):
         return tiers
     terms = search_terms(term)
-    prefix = prefix_query(terms)
-    if prefix is not None:
-        # Both configurations, as `_matches` does: `english` drops stop words
-        # and stems, which is how the prose fields were indexed.
-        query = func.to_tsquery(SIMPLE, prefix).op("||")(func.to_tsquery(ENGLISH, prefix))
+    if terms:
+        query = _prefix(terms)
         tiers.append((document.op("@@")(query), func.ts_rank_cd(document, query)))
     near = fuzzy_text(terms)
     if near is not None:
-        similarity = func.word_similarity(near, _fuzzy_text())
+        similarity = func.strict_word_similarity(near, _fuzzy_text())
         tiers.append((similarity >= FUZZY_FLOOR, similarity))
     return tiers
 
