@@ -683,3 +683,145 @@ async def test_a_same_date_re_pause_sends_the_rearmed_stage_once(
     second = await drained(db_engine, migrated_database, local(week, 10))
 
     assert first + second == ["mentor_return_reminder"]
+
+
+# --------------------------------------------------------------------------
+# A late run sends only the latest due stage (review, 2026-10-01)
+# --------------------------------------------------------------------------
+
+
+async def payload_of(engine: AsyncEngine, mentor: UUID) -> list[dict[str, Any]]:
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT payload FROM outbox_events "
+                "WHERE event_type = 'mentor_return_reminder' AND entity_id = :u "
+                "ORDER BY created_at"
+            ),
+            {"u": mentor},
+        )
+        return [dict(r[0]) for r in rows]
+
+
+async def test_a_run_after_a_gap_sends_only_the_current_stage(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """The week stage was missed; at D-2 the three-day stage is due. One email,
+    `daysUntilReturn` 3 — never a late "7 days" followed by "3 days"."""
+    back = local_today() + dt.timedelta(days=10)
+    mentor = await paused_until(db_engine, api_client, "gap", back, stage=7)
+    late = local(back - dt.timedelta(days=2), 8)
+
+    assert await sweep(db_engine, late) == 1
+    assert await sweep(db_engine, local(back - dt.timedelta(days=2), 9)) == 0
+    sent = await drained(db_engine, migrated_database, late)
+
+    queued = await payload_of(db_engine, mentor)
+    assert sent == ["mentor_return_reminder"]
+    assert [p["days_until_return"] for p in queued] == ["3"]
+    assert await stage_of(db_engine, mentor) == 0
+
+
+async def test_a_queued_stage_overtaken_by_a_later_one_is_dropped(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """Queued "7 days" still undelivered when "3 days" comes due: stale."""
+    back = local_today() + dt.timedelta(days=10)
+    mentor = await paused_until(db_engine, api_client, "overtaken", back, stage=7)
+    assert await sweep(db_engine, local(back - dt.timedelta(days=7), 8)) == 1
+
+    sent = await drained(db_engine, migrated_database, local(back - dt.timedelta(days=3), 9))
+
+    assert sent == []
+    assert await reminders(db_engine, mentor) == 1
+
+
+# --------------------------------------------------------------------------
+# An undated pause: nudges at 30 and 59 days (owner, 2026-10-01)
+# --------------------------------------------------------------------------
+
+
+async def test_an_undated_pause_is_nudged_on_day_thirty_and_day_fifty_nine(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor, headers = await a_mentor(db_engine, "undated")
+    await api_client.post(pause_url(mentor), headers=headers)
+    began = local_today()
+
+    assert await stage_of(db_engine, mentor) == 30
+    runs = [
+        await sweep(db_engine, local(began + dt.timedelta(days=30), 7, 59)),
+        await sweep(db_engine, local(began + dt.timedelta(days=30), 8)),
+        await sweep(db_engine, local(began + dt.timedelta(days=30), 9)),
+        await sweep(db_engine, local(began + dt.timedelta(days=59), 8)),
+        await sweep(db_engine, local(began + dt.timedelta(days=59), 9)),
+    ]
+
+    assert runs == [0, 1, 0, 1, 0]
+    queued = await payload_of(db_engine, mentor)
+    assert [p.get("days_paused") for p in queued] == ["30", "59"]
+    assert all(p["return_on"] == "" for p in queued)
+
+
+async def test_a_resume_before_day_thirty_sends_no_nudge(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor, headers = await a_mentor(db_engine, "undated-resume")
+    await api_client.post(pause_url(mentor), headers=headers)
+    await api_client.post(f"/api/v1/users/{mentor}/mentor-profile/resume", headers=headers)
+
+    assert await sweep(db_engine, local(local_today() + dt.timedelta(days=30), 9)) == 0
+    assert await reminders(db_engine, mentor) == 0
+
+
+async def test_setting_a_date_switches_to_the_dated_cadence(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Paused with no date, then a date set: 7/3/0 for that date, and no
+    30-day nudge any more."""
+    mentor, headers = await a_mentor(db_engine, "undated-then-dated")
+    await api_client.post(pause_url(mentor), headers=headers)
+    back = local_today() + dt.timedelta(days=20)
+    await api_client.post(pause_url(mentor), json={"return_on": back.isoformat()}, headers=headers)
+
+    assert await stage_of(db_engine, mentor) == 7
+    assert await sweep(db_engine, local(back - dt.timedelta(days=7), 8)) == 1
+    # By day 30 the date itself has passed: only the dated day-of is due.
+    await sweep(db_engine, local(local_today() + dt.timedelta(days=30), 9))
+    queued = await payload_of(db_engine, mentor)
+    assert [p.get("days_until_return") for p in queued] == ["7", "0"]
+    assert not any(p.get("days_paused") for p in queued)
+
+
+# --------------------------------------------------------------------------
+# The due moment, through Python and SQL at the boundary (rule 8)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("minute_after_seven", "armed", "sent"),
+    [(59, 7, 1), (60, 3, 0)],
+    ids=["07:59 arms the week stage", "08:00 has passed it"],
+)
+async def test_the_due_moment_agrees_in_python_and_sql(
+    db_engine: AsyncEngine, minute_after_seven: int, armed: int, sent: int
+) -> None:
+    """At 07:59 on D-7, Python arms the week stage (still ahead) and SQL sends
+    it at 08:00. At 08:00 itself, Python skips it (not ahead) and SQL, asked
+    at the same instant, has nothing due. One moment, stated twice, agreeing."""
+    tag = f"boundary-{minute_after_seven}"
+    mentor = await make_user(db_engine, uuid4(), f"{tag}@example.com")
+    await add_mentor(db_engine, mentor, approved=True)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET timezone = :z WHERE id = :u"), {"z": ZONE, "u": mentor}
+        )
+    back = dt.date(2026, 11, 20)
+    when = local(back - dt.timedelta(days=7), 7) + dt.timedelta(minutes=minute_after_seven)
+
+    async with AsyncSession(db_engine) as session:
+        assert await pause(session, user_id=mentor, now=when, return_on=back) == "paused"
+        await session.commit()
+
+    assert await stage_of(db_engine, mentor) == armed
+    assert await sweep(db_engine, local(back - dt.timedelta(days=7), 8)) == sent

@@ -22,7 +22,6 @@ from uuid import UUID
 from sqlalchemy import (
     ColumnElement,
     and_,
-    case,
     exists,
     func,
     insert,
@@ -37,16 +36,16 @@ from app.core.errors import ValidationError
 from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
 from app.domain.listing import (
     RETURN_ON_POINTER,
-    RETURN_REMINDER_OFFSETS,
     first_reminder_stage,
     return_on_problem,
-    stage_after,
     stage_before,
 )
 from app.domain.notifications import Notification
 from app.infra.db.mentor_listing import (
     newest_unlisting_is_self,
     paused_by_mentor,
+    paused_on,
+    pending_after_claim,
     reminder_eligible,
     return_reminder_due,
 )
@@ -319,8 +318,18 @@ async def pause(
             created_by=user_id,
             reason=UnlistedReason.MENTOR_PAUSED.value,
         )
-    # The stages for this date start again, skipping any already behind us.
-    stage = None if return_on is None else first_reminder_stage(return_on, local_now)
+    # The stages start again for this pause, dated or not, skipping any
+    # already behind us. An undated pause counts from when it began, which the
+    # event log holds — so re-pausing keeps the original start.
+    began = (
+        await session.execute(
+            select(paused_on())
+            .select_from(MentorProfile)
+            .join(User, User.id == MentorProfile.user_id)
+            .where(MentorProfile.user_id == user_id)
+        )
+    ).scalar_one()
+    stage = first_reminder_stage(return_on=return_on, paused_on=began, local_now=local_now)
     if not await _set_return(session, user_id, return_on, stage):
         return "absent"
     return "paused"
@@ -346,20 +355,17 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
     """Queue each self-paused mentor's return reminder whose stage has come.
 
     **A reminder, never a switch** (Calendar request, 2026-10-01): nobody is
-    relisted here. One template on three stages (`RETURN_REMINDER_OFFSETS`: a week, three days, the
-    day), each at `RETURN_REMINDER_HOUR` in the mentor's own zone — the first
-    hourly run at or after it — while they are still paused by themselves.
+    relisted here. One template on two cadences (`domain.listing`): a dated
+    pause at 7, 3 and 0 days before its date, an undated one at 30 and 59 days
+    after it began — each at `RETURN_REMINDER_HOUR` in the mentor's own zone,
+    the first hourly run at or after it, while they are still paused by
+    themselves.
 
     **Claimed in one `UPDATE … RETURNING`**, which is what makes each stage
-    send once: the claim steps the pending stage to the next, so two
-    overlapping runs cannot both claim it and a re-run finds it moved on. Does
-    not commit.
+    send once: the claim moves the pending stage past the latest due one, so
+    two overlapping runs cannot both claim it, a re-run finds it moved on, and
+    a run after a gap sends only the current stage. Does not commit.
     """
-    following = case(
-        {offset: stage_after(offset) for offset in RETURN_REMINDER_OFFSETS},
-        value=MentorProfile.return_reminder_stage,
-        else_=None,
-    )
     claimed = (
         await session.execute(
             update(MentorProfile)
@@ -369,7 +375,9 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
                 MentorProfile.return_reminder_stage.is_not(None),
                 return_reminder_due(now),
             )
-            .values(return_reminder_stage=following)
+            # Past the **latest** due stage, so a run after a gap sends only
+            # the current one: never "7 days" late with "3 days" an hour after.
+            .values(return_reminder_stage=pending_after_claim(now))
             .returning(
                 MentorProfile.user_id,
                 MentorProfile.return_on,
@@ -378,14 +386,20 @@ async def remind_returning_mentors(session: AsyncSession, *, now: dt.datetime) -
         )
     ).all()
     for user_id, return_on, pending in claimed:
-        sent = stage_before(pending)
+        dated = return_on is not None
+        sent = stage_before(pending, dated=dated)
+        variables = (
+            {"return_on": return_on.isoformat(), "stage": str(sent), "days_until_return": str(sent)}
+            if dated
+            else {"return_on": "", "stage": str(sent), "days_paused": str(sent)}
+        )
         await enqueue(
             session,
             Notification.MENTOR_RETURN_REMINDER,
             entity_type="mentor_profile",
             entity_id=user_id,
             recipient_ids=(user_id,),
-            variables={"return_on": return_on.isoformat(), "stage": str(sent)},
+            variables=variables,
         )
     return len(claimed)
 

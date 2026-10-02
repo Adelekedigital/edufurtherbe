@@ -231,16 +231,24 @@ addresses the mentee alone.
 `request_expired`, `calendar_disconnected`, `mentor_approved`, `mentor_declined`,
 **`review_requested`**, **`review_received`**, `mentor_return_reminder`.
 
-`mentor_return_reminder` (2026-10-01) is **one template sent on a three-step
-cadence** to a self-paused mentor, at 08:00 in their own zone: a week before the
-return date they gave, three days before, and on the day. A step already past
-when the pause is set is skipped, so a short pause may get only the last. The
+`mentor_return_reminder` (2026-10-01) is **one template for two cases**, sent to
+a self-paused mentor at 08:00 in their own zone. **The template must word both.**
+
+- **A pause with a return date:** sent a week before the date, three days
+  before, and on the day. `daysUntilReturn` is `7`, `3` or `0` and `returnOn` is
+  the date in words; `daysPaused` is empty.
+- **A pause with no date ("Not sure yet"):** sent 30 and 59 days after the pause
+  began. `daysPaused` is `30` or `59`; `daysUntilReturn` and `returnOn` are
+  empty.
+
+A step already past when the pause is set is skipped, and a run after a gap
+sends only the latest step due, so a short pause may get only the last. The
 template may use:
 
 - `recipientName`
-- `daysUntilReturn`: `7`, `3` or `0`, so the one email can say how far away the
-  return is (`0` is "today")
-- `returnOn`: the return date, in words (e.g. `Saturday 03 October 2026`)
+- `daysUntilReturn`: `7`, `3` or `0` (`0` is "today"), or empty with no date
+- `returnOn`: the return date in words (e.g. `Saturday 03 October 2026`), or empty
+- `daysPaused`: `30` or `59` with no date, else empty
 - `calendarUrl`: where they switch back on
 
 **The last two are the operationally urgent ones**, and this list is where an

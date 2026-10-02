@@ -8,7 +8,10 @@ import pytest
 
 from app.domain.listing import (
     RETURN_REMINDER_OFFSETS,
+    UNDATED_REMINDER_DAYS,
+    cadence,
     first_reminder_stage,
+    latest_due_stage,
     return_on_problem,
     stage_after,
     stage_before,
@@ -30,8 +33,13 @@ def test_not_sure_yet_is_always_allowed() -> None:
     assert return_on_problem(None, TODAY) is None
 
 
-def test_the_stages_run_a_week_three_days_and_the_day() -> None:
+def test_the_cadences_are_a_week_three_days_the_day_and_thirty_fifty_nine() -> None:
     assert RETURN_REMINDER_OFFSETS == (7, 3, 0)
+    assert UNDATED_REMINDER_DAYS == (30, 59)
+
+
+def at(day: dt.date, hour: int, minute: int = 0) -> dt.datetime:
+    return dt.datetime.combine(day, dt.time(hour, minute))
 
 
 @pytest.mark.parametrize(
@@ -40,24 +48,41 @@ def test_the_stages_run_a_week_three_days_and_the_day() -> None:
 )
 def test_the_first_stage_is_the_first_still_ahead(days_away: int, first: int) -> None:
     """A pause at noon: a stage whose 08:00 is today or earlier is skipped."""
-    noon = dt.datetime.combine(TODAY, dt.time(12))
+    back = TODAY + dt.timedelta(days=days_away)
 
-    assert first_reminder_stage(TODAY + dt.timedelta(days=days_away), noon) == first
+    assert first_reminder_stage(return_on=back, paused_on=TODAY, local_now=at(TODAY, 12)) == first
 
 
 def test_a_stage_due_later_today_is_still_ahead() -> None:
-    early = dt.datetime.combine(TODAY, dt.time(7))
+    back = TODAY + dt.timedelta(days=7)
 
-    assert first_reminder_stage(TODAY + dt.timedelta(days=7), early) == 7
+    assert first_reminder_stage(return_on=back, paused_on=TODAY, local_now=at(TODAY, 7)) == 7
 
 
-def test_the_steps_invert() -> None:
-    for offset in RETURN_REMINDER_OFFSETS:
-        assert stage_before(stage_after(offset)) == offset
+def test_an_undated_pause_counts_from_when_it_began() -> None:
+    assert first_reminder_stage(return_on=None, paused_on=TODAY, local_now=at(TODAY, 12)) == 30
+    later = TODAY + dt.timedelta(days=40)
+    assert first_reminder_stage(return_on=None, paused_on=TODAY, local_now=at(later, 12)) == 59
+
+
+@pytest.mark.parametrize(("days_before", "latest"), [(8, None), (7, 7), (5, 7), (2, 3), (0, 0)])
+def test_the_latest_due_stage_is_the_one_a_late_run_sends(
+    days_before: int, latest: int | None
+) -> None:
+    back = TODAY + dt.timedelta(days=10)
+    now = at(back - dt.timedelta(days=days_before), 9)
+
+    assert latest_due_stage(return_on=back, paused_on=TODAY, local_now=now) == latest
+
+
+@pytest.mark.parametrize("dated", [True, False])
+def test_the_steps_invert(dated: bool) -> None:
+    for offset in cadence(dated=dated):
+        assert stage_before(stage_after(offset, dated=dated), dated=dated) == offset
 
 
 def test_the_one_template_hears_how_far_away_the_return_is() -> None:
-    """One template on the whole cadence: the stage reaches it as a variable."""
+    """One template: a dated stage fills `daysUntilReturn` and `returnOn`."""
     from app.domain.messages import MessageContext, build_variables
 
     context = MessageContext(
@@ -66,13 +91,31 @@ def test_the_one_template_hears_how_far_away_the_return_is() -> None:
         mentor_name="",
         mentee_name="",
         app_base_url="https://app.example",
-        extras={"return_on": "2026-10-03", "stage": "3"},
+        extras={"return_on": "2026-10-03", "stage": "3", "days_until_return": "3"},
     )
 
-    built = build_variables(["daysUntilReturn", "returnOn", "calendarUrl"], context)
+    built = build_variables(["daysUntilReturn", "returnOn", "daysPaused", "calendarUrl"], context)
 
     assert built == {
         "daysUntilReturn": "3",
         "returnOn": "Saturday 03 October 2026",
+        "daysPaused": "",
         "calendarUrl": "https://app.example/calendar",
     }
+
+
+def test_the_same_template_hears_how_long_an_undated_pause_has_run() -> None:
+    from app.domain.messages import MessageContext, build_variables
+
+    context = MessageContext(
+        recipient_name="Ada",
+        recipient_timezone="UTC",
+        mentor_name="",
+        mentee_name="",
+        app_base_url="https://app.example",
+        extras={"return_on": "", "stage": "30", "days_paused": "30"},
+    )
+
+    built = build_variables(["daysUntilReturn", "returnOn", "daysPaused"], context)
+
+    assert built == {"daysUntilReturn": "", "returnOn": "", "daysPaused": "30"}

@@ -163,10 +163,15 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "sessionUrl": _session_url,
     "dashboardUrl": lambda c: f"{c.app_base_url.rstrip('/')}{DASHBOARD_PATH}",
     "calendarUrl": lambda c: f"{c.app_base_url.rstrip('/')}{CALENDAR_PATH}",
-    "returnOn": lambda c: dt.date.fromisoformat(
-        _needs(c.extras.get("return_on"), "returnOn")
-    ).strftime("%A %d %B %Y"),
-    "daysUntilReturn": lambda c: _needs(c.extras.get("stage"), "daysUntilReturn"),
+    # The return reminder is one template for a dated pause and an undated one,
+    # so the side that does not apply is deliberately empty, not refused.
+    "returnOn": lambda c: (
+        dt.date.fromisoformat(c.extras["return_on"]).strftime("%A %d %B %Y")
+        if c.extras.get("return_on")
+        else ""
+    ),
+    "daysUntilReturn": lambda c: c.extras.get("days_until_return", ""),
+    "daysPaused": lambda c: c.extras.get("days_paused", ""),
     "hours": _hours_left,
     "reasonTitle": lambda c: _needs(c.extras.get("reason_title"), "reasonTitle"),
     "reasonMessage": lambda c: _needs(c.extras.get("reason_text"), "reasonMessage"),
