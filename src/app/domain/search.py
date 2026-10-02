@@ -30,19 +30,37 @@ MIN_FUZZY_CHARS = 4
 #: 0.30 (both 0.60 under plain `word_similarity`).
 FUZZY_FLOOR = 0.45
 
-#: `websearch_to_tsquery`'s operators: a `-` that starts a word negates it and a
-#: quote makes a phrase. A hyphen inside a word ("Smith-Jones") is neither.
-_OPERATOR = re.compile(r'(?:^|[^\w])-\w|"')
+#: A possessive "'s" (straight or curly apostrophe) closing a word.
+_POSSESSIVE = re.compile(r"(?<=[^\W_])['\u2019]s\b")
 
 
 def has_operators(q: str) -> bool:
     """Whether `q` asks for an exclusion or a phrase.
 
+    `websearch_to_tsquery`'s operators: a `-` that starts a word negates it and a
+    quote makes a phrase. A hyphen inside a word ("Smith-Jones") is neither;
+    "inside" uses the same word characters as `search_terms`, after the same
+    NFC, so a composed and a decomposed spelling read alike.
+
     Such a query is searched exactly and nothing else: the forgiving tiers read
     words without polarity, so ORing them in would put an excluded word back
     and loosen a phrase into separate words.
     """
-    return _OPERATOR.search(q) is not None
+    text = unicodedata.normalize("NFC", q)
+    if '"' in text:
+        return True
+    return any(
+        char == "-" and not _ends_word(text[:n]) and n + 1 < len(text) and _in_word(text[n + 1])
+        for n, char in enumerate(text)
+    )
+
+
+def _ends_word(text: str) -> bool:
+    """Whether `text` ends inside a word: its trailing marks sit on a letter or
+    digit. Marks with no base are dropped by `search_terms`, so they are no word
+    and a dash after them still starts one."""
+    stripped = text.rstrip("".join(c for c in set(text) if unicodedata.category(c)[0] == "M"))
+    return bool(stripped) and unicodedata.category(stripped[-1])[0] in "LN"
 
 
 def _in_word(char: str) -> bool:
@@ -53,8 +71,9 @@ def _in_word(char: str) -> bool:
 
 def search_terms(q: str) -> list[str]:
     """The query's words, NFC-composed, lowercased, and stripped to letters,
-    digits and the marks inside them."""
-    text = unicodedata.normalize("NFC", q.lower())
+    digits and the marks inside them. A possessive "'s" goes with its word,
+    or the stray "s" would be required as a word of its own."""
+    text = _POSSESSIVE.sub("", unicodedata.normalize("NFC", q.lower()))
     words = "".join(c if _in_word(c) else " " for c in text).split()
     # A word of marks alone yields no lexeme, and `:*` with no operand is a
     # `to_tsquery` syntax error.
