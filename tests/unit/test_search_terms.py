@@ -7,6 +7,7 @@ from app.domain.search import (
     MAX_TERM_LENGTH,
     MIN_FUZZY_CHARS,
     fuzzy_text,
+    has_operators,
     prefix_query,
     search_terms,
 )
@@ -48,3 +49,14 @@ def test_a_short_query_is_not_matched_fuzzily() -> None:
 
 def test_fuzzy_text_joins_the_terms() -> None:
     assert fuzzy_text(["harvrd", "univ"]) == "harvrd univ"
+
+
+def test_a_negation_or_phrase_is_an_operator_query() -> None:
+    assert has_operators("Lovelace -Harvard")
+    assert has_operators("-Harvard")
+    assert has_operators('"harvard university"')
+
+
+def test_a_hyphenated_word_is_not_a_negation() -> None:
+    assert not has_operators("Smith-Jones")
+    assert not has_operators("harv univ")

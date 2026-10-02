@@ -184,3 +184,47 @@ async def test_hostile_input_never_breaks_the_search(
     response = await api_client.get(URL, params={"q": query})
 
     assert response.status_code in (200, 422), response.text
+
+
+async def test_a_negated_word_still_excludes_the_mentor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`-Harvard` is an exclusion. The forgiving tiers must not read it as a
+    positive prefix and OR everybody back in (Codex on #328)."""
+    harvard = await make_bookable_mentor(db_engine, "fz-neg-harvard")
+    await add_education(db_engine, harvard, school="Harvard University")
+    other = await make_bookable_mentor(db_engine, "fz-neg-other")
+    await add_education(db_engine, other, school="Oxford University")
+
+    found = await ids(api_client, "Lovelace -Harvard")
+
+    assert str(other) in found
+    assert str(harvard) not in found
+
+
+async def test_a_mentor_with_only_a_last_name_is_found_by_its_prefix(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Names are nullable. Joined with `+`, one null blanked both (Codex on #328)."""
+    mentor = await make_bookable_mentor(db_engine, "fz-null-first")
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET first_name = NULL WHERE id = :u"), {"u": mentor})
+
+    assert str(mentor) in await ids(api_client, "Lov")
+
+
+async def test_a_stop_word_does_not_block_a_prefix_match_in_prose(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The bio is `english`, which dropped "at"; the prefix query must too
+    (Codex on #328)."""
+    mentor = await make_bookable_mentor(db_engine, "fz-stopword")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, about_me) VALUES (:u, 'I studied at Harvard')"
+            ),
+            {"u": mentor},
+        )
+
+    assert str(mentor) in await ids(api_client, "at harv")

@@ -54,7 +54,13 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.availability import BookingWindow
-from app.domain.search import FUZZY_FLOOR, fuzzy_text, prefix_query, search_terms
+from app.domain.search import (
+    FUZZY_FLOOR,
+    fuzzy_text,
+    has_operators,
+    prefix_query,
+    search_terms,
+)
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
@@ -223,7 +229,9 @@ def _document() -> Any:
         return func.to_tsvector(ENGLISH, func.coalesce(column, ""))
 
     return (
-        weight(simple(User.first_name + literal(" ") + User.last_name), "A")
+        # `concat_ws`, not `+`: both names are nullable, and one null made the
+        # whole name unsearchable.
+        weight(simple(func.concat_ws(" ", User.first_name, User.last_name)), "A")
         .op("||")(weight(english(MentorProfile.headline), "B"))
         .op("||")(weight(english(MentorProfile.primary_study_program), "B"))
         .op("||")(weight(simple(education), "C"))
@@ -266,16 +274,21 @@ def _fuzzy_text() -> Any:
 def _tiers(term: str) -> list[tuple[Any, Any]]:
     """Each way `term` can match, best first, as `(condition, score)` pairs (#227).
 
-    Exact full-text, then every word as a prefix, then a near spelling. The
+    Exact full-text, then every word as a prefix, then a near spelling — or
+    exact alone for a query with a negation or a phrase (`has_operators`). The
     prefix and near tiers are built from sanitised terms (`domain.search`), so
     no query syntax a user types reaches `to_tsquery`; both are bound.
     """
     document = _document()
     tiers = [(document.op("@@")(_matches(term)), func.ts_rank_cd(document, _matches(term)))]
+    if has_operators(term):
+        return tiers
     terms = search_terms(term)
     prefix = prefix_query(terms)
     if prefix is not None:
-        query = func.to_tsquery(SIMPLE, prefix)
+        # Both configurations, as `_matches` does: `english` drops stop words
+        # and stems, which is how the prose fields were indexed.
+        query = func.to_tsquery(SIMPLE, prefix).op("||")(func.to_tsquery(ENGLISH, prefix))
         tiers.append((document.op("@@")(query), func.ts_rank_cd(document, query)))
     near = fuzzy_text(terms)
     if near is not None:

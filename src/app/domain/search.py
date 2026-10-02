@@ -30,6 +30,19 @@ FUZZY_FLOOR = 0.5
 #: A letter or digit in any script; underscore is the one `\w` character that
 #: is neither, and `to_tsquery` would split on it.
 _TERM = re.compile(r"[^\W_]+")
+#: `websearch_to_tsquery`'s operators: a word-leading `-` negates and a quote
+#: makes a phrase. A hyphen inside a word ("Smith-Jones") is neither.
+_OPERATOR = re.compile(r'(?:^|\s)-\S|"')
+
+
+def has_operators(q: str) -> bool:
+    """Whether `q` asks for an exclusion or a phrase.
+
+    Such a query is searched exactly and nothing else: the forgiving tiers read
+    words without polarity, so ORing them in would put an excluded word back
+    and loosen a phrase into separate words.
+    """
+    return _OPERATOR.search(q) is not None
 
 
 def search_terms(q: str) -> list[str]:
