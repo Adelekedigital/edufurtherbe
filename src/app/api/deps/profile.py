@@ -184,17 +184,11 @@ async def own_attributes(
         "goal": goal,
         "awards": await list_awards(session, user_id),
         "mentor_profile": mentor_profile,
-        # One grouped query, and only for somebody with a role to count: the
-        # route renders each half on the same predicate that gates it here.
-        "booking_counts": (
-            await booking_counts(session, user_id, dt.datetime.now(dt.UTC))
-            if mentor_profile is not None or goal is not None
-            else None
-        ),
-        # Fetched unconditionally and rendered conditionally. The predicate is
-        # "has a mentee goal", which the `goal` fetch above already answers, so
-        # branching here would mean ordering these two against each other for
-        # one `SUM` against an indexed column.
+        # One grouped query. Every caller has a role (`domain/roles.py`), so it
+        # always runs; the route renders each half on its own predicate.
+        "booking_counts": await booking_counts(session, user_id, dt.datetime.now(dt.UTC)),
+        # Fetched unconditionally and rendered on `is_mentee`, which the two
+        # fetches above already answer.
         "credits": await get_credit_summary(session, user_id, ladder=ladder),
         "mentee_completed_sessions": await mentee_completed_sessions(session, user_id),
     }

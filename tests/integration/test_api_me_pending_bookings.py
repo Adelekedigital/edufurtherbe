@@ -141,13 +141,37 @@ async def test_a_dual_role_user_gets_both_halves_kept_apart(
     }
 
 
-async def test_somebody_with_neither_role_gets_both_halves_null(
+async def test_a_mentee_without_a_goal_still_counts_their_requests(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    nobody = await a_user(db_engine)
-    headers = await sign_in(db_engine, nobody)
+    """Booking needs no goal, so the badge must not either (app-shell Round 2)."""
+    mentor = await make_bookable_mentor(db_engine, "counts-goalless")
+    mentee = await a_user(db_engine)
+    await a_session(db_engine, mentor, mentee, days_ahead=3)
+    headers = await sign_in(db_engine, mentee)
 
-    assert await counts(api_client, headers) == {"as_mentor": None, "as_mentee": None}
+    me = await api_client.get(URL, headers=headers)
+
+    assert me.status_code == 200, me.text
+    assert me.json()["booking_counts"] == {
+        "as_mentor": None,
+        "as_mentee": {"awaiting_mentor": 1, "upcoming": 0},
+    }
+    assert me.json()["credits"] is not None
+
+
+async def test_a_mentor_without_a_goal_gets_no_mentee_half(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "counts-mentor-only")
+    headers = await sign_in(db_engine, mentor)
+
+    me = await api_client.get(URL, headers=headers)
+
+    assert me.status_code == 200, me.text
+    assert me.json()["booking_counts"]["as_mentee"] is None
+    assert me.json()["booking_counts"]["as_mentor"] is not None
+    assert me.json()["credits"] is None
 
 
 async def test_a_mentor_cannot_answer_a_request_past_its_deadline(

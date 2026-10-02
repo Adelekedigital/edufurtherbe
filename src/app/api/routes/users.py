@@ -8,6 +8,7 @@ from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep
 from app.api.schemas.common import AvatarFocusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import BookingCountsRead, CreditsRead, UserProfileRead, UserRead
+from app.domain.roles import is_mentee
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
@@ -51,10 +52,10 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "authorization claim — permissions come from whether the relevant profile "
         "row exists, never from this field. `is_admin` reflects a live, unrevoked "
         "grant in `admin_users`.\n\n"
-        "`credits` is the dashboard card's block and is **null unless the caller "
-        "has a mentee goal** — the same predicate the monthly grant uses, and "
-        'deliberately not "is not a mentor", since a dual-role user is both. '
-        "It carries `balance`, `allowance`, `state` and `next_reset_at`; the "
+        "`credits` is the dashboard card's block. It is **null only for a mentor "
+        "without a mentee goal**: anyone with a goal, or without a mentor "
+        "profile, is a mentee, since booking needs no goal and a dual-role user "
+        "is both. It carries `balance`, `allowance`, `state` and `next_reset_at`; the "
         "client draws the progress bar, so no percentage is published. "
         "`allowance` is `max(steady_state, balance)` — the steady-state "
         "ceiling rather than the monthly grant, so the bar moves when a "
@@ -68,8 +69,8 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "request. `as_mentor` (null without a mentor profile) carries "
         "`awaiting_your_response`, requests waiting on the caller's accept or "
         "decline before their deadline, and `upcoming`, confirmed sessions not yet "
-        "started. `as_mentee` (null without a mentee goal, the `credits` "
-        "predicate) carries `awaiting_mentor`, the caller's own requests still "
+        "started. `as_mentee` (null on the same rule as `credits`: a mentor "
+        "without a mentee goal) carries `awaiting_mentor`, the caller's own requests still "
         "waiting on a mentor, and `upcoming`. **Badge only the action counts** "
         "(`awaiting_your_response`, `awaiting_mentor`); `upcoming` is information "
         "and would almost always be lit.\n\n"
@@ -94,6 +95,7 @@ async def read_me(
     # too, and a keyword argument that depends on an earlier argument's
     # side effect breaks silently the first time somebody reorders them.
     goal = attributes["goal"]
+    mentee = is_mentee(has_goal=goal is not None, has_mentor_profile=mentor_profile is not None)
     return UserRead(
         **user,
         profile=profile,
@@ -105,15 +107,12 @@ async def read_me(
             if mentor_profile is not None
             else None
         ),
-        # The card belongs to a mentee. The predicate is *having a mentee goal*,
-        # not *not being a mentor* — authorization here is profile existence, so
-        # a dual-role user is both, and a negative predicate would hide the card
-        # from somebody who can book.
-        credits=(CreditsRead.model_validate(attributes["credits"]) if goal is not None else None),
+        # The card and `as_mentee` are the mentee half, on one rule.
+        credits=(CreditsRead.model_validate(attributes["credits"]) if mentee else None),
         mentee_completed_sessions=attributes["mentee_completed_sessions"],
         booking_counts=BookingCountsRead.of(
             attributes["booking_counts"],
             mentor=mentor_profile is not None,
-            mentee=goal is not None,
+            mentee=mentee,
         ),
     )
