@@ -798,3 +798,72 @@ async def test_a_held_time_is_never_booked_after_it_starts(
                 require_answers=True,
                 window=PLATFORM_WINDOW,
             )
+
+
+# --------------------------------------------------------------------------
+# The mentee's limits (#342) apply to booking a suggested time
+# --------------------------------------------------------------------------
+
+
+async def _elsewhere(
+    client: httpx.AsyncClient, engine: AsyncEngine, tag: str, *avoid: dt.datetime
+) -> tuple[str, str]:
+    """Another mentor's offering and a time of theirs well clear of ``avoid``."""
+    from tests.integration.test_api_booking import a_bookable_offering
+
+    mentor, session_type = await a_bookable_offering(engine, tag)
+    response = await client.get(
+        f"/api/v1/users/{mentor}/availability/slots",
+        params={"session_type_id": str(session_type)},
+    )
+    starts = [str(s["start"]) for s in response.json()["data"]]
+    clear = next(
+        s
+        for s in starts
+        if all(abs(dt.datetime.fromisoformat(s) - a) > dt.timedelta(hours=3) for a in avoid)
+    )
+    return str(session_type), clear
+
+
+async def test_booking_a_suggested_time_counts_against_the_cap(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Two live sessions elsewhere and the suggestion is refused at the cap;
+    the declined original no longer counts, which one session elsewhere shows."""
+    booking = await a_booking(db_engine, api_client, "sg-cap")
+    session_type = await offering_of(api_client, booking)
+    at = await another_slot(api_client, booking)
+    await end_with_suggestion(api_client, booking, "decline", at)
+    avoid = dt.datetime.fromisoformat(at)
+    first = await _elsewhere(api_client, db_engine, "sg-cap-b", avoid)
+    second = await _elsewhere(
+        api_client, db_engine, "sg-cap-c", avoid, dt.datetime.fromisoformat(first[1])
+    )
+    for other_type, other_at in (first, second):
+        made = await book(api_client, other_type, other_at, booking["mentee"])
+        assert made.status_code == 201, made.text
+
+    refused = await book(api_client, session_type, at, booking["mentee"])
+
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["type"] == "/problems/booking-limit-reached"
+    assert (await suggestion_of(api_client, booking))["status"] == "active"
+
+
+async def test_a_suggested_time_is_bookable_beside_one_session_elsewhere(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The positive side of the cap, and of the one-per-mentor rule: the
+    original with this mentor ended, so it holds no place."""
+    booking = await a_booking(db_engine, api_client, "sg-cap-ok")
+    session_type = await offering_of(api_client, booking)
+    at = await another_slot(api_client, booking)
+    await end_with_suggestion(api_client, booking, "decline", at)
+    other_type, other_at = await _elsewhere(
+        api_client, db_engine, "sg-cap-ok-b", dt.datetime.fromisoformat(at)
+    )
+    assert (await book(api_client, other_type, other_at, booking["mentee"])).status_code == 201
+
+    booked = await book(api_client, session_type, at, booking["mentee"])
+
+    assert booked.status_code == 201, booked.text
