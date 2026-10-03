@@ -232,9 +232,8 @@ contract.
 | `mentor_declined` | — | **NEEDED** | the applicant | — |
 | `mentor_response_reminder` | Session Request Reminder | `cmbxjqtne3nt1wu0i5sk5kr2h` | mentor | `discuss`, `hours`, `location`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
 | `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |
-
-**Coming:** #339 ("Suggest a new time", in progress on another branch) adds two
-members, the suggestion email and the hold reminder. That branch adds their rows.
+| `session_time_suggested` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
+| `session_suggestion_reminder` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
 
 **A member marked NEEDED fails at the drain** (`template_for()` raises), and the
 outbox keeps the row, so nothing is lost and nothing is sent until an id is set.
