@@ -46,22 +46,34 @@ the boundary is shared.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Literal
+from uuid import UUID
 
 from app.core.config import Settings
 from app.domain.enums import CreditReason, CreditSource, CreditState
 
 __all__ = [
     "NON_EXPIRING",
+    "SOURCE_BUCKET",
+    "BonusCredits",
+    "BonusGroup",
+    "Bucket",
     "CreditLadder",
     "CreditReason",
     "CreditSource",
     "CreditState",
+    "HeldLot",
+    "MonthlyCredits",
     "allowance_for",
+    "bucket_of",
     "credit_ladder",
     "end_of_month",
     "expiry_for",
     "refund_expiry",
+    "split_buckets",
     "state_for",
 ]
 
@@ -258,3 +270,140 @@ def allowance_for(balance: int, ladder: CreditLadder) -> int:
     drift.
     """
     return max(ladder.steady_state, balance)
+
+
+# --------------------------------------------------------------------------
+# Monthly and bonus credits (decision 232)
+# --------------------------------------------------------------------------
+
+#: The two parts of the card. The bar draws only the monthly part, so a full
+#: month reads "3 of 3" rather than "3 of 4" (#344).
+Bucket = Literal["monthly", "bonus"]
+
+#: Which part a lot of each source sits in. **One mapping**; a test pins every
+#: `CreditSource` member to it.
+#:
+#: ``REFUND`` maps to ``None`` because a refund has no bucket of its own: it
+#: goes back to the bucket of the credit it replaces (owner, 2026-10-03), found
+#: by :func:`bucket_of`. ``OPENING_BALANCE`` is monthly because it stands in for
+#: the cutover month's grant, which is why it is capped at the grant.
+SOURCE_BUCKET: Mapping[CreditSource, Bucket | None] = MappingProxyType(
+    {
+        CreditSource.MONTHLY_FREE: "monthly",
+        CreditSource.OPENING_BALANCE: "monthly",
+        CreditSource.PROFILE_COMPLETED: "bonus",
+        CreditSource.REFERRAL_UNLOCK: "bonus",
+        CreditSource.ADMIN_GRANT: "bonus",
+        CreditSource.REFUND: None,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class HeldLot:
+    """A lot with spendable credit in it, as the split needs it."""
+
+    lot_id: UUID
+    source: CreditSource
+    remaining: int
+    expires_at: dt.datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlyCredits:
+    """The monthly part of the card."""
+
+    balance: int
+    #: The monthly grant. A late refund can briefly put ``balance`` above it.
+    ceiling: int
+    #: The soonest instant a held monthly credit stops being spendable. Null when
+    #: there are none, or none of them expire.
+    expires_at: dt.datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BonusGroup:
+    """Bonus credits that die at the same instant, or never."""
+
+    count: int
+    expires_at: dt.datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BonusCredits:
+    """Every credit that is not the monthly grant."""
+
+    balance: int
+    #: Soonest expiry first, never-expiring last.
+    groups: tuple[BonusGroup, ...]
+
+
+def bucket_of(
+    lot_id: UUID, sources: Mapping[UUID, CreditSource], replaces: Mapping[UUID, UUID]
+) -> Bucket:
+    """Which part of the card a lot belongs to.
+
+    ``sources`` is every lot the user has had, spent or not, because a refund's
+    origin is usually spent. ``replaces`` maps a refund lot to the lot that paid
+    for the session it refunds. A refund of a refund follows the chain to the
+    first credit that was not one.
+
+    **A refund whose origin cannot be found counts as bonus**: a session booked
+    before the ledger had a debit, or a broken chain. Bonus is the side that
+    never claims to be part of the monthly allowance.
+    """
+    seen: set[UUID] = set()
+    current = lot_id
+    while current not in seen:
+        seen.add(current)
+        source = sources.get(current)
+        if source is None:
+            return "bonus"
+        bucket = SOURCE_BUCKET[source]
+        if bucket is not None:
+            return bucket
+        origin = replaces.get(current)
+        if origin is None:
+            return "bonus"
+        current = origin
+    return "bonus"
+
+
+def split_buckets(
+    held: Iterable[HeldLot],
+    *,
+    sources: Mapping[UUID, CreditSource],
+    replaces: Mapping[UUID, UUID],
+    ceiling: int,
+) -> tuple[MonthlyCredits, BonusCredits]:
+    """Split the held lots into the card's monthly and bonus parts.
+
+    The two balances add up to the total, because ``held`` is exactly the set of
+    lots the total sums.
+    """
+    monthly = 0
+    monthly_expiries: list[dt.datetime] = []
+    bonus: dict[dt.datetime | None, int] = {}
+    for lot in held:
+        if bucket_of(lot.lot_id, sources, replaces) == "monthly":
+            monthly += lot.remaining
+            if lot.expires_at is not None:
+                monthly_expiries.append(lot.expires_at)
+        else:
+            bonus[lot.expires_at] = bonus.get(lot.expires_at, 0) + lot.remaining
+
+    groups = tuple(
+        BonusGroup(count=count, expires_at=expires_at)
+        for expires_at, count in sorted(
+            bonus.items(),
+            key=lambda item: (item[0] is None, item[0].timestamp() if item[0] else 0.0),
+        )
+    )
+    return (
+        MonthlyCredits(
+            balance=monthly,
+            ceiling=ceiling,
+            expires_at=min(monthly_expiries) if monthly and monthly_expiries else None,
+        ),
+        BonusCredits(balance=sum(bonus.values()), groups=groups),
+    )

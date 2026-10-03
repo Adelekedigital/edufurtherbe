@@ -50,6 +50,44 @@ class UserProfileRead(BaseModel):
     social_youtube: YouTubeRead = None
 
 
+class MonthlyCreditsRead(BaseModel):
+    """The monthly grant's part of the balance. The card's bar draws this."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    #: Monthly credits held now: the 1st-of-month grant, a migrated opening
+    #: balance, and refunds of either.
+    balance: int
+    #: The monthly grant. Draw the bar as `balance` of `ceiling`, clamped: a late
+    #: refund can briefly put `balance` above it.
+    ceiling: int
+    #: The soonest instant a held monthly credit stops being spendable (the 1st
+    #: of next month, midnight UTC, exclusive). Null when `balance` is 0, or
+    #: when none of the held monthly credits expire (a migrated opening balance).
+    expires_at: datetime | None
+
+
+class BonusCreditGroupRead(BaseModel):
+    """Bonus credits that stop being spendable at the same instant."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    count: int
+    #: Exclusive, like `next_reset_at`. Null means the credits never expire.
+    expires_at: datetime | None
+
+
+class BonusCreditsRead(BaseModel):
+    """Every credit that is not the monthly grant: the starter, the invite
+    bonus, support grants, and refunds of any of them."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    balance: int
+    #: Soonest expiry first; never-expiring last.
+    groups: list[BonusCreditGroupRead]
+
+
 class CreditsRead(BaseModel):
     """The dashboard card's credit block.
 
@@ -76,6 +114,10 @@ class CreditsRead(BaseModel):
     #: August survives all of 31 August and dies as September opens, which is
     #: what makes the card's "Next reset date" literally true.
     next_reset_at: datetime
+    #: `balance` split in two (decision 232): `monthly.balance + bonus.balance`
+    #: always equals `balance`.
+    monthly: MonthlyCreditsRead
+    bonus: BonusCreditsRead
 
 
 class MentorBookingCounts(BaseModel):
