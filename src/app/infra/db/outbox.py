@@ -223,7 +223,10 @@ async def drain(
 #: not failed (nothing went wrong); `wait` stays pending.
 STILL_DUE = {
     Notification.MENTOR_RETURN_REMINDER: return_reminder_state,
-    # The offer may be booked, or its hold lapsed, before the drain reaches it.
+    # The offer may be booked, or its hold lapsed, before the drain reaches it —
+    # and a suggestion queued before its template id was set must not go out
+    # once there is nothing left to book.
+    Notification.SESSION_TIME_SUGGESTED: suggestion_reminder_state,
     Notification.SESSION_SUGGESTION_REMINDER: suggestion_reminder_state,
 }
 

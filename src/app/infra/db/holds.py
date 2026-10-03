@@ -197,7 +197,7 @@ async def lock_mentor_slots(session: AsyncSession, mentor_id: UUID) -> None:
 async def suggestion_reminder_state(
     session: AsyncSession, session_id: UUID, payload: dict[str, Any], now: dt.datetime
 ) -> Literal["due", "wait", "stale"]:
-    """Whether a queued hold reminder is still worth sending, checked at the drain.
+    """Whether a queued suggestion or its reminder is still worth sending, at the drain.
 
     The callback queues it while the offer is open, but the drain runs on its
     own schedule — the offer may be booked, or the hold lapsed, by the time it

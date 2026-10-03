@@ -867,3 +867,17 @@ async def test_a_suggested_time_is_bookable_beside_one_session_elsewhere(
     booked = await book(api_client, session_type, at, booking["mentee"])
 
     assert booked.status_code == 201, booked.text
+
+
+async def test_a_suggestion_email_queued_past_its_hold_is_not_sent(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """Queued while no template id was set, drained after the hold lapsed: the
+    mentee is not told about a time they can no longer book."""
+    booking = await a_booking(db_engine, api_client, "sg-stale-email")
+    await end_with_suggestion(
+        api_client, booking, "decline", await another_slot(api_client, booking)
+    )
+    await lapse(db_engine, booking)
+
+    assert "session_time_suggested" not in await drained(db_engine, migrated_database)
