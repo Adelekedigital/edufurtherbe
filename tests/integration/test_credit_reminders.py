@@ -14,14 +14,17 @@ once, ever, and never again.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.domain.messages import build_variables
 from app.infra.db.credit_reminders import remind_about_expiring_credits
 from app.infra.db.engine import create_session_factory
+from app.infra.db.outbox import drain
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -290,3 +293,49 @@ async def test_the_nudge_carries_how_many_credits_expire(db_engine: AsyncEngine)
             )
         ).scalar_one()
     assert count == "3"
+
+
+async def drain_expiring(engine: AsyncEngine) -> list[Any]:
+    """Drain the outbox, returning each expiry nudge's context as sent."""
+    contexts: list[Any] = []
+
+    class Capture:
+        def send(self, **kwargs: Any) -> None:
+            if str(kwargs["notification"]) == "credits_expiring":
+                contexts.append(kwargs["context"])
+
+    factory = create_session_factory(engine)
+    async with factory() as db:
+        await drain(db, notifier=Capture(), now=dt.datetime.now(dt.UTC))
+        await db.commit()
+    return contexts
+
+
+async def test_the_count_sent_is_what_is_left_when_it_goes(db_engine: AsyncEngine) -> None:
+    """Codex on #340: a booking between the sweep and the send spends these
+    lots first, so the queued number would overstate what is about to go."""
+    user = await a_user(db_engine)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=14)
+    await a_lot(db_engine, user, remaining=3, expires=expires)
+    await sweep(db_engine, now=expires - dt.timedelta(days=14))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET quantity_remaining = 1 WHERE user_id = :u"), {"u": user}
+        )
+
+    (context,) = await drain_expiring(db_engine)
+
+    assert build_variables(["creditCount"], context) == {"creditCount": "1"}
+
+
+async def test_a_nudge_whose_credits_were_all_spent_is_not_sent(db_engine: AsyncEngine) -> None:
+    user = await a_user(db_engine)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=14)
+    await a_lot(db_engine, user, remaining=2, expires=expires)
+    await sweep(db_engine, now=expires - dt.timedelta(days=14))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET quantity_remaining = 0 WHERE user_id = :u"), {"u": user}
+        )
+
+    assert await drain_expiring(db_engine) == []

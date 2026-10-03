@@ -216,7 +216,7 @@ contract.
 | `session_cancelled` | Session Canceled | `clyvhvwru002hm392q9y8qeje` | the other party | `cancelinitiator`, `cancelmessage`, `dashlink`, `name`, `sessiondate` |
 | `request_expired` | — | **NEEDED** | both | — |
 | `mentor_approved` | — | **NEEDED** | the mentor | — |
-| `calendar_disconnected` | — | **NEEDED** | the mentor | — |
+| `calendar_disconnected` | — | **NEEDED** | the mentor whose calendar it is | — |
 | `session_reminder` | Session Reminder | `clyao8wx60024h2stw3o2ejh8` | both | `attendee`, `intervaltime`, `location`, `name`, `sessiondate`, `sessionlink`, `sessiontime`, `topic`, `topicDiscuss` |
 | `session_last_reminder` | Session Last Reminder | `clyaoph2m00xzs2yecm330s2u` | both | as `session_booked` |
 | `review_requested` | sessionReviewRequest | `cmf1qlt600bjiut0iu5i7yycj` | mentee | `reviewBy`, `reviewFor`, `reviewLink`, `sessTopic` |
@@ -224,7 +224,7 @@ contract.
 | `credits_granted` | Credit: New users update | `cmbn678u30iwz4x0ixz20yfod` | the user | `bookLink`, `fName` |
 | `credits_renewed` | Credit renewal | `cmbk0mv700e4yzn0i6ho1h75s` | the user | `bookLink`, `fName` |
 | `credits_expiring` | Unused credit | `cmbk13nzg0iv4xw0i90uq1j5s` | the user | `bookLink`, `creditCount`, `fName` |
-| `mentor_application_received` | — | **NEEDED** | the applicant | — |
+| `mentor_application_received` | — | **NEEDED** | admins who can decide it, never the applicant | — |
 | `mentor_declined` | — | **NEEDED** | the applicant | — |
 | `mentor_response_reminder` | Session Request Reminder | `cmbxjqtne3nt1wu0i5sk5kr2h` | mentor | `discuss`, `hours`, `location`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
 | `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, func, or_, select
@@ -46,7 +47,47 @@ from app.domain.credits import CreditLadder, allowance_for, end_of_month, state_
 from app.domain.enums import CreditState
 from app.infra.db.models.credits import CreditLot
 
-__all__ = ["CreditSummary", "get_credit_summary", "spendable_now"]
+__all__ = [
+    "CreditSummary",
+    "credits_expiring_state",
+    "expiring_on",
+    "get_credit_summary",
+    "held",
+    "spendable_now",
+]
+
+
+def held(moment: dt.datetime) -> list[ColumnElement[bool]]:
+    """A lot with credit left in it that can still be spent: what "expiring" counts."""
+    return [CreditLot.quantity_remaining > 0, spendable_now(moment)]
+
+
+async def expiring_on(
+    session: AsyncSession, user_id: UUID, expires_at: dt.datetime, *, now: dt.datetime
+) -> int:
+    """How many of this user's credits still expire at ``expires_at``, right now.
+
+    Read **at send time** for `creditCount`: the sweep counted them when it
+    queued the nudge, and a booking since then spends the soonest-expiring lot
+    first, so the queued number can be stale by the time the email goes.
+    """
+    total = await session.scalar(
+        select(func.coalesce(func.sum(CreditLot.quantity_remaining), 0)).where(
+            CreditLot.user_id == user_id, CreditLot.expires_at == expires_at, *held(now)
+        )
+    )
+    return int(total or 0)
+
+
+async def credits_expiring_state(
+    session: AsyncSession, user_id: UUID, payload: dict[str, Any], now: dt.datetime
+) -> Literal["due", "stale"]:
+    """Drop an expiry nudge whose credits were all spent before it was sent."""
+    expires_at = payload.get("expires_at")
+    if not expires_at:
+        return "due"
+    left = await expiring_on(session, user_id, dt.datetime.fromisoformat(expires_at), now=now)
+    return "due" if left > 0 else "stale"
 
 
 def spendable_now(moment: dt.datetime) -> ColumnElement[bool]:

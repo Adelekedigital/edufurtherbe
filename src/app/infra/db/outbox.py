@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.notifications import Channel, Notification
+from app.infra.db.credit_store import credits_expiring_state, expiring_on
 from app.infra.db.mentor_listing import return_reminder_state
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session, SessionType
@@ -209,7 +210,11 @@ async def drain(
 #: or changed zone would be a false or early instruction. Every other message is
 #: about something that already happened and stays true. `stale` is skipped,
 #: not failed (nothing went wrong); `wait` stays pending.
-STILL_DUE = {Notification.MENTOR_RETURN_REMINDER: return_reminder_state}
+STILL_DUE = {
+    Notification.MENTOR_RETURN_REMINDER: return_reminder_state,
+    # Spent since the sweep queued it: nothing is expiring any more.
+    Notification.CREDITS_EXPIRING: credits_expiring_state,
+}
 
 
 async def _finish(
@@ -263,7 +268,22 @@ async def _context_for(
         "extras": extras,
     }
 
+    if str(row["entity_type"]) == "mentor_profile":
+        # The profile is the mentor's: the return reminder goes to them, and an
+        # application notice to the admins deciding it, both naming the mentor.
+        mentor = (await _names_for(session, (row["entity_id"],))).get(row["entity_id"])
+        named = mentor[0] if mentor else ""
+        return MessageContext(mentor_name=named, mentee_name="", **base)  # type: ignore[arg-type]
     if str(row["entity_type"]) != "session":
+        if row["event_type"] == Notification.CREDITS_EXPIRING and extras.get("expires_at"):
+            extras["credit_count"] = str(
+                await expiring_on(
+                    session,
+                    row["entity_id"],
+                    dt.datetime.fromisoformat(extras["expires_at"]),
+                    now=dt.datetime.now(dt.UTC),
+                )
+            )
         return MessageContext(mentor_name="", mentee_name="", **base)  # type: ignore[arg-type]
 
     found = (

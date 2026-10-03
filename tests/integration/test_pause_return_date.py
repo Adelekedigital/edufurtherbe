@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.test_mentor_status_log import ADMIN, add_mentor, make_user
 
 from app.core.config import Settings
+from app.domain.messages import build_variables
 from app.infra.db.mentor_listing import stage_due
 from app.infra.db.mentor_status_store import decide, pause, remind_returning_mentors
 from app.infra.db.models.mentoring import MentorProfile
@@ -983,3 +984,36 @@ async def test_a_queued_stage_not_sent_on_its_day_is_dropped(
 
     assert await drained(db_engine, migrated_database, local(back - dt.timedelta(days=2), 9)) == []
     assert await reminders(db_engine, mentor) == 1
+
+
+async def test_a_queued_reminder_names_the_mentor_the_template_asks_for(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """The live template asks only for `mentorName` (Codex on #340): a context
+    built without the mentor's name fails every attempt and no paused mentor is
+    ever reminded."""
+    mentor = await due_now(db_engine, api_client, "named-queued")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET first_name = 'Ngozi', last_name = 'Okafor' WHERE id = :u"),
+            {"u": mentor},
+        )
+    assert await sweep(db_engine, dt.datetime.now(dt.UTC)) == 1
+    contexts: list[Any] = []
+
+    class Capture:
+        def send(self, **kwargs: Any) -> None:
+            if str(kwargs["notification"]) == "mentor_return_reminder":
+                contexts.append(kwargs["context"])
+
+    async with AsyncSession(db_engine) as session:
+        await drain(
+            session,
+            notifier=Capture(),
+            now=dt.datetime.now(dt.UTC),
+            settings=Settings(_env_file=None, database_url=SecretStr(migrated_database)),
+        )
+        await session.commit()
+
+    (context,) = contexts
+    assert build_variables(["mentorName"], context) == {"mentorName": "Ngozi Okafor"}
