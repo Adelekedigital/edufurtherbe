@@ -398,7 +398,7 @@ async def book_session(
     # **A suggested time, taken up** (#339): the offer is spent by the booking
     # it became, in the same transaction, so it can never be booked twice.
     if offer is not None:
-        await session.execute(
+        spent = await session.scalar(
             update(SessionSuggestion)
             .where(
                 # Owner-scoped and still active in the write itself, not only in
@@ -409,7 +409,13 @@ async def book_session(
                 *active_hold(now),
             )
             .values(accepted_session_id=session_id)
+            .returning(SessionSuggestion.id)
         )
+        if spent is None:
+            # Unreachable while `held_offer` holds the row FOR UPDATE on the same
+            # predicates; refused rather than trusted, so a booking can never
+            # commit with its offer left open. Raising rolls the booking back.
+            raise ConflictError("the suggested time is no longer held — re-read the mentor's slots")
 
     # **The answers, in the booking's transaction**: a session without the form
     # its mentee filled in, or a form for a session that was never written, are
