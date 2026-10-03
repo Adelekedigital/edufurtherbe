@@ -39,12 +39,22 @@ import datetime as dt
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.domain.credits import CreditLadder, allowance_for, end_of_month, state_for
-from app.domain.enums import CreditState
-from app.infra.db.models.credits import CreditLot
+from app.domain.credits import (
+    BonusCredits,
+    CreditLadder,
+    HeldLot,
+    MonthlyCredits,
+    allowance_for,
+    end_of_month,
+    split_buckets,
+    state_for,
+)
+from app.domain.enums import CreditReason, CreditSource, CreditState
+from app.infra.db.models.credits import CreditLot, CreditTransaction
 
 __all__ = [
     "CreditSummary",
@@ -121,15 +131,28 @@ class CreditSummary:
     allowance: int
     state: CreditState
     next_reset_at: dt.datetime
+    #: The balance split into the monthly grant and everything else (#344).
+    monthly: MonthlyCredits
+    bonus: BonusCredits
 
     @classmethod
-    def of(cls, *, balance: int, next_reset_at: dt.datetime, ladder: CreditLadder) -> CreditSummary:
+    def of(
+        cls,
+        *,
+        balance: int,
+        next_reset_at: dt.datetime,
+        ladder: CreditLadder,
+        monthly: MonthlyCredits,
+        bonus: BonusCredits,
+    ) -> CreditSummary:
         """Derive the three published values from the one measured one."""
         return cls(
             balance=balance,
             allowance=allowance_for(balance, ladder),
             state=state_for(balance, ladder),
             next_reset_at=next_reset_at,
+            monthly=monthly,
+            bonus=bonus,
         )
 
 
@@ -156,6 +179,75 @@ async def get_credit_summary(
         )
     )
 
+    monthly, bonus = await _buckets(session, user_id, moment=moment, ladder=ladder)
     return CreditSummary.of(
-        balance=int(total or 0), next_reset_at=end_of_month(moment), ladder=ladder
+        balance=int(total or 0),
+        next_reset_at=end_of_month(moment),
+        ladder=ladder,
+        monthly=monthly,
+        bonus=bonus,
+    )
+
+
+async def _buckets(
+    session: AsyncSession, user_id: UUID, *, moment: dt.datetime, ladder: CreditLadder
+) -> tuple[MonthlyCredits, BonusCredits]:
+    """The balance split into monthly and bonus credits, in two queries.
+
+    **Every lot the user has had**, spent or not, because a refund's origin is
+    usually a spent lot. Which of them still count is ``held(moment)``, selected
+    as a column so the split sums exactly the lots the total does.
+
+    A refund lot is linked to the lot it replaces through the ledger: its own
+    grant row names the session, and that session's ``session_booked`` debit
+    names the lot that paid. The rule for what that means is
+    :func:`app.domain.credits.bucket_of`.
+    """
+    lots = (
+        await session.execute(
+            select(
+                CreditLot.id,
+                CreditLot.source,
+                CreditLot.quantity_remaining,
+                CreditLot.expires_at,
+                and_(*held(moment)).label("held"),
+            ).where(CreditLot.user_id == user_id)
+        )
+    ).all()
+
+    grant = aliased(CreditTransaction)
+    debit = aliased(CreditTransaction)
+    links = (
+        await session.execute(
+            select(grant.credit_lot_id, debit.credit_lot_id)
+            .join(CreditLot, CreditLot.id == grant.credit_lot_id)
+            .join(
+                debit,
+                and_(
+                    debit.session_id == grant.session_id,
+                    debit.reason == CreditReason.SESSION_BOOKED,
+                ),
+            )
+            .where(
+                grant.user_id == user_id,
+                grant.delta > 0,
+                CreditLot.source == CreditSource.REFUND,
+            )
+        )
+    ).all()
+
+    return split_buckets(
+        (
+            HeldLot(
+                lot_id=row.id,
+                source=row.source,
+                remaining=row.quantity_remaining,
+                expires_at=row.expires_at,
+            )
+            for row in lots
+            if row.held
+        ),
+        sources={row.id: row.source for row in lots},
+        replaces={row[0]: row[1] for row in links},
+        ceiling=ladder.monthly,
     )

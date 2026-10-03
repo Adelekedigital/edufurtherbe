@@ -230,20 +230,27 @@ async def test_a_mentee_without_a_goal_still_gets_the_card(
     assert card["balance"] == 2
 
 
-async def test_the_block_carries_exactly_four_fields(
+async def test_the_block_carries_exactly_its_fields(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     """No percentage. The client draws the bar, and a third representation of
-    one fact is the first thing to drift."""
+    one fact is the first thing to drift. `monthly` and `bonus` split the
+    balance; they are not another measure of it."""
     auth_id = uuid4()
     await seed_mentee(db_engine, auth_id)
 
-    assert set(await credits_of(api_client, auth_id)) == {
+    block = await credits_of(api_client, auth_id)
+
+    assert set(block) == {
         "balance",
         "allowance",
         "state",
         "next_reset_at",
+        "monthly",
+        "bonus",
     }
+    assert set(block["monthly"]) == {"balance", "ceiling", "expires_at"}
+    assert set(block["bonus"]) == {"balance", "groups"}
 
 
 # --------------------------------------------------------------------------
@@ -309,3 +316,95 @@ async def test_a_migrated_balance_disappears_when_its_month_ends(
 
     assert block["balance"] == 0
     assert block["state"] == "exhausted"
+
+
+# --------------------------------------------------------------------------
+# Monthly and bonus credits (decision 232, #344)
+# --------------------------------------------------------------------------
+
+
+async def test_a_starter_only_mentee_reads_one_never_expiring_bonus_credit(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    await grant(db_engine, user_id, quantity=1, source="profile_completed", expires=None)
+
+    block = await credits_of(api_client, auth_id)
+
+    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None}
+    assert block["bonus"] == {"balance": 1, "groups": [{"count": 1, "expires_at": None}]}
+
+
+async def test_a_full_month_and_the_starter_read_three_of_three_plus_one(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    await grant(db_engine, user_id, quantity=3, source="monthly_free")
+    await grant(db_engine, user_id, quantity=1, source="profile_completed", expires=None)
+
+    block = await credits_of(api_client, auth_id)
+
+    assert block["balance"] == 4
+    assert (block["monthly"]["balance"], block["monthly"]["ceiling"]) == (3, 3)
+    assert block["monthly"]["expires_at"] is not None
+    assert block["bonus"]["balance"] == 1
+
+
+async def test_an_expiring_support_grant_groups_before_the_starter(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    await grant(db_engine, user_id, quantity=1, source="profile_completed", expires=None)
+    await grant(db_engine, user_id, quantity=2, source="admin_grant", expires=FAR_FUTURE)
+
+    groups = (await credits_of(api_client, auth_id))["bonus"]["groups"]
+
+    assert [g["count"] for g in groups] == [2, 1]
+    assert groups[0]["expires_at"] is not None
+    assert groups[1]["expires_at"] is None
+
+
+async def test_a_migrated_opening_balance_is_monthly(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    await grant(db_engine, user_id, quantity=2, source="opening_balance")
+
+    block = await credits_of(api_client, auth_id)
+
+    assert (block["monthly"]["balance"], block["bonus"]["balance"]) == (2, 0)
+
+
+async def test_expired_credits_are_in_neither_part(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    await grant(db_engine, user_id, quantity=3, source="monthly_free", expires=LONG_PAST)
+    await grant(db_engine, user_id, quantity=1, source="admin_grant", expires=LONG_PAST)
+
+    block = await credits_of(api_client, auth_id)
+
+    assert block["balance"] == 0
+    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None}
+    assert block["bonus"] == {"balance": 0, "groups": []}
+
+
+async def test_the_two_parts_always_add_up_to_the_balance(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """Pinned against the published balance, which a different query sums."""
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    await grant(db_engine, user_id, quantity=3, remaining=1, source="monthly_free")
+    await grant(db_engine, user_id, quantity=1, source="profile_completed", expires=None)
+    await grant(db_engine, user_id, quantity=2, source="admin_grant")
+    await grant(db_engine, user_id, quantity=5, source="referral_unlock", expires=LONG_PAST)
+
+    block = await credits_of(api_client, auth_id)
+
+    assert block["monthly"]["balance"] + block["bonus"]["balance"] == block["balance"] == 4
