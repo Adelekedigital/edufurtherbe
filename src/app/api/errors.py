@@ -27,6 +27,9 @@ from app.core.errors import (
     AlreadyReviewedError,
     AppError,
     AuthenticationError,
+    BookingLimitReachedError,
+    BookingOverlapError,
+    BookingWithMentorExistsError,
     ConfigurationError,
     ConflictError,
     InsufficientCreditError,
@@ -83,6 +86,9 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     OnboardingIncompleteError: "/problems/onboarding-incomplete",
     AlreadyReviewedError: "/problems/review-already-exists",
     ReviewIntervalError: "/problems/review-interval-not-elapsed",
+    BookingOverlapError: "/problems/booking-overlap",
+    BookingWithMentorExistsError: "/problems/booking-with-mentor-exists",
+    BookingLimitReachedError: "/problems/booking-limit-reached",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx

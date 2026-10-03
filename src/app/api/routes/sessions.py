@@ -171,7 +171,19 @@ BOOKING_RESPONSES: dict[int | str, dict[str, str]] = {
             "**Insufficient credit is a third, and it does not pass.** It "
             "carries the problem type `/problems/insufficient-credit`, and the "
             "answer is to wait for the monthly grant or invite somebody — never "
-            "to retry the same request."
+            "to retry the same request.\n\n"
+            "**Your booking limits** (settled decision 231) are three more, each "
+            "with its own problem type, checked in this order:\n"
+            "- `/problems/booking-overlap`: you already have a session at an "
+            "overlapping time, with any mentor.\n"
+            "- `/problems/booking-with-mentor-exists`: you already have a session "
+            "pending or coming up with this mentor.\n"
+            "- `/problems/booking-limit-reached`: you already have 2 sessions "
+            "pending or coming up.\n\n"
+            "A session stops counting once it is completed, cancelled, declined, "
+            "expired, withdrawn or missed. Suggested copy, which never points to "
+            'cancelling: *"You can book another once one of them has taken '
+            'place."* and *"You can book {mentor} again after it."*'
         )
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {

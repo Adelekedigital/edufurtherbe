@@ -791,6 +791,30 @@ def test_two_mentors_may_hold_the_same_window() -> None:
     assert not result.overlapping_live_windows
 
 
+def test_one_mentee_may_not_hold_the_same_window_with_two_mentors() -> None:
+    """The mentee dimension (#342). ``sessions_no_mentee_double_booking`` refuses
+    one mentee in two live sessions at once, whoever the mentors are, so the
+    pre-flight reports it at the extract rather than letting the load abort."""
+    second_mentor = "1734290858394x940262126235280600"
+    result = plan(
+        [
+            booking(bubble_id="sb-1", sessionStatus="Pending", **{"SessionCancel (Y/N)❌": "no"}),
+            booking(
+                bubble_id="sb-2",
+                sessionStatus="Pending",
+                **{"SessionCancel (Y/N)❌": "no", "\U0001f575Mentor": second_mentor},
+            ),
+        ],
+        users=[*USERS, {"bubble_id": second_mentor, "Mentor": "m-2"}],
+    )
+
+    assert len(result.sessions) == 2
+    mentee = result.sessions[0].mentee_bubble_id
+    assert [d.detail for d in result.overlapping_live_windows] == [
+        f"overlaps sb-2 for mentee {mentee}"
+    ]
+
+
 def test_cancelled_sessions_may_share_a_window() -> None:
     """19 dev mentor-and-start pairs are booked more than once, one of them 26
     times. Without this the migration could not import its own source data."""

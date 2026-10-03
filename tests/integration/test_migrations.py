@@ -1238,3 +1238,56 @@ def test_the_imported_meet_downgrade_restores_the_old_load_rule(
         "venue-b@example.test=daily*>daily,"
         "venue-c@example.test=daily*>none"
     )
+
+
+_MENTEE_IN_TWO = """
+    WITH m1 AS (
+        INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+        VALUES ('overlap-m1@example.test', gen_random_uuid(), 'M1', 'mentor', 'UTC') RETURNING id
+    ), m2 AS (
+        INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+        VALUES ('overlap-m2@example.test', gen_random_uuid(), 'M2', 'mentor', 'UTC') RETURNING id
+    ), e AS (
+        INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+        VALUES ('overlap-e@example.test', gen_random_uuid(), 'E', 'mentee', 'UTC') RETURNING id
+    )
+    INSERT INTO sessions (mentor_id, mentee_id, starts_at, duration_minutes, status)
+    SELECT m.id, e.id, '2026-11-02 10:00+00', 60, s.status
+    FROM (SELECT id, 1 AS n FROM m1 UNION ALL SELECT id, 2 FROM m2) m
+    CROSS JOIN e
+    JOIN (VALUES (1, 'confirmed'), (2, '{second}')) AS s(n, status) ON s.n = m.n
+"""
+
+
+def test_the_mentee_overlap_constraint_refuses_to_apply_over_existing_overlaps(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`c3f8a51d7e20` stops with the ids rather than skipping (#342): one mentee
+    in two live sessions at the same hour is a decision for a person."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "b7c41e9a2d58")
+    execute(disposable_database, _MENTEE_IN_TWO.format(second="pending_mentor_approval"))
+
+    with pytest.raises(RuntimeError, match="sessions_no_mentee_double_booking cannot be added"):
+        command.upgrade(config, "c3f8a51d7e20")
+
+
+def test_the_mentee_overlap_constraint_applies_over_a_cancelled_twin(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """The accepting case: a cancelled session at the same hour is history, not a
+    double booking, so the constraint applies and is valid."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "b7c41e9a2d58")
+    execute(disposable_database, _MENTEE_IN_TWO.format(second="cancelled"))
+
+    command.upgrade(config, "c3f8a51d7e20")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT convalidated FROM pg_constraint "
+            "WHERE conname = 'sessions_no_mentee_double_booking'",
+        )
+        is True
+    )

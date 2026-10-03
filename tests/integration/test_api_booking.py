@@ -551,18 +551,22 @@ async def test_an_expired_key_is_reclaimed_rather_than_replayed(
     a stale answer. That is the whole difference between a cache and a leak.
     """
     mentor, session_type = await a_bookable_offering(db_engine, "book-expiry")
+    other, other_type = await a_bookable_offering(db_engine, "book-expiry-2")
     _, headers = await a_mentee(db_engine, "book-expiry")
+    one = await first_slot(api_client, mentor, session_type)
+    # A second mentor and a later hour: a mentee may hold one live session per
+    # mentor and none that overlap (#342), and neither is what this tests.
     slots = await api_client.get(
-        f"/api/v1/users/{mentor}/availability/slots",
-        params={"session_type_id": str(session_type)},
+        f"/api/v1/users/{other}/availability/slots",
+        params={"session_type_id": str(other_type)},
     )
-    one, two = (str(slot["start"]) for slot in slots.json()["data"][:2])
+    two = str(slots.json()["data"][2]["start"])
     same = key()
 
     first = await api_client.post(URL, json=body(session_type, one), headers=headers | same)
     async with db_engine.begin() as conn:
         await conn.execute(text("UPDATE idempotency_keys SET expires_at = now() - interval '1s'"))
-    after = await api_client.post(URL, json=body(session_type, two), headers=headers | same)
+    after = await api_client.post(URL, json=body(other_type, two), headers=headers | same)
 
     assert after.status_code == 201, after.text
     assert after.json()["id"] != first.json()["id"]
