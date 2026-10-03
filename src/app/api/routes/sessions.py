@@ -364,9 +364,14 @@ async def withdraw_session(_: WithdrawnSessionDep) -> dict[str, bool]:
         "removable, and applying to every offering rather than this one. It says "
         "*unavailable*, not *reserved for somebody* — this endpoint has no way to "
         "hold time for a particular person.\n\n"
+        "**The mentee's credit:** a **mentor** cancelling always refunds it, "
+        "whatever reason is given. A **mentee** cancelling gets it back with at "
+        "least **twelve hours** to go, the boundary included; inside that the "
+        "credit is used. A refund is a new `refund` lot carrying the original's "
+        "expiry.\n\n"
         "Which reason codes you may give depends on which side you are on. "
         "Sending one you may not is a `422` that names it, rather than a "
-        "silently dropped field."
+        "silently dropped field. The code does not decide the refund."
     ),
     responses=TRANSITION_RESPONSES,
 )

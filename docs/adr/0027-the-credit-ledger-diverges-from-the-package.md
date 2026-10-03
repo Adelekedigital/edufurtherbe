@@ -330,8 +330,16 @@ its refund share a `session_id`** — keyed on the column alone it would reject 
 refund it exists to permit, and every *rejecting* test would still pass.
 
 **A refund is a fresh lot, not a return to the original**, and it inherits expiry
-*semantics* rather than the date. Both refund triggers are settled after the
-session has run, so the lot that paid may already be dead. Never-expiring in,
+*semantics* rather than the date. A refund can land after the session has run
+— a no-show settled, a request expired — so the lot that paid may already be
+dead.
+
+> **Amended 2026-10-03 (settled decision 229).** The refund triggers are now
+> decided in one pure rule, `domain/refunds.py`: a request that never became a
+> session, a **mentor's** cancellation, a **mentee's** cancellation with at least
+> twelve hours' notice, and a **mentor no-show**. A cancellation refund can land
+> *before* the session, which changes nothing above: the fresh lot inherits the
+> original's expiry semantics either way. Never-expiring in,
 never-expiring out: today that is only the starter, but once payments land it is
 every purchased credit, and expiring something somebody bought is a chargeback
 and in several jurisdictions unlawful.

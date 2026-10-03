@@ -28,6 +28,8 @@ from app.domain.enums import (
 from app.domain.notifications import (
     Notification,
 )
+from app.domain.refunds import no_show_refund
+from app.infra.db.credit_writer import refund_credit
 from app.infra.db.models.sessions import (
     Session,
     SessionEvent,
@@ -278,6 +280,18 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
             for row in settled
         ],
     )
+
+    # 4. **A mentor who never came owes the mentee their credit** (decision
+    #    229). Decided by `domain.refunds` from the same two facts the reason
+    #    code above reads, and paid in the settling transaction, so an outcome
+    #    and its refund commit together. Only rows this run settled reach here,
+    #    and `refund_credit` is once-per-session at the database besides.
+    for row in settled:
+        owed = no_show_refund(
+            mentor_came=bool(row["mentor_came"]), mentee_came=bool(row["mentee_came"])
+        )
+        if owed is not None:
+            await refund_credit(session, row["mentee_id"], row["id"], reason=owed, now=now)
 
     await _request_reviews(
         session,

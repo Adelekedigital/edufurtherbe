@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.enums import (
     ActorType,
-    CreditReason,
     SessionReasonCode,
     SessionRole,
     SessionStatus,
@@ -23,6 +22,7 @@ from app.domain.notifications import (
     Notification,
     recipients,
 )
+from app.domain.refunds import transition_refund
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
@@ -59,16 +59,6 @@ TRANSITION_NOTICE = {
     "withdraw": Notification.REQUEST_WITHDRAWN,
     "cancel": Notification.SESSION_CANCELLED,
 }
-
-
-#: Terminal statuses that mean the session was never delivered, so the credit
-#: taken at booking comes back. **Not `cancelled`** — cancelling a confirmed
-#: session carries a real policy (`MENTOR_UNAVAILABLE` refunds,
-#: `MENTEE_NO_LONGER_NEEDED` does not) and belongs with the no-show sweep, where
-#: both triggers can be reasoned about together.
-REFUNDS_THE_REQUEST = frozenset(
-    {SessionStatus.DECLINED, SessionStatus.WITHDRAWN, SessionStatus.EXPIRED}
-)
 
 
 async def transition(
@@ -198,26 +188,15 @@ async def transition(
         )
     )
 
-    # **A request that never became a session hands the credit back.** The
-    # mentor declined or the mentee withdrew: nothing was delivered, so nothing
-    # was owed, and the debit taken at booking has to be reversed.
-    #
-    # Not the cancel path. Cancelling a *confirmed* session is a different
-    # question with a real policy behind it — `MENTOR_UNAVAILABLE` refunds and
-    # `MENTEE_NO_LONGER_NEEDED` does not — and that belongs with the no-show
-    # sweep in M5b-ii, where the two triggers live together.
-    #
-    # In this transaction, so the status and the refund commit together. A
-    # session marked declined with no credit returned is the state a retry
-    # cannot fix, because the transition already happened.
-    if rule.to in REFUNDS_THE_REQUEST:
-        await refund_credit(
-            session,
-            row["mentee_id"],
-            session_id,
-            reason=CreditReason.REQUEST_UNFULFILLED,
-            now=dt.datetime.now(dt.UTC),
-        )
+    # **Whether the mentee's credit comes back is `domain.refunds`'s call**
+    # (decision 229): a request that never became a session always refunds; a
+    # mentor's cancellation always refunds; a mentee's only with twelve hours'
+    # notice. Asked here and written here, so the status and the refund commit
+    # together — a session marked cancelled with the credit still owed is the
+    # state a retry cannot fix, because the transition already happened.
+    owed = transition_refund(rule.to, actor=role, starts_at=row["starts_at"], now=now)
+    if owed is not None:
+        await refund_credit(session, row["mentee_id"], session_id, reason=owed, now=now)
 
     # **The party who did not act.** `cancel` is the only action either of them
     # may take, which is why `recipients` needs the actor at all — for the other
@@ -307,15 +286,12 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime, calendar: 
     # **The same refund, for the request nobody answered.** `refund_credit` is
     # once-per-session at the database, so this sweep re-running — which it does
     # every hour, and which its own docstring calls idempotent — pays each
-    # request back exactly once.
+    # request back exactly once. The reason comes from the same rule the
+    # transitions ask, so "an expired request refunds" is written once.
+    owed = transition_refund(SessionStatus.EXPIRED, actor=None, starts_at=now, now=now)
     for row in expired:
-        await refund_credit(
-            session,
-            row["mentee_id"],
-            row["id"],
-            reason=CreditReason.REQUEST_UNFULFILLED,
-            now=now,
-        )
+        if owed is not None:
+            await refund_credit(session, row["mentee_id"], row["id"], reason=owed, now=now)
 
     # **Both parties, and this is the rule's one exception.** Nobody acted, so
     # neither of them already knows — the mentor let it lapse and the mentee has
