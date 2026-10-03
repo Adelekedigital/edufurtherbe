@@ -26,6 +26,11 @@ belongs to ``session_stats`` and is imported, not restated.
 one: the screen that needs it is the one a participant is sitting on while they
 wait, and *"your mentor has not joined yet"* is a different message from *"your
 mentor left"*. A client cannot tell those apart from the session alone.
+
+**So does a preview of the intake answers**: how many, and the first, so a
+list of bookings can show what each mentee wants to cover without a request
+per row. It is one extra query per page, read through the same rows and fold
+as ``GET /sessions/{id}/answers`` (``session_answer_rows``).
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipa
 from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.predicates import live
+from app.infra.db.session_answer_rows import answer_previews
 from app.infra.db.session_stats import MENTEE, attendance_rate
 
 __all__ = ["get_session", "is_a_party", "list_session_events", "list_sessions"]
@@ -304,7 +310,9 @@ async def list_sessions(
     # and more honest than a second COUNT, which can disagree with the page it
     # claims to describe.
     rows = [dict(r) for r in (await session.execute(statement.limit(limit + 1))).mappings()]
-    return rows[:limit], len(rows) > limit
+    page = rows[:limit]
+    await _with_answer_previews(session, page)
+    return page, len(rows) > limit
 
 
 async def get_session(
@@ -323,7 +331,22 @@ async def get_session(
         )
     )
     row = result.mappings().one_or_none()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    found = dict(row)
+    await _with_answer_previews(session, [found])
+    return found
+
+
+async def _with_answer_previews(session: AsyncSession, rows: list[dict[str, Any]]) -> None:
+    """Each row's answer preview, in **one** query for the whole page.
+
+    The rows are already scoped to the viewer, which is what makes reading
+    their answers by id safe. A session with no answers gets ``None``.
+    """
+    previews = await answer_previews(session, [row["id"] for row in rows])
+    for row in rows:
+        row["answers_preview"] = previews.get(row["id"])
 
 
 async def list_session_events(

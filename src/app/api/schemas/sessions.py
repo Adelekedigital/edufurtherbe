@@ -100,6 +100,30 @@ class PartyRead(BaseModel):
     )
 
 
+class AnswerPreviewFirstRead(BaseModel):
+    """The first answered question, as one line."""
+
+    question_text: str = Field(description="The question as it reads now.")
+    text: str = Field(
+        description=(
+            "The answer as plain text: the written answer, the chosen options "
+            "joined with `, `, or a file's name. May be long; clamp it client-side."
+        )
+    )
+
+
+class AnswerPreviewRead(BaseModel):
+    """Enough of the intake answers to show on a row without a second request."""
+
+    count: int = Field(
+        ge=1,
+        description="How many questions were answered, the length of `GET /sessions/{id}/answers`.",
+    )
+    first: AnswerPreviewFirstRead = Field(
+        description="The first answered question in the form's order, the first entry of that list."
+    )
+
+
 class SuggestionRead(BaseModel):
     """Another time the mentor offered when ending this session (#339)."""
 
@@ -216,6 +240,15 @@ class SessionRead(BaseModel):
             "this session. `null` when none was."
         ),
     )
+    answers_preview: AnswerPreviewRead | None = Field(
+        default=None,
+        description=(
+            "What the mentee answered on the offering's form, in brief: how many "
+            "answers and the first. `null` when there are none, including every "
+            "migrated booking. The full list, files included, is "
+            "`GET /sessions/{id}/answers`, read by the same people as this session."
+        ),
+    )
     mentee_attendance_rate: int | None = Field(
         default=None,
         description=(
@@ -268,12 +301,18 @@ class SessionRead(BaseModel):
             join_closes_at=closes,
             created_at=row["created_at"],  # type: ignore[arg-type]
             suggestion=_suggestion(row),
+            answers_preview=_answers_preview(row),
             mentee_attendance_rate=(
                 int(str(row["mentee_attendance_rate"]))
                 if row.get("mentee_attendance_rate") is not None
                 else None
             ),
         )
+
+
+def _answers_preview(row: dict[str, object]) -> AnswerPreviewRead | None:
+    preview = row.get("answers_preview")
+    return AnswerPreviewRead.model_validate(preview) if preview is not None else None
 
 
 def _suggestion(row: dict[str, object]) -> SuggestionRead | None:

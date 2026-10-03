@@ -13,6 +13,9 @@ question is still shown, because retiring is a soft delete that keeps the row
 for exactly this read, and it is flagged `retired`. The same holds for an
 option's text. Whether to keep a copy at booking is #350's question.
 
+**The rows and their folding are shared** with the preview every
+``SessionRead`` carries (``session_answer_rows``), so the two cannot drift.
+
 **Only answered questions are listed.** An optional question the mentee
 skipped has no row, and what the form held at booking is not recorded, so the
 current form cannot stand in for it: a question added since would read as
@@ -27,15 +30,8 @@ from uuid import UUID
 from sqlalchemy import literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.enums import QuestionType
-from app.infra.db.models.intake import (
-    IntakeAnswer,
-    IntakeFile,
-    IntakeSubmission,
-    SessionTypeQuestion,
-    SessionTypeQuestionOption,
-)
 from app.infra.db.models.sessions import Session
+from app.infra.db.session_answer_rows import answer_rows, fold_answers
 from app.infra.db.session_store import is_a_party
 
 __all__ = ["session_answers"]
@@ -64,67 +60,6 @@ async def session_answers(
     # Scoped again here rather than trusting the check above: the rows are
     # personal data, and the predicate costs one join.
     rows = await session.execute(
-        select(
-            SessionTypeQuestion.id.label("question_id"),
-            SessionTypeQuestion.question_text,
-            SessionTypeQuestion.deleted_at.is_not(None).label("retired"),
-            IntakeAnswer.answer_text,
-            SessionTypeQuestionOption.id.label("option_id"),
-            SessionTypeQuestionOption.option_text,
-            IntakeFile.id.label("file_id"),
-            IntakeFile.filename,
-            IntakeFile.content_type,
-            IntakeFile.size_bytes,
-            IntakeFile.deleted_at.is_(None).label("file_available"),
-        )
-        .select_from(IntakeAnswer)
-        .join(IntakeSubmission, IntakeSubmission.id == IntakeAnswer.submission_id)
-        .join(Session, Session.id == IntakeSubmission.session_id)
-        .join(SessionTypeQuestion, SessionTypeQuestion.id == IntakeAnswer.question_id)
-        .outerjoin(
-            SessionTypeQuestionOption,
-            SessionTypeQuestionOption.id == IntakeAnswer.selected_option_id,
-        )
-        .outerjoin(IntakeFile, IntakeFile.storage_key == IntakeAnswer.file_storage_key)
-        .where(Session.id == session_id, _readable_by(caller_id, caller_is_admin))
-        .order_by(
-            SessionTypeQuestion.display_order,
-            SessionTypeQuestion.id,
-            SessionTypeQuestionOption.sort_order,
-            SessionTypeQuestionOption.id,
-        )
+        answer_rows(Session.id == session_id, _readable_by(caller_id, caller_is_admin))
     )
-
-    answers: dict[UUID, dict[str, Any]] = {}
-    for row in rows.mappings():
-        entry = answers.setdefault(
-            row["question_id"],
-            {
-                "question_id": row["question_id"],
-                "question_text": row["question_text"],
-                "retired": row["retired"],
-                "text": None,
-                "options": [],
-                "file": None,
-            },
-        )
-        # **The type is the answer's form, not the question's type now.** A
-        # mentor may switch a question between free text and file after it was
-        # answered, and the current type would then mislabel the answer given.
-        # The CHECK guarantees each row carries exactly one form.
-        if row["answer_text"] is not None:
-            entry["question_type"] = QuestionType.FREE_TEXT
-            entry["text"] = row["answer_text"]
-        if row["option_id"] is not None:
-            entry["question_type"] = QuestionType.MULTI_CHOICE
-            entry["options"].append({"id": row["option_id"], "text": row["option_text"]})
-        if row["file_id"] is not None:
-            entry["question_type"] = QuestionType.FILE_UPLOAD
-            entry["file"] = {
-                "id": row["file_id"],
-                "filename": row["filename"],
-                "content_type": row["content_type"],
-                "size_bytes": row["size_bytes"],
-                "available": row["file_available"],
-            }
-    return list(answers.values())
+    return fold_answers(rows.mappings()).get(session_id, [])
