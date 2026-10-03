@@ -213,7 +213,14 @@ async def transition(
             mentee_id=row["mentee_id"],
             actor_id=actor_id,
         ),
-        variables={"reason_text": payload.get("reason_text") or ""},
+        # What the event says, kept on the row: the code is worded and the side
+        # is named only at send time (`domain/messages.py`), so a party who has
+        # since deleted their account is not named (#288).
+        variables={
+            "reason_text": payload.get("reason_text") or "",
+            "reason_code": str(reason_code or ""),
+            "cancel_initiator": str(role),
+        },
     )
 
 

@@ -269,3 +269,24 @@ async def test_a_naive_now_is_refused(db_engine: AsyncEngine) -> None:
     async with factory() as db:
         with pytest.raises(ValueError, match="aware datetime"):
             await remind_about_expiring_credits(db, now=dt.datetime(2026, 9, 17, 6, 0))
+
+
+async def test_the_nudge_carries_how_many_credits_expire(db_engine: AsyncEngine) -> None:
+    """`creditCount` in the live template: the sum across lots sharing the date."""
+    user = await a_user(db_engine)
+    await a_lot(db_engine, user, remaining=1)
+    await a_lot(db_engine, user, remaining=2, source="referral_unlock")
+
+    await sweep(db_engine, now=FOURTEEN_OUT)
+
+    async with db_engine.begin() as conn:
+        count = (
+            await conn.execute(
+                text(
+                    "SELECT payload ->> 'credit_count' FROM outbox_events "
+                    "WHERE event_type = 'credits_expiring' AND payload ->> 'recipient_id' = :u"
+                ),
+                {"u": str(user)},
+            )
+        ).scalar_one()
+    assert count == "3"

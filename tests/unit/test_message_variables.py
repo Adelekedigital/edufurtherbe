@@ -16,9 +16,14 @@ import datetime as dt
 
 import pytest
 
+from app.domain.enums import SessionReasonCode
 from app.domain.messages import (
     ALIASES,
+    NO_REASON_TITLE,
+    REASON_TITLES,
     RESOLVERS,
+    SESSION_TOPIC_FALLBACK,
+    VENUE_FALLBACK,
     MessageContext,
     UnresolvedVariableError,
     build_variables,
@@ -190,9 +195,9 @@ def test_an_empty_declaration_is_refused_as_unpublished() -> None:
 
 
 def test_a_missing_value_is_refused_rather_than_left_blank() -> None:
-    """A session with no topic cannot fill a template that asks for one."""
-    with pytest.raises(UnresolvedVariableError, match="sessionTopic"):
-        build_variables(["sessionTopic"], context(topic=None))
+    """A message with nobody to name cannot fill a template that names them."""
+    with pytest.raises(UnresolvedVariableError, match="mentorName"):
+        build_variables(["mentorName"], context(mentor_name=""))
 
 
 def test_a_session_variable_on_a_message_with_no_session_is_refused() -> None:
@@ -225,7 +230,7 @@ def test_what_a_person_wrote_comes_from_the_event_not_the_session() -> None:
     from the session row."""
     built = build_variables(
         ["cancelmessage", "cancelinitiator"],
-        context(extras={"reason_text": "I am unwell", "cancel_initiator": "Ada Mentor"}),
+        context(extras={"reason_text": "I am unwell", "cancel_initiator": "mentor"}),
     )
 
     assert built["cancelmessage"] == "I am unwell"
@@ -240,3 +245,243 @@ def test_hours_left_is_floored_and_never_negative() -> None:
 
     assert build_variables(["hours"], ahead)["hours"] == "3"
     assert build_variables(["hours"], past)["hours"] == "0"
+
+
+# --------------------------------------------------------------------------
+# Values that are legitimately absent (dev outbox, 2026-10-03)
+# --------------------------------------------------------------------------
+#
+# Found by sending every live template through the real notifier: a booking
+# with no topic failed `session_requested` on `sessionTopic`, and a decline
+# with no reason code failed `request_declined` on `reasonTitle`, so mentors
+# were not told of requests and mentees were not told of declines. These are
+# values a real event often lacks, so each has one defined fallback. An
+# unknown *name* is still refused (above).
+
+
+def test_a_session_with_no_topic_is_named_by_its_offering() -> None:
+    built = build_variables(
+        ["sessionTopic", "topic", "sessTopic"],
+        context(topic=None, session_type_name="School shortlist"),
+    )
+
+    assert built == {
+        "sessionTopic": "School shortlist",
+        "topic": "School shortlist",
+        "sessTopic": "School shortlist",
+    }
+
+
+def test_a_session_with_no_topic_and_no_offering_still_has_a_subject() -> None:
+    built = build_variables(["sessionTopic"], context(topic=None, session_type_name=None))
+
+    assert built["sessionTopic"] == SESSION_TOPIC_FALLBACK == "Mentorship session"
+
+
+def test_a_written_topic_wins_over_the_offering() -> None:
+    built = build_variables(["sessionTopic"], context(session_type_name="School shortlist"))
+
+    assert built["sessionTopic"] == "Personal statements"
+
+
+def test_no_booking_message_is_an_empty_detail_not_a_failed_send() -> None:
+    built = build_variables(["sessionDetail", "discuss", "topicDiscuss"], context(detail=None))
+
+    assert built == {"sessionDetail": "", "discuss": "", "topicDiscuss": ""}
+
+
+def test_no_venue_reads_as_online() -> None:
+    assert build_variables(["location"], context(venue=None))["location"] == VENUE_FALLBACK
+
+
+def test_a_reason_code_reads_as_words() -> None:
+    built = build_variables(["reasonTitle"], context(extras={"reason_code": "scheduling_conflict"}))
+
+    assert built["reasonTitle"] == REASON_TITLES[SessionReasonCode.SCHEDULING_CONFLICT]
+
+
+def test_no_reason_code_reads_as_no_reason_given() -> None:
+    built = build_variables(["reasonTitle", "reasonMessage"], context(extras={}))
+
+    assert built == {"reasonTitle": NO_REASON_TITLE, "reasonMessage": ""}
+
+
+def test_every_reason_code_has_words() -> None:
+    """A code added to the enum without wording would fall back silently."""
+    assert set(REASON_TITLES) == set(SessionReasonCode)
+
+
+def test_the_initiator_is_named_by_side_at_send_time() -> None:
+    built = build_variables(["cancelInitiator"], context(extras={"cancel_initiator": "mentee"}))
+
+    assert built["cancelInitiator"] == "Bo Mentee"
+
+
+# --------------------------------------------------------------------------
+# Names the live templates use
+# --------------------------------------------------------------------------
+
+
+def test_fname_is_the_recipients_first_name() -> None:
+    assert build_variables(["fName"], context(recipient_first_name="Ada"))["fName"] == "Ada"
+
+
+def test_fname_without_a_first_name_falls_back_to_the_full_name() -> None:
+    built = build_variables(["fName"], context(recipient_first_name=None))
+
+    assert built["fName"] == "Ada Mentor"
+
+
+def test_a_review_names_its_author_and_its_subject_and_links_the_session() -> None:
+    built = build_variables(["reviewBy", "reviewFor", "reviewLink"], context())
+
+    assert built == {
+        "reviewBy": "Bo Mentee",
+        "reviewFor": "Ada Mentor",
+        "reviewLink": "https://app.edufurther.org/sessions/01a0-session",
+    }
+
+
+def test_the_book_link_is_explore() -> None:
+    assert build_variables(["bookLink"], context())["bookLink"] == (
+        "https://app.edufurther.org/explore"
+    )
+
+
+def test_credit_count_comes_from_the_row() -> None:
+    built = build_variables(["creditCount"], context(extras={"credit_count": "2"}))
+
+    assert built == {"creditCount": "2"}
+
+
+def test_credit_count_is_required_where_asked() -> None:
+    with pytest.raises(UnresolvedVariableError, match="creditCount"):
+        build_variables(["creditCount"], context())
+
+
+#: What each live template declared on 2026-10-03, read from Loops.
+LIVE_TEMPLATES = {
+    "credits_expiring": ["bookLink", "creditCount", "fName"],
+    "credits_granted": ["bookLink", "fName"],
+    "credits_renewed": ["bookLink", "fName"],
+    "mentor_response_reminder": [
+        "discuss",
+        "hours",
+        "location",
+        "menteeName",
+        "mentorName",
+        "sessionDate",
+        "sessionTime",
+        "sessionTopic",
+        "webUrl",
+    ],
+    "mentor_return_reminder": ["mentorName"],
+    "request_accepted": [
+        "attendee",
+        "location",
+        "name",
+        "sessiondate",
+        "sessionlink",
+        "sessiontime",
+        "topic",
+        "topicDiscuss",
+    ],
+    "request_declined": [
+        "menteeName",
+        "mentorName",
+        "reasonMessage",
+        "reasonTitle",
+        "sessionDate",
+        "webUrl",
+    ],
+    "request_withdrawn": [
+        "menteeName",
+        "mentorName",
+        "reasonMessage",
+        "reasonTitle",
+        "sessionDate",
+        "webUrl",
+    ],
+    "review_received": ["reviewBy", "reviewFor", "reviewLink"],
+    "review_requested": ["reviewBy", "reviewFor", "reviewLink", "sessTopic"],
+    "session_booked": [
+        "attendee",
+        "location",
+        "name",
+        "sessiondate",
+        "sessionlink",
+        "sessiontime",
+        "topic",
+        "topicDiscuss",
+    ],
+    "session_cancelled": ["cancelinitiator", "cancelmessage", "dashlink", "name", "sessiondate"],
+    "session_last_reminder": [
+        "attendee",
+        "location",
+        "name",
+        "sessiondate",
+        "sessionlink",
+        "sessiontime",
+        "topic",
+        "topicDiscuss",
+    ],
+    "session_reminder": [
+        "attendee",
+        "intervaltime",
+        "location",
+        "name",
+        "sessiondate",
+        "sessionlink",
+        "sessiontime",
+        "topic",
+        "topicDiscuss",
+    ],
+    "session_requested": [
+        "discuss",
+        "hours",
+        "menteeName",
+        "mentorName",
+        "sessionDate",
+        "sessionTime",
+        "sessionTopic",
+        "webUrl",
+    ],
+}
+
+
+def test_every_name_a_live_template_uses_has_a_resolver() -> None:
+    """The gap the dev outbox found, closed for every template at once."""
+    known = set(RESOLVERS) | set(ALIASES)
+    missing = {
+        template: sorted(set(names) - known)
+        for template, names in LIVE_TEMPLATES.items()
+        if set(names) - known
+    }
+
+    assert missing == {}
+
+
+def test_a_bare_session_fills_every_live_session_template() -> None:
+    """A real booking: no topic, no message, no venue, no reason given."""
+    bare = context(
+        topic=None,
+        detail=None,
+        venue=None,
+        session_type_name=None,
+        respond_by=dt.datetime.now(dt.UTC) + dt.timedelta(hours=5),
+        extras={"interval": "24 hours", "cancel_initiator": "mentor"},
+    )
+    for template in (
+        "mentor_response_reminder",
+        "request_accepted",
+        "request_declined",
+        "request_withdrawn",
+        "review_received",
+        "review_requested",
+        "session_booked",
+        "session_cancelled",
+        "session_last_reminder",
+        "session_reminder",
+        "session_requested",
+    ):
+        build_variables(LIVE_TEMPLATES[template], bare)

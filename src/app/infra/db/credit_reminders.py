@@ -78,7 +78,7 @@ WINDOW = dt.timedelta(days=1)
 
 async def expiring_soon(
     session: AsyncSession, reminder: CreditReminder, *, now: dt.datetime
-) -> list[tuple[UUID, dt.datetime]]:
+) -> list[tuple[UUID, dt.datetime, int]]:
     """Users with spendable credits expiring around ``reminder.before`` from now.
 
     Returns one row per user per expiry date, because a user can hold two lots
@@ -91,9 +91,13 @@ async def expiring_soon(
     target = now + reminder.before
 
     return [
-        (row.user_id, row.expires_at)
+        (row.user_id, row.expires_at, int(row.expiring))
         for row in await session.execute(
-            select(CreditLot.user_id, CreditLot.expires_at)
+            select(
+                CreditLot.user_id,
+                CreditLot.expires_at,
+                func.sum(CreditLot.quantity_remaining).label("expiring"),
+            )
             .join(User, User.id == CreditLot.user_id)
             .where(
                 LIVE,
@@ -125,7 +129,7 @@ async def remind_about_expiring_credits(session: AsyncSession, *, now: dt.dateti
     """
     queued = 0
     for reminder in CREDIT_REMINDERS:
-        for user_id, expires_at in await expiring_soon(session, reminder, now=now):
+        for user_id, expires_at, expiring in await expiring_soon(session, reminder, now=now):
             await enqueue(
                 session,
                 Notification.CREDITS_EXPIRING,
@@ -138,6 +142,8 @@ async def remind_about_expiring_credits(session: AsyncSession, *, now: dt.dateti
                     # moves the wording with it rather than leaving a message
                     # that says "two weeks" one week out.
                     "interval": reminder.interval,
+                    # How many go, for `creditCount`: a fact of this run.
+                    "credit_count": expiring,
                 },
             )
             queued += 1

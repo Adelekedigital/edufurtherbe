@@ -30,7 +30,7 @@ from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.notifications import Channel, Notification
 from app.infra.db.mentor_listing import return_reminder_state
 from app.infra.db.models.platform import OutboxEvent
-from app.infra.db.models.sessions import Session
+from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
 
@@ -251,12 +251,14 @@ async def _context_for(
     pointed at the wrong message — which `build_variables` refuses by name.
     """
     people = await _names_for(session, (recipient,))
+    nobody = ("", "UTC", None)
     extras = {
         str(key): str(value) for key, value in dict(row["payload"]).items() if key != "recipient_id"
     }
     base = {
-        "recipient_name": people.get(recipient, ("", "UTC"))[0],
-        "recipient_timezone": people.get(recipient, ("", "UTC"))[1],
+        "recipient_name": people.get(recipient, nobody)[0],
+        "recipient_timezone": people.get(recipient, nobody)[1],
+        "recipient_first_name": people.get(recipient, nobody)[2],
         "app_base_url": settings.app_base_url or "",
         "extras": extras,
     }
@@ -276,7 +278,12 @@ async def _context_for(
                     Session.booking_message,
                     Session.meeting_provider,
                     Session.respond_by,
-                ).where(Session.id == row["entity_id"])
+                    # The offering's current name, retired or not, as #185 and
+                    # the session read do: the subject when no topic was written.
+                    SessionType.name.label("session_type_name"),
+                )
+                .outerjoin(SessionType, SessionType.id == Session.session_type_id)
+                .where(Session.id == row["entity_id"])
             )
         )
         .mappings()
@@ -287,12 +294,14 @@ async def _context_for(
 
     parties = await _names_for(session, (found["mentor_id"], found["mentee_id"], recipient))
     return MessageContext(
-        recipient_name=parties.get(recipient, ("", "UTC"))[0],
-        recipient_timezone=parties.get(recipient, ("", "UTC"))[1],
+        recipient_name=parties.get(recipient, nobody)[0],
+        recipient_timezone=parties.get(recipient, nobody)[1],
+        recipient_first_name=parties.get(recipient, nobody)[2],
         mentor_name=_party_name(parties, found["mentor_id"], "mentor"),
         mentee_name=_party_name(parties, found["mentee_id"], "mentee"),
         starts_at=found["starts_at"],
         topic=found["topic"],
+        session_type_name=found["session_type_name"],
         detail=found["booking_message"],
         venue=VENUE_LABELS.get(str(found["meeting_provider"] or "")),
         respond_by=found["respond_by"],
@@ -315,7 +324,7 @@ VENUE_LABELS = {
 }
 
 
-def _party_name(people: dict[UUID, tuple[str, str]], user_id: UUID, role: str) -> str:
+def _party_name(people: dict[UUID, tuple[str, str, str | None]], user_id: UUID, role: str) -> str:
     """A session party's name, or "your mentor" / "your mentee" once they are gone.
 
     Absent from ``people`` means `_names_for` did not see them live: the account
@@ -328,8 +337,8 @@ def _party_name(people: dict[UUID, tuple[str, str]], user_id: UUID, role: str) -
 
 async def _names_for(
     session: AsyncSession, user_ids: tuple[UUID, ...]
-) -> dict[UUID, tuple[str, str]]:
-    """Display name and timezone for each **live** person, in one statement.
+) -> dict[UUID, tuple[str, str, str | None]]:
+    """Display name, timezone and first name for each **live** person, in one statement.
 
     Through `LIVE`, like every other read of a person's identity (#212, #288):
     names are read when the outbox drains, which can be after an account was
@@ -346,6 +355,7 @@ async def _names_for(
         row["id"]: (
             " ".join(part for part in (row["first_name"], row["last_name"]) if part).strip(),
             str(row["timezone"] or "UTC"),
+            row["first_name"] or None,
         )
         for row in rows
     }
