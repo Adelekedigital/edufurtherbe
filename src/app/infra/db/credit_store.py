@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, func, or_, select
@@ -49,7 +48,6 @@ from app.infra.db.models.credits import CreditLot
 
 __all__ = [
     "CreditSummary",
-    "credits_expiring_state",
     "expiring_on",
     "get_credit_summary",
     "held",
@@ -77,17 +75,6 @@ async def expiring_on(
         )
     )
     return int(total or 0)
-
-
-async def credits_expiring_state(
-    session: AsyncSession, user_id: UUID, payload: dict[str, Any], now: dt.datetime
-) -> Literal["due", "stale"]:
-    """Drop an expiry nudge whose credits were all spent before it was sent."""
-    expires_at = payload.get("expires_at")
-    if not expires_at:
-        return "due"
-    left = await expiring_on(session, user_id, dt.datetime.fromisoformat(expires_at), now=now)
-    return "due" if left > 0 else "stale"
 
 
 def spendable_now(moment: dt.datetime) -> ColumnElement[bool]:

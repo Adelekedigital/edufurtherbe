@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.notifications import Channel, Notification
-from app.infra.db.credit_store import credits_expiring_state, expiring_on
+from app.infra.db.credit_store import expiring_on
 from app.infra.db.mentor_listing import return_reminder_state
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session, SessionType
@@ -178,6 +178,16 @@ async def drain(
             counts["skipped"] += 1
             continue
         try:
+            context = await _context_for(session, row, recipient, settings)
+        except Superseded:
+            await _finish(session, row["id"], "skipped", row["attempts"], "superseded")
+            counts["skipped"] += 1
+            continue
+        except Exception as exc:
+            await _finish(session, row["id"], "failed", row["attempts"], str(exc)[:500])
+            counts["failed"] += 1
+            continue
+        try:
             notifier.send(
                 notification=Notification(str(row["event_type"])),
                 channel=Channel(str(row["destination"])),
@@ -186,7 +196,7 @@ async def drain(
                 # uses is a fact about the channel, so what it declares is too —
                 # and a notifier with no templates must not need one looked up
                 # on its behalf. The adapter builds what it asked for.
-                context=await _context_for(session, row, recipient, settings),
+                context=context,
                 # **The row's own id is the idempotency key.** It is a UUID that
                 # exists exactly once per message per recipient, so a retry
                 # after a timeout replays the provider's answer rather than
@@ -210,11 +220,15 @@ async def drain(
 #: or changed zone would be a false or early instruction. Every other message is
 #: about something that already happened and stays true. `stale` is skipped,
 #: not failed (nothing went wrong); `wait` stays pending.
-STILL_DUE = {
-    Notification.MENTOR_RETURN_REMINDER: return_reminder_state,
-    # Spent since the sweep queued it: nothing is expiring any more.
-    Notification.CREDITS_EXPIRING: credits_expiring_state,
-}
+STILL_DUE = {Notification.MENTOR_RETURN_REMINDER: return_reminder_state}
+
+
+class Superseded(Exception):  # noqa: N818 - a reason not to send, not an error
+    """What the message would say stopped being true while it waited.
+
+    Raised while building the context, from the same read that fills it, so
+    there is no gap between deciding to send and what the email says.
+    """
 
 
 async def _finish(
@@ -276,14 +290,16 @@ async def _context_for(
         return MessageContext(mentor_name=named, mentee_name="", **base)  # type: ignore[arg-type]
     if str(row["entity_type"]) != "session":
         if row["event_type"] == Notification.CREDITS_EXPIRING and extras.get("expires_at"):
-            extras["credit_count"] = str(
-                await expiring_on(
-                    session,
-                    row["entity_id"],
-                    dt.datetime.fromisoformat(extras["expires_at"]),
-                    now=dt.datetime.now(dt.UTC),
-                )
+            left = await expiring_on(
+                session,
+                row["entity_id"],
+                dt.datetime.fromisoformat(extras["expires_at"]),
+                now=dt.datetime.now(dt.UTC),
             )
+            if left == 0:
+                # All spent since the sweep queued it: nothing is expiring.
+                raise Superseded
+            extras["credit_count"] = str(left)
         return MessageContext(mentor_name="", mentee_name="", **base)  # type: ignore[arg-type]
 
     found = (

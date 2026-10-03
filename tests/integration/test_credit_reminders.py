@@ -339,3 +339,58 @@ async def test_a_nudge_whose_credits_were_all_spent_is_not_sent(db_engine: Async
         )
 
     assert await drain_expiring(db_engine) == []
+
+
+async def test_a_nudge_dropped_as_spent_is_recorded_skipped_not_failed(
+    db_engine: AsyncEngine,
+) -> None:
+    """A deliberate non-send, so it is not retried and not counted as a failure."""
+    user = await a_user(db_engine)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=14)
+    await a_lot(db_engine, user, remaining=2, expires=expires)
+    await sweep(db_engine, now=expires - dt.timedelta(days=14))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET quantity_remaining = 0 WHERE user_id = :u"), {"u": user}
+        )
+
+    await drain_expiring(db_engine)
+
+    async with db_engine.connect() as conn:
+        status, detail = (
+            await conn.execute(
+                text(
+                    "SELECT status, error_detail FROM outbox_events "
+                    "WHERE event_type = 'credits_expiring' AND payload ->> 'recipient_id' = :u"
+                ),
+                {"u": str(user)},
+            )
+        ).one()
+    assert (status, detail) == ("skipped", "superseded")
+
+
+async def test_the_count_is_read_once_so_a_spend_cannot_slip_between(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex on #340: a check and then a second read for the email let a spend
+    in between send "0 credits". The decision and the number are one read."""
+    from app.infra.db import credit_store, outbox
+
+    user = await a_user(db_engine)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=14)
+    await a_lot(db_engine, user, remaining=2, expires=expires)
+    await sweep(db_engine, now=expires - dt.timedelta(days=14))
+    reads: list[int] = []
+    answers = iter([2, 0])
+
+    async def racing(*_args: Any, **_kwargs: Any) -> int:
+        reads.append(1)
+        return next(answers)
+
+    monkeypatch.setattr(outbox, "expiring_on", racing)
+    monkeypatch.setattr(credit_store, "expiring_on", racing)
+
+    (context,) = await drain_expiring(db_engine)
+
+    assert len(reads) == 1
+    assert build_variables(["creditCount"], context) == {"creditCount": "2"}

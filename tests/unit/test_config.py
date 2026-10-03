@@ -290,3 +290,16 @@ def test_the_env_file_is_selectable(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     settings = Settings(_env_file=".env.staging")
 
     assert settings.cors_origins == ["https://staging.example"]
+
+
+@pytest.mark.parametrize("value", ["app.example.com", "/app", "ftp://app.example.com"])
+def test_an_app_origin_without_a_web_scheme_is_refused(value: str) -> None:
+    """Codex on #340: every email link is joined to this, so a value with no
+    scheme sends links no mail client can open. Refused at start-up instead."""
+    with pytest.raises(PydanticValidationError):
+        Settings(_env_file=None, app_base_url=value)
+
+
+@pytest.mark.parametrize("value", ["https://app.edufurther.org", "http://localhost:3000"])
+def test_an_app_origin_with_a_web_scheme_is_kept(value: str) -> None:
+    assert Settings(_env_file=None, app_base_url=value).app_base_url == value
