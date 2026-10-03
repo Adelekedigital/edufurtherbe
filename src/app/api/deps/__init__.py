@@ -47,7 +47,12 @@ from app.api.deps.core import (
     _configured,
     get_storage,
 )
-from app.api.deps.intake import MAX_FILE_MB, IntakeFileDownloadDep, UploadedIntakeFileDep
+from app.api.deps.intake import (
+    MAX_FILE_MB,
+    IntakeFileDownloadDep,
+    SessionAnswersDep,
+    UploadedIntakeFileDep,
+)
 from app.api.deps.jobs import ReminderCallbackDep, RuntimeJobDep
 from app.api.deps.mentors import (
     FeaturedMentorDep,
@@ -211,6 +216,7 @@ __all__ = [
     "ResumedSelfDep",
     "ReviewableSessionsDep",
     "RuntimeJobDep",
+    "SessionAnswersDep",
     "SessionDetailDep",
     "SessionEventsDep",
     "SessionTypeWindowsDep",

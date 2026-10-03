@@ -33,12 +33,14 @@ from app.api.deps import (
     CancelledSessionDep,
     DeclinedSessionDep,
     JoinedSessionDep,
+    SessionAnswersDep,
     SessionDetailDep,
     SessionEventsDep,
     SessionsPageDep,
     WithdrawnSessionDep,
 )
 from app.api.schemas.common import Page
+from app.api.schemas.intake import SessionAnswerRead
 from app.api.schemas.sessions import SessionEventRead, SessionRead
 
 router = APIRouter(prefix="/api/v1", tags=["sessions"])
@@ -146,6 +148,32 @@ async def read_session(session: SessionDetailDep) -> SessionRead:
 )
 async def read_session_events(events: SessionEventsDep) -> Page[SessionEventRead]:
     return Page(data=[SessionEventRead.from_row(row) for row in events], next_cursor=None)
+
+
+@router.get(
+    "/sessions/{session_id}/answers",
+    response_model=Page[SessionAnswerRead],
+    summary="Read the answers given when booking",
+    description=(
+        "The intake form's answers for this booking, one entry per question in "
+        "the form's order, for the mentor to prepare with.\n\n"
+        "**Readable by the session's mentee, its mentor, and admins**; anyone "
+        "else gets the same `404` as a session that does not exist.\n\n"
+        "**An empty list is not an error**: a booking made on an offering with "
+        "no form, or migrated from the old app, was asked nothing.\n\n"
+        "A file answer carries the file's `id`; download it with "
+        "`GET /api/v1/intake-files/{id}`, which admits the same three readers. "
+        "`available: false` means retention has removed the file.\n\n"
+        "**Questions read as they stand now.** No copy of the wording is kept at "
+        "booking, so a question reworded afterwards shows its new wording. A "
+        "removed question is still listed, with `retired: true`.\n\n"
+        "`next_cursor` is always `null`: a form has at most a handful of "
+        "questions and is returned whole."
+    ),
+    responses=READ_RESPONSES,
+)
+async def read_session_answers(answers: SessionAnswersDep) -> Page[SessionAnswerRead]:
+    return Page(data=[SessionAnswerRead.from_row(row) for row in answers], next_cursor=None)
 
 
 BOOKING_RESPONSES: dict[int | str, dict[str, str]] = {

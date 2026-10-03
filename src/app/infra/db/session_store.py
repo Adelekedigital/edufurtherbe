@@ -47,7 +47,7 @@ from app.infra.db.models.user import User, UserProfile
 from app.infra.db.predicates import live
 from app.infra.db.session_stats import MENTEE, attendance_rate
 
-__all__ = ["get_session", "list_session_events", "list_sessions"]
+__all__ = ["get_session", "is_a_party", "list_session_events", "list_sessions"]
 
 #: What both parties may read about a session. `created_by` is absent — it is
 #: null on every migrated row and is an internal attribution rather than
@@ -215,7 +215,7 @@ _EVENT_COLUMNS = (
 )
 
 
-def _is_a_party(viewer_id: UUID) -> Any:
+def is_a_party(viewer_id: UUID) -> Any:
     """The predicate every read here is scoped by.
 
     Written once and reused rather than retyped into three statements — the
@@ -288,7 +288,7 @@ async def list_sessions(
     keys = (Session.starts_at, Session.id)
     statement = (
         _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS))
-        .where(_is_a_party(user_id))
+        .where(is_a_party(user_id))
         .order_by(*(k.asc() if ascending else k.desc() for k in keys))
     )
     if starts_from is not None:
@@ -319,7 +319,7 @@ async def get_session(
     """
     result = await session.execute(
         _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS)).where(
-            Session.id == session_id, _is_a_party(viewer_id)
+            Session.id == session_id, is_a_party(viewer_id)
         )
     )
     row = result.mappings().one_or_none()
@@ -348,7 +348,7 @@ async def list_session_events(
     session's existence.
     """
     owned = await session.execute(
-        select(Session.id).where(Session.id == session_id, _is_a_party(viewer_id))
+        select(Session.id).where(Session.id == session_id, is_a_party(viewer_id))
     )
     if owned.scalar_one_or_none() is None:
         return None
