@@ -63,7 +63,7 @@ from app.domain.sessions import (
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.booking_rules import effective_break_minutes, effective_duration_minutes
 from app.infra.db.credit_writer import spend_credit
-from app.infra.db.holds import held_offer, holds_against, lock_mentor_slots
+from app.infra.db.holds import active_hold, held_offer, holds_against, lock_mentor_slots
 from app.infra.db.intake_file_store import link_files, usable_file_ids
 from app.infra.db.intake_store import questions_by_type, record_answers
 from app.infra.db.mentee_limits import check_mentee_limits
@@ -400,7 +400,14 @@ async def book_session(
     if offer is not None:
         await session.execute(
             update(SessionSuggestion)
-            .where(SessionSuggestion.id == offer["id"])
+            .where(
+                # Owner-scoped and still active in the write itself, not only in
+                # the read that found it.
+                SessionSuggestion.id == offer["id"],
+                SessionSuggestion.mentee_id == mentee_id,
+                SessionSuggestion.mentor_id == mentor_id,
+                *active_hold(now),
+            )
             .values(accepted_session_id=session_id)
         )
 
