@@ -25,12 +25,13 @@ prefers extraction to pinned copies; this is the extraction, and the pinning
 test in ``test_credit_expiry.py`` now asserts the *behaviour* rather than
 guarding a second copy.
 
-NULL IS NOT ZERO, AND ``SUM`` RETURNS NULL
-==========================================
+NO LOTS IS ZERO, NOT NULL
+=========================
 A user with no lots at all — every migrated mentor, and anybody before their
-first grant — has ``SUM`` return ``NULL`` rather than ``0``. Coalesced here
-rather than at the call site, because a ``None`` balance reaching
-:func:`state_for` raises and a ``None`` reaching the card renders nothing.
+first grant — has a balance of ``0``. The balance is summed in Python from the
+held lots, so an empty list sums to ``0`` rather than SQL's ``NULL``; a ``None``
+balance reaching :func:`state_for` raises and a ``None`` reaching the card
+renders nothing.
 """
 
 from __future__ import annotations
@@ -170,18 +171,11 @@ async def get_credit_summary(
     """
     moment = now or dt.datetime.now(dt.UTC)
 
-    total = await session.scalar(
-        select(func.coalesce(func.sum(CreditLot.quantity_remaining), 0)).where(
-            CreditLot.user_id == user_id,
-            # See the module docstring. The job does not decide what is
-            # spendable; this does.
-            spendable_now(moment),
-        )
-    )
-
-    monthly, bonus = await _buckets(session, user_id, moment=moment, ladder=ladder)
+    # One statement for the total and its split, so they cannot disagree: a
+    # booking between two reads would otherwise make them add up wrong.
+    balance, monthly, bonus = await _buckets(session, user_id, moment=moment, ladder=ladder)
     return CreditSummary.of(
-        balance=int(total or 0),
+        balance=balance,
         next_reset_at=end_of_month(moment),
         ladder=ladder,
         monthly=monthly,
@@ -191,12 +185,14 @@ async def get_credit_summary(
 
 async def _buckets(
     session: AsyncSession, user_id: UUID, *, moment: dt.datetime, ladder: CreditLadder
-) -> tuple[MonthlyCredits, BonusCredits]:
-    """The balance split into monthly and bonus credits, in two queries.
+) -> tuple[int, MonthlyCredits, BonusCredits]:
+    """The balance, and its split into monthly and bonus credits, in two queries.
 
     **Every lot the user has had**, spent or not, because a refund's origin is
-    usually a spent lot. Which of them still count is ``held(moment)``, selected
-    as a column so the split sums exactly the lots the total does.
+    usually a spent lot. Which of them still count is ``held(moment)``, which
+    is ``spendable_now`` plus credit left in the lot, selected as a column. The
+    balance and the split are summed from those same rows, so
+    ``monthly.balance + bonus.balance == balance`` by construction.
 
     A refund lot is linked to the lot it replaces through the ledger: its own
     grant row names the session, and that session's ``session_booked`` debit
@@ -224,6 +220,9 @@ async def _buckets(
             .join(
                 debit,
                 and_(
+                    # Scoped to the caller in the query (non-negotiable #5),
+                    # which also keeps this on the user's ledger rows.
+                    debit.user_id == user_id,
                     debit.session_id == grant.session_id,
                     debit.reason == CreditReason.SESSION_BOOKED,
                 ),
@@ -236,18 +235,20 @@ async def _buckets(
         )
     ).all()
 
-    return split_buckets(
-        (
-            HeldLot(
-                lot_id=row.id,
-                source=row.source,
-                remaining=row.quantity_remaining,
-                expires_at=row.expires_at,
-            )
-            for row in lots
-            if row.held
-        ),
+    held_lots = [
+        HeldLot(
+            lot_id=row.id,
+            source=row.source,
+            remaining=row.quantity_remaining,
+            expires_at=row.expires_at,
+        )
+        for row in lots
+        if row.held
+    ]
+    monthly, bonus = split_buckets(
+        held_lots,
         sources={row.id: row.source for row in lots},
         replaces={row[0]: row[1] for row in links},
         ceiling=ladder.monthly,
     )
+    return sum(lot.remaining for lot in held_lots), monthly, bonus

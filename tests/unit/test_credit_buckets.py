@@ -138,3 +138,10 @@ def test_the_two_parts_add_up_to_everything_held() -> None:
     monthly, bonus = split(held)
 
     assert monthly.balance + bonus.balance == sum(item.remaining for item in held)
+
+
+def test_a_monthly_part_that_never_expires_has_no_expiry_rather_than_failing() -> None:
+    """A migrated opening balance carried with no expiry is still monthly."""
+    monthly, _ = split([lot(CreditSource.OPENING_BALANCE, remaining=2, expires_at=None)])
+
+    assert (monthly.balance, monthly.expires_at) == (2, None)

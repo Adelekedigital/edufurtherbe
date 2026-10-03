@@ -316,7 +316,8 @@ class MonthlyCredits:
     balance: int
     #: The monthly grant. A late refund can briefly put ``balance`` above it.
     ceiling: int
-    #: The soonest instant a held monthly credit stops being spendable.
+    #: The soonest instant a held monthly credit stops being spendable. Null when
+    #: there are none, or none of them expire.
     expires_at: dt.datetime | None
 
 
@@ -402,7 +403,7 @@ def split_buckets(
         MonthlyCredits(
             balance=monthly,
             ceiling=ceiling,
-            expires_at=min(monthly_expiries) if monthly else None,
+            expires_at=min(monthly_expiries) if monthly and monthly_expiries else None,
         ),
         BonusCredits(balance=sum(bonus.values()), groups=groups),
     )
