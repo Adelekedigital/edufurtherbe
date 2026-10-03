@@ -249,7 +249,7 @@ async def test_the_block_carries_exactly_its_fields(
         "monthly",
         "bonus",
     }
-    assert set(block["monthly"]) == {"balance", "ceiling", "expires_at"}
+    assert set(block["monthly"]) == {"balance", "ceiling", "expires_at", "unlocked"}
     assert set(block["bonus"]) == {"balance", "groups"}
 
 
@@ -332,7 +332,7 @@ async def test_a_starter_only_mentee_reads_one_never_expiring_bonus_credit(
 
     block = await credits_of(api_client, auth_id)
 
-    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None}
+    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None, "unlocked": False}
     assert block["bonus"] == {"balance": 1, "groups": [{"count": 1, "expires_at": None}]}
 
 
@@ -390,7 +390,7 @@ async def test_expired_credits_are_in_neither_part(
     block = await credits_of(api_client, auth_id)
 
     assert block["balance"] == 0
-    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None}
+    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None, "unlocked": False}
     assert block["bonus"] == {"balance": 0, "groups": []}
 
 
@@ -408,3 +408,83 @@ async def test_the_two_parts_always_add_up_to_the_balance(
     block = await credits_of(api_client, auth_id)
 
     assert block["monthly"]["balance"] + block["bonus"]["balance"] == block["balance"] == 4
+
+
+# --------------------------------------------------------------------------
+# Whether the monthly grant is unlocked (decision 232, frontend #158)
+# --------------------------------------------------------------------------
+
+
+async def unlock(engine: AsyncEngine, user_id: UUID) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO referral_unlocks (user_id, unlocked_by_referral_id) VALUES (:u, NULL)"
+            ),
+            {"u": user_id},
+        )
+
+
+async def test_a_mentee_with_a_goal_and_an_unlock_reads_unlocked(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id)
+    await unlock(db_engine, user_id)
+
+    assert (await credits_of(api_client, auth_id))["monthly"]["unlocked"] is True
+
+
+async def test_a_mentee_with_a_goal_but_no_unlock_reads_locked(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The case the card needs: `ceiling` is still the grant, so only this flag
+    tells "not unlocked yet" from "spent"."""
+    auth_id = uuid4()
+    await seed_mentee(db_engine, auth_id)
+
+    monthly = (await credits_of(api_client, auth_id))["monthly"]
+
+    assert monthly["unlocked"] is False
+    assert monthly["ceiling"] == 3
+
+
+async def test_an_unlock_without_a_goal_reads_locked(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id, with_goal=False)
+    await unlock(db_engine, user_id)
+
+    assert (await credits_of(api_client, auth_id))["monthly"]["unlocked"] is False
+
+
+@pytest.mark.parametrize(
+    ("with_goal", "unlocked"),
+    [(True, True), (True, False), (False, True), (False, False)],
+)
+async def test_unlocked_is_exactly_who_the_monthly_grant_pays(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, with_goal: bool, unlocked: bool
+) -> None:
+    """**The card and the job read one rule.** Run the real grant, then compare:
+    a user it paid reads `unlocked: true`, and a user it skipped reads `false`."""
+    from app.core.config import Settings
+    from app.domain.credits import credit_ladder
+    from app.infra.db.credit_grants import grant_monthly_credits
+    from app.infra.db.engine import create_session_factory
+
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id, with_goal=with_goal)
+    if unlocked:
+        await unlock(db_engine, user_id)
+    factory = create_session_factory(db_engine)
+    async with factory() as db:
+        await grant_monthly_credits(
+            db, now=datetime.now(UTC), ladder=credit_ladder(Settings(_env_file=None))
+        )
+        await db.commit()
+
+    monthly = (await credits_of(api_client, auth_id))["monthly"]
+
+    assert monthly["unlocked"] is (monthly["balance"] > 0)
+    assert monthly["unlocked"] is (with_goal and unlocked)

@@ -65,6 +65,10 @@ class MonthlyCreditsRead(BaseModel):
     #: of next month, midnight UTC, exclusive). Null when `balance` is 0, or
     #: when none of the held monthly credits expire (a migrated opening balance).
     expires_at: datetime | None
+    #: Whether this account receives the monthly grant on the 1st: a mentee goal
+    #: and an unlock from a qualifying invite. `ceiling` is the grant either way,
+    #: so `false` tells "not unlocked yet" apart from "spent".
+    unlocked: bool
 
 
 class BonusCreditGroupRead(BaseModel):

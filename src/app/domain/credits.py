@@ -319,6 +319,9 @@ class MonthlyCredits:
     #: The soonest instant a held monthly credit stops being spendable. Null when
     #: there are none, or none of them expire.
     expires_at: dt.datetime | None
+    #: Whether the account receives the monthly grant. The store sets it from
+    #: the same rule the grant job pays on.
+    unlocked: bool = False
 
 
 @dataclass(frozen=True, slots=True)

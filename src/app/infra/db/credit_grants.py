@@ -44,19 +44,17 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import exists, func, insert, literal, select, text
+from sqlalchemy import func, insert, literal, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.credits import CreditLadder, expiry_for
 from app.domain.enums import CreditReason, CreditSource
 from app.domain.notifications import Notification
+from app.infra.db.credit_eligibility import receives_monthly_grant
 from app.infra.db.models.credits import CreditLot, CreditTransaction
-from app.infra.db.models.mentoring import MenteeGoal
-from app.infra.db.models.referrals import ReferralUnlock
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
-from app.infra.db.predicates import LIVE
 
 __all__ = ["grant_monthly_credits"]
 
@@ -84,13 +82,7 @@ async def grant_monthly_credits(
         literal(monthly).label("quantity_granted"),
         literal(monthly).label("quantity_remaining"),
         literal(expires_at).label("expires_at"),
-    ).where(
-        LIVE,
-        # Credits buy sessions; somebody who is not a mentee books none.
-        exists(select(MenteeGoal.id).where(MenteeGoal.user_id == User.id)),
-        # The gate a qualifying invite opens.
-        exists(select(ReferralUnlock.id).where(ReferralUnlock.user_id == User.id)),
-    )
+    ).where(*receives_monthly_grant())
 
     granted = (
         (
@@ -164,19 +156,13 @@ async def grant_monthly_credits(
 async def unlocked_mentee_count(session: AsyncSession) -> int:
     """How many users the grant would reach, for the script's dry run.
 
-    Deliberately the same two `EXISTS` as above rather than a second predicate
-    that could drift — a dry run reporting on a different query from the real
-    run is worse than no dry run.
+    Deliberately the same predicate as the grant rather than a second one that
+    could drift — a dry run reporting on a different query from the real run is
+    worse than no dry run.
     """
     return int(
         await session.scalar(
-            select(func.count())
-            .select_from(User)
-            .where(
-                LIVE,
-                exists(select(MenteeGoal.id).where(MenteeGoal.user_id == User.id)),
-                exists(select(ReferralUnlock.id).where(ReferralUnlock.user_id == User.id)),
-            )
+            select(func.count()).select_from(User).where(*receives_monthly_grant())
         )
         or 0
     )
