@@ -39,7 +39,7 @@ from app.api.deps import (
     SessionsPageDep,
     WithdrawnSessionDep,
 )
-from app.api.schemas.common import Page, encode_cursor
+from app.api.schemas.common import Page
 from app.api.schemas.sessions import SessionEventRead, SessionRead
 
 router = APIRouter(prefix="/api/v1", tags=["sessions"])
@@ -67,8 +67,9 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": (
-            "The `cursor` was not one this endpoint issued, `to` is not after "
-            "`from`, or a `status` is not a session status."
+            "The `cursor` was not one this endpoint issued or was issued for the "
+            "other `order`, `to` is not after `from`, `order` is not `asc` or "
+            "`desc`, or a `status` is not a session status."
         )
     },
 }
@@ -80,7 +81,12 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
     summary="List a user's sessions",
     description=(
         "Every session this user is a party to — as mentor, as mentee, or "
-        "both — newest first.\n\n"
+        "both — newest first by default.\n\n"
+        "**`order=asc`** lists soonest first instead, for an Upcoming view: "
+        "pair it with `status=confirmed&from=<today>` and the next session leads "
+        "page one. The order applies before the page is cut, and a `cursor` "
+        "keeps the order it was issued under — replayed with the other order it "
+        "is a `422`.\n\n"
         "A user with no sessions gets an empty page and a `200`, not a `404`: "
         "an empty collection exists, it simply has nothing in it, and a `404` "
         "would leave a client unable to tell that from being refused.\n\n"
@@ -91,18 +97,13 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
         "**Optional filters** for a month view: `from` (inclusive) and `to` "
         "(exclusive) are calendar dates in the **caller's** time zone, matched "
         "on the session's start; `status` repeats "
-        "(`status=confirmed&status=pending_mentor_approval`). Ordering and "
-        "`cursor` paging are unchanged and apply within the filter."
+        "(`status=confirmed&status=pending_mentor_approval`). `order` and "
+        "`cursor` paging apply within the filter."
     ),
     responses=LIST_RESPONSES,
 )
 async def list_user_sessions(page: SessionsPageDep) -> Page[SessionRead]:
-    rows, has_more = page
-    next_cursor = (
-        encode_cursor(rows[-1]["starts_at"].isoformat(), rows[-1]["id"])
-        if has_more and rows
-        else None
-    )
+    rows, next_cursor = page
     return Page(data=[SessionRead.from_row(row) for row in rows], next_cursor=next_cursor)
 
 

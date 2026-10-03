@@ -199,7 +199,7 @@ def _is_a_party(viewer_id: UUID) -> Any:
     return or_(Session.mentor_id == viewer_id, Session.mentee_id == viewer_id)
 
 
-def _after(cursor: tuple[str, UUID]) -> Any:
+def _after(cursor: tuple[str, UUID], *, ascending: bool) -> Any:
     """The keyset position, as a comparison on ``(starts_at, id)``.
 
     The cursor's sort key is a timestamp rendered as text, so it has to be
@@ -213,8 +213,11 @@ def _after(cursor: tuple[str, UUID]) -> Any:
         after = dt.datetime.fromisoformat(raw)
     except ValueError as exc:
         raise ValidationError("cursor is not a cursor this endpoint issued") from exc
-    # Descending, so the page moves *backwards* through time.
-    return tuple_(Session.starts_at, Session.id) < tuple_(literal(after), literal(after_id))
+    position = tuple_(Session.starts_at, Session.id)
+    bound = tuple_(literal(after), literal(after_id))
+    # The page moves the way the list is ordered: forwards through time for
+    # `asc`, backwards for the newest-first default.
+    return position > bound if ascending else position < bound
 
 
 async def list_sessions(
@@ -226,8 +229,9 @@ async def list_sessions(
     starts_from: dt.datetime | None = None,
     starts_before: dt.datetime | None = None,
     statuses: Sequence[str] = (),
+    ascending: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Every session one user is a party to, newest first.
+    """Every session one user is a party to, newest first unless ``ascending``.
 
     **Optionally narrowed** to sessions starting in ``[starts_from,
     starts_before)`` and to some statuses — the month view's booked days. The
@@ -251,13 +255,15 @@ async def list_sessions(
     limit and the union needs no separate sort.
 
     Newest first: this list includes cancelled and completed sessions, which is
-    most of the history, and a paged list of mostly-past rows reads that way. A
-    status filter is additive later and does not change the contract.
+    most of the history, and a paged list of mostly-past rows reads that way.
+    ``ascending`` is for an Upcoming view, where the next session must lead page
+    one rather than end the last; the cursor flips with it.
     """
+    keys = (Session.starts_at, Session.id)
     statement = (
         _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS))
         .where(_is_a_party(user_id))
-        .order_by(Session.starts_at.desc(), Session.id.desc())
+        .order_by(*(k.asc() if ascending else k.desc() for k in keys))
     )
     if starts_from is not None:
         statement = statement.where(Session.starts_at >= starts_from)
@@ -266,7 +272,7 @@ async def list_sessions(
     if statuses:
         statement = statement.where(Session.status.in_(list(statuses)))
     if cursor is not None:
-        statement = statement.where(_after(cursor))
+        statement = statement.where(_after(cursor, ascending=ascending))
 
     # One more than asked for: if it comes back there is a next page. Cheaper
     # and more honest than a second COUNT, which can disagree with the page it
