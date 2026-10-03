@@ -233,7 +233,14 @@ REPLAYED_HEADER = "Idempotent-Replayed"
         "**`meeting_url` is null on a new session.** It is generated per "
         "session when the session is confirmed — a static personal room means "
         "back-to-back sessions share it and an early joiner walks into the "
-        "previous one."
+        "previous one.\n\n"
+        "**Booking a suggested time** (#339) is this same call, at the "
+        "`suggestion.starts_at` of the declined or cancelled session, with its "
+        "`session_type`. While the suggestion is `active` the time is held for "
+        "you alone: `/slots` hides it from everyone else and shows it open to you "
+        "(with your token) while held, and another mentee booking it is refused — a `422` if "
+        "the grid was read after the offer, a `409` if the two raced. Booking it "
+        "marks the suggestion `booked`. Answers are required as for any booking."
     ),
     responses=BOOKING_RESPONSES,
 )
@@ -327,7 +334,10 @@ async def accept_session(_: AcceptedSessionDep) -> dict[str, bool]:
         "separates them from `cancel`.\n\n"
         "A reason is optional. Better to give one, but requiring it turns a "
         "clear-cut decision into a form to argue with — and every migrated "
-        "event carries none, because legacy held only free text."
+        "event carries none, because legacy held only free text.\n\n"
+        "**`suggested_starts_at` offers another time instead** (#339): see the "
+        "field. The request still ends `declined` and the credit still comes "
+        "back; the offer is separate, held for the mentee for two hours."
     ),
     responses=TRANSITION_RESPONSES,
 )
@@ -383,7 +393,10 @@ async def withdraw_session(_: WithdrawnSessionDep) -> dict[str, bool]:
         "current month (UTC), whatever date the original carried.\n\n"
         "Which reason codes you may give depends on which side you are on. "
         "Sending one you may not is a `422` that names it, rather than a "
-        "silently dropped field. The code does not decide the refund."
+        "silently dropped field. The code does not decide the refund.\n\n"
+        "**A mentor may offer another time instead** with `suggested_starts_at` "
+        "(#339): the session still ends `cancelled`, refunded as above, and the "
+        "offered time is held for the mentee for two hours."
     ),
     responses=TRANSITION_RESPONSES,
 )

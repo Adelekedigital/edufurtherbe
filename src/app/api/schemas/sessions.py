@@ -23,6 +23,7 @@ as one problem would be applying a rule past its reason.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field
@@ -96,6 +97,27 @@ class PartyRead(BaseModel):
             "two of the migrated bookings have no participant row, and a "
             "missing row is not an arrival."
         ),
+    )
+
+
+class SuggestionRead(BaseModel):
+    """Another time the mentor offered when ending this session (#339)."""
+
+    id: str
+    starts_at: dt.datetime = Field(description="The offered time. UTC instant.")
+    duration_minutes: int
+    held_until: dt.datetime = Field(
+        description="Until when the time is kept for the mentee alone — two hours from the offer."
+    )
+    status: Literal["active", "booked", "expired"] = Field(
+        description=(
+            "`active` while held and unbooked; `booked` once the mentee booked "
+            "it; `expired` once the hold lapsed unbooked. An expired time may "
+            "still be free — re-read `/slots` — but is no longer held."
+        )
+    )
+    booked_session_id: str | None = Field(
+        default=None, description="The session it became, once `booked`."
     )
 
 
@@ -187,6 +209,13 @@ class SessionRead(BaseModel):
         ),
     )
     created_at: dt.datetime = Field(description="When the session was booked.")
+    suggestion: SuggestionRead | None = Field(
+        default=None,
+        description=(
+            "Another time the mentor offered when they declined or cancelled "
+            "this session. `null` when none was."
+        ),
+    )
     mentee_attendance_rate: int | None = Field(
         default=None,
         description=(
@@ -238,12 +267,27 @@ class SessionRead(BaseModel):
             join_opens_at=opens,
             join_closes_at=closes,
             created_at=row["created_at"],  # type: ignore[arg-type]
+            suggestion=_suggestion(row),
             mentee_attendance_rate=(
                 int(str(row["mentee_attendance_rate"]))
                 if row.get("mentee_attendance_rate") is not None
                 else None
             ),
         )
+
+
+def _suggestion(row: dict[str, object]) -> SuggestionRead | None:
+    if row.get("suggestion_id") is None:
+        return None
+    booked = row.get("suggestion_booked_session_id")
+    return SuggestionRead(
+        id=str(row["suggestion_id"]),
+        starts_at=row["suggestion_starts_at"],  # type: ignore[arg-type]
+        duration_minutes=int(str(row["suggestion_duration_minutes"])),
+        held_until=row["suggestion_held_until"],  # type: ignore[arg-type]
+        status=str(row["suggestion_status"]),  # type: ignore[arg-type]
+        booked_session_id=str(booked) if booked is not None else None,
+    )
 
 
 def _party(row: dict[str, object], side: str) -> PartyRead:
@@ -436,6 +480,38 @@ class SessionTransitionWrite(BaseModel):
     )
 
 
+#: Another time a mentor offers when declining or cancelling (#339). One type,
+#: so the two bodies that carry it cannot describe it differently.
+SuggestedStartsAt = Annotated[
+    AwareDatetime | None,
+    Field(
+        description=(
+            "**Mentors only.** Another time to offer the mentee instead (#339). "
+            "Must be one `/slots` currently offers for this session's offering, "
+            "exactly — anything else is a `422` at `/suggested_starts_at`, and "
+            "so is a mentee sending it.\n\n"
+            "The session still ends as it would have, refunded the same way; the "
+            "suggestion is a separate offer. The time is **held for the mentee "
+            "for two hours** — hidden from everyone else's slots and refused to "
+            "anyone else's booking — and they book it with an ordinary `POST "
+            "/sessions` at that time. They are emailed once, with both the news "
+            "and the offer, and reminded thirty minutes before the hold lapses. "
+            "The offer appears on this session as `suggestion`."
+        ),
+    ),
+]
+
+
+class SessionDeclineWrite(SessionTransitionWrite):
+    """Declining, which may offer another time instead (#339).
+
+    Its own model for the reason cancelling has one: withdrawing binds the
+    shared body, and a mentee taking back a request has no time to suggest.
+    """
+
+    suggested_starts_at: SuggestedStartsAt = None
+
+
 class SessionCancellationWrite(SessionTransitionWrite):
     """Cancelling, which asks the mentor one extra thing.
 
@@ -463,3 +539,5 @@ class SessionCancellationWrite(SessionTransitionWrite):
             "time is reserved for somebody."
         ),
     )
+
+    suggested_starts_at: SuggestedStartsAt = None

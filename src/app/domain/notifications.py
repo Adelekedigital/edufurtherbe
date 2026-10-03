@@ -220,6 +220,17 @@ class Notification(StrEnum):
     #: `UNDATED_REMINDER_DAYS`.
     MENTOR_RETURN_REMINDER = "mentor_return_reminder"
 
+    #: **The mentor declined or cancelled, and suggested another time** (#339,
+    #: decision 230). One message for both facts, in place of the decline or
+    #: cancellation email — the mentee learns the session is off and what is
+    #: offered instead together, not seconds apart. Carries `suggestedAfter`
+    #: (`declined` or `cancelled`), the suggested time and when its hold lapses.
+    SESSION_TIME_SUGGESTED = "session_time_suggested"
+
+    #: **The suggested time is still held, and not for long.** Thirty minutes
+    #: before the two-hour hold lapses, only while it is still unbooked.
+    SESSION_SUGGESTION_REMINDER = "session_suggestion_reminder"
+
 
 class Audience(StrEnum):
     """Who hears a session message.
@@ -258,6 +269,9 @@ AUDIENCE: dict[Notification, Audience] = {
     #: because it is now on their profile, which is a fact about them.
     Notification.REVIEW_RECEIVED: Audience.MENTOR,
     Notification.SESSION_LAST_REMINDER: Audience.BOTH,
+    #: Both about an offer made *to* the mentee; the mentor made it.
+    Notification.SESSION_TIME_SUGGESTED: Audience.MENTEE,
+    Notification.SESSION_SUGGESTION_REMINDER: Audience.MENTEE,
 }
 
 

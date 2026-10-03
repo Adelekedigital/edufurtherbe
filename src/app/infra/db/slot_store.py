@@ -63,6 +63,7 @@ from app.infra.db.booking_rules import (
     effective_window_days,
 )
 from app.infra.db.calendar_store import NullFreeBusy
+from app.infra.db.holds import held_slots
 from app.infra.db.models.availability import (
     AvailabilityException,
     AvailabilityRule,
@@ -78,7 +79,15 @@ from app.infra.db.models.sessions import (
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import live_window, mentor_is_public, session_type_is_live
 
-__all__ = ["FreeBusyReader", "list_slots", "mentor_today"]
+__all__ = ["OFFERED_SPAN_DAYS", "FreeBusyReader", "list_slots", "mentor_today", "offered_slot"]
+
+#: How far either side of a requested instant `offered_slot` asks the grid for.
+#:
+#: The grid is addressed in the **mentor's** calendar days while a booking names
+#: a UTC instant, and the two disagree by up to fourteen hours. One day either
+#: side covers every zone, and the extra days cost a handful of rows the
+#: membership test discards.
+OFFERED_SPAN_DAYS = 1
 
 
 class FreeBusyReader(Protocol):
@@ -211,6 +220,8 @@ async def list_slots(
     window: BookingWindow,
     external_busy: FreeBusyReader | None = None,
     range_cap: int | None = None,
+    holds_for: UUID | None = None,
+    notice_from: dt.datetime | None = None,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
 
@@ -241,6 +252,15 @@ async def list_slots(
     New York at 02:00 UTC is at 21:00 the previous day; their evening window is
     still ahead of them, and a UTC "today" would skip it. Being wrong the other
     way costs nothing, because a day already past yields no slots anyway.
+
+    **A suggested time is held for its mentee** (#339). ``holds_for`` names the
+    mentee asking; the time offered to them *at this offering* stays open to
+    them, and every other hold counts as busy. ``None`` counts every hold.
+
+    ``notice_from`` moves where the notice window is measured from, and nothing
+    else: a time held for a mentee (#339) stays bookable through its hold even
+    once the notice floor has passed it, so the floor is measured from when it
+    was offered. Nothing earlier than ``now`` is ever offered either way.
     """
     external_busy = external_busy or NullFreeBusy()
     offering = (
@@ -334,7 +354,23 @@ async def list_slots(
     # discards.
     span_start = dt.datetime.combine(start, dt.time.min, tzinfo=dt.UTC) - dt.timedelta(days=1)
     span_end = dt.datetime.combine(end, dt.time.min, tzinfo=dt.UTC) + dt.timedelta(days=1)
-    busy = (await session.execute(_busy(user_id, span_start, span_end))).mappings()
+    busy = list((await session.execute(_busy(user_id, span_start, span_end))).mappings())
+    # **Held times are busy too**, shaped like booked sessions and carrying
+    # their offering's break — a hold is a session that has not been written yet.
+    busy += list(
+        (
+            await session.execute(
+                held_slots(
+                    user_id,
+                    span_start,
+                    span_end,
+                    now=now,
+                    holds_for=holds_for,
+                    session_type_id=session_type_id,
+                )
+            )
+        ).mappings()
+    )
 
     # **The mentor's own calendar, subtracted over the same span.** One request
     # for the whole range rather than one per day, and none at all unless this
@@ -394,9 +430,43 @@ async def list_slots(
             busy=ours + list(elsewhere),
             duration_minutes=offering["duration_minutes"],
             min_notice_minutes=offering["min_notice_minutes"],
-            now=now,
+            now=notice_from or now,
             start=start,
             end=end,
         )
-        if slot.start < cutoff
+        if slot.start < cutoff and slot.start >= now
     ]
+
+
+async def offered_slot(
+    session: AsyncSession,
+    user_id: UUID,
+    session_type_id: UUID,
+    starts_at: dt.datetime,
+    *,
+    now: dt.datetime,
+    window: BookingWindow,
+    external_busy: FreeBusyReader | None = None,
+    holds_for: UUID | None = None,
+    notice_from: dt.datetime | None = None,
+) -> UtcInterval | None:
+    """The slot the grid offers at exactly ``starts_at``, or ``None``.
+
+    **The one legality check** booking and suggesting both make: a membership
+    test against the public grid, asked over a span in the mentor's days so the
+    timezone question stays where it is already answered.
+    """
+    day = starts_at.astimezone(dt.UTC).date()
+    slots = await list_slots(
+        session,
+        user_id,
+        session_type_id,
+        start=day - dt.timedelta(days=OFFERED_SPAN_DAYS),
+        end=day + dt.timedelta(days=OFFERED_SPAN_DAYS + 1),
+        now=now,
+        window=window,
+        external_busy=external_busy,
+        holds_for=holds_for,
+        notice_from=notice_from,
+    )
+    return next((slot for slot in slots or () if slot.start == starts_at), None)

@@ -57,6 +57,7 @@ from app.infra.db.models.sessions import (
     SessionTypeBookingConfig,
     SessionTypeStage,
 )
+from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import (
     AuthIdentity,
     User,
@@ -104,6 +105,7 @@ __all__ = [
     "Session",
     "SessionEvent",
     "SessionParticipant",
+    "SessionSuggestion",
     "SessionType",
     "SessionTypeBookingConfig",
     "SessionTypeOffering",

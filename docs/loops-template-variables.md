@@ -131,6 +131,10 @@ know which one they are reading.
 | `reasonMessage` | declined, withdrawn, cancelled | what the person wrote |
 | `cancelInitiator` | cancelled | which party called it off |
 | `feedbackUrl` | feedback | where to leave it |
+| `suggestedDate` | time suggested, its reminder | the offered time's date, in the mentee's zone |
+| `suggestedTime` | time suggested, its reminder | the offered time, `HH:MM` in the mentee's zone |
+| `holdUntilTime` | time suggested, its reminder | when the hold lapses, `HH:MM` in the mentee's zone |
+| `suggestedAfter` | time suggested | `declined` or `cancelled` — what happened to the original |
 
 A resolver asked for something the message has no basis for — `hours` on a
 cancellation — fails rather than returning empty. A template asking for it is a
@@ -228,9 +232,8 @@ contract.
 | `mentor_declined` | — | **NEEDED** | the applicant | — |
 | `mentor_response_reminder` | Session Request Reminder | `cmbxjqtne3nt1wu0i5sk5kr2h` | mentor | `discuss`, `hours`, `location`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
 | `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |
-
-**Coming:** #339 ("Suggest a new time", in progress on another branch) adds two
-members, the suggestion email and the hold reminder. That branch adds their rows.
+| `session_time_suggested` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
+| `session_suggestion_reminder` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
 
 **A member marked NEEDED fails at the drain** (`template_for()` raises), and the
 outbox keeps the row, so nothing is lost and nothing is sent until an id is set.
@@ -263,6 +266,23 @@ instead of failing the send (the dev outbox showed `session_requested` and
 | `reviewLink` | the session page, where the review lives | — |
 | `bookLink` | the Explore page | — |
 | `creditCount` | credits expiring on that date, carried on the row | required |
+
+### A suggested time (#339)
+
+`session_time_suggested` and `session_suggestion_reminder` (2026-10-03, decision
+230) need their own templates and `EMAIL_TEMPLATES` entries on dev before a
+suggestion can be delivered; until then the rows wait in the outbox.
+
+- **`session_time_suggested`** replaces the decline or cancellation email when
+  the mentor offered another time — the mentee gets **one** message saying the
+  session is off and what is offered instead. May use `recipientName`,
+  `mentorName`, `sessionDate`/`sessionTime` (the original), `suggestedAfter`,
+  `reasonMessage` (empty when the mentor wrote nothing — word it so),
+  `suggestedDate`, `suggestedTime`, `holdUntilTime` and `sessionUrl` (the
+  original session's page, where the offer is shown and booked).
+- **`session_suggestion_reminder`** goes thirty minutes before the two-hour
+  hold lapses, only while the offer is still unbooked. Same names, without
+  `suggestedAfter` and `reasonMessage`.
 
 ### Notes per message
 

@@ -23,9 +23,15 @@ __all__ = ["PER_VIEWER_ROOTS", "PerViewerHeadersMiddleware"]
 #: viewer's goals and leaving the viewer out.
 PER_VIEWER_ROOTS = ("/api/v1/mentors",)
 
+#: A mentor's slot grid, which a signed-in mentee sees with the time held for
+#: them open (#339). Matched as the user prefix plus this exact tail.
+PER_VIEWER_SLOTS = ("/api/v1/users/", "/availability/slots")
+
 
 def _is_per_viewer(path: str) -> bool:
     """The root exactly, or a path under it — not a sibling sharing a prefix."""
+    if path.startswith(PER_VIEWER_SLOTS[0]) and path.endswith(PER_VIEWER_SLOTS[1]):
+        return True
     return any(path == root or path.startswith(root + "/") for root in PER_VIEWER_ROOTS)
 
 

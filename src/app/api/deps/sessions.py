@@ -31,6 +31,7 @@ from app.api.schemas.common import (
 from app.api.schemas.sessions import (
     SessionBookingWrite,
     SessionCancellationWrite,
+    SessionDeclineWrite,
     SessionRead,
     SessionTransitionWrite,
 )
@@ -41,6 +42,7 @@ from app.core.errors import (
 from app.domain.attendance import join_window
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionStatus
+from app.domain.sessions import TRANSITIONS
 from app.infra.clients.meetings import (
     DailyRooms,
     GoogleCalendar,
@@ -72,6 +74,7 @@ from app.infra.db.session_writer import (
     record_arrival,
     release_meeting,
     schedule_session_reminders,
+    suggest_time,
     transition,
 )
 
@@ -367,14 +370,36 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
         request: Request,
         payload: SessionTransitionWrite | None,
     ) -> None:
+        now = dt.datetime.now(dt.UTC)
+        body = payload.model_dump() if payload else {}
+        suggested = body.pop("suggested_starts_at", None)
         await transition(
             session,
             session_id,
             user["id"],
             action,
-            payload.model_dump() if payload else {},
-            now=dt.datetime.now(dt.UTC),
+            body,
+            now=now,
+            # A suggestion tells the mentee itself, in one email with the news.
+            notify=suggested is None,
         )
+        # **Another time offered, in the same transaction** (#339): the session
+        # ends as it would have, and the offer is written beside it — or, if the
+        # offer is refused, neither lands.
+        if suggested is not None:
+            await suggest_time(
+                session,
+                session_id,
+                user["id"],
+                suggested,
+                ended_as=str(TRANSITIONS[action].to),
+                reason_text=body.get("reason_text"),
+                now=now,
+                window=booking_window(_configured(request)),
+                external_busy=_free_busy(request),
+                scheduler=_scheduler(request),
+                callback_url=_reminder_callback_url(request),
+            )
         # The second confirmation point. Accepting is the moment a
         # confirmation-required session becomes real, and it is the only action
         # that produces `confirmed` — declining, withdrawing and cancelling all
@@ -420,6 +445,15 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
     ) -> None:
         await run(session_id, user, session, request, payload)
 
+    async def declining(
+        session_id: UUID,
+        user: CurrentUserDep,
+        session: SessionDep,
+        request: Request,
+        payload: SessionDeclineWrite | None = None,
+    ) -> None:
+        await run(session_id, user, session, request, payload)
+
     async def ending(
         session_id: UUID,
         user: CurrentUserDep,
@@ -429,7 +463,11 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
     ) -> None:
         await run(session_id, user, session, request, payload)
 
-    return cancelling if action == "cancel" else ending
+    if action == "cancel":
+        return cancelling
+    if action == "decline":
+        return declining
+    return ending
 
 
 AcceptedSessionDep = Annotated[None, Depends(transitions("accept"))]
