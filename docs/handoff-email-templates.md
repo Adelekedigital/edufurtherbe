@@ -8,8 +8,8 @@ status page is <https://claude.ai/artifact/PtC41gX7nFDvXMLF4Tms8y>.
 ## The job
 
 Create a **new template for every email the new app sends**, in the new design
-system (Claude's design system and/or the `edufurtherfe` tokens), through the
-Loops and Emailit MCPs. That covers both:
+system (Claude's design system and/or the `edufurtherfe` tokens), **in Loops**
+through its MCP. That covers both:
 
 - **existing emails**, which have a legacy template today, and
 - **new emails**, which have none yet.
@@ -18,8 +18,10 @@ Loops and Emailit MCPs. That covers both:
 legacy app, which still sends with them. The new app moves to the new templates
 by configuration (below), so the two never share a template.
 
-With the owner, decide which emails go through **Loops** and which through
-**Emailit**, by importance. A proposed split is below. It's the owner's call.
+**Loops only, for now.** The owner will look into Emailit later (2026-10-03).
+Create every template in Loops. The importance tiers below still guide
+priority, meaning which emails to design first, and will inform any later
+provider split.
 
 ## How the backend sends an email (what the templates must fit)
 
@@ -48,11 +50,12 @@ With the owner, decide which emails go through **Loops** and which through
   variables for an unpublished template, and the backend refuses to send
   those.
 
-## Emailit needs backend work first
+## Emailit: later, not part of this job
 
-**Only a Loops sender exists in the backend today.** Emailit is used only by
-Supabase, for sign-in codes, through SMTP configured in the Supabase console.
-For any email assigned to Emailit, the backend needs:
+The owner will look into Emailit later, so **don't create Emailit templates
+now**. For the record: **only a Loops sender exists in the backend today.**
+Emailit is used only by Supabase, for sign-in codes, through SMTP configured in
+the Supabase console. If emails move to Emailit later, the backend needs:
 
 1. an Emailit sender adapter (send a template with variables, using an
    idempotency key);
@@ -61,10 +64,7 @@ For any email assigned to Emailit, the backend needs:
 3. variable discovery from Emailit's API if it publishes template variables;
    otherwise a pinned list per template.
 
-Tracked as backend issue #348. So: **create
-Emailit templates whenever you like, but tell the backend session which emails
-go to Emailit**, so the adapter is built before those ids are switched on.
-Until then, Loops ids keep working.
+Tracked as backend issue #348, deferred until the owner decides on Emailit.
 
 ## Every email, what it's for, and what it may use
 
@@ -100,7 +100,7 @@ Until then, Loops ids keep working.
 **22 emails; 7 have no template at all.** The reference doc's "Notes per
 message" has more on the return reminder's two cases and the review nudge.
 
-## A proposed split by importance (the owner decides)
+## Importance tiers: design order now, provider split later
 
 | Tier | Emails | Why it matters |
 |---|---|---|
@@ -108,15 +108,16 @@ message" has more on the return reminder's two cases and the review nudge.
 | **2 — status the user should know** | `request_withdrawn`, `request_expired`, `mentor_application_received`, `mentor_approved`, `mentor_declined` | Important but not time-critical |
 | **3 — engagement** | `review_requested`, `review_received`, `credits_granted`, `credits_renewed`, `credits_expiring`, `mentor_return_reminder` | Lifecycle nudges; a delay costs little |
 
-Put tier 1 on whichever provider has the better deliverability and monitoring
-for transactional mail. Tiers 2 and 3 can sit on either.
+Design tier 1 first. All tiers go in Loops for now; if the owner later splits
+providers, tier 1 belongs on whichever has the better deliverability and
+monitoring for transactional mail.
 
 ## Handing back
 
 For each template created, send the backend session (or write in
 `docs/handoff/` in edufurtherfe, which it reads):
 
-- the **key**, the **provider** (`loops` or `emailit`) and the **template id**;
+- the **key** and the Loops **template id**;
 - confirmation it's **published**;
 - any variable you needed that isn't in the list above. Don't invent one in the
   template: the send would fail. Ask, and the backend adds a resolver.
