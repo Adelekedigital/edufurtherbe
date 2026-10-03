@@ -17,11 +17,10 @@ than a constraint carrying the product's current mind. A cutoff the product will
 want to change is the same shape, and a trigger would make every change a
 migration.
 
-**The reason codes are restricted per actor, and that is authorization rather
-than tidiness.** ``SessionReasonCode``'s own docstring says the codes are what
-refund policy runs on — ``MENTOR_UNAVAILABLE`` refunds where
-``MENTEE_NO_LONGER_NEEDED`` does not — so a mentee free to send the mentor's
-code is a mentee who can claim a refund by choosing a value.
+**The reason codes are restricted per actor so that what they count stays
+true**: a mentee cannot file their own cancellation as ``MENTOR_UNAVAILABLE``.
+They do not decide refunds — decision 229 does, in ``domain/refunds.py``, from
+the actor's side and the notice given.
 """
 
 from __future__ import annotations
@@ -134,8 +133,8 @@ _MENTOR_REASONS = frozenset(
     }
 )
 
-#: And the mentee's. `MENTOR_UNAVAILABLE` is absent for the reason the module
-#: docstring gives: it is the code that refunds.
+#: And the mentee's. `MENTOR_UNAVAILABLE` is absent because it says the mentor
+#: could not make it, which is not the mentee's to report.
 _MENTEE_REASONS = frozenset(
     {
         SessionReasonCode.MENTEE_NO_LONGER_NEEDED,

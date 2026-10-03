@@ -16,6 +16,7 @@ from app.core.errors import ConflictError, NotFoundError
 from app.domain.attendance import (
     JOIN_CLOSES,
     AttendanceEvidence,
+    absent_party,
     join_window,
     within_join_window,
 )
@@ -23,11 +24,14 @@ from app.domain.enums import (
     ActorType,
     AttendanceStatus,
     SessionReasonCode,
+    SessionRole,
     SessionStatus,
 )
 from app.domain.notifications import (
     Notification,
 )
+from app.domain.refunds import no_show_refund
+from app.infra.db.credit_writer import refund_credit
 from app.infra.db.models.sessions import (
     Session,
     SessionEvent,
@@ -279,6 +283,18 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
         ],
     )
 
+    # 4. **A mentor who never came owes the mentee their credit** (decision
+    #    229). Decided by `domain.refunds` from the same two facts the reason
+    #    code above reads, and paid in the settling transaction, so an outcome
+    #    and its refund commit together. Only rows this run settled reach here,
+    #    and `refund_credit` is once-per-session at the database besides.
+    for row in settled:
+        owed = no_show_refund(
+            mentor_came=bool(row["mentor_came"]), mentee_came=bool(row["mentee_came"])
+        )
+        if owed is not None:
+            await refund_credit(session, row["mentee_id"], row["id"], reason=owed, now=now)
+
     await _request_reviews(
         session,
         [row["id"] for row in settled if row["status"] == SessionStatus.COMPLETED],
@@ -347,19 +363,18 @@ def _absence_code(*, mentor_came: bool, mentee_came: bool) -> SessionReasonCode 
     event asserting one party would be a second copy. Half of that argument
     survives and half does not: it is right that *both absent* has no correct
     code, and wrong that a mentor's absence should be filed under the mentee's —
-    these codes are what refund policy runs on, so naming the wrong party is
-    not coarseness, it is the wrong answer to the question that decides a
-    refund.
+    naming the wrong party is not coarseness, it is the wrong answer. Who missed
+    it is :func:`app.domain.attendance.absent_party`, the same call the no-show
+    refund makes (decision 229), so the code and the refund cannot disagree.
 
     So: null when the session happened, null when both were absent — the
     participant rows are the only thing that can state that, and inventing a
     code would make an aggregate over `reason_code` wrong in a way nobody could
     see — and the exact code when exactly one party failed to turn up.
     """
-    if mentor_came and mentee_came:
-        return None
-    if mentee_came:
+    missed = absent_party(mentor_attended=mentor_came, mentee_attended=mentee_came)
+    if missed is SessionRole.MENTOR:
         return SessionReasonCode.MENTOR_NO_SHOW
-    if mentor_came:
+    if missed is SessionRole.MENTEE:
         return SessionReasonCode.MENTEE_NO_SHOW
     return None

@@ -1,10 +1,8 @@
 """Sessions, their lifecycle history, and the writes that move them along.
 
-**Booking and the four transitions have landed.** What has not is the *refund*
-policy — which is a different thing from the cancellation rule and is what
-project conventions record as undecided. The transitions can ship without it
-because `session_events.reason_code` is the input that policy will read: the
-codes are captured now and nothing prices them yet.
+**Booking and the four transitions have landed**, and so has the refund rule
+(decision 229, `domain/refunds.py`), which reads who acted and when — never
+`session_events.reason_code`, which is captured for reporting.
 
 ``starts_at`` goes out as a UTC instant and is never rendered into a local
 string. The browser knows the viewer's zone; the server does not, and a session
@@ -411,9 +409,10 @@ class SessionTransitionWrite(BaseModel):
 
     **Which codes you may send depends on which side of the session you are
     on**, and a code you may not give is a `422` rather than a silently dropped
-    field. That is authorization rather than tidiness: the codes drive refund
-    policy, so a mentee free to send the mentor's code is a mentee who can claim
-    a refund by choosing a value. The permitted sets are not published per-role
+    field. Each side reports with its own vocabulary — a mentee cannot file a
+    cancellation as `mentor_unavailable` — so what the codes count stays true.
+    **A code never decides a refund**: that is decision 229, from the actor's
+    side and the notice given. The permitted sets are not published per-role
     here because they are the *domain's* table, not the schema's — sending one
     you may not give tells you so by name.
 
