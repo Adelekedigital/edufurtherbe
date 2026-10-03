@@ -164,15 +164,17 @@ async def test_back_to_back_sessions_with_two_mentors_are_allowed(
     """Touching is not overlapping: one ends at 10:00, the next starts at 10:00."""
     _, headers = await a_mentee(db_engine, "lim-touch")
     (m1, t1), (m2, t2) = [await a_bookable_offering(db_engine, f"lim-tc-{n}") for n in range(2)]
-    first_times = await slots(api_client, m1, t1)
-    start = dt.datetime.fromisoformat(first_times[0])
-    after = next(
-        s
-        for s in await slots(api_client, m2, t2)
-        if dt.datetime.fromisoformat(s) == start + dt.timedelta(minutes=60)
+    # The first pair that actually touches. Taking the first slot and its
+    # successor failed whenever the run's clock made that slot the last of its
+    # day's window, so the pair is searched for rather than assumed.
+    second_times = {dt.datetime.fromisoformat(s): s for s in await slots(api_client, m2, t2)}
+    before, after = next(
+        (s, second_times[dt.datetime.fromisoformat(s) + dt.timedelta(minutes=60)])
+        for s in await slots(api_client, m1, t1)
+        if dt.datetime.fromisoformat(s) + dt.timedelta(minutes=60) in second_times
     )
 
-    first = await book(api_client, headers, t1, first_times[0])
+    first = await book(api_client, headers, t1, before)
     second = await book(api_client, headers, t2, after)
 
     assert first.status_code == 201, first.text
