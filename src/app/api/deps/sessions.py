@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import Depends, Query, Request
@@ -25,7 +25,8 @@ from app.api.deps.core import (
 from app.api.schemas.common import (
     MAX_PAGE_SIZE,
     clamp_limit,
-    decode_cursor,
+    decode_session_cursor,
+    encode_session_cursor,
 )
 from app.api.schemas.sessions import (
     SessionBookingWrite,
@@ -121,8 +122,13 @@ async def target_sessions(
         list[SessionStatus] | None,
         Query(description="Only these statuses; repeat the parameter for several."),
     ] = None,
-) -> tuple[list[dict[str, Any]], bool]:
-    """One page of the sessions a user is a party to, optionally narrowed.
+    order: Annotated[
+        Literal["asc", "desc"],
+        Query(description="`desc` (default) is newest first; `asc` is soonest first."),
+    ] = "desc",
+) -> tuple[list[dict[str, Any]], str | None]:
+    """One page of the sessions a user is a party to, optionally narrowed, and
+    the cursor for the next — minted here because only here is the direction known.
 
     Dates are the **caller's** calendar dates — the person looking at a month —
     turned into instants at their local midnight, so a session late on the
@@ -133,14 +139,22 @@ async def target_sessions(
             "to is exclusive and must be after from", field_errors=(("/to", "must be after from"),)
         )
     zone = str(user["timezone"])
-    return await list_sessions(
+    ascending = order == "asc"
+    rows, has_more = await list_sessions(
         session,
         user_id,
         limit=clamp_limit(limit),
-        cursor=decode_cursor(cursor),
+        cursor=decode_session_cursor(cursor, ascending=ascending),
         starts_from=local_day_start(from_, zone) if from_ is not None else None,
         starts_before=local_day_start(to, zone) if to is not None else None,
         statuses=[s.value for s in status or ()],
+        ascending=ascending,
+    )
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_session_cursor(
+        last["starts_at"].isoformat(), last["id"], ascending=ascending
     )
 
 
@@ -480,6 +494,6 @@ async def joined_session(
 
 JoinedSessionDep = Annotated[str | None, Depends(joined_session)]
 
-SessionsPageDep = Annotated[tuple[list[dict[str, Any]], bool], Depends(target_sessions)]
+SessionsPageDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
 SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events)]

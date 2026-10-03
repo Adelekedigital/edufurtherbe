@@ -156,6 +156,30 @@ def decode_browse_cursor(cursor: str | None) -> tuple[bool, UUID] | None:
     return group == "1", row_id
 
 
+#: Marks a soonest-first session cursor. **Only `asc` is tagged**: newest first
+#: is the default and predates `order`, so its cursors stay exactly as clients
+#: already hold them. A timestamp never starts with this letter.
+ASCENDING_CURSOR_TAG = "a"
+
+
+def encode_session_cursor(starts_at: str, row_id: UUID, *, ascending: bool) -> str:
+    """A session-list position that remembers which way it was going."""
+    return encode_cursor(f"{ASCENDING_CURSOR_TAG if ascending else ''}{starts_at}", row_id)
+
+
+def decode_session_cursor(cursor: str | None, *, ascending: bool) -> tuple[str, UUID] | None:
+    """A session cursor back into `(starts_at, id)`, or a `422` when it was minted
+    for the other direction — a page from the wrong place looks like working
+    software and loses rows."""
+    decoded = decode_cursor(cursor)
+    if decoded is None:
+        return None
+    sort_key, row_id = decoded
+    if sort_key.startswith(ASCENDING_CURSOR_TAG) != ascending:
+        raise ValidationError("cursor was issued for the other order")
+    return sort_key.removeprefix(ASCENDING_CURSOR_TAG), row_id
+
+
 #: How deep a search may be paged. Elasticsearch refuses past 10,000 results by
 #: default and Google stops near 1,000: the systems built for search cap depth
 #: rather than solve it, because relevance is unstable and nobody reads page 40.
