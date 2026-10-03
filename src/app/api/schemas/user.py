@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.api.schemas.common import AvatarFocusRead, LinkedInRead, XRead, YouTubeRead
+from app.api.schemas.common import AvatarFocusRead, LinkedInRead, StoredEmail, XRead, YouTubeRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.domain.emails import normalise_email
 from app.domain.enums import CoverArt, CoverColor, CreditState, PrimaryRole
@@ -20,9 +20,13 @@ class NormalisedEmail(BaseModel):
     is the version that works until somebody adds a route and forgets, and the
     failure is a second account nobody can find. Here it happens before the
     handler is entered, on every model that inherits it.
+
+    **Its one user is a response** (`UserRead`), so the field is
+    :data:`StoredEmail`, not `EmailStr`: a stored address is reported as stored,
+    never re-validated into a 500 (#321).
     """
 
-    email: EmailStr
+    email: StoredEmail
 
     @field_validator("email")
     @classmethod

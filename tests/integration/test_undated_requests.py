@@ -10,15 +10,14 @@ The deadline is now `COALESCE(respond_by, starts_at)`, in one place
 from __future__ import annotations
 
 import datetime as dt
-from uuid import UUID
 
 import httpx
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_response_deadline import a_request, status_of, sweep
 
-from app.infra.db.pending_requests import booking_counts
+from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -59,25 +58,28 @@ async def refund_lots(engine: AsyncEngine, session_id: str) -> int:
         )
 
 
-async def counts(engine: AsyncEngine, session_id: str) -> dict[str, int]:
-    """The four counts `/me` publishes, read through the same function it uses.
+async def counts(engine: AsyncEngine, client: httpx.AsyncClient, session_id: str) -> dict[str, int]:
+    """The two awaiting counts, read from each party's own `GET /me`.
 
-    Not through `/me` itself: these fixtures' `@example.test` addresses make it
-    a 500 (#321), which is a different bug.
+    Through `/me` itself: its fixtures' `@example.test` addresses used to make it
+    a 500 (#321), which is why this once called `booking_counts` directly.
     """
     async with engine.connect() as conn:
-        mentor_id, mentee_id = (
+        mentor_auth, mentee_auth = (
             await conn.execute(
-                text("SELECT mentor_id, mentee_id FROM sessions WHERE id = :i"), {"i": session_id}
+                text(
+                    "SELECT mentor.auth_id, mentee.auth_id FROM sessions s "
+                    "JOIN users mentor ON mentor.id = s.mentor_id "
+                    "JOIN users mentee ON mentee.id = s.mentee_id WHERE s.id = :i"
+                ),
+                {"i": session_id},
             )
         ).one()
-    async with async_sessionmaker(engine)() as session:
-        now = dt.datetime.now(dt.UTC)
-        as_mentor = await booking_counts(session, UUID(str(mentor_id)), now)
-        as_mentee = await booking_counts(session, UUID(str(mentee_id)), now)
+    as_mentor = (await client.get("/api/v1/me", headers=bearer(api_token(mentor_auth)))).json()
+    as_mentee = (await client.get("/api/v1/me", headers=bearer(api_token(mentee_auth)))).json()
     return {
-        "mentor_awaiting": as_mentor["mentor_awaiting"],
-        "mentee_awaiting": as_mentee["mentee_awaiting"],
+        "mentor_awaiting": as_mentor["booking_counts"]["as_mentor"]["awaiting_your_response"],
+        "mentee_awaiting": as_mentee["booking_counts"]["as_mentee"]["awaiting_mentor"],
     }
 
 
@@ -87,7 +89,7 @@ async def test_an_undated_request_whose_session_started_awaits_nobody(
     request = await a_request(db_engine, api_client, "ud-started")
     await undated(db_engine, request["id"], started=True)
 
-    got = await counts(db_engine, request["id"])
+    got = await counts(db_engine, api_client, request["id"])
 
     assert got == {"mentor_awaiting": 0, "mentee_awaiting": 0}
 
@@ -99,7 +101,7 @@ async def test_an_undated_request_not_yet_started_still_awaits_the_mentor(
     request = await a_request(db_engine, api_client, "ud-ahead")
     await undated(db_engine, request["id"], started=False)
 
-    got = await counts(db_engine, request["id"])
+    got = await counts(db_engine, api_client, request["id"])
 
     assert got == {"mentor_awaiting": 1, "mentee_awaiting": 1}
     assert await sweep(db_engine) == 0

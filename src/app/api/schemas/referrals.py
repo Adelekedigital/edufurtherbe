@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.api.schemas.common import StoredEmail
 from app.domain.emails import normalise_email
 
 
@@ -53,7 +54,8 @@ class ReferralRead(BaseModel):
 
     id: UUID
     code: str
-    invitee_email: EmailStr | None = None
+    #: Reported as stored (#321): validated when the invite was written.
+    invitee_email: StoredEmail | None = None
     invited_at: datetime
     #: **Set when the invitee claims their code, not when they signed up.** This
     #: service never sees a signup — `users` rows come from the provisioning CLI

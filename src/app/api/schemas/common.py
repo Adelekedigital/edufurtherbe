@@ -372,6 +372,16 @@ def storable(value: str) -> str:
 #: each reachable, and the fourth is the one that would ship.
 StorableText = AfterValidator(storable)
 
+#: An email address the service already holds, on its way **out**. Plain text,
+#: still published as `format: email`, so generated client types are unchanged.
+#:
+#: **Not `EmailStr`, deliberately (#321).** That re-validates on output, and a
+#: stored address today's validator refuses (a reserved domain such as
+#: `example.test`, or a rule tightened after the row was written) turned the
+#: owner's own `GET /me` into a 500. Addresses are validated where they are
+#: *written*; a read reports what is stored.
+StoredEmail = Annotated[str, Field(json_schema_extra={"format": "email"})]
+
 
 class Normalised(BaseModel):
     """Trims every string, and turns an emptied one into ``None``.
