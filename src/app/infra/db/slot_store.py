@@ -245,8 +245,8 @@ async def list_slots(
     way costs nothing, because a day already past yields no slots anyway.
 
     **A suggested time is held for its mentee** (#339). ``holds_for`` names the
-    mentee asking; their own holds stay open to them and everyone else's count as
-    busy. ``None`` counts every hold.
+    mentee asking; the time offered to them *at this offering* stays open to
+    them, and every other hold counts as busy. ``None`` counts every hold.
     """
     external_busy = external_busy or NullFreeBusy()
     offering = (
@@ -346,7 +346,14 @@ async def list_slots(
     busy += list(
         (
             await session.execute(
-                held_slots(user_id, span_start, span_end, now=now, holds_for=holds_for)
+                held_slots(
+                    user_id,
+                    span_start,
+                    span_end,
+                    now=now,
+                    holds_for=holds_for,
+                    session_type_id=session_type_id,
+                )
             )
         ).mappings()
     )

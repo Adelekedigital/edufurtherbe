@@ -405,26 +405,221 @@ async def test_only_the_mentee_it_was_offered_to_takes_up_the_offer(
 ) -> None:
     """At the store, because the API never lets a stranger reach a held time:
     the scope is the last wall, so it is tested on its own."""
-    from app.infra.db.session_writer.suggestions import attach_suggestion
+    from app.infra.db.holds import held_offer
 
     booking = await a_booking(db_engine, api_client, "sg-scope")
     session_type = await offering_of(api_client, booking)
+    at = dt.datetime.fromisoformat(await another_slot(api_client, booking))
+    await end_with_suggestion(api_client, booking, "decline", at.isoformat())
+    stranger, _ = await a_mentee(db_engine, "sg-scope-b")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    asked = {
+        "mentor_id": UUID(str(booking["mentor_id"])),
+        "session_type_id": UUID(session_type),
+        "starts_at": at,
+        "now": dt.datetime.now(dt.UTC),
+    }
+
+    async with factory() as session:
+        theirs = await held_offer(session, mentee_id=UUID(str(booking["mentee_id"])), **asked)
+        strangers = await held_offer(session, mentee_id=stranger, **asked)
+        await session.rollback()
+
+    assert theirs is not None
+    assert strangers is None
+
+
+# --------------------------------------------------------------------------
+# Codex on #341
+# --------------------------------------------------------------------------
+
+
+async def test_a_queued_reminder_is_dropped_once_the_offer_is_booked(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The drain runs on its own schedule, so the check is repeated there."""
+    from app.infra.db.holds import suggestion_reminder_state
+
+    booking = await a_booking(db_engine, api_client, "sg-drain")
+    session_type = await offering_of(api_client, booking)
     at = await another_slot(api_client, booking)
     await end_with_suggestion(api_client, booking, "decline", at)
-    stranger, _ = await a_mentee(db_engine, "sg-scope-b")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async def state() -> str:
+        async with factory() as session:
+            return await suggestion_reminder_state(
+                session, UUID(booking["id"]), {}, dt.datetime.now(dt.UTC)
+            )
+
+    assert await state() == "due"
+    await book(api_client, session_type, at, booking["mentee"])
+    assert await state() == "stale"
+
+
+async def test_a_lapsed_offer_is_stale_at_the_drain(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    from app.infra.db.holds import suggestion_reminder_state
+
+    booking = await a_booking(db_engine, api_client, "sg-drain-lapse")
+    await end_with_suggestion(
+        api_client, booking, "decline", await another_slot(api_client, booking)
+    )
+    await lapse(db_engine, booking)
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with factory() as session:
-        taken = await attach_suggestion(
-            session,
-            mentor_id=UUID(str(booking["mentor_id"])),
-            mentee_id=stranger,
-            session_type_id=UUID(session_type),
-            starts_at=dt.datetime.fromisoformat(at),
-            booked_session_id=UUID(booking["id"]),
-            now=dt.datetime.now(dt.UTC),
+        found = await suggestion_reminder_state(
+            session, UUID(booking["id"]), {}, dt.datetime.now(dt.UTC)
         )
-        await session.rollback()
+    assert found == "stale"
 
-    assert taken is None
+
+async def test_the_holder_cannot_book_across_their_own_offer_at_another_offering(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Only the exact offer is theirs: half an hour later at another offering
+    would book the mentor across the held hour and strand the offer."""
+    from tests.integration.factories import add_session_type
+
+    booking = await a_booking(db_engine, api_client, "sg-overlap")
+    at = dt.datetime.fromisoformat(await another_slot(api_client, booking))
+    await end_with_suggestion(api_client, booking, "decline", at.isoformat())
+    short = await add_session_type(
+        db_engine, UUID(str(booking["mentor_id"])), name="Quick", duration=30, notice=0
+    )
+
+    across = await book(
+        api_client, str(short), (at + dt.timedelta(minutes=30)).isoformat(), booking["mentee"]
+    )
+
+    assert across.status_code == 422, across.text
     assert (await suggestion_of(api_client, booking))["status"] == "active"
+
+
+async def test_the_offer_is_booked_at_the_length_it_was_offered(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A mentor shortening the offering inside the hold does not change what
+    the offer becomes."""
+    booking = await a_booking(db_engine, api_client, "sg-length")
+    session_type = await offering_of(api_client, booking)
+    at = await another_slot(api_client, booking)
+    await end_with_suggestion(api_client, booking, "decline", at)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_type_booking_configs SET duration_minutes = 30 "
+                "WHERE session_type_id = :t"
+            ),
+            {"t": session_type},
+        )
+
+    booked = await book(api_client, session_type, at, booking["mentee"])
+
+    assert booked.status_code == 201, booked.text
+    assert booked.json()["duration_minutes"] == 60
+    assert (await suggestion_of(api_client, booking))["status"] == "booked"
+
+
+async def test_the_locked_recheck_counts_the_offerings_break(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The hour straight after a held hour is still inside its break, as the
+    grid would say; the hour after the break is not."""
+    from app.infra.db.holds import holds_against
+
+    booking = await a_booking(db_engine, api_client, "sg-break")
+    session_type = await offering_of(api_client, booking)
+    at = dt.datetime.fromisoformat(await another_slot(api_client, booking))
+    await end_with_suggestion(api_client, booking, "decline", at.isoformat())
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_type_booking_configs SET break_after_minutes = 30 "
+                "WHERE session_type_id = :t"
+            ),
+            {"t": session_type},
+        )
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    mentor = UUID(str(booking["mentor_id"]))
+    now = dt.datetime.now(dt.UTC)
+
+    async with factory() as session:
+        next_hour = await holds_against(
+            session,
+            mentor,
+            starts_at=at + dt.timedelta(hours=1),
+            duration_minutes=60,
+            break_minutes=0,
+            now=now,
+            except_id=None,
+        )
+        after_break = await holds_against(
+            session,
+            mentor,
+            starts_at=at + dt.timedelta(minutes=90),
+            duration_minutes=60,
+            break_minutes=0,
+            now=now,
+            except_id=None,
+        )
+
+    assert next_hour is True
+    assert after_break is False
+
+
+class Recorder:
+    """A notifier that sends nothing and remembers what it was asked to send."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    def send(self, **kwargs: Any) -> None:
+        self.sent.append(str(kwargs["notification"]))
+
+
+async def drained(engine: AsyncEngine, migrated_database: str) -> list[str]:
+    from pydantic import SecretStr
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core.config import Settings
+    from app.infra.db.outbox import drain
+
+    notifier = Recorder()
+    async with AsyncSession(engine) as session:
+        await drain(
+            session,
+            notifier=notifier,
+            now=dt.datetime.now(dt.UTC),
+            settings=Settings(_env_file=None, database_url=SecretStr(migrated_database)),
+        )
+        await session.commit()
+    return notifier.sent
+
+
+async def test_the_drain_sends_a_reminder_for_an_open_offer(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    booking = await a_booking(db_engine, api_client, "sg-drain-open")
+    await end_with_suggestion(
+        api_client, booking, "decline", await another_slot(api_client, booking)
+    )
+    await fire(db_engine, booking["id"])
+
+    assert "session_suggestion_reminder" in await drained(db_engine, migrated_database)
+
+
+async def test_the_drain_drops_a_reminder_for_an_offer_booked_since(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """Queued at the callback, booked before the drain ran: not sent."""
+    booking = await a_booking(db_engine, api_client, "sg-drain-booked")
+    session_type = await offering_of(api_client, booking)
+    at = await another_slot(api_client, booking)
+    await end_with_suggestion(api_client, booking, "decline", at)
+    await fire(db_engine, booking["id"])
+    await book(api_client, session_type, at, booking["mentee"])
+
+    assert "session_suggestion_reminder" not in await drained(db_engine, migrated_database)

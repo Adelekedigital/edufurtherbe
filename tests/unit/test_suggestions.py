@@ -58,3 +58,12 @@ def test_the_offer_renders_in_the_mentees_zone() -> None:
         "holdUntilTime": "15:00",
         "suggestedAfter": "declined",
     }
+
+
+def test_a_suggestion_with_no_reason_still_renders() -> None:
+    """`reason_text` is optional, so its absence must not fail the drain."""
+    context = MessageContext(
+        recipient_name="Mo", recipient_timezone="UTC", mentor_name="Ada", mentee_name="Mo"
+    )
+
+    assert build_variables(["reasonMessage"], context) == {"reasonMessage": ""}

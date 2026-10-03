@@ -33,7 +33,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,9 +61,9 @@ from app.domain.sessions import (
     respond_by,
 )
 from app.infra.clients.scheduler import SchedulerError
-from app.infra.db.booking_rules import effective_duration_minutes
+from app.infra.db.booking_rules import effective_break_minutes, effective_duration_minutes
 from app.infra.db.credit_writer import spend_credit
-from app.infra.db.holds import holds_against, lock_mentor_slots
+from app.infra.db.holds import held_offer, holds_against, lock_mentor_slots
 from app.infra.db.intake_file_store import link_files, usable_file_ids
 from app.infra.db.intake_store import questions_by_type, record_answers
 from app.infra.db.mentee_limits import check_mentee_limits
@@ -75,11 +75,11 @@ from app.infra.db.models.sessions import (
     SessionType,
     SessionTypeBookingConfig,
 )
+from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 from app.infra.db.session_writer.reminders import schedule_session_reminders
-from app.infra.db.session_writer.suggestions import attach_suggestion
 from app.infra.db.slot_store import list_slots
 
 logger = logging.getLogger(__name__)
@@ -153,6 +153,9 @@ async def _offering(
                     # The length the slot was offered at (#216) — resolved the
                     # way `/slots` resolves it, so the two cannot disagree.
                     effective_duration_minutes().label("duration_minutes"),
+                    # Measured against a held time under the lock (#339), the way
+                    # the grid measures it.
+                    effective_break_minutes().label("break_minutes"),
                     func.coalesce(
                         SessionTypeBookingConfig.requires_booking_confirmation,
                         MentorProfile.requires_booking_confirmation,
@@ -308,15 +311,28 @@ async def book_session(
     # the hold is found here — or waits behind this booking and then finds the
     # hour taken (`holds.lock_mentor_slots`).
     await lock_mentor_slots(session, mentor_id)
+    # **The time offered to this mentee, if this is it** (#339) — booked at the
+    # length it was offered at, as decision #10 snapshots what was agreed, so a
+    # mentor editing the offering inside the hold cannot change what it becomes.
+    offer = await held_offer(
+        session,
+        mentor_id=mentor_id,
+        mentee_id=mentee_id,
+        session_type_id=payload["session_type_id"],
+        starts_at=starts_at,
+        now=now,
+    )
+    duration = int(offer["duration_minutes"] if offer else offering["duration_minutes"])
     if await holds_against(
         session,
         mentor_id,
-        mentee_id,
         starts_at=starts_at,
-        duration_minutes=int(offering["duration_minutes"]),
+        duration_minutes=duration,
+        break_minutes=int(offering["break_minutes"]),
         now=now,
+        except_id=offer["id"] if offer else None,
     ):
-        raise ConflictError("that time is being held for another mentee")
+        raise ConflictError("that time is being held for another booking")
 
     try:
         session_id = (
@@ -337,7 +353,7 @@ async def book_session(
                     # decision #10 gives the reason for a mentor's rate and it
                     # is the same one here: a later edit to the offering must
                     # not silently rewrite what was agreed.
-                    duration_minutes=offering["duration_minutes"],
+                    duration_minutes=duration,
                     topic=payload.get("topic"),
                     booking_message=payload.get("booking_message"),
                 )
@@ -373,15 +389,12 @@ async def book_session(
 
     # **A suggested time, taken up** (#339): the offer is spent by the booking
     # it became, in the same transaction, so it can never be booked twice.
-    await attach_suggestion(
-        session,
-        mentor_id=mentor_id,
-        mentee_id=mentee_id,
-        session_type_id=payload["session_type_id"],
-        starts_at=starts_at,
-        booked_session_id=session_id,
-        now=now,
-    )
+    if offer is not None:
+        await session.execute(
+            update(SessionSuggestion)
+            .where(SessionSuggestion.id == offer["id"])
+            .values(accepted_session_id=session_id)
+        )
 
     # **The answers, in the booking's transaction**: a session without the form
     # its mentee filled in, or a form for a session that was never written, are

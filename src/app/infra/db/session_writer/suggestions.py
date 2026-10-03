@@ -18,7 +18,8 @@ Owner decisions of 2026-10-03 (settled decision 230), in the order they act:
    re-checked when it fires, like every other reminder here: nothing is ever
    unscheduled, and a nudge for an offer already booked or lapsed does nothing.
 5. **Booking it is ordinary booking** — `POST /sessions` at the suggested time.
-   The booking writer attaches the offer to the session it became.
+   The booking writer finds the offer under its lock, books it at the length
+   it was offered at, and marks it spent (`holds.held_offer`).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
@@ -48,7 +49,7 @@ from app.infra.db.slot_store import list_slots
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["attach_suggestion", "remind_suggestion", "suggest_time"]
+__all__ = ["remind_suggestion", "suggest_time"]
 
 #: Where a refused suggestion points, so a client marks the right field.
 POINTER = "/suggested_starts_at"
@@ -218,42 +219,3 @@ async def remind_suggestion(session: AsyncSession, session_id: UUID, kind: str) 
         },
     )
     return True
-
-
-async def attach_suggestion(
-    session: AsyncSession,
-    *,
-    mentor_id: UUID,
-    mentee_id: UUID,
-    session_type_id: UUID,
-    starts_at: dt.datetime,
-    booked_session_id: UUID,
-    now: dt.datetime,
-) -> UUID | None:
-    """Mark the offer this booking took up, if there was one. Returns its id.
-
-    Matched on the mentee, the offering and the instant, among offers still
-    held — so a mentee booking the time they were offered spends the offer, and
-    one booking any other time leaves it to lapse. Does not commit.
-    """
-    target = (
-        select(SessionSuggestion.id)
-        .where(
-            SessionSuggestion.mentor_id == mentor_id,
-            SessionSuggestion.mentee_id == mentee_id,
-            SessionSuggestion.session_type_id == session_type_id,
-            SessionSuggestion.starts_at == starts_at,
-            *active_hold(now),
-        )
-        .order_by(SessionSuggestion.created_at)
-        .limit(1)
-        .with_for_update()
-        .scalar_subquery()
-    )
-    attached = await session.scalar(
-        update(SessionSuggestion)
-        .where(SessionSuggestion.id == target)
-        .values(accepted_session_id=booked_session_id)
-        .returning(SessionSuggestion.id)
-    )
-    return UUID(str(attached)) if attached is not None else None
