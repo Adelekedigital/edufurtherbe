@@ -8,7 +8,7 @@ its options (#200).
 
 from __future__ import annotations
 
-from typing import Self, cast
+from typing import Any, Self, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -174,3 +174,81 @@ class IntakeFileRead(BaseModel):
     )
     size: int = Field(description="Bytes.")
     content_type: IntakeFileType = Field(description="Decided from the file's bytes.")
+
+
+class AnsweredOptionRead(BaseModel):
+    """A choice the mentee picked."""
+
+    id: UUID
+    text: str = Field(description="The option's wording as it stands now.")
+
+
+class AnsweredFileRead(BaseModel):
+    """The file that answers a `file_upload` question."""
+
+    id: UUID = Field(description="Download with `GET /api/v1/intake-files/{id}`.")
+    filename: str
+    content_type: IntakeFileType
+    size: int = Field(description="Bytes.")
+    available: bool = Field(
+        description=(
+            "`false` once retention has removed the file: the answer stays, the "
+            "download is a `404`. Show the name without a link."
+        )
+    )
+
+
+class SessionAnswerRead(BaseModel):
+    """One question of the booking's intake form and the mentee's answer to it.
+
+    Exactly one of `text`, `options` (non-empty) or `file` carries the answer,
+    by `question_type`.
+    """
+
+    question_id: UUID
+    question_text: str = Field(
+        description=(
+            "The question's wording **as it stands now**, not a copy kept at "
+            "booking: a mentor who rewords a question after a booking sees the "
+            "new wording here."
+        )
+    )
+    question_type: QuestionType = Field(
+        description=(
+            "The form the **answer** was given in. A mentor may switch a question "
+            "between free text and file after it was answered; this follows the "
+            "answer, so it always says which of `text`, `options` or `file` to read."
+        )
+    )
+    retired: bool = Field(
+        description="The question has since been removed from the form. Its answer is still shown."
+    )
+    text: str | None = Field(default=None, description="For `free_text`.")
+    options: list[AnsweredOptionRead] = Field(
+        default_factory=list,
+        description="For `multi_choice`, in the order the form lists them.",
+    )
+    file: AnsweredFileRead | None = Field(default=None, description="For `file_upload`.")
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> SessionAnswerRead:
+        file = row["file"]
+        return cls(
+            question_id=row["question_id"],
+            question_text=row["question_text"],
+            question_type=QuestionType(str(row["question_type"])),
+            retired=row["retired"],
+            text=row["text"],
+            options=[AnsweredOptionRead(**option) for option in row["options"]],
+            file=(
+                AnsweredFileRead(
+                    id=file["id"],
+                    filename=file["filename"],
+                    content_type=IntakeFileType(str(file["content_type"])),
+                    size=file["size_bytes"],
+                    available=file["available"],
+                )
+                if file is not None
+                else None
+            ),
+        )

@@ -22,6 +22,7 @@ from app.core.errors import (
 )
 from app.domain.intake_files import clean_filename, content_disposition, file_type
 from app.infra.db.intake_file_store import readable_file, store_intake_file
+from app.infra.db.session_answers_store import session_answers
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -135,3 +136,18 @@ async def intake_file_download(
 
 
 IntakeFileDownloadDep = Annotated[StreamingResponse, Depends(intake_file_download)]
+
+
+async def session_intake_answers(
+    session_id: UUID, user: CurrentUserDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    """The booking's answers, for its mentee, its mentor or an admin; else 404."""
+    rows = await session_answers(
+        session, session_id, caller_id=user["id"], caller_is_admin=bool(user["is_admin"])
+    )
+    if rows is None:
+        raise NotFoundError("no such session")
+    return rows
+
+
+SessionAnswersDep = Annotated[list[dict[str, Any]], Depends(session_intake_answers)]
