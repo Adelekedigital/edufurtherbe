@@ -579,6 +579,16 @@ class Session(TimestampMixin, Base):
             using="gist",
             where=text(LIVE_STATUSES),
         ),
+        # **The mentee's twin (#342):** a mentee cannot hold two overlapping
+        # live sessions, whoever the mentors are. The booking path refuses this
+        # first, with a clean 409; the constraint is what a race cannot get past.
+        ExcludeConstraint(
+            ("mentee_id", "="),
+            (text("session_window(starts_at, duration_minutes)"), "&&"),
+            name="sessions_no_mentee_double_booking",
+            using="gist",
+            where=text(LIVE_STATUSES),
+        ),
         # The three reads that matter, all partial. `alembic check` cannot
         # compare a predicate, so each is asserted against `pg_indexes`.
         Index(

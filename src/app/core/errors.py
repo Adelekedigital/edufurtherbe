@@ -84,6 +84,22 @@ class ReviewIntervalError(ConflictError):
     """
 
 
+class BookingOverlapError(ConflictError):
+    """The mentee already has a live session at an overlapping time (#342).
+
+    Each of the three booking limits carries its own problem type, because the
+    client's copy differs for each and none of them should suggest cancelling.
+    """
+
+
+class BookingWithMentorExistsError(ConflictError):
+    """The mentee already has a live session with this mentor (#342)."""
+
+
+class BookingLimitReachedError(ConflictError):
+    """The mentee already holds the most live sessions allowed at once (#342)."""
+
+
 class ValidationError(AppError):
     """Input violated a domain rule, as opposed to failing a schema check.
 

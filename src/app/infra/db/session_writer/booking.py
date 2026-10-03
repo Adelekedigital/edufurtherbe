@@ -37,8 +37,14 @@ from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import (
+    BookingOverlapError,
+    ConflictError,
+    NotFoundError,
+    ValidationError,
+)
 from app.domain.availability import BookingWindow
+from app.domain.booking_limits import OVERLAP_MESSAGE
 from app.domain.enums import (
     ActorType,
     QuestionType,
@@ -59,6 +65,7 @@ from app.infra.db.booking_rules import effective_duration_minutes
 from app.infra.db.credit_writer import spend_credit
 from app.infra.db.intake_file_store import link_files, usable_file_ids
 from app.infra.db.intake_store import questions_by_type, record_answers
+from app.infra.db.mentee_limits import check_mentee_limits
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import (
     Session,
@@ -84,6 +91,10 @@ logger = logging.getLogger(__name__)
 #: client's conflict, and they would retry forever against a row that can never
 #: be written.
 DOUBLE_BOOKED = "sessions_no_mentor_double_booking"
+
+#: The mentee's twin of ``DOUBLE_BOOKED`` (#342). Reached only by a race the
+#: limits check lost, since that check refuses an overlap first.
+MENTEE_DOUBLE_BOOKED = "sessions_no_mentee_double_booking"
 
 #: How far either side of the requested instant to ask ``list_slots`` for.
 #:
@@ -269,6 +280,17 @@ async def book_session(
         # re-read `/slots` — which the message says.
         raise ValidationError("that time is not available — re-read the mentor's slots")
 
+    # **The mentee's own limits (#342)**, under a per-mentee lock held to the
+    # end of this transaction: no overlap, one live session per mentor, and the
+    # overall cap. After legality, so an unoffered time is still a 422.
+    await check_mentee_limits(
+        session,
+        mentee_id,
+        mentor_id=mentor_id,
+        starts_at=starts_at,
+        duration_minutes=offering["duration_minutes"],
+    )
+
     requires_confirmation = bool(offering["requires_confirmation"])
     status = (
         SessionStatus.PENDING_MENTOR_APPROVAL if requires_confirmation else SessionStatus.CONFIRMED
@@ -301,12 +323,15 @@ async def book_session(
             )
         ).scalar_one()
     except IntegrityError as exc:
-        if DOUBLE_BOOKED not in str(exc.orig):
+        cause = str(exc.orig)
+        if DOUBLE_BOOKED not in cause and MENTEE_DOUBLE_BOOKED not in cause:
             raise
         # Rolled back here rather than left to the caller: the transaction is
         # already aborted, so every later statement in it would fail with
         # `InFailedSQLTransaction` and bury this cause under that one.
         await session.rollback()
+        if MENTEE_DOUBLE_BOOKED in cause:
+            raise BookingOverlapError(OVERLAP_MESSAGE) from exc
         raise ConflictError("that time was taken while you were booking it") from exc
 
     # **The debit, in the same transaction as the session.** A session that

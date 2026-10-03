@@ -664,9 +664,12 @@ async def test_the_same_window_is_free_for_another_mentor(
 ) -> None:
     conn, mentor_id, mentee_id = booking
     other_mentor = await make_mentor(conn, "second-mentor@example.test")
+    # A different mentee too: one mentee in two live sessions at once is
+    # refused by `sessions_no_mentee_double_booking` (#342).
+    other_mentee = await make_user(conn, "second-mentee-window@example.test")
 
     await insert_session(conn, mentor_id, mentee_id, duration=60)
-    await insert_session(conn, other_mentor, mentee_id, duration=60)
+    await insert_session(conn, other_mentor, other_mentee, duration=60)
 
     count = await conn.execute(text("SELECT count(*) FROM sessions"))
     assert count.scalar_one() == 2

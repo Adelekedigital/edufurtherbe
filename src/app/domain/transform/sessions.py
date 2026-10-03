@@ -83,6 +83,7 @@ from __future__ import annotations
 import datetime as dt
 from collections import Counter
 from dataclasses import dataclass, field
+from operator import attrgetter
 from typing import Any
 from urllib.parse import urlparse
 
@@ -698,12 +699,13 @@ GUARDED_STATUSES = frozenset({SessionStatus.PENDING_MENTOR_APPROVAL, SessionStat
 
 
 def overlapping_windows(sessions: list[SessionRow]) -> list[Disagreement]:
-    """Live windows colliding for one mentor — the extract-time pre-flight.
+    """Live windows colliding for one mentor or one mentee — the extract-time
+    pre-flight.
 
-    ``sessions_no_mentor_double_booking`` refuses these, so an overlap aborts the
-    load. Finding them **at the extract** is what makes them fixable in Bubble
-    while it is still writable; finding them at load time means finding them
-    inside the freeze window.
+    ``sessions_no_mentor_double_booking`` and ``sessions_no_mentee_double_booking``
+    (#342) refuse these, so an overlap aborts the load. Finding them **at the
+    extract** is what makes them fixable in Bubble while it is still writable;
+    finding them at load time means finding them inside the freeze window.
 
     The expected result is zero. Legacy did prevent double-booking, and mostly
     from the frontend (settled decision #84) — which cannot see two people
@@ -711,21 +713,30 @@ def overlapping_windows(sessions: list[SessionRow]) -> list[Disagreement]:
     So a non-zero result is a race or a bypass, and is worth understanding rather
     than merely cleaning.
     """
+    found: list[Disagreement] = []
+    for side in ("mentor", "mentee"):
+        found.extend(_overlaps_for(sessions, side))
+    return found
+
+
+def _overlaps_for(sessions: list[SessionRow], side: str) -> list[Disagreement]:
+    """One constraint's worth of overlaps: the same window for the same party."""
+    party = attrgetter(f"{side}_bubble_id")
     live = sorted(
         (row for row in sessions if row.status in GUARDED_STATUSES),
-        key=lambda row: (row.mentor_bubble_id, row.starts_at),
+        key=lambda row: (party(row), row.starts_at),
     )
     found: list[Disagreement] = []
     for index, row in enumerate(live):
         for other in live[index + 1 :]:
-            if other.mentor_bubble_id != row.mentor_bubble_id:
+            if party(other) != party(row):
                 break
             if other.starts_at >= row.starts_at + dt.timedelta(minutes=row.duration_minutes):
                 break
             found.append(
                 Disagreement(
                     row.legacy_bubble_id,
-                    f"overlaps {other.legacy_bubble_id} for mentor {row.mentor_bubble_id}",
+                    f"overlaps {other.legacy_bubble_id} for {side} {party(row)}",
                 )
             )
     return found
