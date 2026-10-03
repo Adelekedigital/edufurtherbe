@@ -43,15 +43,17 @@ async def walk(client: httpx.AsyncClient, url: str, auth_id: object, query: str)
 async def test_asc_pages_soonest_first_with_no_repeats_or_gaps(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Two at a time over five, with a tie at one instant so the id half of the
-    cursor is load-bearing in this direction too."""
+    """Two at a time over six, with **three** sessions at one instant, so the tie
+    straddles the first page boundary and the id half of the cursor is
+    load-bearing in this direction too — comparing on `starts_at` alone skips
+    the third."""
     mentor, _, mentee, auth = await pair(db_engine, "o-asc")
     later = [
         await make_session(db_engine, mentor, mentee, starts_at=BASE + timedelta(days=d))
         for d in (3, 1, 2)
     ]
     tied = sorted(
-        [str(await make_session(db_engine, mentor, mentee, starts_at=BASE)) for _ in range(2)]
+        [str(await make_session(db_engine, mentor, mentee, starts_at=BASE)) for _ in range(3)]
     )
 
     served = await walk(api_client, sessions_url(mentee), auth, "order=asc&limit=2")
