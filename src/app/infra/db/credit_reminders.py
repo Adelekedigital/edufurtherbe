@@ -61,7 +61,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.notifications import CREDIT_REMINDERS, CreditReminder, Notification
 from app.domain.notifications import credit_reminder_kind as kind_for
-from app.infra.db.credit_store import spendable_now
+from app.infra.db.credit_store import held
 from app.infra.db.models.credits import CreditLot
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
@@ -78,7 +78,7 @@ WINDOW = dt.timedelta(days=1)
 
 async def expiring_soon(
     session: AsyncSession, reminder: CreditReminder, *, now: dt.datetime
-) -> list[tuple[UUID, dt.datetime]]:
+) -> list[tuple[UUID, dt.datetime, int]]:
     """Users with spendable credits expiring around ``reminder.before`` from now.
 
     Returns one row per user per expiry date, because a user can hold two lots
@@ -91,19 +91,22 @@ async def expiring_soon(
     target = now + reminder.before
 
     return [
-        (row.user_id, row.expires_at)
+        (row.user_id, row.expires_at, int(row.expiring))
         for row in await session.execute(
-            select(CreditLot.user_id, CreditLot.expires_at)
+            select(
+                CreditLot.user_id,
+                CreditLot.expires_at,
+                func.sum(CreditLot.quantity_remaining).label("expiring"),
+            )
             .join(User, User.id == CreditLot.user_id)
             .where(
                 LIVE,
-                CreditLot.quantity_remaining > 0,
                 # `spendable_now` admits the never-expiring starter, deliberately
                 # — it *is* spendable. What excludes it here is the two-sided
                 # window below: a lot with no expiry has no date to fall in one.
                 # See the module docstring for why an explicit `IS NOT NULL`
                 # would add nothing.
-                spendable_now(now),
+                *held(now),
                 CreditLot.expires_at >= target - WINDOW,
                 CreditLot.expires_at < target + WINDOW,
             )
@@ -125,7 +128,7 @@ async def remind_about_expiring_credits(session: AsyncSession, *, now: dt.dateti
     """
     queued = 0
     for reminder in CREDIT_REMINDERS:
-        for user_id, expires_at in await expiring_soon(session, reminder, now=now):
+        for user_id, expires_at, expiring in await expiring_soon(session, reminder, now=now):
             await enqueue(
                 session,
                 Notification.CREDITS_EXPIRING,
@@ -138,6 +141,11 @@ async def remind_about_expiring_credits(session: AsyncSession, *, now: dt.dateti
                     # moves the wording with it rather than leaving a message
                     # that says "two weeks" one week out.
                     "interval": reminder.interval,
+                    # How many go, for `creditCount`. Re-read at send time from
+                    # `expires_at` (`credit_store.expiring_on`), since a booking
+                    # in between spends these first; this is the fallback.
+                    "credit_count": expiring,
+                    "expires_at": expires_at.isoformat(),
                 },
             )
             queued += 1

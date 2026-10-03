@@ -153,6 +153,12 @@ Registered so the current templates work **without being edited**:
 | `cancelmessage` | `reasonMessage` |
 | `cancelinitiator` | `cancelInitiator` |
 | `intervaltime` | `intervalTime` |
+| `sessTopic` | `sessionTopic` |
+| `fName` | the recipient's first name |
+| `bookLink` | the Explore page |
+| `reviewBy` | `menteeName` (the review's author) |
+| `reviewFor` | `mentorName` (who the review is about) |
+| `reviewLink` | `sessionUrl` (where the review lives) |
 | `feedbacklink` | `feedbackUrl` |
 
 `attendee` is the one alias that is **not** a rename. It is recipient-relative —
@@ -190,46 +196,75 @@ constants in one place, so settling them is a one-file change.
 
 ---
 
-## Current templates
+## Template registry
 
-Ids are unchanged and `EMAIL_TEMPLATES` needs no edit for those already mapped.
-With aliases registered, **none of these needs editing in Loops to work**.
+**The one reference for which Loops template each email uses.** Every
+`Notification` member has exactly one row, and `tests/unit/test_template_registry.py`
+fails when a member is missing, so code and this table cannot drift. Ids are the
+Railway `development` mapping as of 2026-10-03; ids are not secret. Variables are
+what the live template declared when read from Loops on 2026-10-03; the backend
+reads them again from Loops at send time, so this column is a record, not a
+contract.
 
-| template | id | message |
+| member | Loops template | id | receives it | variables |
+|---|---|---|---|---|
+| `session_booked` | Session Confirmation | `clyamujcw008npblz54cv0oxw` | mentor | `attendee`, `location`, `name`, `sessiondate`, `sessionlink`, `sessiontime`, `topic`, `topicDiscuss` |
+| `session_requested` | Session Request | `cmbxizcr3bcvrvs0idfrh81yo` | mentor | `discuss`, `hours`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
+| `request_accepted` | Session Confirmation (shared) | `clyamujcw008npblz54cv0oxw` | mentee | as `session_booked` |
+| `request_declined` | Declined Request | `cmbxk5mzj1ldovu0iw608gzga` | mentee | `menteeName`, `mentorName`, `reasonMessage`, `reasonTitle`, `sessionDate`, `webUrl` |
+| `request_withdrawn` | Withdrawn Request | `cmc4umpfe0a5y5e0in8n13flj` | mentor | as `request_declined` |
+| `session_cancelled` | Session Canceled | `clyvhvwru002hm392q9y8qeje` | the other party | `cancelinitiator`, `cancelmessage`, `dashlink`, `name`, `sessiondate` |
+| `request_expired` | — | **NEEDED** | both | — |
+| `mentor_approved` | — | **NEEDED** | the mentor | — |
+| `calendar_disconnected` | — | **NEEDED** | the mentor whose calendar it is | — |
+| `session_reminder` | Session Reminder | `clyao8wx60024h2stw3o2ejh8` | both | `attendee`, `intervaltime`, `location`, `name`, `sessiondate`, `sessionlink`, `sessiontime`, `topic`, `topicDiscuss` |
+| `session_last_reminder` | Session Last Reminder | `clyaoph2m00xzs2yecm330s2u` | both | as `session_booked` |
+| `review_requested` | sessionReviewRequest | `cmf1qlt600bjiut0iu5i7yycj` | mentee | `reviewBy`, `reviewFor`, `reviewLink`, `sessTopic` |
+| `review_received` | reviewUpdateToMentors | `cmf1rd22ty7dcxz0iffc6jymd` | mentor | `reviewBy`, `reviewFor`, `reviewLink` |
+| `credits_granted` | Credit: New users update | `cmbn678u30iwz4x0ixz20yfod` | the user | `bookLink`, `fName` |
+| `credits_renewed` | Credit renewal | `cmbk0mv700e4yzn0i6ho1h75s` | the user | `bookLink`, `fName` |
+| `credits_expiring` | Unused credit | `cmbk13nzg0iv4xw0i90uq1j5s` | the user | `bookLink`, `creditCount`, `fName` |
+| `mentor_application_received` | — | **NEEDED** | admins who can decide it, never the applicant | — |
+| `mentor_declined` | — | **NEEDED** | the applicant | — |
+| `mentor_response_reminder` | Session Request Reminder | `cmbxjqtne3nt1wu0i5sk5kr2h` | mentor | `discuss`, `hours`, `location`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
+| `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |
+
+**Coming:** #339 ("Suggest a new time", in progress on another branch) adds two
+members, the suggestion email and the hold reminder. That branch adds their rows.
+
+**A member marked NEEDED fails at the drain** (`template_for()` raises), and the
+outbox keeps the row, so nothing is lost and nothing is sent until an id is set.
+
+### Paste-ready
+
+Every mapped id, as one value. `EMAIL_TEMPLATES` **replaces the whole map**:
+there is no merge, so adding a message means re-stating them all.
+
+```
+EMAIL_TEMPLATES={"session_booked":"clyamujcw008npblz54cv0oxw","request_accepted":"clyamujcw008npblz54cv0oxw","session_requested":"cmbxizcr3bcvrvs0idfrh81yo","request_declined":"cmbxk5mzj1ldovu0iw608gzga","request_withdrawn":"cmc4umpfe0a5y5e0in8n13flj","session_cancelled":"clyvhvwru002hm392q9y8qeje","mentor_response_reminder":"cmbxjqtne3nt1wu0i5sk5kr2h","session_reminder":"clyao8wx60024h2stw3o2ejh8","session_last_reminder":"clyaoph2m00xzs2yecm330s2u","review_requested":"cmf1qlt600bjiut0iu5i7yycj","review_received":"cmf1rd22ty7dcxz0iffc6jymd","credits_granted":"cmbn678u30iwz4x0ixz20yfod","credits_renewed":"cmbk0mv700e4yzn0i6ho1h75s","credits_expiring":"cmbk13nzg0iv4xw0i90uq1j5s","mentor_return_reminder":"cm4w04jbv00r82fxqlo8c6vyh"}
+```
+
+### Values that may be absent
+
+Since 2026-10-03, a value a real event often lacks has one defined fallback
+instead of failing the send (the dev outbox showed `session_requested` and
+`request_declined` failing on them). An unknown variable **name** still fails.
+
+| variable | value | when absent |
 |---|---|---|
-| Session Confirmation | `clyamujcw008npblz54cv0oxw` | `session_booked`, and `request_accepted` |
-| Session Request | `cmbxizcr3bcvrvs0idfrh81yo` | `session_requested` |
-| Declined Request | `cmbxk5mzj1ldovu0iw608gzga` | `request_declined` |
-| Withdrawn Request | `cmc4umpfe0a5y5e0in8n13flj` | `request_withdrawn` |
-| Session Canceled | `clyvhvwru002hm392q9y8qeje` | `session_cancelled` |
-| Session Request Reminder | `cmbxjqtne3nt1wu0i5sk5kr2h` | `mentor_response_reminder` |
-| Session Reminder | `clyao8wx60024h2stw3o2ejh8` | `session_reminder` |
-| Session Last Reminder | `clyaoph2m00xzs2yecm330s2u` | `session_last_reminder` |
-| Session Feedback | `clyarw8rp01mezrlmid7xay2i` | **withdrawn — see below** |
-| Credit: New users update | `cmbn678u30iwz4x0ixz20yfod` | `credits_granted` |
-| Credit renewal | `cmbk0mv700e4yzn0i6ho1h75s` | `credits_renewed` |
-| Unused credit | `cmbk13nzg0iv4xw0i90uq1j5s` | `credits_expiring` |
+| `sessionTopic` (`topic`, `sessTopic`) | the topic written at booking | the offering's name, else "Mentorship session" |
+| `sessionDetail` (`discuss`, `topicDiscuss`) | the booking message | empty |
+| `location` | the venue label | "Online" |
+| `reasonTitle` | the reason code in words (`REASON_TITLES`) | empty when a reason was written without a code; "No reason given" when neither |
+| `reasonMessage` (`cancelmessage`) | what the person wrote | empty |
+| `cancelInitiator` (`cancelinitiator`) | the name of whoever cancelled, read at send time | (always set by the cancel) |
+| `fName` | the recipient's first name | their full name |
+| `reviewBy` / `reviewFor` | the mentee (author) / the mentor (subject) | — |
+| `reviewLink` | the session page, where the review lives | — |
+| `bookLink` | the Explore page | — |
+| `creditCount` | credits expiring on that date, carried on the row | required |
 
-`request_accepted` sharing Session Confirmation stops being a decision worth
-agonising over: both resolve the same names, so sharing costs nothing and
-splitting later is a config change.
-
-**Two of those three gained producers and one lost its message.** The
-pre-session reminders ship and fire; the feedback request was *withdrawn*
-before it ever sent, because it conflated a platform survey to both parties
-with a mentor review from the mentee.
-
-So **Session Feedback is a template with no message**. Whether
-`review_requested` reuses that id or gets its own is an operator decision in
-Loops, not a code one — the mapping is configuration, which is the whole
-point of `EMAIL_TEMPLATES`. What the copy has to change either way is the
-audience: the withdrawn message addressed both parties, and a review request
-addresses the mentee alone.
-
-### Messages with no template
-
-`request_expired`, `calendar_disconnected`, `mentor_approved`, `mentor_declined`,
-**`review_requested`**, **`review_received`**, `mentor_return_reminder`.
+### Notes per message
 
 `mentor_return_reminder` (2026-10-01) is **one template for two cases**, sent to
 a self-paused mentor at 08:00 in their own zone. **The template must word both.**
@@ -276,9 +311,8 @@ what makes that free rather than three more field lists.
 
 ## Open questions
 
-- **`reasonTitle` needs a code-to-words mapping.** `SessionReasonCode` is a
-  vocabulary policy reads; the human wording has to live somewhere, and Loops is
-  the wrong place because a template cannot see the code.
+- ~~**`reasonTitle` needs a code-to-words mapping.**~~ **Settled 2026-10-03:**
+  `REASON_TITLES` in `domain/messages.py`, pinned to cover every code.
 - **How often to refresh the cache in the background.** The miss path is settled
   — fetch the single template — but a template whose variables *changed* rather
   than appeared produces no miss, so something has to re-read it eventually. A
@@ -330,18 +364,3 @@ a two-sided one *structurally*, which it cannot.
 `uq_outbox_events_reminder` is unique on `(entity_id, event_type, kind,
 recipient)` and `entity_id` here is the user, so a bare kind would be unique
 across their lifetime and they would be nudged once, ever.
-
-## Paste-ready
-
-Everything with a producer today, as one value. `EMAIL_TEMPLATES` **replaces
-wholly** — there is no merge, so adding a message means re-stating them all:
-
-```
-EMAIL_TEMPLATES={"session_booked":"clyamujcw008npblz54cv0oxw","request_accepted":"clyamujcw008npblz54cv0oxw","session_requested":"cmbxizcr3bcvrvs0idfrh81yo","request_declined":"cmbxk5mzj1ldovu0iw608gzga","request_withdrawn":"cmc4umpfe0a5y5e0in8n13flj","session_cancelled":"clyvhvwru002hm392q9y8qeje","mentor_response_reminder":"cmbxjqtne3nt1wu0i5sk5kr2h","session_reminder":"clyao8wx60024h2stw3o2ejh8","session_last_reminder":"clyaoph2m00xzs2yecm330s2u","credits_granted":"cmbn678u30iwz4x0ixz20yfod","credits_renewed":"cmbk0mv700e4yzn0i6ho1h75s","credits_expiring":"cmbk13nzg0iv4xw0i90uq1j5s"}
-```
-
-Still absent, and both have producers already shipped: `review_requested`
-(`sessionReviewRequest`) and `review_received` (`reviewUpdateToMentors`). Only
-their names are recorded anywhere — the ids have never been written down, and
-until they are, a settled session queues a review request that fails at the
-drain.

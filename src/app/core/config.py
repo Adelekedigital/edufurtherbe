@@ -318,6 +318,17 @@ class Settings(BaseSettings):
             part.split("=", 1) for part in (p.strip() for p in text.split(",")) if "=" in part
         )
 
+    @field_validator("app_base_url")
+    @classmethod
+    def an_absolute_web_origin(cls, value: str | None) -> str | None:
+        """Every email link is joined to this, so a value with no web scheme
+        would send links no mail client can open. Refused at start-up instead.
+        Unset stays allowed: then a message that links fails rather than sends.
+        """
+        if value and not value.startswith(("https://", "http://")):
+            raise ValueError("APP_BASE_URL must be an absolute http(s) URL")
+        return value
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def accept_json_or_a_comma_separated_list(cls, value: object) -> object:

@@ -14,14 +14,17 @@ once, ever, and never again.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.domain.messages import build_variables
 from app.infra.db.credit_reminders import remind_about_expiring_credits
 from app.infra.db.engine import create_session_factory
+from app.infra.db.outbox import drain
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -269,3 +272,125 @@ async def test_a_naive_now_is_refused(db_engine: AsyncEngine) -> None:
     async with factory() as db:
         with pytest.raises(ValueError, match="aware datetime"):
             await remind_about_expiring_credits(db, now=dt.datetime(2026, 9, 17, 6, 0))
+
+
+async def test_the_nudge_carries_how_many_credits_expire(db_engine: AsyncEngine) -> None:
+    """`creditCount` in the live template: the sum across lots sharing the date."""
+    user = await a_user(db_engine)
+    await a_lot(db_engine, user, remaining=1)
+    await a_lot(db_engine, user, remaining=2, source="referral_unlock")
+
+    await sweep(db_engine, now=FOURTEEN_OUT)
+
+    async with db_engine.begin() as conn:
+        count = (
+            await conn.execute(
+                text(
+                    "SELECT payload ->> 'credit_count' FROM outbox_events "
+                    "WHERE event_type = 'credits_expiring' AND payload ->> 'recipient_id' = :u"
+                ),
+                {"u": str(user)},
+            )
+        ).scalar_one()
+    assert count == "3"
+
+
+async def drain_expiring(engine: AsyncEngine) -> list[Any]:
+    """Drain the outbox, returning each expiry nudge's context as sent."""
+    contexts: list[Any] = []
+
+    class Capture:
+        def send(self, **kwargs: Any) -> None:
+            if str(kwargs["notification"]) == "credits_expiring":
+                contexts.append(kwargs["context"])
+
+    factory = create_session_factory(engine)
+    async with factory() as db:
+        await drain(db, notifier=Capture(), now=dt.datetime.now(dt.UTC))
+        await db.commit()
+    return contexts
+
+
+async def test_the_count_sent_is_what_is_left_when_it_goes(db_engine: AsyncEngine) -> None:
+    """Codex on #340: a booking between the sweep and the send spends these
+    lots first, so the queued number would overstate what is about to go."""
+    user = await a_user(db_engine)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=14)
+    await a_lot(db_engine, user, remaining=3, expires=expires)
+    await sweep(db_engine, now=expires - dt.timedelta(days=14))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET quantity_remaining = 1 WHERE user_id = :u"), {"u": user}
+        )
+
+    (context,) = await drain_expiring(db_engine)
+
+    assert build_variables(["creditCount"], context) == {"creditCount": "1"}
+
+
+async def test_a_nudge_whose_credits_were_all_spent_is_not_sent(db_engine: AsyncEngine) -> None:
+    user = await a_user(db_engine)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=14)
+    await a_lot(db_engine, user, remaining=2, expires=expires)
+    await sweep(db_engine, now=expires - dt.timedelta(days=14))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET quantity_remaining = 0 WHERE user_id = :u"), {"u": user}
+        )
+
+    assert await drain_expiring(db_engine) == []
+
+
+async def test_a_nudge_dropped_as_spent_is_recorded_skipped_not_failed(
+    db_engine: AsyncEngine,
+) -> None:
+    """A deliberate non-send, so it is not retried and not counted as a failure."""
+    user = await a_user(db_engine)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=14)
+    await a_lot(db_engine, user, remaining=2, expires=expires)
+    await sweep(db_engine, now=expires - dt.timedelta(days=14))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET quantity_remaining = 0 WHERE user_id = :u"), {"u": user}
+        )
+
+    await drain_expiring(db_engine)
+
+    async with db_engine.connect() as conn:
+        status, detail = (
+            await conn.execute(
+                text(
+                    "SELECT status, error_detail FROM outbox_events "
+                    "WHERE event_type = 'credits_expiring' AND payload ->> 'recipient_id' = :u"
+                ),
+                {"u": str(user)},
+            )
+        ).one()
+    assert (status, detail) == ("skipped", "superseded")
+
+
+async def test_the_count_is_read_once_so_a_spend_cannot_slip_between(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex on #340: a check and then a second read for the email let a spend
+    in between send "0 credits". The decision and the number are one read."""
+    from app.infra.db import credit_store, outbox
+
+    user = await a_user(db_engine)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=14)
+    await a_lot(db_engine, user, remaining=2, expires=expires)
+    await sweep(db_engine, now=expires - dt.timedelta(days=14))
+    reads: list[int] = []
+    answers = iter([2, 0])
+
+    async def racing(*_args: Any, **_kwargs: Any) -> int:
+        reads.append(1)
+        return next(answers)
+
+    monkeypatch.setattr(outbox, "expiring_on", racing)
+    monkeypatch.setattr(credit_store, "expiring_on", racing)
+
+    (context,) = await drain_expiring(db_engine)
+
+    assert len(reads) == 1
+    assert build_variables(["creditCount"], context) == {"creditCount": "2"}

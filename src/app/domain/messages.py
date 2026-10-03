@@ -30,11 +30,16 @@ from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
 
 from app.core.errors import AppError
+from app.domain.enums import SessionReasonCode
 
 __all__ = [
     "ALIASES",
     "DELETED_PARTY_LABELS",
+    "NO_REASON_TITLE",
+    "REASON_TITLES",
     "RESOLVERS",
+    "SESSION_TOPIC_FALLBACK",
+    "VENUE_FALLBACK",
     "MessageContext",
     "UnresolvedVariableError",
     "build_variables",
@@ -48,6 +53,28 @@ __all__ = [
 #: role the deleted person had in the session, so the recipient reads "your
 #: mentor" or "your mentee". The one place these words live.
 DELETED_PARTY_LABELS = {"mentor": "your mentor", "mentee": "your mentee"}
+
+#: **What is legitimately absent gets one defined value, not a failed send.**
+#: The dev outbox showed the cost of refusing these (2026-10-03): most bookings
+#: carry no topic and no decline carries a reason code, so `session_requested`
+#: and `request_declined` failed and nobody was told. An unknown *name* is still
+#: refused; these are only for values a real event often lacks.
+SESSION_TOPIC_FALLBACK = "Mentorship session"
+VENUE_FALLBACK = "Online"
+NO_REASON_TITLE = "No reason given"
+
+#: A reason code in words, for `reasonTitle`. The one place they live.
+REASON_TITLES: dict[SessionReasonCode, str] = {
+    SessionReasonCode.MENTOR_UNAVAILABLE: "The mentor is unavailable",
+    SessionReasonCode.MENTEE_NO_LONGER_NEEDED: "No longer needed",
+    SessionReasonCode.SCHEDULING_CONFLICT: "Scheduling conflict",
+    SessionReasonCode.TECHNICAL_ISSUE: "Technical issue",
+    SessionReasonCode.MENTOR_NO_SHOW: "The mentor did not attend",
+    SessionReasonCode.MENTEE_NO_SHOW: "The mentee did not attend",
+    SessionReasonCode.EXPIRED_NO_RESPONSE: "No response in time",
+    SessionReasonCode.RESCHEDULED: "Rescheduled",
+    SessionReasonCode.ADMIN_ACTION: "Changed by EduFurther",
+}
 
 
 class UnresolvedVariableError(AppError):
@@ -73,9 +100,12 @@ class MessageContext:
     recipient_timezone: str
     mentor_name: str
     mentee_name: str
+    recipient_first_name: str | None = None
 
     starts_at: dt.datetime | None = None
     topic: str | None = None
+    #: The offering's name, the subject when nobody wrote a topic.
+    session_type_name: str | None = None
     detail: str | None = None
     venue: str | None = None
     respond_by: dt.datetime | None = None
@@ -99,6 +129,7 @@ class MessageContext:
 SESSION_PATH = "/sessions/{session_id}"
 DASHBOARD_PATH = "/dashboard"
 CALENDAR_PATH = "/calendar"
+EXPLORE_PATH = "/explore"
 
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
@@ -116,6 +147,15 @@ def _needs(value: object, name: str) -> str:
     return str(value)
 
 
+def _app_link(context: MessageContext, path: str, name: str) -> str:
+    """An absolute link into the application, or a refusal.
+
+    Every link goes through here: with no application origin configured a
+    link would go out as a bare path that no mail client can open.
+    """
+    return f"{_needs(context.app_base_url, name).rstrip('/')}{path}"
+
+
 def _session_url(context: MessageContext) -> str:
     """The EduFurther **session page** — never the meeting link.
 
@@ -125,7 +165,30 @@ def _session_url(context: MessageContext) -> str:
     room out days in advance and undo both.
     """
     session_id = _needs(context.session_id, "sessionUrl")
-    return f"{context.app_base_url.rstrip('/')}{SESSION_PATH.format(session_id=session_id)}"
+    return _app_link(context, SESSION_PATH.format(session_id=session_id), "sessionUrl")
+
+
+def _topic(context: MessageContext) -> str:
+    """What the session is about: the topic written, else the offering's name."""
+    return context.topic or context.session_type_name or SESSION_TOPIC_FALLBACK
+
+
+def _reason_title(context: MessageContext) -> str:
+    """The code in words; "No reason given" only when nothing at all was given.
+
+    A written reason with no code gets no title, so the email does not read
+    "No reason given" directly above the reason.
+    """
+    code = context.extras.get("reason_code")
+    if code:
+        return REASON_TITLES[SessionReasonCode(code)]
+    return "" if context.extras.get("reason_text") else NO_REASON_TITLE
+
+
+def _initiator(context: MessageContext) -> str:
+    """Who called it off, named at send time so a deleted party is not named."""
+    side = _needs(context.extras.get("cancel_initiator"), "cancelInitiator")
+    return context.mentor_name if side == "mentor" else context.mentee_name
 
 
 def _hours_left(context: MessageContext) -> str:
@@ -157,12 +220,17 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
         "%H:%M"
     ),
     "sessionTimezone": lambda c: _needs(c.recipient_timezone, "sessionTimezone"),
-    "sessionTopic": lambda c: _needs(c.topic, "sessionTopic"),
-    "sessionDetail": lambda c: _needs(c.detail, "sessionDetail"),
-    "location": lambda c: _needs(c.venue, "location"),
+    "sessionTopic": _topic,
+    "sessionDetail": lambda c: c.detail or "",
+    "location": lambda c: c.venue or VENUE_FALLBACK,
     "sessionUrl": _session_url,
-    "dashboardUrl": lambda c: f"{c.app_base_url.rstrip('/')}{DASHBOARD_PATH}",
-    "calendarUrl": lambda c: f"{c.app_base_url.rstrip('/')}{CALENDAR_PATH}",
+    "dashboardUrl": lambda c: _app_link(c, DASHBOARD_PATH, "dashboardUrl"),
+    "exploreUrl": lambda c: _app_link(c, EXPLORE_PATH, "exploreUrl"),
+    "recipientFirstName": lambda c: (
+        c.recipient_first_name or _needs(c.recipient_name, "recipientFirstName")
+    ),
+    "creditCount": lambda c: _needs(c.extras.get("credit_count"), "creditCount"),
+    "calendarUrl": lambda c: _app_link(c, CALENDAR_PATH, "calendarUrl"),
     # The return reminder is one template for a dated pause and an undated one,
     # so the side that does not apply is deliberately empty, not refused.
     "returnOn": lambda c: (
@@ -173,9 +241,9 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "daysUntilReturn": lambda c: c.extras.get("days_until_return", ""),
     "daysPaused": lambda c: c.extras.get("days_paused", ""),
     "hours": _hours_left,
-    "reasonTitle": lambda c: _needs(c.extras.get("reason_title"), "reasonTitle"),
-    "reasonMessage": lambda c: _needs(c.extras.get("reason_text"), "reasonMessage"),
-    "cancelInitiator": lambda c: _needs(c.extras.get("cancel_initiator"), "cancelInitiator"),
+    "reasonTitle": _reason_title,
+    "reasonMessage": lambda c: c.extras.get("reason_text") or "",
+    "cancelInitiator": _initiator,
     "intervalTime": lambda c: _needs(c.extras.get("interval"), "intervalTime"),
 }
 
@@ -212,6 +280,14 @@ ALIASES: dict[str, str] = {
     "cancelmessage": "reasonMessage",
     "cancelinitiator": "cancelInitiator",
     "intervaltime": "intervalTime",
+    "sessTopic": "sessionTopic",
+    "fName": "recipientFirstName",
+    "bookLink": "exploreUrl",
+    # A review is by the mentee and about the mentor, and its content lives on
+    # the session page, so the link is that page rather than a quote.
+    "reviewBy": "menteeName",
+    "reviewFor": "mentorName",
+    "reviewLink": "sessionUrl",
 }
 
 
