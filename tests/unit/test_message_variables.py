@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from tests.unit.test_template_registry import live_variables
 
 from app.domain.enums import SessionReasonCode
 from app.domain.messages import (
@@ -359,109 +360,26 @@ def test_credit_count_is_required_where_asked() -> None:
         build_variables(["creditCount"], context())
 
 
-#: What each live template declared on 2026-10-03, read from Loops.
-LIVE_TEMPLATES = {
-    "credits_expiring": ["bookLink", "creditCount", "fName"],
-    "credits_granted": ["bookLink", "fName"],
-    "credits_renewed": ["bookLink", "fName"],
-    "mentor_response_reminder": [
-        "discuss",
-        "hours",
-        "location",
-        "menteeName",
-        "mentorName",
-        "sessionDate",
-        "sessionTime",
-        "sessionTopic",
-        "webUrl",
-    ],
-    "mentor_return_reminder": ["mentorName"],
-    "request_accepted": [
-        "attendee",
-        "location",
-        "name",
-        "sessiondate",
-        "sessionlink",
-        "sessiontime",
-        "topic",
-        "topicDiscuss",
-    ],
-    "request_declined": [
-        "menteeName",
-        "mentorName",
-        "reasonMessage",
-        "reasonTitle",
-        "sessionDate",
-        "webUrl",
-    ],
-    "request_withdrawn": [
-        "menteeName",
-        "mentorName",
-        "reasonMessage",
-        "reasonTitle",
-        "sessionDate",
-        "webUrl",
-    ],
-    "review_received": ["reviewBy", "reviewFor", "reviewLink"],
-    "review_requested": ["reviewBy", "reviewFor", "reviewLink", "sessTopic"],
-    "session_booked": [
-        "attendee",
-        "location",
-        "name",
-        "sessiondate",
-        "sessionlink",
-        "sessiontime",
-        "topic",
-        "topicDiscuss",
-    ],
-    "session_cancelled": ["cancelinitiator", "cancelmessage", "dashlink", "name", "sessiondate"],
-    "session_last_reminder": [
-        "attendee",
-        "location",
-        "name",
-        "sessiondate",
-        "sessionlink",
-        "sessiontime",
-        "topic",
-        "topicDiscuss",
-    ],
-    "session_reminder": [
-        "attendee",
-        "intervaltime",
-        "location",
-        "name",
-        "sessiondate",
-        "sessionlink",
-        "sessiontime",
-        "topic",
-        "topicDiscuss",
-    ],
-    "session_requested": [
-        "discuss",
-        "hours",
-        "menteeName",
-        "mentorName",
-        "sessionDate",
-        "sessionTime",
-        "sessionTopic",
-        "webUrl",
-    ],
-}
-
-
 def test_every_name_a_live_template_uses_has_a_resolver() -> None:
     """The gap the dev outbox found, closed for every template at once."""
     known = set(RESOLVERS) | set(ALIASES)
     missing = {
         template: sorted(set(names) - known)
-        for template, names in LIVE_TEMPLATES.items()
+        for template, names in live_variables().items()
         if set(names) - known
     }
 
     assert missing == {}
 
 
-def test_a_bare_session_fills_every_live_session_template() -> None:
+#: The mapped templates that are about a session, so a bare session fills them.
+SESSION_TEMPLATES = sorted(
+    member for member in live_variables() if not member.startswith(("credits_", "mentor_return"))
+)
+
+
+@pytest.mark.parametrize("template", SESSION_TEMPLATES)
+def test_a_bare_session_fills_every_live_session_template(template: str) -> None:
     """A real booking: no topic, no message, no venue, no reason given."""
     bare = context(
         topic=None,
@@ -471,17 +389,19 @@ def test_a_bare_session_fills_every_live_session_template() -> None:
         respond_by=dt.datetime.now(dt.UTC) + dt.timedelta(hours=5),
         extras={"interval": "24 hours", "cancel_initiator": "mentor"},
     )
-    for template in (
-        "mentor_response_reminder",
-        "request_accepted",
-        "request_declined",
-        "request_withdrawn",
-        "review_received",
-        "review_requested",
-        "session_booked",
-        "session_cancelled",
-        "session_last_reminder",
-        "session_reminder",
-        "session_requested",
-    ):
-        build_variables(LIVE_TEMPLATES[template], bare)
+
+    build_variables(live_variables()[template], bare)
+
+
+def test_the_session_templates_are_all_there() -> None:
+    """A filter that silently dropped templates would make the case above vacuous."""
+    assert len(SESSION_TEMPLATES) == 11
+
+
+def test_a_reason_written_without_a_code_has_no_title() -> None:
+    """A decline reading "No reason given" above "I'm travelling" contradicts itself."""
+    built = build_variables(
+        ["reasonTitle", "reasonMessage"], context(extras={"reason_text": "I'm travelling"})
+    )
+
+    assert built == {"reasonTitle": "", "reasonMessage": "I'm travelling"}

@@ -255,7 +255,7 @@ instead of failing the send (the dev outbox showed `session_requested` and
 | `sessionTopic` (`topic`, `sessTopic`) | the topic written at booking | the offering's name, else "Mentorship session" |
 | `sessionDetail` (`discuss`, `topicDiscuss`) | the booking message | empty |
 | `location` | the venue label | "Online" |
-| `reasonTitle` | the reason code in words (`REASON_TITLES`) | "No reason given" |
+| `reasonTitle` | the reason code in words (`REASON_TITLES`) | empty when a reason was written without a code; "No reason given" when neither |
 | `reasonMessage` (`cancelmessage`) | what the person wrote | empty |
 | `cancelInitiator` (`cancelinitiator`) | the name of whoever cancelled, read at send time | (always set by the cancel) |
 | `fName` | the recipient's first name | their full name |

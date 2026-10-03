@@ -165,10 +165,15 @@ def _topic(context: MessageContext) -> str:
 
 
 def _reason_title(context: MessageContext) -> str:
+    """The code in words; "No reason given" only when nothing at all was given.
+
+    A written reason with no code gets no title, so the email does not read
+    "No reason given" directly above the reason.
+    """
     code = context.extras.get("reason_code")
-    if not code:
-        return NO_REASON_TITLE
-    return REASON_TITLES[SessionReasonCode(code)]
+    if code:
+        return REASON_TITLES[SessionReasonCode(code)]
+    return "" if context.extras.get("reason_text") else NO_REASON_TITLE
 
 
 def _initiator(context: MessageContext) -> str:

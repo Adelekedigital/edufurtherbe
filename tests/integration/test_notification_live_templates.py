@@ -13,7 +13,7 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_notifications import Recorder, a_booking, sweep
-from tests.unit.test_message_variables import LIVE_TEMPLATES
+from tests.unit.test_template_registry import live_variables
 
 from app.domain.enums import SessionReasonCode
 from app.domain.messages import NO_REASON_TITLE, REASON_TITLES, build_variables
@@ -24,7 +24,7 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 def sent(recorder: Recorder, notification: Notification) -> list[dict[str, str]]:
     return [
-        build_variables(LIVE_TEMPLATES[notification.value], message["context"])
+        build_variables(live_variables()[notification.value], message["context"])
         for message in recorder.sent
         if message["notification"] == notification
     ]
