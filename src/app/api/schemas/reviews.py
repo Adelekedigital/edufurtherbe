@@ -22,7 +22,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.api.schemas.common import Normalised
+from app.api.schemas.common import Normalised, SessionTypeRefRead
 from app.domain.reviews import (
     MENTOR_RATINGS,
     OVERALL_SCALE,
@@ -412,11 +412,13 @@ class ReviewSummaryRead(BaseModel):
         )
 
 
-class ReviewTopicRead(BaseModel):
-    """Which of the mentor's offerings a review was about."""
+class ReviewTopicRead(SessionTypeRefRead):
+    """Which of the mentor's offerings a review was about.
+
+    The shared `{id, name}`; only the id's description is the review's own.
+    """
 
     id: UUID = Field(description="Pass as `?session_type=` to list only these reviews.")
-    name: str = Field(description="The offering's name as it is now.")
 
 
 class MentorReviewRead(BaseModel):
@@ -463,9 +465,5 @@ class MentorReviewRead(BaseModel):
             author_last_initial=row["author_last_initial"],
             author_institution=row["author_institution"],
             author_deleted=bool(row["author_deleted"]),
-            session_type=(
-                ReviewTopicRead(id=row["session_type_id"], name=str(row["session_type_name"]))
-                if row["session_type_id"] is not None
-                else None
-            ),
+            session_type=ReviewTopicRead.of(row["session_type_id"], row["session_type_name"]),
         )

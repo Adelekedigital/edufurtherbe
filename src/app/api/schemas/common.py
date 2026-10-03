@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Annotated, Any
+from typing import Annotated, Any, Self
 from uuid import UUID
 
 from pydantic import (
@@ -75,6 +75,26 @@ class AvatarFocusWrite(AvatarFocusRead):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+
+class SessionTypeRefRead(BaseModel):
+    """Which of a mentor's offerings something was about: `{id, name}`.
+
+    One shape for every reader that names an offering beside something else —
+    a review's topic (#185) and a session's heading. The name is the offering's
+    **current** name, read whatever its state: retiring an offering does not
+    change what an old session was about.
+    """
+
+    id: UUID
+    name: str = Field(description="The offering's name as it is now.")
+
+    @classmethod
+    def of(cls, type_id: object, name: object) -> Self | None:
+        """From the joined pair; `None` when the row names no offering."""
+        if type_id is None:
+            return None
+        return cls(id=UUID(str(type_id)), name=str(name))
 
 
 class Page[T](BaseModel):

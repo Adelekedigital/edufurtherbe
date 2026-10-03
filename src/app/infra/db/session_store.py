@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.errors import ValidationError
-from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant
+from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant, SessionType
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.predicates import live
 from app.infra.db.session_stats import MENTEE, attendance_rate
@@ -55,6 +55,9 @@ _SESSION_COLUMNS = (
     Session.mentor_id,
     Session.mentee_id,
     Session.session_type_id,
+    # The offering's **current** name, whatever its state (#185): retiring an
+    # offering does not change what an old session was about.
+    SessionType.name.label("session_type_name"),
     Session.status,
     Session.starts_at,
     Session.duration_minutes,
@@ -138,11 +141,15 @@ _PARTY_COLUMNS = (
     _MENTOR_PROFILE.avatar_url.label("mentor_avatar_url"),
     _MENTOR_PROFILE.avatar_focus_x.label("mentor_avatar_focus_x"),
     _MENTOR_PROFILE.avatar_focus_y.label("mentor_avatar_focus_y"),
+    # Through the same `live()` join as the name, so a party who left takes
+    # their zone with them.
+    _MENTOR.timezone.label("mentor_timezone"),
     _MENTEE.first_name.label("mentee_first_name"),
     _MENTEE.last_name.label("mentee_last_name"),
     _MENTEE_PROFILE.avatar_url.label("mentee_avatar_url"),
     _MENTEE_PROFILE.avatar_focus_x.label("mentee_avatar_focus_x"),
     _MENTEE_PROFILE.avatar_focus_y.label("mentee_avatar_focus_y"),
+    _MENTEE.timezone.label("mentee_timezone"),
     _attendance(Session.mentor_id, SessionParticipant.joined_at, "mentor_joined_at"),
     _attendance(
         Session.mentor_id, SessionParticipant.attendance_status, "mentor_attendance_status"
@@ -174,6 +181,8 @@ def _with_parties(statement: Select[Any]) -> Select[Any]:
         .outerjoin(_MENTEE, and_(_MENTEE.id == Session.mentee_id, live(_MENTEE)))
         .outerjoin(_MENTOR_PROFILE, _MENTOR_PROFILE.user_id == _MENTOR.id)
         .outerjoin(_MENTEE_PROFILE, _MENTEE_PROFILE.user_id == _MENTEE.id)
+        # On its primary key and unfiltered, so no row is gained or lost.
+        .outerjoin(SessionType, SessionType.id == Session.session_type_id)
     )
 
 
