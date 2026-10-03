@@ -37,10 +37,10 @@ renders nothing.
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -55,7 +55,9 @@ from app.domain.credits import (
     state_for,
 )
 from app.domain.enums import CreditReason, CreditSource, CreditState
+from app.infra.db.credit_eligibility import receives_monthly_grant
 from app.infra.db.models.credits import CreditLot, CreditTransaction
+from app.infra.db.models.user import User
 
 __all__ = [
     "CreditSummary",
@@ -176,6 +178,12 @@ async def get_credit_summary(
     # wrong. (The refund links are a second query; they decide only which part
     # a refund sits in, never how much is held.)
     balance, monthly, bonus = await _buckets(session, user_id, moment=moment, ladder=ladder)
+    # The grant job's own rule, so the card never says "unlocked" to somebody
+    # the 1st skips.
+    unlocked = bool(
+        await session.scalar(select(exists().where(User.id == user_id, *receives_monthly_grant())))
+    )
+    monthly = replace(monthly, unlocked=unlocked)
     return CreditSummary.of(
         balance=balance,
         next_reset_at=end_of_month(moment),
