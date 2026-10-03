@@ -125,15 +125,19 @@ async def test_the_mentor_reads_every_answer_in_form_order(
     assert file_answer["file"]["size"] > 0
 
 
+@pytest.mark.parametrize("reader", ["mentee", "admin"])
 async def test_the_mentee_and_an_admin_read_them_too(
-    files_client: httpx.AsyncClient, db_engine: AsyncEngine
+    files_client: httpx.AsyncClient, db_engine: AsyncEngine, reader: str
 ) -> None:
-    booking = await booked_with_answers(files_client, db_engine, "sa-three")
+    booking = await booked_with_answers(files_client, db_engine, f"sa-{reader}")
+    headers = (
+        booking["mentee_headers"] if reader == "mentee" else await an_admin(db_engine, "sa-admin")
+    )
 
-    for headers in (booking["mentee_headers"], await an_admin(db_engine, "sa-three")):
-        response = await answers(files_client, booking["session_id"], headers)
-        assert response.status_code == 200, response.text
-        assert len(response.json()["data"]) == 3
+    response = await answers(files_client, booking["session_id"], headers)
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()["data"]) == 3
 
 
 async def test_the_file_answer_downloads_for_the_mentor(
@@ -150,25 +154,34 @@ async def test_the_file_answer_downloads_for_the_mentor(
     assert download.status_code == 200
 
 
+@pytest.mark.parametrize("outsider", ["another_mentor", "stranger"])
 async def test_anyone_else_gets_the_404_of_a_missing_session(
+    files_client: httpx.AsyncClient, db_engine: AsyncEngine, outsider: str
+) -> None:
+    booking = await booked_with_answers(files_client, db_engine, f"sa-404-{outsider}")
+    if outsider == "another_mentor":
+        other_mentor, _ = await a_bookable_offering(db_engine, "sa-404-other")
+        headers = await signed_in(db_engine, other_mentor)
+    else:
+        _, headers = await a_mentee(db_engine, "sa-404-stranger")
+
+    response = await answers(files_client, booking["session_id"], headers)
+    # The file's own reader rule (decision 210) refuses the same people, so the
+    # answers and the file behind one never disagree about who may read.
+    download = await files_client.get(f"/api/v1/intake-files/{booking['file_id']}", headers=headers)
+
+    assert response.status_code == 404, response.text
+    assert booking["file_id"] not in response.text
+    assert download.status_code == 404
+
+
+async def test_a_session_that_does_not_exist_is_404(
     files_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    booking = await booked_with_answers(files_client, db_engine, "sa-404")
-    other_mentor, _ = await a_bookable_offering(db_engine, "sa-404-other")
-    _, stranger = await a_mentee(db_engine, "sa-404-stranger")
+    _, headers = await a_mentee(db_engine, "sa-404-missing")
 
-    for headers in (await signed_in(db_engine, other_mentor), stranger):
-        response = await answers(files_client, booking["session_id"], headers)
-        assert response.status_code == 404, response.text
-        assert booking["file_id"] not in response.text
-        # The file's own reader rule (decision 210) refuses the same people, so
-        # the answers and the file behind one never disagree about who may read.
-        download = await files_client.get(
-            f"/api/v1/intake-files/{booking['file_id']}", headers=headers
-        )
-        assert download.status_code == 404
+    missing = await answers(files_client, str(uuid4()), headers)
 
-    missing = await answers(files_client, str(uuid4()), booking["mentee_headers"])
     assert missing.status_code == 404
 
 

@@ -8,7 +8,7 @@ import datetime as dt
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, insert, or_, select, text, update
+from sqlalchemy import and_, case, func, insert, select, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,7 @@ from app.infra.db.models.sessions import (
 )
 from app.infra.db.outbox import enqueue
 from app.infra.db.review_eligibility import within_interval
+from app.infra.db.session_store import is_a_party
 
 
 async def record_arrival(
@@ -79,7 +80,7 @@ async def record_arrival(
                     (Session.mentor_id == actor_id).label("is_mentor"),
                 ).where(
                     Session.id == session_id,
-                    or_(Session.mentor_id == actor_id, Session.mentee_id == actor_id),
+                    is_a_party(actor_id),
                 )
             )
         )
