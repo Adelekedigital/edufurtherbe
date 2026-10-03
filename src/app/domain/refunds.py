@@ -29,11 +29,13 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 
+from app.domain.attendance import absent_party
 from app.domain.enums import CreditReason, SessionRole, SessionStatus
 
 __all__ = [
     "REFUND_POLICY",
     "RefundPolicy",
+    "never_agreed_refund",
     "no_show_refund",
     "transition_refund",
 ]
@@ -52,6 +54,13 @@ REFUND_POLICY = RefundPolicy()
 _NEVER_AGREED = frozenset({SessionStatus.DECLINED, SessionStatus.WITHDRAWN, SessionStatus.EXPIRED})
 
 
+def never_agreed_refund(to: SessionStatus) -> CreditReason | None:
+    """The refund for a request that ended without becoming a session: always,
+    whoever ended it and whenever. Needs no clock, which is why the expiry sweep
+    asks this rather than :func:`transition_refund`."""
+    return CreditReason.REQUEST_UNFULFILLED if to in _NEVER_AGREED else None
+
+
 def transition_refund(
     to: SessionStatus,
     *,
@@ -64,8 +73,8 @@ def transition_refund(
 
     ``actor`` is who moved it, and ``None`` for the system (the expiry sweep).
     """
-    if to in _NEVER_AGREED:
-        return CreditReason.REQUEST_UNFULFILLED
+    if (owed := never_agreed_refund(to)) is not None:
+        return owed
     if to is not SessionStatus.CANCELLED:
         return None
     if actor is SessionRole.MENTOR:
@@ -77,7 +86,7 @@ def transition_refund(
 
 def no_show_refund(*, mentor_came: bool, mentee_came: bool) -> CreditReason | None:
     """The refund a settled session owes the mentee: only when the mentor alone
-    was absent."""
-    if mentee_came and not mentor_came:
+    was absent, as :func:`app.domain.attendance.absent_party` decides it."""
+    if absent_party(mentor_attended=mentor_came, mentee_attended=mentee_came) is SessionRole.MENTOR:
         return CreditReason.SESSION_NO_SHOW_REFUND
     return None

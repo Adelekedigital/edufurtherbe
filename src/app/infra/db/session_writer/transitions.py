@@ -22,7 +22,7 @@ from app.domain.notifications import (
     Notification,
     recipients,
 )
-from app.domain.refunds import transition_refund
+from app.domain.refunds import never_agreed_refund, transition_refund
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
@@ -153,10 +153,10 @@ async def transition(
 
     reason_code = payload.get("reason_code")
     if reason_code is not None and reason_code not in rule.reasons.get(role, frozenset()):
-        # A 422 rather than silently dropping it. The codes drive refund policy,
-        # so a mentee sending the mentor's code is claiming a refund by choosing
-        # a value — and a request that was partly honoured is worse than one
-        # refused, because the client believes the reason was recorded.
+        # A 422 rather than silently dropping it. Each side reports with its own
+        # codes, so a mentee sending the mentor's would misfile the reason — and
+        # a request that was partly honoured is worse than one refused, because
+        # the client believes the reason was recorded.
         raise ValidationError(f"{reason_code} is not a reason you may give for {action}")
 
     await session.execute(update(Session).where(Session.id == session_id).values(status=rule.to))
@@ -288,7 +288,7 @@ async def expire_requests(session: AsyncSession, *, now: dt.datetime, calendar: 
     # every hour, and which its own docstring calls idempotent — pays each
     # request back exactly once. The reason comes from the same rule the
     # transitions ask, so "an expired request refunds" is written once.
-    owed = transition_refund(SessionStatus.EXPIRED, actor=None, starts_at=now, now=now)
+    owed = never_agreed_refund(SessionStatus.EXPIRED)
     for row in expired:
         if owed is not None:
             await refund_credit(session, row["mentee_id"], row["id"], reason=owed, now=now)

@@ -442,8 +442,8 @@ class SessionStatus(StrEnum):
     ``CANCELLED``, whoever calls it off — the mentor has already committed time,
     and that is the fact the two statuses separate. Collapsing them would put a
     request nobody had accepted into the same bucket as a booking broken after
-    agreement, which carries different policy for refunds and for
-    mentor-reliability statistics.
+    agreement, which mentor-reliability statistics count apart. Both refund
+    the mentee, by different rules (decision 229, ``domain/refunds.py``).
 
     Nothing enforces transitions in the schema, here or anywhere else; the rule
     lives at the endpoint that writes the status. It is recorded here because the
@@ -520,8 +520,8 @@ class SessionReasonCode(StrEnum):
 
     **This is not ``reason_text`` and does not replace it** (package D6). The text
     is what a human wrote — *"Sorry, conference clash"* — and the code is what
-    policy runs on: ``MENTOR_UNAVAILABLE`` refunds, ``MENTEE_NO_LONGER_NEEDED``
-    within 24 hours of the start does not. "What share of mentor-side
+    reporting groups by. **It does not decide refunds**: decision 229 reads the
+    actor's side and the notice given, never this field. "What share of mentor-side
     cancellations are scheduling conflicts" decides whether reschedule flows get
     built, and free text cannot answer it without somebody reading 200 rows.
 
@@ -642,10 +642,9 @@ class CreditReason(StrEnum):
     #: A session was booked. The only debit this phase writes.
     SESSION_BOOKED = "session_booked"
 
-    #: The mentor called it off with `MENTOR_UNAVAILABLE`. **Already assumed by
-    #: shipped code**: `SessionReasonCode` restricts reason codes per actor
-    #: precisely because this one refunds and `MENTEE_NO_LONGER_NEEDED` does
-    #: not, so leaving it unbuilt would make that restriction guard nothing.
+    #: A confirmed session was called off and the credit came back: always for
+    #: a mentor's cancellation, and for a mentee's with enough notice (decision
+    #: 229). The reason code plays no part.
     SESSION_CANCELLED_REFUND = "session_cancelled_refund"
 
     #: The mentor did not attend and the mentee did. The predicate reads
@@ -657,8 +656,9 @@ class CreditReason(StrEnum):
     #: mentee withdrew, or the request expired unanswered.
     #:
     #: **One member for three transitions, deliberately.** The other two refund
-    #: reasons are separate because their *policy* differs — a mentor
-    #: cancelling refunds where a mentee cancelling does not. These three do
+    #: reasons are separate because their *policy* differs — a cancellation
+    #: refunds by who called it off and how late, a no-show by who missed it
+    #: (decision 229). These three do
     #: not: a request that was never fulfilled always returns the credit,
     #: whoever ended it. Which of the three it was is recorded precisely by
     #: `session_events.reason_code`, and a second copy of that vocabulary here

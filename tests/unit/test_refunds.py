@@ -6,8 +6,15 @@ import datetime as dt
 
 import pytest
 
+from app.domain.attendance import absent_party
 from app.domain.enums import CreditReason, SessionRole, SessionStatus
-from app.domain.refunds import REFUND_POLICY, RefundPolicy, no_show_refund, transition_refund
+from app.domain.refunds import (
+    REFUND_POLICY,
+    RefundPolicy,
+    never_agreed_refund,
+    no_show_refund,
+    transition_refund,
+)
 
 NOW = dt.datetime(2026, 10, 3, 12, 0, tzinfo=dt.UTC)
 NOTICE = REFUND_POLICY.mentee_cancel_notice
@@ -88,3 +95,36 @@ def test_only_a_mentor_no_show_refunds(
     mentor_came: bool, mentee_came: bool, expected: CreditReason | None
 ) -> None:
     assert no_show_refund(mentor_came=mentor_came, mentee_came=mentee_came) is expected
+
+
+@pytest.mark.parametrize(
+    ("mentor_attended", "mentee_attended", "expected"),
+    [
+        (False, True, SessionRole.MENTOR),
+        (True, False, SessionRole.MENTEE),
+        (False, False, None),
+        (True, True, None),
+    ],
+)
+def test_the_absent_party_is_named_only_when_one_missed(
+    mentor_attended: bool, mentee_attended: bool, expected: SessionRole | None
+) -> None:
+    assert (
+        absent_party(mentor_attended=mentor_attended, mentee_attended=mentee_attended) is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("to", "expected"),
+    [
+        (SessionStatus.EXPIRED, CreditReason.REQUEST_UNFULFILLED),
+        (SessionStatus.DECLINED, CreditReason.REQUEST_UNFULFILLED),
+        (SessionStatus.WITHDRAWN, CreditReason.REQUEST_UNFULFILLED),
+        (SessionStatus.CANCELLED, None),
+        (SessionStatus.CONFIRMED, None),
+    ],
+)
+def test_only_a_request_that_never_became_a_session_refunds_without_a_clock(
+    to: SessionStatus, expected: CreditReason | None
+) -> None:
+    assert never_agreed_refund(to) is expected

@@ -1,9 +1,8 @@
 """Sessions a user is a party to, what happened to each one, and the five writes.
 
-Booking, then the four transitions — accept, decline, withdraw, cancel. What is
-still absent is the *refund* policy, which is a different thing from the
-cancellation rule: the transitions capture `reason_code`, which is the input
-policy will read, and nothing prices it yet.
+Booking, then the four transitions — accept, decline, withdraw, cancel. Whether
+a transition refunds the mentee is decision 229, decided in `domain/refunds.py`
+from who acted and when — never from `reason_code`, which is for reporting.
 
 **The four transitions are four names for one table.** Who may take each action,
 from which state, and which reason codes they may give all live in
@@ -273,8 +272,8 @@ TRANSITION_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": (
             "The body failed validation, or `reason_code` is not one your side "
-            "of the session may give. The codes drive refund policy, so they "
-            "are restricted per party rather than open."
+            "of the session may give. Each side reports with its own codes, so "
+            "they are restricted per party; a code never decides a refund."
         )
     },
 }
@@ -331,8 +330,8 @@ async def decline_session(_: DeclinedSessionDep) -> dict[str, bool]:
         "**The mentee's, and only before the mentor answers.** Once a session "
         "is confirmed it is `cancel`, and the two are separate statuses "
         "deliberately: a request nobody accepted is not the same fact as a "
-        "booking broken after agreement, and they carry different policy for "
-        "refunds and for mentor-reliability statistics.\n\n"
+        "booking broken after agreement, and mentor-reliability statistics "
+        "count them apart. A withdrawn request always returns your credit.\n\n"
         "The slot goes back on the grid immediately — nothing was agreed, so "
         "there is nothing to protect."
     ),

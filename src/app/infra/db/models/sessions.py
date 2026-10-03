@@ -710,9 +710,9 @@ class SessionEvent(Base):
     ``Expiration``, ``statusApproved-DeclinedDate``.
 
     **``reason_code`` and ``reason_text`` are two different fields** (package
-    D6). The text is what a human wrote; the code is what policy runs on —
-    ``mentor_unavailable`` refunds, ``mentee_no_longer_needed`` within 24 hours
-    does not. Legacy supplies only the text, so every migrated event carries a
+    D6). The text is what a human wrote; the code is what reporting groups by.
+    Refunds do not read it (decision 229). Legacy supplies only the text, so
+    every migrated event carries a
     null code, which is why the index over it is partial.
 
     **No ``TimestampMixin``, and no ``updated_at``.** This table is append-only:

@@ -137,8 +137,11 @@ async def test_a_mentee_cancelling_late_uses_the_credit(
 # --------------------------------------------------------------------------
 
 
-async def missed(engine: AsyncEngine, client: httpx.AsyncClient, tag: str, *joins: str) -> str:
-    """A session the named parties joined, then pushed past its join window."""
+async def missed(
+    engine: AsyncEngine, client: httpx.AsyncClient, tag: str, *joins: str
+) -> tuple[str, Any]:
+    """A session the named parties joined, then pushed past its join window.
+    Returns its id and the mentee's id."""
     booking = await a_confirmed_session(engine, client, tag, starts_in=dt.timedelta(minutes=1))
     for party in joins:
         joined = await client.post(join_url(booking), headers=booking[party])
@@ -148,58 +151,64 @@ async def missed(engine: AsyncEngine, client: httpx.AsyncClient, tag: str, *join
             text("UPDATE sessions SET starts_at = now() - interval '1 hour' WHERE id = :i"),
             {"i": booking["id"]},
         )
-    return str(booking["id"])
+    return str(booking["id"]), booking["mentee_id"]
 
 
 async def test_a_mentor_no_show_refunds_the_mentee(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    session_id = await missed(db_engine, api_client, "cr-ns-mentor", "mentee")
+    session_id, mentee = await missed(db_engine, api_client, "cr-ns-mentor", "mentee")
+    assert await balance_of(db_engine, mentee) == FUNDED - 1
 
     await settle(db_engine)
 
     assert await refunds_of(db_engine, session_id) == ["session_no_show_refund"]
+    assert await balance_of(db_engine, mentee) == FUNDED
 
 
 async def test_a_second_settlement_refunds_once(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    session_id = await missed(db_engine, api_client, "cr-ns-twice", "mentee")
+    session_id, mentee = await missed(db_engine, api_client, "cr-ns-twice", "mentee")
 
     await settle(db_engine)
     await settle(db_engine)
 
     assert await refunds_of(db_engine, session_id) == ["session_no_show_refund"]
+    assert await balance_of(db_engine, mentee) == FUNDED
 
 
 async def test_a_mentee_no_show_refunds_nothing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    session_id = await missed(db_engine, api_client, "cr-ns-mentee", "mentor")
+    session_id, mentee = await missed(db_engine, api_client, "cr-ns-mentee", "mentor")
 
     await settle(db_engine)
 
     assert await refunds_of(db_engine, session_id) == []
+    assert await balance_of(db_engine, mentee) == FUNDED - 1
 
 
 async def test_a_session_both_missed_refunds_nothing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    session_id = await missed(db_engine, api_client, "cr-ns-both")
+    session_id, mentee = await missed(db_engine, api_client, "cr-ns-both")
 
     await settle(db_engine)
 
     assert await refunds_of(db_engine, session_id) == []
+    assert await balance_of(db_engine, mentee) == FUNDED - 1
 
 
 async def test_a_completed_session_refunds_nothing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    session_id = await missed(db_engine, api_client, "cr-ns-done", "mentor", "mentee")
+    session_id, mentee = await missed(db_engine, api_client, "cr-ns-done", "mentor", "mentee")
 
     await settle(db_engine)
 
     assert await refunds_of(db_engine, session_id) == []
+    assert await balance_of(db_engine, mentee) == FUNDED - 1
 
 
 # --------------------------------------------------------------------------

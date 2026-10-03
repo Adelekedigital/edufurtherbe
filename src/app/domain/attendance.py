@@ -42,12 +42,13 @@ from __future__ import annotations
 import datetime as dt
 from enum import StrEnum
 
-from app.domain.enums import SessionStatus
+from app.domain.enums import SessionRole, SessionStatus
 
 __all__ = [
     "JOIN_CLOSES",
     "JOIN_OPENS",
     "AttendanceEvidence",
+    "absent_party",
     "join_window",
     "outcome",
     "window_has_closed",
@@ -171,3 +172,16 @@ def outcome(*, mentor_attended: bool, mentee_attended: bool) -> SessionStatus:
     the two disagreed on. It now drives the missing-row cases too.
     """
     return SessionStatus.COMPLETED if mentor_attended and mentee_attended else SessionStatus.NO_SHOW
+
+
+def absent_party(*, mentor_attended: bool, mentee_attended: bool) -> SessionRole | None:
+    """The one party who missed a session, or ``None``.
+
+    ``None`` when both came, and when **both** missed: nobody can be singled
+    out then. The one place "who missed it" is decided — the settlement's reason
+    code and the no-show refund (decision 229) both read it, so they cannot
+    disagree about which party failed to turn up.
+    """
+    if mentor_attended == mentee_attended:
+        return None
+    return SessionRole.MENTEE if mentor_attended else SessionRole.MENTOR
