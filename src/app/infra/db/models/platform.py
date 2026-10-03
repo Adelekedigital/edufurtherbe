@@ -66,9 +66,10 @@ class IdempotencyKey(TimestampMixin, Base):
 
     **``expires_at`` is enforced by the queries, not by a job.** A row past it is
     invisible to the lookup and is *reclaimed in place* by the next reservation
-    for the same key, so the table self-heals without a sweep. The retention job
-    the runbook lists still earns its place — it keeps the table small — but
-    nothing depends on it having run.
+    for the same key, so correctness never depends on a sweep. A sweep does run,
+    for retention (#353): ``response_body`` holds the mentee's own words, so the
+    daily ``sweep-intake-files`` job deletes rows an hour past ``expires_at``
+    (``idempotency.sweep_expired_keys``).
     """
 
     __tablename__ = "idempotency_keys"

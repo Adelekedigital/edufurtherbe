@@ -28,24 +28,32 @@ row present, completed           :class:`Replayed` — the stored answer
 
 **Expiry is enforced here, not by a job.** A row past ``expires_at`` is
 invisible to the lookup and is reclaimed in place by the next reservation for
-the same key, so the table self-heals. The retention sweep the runbook lists
-still earns its place — it keeps the table small — but nothing depends on it
-having run, which is the difference between a cache and a leak.
+the same key, so the table self-heals. Correctness never depends on a sweep
+having run.
+
+**But a sweep does run, because the rows are personal data** (#353). A stored
+booking response carries the mentee's own words — ``booking_message`` and the
+first intake answer — so a row kept past its use is that text kept for no
+reason. :func:`sweep_expired_keys` deletes rows an hour past ``expires_at``, on
+the daily retention job.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.platform import TTL_SQL, IdempotencyKey
 
 __all__ = [
+    "SWEEP_BATCH",
+    "SWEEP_GRACE",
     "Held",
     "InFlight",
     "Mismatched",
@@ -53,7 +61,18 @@ __all__ = [
     "Reservation",
     "record_response",
     "reserve",
+    "sweep_expired_keys",
 ]
+
+#: How long past `expires_at` a row survives the sweep. Not needed for
+#: correctness — a reclaim moves `expires_at` forward in the same statement, and
+#: the delete re-checks the column — but it keeps the sweep well clear of a key a
+#: client is retrying at the moment it lapses.
+SWEEP_GRACE = dt.timedelta(hours=1)
+
+#: Rows per delete. Each batch commits on its own, so a backlog never holds one
+#: long transaction or one large lock set.
+SWEEP_BATCH = 1000
 
 #: The column default, reused. The reclaim path below sets `expires_at`
 #: explicitly, and two windows that disagreed would be a defect nobody could
@@ -207,3 +226,43 @@ async def record_response(
         .where(IdempotencyKey.id == reservation.id)
         .values(status_code=status_code, response_body=body, completed_at=func.now())
     )
+
+
+async def sweep_expired_keys(
+    session: AsyncSession, *, now: dt.datetime, dry_run: bool, batch: int = SWEEP_BATCH
+) -> int:
+    """Delete keys more than :data:`SWEEP_GRACE` past ``expires_at``; the count.
+
+    **Safe against a concurrent reclaim.** :func:`reserve` reclaims an expired
+    row by moving its ``expires_at`` forward in one upsert. The delete keeps the
+    expiry condition in its *own* ``WHERE``, not only in the id subselect, so
+    when it meets a row a reclaim has just updated, PostgreSQL re-checks that
+    condition against the new version and leaves the row alone. A row the sweep
+    deletes first is simply absent, and the next reservation inserts afresh:
+    the same outcome as a reclaim. So a swept key behaves exactly like an
+    expired one.
+
+    **An expired row still in flight** (``locked_at`` set, no ``completed_at``)
+    is a request that died; :func:`reserve` already treats it as free once it
+    expires, so it is swept like any other.
+
+    Each batch commits on its own. A dry run counts and writes nothing.
+    """
+    cutoff = now - SWEEP_GRACE
+    expired = IdempotencyKey.expires_at < cutoff
+    if dry_run:
+        return int(await session.scalar(select(func.count()).where(expired)) or 0)
+    deleted = 0
+    while True:
+        ids = select(IdempotencyKey.id).where(expired).order_by(IdempotencyKey.expires_at)
+        removed = (
+            await session.execute(
+                delete(IdempotencyKey)
+                .where(IdempotencyKey.id.in_(ids.limit(batch).scalar_subquery()), expired)
+                .returning(IdempotencyKey.id)
+            )
+        ).all()
+        await session.commit()
+        deleted += len(removed)
+        if len(removed) < batch:
+            return deleted
