@@ -9,6 +9,8 @@ build the live templates' variables from them.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -24,7 +26,11 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 def sent(recorder: Recorder, notification: Notification) -> list[dict[str, str]]:
     return [
-        build_variables(live_variables()[notification.value], message["context"])
+        build_variables(
+            live_variables()[notification.value],
+            # The test settings configure no origin, and links refuse without one.
+            replace(message["context"], app_base_url="https://app.example.test"),
+        )
         for message in recorder.sent
         if message["notification"] == notification
     ]

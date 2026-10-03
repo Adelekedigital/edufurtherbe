@@ -147,6 +147,15 @@ def _needs(value: object, name: str) -> str:
     return str(value)
 
 
+def _app_link(context: MessageContext, path: str, name: str) -> str:
+    """An absolute link into the application, or a refusal.
+
+    Every link goes through here: with no application origin configured a
+    link would go out as a bare path that no mail client can open.
+    """
+    return f"{_needs(context.app_base_url, name).rstrip('/')}{path}"
+
+
 def _session_url(context: MessageContext) -> str:
     """The EduFurther **session page** — never the meeting link.
 
@@ -156,7 +165,7 @@ def _session_url(context: MessageContext) -> str:
     room out days in advance and undo both.
     """
     session_id = _needs(context.session_id, "sessionUrl")
-    return f"{context.app_base_url.rstrip('/')}{SESSION_PATH.format(session_id=session_id)}"
+    return _app_link(context, SESSION_PATH.format(session_id=session_id), "sessionUrl")
 
 
 def _topic(context: MessageContext) -> str:
@@ -215,13 +224,13 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "sessionDetail": lambda c: c.detail or "",
     "location": lambda c: c.venue or VENUE_FALLBACK,
     "sessionUrl": _session_url,
-    "dashboardUrl": lambda c: f"{c.app_base_url.rstrip('/')}{DASHBOARD_PATH}",
-    "exploreUrl": lambda c: f"{c.app_base_url.rstrip('/')}{EXPLORE_PATH}",
+    "dashboardUrl": lambda c: _app_link(c, DASHBOARD_PATH, "dashboardUrl"),
+    "exploreUrl": lambda c: _app_link(c, EXPLORE_PATH, "exploreUrl"),
     "recipientFirstName": lambda c: (
         c.recipient_first_name or _needs(c.recipient_name, "recipientFirstName")
     ),
     "creditCount": lambda c: _needs(c.extras.get("credit_count"), "creditCount"),
-    "calendarUrl": lambda c: f"{c.app_base_url.rstrip('/')}{CALENDAR_PATH}",
+    "calendarUrl": lambda c: _app_link(c, CALENDAR_PATH, "calendarUrl"),
     # The return reminder is one template for a dated pause and an undated one,
     # so the side that does not apply is deliberately empty, not refused.
     "returnOn": lambda c: (

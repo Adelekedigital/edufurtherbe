@@ -405,3 +405,11 @@ def test_a_reason_written_without_a_code_has_no_title() -> None:
     )
 
     assert built == {"reasonTitle": "", "reasonMessage": "I'm travelling"}
+
+
+@pytest.mark.parametrize("name", ["sessionUrl", "dashboardUrl", "exploreUrl", "calendarUrl"])
+def test_a_link_with_no_app_origin_is_refused(name: str) -> None:
+    """Codex on #340: with `APP_BASE_URL` unset a link went out as `/explore`,
+    which no mail client can open. A message that cannot link should not go."""
+    with pytest.raises(UnresolvedVariableError, match=name):
+        build_variables([name], context(app_base_url=""))
