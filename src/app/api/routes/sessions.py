@@ -155,8 +155,9 @@ async def read_session_events(events: SessionEventsDep) -> Page[SessionEventRead
     response_model=Page[SessionAnswerRead],
     summary="Read the answers given when booking",
     description=(
-        "The intake form's answers for this booking, one entry per question in "
-        "the form's order, for the mentor to prepare with.\n\n"
+        "The intake form's answers for this booking, one entry per **answered** "
+        "question in the form's order, for the mentor to prepare with. An "
+        "optional question the mentee skipped is not listed.\n\n"
         "**Readable by the session's mentee, its mentor, and admins**; anyone "
         "else gets the same `404` as a session that does not exist.\n\n"
         "**An empty list is not an error**: a booking made on an offering with "

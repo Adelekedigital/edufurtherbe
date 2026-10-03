@@ -213,7 +213,13 @@ class SessionAnswerRead(BaseModel):
             "new wording here."
         )
     )
-    question_type: QuestionType
+    question_type: QuestionType = Field(
+        description=(
+            "The form the **answer** was given in. A mentor may switch a question "
+            "between free text and file after it was answered; this follows the "
+            "answer, so it always says which of `text`, `options` or `file` to read."
+        )
+    )
     retired: bool = Field(
         description="The question has since been removed from the form. Its answer is still shown."
     )

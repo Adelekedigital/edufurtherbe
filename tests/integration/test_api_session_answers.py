@@ -161,9 +161,38 @@ async def test_anyone_else_gets_the_404_of_a_missing_session(
         response = await answers(files_client, booking["session_id"], headers)
         assert response.status_code == 404, response.text
         assert booking["file_id"] not in response.text
+        # The file's own reader rule (decision 210) refuses the same people, so
+        # the answers and the file behind one never disagree about who may read.
+        download = await files_client.get(
+            f"/api/v1/intake-files/{booking['file_id']}", headers=headers
+        )
+        assert download.status_code == 404
 
     missing = await answers(files_client, str(uuid4()), booking["mentee_headers"])
     assert missing.status_code == 404
+
+
+async def test_the_type_follows_the_answer_when_the_question_is_switched(
+    files_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    booking = await booked_with_answers(files_client, db_engine, "sa-switch")
+    prose, _, cv = booking["questions"]
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_type_questions SET question_type = CASE id "
+                "WHEN :p THEN 'file_upload' ELSE 'free_text' END WHERE id IN (:p, :c)"
+            ),
+            {"p": prose, "c": cv},
+        )
+
+    data = (await answers(files_client, booking["session_id"], booking["mentee_headers"])).json()[
+        "data"
+    ]
+
+    assert (data[0]["question_type"], data[0]["text"]) == ("free_text", "MSc Public Policy")
+    assert data[2]["question_type"] == "file_upload"
+    assert data[2]["file"]["id"] == booking["file_id"]
 
 
 async def test_a_booking_with_no_form_reads_as_an_empty_list(

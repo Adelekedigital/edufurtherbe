@@ -12,6 +12,11 @@ question after a booking sees the new wording beside the old answer. A *retired*
 question is still shown, because retiring is a soft delete that keeps the row
 for exactly this read, and it is flagged `retired`. The same holds for an
 option's text. Whether to keep a copy at booking is #350's question.
+
+**Only answered questions are listed.** An optional question the mentee
+skipped has no row, and what the form held at booking is not recorded, so the
+current form cannot stand in for it: a question added since would read as
+skipped when it was never asked.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from uuid import UUID
 from sqlalchemy import literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.enums import QuestionType
 from app.infra.db.models.intake import (
     IntakeAnswer,
     IntakeFile,
@@ -43,7 +49,7 @@ def _readable_by(caller_id: UUID, caller_is_admin: bool) -> Any:
 async def session_answers(
     session: AsyncSession, session_id: UUID, *, caller_id: UUID, caller_is_admin: bool
 ) -> list[dict[str, Any]] | None:
-    """The answers, one entry per question in form order; ``None`` if unreadable.
+    """The answers, one entry per answered question in form order; ``None`` if unreadable.
 
     ``None`` is "no such session **or** not yours", which the route turns into
     one 404. A readable session with no form, or a migrated one, is an empty
@@ -61,7 +67,6 @@ async def session_answers(
         select(
             SessionTypeQuestion.id.label("question_id"),
             SessionTypeQuestion.question_text,
-            SessionTypeQuestion.question_type,
             SessionTypeQuestion.deleted_at.is_not(None).label("retired"),
             IntakeAnswer.answer_text,
             SessionTypeQuestionOption.id.label("option_id"),
@@ -97,18 +102,24 @@ async def session_answers(
             {
                 "question_id": row["question_id"],
                 "question_text": row["question_text"],
-                "question_type": row["question_type"],
                 "retired": row["retired"],
                 "text": None,
                 "options": [],
                 "file": None,
             },
         )
+        # **The type is the answer's form, not the question's type now.** A
+        # mentor may switch a question between free text and file after it was
+        # answered, and the current type would then mislabel the answer given.
+        # The CHECK guarantees each row carries exactly one form.
         if row["answer_text"] is not None:
+            entry["question_type"] = QuestionType.FREE_TEXT
             entry["text"] = row["answer_text"]
         if row["option_id"] is not None:
+            entry["question_type"] = QuestionType.MULTI_CHOICE
             entry["options"].append({"id": row["option_id"], "text": row["option_text"]})
         if row["file_id"] is not None:
+            entry["question_type"] = QuestionType.FILE_UPLOAD
             entry["file"] = {
                 "id": row["file_id"],
                 "filename": row["filename"],
