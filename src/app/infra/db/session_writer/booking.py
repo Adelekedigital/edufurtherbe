@@ -80,7 +80,7 @@ from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 from app.infra.db.session_writer.reminders import schedule_session_reminders
-from app.infra.db.slot_store import list_slots
+from app.infra.db.slot_store import offered_slot
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +97,6 @@ DOUBLE_BOOKED = "sessions_no_mentor_double_booking"
 #: The mentee's twin of ``DOUBLE_BOOKED`` (#342). Reached only by a race the
 #: limits check lost, since that check refuses an overlap first.
 MENTEE_DOUBLE_BOOKED = "sessions_no_mentee_double_booking"
-
-#: How far either side of the requested instant to ask ``list_slots`` for.
-#:
-#: The slot grid is addressed in the **mentor's** calendar days while a booking
-#: names a UTC instant, and the two disagree by up to fourteen hours. One day
-#: either side covers every zone with room to spare, and the extra days cost a
-#: handful of rows that the membership test discards.
-SPAN_DAYS = 1
 
 
 async def _whose(session: AsyncSession, session_type_id: UUID) -> UUID | None:
@@ -264,40 +256,39 @@ async def book_session(
             "; ".join(message for _, message in problems), field_errors=tuple(problems)
         )
 
-    # **The one legality check, and it is a membership test against the public
-    # grid.** Asking for a span in the mentor's days and comparing instants
-    # keeps the timezone question where it is already answered.
-    day = starts_at.astimezone(dt.UTC).date()
-    slots = await list_slots(
+    # **A time offered to this mentee** (#339), read before the grid so its notice
+    # floor is measured from when it was offered: a slot valid then stays
+    # bookable through its two-hour hold. Re-read under the lock below.
+    pending_offer = await held_offer(
+        session,
+        mentor_id=mentor_id,
+        mentee_id=mentee_id,
+        session_type_id=payload["session_type_id"],
+        starts_at=starts_at,
+        now=now,
+        lock=False,
+    )
+
+    # **The one legality check**, shared with suggesting a time (`offered_slot`).
+    slot = await offered_slot(
         session,
         mentor_id,
         payload["session_type_id"],
-        start=day - dt.timedelta(days=SPAN_DAYS),
-        end=day + dt.timedelta(days=SPAN_DAYS + 1),
+        starts_at,
         now=now,
         window=window,
         external_busy=external_busy,
-        # A time suggested to *this* mentee (#339) is open to them; one held for
-        # anybody else is busy.
+        # The time offered to *this* mentee at this offering is open to them;
+        # every other hold is busy.
         holds_for=mentee_id,
+        notice_from=pending_offer["created_at"] if pending_offer else None,
     )
-    if not slots or not any(slot.start == starts_at for slot in slots):
+    if slot is None:
         # Deliberately not distinguished. "Too soon", "outside your hours",
         # "already taken" and "that is not on the grid" are all *this instant is
         # not offered*, and a client's only correct response to each is to
         # re-read `/slots` — which the message says.
         raise ValidationError("that time is not available — re-read the mentor's slots")
-
-    # **The mentee's own limits (#342)**, under a per-mentee lock held to the
-    # end of this transaction: no overlap, one live session per mentor, and the
-    # overall cap. After legality, so an unoffered time is still a 422.
-    await check_mentee_limits(
-        session,
-        mentee_id,
-        mentor_id=mentor_id,
-        starts_at=starts_at,
-        duration_minutes=offering["duration_minutes"],
-    )
 
     requires_confirmation = bool(offering["requires_confirmation"])
     status = (
@@ -322,6 +313,9 @@ async def book_session(
         starts_at=starts_at,
         now=now,
     )
+    if pending_offer is not None and offer is None:
+        # Spent or lapsed between the two reads; the grid was read on its terms.
+        raise ConflictError("the suggested time is no longer held — re-read the mentor's slots")
     duration = int(offer["duration_minutes"] if offer else offering["duration_minutes"])
     if await holds_against(
         session,
@@ -333,6 +327,20 @@ async def book_session(
         except_id=offer["id"] if offer else None,
     ):
         raise ConflictError("that time is being held for another booking")
+
+    # **The mentee's own limits (#342)**, under a per-mentee lock held to the
+    # end of this transaction: no overlap, one live session per mentor, and the
+    # overall cap. After legality, so an unoffered time is still a 422; and on
+    # the length actually inserted — a suggested time's offered length (#339) —
+    # so this checks the same window the database constraint will. Always taken
+    # after the mentor's slot lock, the one order every path uses.
+    await check_mentee_limits(
+        session,
+        mentee_id,
+        mentor_id=mentor_id,
+        starts_at=starts_at,
+        duration_minutes=duration,
+    )
 
     try:
         session_id = (

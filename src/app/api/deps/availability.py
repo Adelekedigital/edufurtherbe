@@ -9,7 +9,13 @@ from uuid import UUID
 from fastapi import Depends, Query, Request
 
 from app.api.deps.calendar import _free_busy
-from app.api.deps.core import BookingWindowDep, OwnerDep, SessionDep, TargetUserDep
+from app.api.deps.core import (
+    BookingWindowDep,
+    OptionalViewerDep,
+    OwnerDep,
+    SessionDep,
+    TargetUserDep,
+)
 from app.api.schemas.availability import (
     AvailabilityExceptionWrite,
     AvailabilityRulePatch,
@@ -129,6 +135,7 @@ async def mentor_slots(
     user_id: UUID,
     session: SessionDep,
     window: BookingWindowDep,
+    viewer: OptionalViewerDep,
     session_type_id: Annotated[UUID, Query(description="Which offering to price the slots for.")],
     start: Annotated[
         dt.date | None,
@@ -173,6 +180,9 @@ async def mentor_slots(
         window=window,
         external_busy=_free_busy(request),
         range_cap=window.range_cap_days,
+        # **A signed-in mentee sees the time held for them open** (#339); to
+        # everyone else, and to anybody without a token, it is busy.
+        holds_for=viewer,
     )
     if slots is None:
         raise NotFoundError("no such bookable session type")

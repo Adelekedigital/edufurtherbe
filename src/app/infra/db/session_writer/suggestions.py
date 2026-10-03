@@ -45,7 +45,7 @@ from app.infra.db.holds import active_hold, lock_mentor_slots
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.outbox import enqueue
-from app.infra.db.slot_store import list_slots
+from app.infra.db.slot_store import offered_slot
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,6 @@ __all__ = ["remind_suggestion", "suggest_time"]
 
 #: Where a refused suggestion points, so a client marks the right field.
 POINTER = "/suggested_starts_at"
-
-#: How far either side of the suggested instant to ask the grid for, for the
-#: reason booking's `SPAN_DAYS` gives: the grid is addressed in the mentor's days.
-SPAN_DAYS = 1
 
 
 def _refuse(message: str) -> ValidationError:
@@ -107,18 +103,15 @@ async def suggest_time(
     # either committed first (and the grid no longer offers the time) or waits
     # and then finds the hold (`holds.lock_mentor_slots`).
     await lock_mentor_slots(session, original["mentor_id"])
-    day = starts_at.astimezone(dt.UTC).date()
-    slots = await list_slots(
+    slot = await offered_slot(
         session,
         original["mentor_id"],
         original["session_type_id"],
-        start=day - dt.timedelta(days=SPAN_DAYS),
-        end=day + dt.timedelta(days=SPAN_DAYS + 1),
+        starts_at,
         now=now,
         window=window,
         external_busy=external_busy,
     )
-    slot = next((s for s in slots or () if s.start == starts_at), None)
     if slot is None:
         raise _refuse("that time is not available — re-read your slots")
 

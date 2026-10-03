@@ -52,32 +52,38 @@ def active_hold(now: Any) -> list[Any]:
     ]
 
 
-def _the_offer(mentee_id: UUID, session_type_id: UUID) -> Any:
+def _the_offer(mentee_id: UUID, session_type_id: UUID, holds: Any = SessionSuggestion) -> Any:
     """The holds open to this mentee at this offering: offered to them, for it."""
-    return and_(
-        SessionSuggestion.mentee_id == mentee_id,
-        SessionSuggestion.session_type_id == session_type_id,
-    )
+    return and_(holds.mentee_id == mentee_id, holds.session_type_id == session_type_id)
 
 
-def _held_window(before: Any) -> tuple[Any, Any]:
-    """A hold as the grid sees a session: pushed earlier by the asking offering's
-    break and later by its own offering's, so the locked re-check below and the
-    grid measure one interval."""
+def _active_holds(mentor_id: UUID, now: Any) -> Any:
+    """**Every reader's hold, written once**: a mentor's active holds, each with
+    its window and its own offering's break — the grid subtracts these and the
+    locked re-check refuses on them, so the two cannot measure differently."""
     window = func.session_window(SessionSuggestion.starts_at, SessionSuggestion.duration_minutes)
-    after = func.make_interval(0, 0, 0, 0, 0, effective_break_minutes())
-    return func.lower(window) - before, func.upper(window) + after
-
-
-def _hold_joins(statement: Select[Any]) -> Select[Any]:
     return (
-        statement.select_from(SessionSuggestion)
+        select(
+            SessionSuggestion.id,
+            SessionSuggestion.mentee_id,
+            SessionSuggestion.session_type_id,
+            func.lower(window).label("start"),
+            func.upper(window).label("end"),
+            effective_break_minutes().label("break_minutes"),
+        )
+        .select_from(SessionSuggestion)
         .join(MentorProfile, MentorProfile.user_id == SessionSuggestion.mentor_id)
         .outerjoin(
             SessionTypeBookingConfig,
             SessionTypeBookingConfig.session_type_id == SessionSuggestion.session_type_id,
         )
+        .where(SessionSuggestion.mentor_id == mentor_id, *active_hold(now))
+        .subquery("holds")
     )
+
+
+def _minutes(value: Any) -> Any:
+    return func.make_interval(0, 0, 0, 0, 0, value)
 
 
 def held_slots(
@@ -96,20 +102,12 @@ def held_slots(
     suggesting — counts every hold. Each carries its offering's break, as a
     booked session does, because a hold is a session that has not been written.
     """
-    window = func.session_window(SessionSuggestion.starts_at, SessionSuggestion.duration_minutes)
-    statement = _hold_joins(
-        select(
-            func.lower(window).label("start"),
-            func.upper(window).label("end"),
-            effective_break_minutes().label("break_minutes"),
-        )
-    ).where(
-        SessionSuggestion.mentor_id == mentor_id,
-        *active_hold(now),
-        window.op("&&")(func.tstzrange(span_start, span_end)),
+    holds = _active_holds(mentor_id, now)
+    statement = select(holds.c.start, holds.c.end, holds.c.break_minutes).where(
+        func.tstzrange(holds.c.start, holds.c.end).op("&&")(func.tstzrange(span_start, span_end))
     )
     if holds_for is not None:
-        statement = statement.where(not_(_the_offer(holds_for, session_type_id)))
+        statement = statement.where(not_(_the_offer(holds_for, session_type_id, holds.c)))
     return statement
 
 
@@ -121,30 +119,33 @@ async def held_offer(
     session_type_id: UUID,
     starts_at: dt.datetime,
     now: dt.datetime,
+    lock: bool = True,
 ) -> dict[str, Any] | None:
-    """The offer this booking takes up, locked, or ``None``. Read under the lock.
+    """The offer this booking takes up, or ``None``. Locked unless ``lock=False``.
 
     Scoped to the mentee in the query: a time offered to somebody else is never
-    theirs to spend.
+    theirs to spend. Read once unlocked, before the grid, for where the notice
+    floor is measured from; and again under the lock, which is the read that
+    decides.
     """
-    row = (
-        (
-            await session.execute(
-                select(SessionSuggestion.id, SessionSuggestion.duration_minutes)
-                .where(
-                    SessionSuggestion.mentor_id == mentor_id,
-                    _the_offer(mentee_id, session_type_id),
-                    SessionSuggestion.starts_at == starts_at,
-                    *active_hold(now),
-                )
-                .order_by(SessionSuggestion.created_at)
-                .limit(1)
-                .with_for_update()
-            )
+    statement = (
+        select(
+            SessionSuggestion.id,
+            SessionSuggestion.duration_minutes,
+            SessionSuggestion.created_at,
         )
-        .mappings()
-        .first()
+        .where(
+            SessionSuggestion.mentor_id == mentor_id,
+            _the_offer(mentee_id, session_type_id),
+            SessionSuggestion.starts_at == starts_at,
+            *active_hold(now),
+        )
+        .order_by(SessionSuggestion.created_at)
+        .limit(1)
     )
+    if lock:
+        statement = statement.with_for_update()
+    row = (await session.execute(statement)).mappings().first()
     return dict(row) if row else None
 
 
@@ -160,19 +161,20 @@ async def holds_against(
 ) -> bool:
     """Whether any hold but the one being spent overlaps this booking.
 
-    Measured the way the grid measures it — the hold pushed earlier by this
-    offering's break and later by its own — so a booking that waited on the
-    lock is refused exactly where the grid would no longer have offered it.
+    Measured exactly as the grid measures it — the hold pushed earlier by this
+    offering's break and later by its own, from the same `_active_holds` — so a
+    booking that waited on the lock is refused exactly where the grid would no
+    longer have offered it.
     """
-    start, end = _held_window(func.make_interval(0, 0, 0, 0, 0, literal(break_minutes)))
-    booked = func.session_window(starts_at, duration_minutes)
-    statement = _hold_joins(select(SessionSuggestion.id)).where(
-        SessionSuggestion.mentor_id == mentor_id,
-        *active_hold(now),
-        func.tstzrange(start, end).op("&&")(booked),
+    holds = _active_holds(mentor_id, now)
+    statement = select(holds.c.id).where(
+        func.tstzrange(
+            holds.c.start - _minutes(literal(break_minutes)),
+            holds.c.end + _minutes(holds.c.break_minutes),
+        ).op("&&")(func.session_window(starts_at, duration_minutes))
     )
     if except_id is not None:
-        statement = statement.where(SessionSuggestion.id != except_id)
+        statement = statement.where(holds.c.id != except_id)
     return await session.scalar(statement.limit(1)) is not None
 
 

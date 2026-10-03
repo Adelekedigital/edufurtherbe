@@ -623,3 +623,178 @@ async def test_the_drain_drops_a_reminder_for_an_offer_booked_since(
     await book(api_client, session_type, at, booking["mentee"])
 
     assert "session_suggestion_reminder" not in await drained(db_engine, migrated_database)
+
+
+# --------------------------------------------------------------------------
+# Review of #341
+# --------------------------------------------------------------------------
+
+
+async def slots_for(
+    client: httpx.AsyncClient, booking: dict[str, Any], headers: dict[str, str]
+) -> list[str]:
+    response = await client.get(
+        f"/api/v1/users/{booking['mentor_id']}/availability/slots",
+        params={"session_type_id": await offering_of(client, booking)},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    return [str(slot["start"]) for slot in response.json()["data"]]
+
+
+async def test_the_holder_sees_their_held_time_open_and_others_do_not(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    booking = await a_booking(db_engine, api_client, "sg-holder-view")
+    at = await another_slot(api_client, booking)
+    await end_with_suggestion(api_client, booking, "decline", at)
+    _, stranger = await a_mentee(db_engine, "sg-holder-view-b")
+
+    holders = await api_client.get(
+        f"/api/v1/users/{booking['mentor_id']}/availability/slots",
+        params={"session_type_id": await offering_of(api_client, booking)},
+        headers=booking["mentee"],
+    )
+
+    assert at in [str(s["start"]) for s in holders.json()["data"]]
+    assert at not in await slots_for(api_client, booking, stranger)
+    assert at not in await slots_for(api_client, booking, {})
+    # A signed-in answer differs per viewer, so no shared cache may keep it.
+    assert "Authorization" in holders.headers.get("vary", "")
+    assert holders.headers.get("cache-control") == "private"
+
+
+async def test_the_earliest_time_stays_bookable_through_the_hold(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The notice floor would pass the earliest slot within the hold: measured
+    from when the time was offered, the mentee can still book it."""
+    from app.infra.db.session_writer import book_session
+
+    booking = await a_booking(db_engine, api_client, "sg-notice")
+    session_type = await offering_of(api_client, booking)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_type_booking_configs SET min_notice_minutes = 120 "
+                "WHERE session_type_id = :t"
+            ),
+            {"t": session_type},
+        )
+    at = dt.datetime.fromisoformat((await open_slots(api_client, booking))[0])
+    await end_with_suggestion(api_client, booking, "decline", at.isoformat())
+    held = dt.datetime.fromisoformat((await suggestion_of(api_client, booking))["held_until"])
+    # Later in the hold, by when the plain notice floor has passed the slot.
+    later = min(at - dt.timedelta(minutes=119), held - dt.timedelta(minutes=1))
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session:
+        booked = await book_session(
+            session,
+            UUID(str(booking["mentee_id"])),
+            {"session_type_id": UUID(session_type), "starts_at": at},
+            now=later,
+            require_answers=True,
+            window=PLATFORM_WINDOW,
+        )
+        await session.commit()
+
+    assert booked is not None
+    assert (await suggestion_of(api_client, booking))["status"] == "booked"
+
+
+async def test_a_stranger_racing_into_the_held_break_is_refused_at_the_lock(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The hour straight after a held hour sits inside the hold's break. A
+    stranger who read the grid before the hold committed is refused there."""
+    from app.infra.db.session_writer import book_session, suggest_time, transition
+
+    booking = await a_booking(db_engine, api_client, "sg-race-break")
+    session_type = await offering_of(api_client, booking)
+    starts = [dt.datetime.fromisoformat(s) for s in await open_slots(api_client, booking)]
+    at = next(s for s in starts if s + dt.timedelta(hours=1) in starts)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_type_booking_configs SET break_after_minutes = 30 "
+                "WHERE session_type_id = :t"
+            ),
+            {"t": session_type},
+        )
+    stranger, _ = await a_mentee(db_engine, "sg-race-break-b")
+    now = dt.datetime.now(dt.UTC)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    mentor = UUID(str(booking["mentor_id"]))
+
+    async with factory() as first, factory() as second:
+        await transition(first, UUID(booking["id"]), mentor, "decline", {}, now=now, notify=False)
+        await suggest_time(
+            first,
+            UUID(booking["id"]),
+            mentor,
+            at,
+            ended_as="declined",
+            reason_text=None,
+            now=now,
+            window=PLATFORM_WINDOW,
+        )
+        racing = asyncio.create_task(
+            book_session(
+                second,
+                stranger,
+                {
+                    "session_type_id": UUID(session_type),
+                    "starts_at": at + dt.timedelta(hours=1),
+                },
+                now=now,
+                require_answers=True,
+                window=PLATFORM_WINDOW,
+            )
+        )
+        await until_blocked(db_engine)
+        await first.commit()
+        with pytest.raises(ConflictError):
+            await racing
+
+
+async def test_a_suggestion_with_no_reason_still_queues_its_email(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, migrated_database: str
+) -> None:
+    """The plain decline email is suppressed, so the suggestion's must send even
+    with nothing written."""
+    booking = await a_booking(db_engine, api_client, "sg-no-reason")
+    at = await another_slot(api_client, booking)
+    declined = await api_client.post(
+        f"/api/v1/sessions/{booking['id']}/decline",
+        json={"suggested_starts_at": at},
+        headers=booking["mentor"],
+    )
+    assert declined.status_code == 200, declined.text
+
+    assert "session_time_suggested" in await drained(db_engine, migrated_database)
+
+
+async def test_a_held_time_is_never_booked_after_it_starts(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The notice floor moves to when the time was offered, never into the past."""
+    from app.core.errors import ValidationError
+    from app.infra.db.session_writer import book_session
+
+    booking = await a_booking(db_engine, api_client, "sg-past")
+    session_type = await offering_of(api_client, booking)
+    at = dt.datetime.fromisoformat((await open_slots(api_client, booking))[0])
+    await end_with_suggestion(api_client, booking, "decline", at.isoformat())
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session:
+        with pytest.raises(ValidationError):
+            await book_session(
+                session,
+                UUID(str(booking["mentee_id"])),
+                {"session_type_id": UUID(session_type), "starts_at": at},
+                now=at + dt.timedelta(minutes=1),
+                require_answers=True,
+                window=PLATFORM_WINDOW,
+            )

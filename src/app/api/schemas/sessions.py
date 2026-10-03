@@ -23,7 +23,7 @@ as one problem would be applying a rule past its reason.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field
@@ -480,15 +480,11 @@ class SessionTransitionWrite(BaseModel):
     )
 
 
-class SessionDeclineWrite(SessionTransitionWrite):
-    """Declining, which may offer another time instead (#339).
-
-    Its own model for the reason cancelling has one: withdrawing binds the
-    shared body, and a mentee taking back a request has no time to suggest.
-    """
-
-    suggested_starts_at: AwareDatetime | None = Field(
-        default=None,
+#: Another time a mentor offers when declining or cancelling (#339). One type,
+#: so the two bodies that carry it cannot describe it differently.
+SuggestedStartsAt = Annotated[
+    AwareDatetime | None,
+    Field(
         description=(
             "**Mentors only.** Another time to offer the mentee instead (#339). "
             "Must be one `/slots` currently offers for this session's offering, "
@@ -502,7 +498,18 @@ class SessionDeclineWrite(SessionTransitionWrite):
             "and the offer, and reminded thirty minutes before the hold lapses. "
             "The offer appears on this session as `suggestion`."
         ),
-    )
+    ),
+]
+
+
+class SessionDeclineWrite(SessionTransitionWrite):
+    """Declining, which may offer another time instead (#339).
+
+    Its own model for the reason cancelling has one: withdrawing binds the
+    shared body, and a mentee taking back a request has no time to suggest.
+    """
+
+    suggested_starts_at: SuggestedStartsAt = None
 
 
 class SessionCancellationWrite(SessionTransitionWrite):
@@ -533,19 +540,4 @@ class SessionCancellationWrite(SessionTransitionWrite):
         ),
     )
 
-    suggested_starts_at: AwareDatetime | None = Field(
-        default=None,
-        description=(
-            "**Mentors only.** Another time to offer the mentee instead (#339). "
-            "Must be one `/slots` currently offers for this session's offering, "
-            "exactly — anything else is a `422` at `/suggested_starts_at`, and "
-            "so is a mentee sending it.\n\n"
-            "The session still ends as it would have, refunded the same way; the "
-            "suggestion is a separate offer. The time is **held for the mentee "
-            "for two hours** — hidden from everyone else's slots and refused to "
-            "anyone else's booking — and they book it with an ordinary `POST "
-            "/sessions` at that time. They are emailed once, with both the news "
-            "and the offer, and reminded thirty minutes before the hold lapses. "
-            "The offer appears on this session as `suggestion`."
-        ),
-    )
+    suggested_starts_at: SuggestedStartsAt = None
