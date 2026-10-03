@@ -69,6 +69,7 @@ async def transition(
     payload: dict[str, Any],
     *,
     now: dt.datetime,
+    notify: bool = True,
 ) -> None:
     """Move one session along, and record who moved it and why.
 
@@ -92,6 +93,10 @@ async def transition(
 
     **Does not commit.** The caller owns the transaction, as everything in this
     module does.
+
+    ``notify=False`` leaves the message to the caller: a decline or cancel that
+    carries a suggested time (#339) tells the mentee both in one email, sent by
+    the suggestion, rather than two seconds apart.
     """
     rule = TRANSITIONS[action]
 
@@ -201,6 +206,8 @@ async def transition(
     # **The party who did not act.** `cancel` is the only action either of them
     # may take, which is why `recipients` needs the actor at all — for the other
     # three the answer follows from the action.
+    if not notify:
+        return
     told = TRANSITION_NOTICE[action]
     await enqueue(
         session,

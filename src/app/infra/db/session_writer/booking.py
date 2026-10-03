@@ -63,6 +63,7 @@ from app.domain.sessions import (
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.booking_rules import effective_duration_minutes
 from app.infra.db.credit_writer import spend_credit
+from app.infra.db.holds import holds_against, lock_mentor_slots
 from app.infra.db.intake_file_store import link_files, usable_file_ids
 from app.infra.db.intake_store import questions_by_type, record_answers
 from app.infra.db.mentee_limits import check_mentee_limits
@@ -78,6 +79,7 @@ from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 from app.infra.db.session_writer.reminders import schedule_session_reminders
+from app.infra.db.session_writer.suggestions import attach_suggestion
 from app.infra.db.slot_store import list_slots
 
 logger = logging.getLogger(__name__)
@@ -272,6 +274,9 @@ async def book_session(
         now=now,
         window=window,
         external_busy=external_busy,
+        # A time suggested to *this* mentee (#339) is open to them; one held for
+        # anybody else is busy.
+        holds_for=mentee_id,
     )
     if not slots or not any(slot.start == starts_at for slot in slots):
         # Deliberately not distinguished. "Too soon", "outside your hours",
@@ -295,6 +300,23 @@ async def book_session(
     status = (
         SessionStatus.PENDING_MENTOR_APPROVAL if requires_confirmation else SessionStatus.CONFIRMED
     )
+
+    # **A hold is not a session, so the exclusion constraint cannot see it.**
+    # The lock is taken *after* the grid was read, so two bookings racing for
+    # one hour still meet at the constraint below as they always have; what it
+    # adds is that a mentor suggesting this time either committed first — and
+    # the hold is found here — or waits behind this booking and then finds the
+    # hour taken (`holds.lock_mentor_slots`).
+    await lock_mentor_slots(session, mentor_id)
+    if await holds_against(
+        session,
+        mentor_id,
+        mentee_id,
+        starts_at=starts_at,
+        duration_minutes=int(offering["duration_minutes"]),
+        now=now,
+    ):
+        raise ConflictError("that time is being held for another mentee")
 
     try:
         session_id = (
@@ -348,6 +370,18 @@ async def book_session(
     # passing a check-time-of-use test. A double-click cannot buy two sessions
     # with one credit.
     await spend_credit(session, mentee_id, session_id, now=now)
+
+    # **A suggested time, taken up** (#339): the offer is spent by the booking
+    # it became, in the same transaction, so it can never be booked twice.
+    await attach_suggestion(
+        session,
+        mentor_id=mentor_id,
+        mentee_id=mentee_id,
+        session_type_id=payload["session_type_id"],
+        starts_at=starts_at,
+        booked_session_id=session_id,
+        now=now,
+    )
 
     # **The answers, in the booking's transaction**: a session without the form
     # its mentee filled in, or a form for a session that was never written, are

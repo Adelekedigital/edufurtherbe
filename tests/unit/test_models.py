@@ -104,6 +104,7 @@ EXPECTED_MODELS = {
     "IntakeFile",
     "Session",
     "SessionParticipant",
+    "SessionSuggestion",
     "SessionEvent",
     # Platform infrastructure, which serves every feature and belongs to none.
     # First of the three in `08_features_platform.sql`; `outbox_events` and

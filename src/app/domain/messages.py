@@ -245,7 +245,23 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "reasonMessage": lambda c: c.extras.get("reason_text") or "",
     "cancelInitiator": _initiator,
     "intervalTime": lambda c: _needs(c.extras.get("interval"), "intervalTime"),
+    # A suggested time (#339), in the recipient's zone like the session's own.
+    "suggestedDate": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedDate").strftime(
+        "%A %d %B %Y"
+    ),
+    "suggestedTime": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedTime").strftime(
+        "%H:%M"
+    ),
+    "holdUntilTime": lambda c: _extra_moment(c, "held_until", "holdUntilTime").strftime("%H:%M"),
+    "suggestedAfter": lambda c: _needs(c.extras.get("suggested_after"), "suggestedAfter"),
 }
+
+
+def _extra_moment(context: MessageContext, key: str, name: str) -> dt.datetime:
+    """An instant the event carried, in the recipient's zone."""
+    return _local(
+        dt.datetime.fromisoformat(_needs(context.extras.get(key), name)), context.recipient_timezone
+    )
 
 
 def _as_moment(context: MessageContext, name: str) -> dt.datetime:

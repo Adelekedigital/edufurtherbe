@@ -17,6 +17,7 @@ from app.core.errors import (
     ValidationError,
 )
 from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
+from app.domain.suggestions import SUGGESTION_REMINDER_KIND
 from app.infra.clients.scheduler import (
     UntrustedCallbackError,
     verify_callback,
@@ -30,6 +31,7 @@ from app.infra.clients.scheduler import (
 from app.infra.db.session_writer import (
     remind_before_session,
     remind_if_still_waiting,
+    remind_suggestion,
 )
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES, schedule_id
 from app.infra.jobs.runner import RuntimeJobs
@@ -70,14 +72,10 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     payload = json.loads(body or b"{}")
     session_id = payload.get("session_id")
     kind = payload.get("kind")
-    if not session_id or (kind not in REMINDER_OFFSETS and kind not in SESSION_REMINDER_KINDS):
+    known = kind in REMINDER_OFFSETS or kind in SESSION_REMINDER_KINDS
+    if not session_id or not (known or kind == SUGGESTION_REMINDER_KIND):
         raise ValidationError("not a reminder callback")
 
-    # **Two kinds of reminder, one callback.** They differ in what they
-    # require: a response reminder is only sent while the request is still
-    # unanswered, a session reminder only while the session is still going
-    # ahead. Dispatching on the kind keeps that in one place rather than in two
-    # endpoints that would drift.
     # **Two kinds, one callback.** They differ in what they require: a response
     # reminder is only sent while the request is still unanswered, a session
     # reminder only while the session is still going ahead. Dispatching on the
@@ -88,6 +86,10 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     # it there.
     if kind in SESSION_REMINDER_KINDS:
         queued = await remind_before_session(session, UUID(str(session_id)), str(kind))
+    elif kind == SUGGESTION_REMINDER_KIND:
+        # A suggested time's hold is about to lapse (#339): nudged only while
+        # the offer is still unbooked and still held.
+        queued = await remind_suggestion(session, UUID(str(session_id)), str(kind))
     else:
         queued = await remind_if_still_waiting(session, UUID(str(session_id)), str(kind))
     await session.commit()

@@ -35,12 +35,14 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, literal, or_, select, tuple_
+from sqlalchemy import Select, and_, case, func, literal, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.errors import ValidationError
+from app.infra.db.holds import active_hold
 from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant, SessionType
+from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.predicates import live
 from app.infra.db.session_stats import MENTEE, attendance_rate
@@ -80,6 +82,19 @@ _SESSION_COLUMNS = (
     # mentor rate here: that one is already on the public profile, and adding a
     # second copy scoped differently is how a number acquires two definitions.
     attendance_rate(Session.mentee_id, MENTEE).label("mentee_attendance_rate"),
+    # **Another time the mentor offered** when ending this session (#339). Its
+    # status is read from `holds.active_hold`, the rule the grid and booking
+    # obey, so "active" here is exactly "still held" there.
+    SessionSuggestion.id.label("suggestion_id"),
+    SessionSuggestion.starts_at.label("suggestion_starts_at"),
+    SessionSuggestion.duration_minutes.label("suggestion_duration_minutes"),
+    SessionSuggestion.held_until.label("suggestion_held_until"),
+    SessionSuggestion.accepted_session_id.label("suggestion_booked_session_id"),
+    case(
+        (SessionSuggestion.accepted_session_id.is_not(None), literal("booked")),
+        (and_(*active_hold(func.now())), literal("active")),
+        else_=literal("expired"),
+    ).label("suggestion_status"),
 )
 
 #: The two people, aliased per side so one statement can join `users` twice.
@@ -183,6 +198,8 @@ def _with_parties(statement: Select[Any]) -> Select[Any]:
         .outerjoin(_MENTEE_PROFILE, _MENTEE_PROFILE.user_id == _MENTEE.id)
         # On its primary key and unfiltered, so no row is gained or lost.
         .outerjoin(SessionType, SessionType.id == Session.session_type_id)
+        # Unique on `session_id`, so at most one row joins and the page holds.
+        .outerjoin(SessionSuggestion, SessionSuggestion.session_id == Session.id)
     )
 
 

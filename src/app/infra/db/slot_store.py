@@ -63,6 +63,7 @@ from app.infra.db.booking_rules import (
     effective_window_days,
 )
 from app.infra.db.calendar_store import NullFreeBusy
+from app.infra.db.holds import held_slots
 from app.infra.db.models.availability import (
     AvailabilityException,
     AvailabilityRule,
@@ -211,6 +212,7 @@ async def list_slots(
     window: BookingWindow,
     external_busy: FreeBusyReader | None = None,
     range_cap: int | None = None,
+    holds_for: UUID | None = None,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
 
@@ -241,6 +243,10 @@ async def list_slots(
     New York at 02:00 UTC is at 21:00 the previous day; their evening window is
     still ahead of them, and a UTC "today" would skip it. Being wrong the other
     way costs nothing, because a day already past yields no slots anyway.
+
+    **A suggested time is held for its mentee** (#339). ``holds_for`` names the
+    mentee asking; their own holds stay open to them and everyone else's count as
+    busy. ``None`` counts every hold.
     """
     external_busy = external_busy or NullFreeBusy()
     offering = (
@@ -334,7 +340,16 @@ async def list_slots(
     # discards.
     span_start = dt.datetime.combine(start, dt.time.min, tzinfo=dt.UTC) - dt.timedelta(days=1)
     span_end = dt.datetime.combine(end, dt.time.min, tzinfo=dt.UTC) + dt.timedelta(days=1)
-    busy = (await session.execute(_busy(user_id, span_start, span_end))).mappings()
+    busy = list((await session.execute(_busy(user_id, span_start, span_end))).mappings())
+    # **Held times are busy too**, shaped like booked sessions and carrying
+    # their offering's break — a hold is a session that has not been written yet.
+    busy += list(
+        (
+            await session.execute(
+                held_slots(user_id, span_start, span_end, now=now, holds_for=holds_for)
+            )
+        ).mappings()
+    )
 
     # **The mentor's own calendar, subtracted over the same span.** One request
     # for the whole range rather than one per day, and none at all unless this

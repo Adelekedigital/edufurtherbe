@@ -142,6 +142,7 @@ EXPECTED_TABLES = [
     # are the wrong shape. See the M4 migration's docstring.
     "session_events",
     "session_participants",
+    "session_suggestions",
     "session_type_booking_configs",
     # Session Types #9: the offerings one session type covers, up to three.
     "session_type_offerings",
