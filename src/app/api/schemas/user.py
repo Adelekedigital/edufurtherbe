@@ -61,8 +61,9 @@ class MonthlyCreditsRead(BaseModel):
     #: The monthly grant. Draw the bar as `balance` of `ceiling`, clamped: a late
     #: refund can briefly put `balance` above it.
     ceiling: int
-    #: When the held monthly credits stop being spendable (the 1st of next
-    #: month, midnight UTC, exclusive). Null when `balance` is 0.
+    #: The soonest instant a held monthly credit stops being spendable (the 1st
+    #: of next month, midnight UTC, exclusive). Null when `balance` is 0, or
+    #: when none of the held monthly credits expire (a migrated opening balance).
     expires_at: datetime | None
 
 

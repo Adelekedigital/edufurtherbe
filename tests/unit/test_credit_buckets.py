@@ -145,3 +145,14 @@ def test_a_monthly_part_that_never_expires_has_no_expiry_rather_than_failing() -
     monthly, _ = split([lot(CreditSource.OPENING_BALANCE, remaining=2, expires_at=None)])
 
     assert (monthly.balance, monthly.expires_at) == (2, None)
+
+
+def test_a_never_expiring_monthly_lot_does_not_hide_an_expiring_one() -> None:
+    monthly, _ = split(
+        [
+            lot(CreditSource.OPENING_BALANCE, expires_at=None),
+            lot(CreditSource.MONTHLY_FREE, expires_at=OCT_END),
+        ]
+    )
+
+    assert (monthly.balance, monthly.expires_at) == (2, OCT_END)

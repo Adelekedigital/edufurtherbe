@@ -171,8 +171,10 @@ async def get_credit_summary(
     """
     moment = now or dt.datetime.now(dt.UTC)
 
-    # One statement for the total and its split, so they cannot disagree: a
-    # booking between two reads would otherwise make them add up wrong.
+    # The total and its split are summed from the same lot rows, so they cannot
+    # disagree: a booking between two separate reads would make them add up
+    # wrong. (The refund links are a second query; they decide only which part
+    # a refund sits in, never how much is held.)
     balance, monthly, bonus = await _buckets(session, user_id, moment=moment, ladder=ladder)
     return CreditSummary.of(
         balance=balance,
@@ -221,7 +223,9 @@ async def _buckets(
                 debit,
                 and_(
                     # Scoped to the caller in the query (non-negotiable #5),
-                    # which also keeps this on the user's ledger rows.
+                    # which also keeps this on the user's ledger rows. Defence
+                    # in depth: fk_credit_transactions_session_belongs_to_user
+                    # already ties a session's ledger rows to its mentee.
                     debit.user_id == user_id,
                     debit.session_id == grant.session_id,
                     debit.reason == CreditReason.SESSION_BOOKED,

@@ -110,6 +110,11 @@ async def test_two_refunds_each_go_back_to_their_own_part(
     """One mentee, one refund from each part, beside another mentee's booking.
 
     Two mentors, because a mentee may hold only one live session per mentor.
+    The other mentee's bookings put foreign rows in the ledger. The
+    `debit.user_id` scope on the refund-origin join is defence in depth that no
+    test can isolate: `fk_credit_transactions_session_belongs_to_user` already
+    refuses a ledger row whose user is not that session's mentee, so another
+    user's debit on the same session cannot be written.
     """
     mentee, token = await a_mentee(db_engine, "bk-both")
     async with db_engine.begin() as conn:
@@ -133,7 +138,7 @@ async def test_two_refunds_each_go_back_to_their_own_part(
             ),
             {"u": mentee},
         )
-    other, other_token = await a_mentee(db_engine, "bk-both-other")
+    _, other_token = await a_mentee(db_engine, "bk-both-other")
 
     # The monthly credit expires first, so it pays for the first booking and
     # the never-expiring starter pays for the second.
@@ -154,7 +159,6 @@ async def test_two_refunds_each_go_back_to_their_own_part(
     assert result.balance == 2
     assert (result.monthly.balance, result.bonus.balance) == (1, 1)
     assert [(g.count, g.expires_at) for g in result.bonus.groups] == [(1, None)]
-    assert (await summary(db_engine, other)).balance >= 0
 
 
 async def request_one(
