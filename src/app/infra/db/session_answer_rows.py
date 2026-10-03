@@ -6,10 +6,11 @@ answers there are and the first one. Both read *this* statement and *this*
 fold, so the preview cannot count a different set, order it differently, or
 word a question differently from the list it previews.
 
-**Scoping is the caller's.** This module carries no reader predicate of its
-own: ``answer_rows`` takes the filters, and each caller passes the one it
+**Scoping is the caller's, and always in the query.** This module carries no
+reader predicate of its own (it cannot import ``session_store``, which imports
+it): ``answer_rows`` takes the filters, and each caller passes the one it
 answers for. The answers endpoint passes the party-or-admin predicate; the
-session reads pass ids they have already scoped to the viewer.
+session reads pass the same party predicate their own statement used.
 """
 
 from __future__ import annotations
@@ -124,16 +125,20 @@ def preview_text(answer: Mapping[str, Any]) -> str:
 
 
 async def answer_previews(
-    session: AsyncSession, session_ids: Sequence[UUID]
+    session: AsyncSession, session_ids: Sequence[UUID], scope: Any
 ) -> dict[UUID, dict[str, Any]]:
     """How many answers each session has, and its first, in one query for a page.
 
-    ``session_ids`` must already be scoped to the viewer: this adds no reader
-    check. A session with no answers is absent from the result.
+    ``scope`` is the reader predicate the caller's session read used, applied
+    again **in this query** (non-negotiable #5), so these personal rows are
+    never read on the strength of ids alone. A session with no answers is
+    absent from the result.
     """
     if not session_ids:
         return {}
-    rows = await session.execute(answer_rows(IntakeSubmission.session_id.in_(list(session_ids))))
+    rows = await session.execute(
+        answer_rows(IntakeSubmission.session_id.in_(list(session_ids)), scope)
+    )
     return {
         session_id: {
             "count": len(answers),

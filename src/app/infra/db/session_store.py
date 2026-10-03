@@ -311,7 +311,7 @@ async def list_sessions(
     # claims to describe.
     rows = [dict(r) for r in (await session.execute(statement.limit(limit + 1))).mappings()]
     page = rows[:limit]
-    await _with_answer_previews(session, page)
+    await _with_answer_previews(session, page, is_a_party(user_id))
     return page, len(rows) > limit
 
 
@@ -334,17 +334,20 @@ async def get_session(
     if row is None:
         return None
     found = dict(row)
-    await _with_answer_previews(session, [found])
+    await _with_answer_previews(session, [found], is_a_party(viewer_id))
     return found
 
 
-async def _with_answer_previews(session: AsyncSession, rows: list[dict[str, Any]]) -> None:
+async def _with_answer_previews(
+    session: AsyncSession, rows: list[dict[str, Any]], scope: Any
+) -> None:
     """Each row's answer preview, in **one** query for the whole page.
 
-    The rows are already scoped to the viewer, which is what makes reading
-    their answers by id safe. A session with no answers gets ``None``.
+    ``scope`` is the party predicate the rows were read with, repeated in the
+    preview's own statement rather than trusted from the ids. A session with no
+    answers gets ``None``.
     """
-    previews = await answer_previews(session, [row["id"] for row in rows])
+    previews = await answer_previews(session, [row["id"] for row in rows], scope)
     for row in rows:
         row["answers_preview"] = previews.get(row["id"])
 

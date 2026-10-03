@@ -9,14 +9,18 @@ two agree.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.test_api_booking import a_bookable_offering, a_mentee, body, first_slot, key
 from tests.integration.test_api_session_answers import answers, booked_with_answers, files_client
 from tests.integration.test_booking_answers import add_question
 from tests.integration.test_intake_files import signed_in, upload
+
+from app.infra.db.session_answer_rows import answer_previews
+from app.infra.db.session_store import is_a_party
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -152,3 +156,18 @@ async def test_the_preview_agrees_with_the_answers_list(
     assert preview["count"] == len(full)
     assert preview["first"]["question_text"] == full[0]["question_text"]
     assert preview["first"]["text"] == full[0]["text"]
+
+
+async def test_the_preview_query_reads_only_within_the_scope_it_is_given(
+    files_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Non-negotiable #5: the preview's own statement carries the reader predicate."""
+    booking = await booked_with_answers(files_client, db_engine, "ap-scope")
+    session_id = UUID(booking["session_id"])
+
+    async with AsyncSession(db_engine) as session:
+        stranger = await answer_previews(session, [session_id], is_a_party(uuid4()))
+        mentor = await answer_previews(session, [session_id], is_a_party(booking["mentor"]))
+
+    assert stranger == {}
+    assert mentor[session_id]["count"] == 3
