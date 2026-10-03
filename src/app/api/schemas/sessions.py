@@ -29,7 +29,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field
 
-from app.api.schemas.common import AvatarFocusRead, Normalised
+from app.api.schemas.common import AvatarFocusRead, Normalised, SessionTypeRefRead
 from app.domain.attendance import join_window
 from app.domain.enums import (
     ActorType,
@@ -70,6 +70,13 @@ class PartyRead(BaseModel):
     avatar_url: str | None = None
     #: Where to centre `avatar_url`; `null` means the client's default crop.
     avatar_focus: AvatarFocusRead | None = None
+    timezone: str | None = Field(
+        default=None,
+        description=(
+            "This party's IANA time zone, for showing the other side what the "
+            "hour is for them. `null` when they deleted their account."
+        ),
+    )
     joined_at: dt.datetime | None = Field(
         default=None,
         description=(
@@ -116,6 +123,9 @@ class SessionRead(BaseModel):
             "predating the migration that gave every mentor a session type."
         ),
     )
+    #: The same offering, named — the session's heading. `null` exactly when
+    #: `session_type_id` is.
+    session_type: SessionTypeRefRead | None = None
     status: SessionStatus = Field(
         description=(
             "The lifecycle state. **Not derived from attendance** — a session is "
@@ -214,6 +224,9 @@ class SessionRead(BaseModel):
             mentor=_party(row, "mentor"),
             mentee=_party(row, "mentee"),
             session_type_id=str(row["session_type_id"]) if row["session_type_id"] else None,
+            session_type=SessionTypeRefRead.of(
+                row["session_type_id"], row.get("session_type_name")
+            ),
             status=SessionStatus(str(row["status"])),
             starts_at=row["starts_at"],  # type: ignore[arg-type]
             duration_minutes=int(str(row["duration_minutes"])),
@@ -252,6 +265,7 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
         avatar_focus=AvatarFocusRead.of(
             row.get(f"{side}_avatar_focus_x"), row.get(f"{side}_avatar_focus_y")
         ),
+        timezone=_text(row.get(f"{side}_timezone")),
         joined_at=row.get(f"{side}_joined_at"),  # type: ignore[arg-type]
         # A missing participant row arrives as `None` and becomes `pending`,
         # which is the same answer as an unsettled row and the right one: both
