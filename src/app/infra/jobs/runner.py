@@ -31,6 +31,7 @@ from app.infra.db.credit_reminders import (
     remind_about_expiring_credits,
 )
 from app.infra.db.engine import create_database_engine, create_session_factory
+from app.infra.db.idempotency import sweep_expired_keys
 from app.infra.db.intake_file_store import sweep_counts, sweep_intake_files
 from app.infra.db.mentor_status_store import remind_returning_mentors
 from app.infra.db.next_available_store import refresh_next_available
@@ -45,6 +46,15 @@ from app.infra.storage.supabase import intake_storage_for
 logger = logging.getLogger(__name__)
 INSTITUTION_TABLES = ("institutions", "education_entries")
 CATALOGUE_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
+
+
+def retention_counts(files: dict[str, int], *, idempotency_keys: int) -> dict[str, int]:
+    """What the daily retention job reports — the one place its keys are named.
+
+    The file step's keys come from `sweep_counts`; this adds the key sweep's.
+    In a dry run both are what *would* be removed.
+    """
+    return {**files, "idempotency_keys_deleted": idempotency_keys}
 
 
 class UnknownRuntimeJobError(ValueError):
@@ -239,28 +249,40 @@ class RuntimeJobs:
             await engine.dispose()
 
     async def _sweep_intake_files(self, *, dry_run: bool) -> dict[str, int]:
+        """The daily retention job: intake files, then expired idempotency keys.
+
+        The key sweep (#353) rides here rather than on a schedule of its own,
+        because both steps exist for one reason — not keeping a person's words
+        past their use — and a second schedule would be one more thing to set
+        up on every environment. It runs even with no storage configured.
+        """
         settings = self.settings
-        with httpx.Client(timeout=CATALOGUE_TIMEOUT) as client:
-            storage = intake_storage_for(settings, client)
-            if storage is None:
-                # No bucket means uploads are refused, so there is nothing to
-                # sweep; a no-op rather than a failure QStash would retry.
-                logger.warning("intake file sweep skipped: intake storage is not configured")
-                return sweep_counts()
-            engine = create_database_engine(settings)
-            try:
-                factory = create_session_factory(engine)
-                async with factory() as session:
-                    return await sweep_intake_files(
-                        session,
-                        storage,
-                        now=dt.datetime.now(dt.UTC),
-                        retention_days=settings.intake_file_retention_days,
-                        unused_hours=settings.intake_file_unused_hours,
-                        dry_run=dry_run,
-                    )
-            finally:
-                await engine.dispose()
+        now = dt.datetime.now(dt.UTC)
+        engine = create_database_engine(settings)
+        try:
+            factory = create_session_factory(engine)
+            async with factory() as session:
+                keys = await sweep_expired_keys(session, now=now, dry_run=dry_run)
+            with httpx.Client(timeout=CATALOGUE_TIMEOUT) as client:
+                storage = intake_storage_for(settings, client)
+                if storage is None:
+                    # No bucket means uploads are refused, so there are no files
+                    # to sweep; a no-op rather than a failure QStash would retry.
+                    logger.warning("intake file sweep skipped: intake storage is not configured")
+                    files = sweep_counts()
+                else:
+                    async with factory() as session:
+                        files = await sweep_intake_files(
+                            session,
+                            storage,
+                            now=now,
+                            retention_days=settings.intake_file_retention_days,
+                            unused_hours=settings.intake_file_unused_hours,
+                            dry_run=dry_run,
+                        )
+            return retention_counts(files, idempotency_keys=keys)
+        finally:
+            await engine.dispose()
 
     async def _credit_reminders(self, *, dry_run: bool) -> dict[str, int]:
         engine = create_database_engine(self.settings)
