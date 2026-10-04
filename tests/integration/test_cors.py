@@ -170,3 +170,12 @@ def test_the_booking_response_headers_are_readable_cross_origin() -> None:
     exposed = response.headers.get("access-control-expose-headers", "").lower()
     assert "idempotent-replayed" in exposed
     assert "location" in exposed
+
+
+def test_a_rate_limits_retry_after_is_readable_cross_origin() -> None:
+    """A 429's `Retry-After` is not on the CORS safelist, so a browser hides it
+    from the frontend's script unless it is exposed (#281)."""
+    response = client(ALLOWED).get("/health", headers={"Origin": ALLOWED})
+
+    exposed = response.headers.get("access-control-expose-headers", "").lower()
+    assert "retry-after" in exposed

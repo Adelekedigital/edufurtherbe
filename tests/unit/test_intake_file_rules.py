@@ -26,6 +26,7 @@ from app.domain.intake_files import (
     retention_cutoff,
     storage_key,
     unused_cutoff,
+    upload_retry_after,
 )
 from conftest import PDF_BYTES, WORD_MAIN, docx_bytes
 
@@ -388,3 +389,30 @@ def test_a_required_file_question_must_be_answered() -> None:
 def test_a_required_file_question_waits_while_enforcement_is_off() -> None:
     """The switch (#283) covers file questions through the same final step."""
     assert answer_problems([UPLOAD], [], require_answers=False, usable_files=frozenset()) == []
+
+
+NOW = dt.datetime(2026, 10, 3, 12, 0, tzinfo=dt.UTC)
+
+
+@pytest.mark.parametrize(
+    ("oldest_age", "expected"),
+    [
+        (dt.timedelta(minutes=59), 60),
+        (dt.timedelta(minutes=59, seconds=30, microseconds=1), 30),
+        (dt.timedelta(minutes=0), 3600),
+        (dt.timedelta(hours=1), 1),
+        (dt.timedelta(hours=2), 1),
+    ],
+    ids=["a-minute-left", "part-second-rounds-up", "just-uploaded", "exactly-due", "overdue"],
+)
+def test_retry_after_is_the_wait_until_the_oldest_upload_leaves_the_hour(
+    oldest_age: dt.timedelta, expected: int
+) -> None:
+    assert upload_retry_after(NOW - oldest_age, NOW) == expected
+
+
+def test_the_hourly_upload_limit_is_configurable_and_bounded() -> None:
+    assert Settings(_env_file=None).intake_uploads_per_hour == 10
+    assert Settings(_env_file=None, intake_uploads_per_hour=5).intake_uploads_per_hour == 5
+    with pytest.raises(SettingsError):
+        Settings(_env_file=None, intake_uploads_per_hour=0)

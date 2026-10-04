@@ -25,6 +25,7 @@ router = APIRouter(prefix="/api/v1", tags=["intake-files"])
 #: what "unless this deployment configures otherwise" qualifies. The file limit
 #: is `deps.MAX_FILE_MB`, which the upload's own field description also quotes.
 UNUSED_HOURS = Settings.model_fields["intake_file_unused_hours"].default
+UPLOADS_PER_HOUR = Settings.model_fields["intake_uploads_per_hour"].default
 
 UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -50,7 +51,11 @@ UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
         "deployment configures otherwise, and you may "
         f"hold at most {MAX_PENDING_UPLOADS} unused uploads at once. Files that "
         "answer a booking are kept for the deployment's retention period, which "
-        "may be indefinitely."
+        "may be indefinitely.\n\n"
+        f"**At most {UPLOADS_PER_HOUR} uploads in any hour** unless this deployment "
+        "configures otherwise. The next is a `429` (problem type "
+        "`/problems/rate-limited`) whose `Retry-After` header is the number of "
+        "seconds until another upload is allowed."
     ),
     responses={
         **UNAUTHENTICATED,
@@ -65,6 +70,18 @@ UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
                 "The file is empty, is not a PDF or Word document, or is over the "
                 "size limit. `errors[0].pointer` is `/file`."
             )
+        },
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": (
+                f"More than {UPLOADS_PER_HOUR} uploads in the last hour. `Retry-After` "
+                "says how many seconds until the next is allowed."
+            ),
+            "headers": {
+                "Retry-After": {
+                    "description": "Seconds until another upload is allowed.",
+                    "schema": {"type": "integer", "minimum": 1},
+                }
+            },
         },
         status.HTTP_500_INTERNAL_SERVER_ERROR: {
             "description": "File uploads are not configured on this deployment."

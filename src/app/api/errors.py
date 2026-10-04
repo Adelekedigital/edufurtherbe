@@ -35,6 +35,7 @@ from app.core.errors import (
     InsufficientCreditError,
     NotFoundError,
     OnboardingIncompleteError,
+    RateLimitedError,
     ReviewIntervalError,
     UpstreamError,
 )
@@ -52,6 +53,7 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     NotFoundError: status.HTTP_404_NOT_FOUND,
     ConflictError: status.HTTP_409_CONFLICT,
     DomainValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    RateLimitedError: status.HTTP_429_TOO_MANY_REQUESTS,
     # **502, not 503.** The fault is always upstream — a provider refused, was
     # unreachable, or answered in a shape we cannot use. 503 would claim *this*
     # service is unavailable and invite a retry against a request that will fail
@@ -89,6 +91,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     BookingOverlapError: "/problems/booking-overlap",
     BookingWithMentorExistsError: "/problems/booking-with-mentor-exists",
     BookingLimitReachedError: "/problems/booking-limit-reached",
+    RateLimitedError: "/problems/rate-limited",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx
@@ -188,7 +191,7 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
             # same for every error with no subclass, and different for exactly the
             # two the `type` slot exists to tell apart — which would otherwise
             # both render `ConflictError` in the one field a human reads.
-            return problem(
+            response = problem(
                 status_code=code,
                 title=type(exc).__name__,
                 detail=str(exc) or None,
@@ -206,6 +209,10 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
                 ),
                 members=exc.problem_members() if isinstance(exc, AppError) else None,
             )
+            # Headers a refusal carries, such as a rate limit's `Retry-After`.
+            if isinstance(exc, AppError):
+                response.headers.update(exc.problem_headers())
+            return response
 
     # An `AppError` subclass nobody mapped. 500 rather than a guessed 4xx: an
     # unmapped error is a gap in this table, and reporting it as the caller's

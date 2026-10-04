@@ -26,13 +26,15 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, delete, exists, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, ValidationError
+from app.core.errors import ConflictError, RateLimitedError, ValidationError
 from app.domain.enums import IntakeFileType
 from app.domain.intake_files import (
     MAX_PENDING_UPLOADS,
+    UPLOAD_RATE_WINDOW,
     retention_cutoff,
     storage_key,
     unused_cutoff,
+    upload_retry_after,
 )
 from app.infra.db.models.intake import IntakeFile
 from app.infra.db.models.sessions import Session
@@ -84,6 +86,42 @@ def sweep_counts(
     }
 
 
+async def _within_upload_rate(session: AsyncSession, uploader_id: UUID, limit: int) -> None:
+    """Refuse an upload past `limit` in the last hour, saying when to retry.
+
+    **Counted on the database's clock**, the one `created_at` was written with,
+    so app and database clocks can't disagree about the window. Every upload in
+    the window still has its row: only unlinked uploads are ever deleted, and
+    not until a day has passed. `ix_intake_files_uploader` serves the count.
+
+    **`Retry-After` waits for enough uploads to leave the window, not just the
+    oldest.** The count can exceed the limit (a concurrent burst, or a lowered
+    setting), and the next upload is allowed once it has fallen to `limit - 1`,
+    which is when the `count - limit + 1`-th oldest upload ages out.
+    """
+    in_window = and_(
+        IntakeFile.uploader_id == uploader_id,
+        IntakeFile.created_at > func.now() - literal(UPLOAD_RATE_WINDOW),
+    )
+    count, now = (await session.execute(select(func.count(), func.now()).where(in_window))).one()
+    if count < limit:
+        return
+    freeing = (
+        await session.execute(
+            select(IntakeFile.created_at)
+            .where(in_window)
+            .order_by(IntakeFile.created_at)
+            .offset(count - limit)
+            .limit(1)
+        )
+    ).scalar()
+    raise RateLimitedError(
+        f"you have uploaded {limit} files in the last hour; try again later",
+        # None only if rows left the window between the two reads: retry soon.
+        retry_after_seconds=1 if freeing is None else upload_retry_after(freeing, now),
+    )
+
+
 async def store_intake_file(
     session: AsyncSession,
     storage: SupabaseStorage,
@@ -92,13 +130,16 @@ async def store_intake_file(
     filename: str,
     payload: bytes,
     kind: IntakeFileType,
+    uploads_per_hour: int,
 ) -> dict[str, Any]:
     """Write the row, then the object, then commit; the new file's description.
 
-    **Pending uploads are bounded per person** — the only thing standing between
-    one account and an unbounded bucket, since uploads are free and unlinked
-    ones live a day. The count races, and a burst can pass it by a few: the
-    bound is on abuse, not on a number anybody relies on.
+    **Pending uploads are bounded per person, then upload rate is** (#281).
+    The pending cap bounds storage but not rate (upload, book, upload again);
+    the hourly count bounds that. Pending is checked first because its refusal
+    tells the person what to do (book with them), where the rate's only says
+    when. Both counts race, and a burst can pass them by a few: the bounds are
+    on abuse, not on a number anybody relies on.
     """
     pending = (
         await session.execute(select(func.count()).where(_unlinked(uploader_id)))
@@ -108,6 +149,7 @@ async def store_intake_file(
             f"you have {MAX_PENDING_UPLOADS} uploads not yet used in a booking; "
             "book with them, or wait a day for them to expire"
         )
+    await _within_upload_rate(session, uploader_id, uploads_per_hour)
     # A random object name, never the row id — ids are the database's to
     # assign (ADR 0015) — and never the uploader's filename.
     key = storage_key(uploader_id, uuid4())
