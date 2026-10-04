@@ -179,7 +179,7 @@ async def drain(
             counts["skipped"] += 1
             continue
         try:
-            context = await _context_for(session, row, recipient, settings)
+            context = await _context_for(session, row, recipient, settings, now)
         except Superseded:
             await _finish(session, row["id"], "skipped", row["attempts"], "superseded")
             counts["skipped"] += 1
@@ -268,7 +268,7 @@ async def _finish(
 
 
 async def _context_for(
-    session: AsyncSession, row: Any, recipient: UUID, settings: Settings
+    session: AsyncSession, row: Any, recipient: UUID, settings: Settings, now: dt.datetime
 ) -> MessageContext:
     """Everything the resolvers may read, loaded by what the message is about.
 
@@ -293,8 +293,10 @@ async def _context_for(
     if str(row["entity_type"]) == "mentor_profile":
         # The profile is the mentor's: the return reminder goes to them, and an
         # application notice to the admins deciding it, both naming the mentor.
-        mentor = (await _names_for(session, (row["entity_id"],))).get(row["entity_id"])
-        named = mentor[0] if mentor else ""
+        # A deleted applicant reads as "your mentor", as a session party does.
+        named = _party_name(
+            await _names_for(session, (row["entity_id"],)), row["entity_id"], "mentor"
+        )
         return MessageContext(mentor_name=named, mentee_name="", **base)  # type: ignore[arg-type]
     if str(row["entity_type"]) != "session":
         if row["event_type"] == Notification.CREDITS_EXPIRING and extras.get("expires_at"):
@@ -302,7 +304,7 @@ async def _context_for(
                 session,
                 row["entity_id"],
                 dt.datetime.fromisoformat(extras["expires_at"]),
-                now=dt.datetime.now(dt.UTC),
+                now=now,
             )
             if left == 0:
                 # All spent since the sweep queued it: nothing is expiring.
