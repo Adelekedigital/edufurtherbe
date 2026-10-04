@@ -9,7 +9,6 @@ from uuid import UUID
 
 from fastapi import Depends, File, Path, Query, Request, UploadFile
 from sqlalchemy import text
-from starlette.concurrency import run_in_threadpool
 
 from app.api.deps.core import (
     BookingWindowDep,
@@ -48,7 +47,7 @@ from app.core.errors import (
 )
 from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
-from app.infra.db.asset_store import clear_image, store_image, stored_avatar_focus
+from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
@@ -436,9 +435,9 @@ async def _store_image(
     url, previous = await store_image(session, storage, kind, user_id, payload)
     await session.commit()
 
-    # **After the commit, and never fatal** — `drop_url`'s contract.
+    # **After the commit, and never fatal** — `release_image`'s contract.
     if previous and previous != url:
-        await run_in_threadpool(storage.drop_url, previous)
+        await release_image(session, storage, user_id, kind, previous)
 
     return url
 
@@ -483,7 +482,7 @@ async def _removed_image(
         storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
     except ConfigurationError:
         return
-    await run_in_threadpool(storage.drop_url, previous)
+    await release_image(session, storage, user_id, kind, previous)
 
 
 async def removed_banner(request: Request, user_id: OwnerDep, session: SessionDep) -> None:

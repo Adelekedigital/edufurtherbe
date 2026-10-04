@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import bindparam, insert, select, update
+from sqlalchemy import bindparam, insert, select, text, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.errors import NotFoundError
@@ -30,6 +32,10 @@ from app.infra.images.faces import FaceDetectionError, avatar_focus
 from app.infra.storage.supabase import SupabaseStorage
 
 logger = logging.getLogger(__name__)
+
+#: ``'IMAG'`` as four ASCII bytes. Its own namespace in the one global keyspace
+#: `pg_advisory_xact_lock` shares with the credit, slot and limit locks.
+IMAGE_LOCK_NAMESPACE = 0x494D4147
 
 #: Users with a profile row, and whatever images they hold. A LEFT JOIN because
 #: only 19 of 43 dev users have a profile at all, and the avatar lives on
@@ -222,9 +228,80 @@ async def store_image(
             # Never a reason to refuse a photo. Left unprocessed for the backfill.
             logger.warning("face detection failed on upload", extra={"user_id": str(user_id)})
     path = object_path(user_id, kind, image.payload, image.content_type)
+    # **Before the storage write, held to the caller's commit**, so a clean-up
+    # deleting this same object cannot run between the write and the pointer.
+    await lock_image(session, user_id, kind)
     url = await asyncio.to_thread(storage.upload, path, image.payload, image.content_type)
     previous = await replace_url(session, user_id, kind, url, focus=focus, looked=looked)
     return url, previous
+
+
+async def lock_image(session: AsyncSession, user_id: UUID, kind: AssetKind) -> None:
+    """Serialise writing one user's image of one kind with deleting it (#320).
+
+    Held until the transaction ends. Object paths are content-addressed and
+    keyed on the user and kind, so the same file uploaded again lands on the
+    same object: an upload rewriting it and a clean-up deleting it must not
+    interleave. Per user and kind, because a path is only ever referenced by
+    that user's column of that kind.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:ns, hashtext(:key))"),
+        {"ns": IMAGE_LOCK_NAMESPACE, "key": f"{user_id}:{kind}"},
+    )
+
+
+async def _finish_in_thread(call: Callable[[str], bool], argument: str) -> bool:
+    """Run ``call`` on a worker thread, and **finish it even if cancelled**.
+
+    A cancelled `asyncio.to_thread` leaves the thread running while the caller
+    unwinds, and unwinding ends the transaction that holds the image lock, so a
+    delete still in flight could land after an identical upload took the lock
+    and committed. Waiting for the thread before re-raising keeps the lock held
+    until the delete has actually finished.
+    """
+    task = asyncio.ensure_future(asyncio.to_thread(call, argument))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
+
+
+async def release_image(
+    session: AsyncSession, storage: SupabaseStorage, user_id: UUID, kind: AssetKind, url: str
+) -> bool:
+    """Delete an image the profile no longer points at; ``True`` if one was removed.
+
+    **Race-free against an upload of the same bytes (#320).** Under the lock
+    `store_image` holds from before its storage write until its commit, this
+    re-reads the column and deletes the object only if the profile does not
+    point at it. So either the upload committed first and the object is kept,
+    or the delete runs first and the upload's write lands after it.
+
+    Only a **live** account's profile keeps the object: a user soft-deleted
+    since the re-upload holds nothing worth keeping, so the clean-up proceeds.
+
+    Run after the change that dropped the reference has committed. **Never
+    fatal**, `drop_url`'s contract: a failure leaves an orphan and is logged,
+    never raised into a change that is already done. Commits its own
+    transaction to release the lock.
+    """
+    column = Profile.avatar_url if kind is AssetKind.AVATAR else Profile.banner_url
+    try:
+        await lock_image(session, user_id, kind)
+        live = await session.scalar(
+            select(Profile.user_id)
+            .join(User, User.id == Profile.user_id)
+            .where(Profile.user_id == user_id, column == url, LIVE)
+        )
+        dropped = False if live is not None else await _finish_in_thread(storage.drop_url, url)
+        await session.commit()
+    except SQLAlchemyError:
+        logger.warning("could not check a replaced image before deleting it", exc_info=True)
+        await session.rollback()
+        return False
+    return dropped
 
 
 async def stored_avatar_focus(session: AsyncSession, user_id: UUID) -> tuple[object, object]:
