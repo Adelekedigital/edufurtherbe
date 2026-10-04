@@ -293,8 +293,10 @@ async def _context_for(
     if str(row["entity_type"]) == "mentor_profile":
         # The profile is the mentor's: the return reminder goes to them, and an
         # application notice to the admins deciding it, both naming the mentor.
-        mentor = (await _names_for(session, (row["entity_id"],))).get(row["entity_id"])
-        named = mentor[0] if mentor else ""
+        # A deleted applicant reads as "your mentor", as a session party does.
+        named = _party_name(
+            await _names_for(session, (row["entity_id"],)), row["entity_id"], "mentor"
+        )
         return MessageContext(mentor_name=named, mentee_name="", **base)  # type: ignore[arg-type]
     if str(row["entity_type"]) != "session":
         if row["event_type"] == Notification.CREDITS_EXPIRING and extras.get("expires_at"):
@@ -302,6 +304,8 @@ async def _context_for(
                 session,
                 row["entity_id"],
                 dt.datetime.fromisoformat(extras["expires_at"]),
+                # The send's own moment, not the drain's start: a run that began
+                # before the expiry must not count credits that lapsed mid-run.
                 now=dt.datetime.now(dt.UTC),
             )
             if left == 0:

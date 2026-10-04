@@ -15,6 +15,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.test_api_application_alert import a_user, apply_as, grant
 from tests.integration.test_api_notifications import Recorder, a_booking, queued, sweep
 
 from app.domain.messages import DELETED_PARTY_LABELS, build_variables
@@ -97,3 +98,83 @@ async def test_a_deleted_recipient_is_sent_nothing(
     assert counts["skipped"] == 1
     (row,) = await queued(db_engine, booking["id"])
     assert row["status"] == "skipped"
+
+
+async def test_a_deleted_applicant_is_your_mentor_to_the_admins(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """An application notice drained after the applicant left names nobody (#343).
+
+    An empty name would fail every attempt of a template asking for
+    `mentorName`; the session messages' label is what this one uses too.
+    """
+    approver, _ = await a_user(db_engine, "gone-applicant-admin")
+    await grant(db_engine, approver, "mentor_approval")
+    applicant, auth_id = await a_user(db_engine, "gone-applicant")
+    assert (await apply_as(api_client, applicant, auth_id)).status_code == 201
+    await delete_account(db_engine, applicant)
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    (message,) = [
+        m for m in recorder.sent if m["notification"] == Notification.MENTOR_APPLICATION_RECEIVED
+    ]
+    context = message["context"]
+    assert context.mentor_name == DELETED_PARTY_LABELS["mentor"] == "your mentor"
+    assert build_variables(["mentorName"], context) == {"mentorName": "your mentor"}
+
+
+async def test_a_live_applicant_is_named_to_the_admins(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    approver, _ = await a_user(db_engine, "live-applicant-admin")
+    await grant(db_engine, approver, "mentor_approval")
+    applicant, auth_id = await a_user(db_engine, "live-applicant")
+    assert (await apply_as(api_client, applicant, auth_id)).status_code == 201
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    (message,) = [
+        m for m in recorder.sent if m["notification"] == Notification.MENTOR_APPLICATION_RECEIVED
+    ]
+    assert message["context"].mentor_name == "Ada"
+
+
+async def test_a_context_that_cannot_be_built_is_retried_not_lost(
+    db_engine: AsyncEngine,
+) -> None:
+    """A payload the drain cannot read fails the attempt and stays pending (#343).
+
+    The drain's guard around building the context is what keeps one bad row
+    from aborting the run; it must count an attempt and leave the row to retry.
+    """
+    user, _ = await a_user(db_engine, "bad-expiry")
+    async with db_engine.begin() as conn:
+        row_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO outbox_events "
+                    "(event_type, entity_type, entity_id, payload, destination, status) "
+                    "VALUES ('credits_expiring', 'user', :u, CAST(:p AS jsonb), 'email', "
+                    "'pending') RETURNING id"
+                ),
+                {"u": user, "p": f'{{"recipient_id": "{user}", "expires_at": "not-a-date"}}'},
+            )
+        ).scalar_one()
+    recorder = Recorder()
+
+    counts = await sweep(db_engine, recorder)
+
+    assert recorder.sent == []
+    assert counts["failed"] == 1
+    async with db_engine.connect() as conn:
+        status, attempts, error = (
+            await conn.execute(
+                text("SELECT status, attempts, error_detail FROM outbox_events WHERE id = :i"),
+                {"i": row_id},
+            )
+        ).one()
+    assert (status, attempts) == ("pending", 1)
+    assert error
