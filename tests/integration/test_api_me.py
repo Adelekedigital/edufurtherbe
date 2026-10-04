@@ -25,15 +25,21 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 OTHER_SECRET = "not-the-signing-secret-for-local-tests"  # noqa: S105
 
 
-async def seed_user(engine: AsyncEngine, auth_id: UUID, *, admin: bool = False) -> None:
+async def seed_user(
+    engine: AsyncEngine,
+    auth_id: UUID,
+    *,
+    admin: bool = False,
+    email: str = "someone@example.com",
+) -> None:
     async with engine.begin() as conn:
         row = await conn.execute(
             text(
                 "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                "VALUES ('someone@example.com', :a, 'Ada', 'mentor', 'Africa/Lagos') "
+                "VALUES (:e, :a, 'Ada', 'mentor', 'Africa/Lagos') "
                 "RETURNING id"
             ),
-            {"a": auth_id},
+            {"a": auth_id, "e": email},
         )
         user_id = row.scalar_one()
         await conn.execute(
@@ -146,6 +152,24 @@ async def test_the_signed_in_user_is_returned(
     assert body["primary_role"] == "mentor"
     assert body["profile"]["about_me"] == "Hello"
     assert body["is_admin"] is False
+
+
+@pytest.mark.parametrize("email", ["someone@example.test", "someone@localhost.localdomain"])
+async def test_a_stored_email_on_a_reserved_domain_still_reads(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, email: str
+) -> None:
+    """A stored value never makes the caller's own record unreadable (#321).
+
+    Input is validated when an address is written; output reports what is
+    stored, even when today's validator would refuse it.
+    """
+    auth_id = uuid4()
+    await seed_user(db_engine, auth_id, email=email)
+
+    response = await api_client.get("/api/v1/me", headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 200
+    assert response.json()["email"] == email
 
 
 async def test_the_vendor_and_migration_identifiers_are_never_returned(
