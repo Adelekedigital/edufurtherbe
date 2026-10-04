@@ -113,12 +113,58 @@ async def test_a_reclaim_in_flight_survives_the_sweep(db_engine: AsyncEngine) ->
         assert type(held).__name__ == "Held"
 
         sweeping = asyncio.create_task(sweep(db_engine, dry_run=False))
-        await asyncio.sleep(0.5)
+        # Proven, not slept on: the sweep's DELETE is waiting on a row lock.
+        await until_a_delete_waits_on_a_lock(db_engine)
         assert not sweeping.done(), "the sweep did not wait for the reclaim's lock"
         await reclaimer.commit()
         await sweeping
 
     assert await present(db_engine, name), "the sweep deleted a key a client had just reclaimed"
+
+
+async def until_a_delete_waits_on_a_lock(engine: AsyncEngine, *, timeout: float = 10.0) -> None:
+    """Return once a `DELETE FROM idempotency_keys` is blocked on a lock."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        async with engine.connect() as conn:
+            waiting = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE wait_event_type = 'Lock' "
+                        "AND query ILIKE 'DELETE FROM idempotency_keys%'"
+                    )
+                )
+            ).scalar_one()
+        if waiting:
+            return
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("the sweep never blocked on the reclaimed row's lock")
+        await asyncio.sleep(0.05)
+
+
+async def test_a_short_batch_does_not_end_a_backlogged_sweep(db_engine: AsyncEngine) -> None:
+    """Codex on #355: a reclaim mid-batch spares a row, so a full backlog can
+    return fewer than `batch` rows while more remain."""
+    from app.infra.db import idempotency
+
+    names = [await a_key(db_engine, expires_in=-dt.timedelta(days=2)) for _ in range(5)]
+    real = idempotency.delete
+    calls = {"n": 0}
+
+    def short_first(*args: Any, **kwargs: Any) -> Any:
+        # The first batch behaves as if a reclaim spared one of its rows.
+        calls["n"] += 1
+        statement = real(*args, **kwargs)
+        if calls["n"] == 1:
+            return statement.where(idempotency.IdempotencyKey.key != names[0])
+        return statement
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(idempotency, "delete", short_first)
+        await sweep(db_engine, dry_run=False, batch=3)
+
+    assert not [n for n in names if await present(db_engine, n)], "rows were left behind"
 
 
 async def test_a_swept_key_books_afresh_like_an_expired_one(
@@ -179,4 +225,5 @@ async def test_the_daily_retention_job_reports_the_keys_it_deleted(
 
     assert counts["idempotency_keys_deleted"] >= 1
     assert counts["purged"] == 0
+    assert set(counts) == set(runner.retention_counts(runner.sweep_counts(), idempotency_keys=0))
     assert not await present(db_engine, old)

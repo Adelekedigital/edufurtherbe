@@ -247,6 +247,12 @@ async def sweep_expired_keys(
     expires, so it is swept like any other.
 
     Each batch commits on its own. A dry run counts and writes nothing.
+
+    **It stops when a batch deletes nothing, not when one comes up short.** A
+    reclaim that lands mid-batch spares its row, so a full backlog can return
+    fewer than ``batch`` rows while more remain; stopping on a short batch would
+    leave them for tomorrow. A spared row's new ``expires_at`` is in the future,
+    so it is never re-selected and the loop always ends.
     """
     cutoff = now - SWEEP_GRACE
     expired = IdempotencyKey.expires_at < cutoff
@@ -263,6 +269,6 @@ async def sweep_expired_keys(
             )
         ).all()
         await session.commit()
-        deleted += len(removed)
-        if len(removed) < batch:
+        if not removed:
             return deleted
+        deleted += len(removed)

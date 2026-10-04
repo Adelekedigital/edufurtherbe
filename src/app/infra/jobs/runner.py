@@ -48,6 +48,15 @@ INSTITUTION_TABLES = ("institutions", "education_entries")
 CATALOGUE_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 
 
+def retention_counts(files: dict[str, int], *, idempotency_keys: int) -> dict[str, int]:
+    """What the daily retention job reports — the one place its keys are named.
+
+    The file step's keys come from `sweep_counts`; this adds the key sweep's.
+    In a dry run both are what *would* be removed.
+    """
+    return {**files, "idempotency_keys_deleted": idempotency_keys}
+
+
 class UnknownRuntimeJobError(ValueError):
     """A trigger named no runtime job declared by this application."""
 
@@ -271,7 +280,7 @@ class RuntimeJobs:
                             unused_hours=settings.intake_file_unused_hours,
                             dry_run=dry_run,
                         )
-            return {**files, "idempotency_keys_deleted": keys}
+            return retention_counts(files, idempotency_keys=keys)
         finally:
             await engine.dispose()
 
