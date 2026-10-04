@@ -179,7 +179,7 @@ async def drain(
             counts["skipped"] += 1
             continue
         try:
-            context = await _context_for(session, row, recipient, settings, now)
+            context = await _context_for(session, row, recipient, settings)
         except Superseded:
             await _finish(session, row["id"], "skipped", row["attempts"], "superseded")
             counts["skipped"] += 1
@@ -268,7 +268,7 @@ async def _finish(
 
 
 async def _context_for(
-    session: AsyncSession, row: Any, recipient: UUID, settings: Settings, now: dt.datetime
+    session: AsyncSession, row: Any, recipient: UUID, settings: Settings
 ) -> MessageContext:
     """Everything the resolvers may read, loaded by what the message is about.
 
@@ -304,7 +304,9 @@ async def _context_for(
                 session,
                 row["entity_id"],
                 dt.datetime.fromisoformat(extras["expires_at"]),
-                now=now,
+                # The send's own moment, not the drain's start: a run that began
+                # before the expiry must not count credits that lapsed mid-run.
+                now=dt.datetime.now(dt.UTC),
             )
             if left == 0:
                 # All spent since the sweep queued it: nothing is expiring.
