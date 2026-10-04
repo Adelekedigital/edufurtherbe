@@ -205,11 +205,12 @@ def unused_cutoff(now: dt.datetime, hours: int) -> dt.datetime:
     return now - dt.timedelta(hours=hours)
 
 
-def upload_retry_after(oldest_in_window: dt.datetime, now: dt.datetime) -> int:
-    """Whole seconds until the oldest upload in the window ages out of it.
+def upload_retry_after(freeing_upload_at: dt.datetime, now: dt.datetime) -> int:
+    """Whole seconds until the upload made at `freeing_upload_at` leaves the window.
 
-    That is when the next upload is allowed, so it is what `Retry-After` says.
-    Never below one: a header saying "retry in 0 seconds" invites a loop.
+    The caller passes the upload whose ageing out brings the count back under
+    the limit, so this is when the next upload is allowed: what `Retry-After`
+    says. Never below one: "retry in 0 seconds" invites a loop.
     """
-    remaining = (oldest_in_window + UPLOAD_RATE_WINDOW - now).total_seconds()
+    remaining = (freeing_upload_at + UPLOAD_RATE_WINDOW - now).total_seconds()
     return max(1, math.ceil(remaining))

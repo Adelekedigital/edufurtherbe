@@ -93,20 +93,33 @@ async def _within_upload_rate(session: AsyncSession, uploader_id: UUID, limit: i
     so app and database clocks can't disagree about the window. Every upload in
     the window still has its row: only unlinked uploads are ever deleted, and
     not until a day has passed. `ix_intake_files_uploader` serves the count.
+
+    **`Retry-After` waits for enough uploads to leave the window, not just the
+    oldest.** The count can exceed the limit (a concurrent burst, or a lowered
+    setting), and the next upload is allowed once it has fallen to `limit - 1`,
+    which is when the `count - limit + 1`-th oldest upload ages out.
     """
-    count, oldest, now = (
+    in_window = and_(
+        IntakeFile.uploader_id == uploader_id,
+        IntakeFile.created_at > func.now() - literal(UPLOAD_RATE_WINDOW),
+    )
+    count, now = (await session.execute(select(func.count(), func.now()).where(in_window))).one()
+    if count < limit:
+        return
+    freeing = (
         await session.execute(
-            select(func.count(), func.min(IntakeFile.created_at), func.now()).where(
-                IntakeFile.uploader_id == uploader_id,
-                IntakeFile.created_at > func.now() - literal(UPLOAD_RATE_WINDOW),
-            )
+            select(IntakeFile.created_at)
+            .where(in_window)
+            .order_by(IntakeFile.created_at)
+            .offset(count - limit)
+            .limit(1)
         )
-    ).one()
-    if count >= limit:
-        raise RateLimitedError(
-            f"you have uploaded {limit} files in the last hour; try again later",
-            retry_after_seconds=upload_retry_after(oldest, now),
-        )
+    ).scalar()
+    raise RateLimitedError(
+        f"you have uploaded {limit} files in the last hour; try again later",
+        # None only if rows left the window between the two reads: retry soon.
+        retry_after_seconds=1 if freeing is None else upload_retry_after(freeing, now),
+    )
 
 
 async def store_intake_file(

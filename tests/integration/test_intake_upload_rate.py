@@ -118,3 +118,36 @@ async def test_one_persons_limit_does_not_touch_anothers(
     response = await upload(limited_client, second)
 
     assert response.status_code == 201, response.text
+
+
+async def test_over_the_limit_retry_after_waits_for_enough_uploads_to_age_out(
+    db_engine: AsyncEngine, intake_fake: FakeStorage
+) -> None:
+    """Three uploads against a limit of two (a lowered setting) free a slot only
+    when the *second* oldest leaves the hour, not the oldest."""
+    mentee, headers = await a_mentee(db_engine, "rate-over-limit")
+    async for client in intake_client(
+        db_engine, intake_fake, intake_settings(intake_uploads_per_hour=3)
+    ):
+        for _ in range(3):
+            assert (await upload(client, headers)).status_code == 201
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE intake_files SET created_at = now() - make_interval(mins => m.age) "
+                "FROM (SELECT id, (ARRAY[55, 10, 0])[row_number() OVER (ORDER BY created_at, id)] "
+                "AS age FROM intake_files WHERE uploader_id = :u) AS m "
+                "WHERE intake_files.id = m.id"
+            ),
+            {"u": mentee},
+        )
+
+    async for client in intake_client(
+        db_engine, intake_fake, intake_settings(intake_uploads_per_hour=2)
+    ):
+        response = await upload(client, headers)
+
+    assert response.status_code == 429, response.text
+    # The 10-minute-old upload frees the slot in about 50 minutes; the oldest
+    # (55 minutes) would wrongly have said about 5.
+    assert 2900 <= int(response.headers["retry-after"]) <= 3001

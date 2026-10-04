@@ -338,9 +338,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # browser drops a cross-origin booking before it leaves.
             allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
             # Response headers a browser hides from another origin's script
-            # unless exposed: the replay flag a retry reads, and a created
-            # resource's `Location`.
-            expose_headers=[REPLAYED_HEADER, "Location"],
+            # unless exposed: the replay flag a retry reads, a created
+            # resource's `Location`, and a rate limit's `Retry-After` (#281).
+            expose_headers=[REPLAYED_HEADER, "Location", "Retry-After"],
         )
     application.include_router(health.router)
     application.include_router(users.router)
