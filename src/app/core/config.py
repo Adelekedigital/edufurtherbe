@@ -627,6 +627,12 @@ class Settings(BaseSettings):
     intake_file_unused_hours: int = Field(
         default=24, ge=1, le=720, validation_alias=env_key("intake_file_unused_hours")
     )
+    #: Intake uploads one person may make in any hour (#281); the next is a
+    #: `429` with `Retry-After`. Bounds request rate, which the cap on unused
+    #: uploads does not: upload, book, upload again.
+    intake_uploads_per_hour: int = Field(
+        default=10, ge=1, le=1000, validation_alias=env_key("intake_uploads_per_hour")
+    )
 
     @field_validator("supabase_intake_bucket", "intake_file_retention_days", mode="before")
     @classmethod

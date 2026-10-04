@@ -14,6 +14,11 @@ class AppError(Exception):
         acts on overrides this (settled decision #197)."""
         return {}
 
+    def problem_headers(self) -> dict[str, str]:
+        """Response headers the refusal carries. None by default; a rate limit
+        sets `Retry-After`."""
+        return {}
+
 
 class NotFoundError(AppError):
     """The resource does not exist, or is not visible to this caller.
@@ -98,6 +103,21 @@ class BookingWithMentorExistsError(ConflictError):
 
 class BookingLimitReachedError(ConflictError):
     """The mentee already holds the most live sessions allowed at once (#342)."""
+
+
+class RateLimitedError(AppError):
+    """The caller has done this too often recently (#281).
+
+    Carries when to try again, which the API layer sends as `Retry-After`. Not a
+    `ConflictError`: nothing about the resource is in the way, only time is.
+    """
+
+    def __init__(self, message: str = "", *, retry_after_seconds: int) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+    def problem_headers(self) -> dict[str, str]:
+        return {"Retry-After": str(self.retry_after_seconds)}
 
 
 class ValidationError(AppError):

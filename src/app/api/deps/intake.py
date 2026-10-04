@@ -81,7 +81,8 @@ async def uploaded_intake_file(
     header is trusted.
     """
     storage = intake_storage(request)
-    limit = _configured(request).intake_file_max_bytes
+    settings = _configured(request)
+    limit = settings.intake_file_max_bytes
     payload = await file.read(limit + 1)
     if len(payload) > limit:
         raise ValidationError(
@@ -101,6 +102,7 @@ async def uploaded_intake_file(
         filename=clean_filename(file.filename, kind),
         payload=payload,
         kind=kind,
+        uploads_per_hour=settings.intake_uploads_per_hour,
     )
 
 

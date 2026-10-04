@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import math
 import unicodedata
 import zipfile
 import zlib
@@ -83,6 +84,11 @@ MAX_FILENAME_LENGTH = 255
 #: file question on a few forms at once; an upload is free, so without a bound
 #: one account could fill the bucket.
 MAX_PENDING_UPLOADS = 10
+
+#: The window the per-person upload rate is counted over (#281). The *count*
+#: is configuration (`INTAKE_UPLOADS_PER_HOUR`); the window is not, because the
+#: setting's name promises an hour.
+UPLOAD_RATE_WINDOW = dt.timedelta(hours=1)
 
 EXTENSION = {IntakeFileType.PDF: ".pdf", IntakeFileType.DOCX: ".docx"}
 
@@ -197,3 +203,13 @@ def retention_cutoff(now: dt.datetime, days: int | None) -> dt.datetime | None:
 def unused_cutoff(now: dt.datetime, hours: int) -> dt.datetime:
     """Uploads still unlinked and older than this are abandoned."""
     return now - dt.timedelta(hours=hours)
+
+
+def upload_retry_after(oldest_in_window: dt.datetime, now: dt.datetime) -> int:
+    """Whole seconds until the oldest upload in the window ages out of it.
+
+    That is when the next upload is allowed, so it is what `Retry-After` says.
+    Never below one: a header saying "retry in 0 seconds" invites a loop.
+    """
+    remaining = (oldest_in_window + UPLOAD_RATE_WINDOW - now).total_seconds()
+    return max(1, math.ceil(remaining))
