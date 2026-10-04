@@ -383,6 +383,29 @@ async def reorder_questions(
     return True
 
 
+async def _wording(
+    session: AsyncSession, answers: list[dict[str, Any]]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The current text of every question and chosen option these answers name,
+    keyed by the id's string form so a payload's ids match either way."""
+    question_ids = [answer["question_id"] for answer in answers]
+    option_ids = [oid for answer in answers for oid in (answer.get("option_ids") or [])]
+    questions = await session.execute(
+        select(SessionTypeQuestion.id, SessionTypeQuestion.question_text).where(
+            SessionTypeQuestion.id.in_(question_ids)
+        )
+    )
+    options: dict[str, str] = {}
+    if option_ids:
+        chosen = await session.execute(
+            select(SessionTypeQuestionOption.id, SessionTypeQuestionOption.option_text).where(
+                SessionTypeQuestionOption.id.in_(option_ids)
+            )
+        )
+        options = {str(oid): text for oid, text in chosen}
+    return {str(qid): text for qid, text in questions}, options
+
+
 async def record_answers(
     session: AsyncSession,
     *,
@@ -399,9 +422,14 @@ async def record_answers(
     carries the `file_storage_key` its upload was linked under. Does not commit:
     the booking's transaction owns it, so a session and its answers land
     together or not at all.
+
+    **Each row keeps the wording it answered** (#350): the question's text, and
+    a choice row's option text, as they read now, so a later rewording never
+    puts an old answer under new words.
     """
     if not answers:
         return
+    question_text, option_text = await _wording(session, answers)
     submission_id = (
         await session.execute(
             insert(IntakeSubmission)
@@ -416,29 +444,22 @@ async def record_answers(
     ).scalar_one()
     rows: list[dict[str, Any]] = []
     for answer in answers:
+        base = {
+            "submission_id": submission_id,
+            "question_id": answer["question_id"],
+            "question_text": question_text[str(answer["question_id"])],
+        }
         if answer.get("file_storage_key") is not None:
-            rows.append(
-                {
-                    "submission_id": submission_id,
-                    "question_id": answer["question_id"],
-                    "file_storage_key": answer["file_storage_key"],
-                }
-            )
+            rows.append({**base, "file_storage_key": answer["file_storage_key"]})
         elif answer.get("option_ids") is not None:
             rows += [
                 {
-                    "submission_id": submission_id,
-                    "question_id": answer["question_id"],
+                    **base,
                     "selected_option_id": option_id,
+                    "option_text": option_text[str(option_id)],
                 }
                 for option_id in answer["option_ids"]
             ]
         else:
-            rows.append(
-                {
-                    "submission_id": submission_id,
-                    "question_id": answer["question_id"],
-                    "answer_text": answer["text"],
-                }
-            )
+            rows.append({**base, "answer_text": answer["text"]})
     await session.execute(insert(IntakeAnswer), rows)

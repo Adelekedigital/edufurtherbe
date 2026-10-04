@@ -250,6 +250,14 @@ class IntakeAnswer(TimestampMixin, Base):
         ),
     )
 
+    #: The question's wording when the mentee answered it (#350). A mentor may
+    #: reword a question afterwards; the answer belongs to the words it was given
+    #: to. Null on answers recorded before this column existed, which readers
+    #: answer with the current wording.
+    question_text: Mapped[str | None] = mapped_column(Text)
+    #: The chosen option's wording at the same moment, on a choice row only.
+    option_text: Mapped[str | None] = mapped_column(Text)
+
     answered_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
