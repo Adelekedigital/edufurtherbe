@@ -19,7 +19,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import RowMapping, Select, select
+from sqlalchemy import RowMapping, Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import QuestionType
@@ -40,17 +40,24 @@ def answer_rows(*filters: Any) -> Select[Any]:
 
     The form's order is the question's ``display_order`` and, inside a choice,
     the option's ``sort_order`` — not the order the mentee picked them in. Ties
-    break on the ids, so the order is stable.
+    break on the ids, so the order is stable. Question and option text are the
+    wording at booking where it was kept, else the current wording.
     """
     return (
         select(
             IntakeSubmission.session_id,
             SessionTypeQuestion.id.label("question_id"),
-            SessionTypeQuestion.question_text,
+            # **The wording the mentee answered, else today's** (#350): rows from
+            # before the snapshot existed have none, and fall back to the live text.
+            func.coalesce(IntakeAnswer.question_text, SessionTypeQuestion.question_text).label(
+                "question_text"
+            ),
             SessionTypeQuestion.deleted_at.is_not(None).label("retired"),
             IntakeAnswer.answer_text,
             SessionTypeQuestionOption.id.label("option_id"),
-            SessionTypeQuestionOption.option_text,
+            func.coalesce(IntakeAnswer.option_text, SessionTypeQuestionOption.option_text).label(
+                "option_text"
+            ),
             IntakeFile.id.label("file_id"),
             IntakeFile.filename,
             IntakeFile.content_type,

@@ -180,7 +180,10 @@ class AnsweredOptionRead(BaseModel):
     """A choice the mentee picked."""
 
     id: UUID
-    text: str = Field(description="The option's wording as it stands now.")
+    text: str = Field(
+        description="The option's wording when it was chosen, or its current wording for "
+        "answers given before that was kept."
+    )
 
 
 class AnsweredFileRead(BaseModel):
@@ -208,9 +211,10 @@ class SessionAnswerRead(BaseModel):
     question_id: UUID
     question_text: str = Field(
         description=(
-            "The question's wording **as it stands now**, not a copy kept at "
-            "booking: a mentor who rewords a question after a booking sees the "
-            "new wording here."
+            "The question's wording **as the mentee saw it**, kept at booking: a "
+            "mentor who rewords a question afterwards still sees the words that "
+            "were answered. Answers given before that copy was kept show the "
+            "current wording."
         )
     )
     question_type: QuestionType = Field(
