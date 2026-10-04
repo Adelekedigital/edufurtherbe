@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -250,6 +251,23 @@ async def lock_image(session: AsyncSession, user_id: UUID, kind: AssetKind) -> N
     )
 
 
+async def _finish_in_thread(call: Callable[[str], bool], argument: str) -> bool:
+    """Run ``call`` on a worker thread, and **finish it even if cancelled**.
+
+    A cancelled `asyncio.to_thread` leaves the thread running while the caller
+    unwinds, and unwinding ends the transaction that holds the image lock, so a
+    delete still in flight could land after an identical upload took the lock
+    and committed. Waiting for the thread before re-raising keeps the lock held
+    until the delete has actually finished.
+    """
+    task = asyncio.ensure_future(asyncio.to_thread(call, argument))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
+
+
 async def release_image(
     session: AsyncSession, storage: SupabaseStorage, user_id: UUID, kind: AssetKind, url: str
 ) -> bool:
@@ -261,6 +279,9 @@ async def release_image(
     point at it. So either the upload committed first and the object is kept,
     or the delete runs first and the upload's write lands after it.
 
+    Only a **live** account's profile keeps the object: a user soft-deleted
+    since the re-upload holds nothing worth keeping, so the clean-up proceeds.
+
     Run after the change that dropped the reference has committed. **Never
     fatal**, `drop_url`'s contract: a failure leaves an orphan and is logged,
     never raised into a change that is already done. Commits its own
@@ -270,9 +291,11 @@ async def release_image(
     try:
         await lock_image(session, user_id, kind)
         live = await session.scalar(
-            select(Profile.user_id).where(Profile.user_id == user_id, column == url)
+            select(Profile.user_id)
+            .join(User, User.id == Profile.user_id)
+            .where(Profile.user_id == user_id, column == url, LIVE)
         )
-        dropped = False if live is not None else await asyncio.to_thread(storage.drop_url, url)
+        dropped = False if live is not None else await _finish_in_thread(storage.drop_url, url)
         await session.commit()
     except SQLAlchemyError:
         logger.warning("could not check a replaced image before deleting it", exc_info=True)

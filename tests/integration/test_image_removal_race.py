@@ -87,6 +87,49 @@ async def test_a_reupload_between_removal_and_cleanup_keeps_the_live_object(
     assert object_exists(fake, original), "the clean-up deleted the object the profile points at"
 
 
+class HeldDelete:
+    """Holds the storage DELETE open on its thread, and notes any upload write."""
+
+    def __init__(self, fake: FakeStorage) -> None:
+        self.deleting, self.release, self.uploading = (
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
+        )
+        real = fake.handle
+
+        def handle(request):  # type: ignore[no-untyped-def]
+            if request.method == "DELETE":
+                self.deleting.set()
+                self.release.wait(timeout=30)
+            elif request.method in ("POST", "PUT") and "/object/" in request.url.path:
+                self.uploading.set()
+            return real(request)
+
+        fake.handle = handle  # type: ignore[method-assign]
+        self.storage = storage_for(fake)
+
+
+async def wait_until_blocked(engine: AsyncEngine, held: HeldDelete) -> None:
+    """Return once the upload is waiting on the image lock; fail if it writes first.
+
+    Deterministic, not a sleep: the proof the upload is held back is a session
+    waiting on an advisory lock, and an upload write while the delete is still
+    open is the regression itself.
+    """
+    async with engine.connect() as conn:
+        for _ in range(600):
+            if held.uploading.is_set():
+                pytest.fail("the upload wrote its object while the delete was still in flight")
+            waiting = await conn.scalar(
+                text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")
+            )
+            if waiting:
+                return
+            await asyncio.sleep(0.05)
+    pytest.fail("the upload never waited on the image lock")
+
+
 @pytest.mark.parametrize("kind", KINDS)
 async def test_an_upload_racing_the_cleanup_waits_and_lands_after_it(
     db_engine: AsyncEngine, kind: AssetKind
@@ -94,41 +137,92 @@ async def test_an_upload_racing_the_cleanup_waits_and_lands_after_it(
     """The clean-up has checked and is mid-delete; the upload must not slip in between.
 
     The delete is held open on a thread. An upload of the same bytes started then
-    has to wait for the clean-up to finish, so its object is written after the
-    delete rather than before it.
+    must wait on the image lock, so its object is written after the delete
+    rather than before it.
     """
     fake = FakeStorage()
-    storage = storage_for(fake)
     payload = image_bytes("JPEG", (300, 300))
     user_id = await make_user(db_engine)
-    original = await upload(db_engine, storage, user_id, kind, payload)
-
-    deleting, release = threading.Event(), threading.Event()
-    real_handle = fake.handle
-
-    def slow_handle(request):  # type: ignore[no-untyped-def]
-        if request.method == "DELETE":
-            deleting.set()
-            release.wait(timeout=10)
-        return real_handle(request)
-
-    fake.handle = slow_handle  # type: ignore[method-assign]
-    slow = storage_for(fake)
+    original = await upload(db_engine, storage_for(fake), user_id, kind, payload)
+    held = HeldDelete(fake)
 
     async with AsyncSession(db_engine) as removal:
         previous = await clear_image(removal, user_id, kind)
         await removal.commit()
-        cleanup = asyncio.create_task(release_image(removal, slow, user_id, kind, previous))
-        await asyncio.to_thread(deleting.wait, 10)
-        racing = asyncio.create_task(upload(db_engine, slow, user_id, kind, payload))
-        await asyncio.sleep(0.5)
-        release.set()
+        cleanup = asyncio.create_task(release_image(removal, held.storage, user_id, kind, previous))
+        await asyncio.to_thread(held.deleting.wait, 30)
+        racing = asyncio.create_task(upload(db_engine, held.storage, user_id, kind, payload))
+        await wait_until_blocked(db_engine, held)
+        held.release.set()
         await cleanup
         again = await racing
 
     assert again == original
     assert await stored_url(db_engine, user_id, kind) == original
     assert object_exists(fake, original), "the upload landed before the delete and was lost"
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_a_cancelled_cleanup_holds_the_lock_until_its_delete_finishes(
+    db_engine: AsyncEngine, kind: AssetKind
+) -> None:
+    """A request cancelled mid-delete must not free the lock while the delete still runs.
+
+    The clean-up owns its session, as a request does, so cancelling it unwinds
+    that session and its transaction. An identical upload started then must
+    still wait until the in-flight delete has finished.
+    """
+    fake = FakeStorage()
+    payload = image_bytes("JPEG", (300, 300))
+    user_id = await make_user(db_engine)
+    original = await upload(db_engine, storage_for(fake), user_id, kind, payload)
+    held = HeldDelete(fake)
+
+    async with AsyncSession(db_engine) as removal:
+        previous = await clear_image(removal, user_id, kind)
+        await removal.commit()
+
+    async def request_cleanup() -> None:
+        async with AsyncSession(db_engine) as session:
+            await release_image(session, held.storage, user_id, kind, previous)
+
+    cleanup = asyncio.create_task(request_cleanup())
+    await asyncio.to_thread(held.deleting.wait, 30)
+    cleanup.cancel()
+    racing = asyncio.create_task(upload(db_engine, held.storage, user_id, kind, payload))
+    await wait_until_blocked(db_engine, held)
+    held.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup
+    again = await racing
+
+    assert again == original
+    assert object_exists(fake, original), "the cancelled delete removed the re-uploaded object"
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_a_deleted_account_does_not_keep_the_object(
+    db_engine: AsyncEngine, kind: AssetKind
+) -> None:
+    """Re-uploaded, then the account deleted: only a live profile keeps an object."""
+    fake = FakeStorage()
+    storage = storage_for(fake)
+    payload = image_bytes("JPEG", (300, 300))
+    user_id = await make_user(db_engine)
+    original = await upload(db_engine, storage, user_id, kind, payload)
+
+    async with AsyncSession(db_engine) as removal:
+        previous = await clear_image(removal, user_id, kind)
+        await removal.commit()
+        await upload(db_engine, storage, user_id, kind, payload)
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": user_id}
+            )
+        dropped = await release_image(removal, storage, user_id, kind, previous)
+
+    assert dropped is True
+    assert not object_exists(fake, original)
 
 
 @pytest.mark.parametrize("kind", KINDS)
