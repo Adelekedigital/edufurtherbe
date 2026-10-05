@@ -212,9 +212,20 @@ class CalendarConnectionRead(BaseModel):
     ADR 0004 calls out. `status` says which it is; a client should not have to
     infer it from `last_error` being set.
 
-    `last_error` is Google's words rather than ours. "Your calendar is
-    disconnected" with no reason is a support ticket; the provider's own message
-    is usually enough for a mentor to fix it themselves.
+    `last_error` is **our own sentence, not the provider's**, and one of a fixed
+    pair: *"the grant was revoked or has expired"*, or *"the stored credential
+    could not be opened"* once the encryption key has rotated. A Google body
+    never reaches it — the one failure that carries one is transient, and is
+    logged rather than stored, because writing it would turn a rate limit into a
+    re-consent.
+
+    This claimed "Google's words rather than ours" until a client asked whether
+    the field was safe to render. It is — nothing interpolates an exception, a
+    URL, a client id or an address into it, and the write bounds it to 500
+    characters. But not for the reason given, so the argument is restated:
+    a reason is returned rather than withheld because "your calendar is
+    disconnected" with nothing to act on is a support ticket. A client is better
+    off writing copy per value than relaying the string.
     """
 
     connected_at: dt.datetime
@@ -235,7 +246,16 @@ class CalendarConnectionRead(BaseModel):
     )
     last_error: str | None = Field(
         default=None,
-        description="Why it stopped working, in Google's words. Null while it works.",
+        description=(
+            "Why it stopped working. Null while it works.\n\n"
+            "**One of a fixed pair of our own sentences, never a provider "
+            "message**: `the grant was revoked or has expired`, or `the stored "
+            "credential could not be opened`. Bounded to 500 characters.\n\n"
+            "Safe to render as it stands, but copy written per value reads "
+            "better than the string relayed — and fall back to a generic line "
+            "for a value you do not recognise, so a third one added later "
+            "degrades rather than shows nothing."
+        ),
     )
 
     @classmethod
