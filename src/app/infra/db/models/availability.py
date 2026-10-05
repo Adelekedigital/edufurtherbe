@@ -376,10 +376,10 @@ class CalendarConnection(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
     last_synced_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     #: Why it stopped working — **our own sentence, not the provider's**, and one
-    #: of a fixed pair: the grant was revoked or has expired, or the stored
-    #: credential could not be opened. `record_failure` bounds the write to 500
-    #: characters. Shown to the mentor, because "your calendar is disconnected"
-    #: without a reason is a support ticket.
+    #: of `CALENDAR_FAILURE_REASONS`, which is the only place they are written
+    #: down. `record_failure` bounds the write to 500 characters. Shown to the
+    #: mentor, because "your calendar is disconnected" without a reason is a
+    #: support ticket.
     last_error: Mapped[str | None] = mapped_column(Text)
 
     connected_at: Mapped[datetime.datetime] = mapped_column(

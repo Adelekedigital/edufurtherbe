@@ -160,6 +160,26 @@ MIN_NOTICE_MINUTES = (NOTICE_FLOOR_MINUTES, NOTICE_CEILING_MINUTES)
 DEFAULT_MIN_NOTICE_MINUTES = MIN_NOTICE_MINUTES[0]
 
 
+#: Why a mentor's calendar grant is dead, in the platform's own words.
+#:
+#: **Ours, never the provider's.** A Google body never reaches a mentor: the one
+#: failure that carries one is transient, and is logged rather than stored.
+#:
+#: Here rather than beside either writer because there are two of them — the
+#: token refresh that Google refuses, and the sweep that cannot open a stored
+#: credential after a key rotation — and three readers that describe the set: the
+#: schema's docstring, the `Field` description that reaches the OpenAPI document,
+#: and the ORM column comment. Five copies of the same two sentences is the
+#: defect non-negotiable #8 names, and the copies are what let the published
+#: description keep advertising the old pair after a writer changed.
+#:
+#: Adding one means a client meets a value its copy does not cover, so
+#: `CALENDAR_FAILURE_REASONS` is pinned to the published description by a test.
+CALENDAR_REVOKED = "the grant was revoked or has expired"
+CALENDAR_CREDENTIAL_UNREADABLE = "the stored credential could not be opened"
+CALENDAR_FAILURE_REASONS = (CALENDAR_REVOKED, CALENDAR_CREDENTIAL_UNREADABLE)
+
+
 class UnknownTimezoneError(ValueError):
     """A timezone that is not in the tz database.
 

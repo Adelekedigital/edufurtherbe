@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.domain.availability import UtcInterval
+from app.domain.availability import CALENDAR_CREDENTIAL_UNREADABLE, UtcInterval
 from app.domain.notifications import Notification
 from app.infra.clients.meetings import (
     CalendarAccessRevokedError,
@@ -345,7 +345,7 @@ async def check_connections(
         except SealError:
             # The key rotated, so this token can never be opened again. As dead
             # as a revoked grant, and the mentor's fix is the same: reconnect.
-            await record_failure(session, user_id, "the stored credential could not be opened")
+            await record_failure(session, user_id, CALENDAR_CREDENTIAL_UNREADABLE)
             counts["disconnected"] += 1
             continue
 
