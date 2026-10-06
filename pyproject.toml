@@ -235,6 +235,7 @@ exempt = [
     "api/deps/calendar.py",
     "api/deps/core.py",
     "api/deps/intake.py",
+    "api/deps/interest.py",
     "api/deps/jobs.py",
     "api/deps/mentors.py",
     "api/deps/profile.py",
