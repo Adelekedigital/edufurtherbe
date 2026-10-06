@@ -163,6 +163,10 @@ EXPECTED_TABLES = [
     # and `feature_flags` ship with whatever first needs them (#21).
     "idempotency_keys",
     "outbox_events",
+    # Not from the package: "tell me when this ships", for any coming-soon thing
+    # in the product (#365). Platform infrastructure by the same test as the two
+    # above — it names a feature by an open slug and belongs to no feature.
+    "feature_interest",
     # M5b — the credit ledger. Two tables, no writer yet: PR 1 lands the shape
     # so the vocabularies and the two partial indexes are settled before
     # anything can depend on them.

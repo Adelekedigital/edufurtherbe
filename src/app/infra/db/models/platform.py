@@ -228,3 +228,71 @@ class OutboxEvent(TimestampMixin, Base):
             postgresql_where=text("payload ? 'kind'"),
         ),
     )
+
+
+class FeatureInterest(TimestampMixin, Base):
+    """Somebody asking to be told when a feature ships (#365).
+
+    **Belongs here rather than beside any feature**, which is the request: the
+    row says *this person is waiting for this thing*, and the thing is named by
+    an open slug that may belong to any part of the product. A table scoped to
+    integrations, or to payments, would have left Explore's cut button still
+    cut.
+
+    **No status column.** A row exists or it does not, and `notified_at` says
+    whether the send has happened — the three states a status would enumerate
+    are already readable from two facts, and the third (*withdrawn*) is the
+    absence of the row, because `DELETE` is what withdrawing is.
+    """
+
+    __tablename__ = "feature_interest"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+    #: An open slug, shape-checked and nothing more. `domain/interest.py` holds
+    #: the pattern and the `CHECK` below is its second copy, pinned by a test.
+    feature: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: Null until somebody has been told. **Here so the send cannot tell one
+    #: person twice** — the send itself does not exist yet, and building the
+    #: column with the table costs nothing while retro-fitting it onto rows
+    #: that have already been notified is guesswork.
+    #:
+    #: **Whatever sends must filter soft-deleted accounts itself.** The foreign
+    #: key cascades a *hard* delete, but a `users.deleted_at` leaves every row
+    #: here intact — and not because of any race: somebody registers legitimately
+    #: today and closes their account next month, which no scoping on the write
+    #: can prevent. So a row existing is not a claim that its account can still
+    #: be contacted, and a sender that trusts it will mail a deleted person.
+    notified_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        # **What makes a second press free.** The writer is an
+        # `ON CONFLICT DO NOTHING` against this, so pressing twice is pressing
+        # once with no header and no read-then-write race. It serves the
+        # caller's own list too, `user_id` being leading.
+        Index("uq_feature_interest_user_feature", "user_id", "feature", unique=True),
+        # The send's read: who is still waiting for one feature. Partial,
+        # because a notified row is never selected again.
+        Index(
+            "ix_feature_interest_unnotified",
+            "feature",
+            postgresql_where=text("notified_at IS NULL"),
+        ),
+        # **The bare suffix, not the full name.** `NAMING_CONVENTION["ck"]` is
+        # `ck_%(table_name)s_%(constraint_name)s`, so passing the already-prefixed
+        # name rendered `ck_feature_interest_ck_feature_interest_feature_is_a_slug`
+        # — a model disagreeing with the database about what the constraint is
+        # called, which only bites later, when a migration drops or renames it by
+        # the model's name and targets something that does not exist.
+        CheckConstraint(
+            "feature ~ '^[a-z][a-z0-9_]{1,39}$'",
+            name="feature_is_a_slug",
+        ),
+    )

@@ -113,6 +113,10 @@ EXPECTED_MODELS = {
     # The second, and the one the package designed for analytics dispatch —
     # it carries notifications first because that is what has a producer.
     "OutboxEvent",
+    # Not from the package: "tell me when this ships", for any coming-soon
+    # thing in the product (#365). Platform infrastructure by the same test —
+    # the row names a feature by an open slug and belongs to no feature.
+    "FeatureInterest",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")

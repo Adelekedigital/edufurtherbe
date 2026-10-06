@@ -43,7 +43,7 @@ from app.infra.db.models.mentoring import (
     ServiceOffering,
     SessionTypeOffering,
 )
-from app.infra.db.models.platform import IdempotencyKey, OutboxEvent
+from app.infra.db.models.platform import FeatureInterest, IdempotencyKey, OutboxEvent
 from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.referrals import Referral, ReferralUnlock
 from app.infra.db.models.review_reports import ReviewReport
@@ -78,6 +78,7 @@ __all__ = [
     "CreditTransaction",
     "DegreeLevel",
     "EducationEntry",
+    "FeatureInterest",
     "FeaturedMentor",
     "IdempotencyKey",
     "Institution",

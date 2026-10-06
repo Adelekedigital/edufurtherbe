@@ -53,6 +53,11 @@ from app.api.deps.intake import (
     SessionAnswersDep,
     UploadedIntakeFileDep,
 )
+from app.api.deps.interest import (
+    OwnInterestsDep,
+    RegisteredInterestDep,
+    WithdrawnInterestDep,
+)
 from app.api.deps.jobs import ReminderCallbackDep, RuntimeJobDep
 from app.api.deps.mentors import (
     FeaturedMentorDep,
@@ -197,6 +202,7 @@ __all__ = [
     "OwnAttributesDep",
     "OwnCalendarDep",
     "OwnConferencingDep",
+    "OwnInterestsDep",
     "OwnOnboardingDep",
     "OwnQuestionsDep",
     "OwnReferralsDep",
@@ -206,6 +212,7 @@ __all__ = [
     "PendingInstitutionsDep",
     "PendingMentorsDep",
     "PublicMentorDep",
+    "RegisteredInterestDep",
     "ReminderCallbackDep",
     "RemovedAvatarDep",
     "RemovedBannerDep",
@@ -238,6 +245,7 @@ __all__ = [
     "UploadedIntakeFileDep",
     "UpsertedGoalDep",
     "UpsertedProfileDep",
+    "WithdrawnInterestDep",
     "WithdrawnSessionDep",
     "WrittenReviewDep",
     "_calendar",

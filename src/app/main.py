@@ -21,6 +21,7 @@ from app.api.routes import (
     me_calendar,
     me_conferencing,
     me_intake,
+    me_interest,
     me_onboarding,
     me_referrals,
     me_reviews,
@@ -259,6 +260,25 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "interest",
+        "description": (
+            "Asking to be told when something ships, and reading back what you "
+            "have asked for. Any signed-in account — a mentee waiting for "
+            "mentors to appear is as much the point as a mentor waiting for "
+            "payouts.\n\n"
+            "**The vocabulary is open.** `feature` is a bounded slug rather than "
+            "an enum, so a new coming-soon control anywhere in the product works "
+            "with no release here. The cost is accepted deliberately: a "
+            "misspelled key is recorded and nobody is ever notified against it, "
+            "so send the spelling the rest of the product uses.\n\n"
+            "**Recording is feature-agnostic; notifying is not.** Sending "
+            "anything for a key needs a template and a notification member "
+            "built here, every time. So a control built on this may promise "
+            "*we'll let you know* and must never promise when — and nothing "
+            "here is a queue anybody is working through."
+        ),
+    },
+    {
         "name": "users",
         "description": (
             "A user's own record and attributes — and, for a platform admin, "
@@ -356,6 +376,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_calendar.callback_router)
     application.include_router(me_conferencing.router)
     application.include_router(me_intake.router)
+    application.include_router(me_interest.router)
     application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)
     application.include_router(me_referrals.router)
