@@ -17,8 +17,10 @@ from app.core.errors import (
 )
 from app.infra.clients.meetings import (
     VenueUnavailableError,
+    account_email,
     consent_url,
     exchange_code,
+    require_calendar_scope,
 )
 from app.infra.clients.secrets import SealError, seal, sealed_value, unsealed_value
 from app.infra.db.calendar_store import (
@@ -89,6 +91,33 @@ def _free_busy(request: Request) -> Any:
     )
 
 
+def _named_account(request: Request, tokens: dict[str, Any]) -> str | None:
+    """The connected account's email, or ``None`` without reaching Google.
+
+    **No access token means no call.** Google always returns one beside the
+    refresh token, so an absent one is a stubbed exchange or a response shape we
+    do not recognise — and calling userinfo with an empty bearer would be an
+    outbound request that can only fail. It would also put a real network call
+    inside every test that completes a consent through a fake exchange.
+    """
+    access = str(tokens.get("access_token") or "")
+    if not access:
+        return None
+    found: str | None = _name_of(request)(access_token=access)
+    return found
+
+
+def _name_of(request: Request) -> Any:
+    """The call that names the connected Google account.
+
+    Read off `app.state` rather than called directly, following `_token_exchange`
+    for the same reason: this is an outbound call whose *request* has to be right
+    — a bearer token on Google's userinfo endpoint — and a seam is what lets a
+    test assert what was sent rather than what came back.
+    """
+    return getattr(request.app.state, "calendar_account_email", None) or account_email
+
+
 def _token_exchange(request: Request) -> Any:
     """The call that turns a consent code into a refresh token.
 
@@ -152,10 +181,22 @@ async def calendar_connected(
     refresh_token = str(tokens.get("refresh_token") or "")
     if not refresh_token:
         raise VenueUnavailableError("google returned no refresh token")
+    # **Here as well as in the adapter, for the reason given just above.** The
+    # exchange is swappable through `app.state`, so a refusal that lives only
+    # inside the real adapter is missing from every wiring that replaces it —
+    # which an integration test proved by watching the API answer `200` to a
+    # consent that granted no calendar access.
+    require_calendar_scope(tokens)
 
     await connect(
         session,
         user_id,
+        # **After the refresh-token check, and never before it.** The grant is
+        # the thing the mentor came to make; naming the account is a label on
+        # it. `account_email` answers `None` rather than raising for exactly
+        # that reason, so a userinfo failure costs the label and not the
+        # connection.
+        account_email=_named_account(request, tokens),
         # **Nothing here names the Google account.** It would come from an
         # `id_token`, and Google issues one only when `openid` is among the
         # scopes — ADR 0012 asks for `calendar.freebusy` alone, so

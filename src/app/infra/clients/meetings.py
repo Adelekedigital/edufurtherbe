@@ -53,16 +53,19 @@ from urllib.parse import urlencode
 
 import httpx
 
-from app.core.errors import UpstreamError
+from app.core.errors import UpstreamError, ValidationError
 from app.domain.availability import CALENDAR_REVOKED, UtcInterval
 from app.domain.enums import ConferencingProvider
 
 __all__ = [
     "FREEBUSY_SCOPE",
     "GOOGLE_CALENDAR_API",
+    "GOOGLE_USERINFO_URL",
     "MENTOR_CALENDAR",
+    "MENTOR_SCOPES",
     "CalendarAccessRevokedError",
     "CalendarEvent",
+    "CalendarScopeNotGrantedError",
     "DailyRooms",
     "GoogleCalendar",
     "MeetingRoom",
@@ -70,6 +73,7 @@ __all__ = [
     "NullRooms",
     "VenueUnavailableError",
     "access_token",
+    "account_email",
     "consent_url",
     "exchange_code",
     "free_busy",
@@ -512,6 +516,29 @@ class GoogleCalendar:
         return payload
 
 
+class CalendarScopeNotGrantedError(ValidationError):
+    """The mentor completed a consent without granting the calendar permission.
+
+    **A caller condition, not an upstream failure**, which is why this is a
+    `ValidationError` and answers `422` rather than joining the `502` family: the
+    mentor chose, Google did exactly as asked, and nothing is broken. Retrying
+    the same consent unchanged would produce the same result, so a `502` would
+    invite precisely the wrong response.
+
+    **Why it is refused rather than stored.** Google's granular permissions put
+    the calendar permission behind its own checkbox, one step after the account
+    screen, so completing a consent that grants `openid email` alone is the
+    default path for anybody who clicks through. A grant like that stores as
+    `active` with an account email beside it and a credential that can never read
+    a calendar — and the failure is invisible, because a scope `403` is a
+    transient upstream error, so `record_failure` never runs and the health sweep
+    never marks the row. The mentor sees "Connected", their availability
+    subtracts nothing, and no part of the system disagrees.
+
+    So the refusal is the only place this is catchable at all.
+    """
+
+
 class CalendarAccessRevokedError(UpstreamError):
     """The mentor's grant is dead, and retrying will not revive it.
 
@@ -526,6 +553,36 @@ class CalendarAccessRevokedError(UpstreamError):
     ``"error": "invalid_grant"`` — so the distinction is made here, at the one
     place that can see the body.
     """
+
+
+def require_calendar_scope(tokens: dict[str, Any]) -> None:
+    """Refuse a grant that did not include `calendar.freebusy`.
+
+    **One function, two callers**, which is the same arrangement the
+    refresh-token check has and for a sharper reason: `exchange_code` is
+    swappable through `app.state`, so a check living only there is absent from
+    every deployment and every test that wires a different exchange. An
+    integration test caught exactly that — the refusal passed in the adapter's
+    own unit tests and the API answered `200`.
+
+    **Membership, never equality.** The set Google returns is not the set we
+    asked for: it expands `email` into `userinfo.email`, keeps both, and orders
+    them its own way. A comparison against `MENTOR_SCOPES` would refuse every
+    real consent.
+
+    **A missing `scope` is accepted.** Google sends it on a code exchange, but
+    refusing its absence would turn a change in response shape into every mentor
+    being unable to connect. This answers only what it can: *was the calendar
+    permission explicitly withheld.*
+    """
+    granted = str(tokens.get("scope") or "")
+    if granted and FREEBUSY_SCOPE not in granted.split():
+        raise CalendarScopeNotGrantedError(
+            "your Google account was connected but permission to see your "
+            "availability was not granted, so no calendar was connected — "
+            "start again and allow the availability permission",
+            field_errors=(("/scope", "calendar availability was not granted"),),
+        )
 
 
 def access_token(
@@ -576,11 +633,53 @@ def access_token(
 #: earlier docstring claim the event writer needed a per-mentor table.
 FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.freebusy"
 
+#: What a mentor is actually asked for, and the single source for it.
+#:
+#: **`openid email` beside the calendar scope, added 2026-10-06** — amending ADR
+#: 0012 while it was still `Proposed`, so this is an amendment rather than a
+#: reversal of a settled decision.
+#:
+#: The narrow ask was never about the *count* of scopes; it was about not asking
+#: for anything sensitive. These two are non-sensitive, so they cannot be the
+#: most sensitive scope in the set, and Google sets an app's verification
+#: requirement by the most sensitive scope it requests. Whatever tier
+#: `calendar.freebusy` turns out to sit in, the increment changes it not at all.
+#: The entire cost is one more line on a screen that already asks for
+#: availability: *"See your primary Google Account email address."*
+#:
+#: What it buys is the thing `calendar.freebusy` cannot answer — **which account
+#: a mentor connected**. `calendarList.list` is outside the scope, so there is
+#: no second route to the name, and without it a mentor who authorised the wrong
+#: Google account has nothing on the page telling them so.
+#:
+#: **Widened at the only moment it was free.** A scope change does not
+#: retro-fit: a mentor who consented to less has no email in their token and
+#: gets one only by consenting again. When this changed, no environment had a
+#: client configured and nobody had connected anything, so it cost nothing. The
+#: same change after mentors connect costs every one of them a re-consent, which
+#: is the step most likely to make somebody abandon an integration.
+MENTOR_SCOPES = f"openid email {FREEBUSY_SCOPE}"
+
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+
+#: Where the account's own email is read from, with the access token the consent
+#: just produced.
+#:
+#: **Not the `id_token`, deliberately.** The grant now returns one, and reading
+#: the email straight out of its payload would mean either verifying its
+#: signature — a JWT library, Google's keys and their rotation, on the calendar
+#: path — or trusting it unverified. Google's own documentation says to verify an
+#: ID token's signature and recommends a library for production; the exemption
+#: often assumed for a token fetched directly from the token endpoint is not
+#: something their docs state, so it is not relied on here.
+#:
+#: This endpoint needs none of that: an ordinary authenticated call with a token
+#: Google issued us seconds earlier, once per connection.
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 
 def consent_url(*, client_id: str, redirect_uri: str, state: str) -> str:
-    """Where to send a mentor to grant free/busy access.
+    """Where to send a mentor to grant free/busy access and name their account.
 
     ``access_type=offline`` with ``prompt=consent`` because we need a **refresh**
     token and Google issues one only on a fresh grant — a mentor who has
@@ -590,19 +689,61 @@ def consent_url(*, client_id: str, redirect_uri: str, state: str) -> str:
     ``include_granted_scopes`` is deliberately absent: it would let a previous
     grant widen this one, and the whole point of the narrow ask is that the
     consent screen says exactly what it says.
+
+    The scopes are `MENTOR_SCOPES`, which explains why there are three.
     """
     query = urlencode(
         {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": FREEBUSY_SCOPE,
+            "scope": MENTOR_SCOPES,
             "access_type": "offline",
             "prompt": "consent",
             "state": state,
         }
     )
     return f"{GOOGLE_AUTH_URL}?{query}"
+
+
+def account_email(*, access_token: str, client: httpx.Client | None = None) -> str | None:
+    """The email of the Google account a mentor just connected, or ``None``.
+
+    **Never raises, and that is the design.** By the time this is called the
+    mentor has completed a consent and Google has issued a refresh token — the
+    connection is made. Reading the address that labels it is a convenience, so
+    a 503, a timeout, a body that is not JSON, or a response with no `email`
+    claim all answer ``None`` and the grant is stored without a name. The
+    alternative is a `502` for a consent that succeeded, telling a mentor
+    nothing worked while their calendar is connected.
+
+    So `external_account_email` being null means *we could not read it*, not
+    *there isn't one* — the same value an older grant carries, which is why the
+    read model documents null as "not known" rather than as a state.
+
+    **Not the `id_token`.** See `GOOGLE_USERINFO_URL` for why this is an
+    ordinary authenticated call rather than a JWT to verify.
+    """
+    if not access_token:
+        # Nothing to ask with. Returned rather than attempted, so a caller that
+        # lost the token does not spend a round trip discovering it.
+        return None
+    http = client or httpx.Client(timeout=TIMEOUT)
+    try:
+        response = http.get(
+            GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"}
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.info("the connected account could not be named: %s", exc)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    found = payload.get("email")
+    # `str()` would turn a missing claim into the string "None", which is worse
+    # than null: it reaches a mentor's page as text.
+    return str(found) if isinstance(found, str) and found else None
 
 
 #: The mentor's own calendar, always. **Never `google_calendar_id`** — that
@@ -716,6 +857,10 @@ def exchange_code(
             "Google returned no refresh token — the grant was not fresh, so "
             "access_type=offline and prompt=consent are both required"
         )
+    # Checked on what was *granted*, not on what was asked: the request always
+    # names `calendar.freebusy`, and whether the mentor ticked it is only
+    # knowable from the response.
+    require_calendar_scope(payload)
     return payload
 
 

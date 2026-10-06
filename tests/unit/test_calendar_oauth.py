@@ -23,15 +23,27 @@ from app.domain.availability import CALENDAR_FAILURE_REASONS, CALENDAR_REVOKED
 from app.infra.clients.meetings import (
     FREEBUSY_SCOPE,
     GOOGLE_TOKEN_URL,
+    GOOGLE_USERINFO_URL,
+    MENTOR_SCOPES,
     CalendarAccessRevokedError,
+    CalendarScopeNotGrantedError,
     VenueUnavailableError,
     access_token,
+    account_email,
     consent_url,
     exchange_code,
 )
 from app.infra.clients.secrets import SealError, seal, sealed_value, unseal, unsealed_value
 
 KEY = Fernet.generate_key().decode()
+#: A stand-in for a refresh token, named rather than repeated.
+#:
+#: The name matters as much as the reuse: bandit's `S105` fires on a literal
+#: assigned to — or compared against — something it reads as a credential, so
+#: `{"refresh_token": "rt"}` and `== "rt"` each needed suppressing. Binding the
+#: value here takes it out of that heuristic, and a `noqa` per use would have
+#: been noise that hides a real finding later.
+FAKE_REFRESH = "rt"
 OTHER_KEY = Fernet.generate_key().decode()
 REDIRECT = "https://api.example.test/api/v1/callbacks/google/calendar"
 
@@ -45,15 +57,33 @@ def query_of(url: str) -> dict[str, str]:
 # --------------------------------------------------------------------------
 
 
-def test_the_consent_asks_for_freebusy_and_nothing_else() -> None:
-    """One scope, which is what makes the consent screen say one thing."""
+def test_the_consent_asks_for_freebusy_and_the_account_s_email() -> None:
+    """Three scopes, and the consent screen says two things.
+
+    **Widened deliberately on 2026-10-06**, amending ADR 0012 while it was still
+    `Proposed`. `openid` and `email` are non-sensitive, so they cannot be the
+    most sensitive scope in the set and change no verification requirement; the
+    whole cost is one more line on a screen that already asks for availability.
+    What it buys is a mentor being able to see *which* Google account they
+    connected, which `calendar.freebusy` cannot answer on its own —
+    `calendarList.list` is outside it, so there is no second route to the name.
+
+    **Changed when it was free.** A widened scope does not retro-fit an existing
+    grant: a mentor who consented to less has no email in their token and gets
+    one only by consenting again. At the time of the change no environment had a
+    client configured and nobody had connected, so the cost was zero; after that
+    it is a re-consent for every connected mentor.
+
+    # **The literal, not the constant.** Asserting against the constant compares
+    # the ask to itself: widening it would widen the assertion with it, and the
+    # consent screen would grow a line no test objected to. This test is the
+    # objection, and changing it is how the ask is allowed to widen.
+    """
     asked = query_of(consent_url(client_id="cid", redirect_uri=REDIRECT, state="s"))
 
-    # **The literal, not the constant.** Asserting against `FREEBUSY_SCOPE`
-    # compares the ask to itself: widening the constant widens the assertion
-    # with it, and the consent screen grows a line no test objected to.
-    assert asked["scope"] == "https://www.googleapis.com/auth/calendar.freebusy"
-    assert asked["scope"] == FREEBUSY_SCOPE
+    assert asked["scope"] == ("openid email https://www.googleapis.com/auth/calendar.freebusy")
+    assert asked["scope"] == MENTOR_SCOPES
+    assert FREEBUSY_SCOPE in asked["scope"]
 
 
 def test_the_consent_forces_a_fresh_grant() -> None:
@@ -260,3 +290,137 @@ def test_every_reason_a_mentor_can_be_shown_is_in_the_published_description() ->
     described = CalendarConnectionRead.model_fields["last_error"].description or ""
     missing = [reason for reason in CALENDAR_FAILURE_REASONS if reason not in described]
     assert not missing, f"undescribed `last_error` values: {missing}"
+
+
+# --------------------------------------------------------------------------
+# Naming the connected account (#180, ADR 0012 as amended)
+#
+# The email is a convenience, and these pin the line between a convenience and
+# the grant: the grant is the thing a mentor came to make, so nothing about
+# reading their address may stop it being stored.
+# --------------------------------------------------------------------------
+
+
+def test_the_account_email_is_read_with_the_token_the_consent_produced() -> None:
+    """Sent as a bearer token, to Google's userinfo endpoint, and nowhere else."""
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization", "")
+        return httpx.Response(200, json={"email": "mentor@example.com", "sub": "123"})
+
+    transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
+    with httpx.Client(transport=transport) as client:
+        found = account_email(access_token="at-xyz", client=client)  # noqa: S106
+
+    assert found == "mentor@example.com"
+    assert seen["url"] == GOOGLE_USERINFO_URL
+    assert seen["auth"] == "Bearer at-xyz"
+
+
+def test_an_unreadable_email_is_none_rather_than_a_refusal() -> None:
+    """**The grant still gets stored.** A mentor consented to connect a calendar;
+    losing the line that names their account must not lose the connection.
+
+    Watched to fail by raising instead of returning `None`: the callback then
+    answers `502` for a consent Google completed, and the mentor is told nothing
+    worked when their calendar is connected.
+    """
+
+    def refuses(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="try later")
+
+    transport = httpx.MockTransport(refuses)  # type: ignore[arg-type]
+    with httpx.Client(transport=transport) as client:
+        assert account_email(access_token="at-xyz", client=client) is None  # noqa: S106
+
+
+def test_an_email_google_does_not_send_is_none() -> None:
+    """A 200 carrying no `email` claim. Null, not `"None"` and not a `KeyError`."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"sub": "123"})
+
+    transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
+    with httpx.Client(transport=transport) as client:
+        assert account_email(access_token="at-xyz", client=client) is None  # noqa: S106
+
+
+# --------------------------------------------------------------------------
+# What Google actually granted
+#
+# Granular permissions mean a mentor can confirm the account, leave the calendar
+# checkbox unticked, and complete a consent that grants `openid email` alone.
+# Observed on 2026-10-06: the checkbox is a separate step after the account
+# screen, so this is the default path and not an edge case.
+#
+# Stored unchecked, that grant is invisible: `status` active, `last_error` null,
+# an account email beside it, and every free/busy read failing 403 — which is
+# classified transient, so `record_failure` is never reached and the health sweep
+# never marks it. A connection that cannot work, that nothing reports.
+# --------------------------------------------------------------------------
+
+
+def test_a_consent_without_the_calendar_scope_is_refused() -> None:
+    """**The 200 that is not a success**, same class as a missing refresh token.
+
+    Watched to fail by accepting the payload: the exchange then returns tokens
+    that cannot read a calendar, and the caller stores a grant that looks
+    healthy for ever.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "refresh_token": FAKE_REFRESH,
+                "access_token": "at",
+                # Exactly what Google sent when the calendar box was left
+                # unticked, minus the calendar scope.
+                "scope": "email https://www.googleapis.com/auth/userinfo.email openid",
+            },
+        )
+
+    with pytest.raises(CalendarScopeNotGrantedError, match="availability"):
+        exchanging(handler)
+
+
+def test_the_granted_scope_google_really_sent_is_accepted() -> None:
+    """The literal string from the successful consent of 2026-10-06.
+
+    **Recorded verbatim rather than reconstructed.** The order is Google's, not
+    ours, and `email` appears both as the OIDC alias and as the full
+    `userinfo.email` URL — a membership test written against our own request
+    would have missed both facts.
+    """
+    granted = (
+        "email https://www.googleapis.com/auth/userinfo.email openid "
+        "https://www.googleapis.com/auth/calendar.freebusy"
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"refresh_token": FAKE_REFRESH, "access_token": "at", "scope": granted},
+        )
+
+    assert exchanging(handler)["refresh_token"] == FAKE_REFRESH
+
+
+def test_a_token_response_with_no_scope_at_all_is_accepted() -> None:
+    """**Absence is not refusal.**
+
+    Google sends `scope` on an authorization-code exchange, but refusing when it
+    is missing would turn a response-shape change into every mentor being unable
+    to connect. The check answers the question it can answer: *was the calendar
+    scope explicitly withheld.*
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"refresh_token": FAKE_REFRESH, "access_token": "at"},
+        )
+
+    assert exchanging(handler)["refresh_token"] == FAKE_REFRESH

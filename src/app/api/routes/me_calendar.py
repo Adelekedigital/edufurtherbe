@@ -157,7 +157,20 @@ callback_router = APIRouter(prefix="/api/v1/callbacks", tags=["callbacks"])
             "description": "The `state` is absent, expired, tampered with, or not ours."
         },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": "Google did not send a completed consent."
+            "description": (
+                "Google did not send a completed consent, **or the mentor "
+                "completed one without granting the calendar permission**.\n\n"
+                "The second is the ordinary path, not an edge case: Google's "
+                "granular permissions put *View your availability in your "
+                "calendars* behind its own checkbox, one step after the account "
+                "screen. Clicking through grants `openid email` alone.\n\n"
+                "Refused rather than stored, because such a grant is "
+                "undetectable afterwards — it reads `active`, carries an account "
+                "email and a null `last_error`, and every free/busy read fails "
+                "`403`, which is a transient upstream error and so never marks "
+                "the row. The mentor would see a calendar that is connected and "
+                "subtracts nothing."
+            )
         },
         status.HTTP_502_BAD_GATEWAY: {
             "description": (

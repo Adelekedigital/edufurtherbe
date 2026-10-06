@@ -371,6 +371,17 @@ class CalendarConnection(TimestampMixin, Base):
     #: widens it is what gets filled.
     external_account_id: Mapped[str | None] = mapped_column(Text)
 
+    #: The email of the account this grant belongs to, from `openid email`
+    #: (ADR 0012 as amended, 2026-10-06). **Not `external_account_id`**, which
+    #: is for the stable `sub` claim: an email can change and a `sub` cannot, so
+    #: one is a label and the other an identifier.
+    #:
+    #: **Null means *not known*, not *none*.** Either the grant predates the
+    #: widened scope — and nothing can backfill it, since the address lives in a
+    #: token that mentor no longer has — or Google's userinfo call failed at
+    #: consent time, which is deliberately not allowed to refuse the connection.
+    external_account_email: Mapped[str | None] = mapped_column(Text)
+
     refresh_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
 
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'active'"))
