@@ -4,13 +4,14 @@ The fail-fast case matters most: a typo'd variable must stop the process rather
 than silently leave a default in place.
 """
 
+import re
 from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
 from pydantic import ValidationError as PydanticValidationError
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, env_key, get_settings
 
 
 def test_settings_default_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,3 +304,40 @@ def test_an_app_origin_without_a_web_scheme_is_refused(value: str) -> None:
 @pytest.mark.parametrize("value", ["https://app.edufurther.org", "http://localhost:3000"])
 def test_an_app_origin_with_a_web_scheme_is_kept(value: str) -> None:
     assert Settings(_env_file=None, app_base_url=value).app_base_url == value
+
+
+# --------------------------------------------------------------------------
+# `.env.example` is the only place an operator finds out a variable exists.
+#
+# Nothing reads it, so nothing fails when a new setting skips it — the cost
+# lands later, on whoever configures a deployment from it and gets a default
+# they never chose. Five settings had drifted out of it before this test was
+# written. Non-negotiable #8: two representations of the same set.
+# --------------------------------------------------------------------------
+
+#: Documented on purpose while not being a `Settings` field: read by
+#: `scripts/supabase_otp.py` and by nothing in the application, which the file
+#: says where it is defined.
+NOT_SETTINGS_FIELDS = frozenset({"SUPABASE_ANON_KEY"})
+
+
+def _documented() -> set[str]:
+    text = Path(".env.example").read_text(encoding="utf-8")
+    return set(re.findall(r"^([A-Z][A-Z0-9_]*)=", text, re.M))
+
+
+def test_every_setting_is_documented_in_env_example() -> None:
+    """Add a field without documenting it and this fails, naming it."""
+    missing = sorted({env_key(name) for name in Settings.model_fields} - _documented())
+    assert not missing, f"undocumented in .env.example: {missing}"
+
+
+def test_env_example_documents_nothing_that_is_not_a_setting() -> None:
+    """The other direction: a variable removed from `Settings` and left behind.
+
+    An operator cannot tell a live setting from a dead one, so a stale line is
+    worse than a missing one — it will be set, and nothing will read it.
+    """
+    keys = {env_key(name) for name in Settings.model_fields}
+    stale = sorted(_documented() - keys - NOT_SETTINGS_FIELDS)
+    assert not stale, f"in .env.example but not a Settings field: {stale}"
