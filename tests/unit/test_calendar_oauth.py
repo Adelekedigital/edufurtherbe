@@ -312,7 +312,7 @@ def test_the_account_email_is_read_with_the_token_the_consent_produced() -> None
 
     transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
     with httpx.Client(transport=transport) as client:
-        found = account_email(access_token="at-xyz", client=client)  # noqa: S106
+        found = account_email(token="at-xyz", client=client)  # noqa: S106
 
     assert found == "mentor@example.com"
     assert seen["url"] == GOOGLE_USERINFO_URL
@@ -333,7 +333,7 @@ def test_an_unreadable_email_is_none_rather_than_a_refusal() -> None:
 
     transport = httpx.MockTransport(refuses)  # type: ignore[arg-type]
     with httpx.Client(transport=transport) as client:
-        assert account_email(access_token="at-xyz", client=client) is None  # noqa: S106
+        assert account_email(token="at-xyz", client=client) is None  # noqa: S106
 
 
 def test_an_email_google_does_not_send_is_none() -> None:
@@ -344,7 +344,7 @@ def test_an_email_google_does_not_send_is_none() -> None:
 
     transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
     with httpx.Client(transport=transport) as client:
-        assert account_email(access_token="at-xyz", client=client) is None  # noqa: S106
+        assert account_email(token="at-xyz", client=client) is None  # noqa: S106
 
 
 # --------------------------------------------------------------------------

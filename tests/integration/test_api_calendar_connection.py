@@ -75,8 +75,8 @@ class FakeNaming:
         self.email = email
         self.calls: list[str] = []
 
-    def __call__(self, *, access_token: str) -> str | None:
-        self.calls.append(access_token)
+    def __call__(self, *, token: str) -> str | None:
+        self.calls.append(token)
         return self.email
 
 
@@ -591,22 +591,22 @@ async def test_one_mentor_cannot_see_another_mentors_account_email(
     fetch, which is what makes this true for every column it selects — the new
     one included.
     """
-    theirs, _ = await a_mentor(db_engine, "owns-the-account")
-    mine, my_token = await a_mentor(db_engine, "other-mentor")
+    _, their_token = await a_mentor(db_engine, "owns-the-account")
+    _, my_token = await a_mentor(db_engine, "other-mentor")
     wire(
         api_client,
         settings=configured(),
         exchange=FakeExchange({"refresh_token": REFRESH_TOKEN, "access_token": "at-4"}),
         naming=FakeNaming("private@gmail.test"),
     )
-    _, their_token = await a_mentor(db_engine, "owns-the-account-again")
     assert (await connect_through_google(api_client, their_token)).status_code == 200
 
     mine_shown = await api_client.get(URL, headers=bearer(my_token))
     assert mine_shown.status_code == 200
+    # Null, not their row: the `WHERE user_id` means a non-owner matches no row
+    # rather than matching one and having a column hidden.
     assert mine_shown.json() is None
     assert "private@gmail.test" not in mine_shown.text
-    del theirs, mine
 
 
 async def test_a_consent_without_the_calendar_permission_stores_nothing(
@@ -675,3 +675,47 @@ async def test_the_scope_google_sent_on_a_real_consent_is_accepted(
     assert [(r["status"], r["external_account_email"]) for r in rows] == [
         ("active", "real@gmail.test")
     ]
+
+
+async def test_disconnecting_also_destroys_the_account_s_address(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The revoked row keeps no email.**
+
+    A mentor who authorised the wrong Google account and then disconnected is
+    trying to undo exactly the fact this column records. Keeping it would store
+    an address the platform may hold nowhere else, on a row whose purpose is
+    that the connection is gone.
+
+    Watched to fail by leaving `external_account_email` out of `disconnect`'s
+    `values()` — the row then reads `revoked` with the address still on it.
+    """
+    mentor, token = await a_mentor(db_engine, "disconnects-wrong-account")
+    wire(
+        api_client,
+        settings=configured(),
+        exchange=FakeExchange({"refresh_token": REFRESH_TOKEN, "access_token": "at-7"}),
+        naming=FakeNaming("wrong-account@gmail.test"),
+    )
+    assert (await connect_through_google(api_client, token)).status_code == 200
+
+    gone = await api_client.delete(URL, headers=bearer(token))
+
+    assert gone.status_code == 204
+    async with db_engine.begin() as conn:
+        left = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT status, external_account_email, refresh_token_encrypted "
+                        "FROM calendar_connections WHERE user_id = :u"
+                    ),
+                    {"u": mentor},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert [(r["status"], r["external_account_email"]) for r in left] == [("revoked", None)]
+    # The credential went with it, as before.
+    assert left[0]["refresh_token_encrypted"] == ""

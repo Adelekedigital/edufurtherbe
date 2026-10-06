@@ -164,7 +164,18 @@ async def disconnect(session: AsyncSession, user_id: UUID) -> bool:
             CalendarConnection.provider == PROVIDER,
             CalendarConnection.status == "active",
         )
-        .values(status="revoked", refresh_token_encrypted="", last_error=None)
+        # **The address goes too.** A row marked revoked exists to answer *that
+        # this mentor once connected*, and an email is not that — it is whose
+        # account it was, which is precisely what a mentor disconnecting a
+        # wrongly-authorised account is trying to undo. Keeping it would store
+        # an address the platform may hold nowhere else, on a row whose purpose
+        # is that the connection is gone.
+        .values(
+            status="revoked",
+            refresh_token_encrypted="",
+            last_error=None,
+            external_account_email=None,
+        )
         .returning(CalendarConnection.id)
     )
     return result.scalar_one_or_none() is not None

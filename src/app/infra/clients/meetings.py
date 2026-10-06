@@ -577,11 +577,16 @@ def require_calendar_scope(tokens: dict[str, Any]) -> None:
     """
     granted = str(tokens.get("scope") or "")
     if granted and FREEBUSY_SCOPE not in granted.split():
+        # **No `field_errors`.** This is a refusal about the request as a whole,
+        # which is what `ValidationError` without them means. The callback is a
+        # `GET` carrying only `code` and `state`, so there is no `/scope` field
+        # to point at — the module's convention for a non-body parameter is
+        # `/query/<name>`, and a pointer to a field the request does not have
+        # resolves to nothing in any client that follows it.
         raise CalendarScopeNotGrantedError(
             "your Google account was connected but permission to see your "
             "availability was not granted, so no calendar was connected — "
-            "start again and allow the availability permission",
-            field_errors=(("/scope", "calendar availability was not granted"),),
+            "start again and allow the availability permission"
         )
 
 
@@ -706,7 +711,7 @@ def consent_url(*, client_id: str, redirect_uri: str, state: str) -> str:
     return f"{GOOGLE_AUTH_URL}?{query}"
 
 
-def account_email(*, access_token: str, client: httpx.Client | None = None) -> str | None:
+def account_email(*, token: str, client: httpx.Client | None = None) -> str | None:
     """The email of the Google account a mentor just connected, or ``None``.
 
     **Never raises, and that is the design.** By the time this is called the
@@ -723,16 +728,20 @@ def account_email(*, access_token: str, client: httpx.Client | None = None) -> s
 
     **Not the `id_token`.** See `GOOGLE_USERINFO_URL` for why this is an
     ordinary authenticated call rather than a JWT to verify.
+
+    The parameter is `token` rather than `access_token` deliberately: this module
+    already has an `access_token()` function, and a parameter of that name
+    shadows it inside this body. Nothing calls it here today, which is exactly
+    what makes the trap worth closing now — `bubble_id` shadowed a local the same
+    way in the M4 transform and raised `UnboundLocalError` far from the edit.
     """
-    if not access_token:
+    if not token:
         # Nothing to ask with. Returned rather than attempted, so a caller that
         # lost the token does not spend a round trip discovering it.
         return None
     http = client or httpx.Client(timeout=TIMEOUT)
     try:
-        response = http.get(
-            GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"}
-        )
+        response = http.get(GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {token}"})
         response.raise_for_status()
         payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:

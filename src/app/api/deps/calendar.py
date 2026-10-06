@@ -103,7 +103,7 @@ def _named_account(request: Request, tokens: dict[str, Any]) -> str | None:
     access = str(tokens.get("access_token") or "")
     if not access:
         return None
-    found: str | None = _name_of(request)(access_token=access)
+    found: str | None = _name_of(request)(token=access)
     return found
 
 
@@ -197,11 +197,16 @@ async def calendar_connected(
         # that reason, so a userinfo failure costs the label and not the
         # connection.
         account_email=_named_account(request, tokens),
-        # **Nothing here names the Google account.** It would come from an
-        # `id_token`, and Google issues one only when `openid` is among the
-        # scopes — ADR 0012 asks for `calendar.freebusy` alone, so
-        # `external_account_id` stays null rather than the consent screen
-        # growing a second line to fill it.
+        # **`external_account_id` stays null**, and that is now the only part
+        # of this still true: ADR 0012 was amended on 2026-10-06 and the consent
+        # does ask for `openid email`, so the account *is* named — by
+        # `external_account_email`, two lines above. What is still not filled is
+        # the stable `sub` claim, because nothing reads an identifier yet and a
+        # column filled for no reader invites the next person to assume it is
+        # load-bearing.
+        #
+        # This comment said the opposite for the length of one commit, which is
+        # how long it took a review to notice.
         refresh_token_encrypted=seal(refresh_token, key=key),
     )
     await session.commit()
