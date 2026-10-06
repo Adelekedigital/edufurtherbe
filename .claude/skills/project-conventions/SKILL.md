@@ -551,6 +551,37 @@ edit only that. Duplicated facts drift, and the copy you forget becomes wrong.
 
 State a gate's blind spots next to its coverage, every time.
 
+- **No gate sees a test that reads two clocks.** A test that writes a timestamp
+  with the *database's* `now()` and then derives its expected value from the
+  *process's* `datetime.now()` passes consistently until the two readings fall
+  either side of a boundary that matters, and then fails for minutes at a time
+  with no code change involved. `test_an_undated_re_pause_keeps_the_original_start`
+  did exactly that (#372): `stage_missed` compares **dates**, `Pacific/Auckland`
+  rolls at 11:00 UTC, and the failing run was stamped 11:22. It passed on a bare
+  re-run, which is the dangerous part — a test that goes green on a re-run
+  teaches everybody to re-run.
+
+  **Swept on 2026-10-06, and the result is recorded so it is not swept again.**
+  Thirteen test files use both clocks; only one compared *dates* across them, and
+  that one is fixed. `test_mentor_next_available.py` looked like a second case and
+  is not: its refresh takes `now` from the process clock too, and its only
+  database-clock write is a relative staleness marker. No test pairs a tight
+  threshold with a cross-clock comparison — the closest, `test_intake_upload_rate`,
+  ages uploads by 59 and 61 minutes against an hour window with **both** sides on
+  the database clock.
+
+  **Production is clean for a reason worth keeping.** Five store modules mix an
+  injected `now` with `func.now()`, and each keeps one clock per decision
+  deliberately: `holds.py` documents its predicate as taking either,
+  `intake_file_store` reads the count and the clock in one statement precisely so
+  "app and database clocks can't disagree about the window", and
+  `idempotency.sweep_expired_keys` compares against `now - SWEEP_GRACE` with an
+  hour of margin. Where the two clocks must meet, a margin absorbs the skew.
+
+  What to do when writing one: derive every date in a test from **one** reading,
+  and if the assertion depends on a local date, put the subject in a mid-day zone
+  (`midday_zone` in `test_pause_return_date.py`) so no boundary is within hours.
+
 - **Nothing server-side *prevents* a bad merge; one thing *detects* it.** CI runs
   on pull requests, `no-commit-to-branch` blocks local commits to `main`, and
   `main-guard.yml` fails when a commit reaches `main` without an associated pull
