@@ -59,6 +59,7 @@ async def connect(
     user_id: UUID,
     *,
     refresh_token_encrypted: str,
+    account_email: str | None = None,
 ) -> None:
     """Record a grant, replacing whatever this mentor had before. No commit.
 
@@ -78,6 +79,7 @@ async def connect(
             user_id=user_id,
             provider=PROVIDER,
             refresh_token_encrypted=refresh_token_encrypted,
+            external_account_email=account_email,
             status="active",
         )
         .on_conflict_do_update(
@@ -85,6 +87,11 @@ async def connect(
             index_where=CalendarConnection.status == "active",
             set_={
                 "refresh_token_encrypted": refresh_token_encrypted,
+                # **Overwritten, including with null.** Reconnecting is how a
+                # mentor switches Google account, so carrying the old address
+                # forward would label the new grant with the previous account —
+                # the exact confusion naming the account exists to end (#180).
+                "external_account_email": account_email,
                 # Cleared, because a reconnection is precisely the fix for
                 # whatever the last error was — leaving it would show a mentor a
                 # complaint about a connection that now works.
@@ -118,6 +125,7 @@ async def active_connection(session: AsyncSession, user_id: UUID) -> dict[str, A
                     CalendarConnection.connected_at,
                     CalendarConnection.last_synced_at,
                     CalendarConnection.last_error,
+                    CalendarConnection.external_account_email,
                 ).where(
                     CalendarConnection.user_id == user_id,
                     CalendarConnection.provider == PROVIDER,
@@ -156,7 +164,18 @@ async def disconnect(session: AsyncSession, user_id: UUID) -> bool:
             CalendarConnection.provider == PROVIDER,
             CalendarConnection.status == "active",
         )
-        .values(status="revoked", refresh_token_encrypted="", last_error=None)
+        # **The address goes too.** A row marked revoked exists to answer *that
+        # this mentor once connected*, and an email is not that — it is whose
+        # account it was, which is precisely what a mentor disconnecting a
+        # wrongly-authorised account is trying to undo. Keeping it would store
+        # an address the platform may hold nowhere else, on a row whose purpose
+        # is that the connection is gone.
+        .values(
+            status="revoked",
+            refresh_token_encrypted="",
+            last_error=None,
+            external_account_email=None,
+        )
         .returning(CalendarConnection.id)
     )
     return result.scalar_one_or_none() is not None

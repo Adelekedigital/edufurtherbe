@@ -68,12 +68,39 @@ class Refusing:
         raise VenueUnavailableError("Google returned no refresh token")
 
 
-def wire(client: httpx.AsyncClient, *, settings: Settings, exchange: Any = None) -> FakeExchange:
-    """Put the settings and the fake exchange on `app.state`, as main.py would."""
+class FakeNaming:
+    """Stands in for Google's userinfo call, and records the token it was given."""
+
+    def __init__(self, email: str | None = "mentor@example.com") -> None:
+        self.email = email
+        self.calls: list[str] = []
+
+    def __call__(self, *, token: str) -> str | None:
+        self.calls.append(token)
+        return self.email
+
+
+def wire(
+    client: httpx.AsyncClient,
+    *,
+    settings: Settings,
+    exchange: Any = None,
+    naming: Any = None,
+) -> FakeExchange:
+    """Put the settings and the fakes on `app.state`, as main.py would.
+
+    **`naming` is left unset by most tests on purpose.** The default
+    `FakeExchange` returns no `access_token`, and the dependency makes no
+    userinfo call without one — so a test that does not care about the account's
+    name reaches no network, and that is asserted rather than assumed by
+    `test_no_access_token_means_no_call_to_google`.
+    """
     app = client._transport.app  # type: ignore[attr-defined]
     app.state.settings = settings
     fake = exchange if exchange is not None else FakeExchange()
     app.state.calendar_exchange = fake
+    if naming is not None:
+        app.state.calendar_account_email = naming
     return fake
 
 
@@ -91,7 +118,8 @@ async def rows_for(engine: AsyncEngine, mentor: UUID) -> list[dict[str, Any]]:
     async with engine.begin() as conn:
         result = await conn.execute(
             text(
-                "SELECT status, refresh_token_encrypted, external_account_id, last_error "
+                "SELECT status, refresh_token_encrypted, external_account_id, "
+                "external_account_email, last_error "
                 "FROM calendar_connections WHERE user_id = :u ORDER BY created_at, id"
             ),
             {"u": mentor},
@@ -429,3 +457,265 @@ async def test_one_mentor_cannot_read_or_revoke_another_mentors_grant(
     assert revoked.status_code == 404
     (row,) = await rows_for(db_engine, owner)
     assert row["status"] == "active"
+
+
+# --------------------------------------------------------------------------
+# Naming the connected account (#180, ADR 0012 as amended 2026-10-06)
+#
+# A mentor who authorised the wrong Google account could not tell: the page said
+# "Connected" and nothing else. `calendar.freebusy` cannot answer which account
+# granted it — `calendarList.list` is outside the scope — so the consent was
+# widened to `openid email` at the one moment it was free, before any mentor had
+# connected anything on any environment.
+# --------------------------------------------------------------------------
+
+
+async def test_completing_the_consent_stores_and_returns_the_account_s_email(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The whole point: the mentor can see *which* account is connected."""
+    mentor, token = await a_mentor(db_engine, "names-the-account")
+    naming = FakeNaming("chosen@gmail.test")
+    wire(
+        api_client,
+        settings=configured(),
+        exchange=FakeExchange({"refresh_token": REFRESH_TOKEN, "access_token": "at-1"}),
+        naming=naming,
+    )
+
+    assert (await connect_through_google(api_client, token)).status_code == 200
+
+    # Read with the access token the consent produced, not the refresh token —
+    # sending the long-lived credential to a userinfo endpoint would be a
+    # needless widening of where it travels.
+    assert naming.calls == ["at-1"]
+    assert [row["external_account_email"] for row in await rows_for(db_engine, mentor)] == [
+        "chosen@gmail.test"
+    ]
+
+    shown = await api_client.get(URL, headers=bearer(token))
+    assert shown.json()["account_email"] == "chosen@gmail.test"
+
+
+async def test_an_unnamed_account_still_connects(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The grant outranks its label.**
+
+    A mentor completed a consent and Google issued a refresh token: the calendar
+    is connected. Refusing because the address could not be read would answer
+    `502` for something that worked, and tell them nothing was connected while
+    it was.
+
+    Watched to fail by raising from the lookup instead of returning `None`.
+    """
+    mentor, token = await a_mentor(db_engine, "unnamed-account")
+    wire(
+        api_client,
+        settings=configured(),
+        exchange=FakeExchange({"refresh_token": REFRESH_TOKEN, "access_token": "at-2"}),
+        naming=FakeNaming(None),
+    )
+
+    assert (await connect_through_google(api_client, token)).status_code == 200
+
+    rows = await rows_for(db_engine, mentor)
+    assert [row["status"] for row in rows] == ["active"]
+    assert rows[0]["refresh_token_encrypted"]
+    assert rows[0]["external_account_email"] is None
+
+    shown = await api_client.get(URL, headers=bearer(token))
+    assert shown.status_code == 200
+    assert shown.json()["status"] == "active"
+    # Null, so a client degrades to "Connected" rather than showing "None".
+    assert shown.json()["account_email"] is None
+
+
+async def test_reconnecting_with_another_account_replaces_the_name(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Switching accounts is the reason this field exists.**
+
+    Carrying the first address forward would label the new grant with the old
+    account — the exact confusion naming it was meant to end, made worse by
+    looking authoritative.
+    """
+    mentor, token = await a_mentor(db_engine, "switches-account")
+    first = FakeNaming("wrong@gmail.test")
+    wire(
+        api_client,
+        settings=configured(),
+        exchange=FakeExchange({"refresh_token": REFRESH_TOKEN, "access_token": "at-3"}),
+        naming=first,
+    )
+    assert (await connect_through_google(api_client, token)).status_code == 200
+
+    api_client._transport.app.state.calendar_account_email = (  # type: ignore[attr-defined]
+        FakeNaming("right@gmail.test")
+    )
+    assert (await connect_through_google(api_client, token)).status_code == 200
+
+    rows = await rows_for(db_engine, mentor)
+    assert [row["external_account_email"] for row in rows] == ["right@gmail.test"]
+    assert (await api_client.get(URL, headers=bearer(token))).json()[
+        "account_email"
+    ] == "right@gmail.test"
+
+
+async def test_no_access_token_means_no_call_to_google(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Asserted, not assumed**, because the alternative is a live network call.
+
+    Every other test here completes a consent through a `FakeExchange` that
+    returns no `access_token`. If the dependency called userinfo anyway it would
+    reach `openidconnect.googleapis.com` from the test suite — passing, because
+    the failure answers `None`, while quietly depending on the network.
+    """
+    mentor, token = await a_mentor(db_engine, "no-access-token")
+    naming = FakeNaming("never-asked@gmail.test")
+    wire(api_client, settings=configured(), naming=naming)
+
+    assert (await connect_through_google(api_client, token)).status_code == 200
+
+    assert naming.calls == []
+    assert [row["external_account_email"] for row in await rows_for(db_engine, mentor)] == [None]
+
+
+async def test_one_mentor_cannot_see_another_mentors_account_email(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The field is somebody's email address, so the scoping is the test.
+
+    `active_connection` filters by `user_id` in the query rather than after the
+    fetch, which is what makes this true for every column it selects — the new
+    one included.
+    """
+    _, their_token = await a_mentor(db_engine, "owns-the-account")
+    _, my_token = await a_mentor(db_engine, "other-mentor")
+    wire(
+        api_client,
+        settings=configured(),
+        exchange=FakeExchange({"refresh_token": REFRESH_TOKEN, "access_token": "at-4"}),
+        naming=FakeNaming("private@gmail.test"),
+    )
+    assert (await connect_through_google(api_client, their_token)).status_code == 200
+
+    mine_shown = await api_client.get(URL, headers=bearer(my_token))
+    assert mine_shown.status_code == 200
+    # Null, not their row: the `WHERE user_id` means a non-owner matches no row
+    # rather than matching one and having a column hidden.
+    assert mine_shown.json() is None
+    assert "private@gmail.test" not in mine_shown.text
+
+
+async def test_a_consent_without_the_calendar_permission_stores_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The grant Google's own consent screen makes easiest to produce.**
+
+    Ticking the account and not the calendar checkbox yields `openid email`
+    alone. Stored, it is a connection nothing can ever report as broken: the
+    free/busy read fails `403`, which is transient, so `record_failure` is never
+    reached and the sweep never marks it.
+
+    `422` and no row, so the mentor is told now rather than never.
+    """
+    mentor, token = await a_mentor(db_engine, "withheld-calendar")
+    wire(
+        api_client,
+        settings=configured(),
+        exchange=FakeExchange(
+            {
+                "refresh_token": REFRESH_TOKEN,
+                "access_token": "at-5",
+                "scope": "email https://www.googleapis.com/auth/userinfo.email openid",
+            }
+        ),
+        naming=FakeNaming("ticked-email-only@gmail.test"),
+    )
+
+    answered = await connect_through_google(api_client, token)
+
+    assert answered.status_code == 422, answered.text
+    assert answered.headers["content-type"].startswith(PROBLEM_JSON)
+    assert await rows_for(db_engine, mentor) == []
+    # Nothing to read, rather than a connection that cannot work.
+    assert (await api_client.get(URL, headers=bearer(token))).json() is None
+
+
+async def test_the_scope_google_sent_on_a_real_consent_is_accepted(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Guards the guard, with the string from the live consent of 2026-10-06.
+
+    A membership test written against *our* request would pass while refusing
+    what Google really sends: it expands `email` into `userinfo.email`, keeps
+    both, and orders them its own way.
+    """
+    mentor, token = await a_mentor(db_engine, "real-granted-scope")
+    wire(
+        api_client,
+        settings=configured(),
+        exchange=FakeExchange(
+            {
+                "refresh_token": REFRESH_TOKEN,
+                "access_token": "at-6",
+                "scope": (
+                    "email https://www.googleapis.com/auth/userinfo.email openid "
+                    "https://www.googleapis.com/auth/calendar.freebusy"
+                ),
+            }
+        ),
+        naming=FakeNaming("real@gmail.test"),
+    )
+
+    assert (await connect_through_google(api_client, token)).status_code == 200
+    rows = await rows_for(db_engine, mentor)
+    assert [(r["status"], r["external_account_email"]) for r in rows] == [
+        ("active", "real@gmail.test")
+    ]
+
+
+async def test_disconnecting_also_destroys_the_account_s_address(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The revoked row keeps no email.**
+
+    A mentor who authorised the wrong Google account and then disconnected is
+    trying to undo exactly the fact this column records. Keeping it would store
+    an address the platform may hold nowhere else, on a row whose purpose is
+    that the connection is gone.
+
+    Watched to fail by leaving `external_account_email` out of `disconnect`'s
+    `values()` — the row then reads `revoked` with the address still on it.
+    """
+    mentor, token = await a_mentor(db_engine, "disconnects-wrong-account")
+    wire(
+        api_client,
+        settings=configured(),
+        exchange=FakeExchange({"refresh_token": REFRESH_TOKEN, "access_token": "at-7"}),
+        naming=FakeNaming("wrong-account@gmail.test"),
+    )
+    assert (await connect_through_google(api_client, token)).status_code == 200
+
+    gone = await api_client.delete(URL, headers=bearer(token))
+
+    assert gone.status_code == 204
+    async with db_engine.begin() as conn:
+        left = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT status, external_account_email, refresh_token_encrypted "
+                        "FROM calendar_connections WHERE user_id = :u"
+                    ),
+                    {"u": mentor},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert [(r["status"], r["external_account_email"]) for r in left] == [("revoked", None)]
+    # The credential went with it, as before.
+    assert left[0]["refresh_token_encrypted"] == ""

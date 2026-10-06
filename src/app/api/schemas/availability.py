@@ -220,11 +220,13 @@ class CalendarConnectionRead(BaseModel):
     encrypted and read only at the moment it is used; a read model that could
     return it would make every future endpoint one mistake away from doing so.
 
-    **No field naming the connected account either**, which needs saying
-    because the column exists. Google names the account only in an `id_token`,
-    and it issues one only when `openid` is among the scopes — ADR 0012 asks
-    for `calendar.freebusy` alone. A field that is null on every row reads as a
-    bug in the fill rather than as a decision about the ask.
+    **`account_email` names the connected account**, which it could not until
+    ADR 0012 was amended on 2026-10-06 to ask for `openid email` beside
+    `calendar.freebusy`. Before that this docstring explained why the field was
+    absent; the reasoning was sound and the conclusion was overtaken, because
+    the two added scopes are non-sensitive and so change no verification
+    requirement, while a mentor who authorised the wrong Google account had
+    nothing on the page telling them so (#180).
 
     **A broken connection is shown rather than hidden.** It used to read as
     *never connected*, which left a mentor with nothing to act on and is the gap
@@ -266,6 +268,21 @@ class CalendarConnectionRead(BaseModel):
         default=None,
         description=_LAST_ERROR_DESCRIPTION,
     )
+    account_email: str | None = Field(
+        default=None,
+        description=(
+            "The Google account this grant belongs to, for showing *which* "
+            "account is connected.\n\n"
+            "**Null means not known, never none.** A grant made before the "
+            "consent asked for it carries no address and cannot be backfilled "
+            "— the value lives in a token that mentor no longer holds, so it "
+            "returns only if they reconnect. It is also null when the lookup "
+            "failed at consent time, which deliberately does not refuse the "
+            "connection.\n\n"
+            "So degrade to `Connected` on null rather than treating it as an "
+            "error or as an account without an address."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> CalendarConnectionRead:
@@ -274,4 +291,7 @@ class CalendarConnectionRead(BaseModel):
             status=str(row["status"]),
             last_synced_at=row.get("last_synced_at"),  # type: ignore[arg-type]
             last_error=str(row["last_error"]) if row.get("last_error") else None,
+            account_email=(
+                str(row["external_account_email"]) if row.get("external_account_email") else None
+            ),
         )

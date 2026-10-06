@@ -4,7 +4,12 @@ Date: 2026-08-05
 
 ## Status
 
-Proposed
+Proposed — **amended 2026-10-06**, while still `Proposed`, to widen the mentor's
+consent to `openid email` beside `calendar.freebusy`. An amendment rather than a
+supersession: this record's headline is that both integrations stay inside the
+**non-sensitive scope tier**, and the amendment keeps that true rather than
+breaking it. See *Amendment: naming the connected account* at the end of the
+Decision.
 
 ## Context
 
@@ -101,9 +106,14 @@ and calendar live in separate Cloud projects.**
    institutional calendar. If it does not, the two are not redundant at all, one
    is simply broader, and this choice is the one to revisit first.
 
-   The split means **a mentor's consent screen asks for one thing**: *"View your
-   availability in your calendars."* It is the narrowest calendar permission
-   Google offers, and it is now the whole ask.
+   The split means **a mentor's consent screen asks for one calendar thing**:
+   *"View your availability in your calendars."* It is the narrowest calendar
+   permission Google offers, and it is the whole of the calendar ask.
+
+   *Amended 2026-10-06:* the screen also shows *"See your primary Google Account
+   email address"*, from the `openid email` added below. The calendar sentence
+   above is unchanged — the amendment adds nothing sensitive and nothing that
+   touches a calendar.
 2. **Sign-in uses `openid`, `.../auth/userinfo.email` and
    `.../auth/userinfo.profile`**, and never a calendar scope.
 3. **Session events live in a secondary calendar the application creates in
@@ -194,6 +204,96 @@ Narrower still, now the write lives in EduFurther's account: the application doe
 not merely refrain from touching a mentor's other events, it **holds no write
 capability on their account at all.** The only thing a mentor grants is a read of
 when they are busy.
+
+### Amendment: naming the connected account (2026-10-06)
+
+**The mentor's consent now asks for `openid email` as well**, and the account's
+email address is stored on the connection and returned by
+`GET /api/v1/me/calendar` as `account_email`.
+
+**Why this record's premise did not survive.** The original reasoning was that
+being able to name the account was worth less than the narrowness of the ask.
+That weighed the right things and got one fact wrong: `openid` and `email` are
+**non-sensitive**, and Google sets an app's verification requirement by the
+**most sensitive** scope it requests. So the increment cannot raise the tier,
+whatever tier `calendar.freebusy` turns out to occupy — if that scope is
+sensitive the app already needs that verification and two non-sensitive
+additions change nothing; if it is not, the set stays non-sensitive. There is no
+third branch, because a non-sensitive scope cannot be the most sensitive one in
+a set. The cost is **one sentence on a consent screen**, not an operational
+burden, and this record's headline — both integrations inside the non-sensitive
+tier — is untouched.
+
+**`calendar.freebusy` is non-sensitive, and this is now measured rather than
+assumed.** Google publishes no tier for it — the Calendar scopes table states
+none, and the Cloud console assigns it at configuration time, so neither this
+record nor the frontend could establish it from the documentation. On 2026-10-06
+the owner configured the mentor-facing client and the console listed it under the
+**non-sensitive** scopes, beside `openid`, `userinfo.email`, `userinfo.profile`
+and `calendar.events.freebusy`:
+
+| Scope | Console's description |
+|---|---|
+| `.../auth/calendar.events.freebusy` | See the availability on Google calendars you have access to |
+| `.../auth/calendar.freebusy` | View your availability in your calendars |
+| `openid` | Associate you with your personal info on Google |
+| `.../auth/userinfo.email` | See your primary Google Account email address |
+| `.../auth/userinfo.profile` | See your personal info, including any personal info you've made publicly available |
+
+So this record's central claim holds as fact and not as intent: **the whole
+mentor grant sits in the non-sensitive tier, and the app needs no sensitive-scope
+verification at all.** The branch reasoning above was sound but is no longer
+needed — the favourable branch is the real one.
+
+Two things follow. `calendar.events.freebusy`, dropped above as *apparently*
+redundant, is also non-sensitive, so revisiting that choice costs no verification
+either — relevant to this record's remaining open question about institutional
+calendars, which this does **not** answer. And the amendment's cost is confirmed
+as exactly one consent-screen line, since `userinfo.email` is the scope whose
+description is that line.
+
+**What it buys.** `calendar.freebusy` cannot name the account it was granted by:
+`calendarList.list` is outside it, so there is no second route. Without a name a
+mentor who authorised the **wrong Google account** has nothing on the page
+telling them — they see "Connected" and a calendar that subtracts the wrong
+person's busy hours, or nobody's. The escape hatch for that problem is useless
+to somebody who cannot see they have it.
+
+**Why now and not later, which is the whole of the timing.** A scope change does
+not retro-fit an existing grant. A mentor who consented to less carries no email
+in their token and gets one only by consenting again — and re-consenting is the
+step most likely to make somebody abandon an integration. When this was decided,
+**no environment had a mentor-facing client configured and no mentor had
+connected anything** (#366 was still open), so the change cost nothing at all.
+The same change a week later costs every connected mentor a re-consent. The
+window was open exactly once.
+
+**What is stored, and what is not.** The email goes in a new nullable
+`calendar_connections.external_account_email`. It does **not** go in
+`external_account_id`, which this record's phase notes reserve for the stable
+`sub` claim: an email can change and a `sub` cannot, so one is a label and the
+other an identifier. `external_account_id` stays null, because nothing reads an
+identifier yet and a column filled for no reader invites the next person to
+assume it is load-bearing.
+
+**Null means *not known*, never *none*.** There is nothing to backfill from —
+the address lives in a token the mentor no longer holds — so a grant predating
+this amendment reads null for ever, and a client degrades to "Connected".
+
+**The email is read from Google's userinfo endpoint, not the `id_token`.** The
+grant now returns an ID token, and reading the claim out of it would mean either
+verifying its signature — a JWT library, Google's keys and their rotation, on
+the calendar path — or trusting it unverified. Google's documentation says to
+verify an ID token's signature and recommends a library in production; the
+exemption often assumed for a token fetched directly from the token endpoint is
+not something those docs state, so it is not relied on here. One authenticated
+call with a token Google issued seconds earlier needs none of it.
+
+**A failed lookup does not refuse the connection.** By the time the email is
+read, the mentor has completed a consent and Google has issued a refresh token:
+the connection is made. So the lookup answers null on any failure, and the grant
+is stored unnamed. The alternative is a `502` for a consent that succeeded,
+telling a mentor nothing worked while their calendar is in fact connected.
 
 ### Rejected alternatives
 
@@ -347,9 +447,13 @@ its own record and its own accounting of the review cost — not a door closed h
 
 ### Confirmation
 
-- **Mechanical, once built:** no sensitive scope appears in either Cloud project's
-  configuration. Not checkable from this repository — the scope list lives in the
-  Google console, so this is a review step against this record rather than a test.
+- **Done, 2026-10-06, and it was never checkable from here:** no sensitive scope
+  appears in the mentor-facing Cloud project. The owner configured the client and
+  reported its scope list; every entry sat under **non-sensitive**, including
+  `calendar.freebusy` itself, whose tier Google publishes nowhere. The table is in
+  the amendment above. This remains a review step against this record rather than
+  a test — the scope list lives in the console, and nothing in this repository can
+  see it, which is why it had stood unconfirmed since August.
 - **Measured, and it was the largest gap:** an event on an app-created secondary
   calendar *does* send attendee invitations, so ADR 0004's mechanism for reaching
   1,200 mentees without an OAuth flow holds. This record was written on
