@@ -263,6 +263,13 @@ class FeatureInterest(TimestampMixin, Base):
     #: person twice** — the send itself does not exist yet, and building the
     #: column with the table costs nothing while retro-fitting it onto rows
     #: that have already been notified is guesswork.
+    #:
+    #: **Whatever sends must filter soft-deleted accounts itself.** The foreign
+    #: key cascades a *hard* delete, but a `users.deleted_at` leaves every row
+    #: here intact — and not because of any race: somebody registers legitimately
+    #: today and closes their account next month, which no scoping on the write
+    #: can prevent. So a row existing is not a claim that its account can still
+    #: be contacted, and a sender that trusts it will mail a deleted person.
     notified_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     __table_args__ = (
