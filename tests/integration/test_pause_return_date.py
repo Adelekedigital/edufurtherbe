@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.test_mentor_status_log import ADMIN, add_mentor, make_user
 
 from app.core.config import Settings
+from app.domain.listing import RETURN_REMINDER_HOUR
 from app.domain.messages import build_variables
 from app.infra.db.mentor_listing import stage_due
 from app.infra.db.mentor_status_store import decide, pause, remind_returning_mentors
@@ -35,13 +36,19 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 ZONE = "Pacific/Auckland"
 
 
-async def a_mentor(engine: AsyncEngine, tag: str) -> tuple[UUID, dict[str, str]]:
+async def a_mentor(engine: AsyncEngine, tag: str, zone: str = ZONE) -> tuple[UUID, dict[str, str]]:
+    """A paused-capable approved mentor, in `zone`.
+
+    **`zone` exists for the tests that write a timestamp with the database's
+    clock and then assert against the process's** — see `midday_zone`. Everything
+    else keeps `ZONE`, where the awkward offset is the point.
+    """
     auth_id = uuid4()
     mentor = await make_user(engine, auth_id, f"{tag}@example.com")
     await add_mentor(engine, mentor, approved=True)
     async with engine.begin() as conn:
         await conn.execute(
-            text("UPDATE users SET timezone = :z WHERE id = :u"), {"z": ZONE, "u": mentor}
+            text("UPDATE users SET timezone = :z WHERE id = :u"), {"z": zone, "u": mentor}
         )
     return mentor, bearer(api_token(auth_id))
 
@@ -219,11 +226,86 @@ def local(day: dt.date, hour: int, minute: int = 0) -> dt.datetime:
     return dt.datetime.combine(day, dt.time(hour, minute), tzinfo=ZoneInfo(ZONE))
 
 
+def midday_zone() -> str:
+    """A fixed-offset zone where it is 12:00 now, for a test that reads two clocks.
+
+    **This is what makes a real-clock date test deterministic.** `ZONE` is
+    `Pacific/Auckland`, UTC+13 in October, so its date rolls over at 11:00 UTC.
+    A test that writes an event with the *database's* `now()` and then computes
+    an expected date from the *process's* clock has those two reads on either
+    side of that boundary whenever the suite happens to run across it — and the
+    two dates then differ by one day.
+
+    `stage_missed` compares dates, not instants: `due.date() < local_now.date()`.
+    So one day of disagreement turns a reminder that is due today into one whose
+    day has gone, the send is skipped, and the test sees `0` where it expects
+    `1` — for a few minutes a day, with no code change involved.
+
+    Twelve hundred local keeps every date read nine or more hours from either
+    midnight, so no boundary exists for the two clocks to straddle. The same
+    trick as `afternoon_zone`, which exists for the sibling case of needing the
+    local hour to be past `RETURN_REMINDER_HOUR`.
+
+    Found when it failed CI on an unrelated PR and passed on a bare re-run
+    (#372). A test that goes green on a re-run teaches everybody to re-run.
+    """
+    return _fixed_offset_zone(12)
+
+
+def _fixed_offset_zone(local_hour: int) -> str:
+    """An `Etc/GMT±n` zone in which it is now `local_hour`.
+
+    The sign is inverted in those names — `Etc/GMT-3` is UTC+3 — which is why
+    this is written once rather than at each call site.
+    """
+    offset = local_hour - dt.datetime.now(dt.UTC).hour
+    return "Etc/GMT" if offset == 0 else f"Etc/GMT{'-' if offset > 0 else '+'}{abs(offset)}"
+
+
 def afternoon_zone() -> str:
     """A fixed-offset zone where it is 14:00 now: a test on the real clock then
     finds today's stage due (after 08:00) and its day not yet gone."""
-    offset = 14 - dt.datetime.now(dt.UTC).hour
-    return "Etc/GMT" if offset == 0 else f"Etc/GMT{'-' if offset > 0 else '+'}{abs(offset)}"
+    return _fixed_offset_zone(14)
+
+
+async def test_the_midday_zone_is_far_from_any_date_boundary() -> None:
+    """**The property the real-clock date tests rest on** (#372).
+
+    Those tests compare a date they computed against one the database derived.
+    That is only safe while no date boundary can fall between the two reads, and
+    this is what keeps it true: at noon local, midnight is nine or more hours
+    away in both directions, so no plausible gap between two clock reads can
+    cross one.
+
+    `async` with nothing awaited, because this module marks every test
+    `asyncio` and a synchronous one under that mark warns — and this project
+    turns that warning into an error, which `failure-modes.md` records as having
+    hidden a flood once.
+
+    Asserted rather than assumed, because the fix is otherwise invisible — a
+    later edit to the hour, or to the inverted `Etc/GMT` sign, would silently
+    put the tests back on a boundary and they would fail for a few minutes a
+    day with no code change in sight. Watched to fail by changing the hour to 0.
+    """
+    now = dt.datetime.now(ZoneInfo(midday_zone()))
+
+    assert now.hour == 12
+    hours_to_midnight = min(now.hour, 24 - now.hour)
+    assert hours_to_midnight >= 9, f"only {hours_to_midnight}h from a date rollover"
+
+
+async def test_the_afternoon_zone_is_past_the_reminder_hour() -> None:
+    """`afternoon_zone`'s own documented property, pinned because it now shares
+    an implementation with `midday_zone` — a change to that helper could satisfy
+    one caller and break the other, and this is the half that would go quiet:
+    a stage not yet due simply does not send, which looks like a different bug.
+    """
+    now = dt.datetime.now(ZoneInfo(afternoon_zone()))
+
+    assert now.hour == 14
+    assert now.hour > RETURN_REMINDER_HOUR, "today's stage would not be due yet"
+    # And its day must not have gone, or the send is dropped as missed.
+    assert now.hour < 24
 
 
 async def due_now(engine: AsyncEngine, client: httpx.AsyncClient, tag: str) -> UUID:
@@ -883,21 +965,32 @@ async def test_an_undated_run_after_a_gap_sends_only_day_fifty_nine(
 
 
 async def status_event_at(
-    engine: AsyncEngine, mentor: UUID, days_ago: int, *, listed: bool
+    engine: AsyncEngine, mentor: UUID, *, on: dt.datetime, listed: bool
 ) -> None:
-    """A self-pause or resume written directly, dated in the past."""
+    """A self-pause or resume written directly, at an explicit moment.
+
+    **`on` rather than `days_ago`, and that is the fix for #372.** This used to
+    insert `now() - make_interval(days => :d)` — the *database's* clock — while
+    its callers computed the expected reminder date from the *process's*. The
+    two reads sat either side of the mentor zone's date rollover whenever the
+    suite ran across it, the dates differed by a day, and `stage_missed` dropped
+    a reminder that was due.
+
+    Now the caller passes the moment, derived from the one clock read it also
+    asserts against, so there are no two readings to disagree.
+    """
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO mentor_status_events "
                 "(mentor_user_id, status_type, created_by, reason, created_at) "
-                "VALUES (:u, :t, :u, :r, now() - make_interval(days => :d))"
+                "VALUES (:u, :t, :u, :r, :when)"
             ),
             {
                 "u": mentor,
                 "t": "listed" if listed else "unlisted",
                 "r": None if listed else "mentor_paused",
-                "d": days_ago,
+                "when": on,
             },
         )
 
@@ -907,13 +1000,21 @@ async def test_an_undated_re_pause_keeps_the_original_start(
 ) -> None:
     """Paused 10 days ago, paused again today: nudged on day 30 of the
     original pause (20 days from now), not 30 days from the re-pause."""
-    mentor, headers = await a_mentor(db_engine, "undated-repause")
-    await status_event_at(db_engine, mentor, 10, listed=False)
+    zone = midday_zone()
+    mentor, headers = await a_mentor(db_engine, "undated-repause", zone)
+    # One clock read, and everything below is derived from it.
+    today = dt.datetime.now(ZoneInfo(zone)).date()
+    await status_event_at(
+        db_engine,
+        mentor,
+        on=dt.datetime.combine(today - dt.timedelta(days=10), dt.time(12), ZoneInfo(zone)),
+        listed=False,
+    )
     await api_client.post(pause_url(mentor), headers=headers)
-    today = local_today()
 
     assert await stage_of(db_engine, mentor) == 30
-    assert await sweep(db_engine, local(today + dt.timedelta(days=20), 8)) == 1
+    due = dt.datetime.combine(today + dt.timedelta(days=20), dt.time(8), ZoneInfo(zone))
+    assert await sweep(db_engine, due) == 1
     assert await unlistings(db_engine, mentor) == 1
 
 
@@ -921,13 +1022,23 @@ async def test_a_resume_then_a_pause_starts_the_count_again(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """Paused 40 days ago, back 20 days ago, paused today: day 30 is from today."""
-    mentor, headers = await a_mentor(db_engine, "undated-restart")
-    await status_event_at(db_engine, mentor, 40, listed=False)
-    await status_event_at(db_engine, mentor, 20, listed=True)
+    zone = midday_zone()
+    mentor, headers = await a_mentor(db_engine, "undated-restart", zone)
+    today = dt.datetime.now(ZoneInfo(zone)).date()
+    for days_ago, listed in ((40, False), (20, True)):
+        await status_event_at(
+            db_engine,
+            mentor,
+            on=dt.datetime.combine(
+                today - dt.timedelta(days=days_ago), dt.time(12), ZoneInfo(zone)
+            ),
+            listed=listed,
+        )
     await api_client.post(pause_url(mentor), headers=headers)
 
     assert await stage_of(db_engine, mentor) == 30
-    assert await sweep(db_engine, local(local_today() + dt.timedelta(days=30), 8)) == 1
+    due = dt.datetime.combine(today + dt.timedelta(days=30), dt.time(8), ZoneInfo(zone))
+    assert await sweep(db_engine, due) == 1
 
 
 async def test_a_date_dropped_counts_from_the_original_pause(
@@ -935,9 +1046,16 @@ async def test_a_date_dropped_counts_from_the_original_pause(
 ) -> None:
     """Paused 35 days ago, given a date, then "Not sure yet" again: the nudges
     count from 35 days ago, so day 30 is behind and day 59 is next."""
-    mentor, headers = await a_mentor(db_engine, "dated-then-undated")
-    await status_event_at(db_engine, mentor, 35, listed=False)
-    back = local_today() + dt.timedelta(days=20)
+    zone = midday_zone()
+    mentor, headers = await a_mentor(db_engine, "dated-then-undated", zone)
+    today = dt.datetime.now(ZoneInfo(zone)).date()
+    await status_event_at(
+        db_engine,
+        mentor,
+        on=dt.datetime.combine(today - dt.timedelta(days=35), dt.time(12), ZoneInfo(zone)),
+        listed=False,
+    )
+    back = today + dt.timedelta(days=20)
     await api_client.post(pause_url(mentor), json={"return_on": back.isoformat()}, headers=headers)
     assert await stage_of(db_engine, mentor) == 7
 
