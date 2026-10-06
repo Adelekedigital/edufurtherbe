@@ -226,7 +226,7 @@ def local(day: dt.date, hour: int, minute: int = 0) -> dt.datetime:
     return dt.datetime.combine(day, dt.time(hour, minute), tzinfo=ZoneInfo(ZONE))
 
 
-def midday_zone() -> str:
+def midday_zone(at: dt.datetime | None = None) -> str:
     """A fixed-offset zone where it is 12:00 now, for a test that reads two clocks.
 
     **This is what makes a real-clock date test deterministic.** `ZONE` is
@@ -249,23 +249,30 @@ def midday_zone() -> str:
     Found when it failed CI on an unrelated PR and passed on a bare re-run
     (#372). A test that goes green on a re-run teaches everybody to re-run.
     """
-    return _fixed_offset_zone(12)
+    return _fixed_offset_zone(12, at=at or dt.datetime.now(dt.UTC))
 
 
-def _fixed_offset_zone(local_hour: int) -> str:
-    """An `Etc/GMT±n` zone in which it is now `local_hour`.
+def _fixed_offset_zone(local_hour: int, *, at: dt.datetime) -> str:
+    """An `Etc/GMT±n` zone in which it is `local_hour` at the instant `at`.
 
     The sign is inverted in those names — `Etc/GMT-3` is UTC+3 — which is why
     this is written once rather than at each call site.
+
+    **`at` is required, not defaulted.** This read the clock itself until a
+    review pointed out the obvious: a caller that then reads the clock again to
+    check the local hour has two readings, and a UTC hour boundary between them
+    makes the offset stale. That is the same two-clock defect this whole change
+    exists to remove, reintroduced inside the guard meant to prove it gone.
+    Taking the instant makes a second reading impossible rather than unlikely.
     """
-    offset = local_hour - dt.datetime.now(dt.UTC).hour
+    offset = local_hour - at.hour
     return "Etc/GMT" if offset == 0 else f"Etc/GMT{'-' if offset > 0 else '+'}{abs(offset)}"
 
 
-def afternoon_zone() -> str:
+def afternoon_zone(at: dt.datetime | None = None) -> str:
     """A fixed-offset zone where it is 14:00 now: a test on the real clock then
     finds today's stage due (after 08:00) and its day not yet gone."""
-    return _fixed_offset_zone(14)
+    return _fixed_offset_zone(14, at=at or dt.datetime.now(dt.UTC))
 
 
 async def test_the_midday_zone_is_far_from_any_date_boundary() -> None:
@@ -287,10 +294,15 @@ async def test_the_midday_zone_is_far_from_any_date_boundary() -> None:
     put the tests back on a boundary and they would fail for a few minutes a
     day with no code change in sight. Watched to fail by changing the hour to 0.
     """
-    now = dt.datetime.now(ZoneInfo(midday_zone()))
+    # **One reading, both derived from it.** Calling the helper and then reading
+    # the clock again is two readings, and a UTC hour boundary between them makes
+    # the offset stale — the defect this change removes, which a review caught
+    # here after I had written it into the guard itself.
+    moment = dt.datetime.now(dt.UTC)
+    local = moment.astimezone(ZoneInfo(midday_zone(moment)))
 
-    assert now.hour == 12
-    hours_to_midnight = min(now.hour, 24 - now.hour)
+    assert local.hour == 12
+    hours_to_midnight = min(local.hour, 24 - local.hour)
     assert hours_to_midnight >= 9, f"only {hours_to_midnight}h from a date rollover"
 
 
@@ -300,12 +312,13 @@ async def test_the_afternoon_zone_is_past_the_reminder_hour() -> None:
     one caller and break the other, and this is the half that would go quiet:
     a stage not yet due simply does not send, which looks like a different bug.
     """
-    now = dt.datetime.now(ZoneInfo(afternoon_zone()))
+    moment = dt.datetime.now(dt.UTC)
+    local = moment.astimezone(ZoneInfo(afternoon_zone(moment)))
 
-    assert now.hour == 14
-    assert now.hour > RETURN_REMINDER_HOUR, "today's stage would not be due yet"
+    assert local.hour == 14
+    assert local.hour > RETURN_REMINDER_HOUR, "today's stage would not be due yet"
     # And its day must not have gone, or the send is dropped as missed.
-    assert now.hour < 24
+    assert local.hour < 24
 
 
 async def due_now(engine: AsyncEngine, client: httpx.AsyncClient, tag: str) -> UUID:
