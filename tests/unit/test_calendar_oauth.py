@@ -17,11 +17,15 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 
+from app.api.schemas.availability import CalendarConnectionRead
 from app.core.errors import ConfigurationError
+from app.domain.availability import CALENDAR_FAILURE_REASONS, CALENDAR_REVOKED
 from app.infra.clients.meetings import (
     FREEBUSY_SCOPE,
     GOOGLE_TOKEN_URL,
+    CalendarAccessRevokedError,
     VenueUnavailableError,
+    access_token,
     consent_url,
     exchange_code,
 )
@@ -197,3 +201,62 @@ def test_no_key_is_an_operator_fault_rather_than_a_seal_failure() -> None:
 def test_a_malformed_key_is_an_operator_fault() -> None:
     with pytest.raises(ConfigurationError, match="valid Fernet key"):
         seal("anything", key="not-a-fernet-key")
+
+
+# --------------------------------------------------------------------------
+# The failure vocabulary
+#
+# `last_error` is the one field this service puts in front of a mentor as the
+# reason their calendar stopped working, and a client writes copy per value
+# (the frontend's Integrations page does). So the set has to stay the same in
+# places that cannot see each other: the two writers, and the published
+# description a client reads. Non-negotiable #8, the same way
+# `SESSION_DURATION_MINUTES` is pinned to its CHECK.
+#
+# The description is *generated* from `CALENDAR_FAILURE_REASONS`, so a reason
+# added there cannot go undescribed. What is left to pin is the two ways that
+# generation can be undone by hand, and both have already happened once:
+# a writer carrying its own literal, and the description retyped in place.
+# --------------------------------------------------------------------------
+
+
+def test_a_revoked_grant_is_recorded_in_the_vocabulary_s_words() -> None:
+    """The writer's message *is* the constant, not a copy that happens to match.
+
+    Watched to fail by changing `CALENDAR_REVOKED` alone: the raise site then
+    disagrees with the vocabulary the description is built from, which is
+    exactly the drift that let the docstring claim these were Google's words.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
+    with (
+        httpx.Client(transport=transport) as client,
+        pytest.raises(CalendarAccessRevokedError) as caught,
+    ):
+        access_token(
+            client_id="cid",
+            client_secret="secret",  # noqa: S106
+            refresh_token="stale",  # noqa: S106
+            client=client,
+        )
+    assert str(caught.value) == CALENDAR_REVOKED
+
+
+def test_every_reason_a_mentor_can_be_shown_is_in_the_published_description() -> None:
+    """Retype the description in place and this fails.
+
+    **Not a guarantee that the generation is correct** — it is generated from
+    the same tuple, so this would agree with it either way. What it catches is
+    the description being replaced by a hand-written one, which is how the field
+    came to advertise a pair as "Google's words": prose and literals copied to
+    where a reader would see them, and then left behind.
+
+    The failure a client meets otherwise is silent: an unrecognised value, and
+    copy written for the set that used to be the whole set.
+    """
+    described = CalendarConnectionRead.model_fields["last_error"].description or ""
+    missing = [reason for reason in CALENDAR_FAILURE_REASONS if reason not in described]
+    assert not missing, f"undescribed `last_error` values: {missing}"

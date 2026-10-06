@@ -20,7 +20,11 @@ from typing import Annotated, Self
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.schemas.common import Normalised
-from app.domain.availability import UnknownTimezoneError, normalise_timezone
+from app.domain.availability import (
+    CALENDAR_FAILURE_REASONS,
+    UnknownTimezoneError,
+    normalise_timezone,
+)
 from app.domain.enums import AvailabilityExceptionType
 
 #: 0 = Sunday, matching `availability_rules.day_of_week` and the legacy
@@ -194,6 +198,21 @@ class AvailabilityWindow(BaseModel):
     timezone: str
 
 
+#: Built from `CALENDAR_FAILURE_REASONS` rather than retyping it, so the
+#: published contract cannot describe a set the writers no longer produce. A test
+#: pins the two together for the case this cannot catch: a reason added and never
+#: described.
+_LAST_ERROR_DESCRIPTION = (
+    "Why it stopped working. Null while it works.\n\n"
+    "**One of a fixed set of our own sentences, never a provider message**: "
+    + ", ".join(f"`{reason}`" for reason in CALENDAR_FAILURE_REASONS)
+    + ". Bounded to 500 characters.\n\n"
+    "Safe to render as it stands, but copy written per value reads better than "
+    "the string relayed — and fall back to a generic line for a value you do "
+    "not recognise, so one added later degrades rather than shows nothing."
+)
+
+
 class CalendarConnectionRead(BaseModel):
     """A mentor's calendar grant, as they see it.
 
@@ -212,9 +231,19 @@ class CalendarConnectionRead(BaseModel):
     ADR 0004 calls out. `status` says which it is; a client should not have to
     infer it from `last_error` being set.
 
-    `last_error` is Google's words rather than ours. "Your calendar is
-    disconnected" with no reason is a support ticket; the provider's own message
-    is usually enough for a mentor to fix it themselves.
+    `last_error` is **our own sentence, not the provider's** — one of
+    `CALENDAR_FAILURE_REASONS`, which is where they are written down and the only
+    place they are. A Google body never reaches it: the one failure that carries
+    one is transient, and is logged rather than stored, because writing it would
+    turn a rate limit into a re-consent.
+
+    This claimed "Google's words rather than ours" until a client asked whether
+    the field was safe to render. It is — nothing interpolates an exception, a
+    URL, a client id or an address into it, and the write bounds it to 500
+    characters. But not for the reason given, so the argument is restated: a
+    reason is returned rather than withheld because "your calendar is
+    disconnected" with nothing to act on is a support ticket. A client is better
+    off writing copy per value than relaying the string.
     """
 
     connected_at: dt.datetime
@@ -235,7 +264,7 @@ class CalendarConnectionRead(BaseModel):
     )
     last_error: str | None = Field(
         default=None,
-        description="Why it stopped working, in Google's words. Null while it works.",
+        description=_LAST_ERROR_DESCRIPTION,
     )
 
     @classmethod

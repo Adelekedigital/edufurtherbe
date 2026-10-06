@@ -54,7 +54,7 @@ from urllib.parse import urlencode
 import httpx
 
 from app.core.errors import UpstreamError
-from app.domain.availability import UtcInterval
+from app.domain.availability import CALENDAR_REVOKED, UtcInterval
 from app.domain.enums import ConferencingProvider
 
 __all__ = [
@@ -556,7 +556,7 @@ def access_token(
         raise VenueUnavailableError(f"google token refresh failed: {exc}") from exc
 
     if response.status_code == httpx.codes.BAD_REQUEST and "invalid_grant" in response.text:
-        raise CalendarAccessRevokedError("the grant was revoked or has expired")
+        raise CalendarAccessRevokedError(CALENDAR_REVOKED)
 
     try:
         response.raise_for_status()
