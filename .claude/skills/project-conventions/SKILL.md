@@ -361,6 +361,41 @@ product backend and the migration are done.**
   second endpoint exists, not the tenth — the Next.js client will encode whatever
   shape ships first.
 
+## Migration ordering
+
+**A new table's migration belongs in its own PR, merged and applied before the
+code that reads it.** Not a preference — the deploy path leaves no other way to
+do it in the right order.
+
+`Migrate` is `workflow_dispatch` only, deliberately (ADRs 0017 and 0028): *"a
+schema change that lands without anybody choosing the moment is how a lock queue
+meets a traffic peak."* And the `staging` environment has a custom deployment
+branch policy allowing **only `main`** — a dispatch from a feature branch fails
+before any step runs, which is correct and not worth circumventing.
+
+So for a change that **adds** a table or column the code requires:
+
+1. Merge the migration alone. Nothing reads it yet, so merging it is inert.
+2. Dispatch `Migrate` with `target=staging` and confirm the revision moved.
+3. Merge the code. It now finds the schema it expects.
+
+Do it the other way and there is a window — between the code deploying and the
+migration being dispatched — where every request touching the new column or
+table answers `500`. That happened twice on 2026-10-06: first on #371, where
+`/me/calendar` failed for authenticated mentors until the migration ran, and
+then on #373, where it was unavoidable because the schema could not be applied
+until the code that needed it had merged.
+
+**The expand/contract rule still holds and this is how to satisfy it here.**
+"Expand-only" means the *old* code tolerates the new schema; it does not mean new
+code tolerates an old one. A nullable column added by a migration is
+parallel-safe in one direction only, and the direction that bites is the one
+where the reader ships first.
+
+Worth writing down because it looks like carelessness afterwards and is a
+property of the deploy path. A frontend session independently asked for it to be
+recorded for that reason.
+
 ## File size
 
 CLAUDE.md non-negotiable 11, adopted 2026-09-29 at the owner's request, when
