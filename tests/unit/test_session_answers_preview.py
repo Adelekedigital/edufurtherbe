@@ -30,6 +30,9 @@ def test_the_session_read_has_exactly_these_fields() -> None:
         "respond_by",
         "join_opens_at",
         "join_closes_at",
+        # #379: until when `/door` hands back a way in. Optional in the spec, so
+        # adding it cannot fail a client that validates against the old one.
+        "door_closes_at",
         "created_at",
         "suggestion",
         "answers_preview",

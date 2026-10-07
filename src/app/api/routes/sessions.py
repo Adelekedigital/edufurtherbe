@@ -35,6 +35,7 @@ from app.api.deps import (
     JoinedSessionDep,
     SessionAnswersDep,
     SessionDetailDep,
+    SessionDoorDep,
     SessionEventsDep,
     SessionsPageDep,
     WithdrawnSessionDep,
@@ -328,6 +329,29 @@ TRANSITION_RESPONSES: dict[int | str, dict[str, str]] = {
     },
 }
 
+#: `/door`'s own responses. **Not `TRANSITION_RESPONSES`**, which it borrowed
+#: until a review pointed out the published contract then told the frontend this
+#: bodyless endpoint could `422` on a bad `reason_code` and `404` for "an action
+#: not yours to take" — neither of which it can do. The frontend generates its
+#: error handling from this document, so a wrong entry here is a wrong branch
+#: there.
+DOOR_RESPONSES: dict[int | str, dict[str, str]] = {
+    status.HTTP_401_UNAUTHORIZED: TRANSITION_RESPONSES[status.HTTP_401_UNAUTHORIZED],
+    status.HTTP_404_NOT_FOUND: {
+        "description": (
+            "No such session, or you are not part of it — one answer, so a "
+            "stranger cannot learn that a session exists. Never a credential."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "Your session, but there is no room to enter: it was never agreed "
+            "to or was called off, or it is outside the span from five minutes "
+            "before its start to its end. The message names which."
+        )
+    },
+}
+
 
 @router.post(
     "/sessions/{session_id}/accept",
@@ -481,3 +505,45 @@ async def join_session(door: JoinedSessionDep) -> dict[str, object]:
     exists.
     """
     return {"joined": True, "meeting_url": door}
+
+
+@router.post(
+    "/sessions/{session_id}/door",
+    summary="Get back into a session that is running",
+    description=(
+        "Your way into the room, **without recording an arrival** — for after "
+        "a dropped call or a refreshed tab.\n\n"
+        "**Open from five minutes before the start until the session ends**, "
+        "not until fifteen minutes after it like `/join`. The difference is "
+        "deliberate: `/join` closes then because that is when the session's "
+        "outcome becomes decidable, and an arrival recorded later would change "
+        "a verdict already reached. Getting *in* has no such constraint, so a "
+        "party who drops at minute twenty of an hour can still get back.\n\n"
+        "**Call `/join` to arrive and this to re-enter.** Calling only this "
+        "records nothing: `joined_at` and `attendance_status` are untouched, so "
+        "a party who never pressed Join is still settled absent. That is "
+        "deliberate rather than an oversight — pressing Join is the signal of "
+        "arrival, and this is a door, not an arrival.\n\n"
+        "**`meeting_url` is minted for you and never stored**, exactly as on "
+        "`/join`: for a Daily session it carries a token for this caller, "
+        "expiring when the session ends, and the mentor's carries owner rights. "
+        "For any other venue it is the session's stored address.\n\n"
+        "**It can be `null` on a success**, meaning the venue could not be "
+        "reached or none is configured — a different thing from being refused, "
+        "and worth showing as such.\n\n"
+        "**A settled session still has a door.** Fifteen minutes in, the "
+        "session's status moves to `completed` or `no_show` — the outcome is "
+        "decided — but the session is still running, so `/door` keeps working "
+        "until it ends. Do not hide Rejoin because `status` stopped being "
+        "`confirmed`.\n\n"
+        "Outside that span, or on a session never agreed to or called off — "
+        "pending, declined, withdrawn, expired or cancelled — this is a `409`. "
+        "A session that is not yours is a `404`, indistinguishable from one "
+        "that does not exist."
+    ),
+    responses=DOOR_RESPONSES,
+)
+async def enter_session(door: SessionDoorDep) -> dict[str, object]:
+    """Same response shape as `/join` minus the claim that you joined, because
+    this endpoint makes no such claim and a client must not read one into it."""
+    return {"meeting_url": door}

@@ -39,7 +39,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
-from app.domain.attendance import join_window
+from app.domain.attendance import door_window
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionStatus
 from app.domain.sessions import TRANSITIONS
@@ -70,6 +70,7 @@ from app.infra.db.session_store import (
 )
 from app.infra.db.session_writer import (
     book_session,
+    door_row,
     provision_meeting,
     record_arrival,
     release_meeting,
@@ -476,6 +477,53 @@ WithdrawnSessionDep = Annotated[None, Depends(transitions("withdraw"))]
 CancelledSessionDep = Annotated[None, Depends(transitions("cancel"))]
 
 
+def _door_for(
+    request: Request, session_id: UUID, row: dict[str, Any], user: dict[str, Any]
+) -> str | None:
+    """Turn a venue row into the caller's way in, or ``None`` if there is none.
+
+    **Shared by the arrival and the door** (#379), which is why it is a function
+    rather than the tail of `joined_session` it used to be: both have to mint the
+    same credential with the same owner rule and the same expiry, and two copies
+    of a token request are where one drifts — the mentor losing owner rights on
+    one path, or an expiry tied to the join window on the other.
+
+    **The URL is minted here rather than stored**, and only for a private room.
+    A Daily room refuses anybody without a token, and storing the token instead
+    would put two live bearer credentials per session into the database and
+    every backup, outliving the session they open. For every other venue the
+    door is the stored URL: a Meet link is on the calendar event, and a custom
+    venue is the address the mentor typed.
+    """
+    stored = row["meeting_url"]
+    if row["meeting_provider"] != MeetingProvider.DAILY or not row["external_room_id"]:
+        return str(stored) if stored else None
+
+    # **The token's validity is the door's window, read from the one place it is
+    # defined.** It was rebuilt here from its parts, which a review caught as the
+    # same rule kept twice: change `door_window` and `/door` would accept a
+    # request while this minted a token Daily had already stopped honouring.
+    opens, closes = door_window(row["starts_at"], int(row["duration_minutes"]))
+    try:
+        token = _rooms(request).token_for(
+            room=str(row["external_room_id"]),
+            user_id=str(user["id"]),
+            user_name=str(user.get("first_name") or "Guest"),
+            # The mentor hosts: on Daily an owner may admit, mute and end.
+            is_owner=bool(row["is_mentor"]),
+            opens_at=opens,
+            closes_at=closes,
+        )
+    except (VenueUnavailableError, NotImplementedError) as exc:
+        # **Not a failure of the request.** What is missing is a way in, and
+        # saying so honestly beats a 500 on a request that otherwise did what it
+        # was asked.
+        logger.info("no door for session %s: %s", session_id, exc)
+        return None
+
+    return f"{stored}?t={token}"
+
+
 async def joined_session(
     session_id: UUID, user: CurrentUserDep, session: SessionDep, request: Request
 ) -> str | None:
@@ -486,51 +534,44 @@ async def joined_session(
     decided once for both parties when the join window shuts. Putting this in
     `TRANSITIONS` would have needed a `to` state it does not have.
 
-    **The URL is minted here rather than stored**, and only for a private room.
-    A Daily room refuses anybody without a token, so recording an arrival and
-    returning nothing would close none of the gap this endpoint exists for —
-    and storing the token instead would put two live bearer credentials per
-    session into the database and every backup, outliving the session they open.
-
-    For every other venue the door is the stored URL: a Meet link is on the
-    calendar event, and a custom venue is the address the mentor typed.
+    The door it hands back is `_door_for`'s, shared with `/door` — where the
+    reasons a Daily URL is minted rather than stored are written down once.
     """
     now = dt.datetime.now(dt.UTC)
     row = await record_arrival(session, session_id, user["id"], now=now)
+    # Committed before the door is minted: the arrival is the thing asked for,
+    # and a provider failure afterwards must not take it back.
     await session.commit()
+    return _door_for(request, session_id, row, user)
 
-    stored = row["meeting_url"]
-    if row["meeting_provider"] != MeetingProvider.DAILY or not row["external_room_id"]:
-        return str(stored) if stored else None
 
-    # Only the opening edge: the token outlives the join window for the same
-    # reason the room does — one expiring at `join_closes_at` would evict its
-    # holder fifteen minutes into an hour-long session.
-    opens, _ = join_window(row["starts_at"])
-    try:
-        token = _rooms(request).token_for(
-            room=str(row["external_room_id"]),
-            user_id=str(user["id"]),
-            user_name=str(user.get("first_name") or "Guest"),
-            # The mentor hosts: on Daily an owner may admit, mute and end.
-            is_owner=bool(row["is_mentor"]),
-            opens_at=opens,
-            # The room outlives the window by the session's length, and so must
-            # the token — one expiring at `join_closes_at` would evict its
-            # holder fifteen minutes into an hour.
-            closes_at=row["starts_at"] + dt.timedelta(minutes=int(row["duration_minutes"])),
-        )
-    except (VenueUnavailableError, NotImplementedError) as exc:
-        # **Not a failure of the join.** The arrival is recorded and committed;
-        # what is missing is a way in, and saying so honestly beats a 500 on a
-        # request that already did the thing it was asked to do.
-        logger.info("no door for session %s: %s", session_id, exc)
-        return None
+async def session_door(
+    session_id: UUID, user: CurrentUserDep, session: SessionDep, request: Request
+) -> str | None:
+    """The caller's way back into a running session, **recording nothing** (#379).
 
-    return f"{stored}?t={token}"
+    For the party who dropped at minute twenty, or refreshed the tab. `/join`
+    stops at `join_closes_at` because that is when the outcome becomes
+    decidable; this runs to the session's end because getting in has no such
+    constraint, and the token it mints already lasts that long.
+
+    Calling it never touches `joined_at` or `attendance_status`, so a party who
+    only ever used this would be settled absent — which is right: pressing Join
+    is the signal of arrival, and this is a door, not an arrival.
+    """
+    row = await door_row(session, session_id, user["id"], now=dt.datetime.now(dt.UTC))
+    # **Released before Daily is called**, as `joined_session` commits before
+    # it. The read left a transaction open on a pooled connection, and the
+    # token request is a blocking call with a fifteen-second timeout — so a slow
+    # provider would otherwise hold one connection idle-in-transaction per
+    # refreshing participant, and enough of them starve unrelated endpoints.
+    # Rolled back rather than committed because there is nothing to keep.
+    await session.rollback()
+    return _door_for(request, session_id, row, user)
 
 
 JoinedSessionDep = Annotated[str | None, Depends(joined_session)]
+SessionDoorDep = Annotated[str | None, Depends(session_door)]
 
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]

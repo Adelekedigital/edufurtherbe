@@ -8,6 +8,7 @@ limit. Every name a caller used is re-exported here, so imports did not change.
 from __future__ import annotations
 
 from app.infra.db.session_writer.attendance import (
+    door_row,
     record_arrival,
     settle_attendance,
 )
@@ -37,6 +38,7 @@ from app.infra.db.session_writer.transitions import (
 __all__ = [
     "DOUBLE_BOOKED",
     "book_session",
+    "door_row",
     "expire_requests",
     "provision_meeting",
     "record_arrival",

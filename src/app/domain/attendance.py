@@ -45,13 +45,16 @@ from enum import StrEnum
 from app.domain.enums import SessionRole, SessionStatus
 
 __all__ = [
+    "DOOR_STATUSES",
     "JOIN_CLOSES",
     "JOIN_OPENS",
     "AttendanceEvidence",
     "absent_party",
+    "door_window",
     "join_window",
     "outcome",
     "window_has_closed",
+    "within_door_window",
     "within_join_window",
 ]
 
@@ -107,6 +110,46 @@ def join_window(starts_at: dt.datetime) -> tuple[dt.datetime, dt.datetime]:
     window's own history warns about.
     """
     return starts_at - JOIN_OPENS, starts_at + JOIN_CLOSES
+
+
+#: Which sessions may be entered at all: agreed to, and not called off.
+#:
+#: **Not only `confirmed`**, and that was a bug a review caught. Settlement moves
+#: a session to `completed` or `no_show` the moment its join window shuts —
+#: fifteen minutes in — while the session is still running and its room still
+#: open. A door that required `confirmed` therefore stopped working at whichever
+#: point in the hour the settlement job happened to run, which is the opposite of
+#: what it was built for. The outcome is settled; the room is not closed.
+#:
+#: Excludes everything that never happened by agreement: a pending request, a
+#: declined or withdrawn one, an expired one, and a cancellation.
+DOOR_STATUSES = frozenset({SessionStatus.CONFIRMED, SessionStatus.COMPLETED, SessionStatus.NO_SHOW})
+
+
+def door_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datetime, dt.datetime]:
+    """When a party may be handed a way into the room: from the join window
+    opening until the session's end (#379).
+
+    **Not the join window, and the difference is the point.** That window
+    closes fifteen minutes after the start because it is also when the outcome
+    becomes decidable — an arrival recorded later would change a verdict
+    already reached. Getting *in* has no such constraint, and the room and its
+    token already last the session's length for exactly this reason. With only
+    one window, a party who dropped at minute twenty — or merely refreshed the
+    tab — held a credential valid until the end and could not be handed another.
+
+    Opens with the join window rather than earlier: the room's own token is not
+    valid before it, so a door issued sooner would open onto nothing.
+    """
+    opens, _ = join_window(starts_at)
+    return opens, starts_at + dt.timedelta(minutes=duration_minutes)
+
+
+def within_door_window(starts_at: dt.datetime, duration_minutes: int, now: dt.datetime) -> bool:
+    """Whether a door may be issued at ``now``. Half-open, like the join window:
+    the session's last instant is already over."""
+    opens, closes = door_window(starts_at, duration_minutes)
+    return opens <= now < closes
 
 
 def within_join_window(starts_at: dt.datetime, now: dt.datetime) -> bool:

@@ -14,10 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
 from app.domain.attendance import (
+    DOOR_STATUSES,
     JOIN_CLOSES,
     AttendanceEvidence,
     absent_party,
+    door_window,
     join_window,
+    within_door_window,
     within_join_window,
 )
 from app.domain.enums import (
@@ -40,6 +43,81 @@ from app.infra.db.models.sessions import (
 from app.infra.db.outbox import enqueue
 from app.infra.db.review_eligibility import within_interval
 from app.infra.db.session_store import is_a_party
+
+
+async def _venue_row(session: AsyncSession, session_id: UUID, actor_id: UUID) -> dict[str, Any]:
+    """As much of the caller's own session as a way into it needs.
+
+    **One read for the arrival and the door**, which is the point of it being
+    here rather than inside either (non-negotiable #8): both need the same row,
+    scoped the same way, and a second copy of this `SELECT` is where the two
+    would drift — one of them gaining a column or losing the party scope.
+
+    Scoped by `is_a_party` in the query, so a stranger matches no row rather
+    than a row that is then refused; :class:`NotFoundError` either way, and
+    indistinguishable from a session that does not exist.
+    """
+    row = (
+        (
+            await session.execute(
+                select(
+                    Session.status,
+                    Session.starts_at,
+                    Session.duration_minutes,
+                    Session.meeting_url,
+                    Session.meeting_provider,
+                    Session.external_room_id,
+                    (Session.mentor_id == actor_id).label("is_mentor"),
+                ).where(
+                    Session.id == session_id,
+                    is_a_party(actor_id),
+                )
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        raise NotFoundError("no such session")
+    return dict(row)
+
+
+def _require_status(row: dict[str, Any], allowed: frozenset[SessionStatus], *, to: str) -> None:
+    """Refuse a session whose status is not in `allowed`, saying what was refused.
+
+    **One check, two different sets**, and the difference is the point. An
+    arrival needs `confirmed`: once the session is settled its outcome is
+    decided, and an arrival recorded afterwards would change it. A door needs
+    only that the session was agreed to and not called off — see
+    `DOOR_STATUSES` — because settlement closes the outcome, not the room.
+
+    `409` rather than a quiet no-op: a client that believes it succeeded will
+    not try again.
+    """
+    if SessionStatus(row["status"]) not in allowed:
+        raise ConflictError(f"a {row['status']} session cannot be {to}")
+
+
+async def door_row(
+    session: AsyncSession, session_id: UUID, actor_id: UUID, *, now: dt.datetime
+) -> dict[str, Any]:
+    """The caller's way into a running session, **recording nothing** (#379).
+
+    The arrival's twin with two differences, both deliberate. Its window runs
+    to the session's **end** rather than fifteen minutes past the start —
+    see :func:`door_window` — and it writes no attendance, so it cannot change
+    `joined_at`, `attendance_status`, or an outcome already settled.
+
+    Read-only, so it does not need the caller to commit; nothing is pending.
+    """
+    row = await _venue_row(session, session_id, actor_id)
+    _require_status(row, DOOR_STATUSES, to="entered")
+    if not within_door_window(row["starts_at"], row["duration_minutes"], now):
+        opens, closes = door_window(row["starts_at"], row["duration_minutes"])
+        raise ConflictError(
+            f"this session's room is open between {opens.isoformat()} and {closes.isoformat()}"
+        )
+    return row
 
 
 async def record_arrival(
@@ -67,33 +145,8 @@ async def record_arrival(
     :class:`ConflictError` when it is not confirmed or the window is shut. Does
     not commit.
     """
-    row = (
-        (
-            await session.execute(
-                select(
-                    Session.status,
-                    Session.starts_at,
-                    Session.duration_minutes,
-                    Session.meeting_url,
-                    Session.meeting_provider,
-                    Session.external_room_id,
-                    (Session.mentor_id == actor_id).label("is_mentor"),
-                ).where(
-                    Session.id == session_id,
-                    is_a_party(actor_id),
-                )
-            )
-        )
-        .mappings()
-        .one_or_none()
-    )
-    if row is None:
-        raise NotFoundError("no such session")
-    if SessionStatus(row["status"]) is not SessionStatus.CONFIRMED:
-        # A pending request has not been agreed to and a terminal one is over.
-        # Both are `409` rather than a quiet no-op: a client that believes it has
-        # registered an arrival will not try again.
-        raise ConflictError(f"a {row['status']} session cannot be joined")
+    row = await _venue_row(session, session_id, actor_id)
+    _require_status(row, frozenset({SessionStatus.CONFIRMED}), to="joined")
     if not within_join_window(row["starts_at"], now):
         opens, closes = join_window(row["starts_at"])
         raise ConflictError(
@@ -123,7 +176,7 @@ async def record_arrival(
         # nothing to appeal against.
         raise ConflictError("this session has no attendance record for you")
 
-    return dict(row)
+    return row
 
 
 def _window_shut(now: dt.datetime) -> Any:
