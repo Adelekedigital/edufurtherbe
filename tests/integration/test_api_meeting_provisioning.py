@@ -1097,3 +1097,108 @@ async def test_after_a_short_session_ends_there_is_no_door_even_while_arrival_is
     entered = await api_client.post(door_url(session), headers=setup["mentee_headers"])
 
     assert entered.status_code == 409, entered.text
+
+
+# --------------------------------------------------------------------------
+# When there is no way in (#380, CLAUDE.md rule 12)
+#
+# `_door_for` answers `null` rather than raising when Daily will not mint, and
+# that `except` had never run under any test — on `/door` *or* `/join`, which
+# share it. A fallback no test reaches has never been executed.
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class RefusingDoor(FakeDoor):
+    """A room provider that makes rooms and then will not mint a token for them."""
+
+    def token_for(self, **kwargs: Any) -> str:
+        self.tokens.append(kwargs)
+        raise VenueUnavailableError("daily refused the token")
+
+
+@pytest.fixture
+def refusing_door(api_client: httpx.AsyncClient) -> RefusingDoor:
+    rooms = RefusingDoor()
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.meeting_rooms = rooms
+    app.state.calendar = FakeCalendar()
+    return rooms
+
+
+async def test_a_door_daily_will_not_mint_is_null_not_a_500(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, refusing_door: RefusingDoor
+) -> None:
+    """**`200` with `null`, not a `500`.** What is missing is a way in, which the
+    lobby can say honestly; a `500` would look like the platform broke.
+
+    Watched to fail by letting the exception propagate from the shared minting.
+    """
+    setup = await a_mentor_on(db_engine, "door-refused", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=20)
+
+    entered = await api_client.post(door_url(session), headers=setup["mentee_headers"])
+
+    assert entered.status_code == 200, entered.text
+    assert entered.json() == {"meeting_url": None}
+    # It did ask: the null is Daily's refusal, not a request never made.
+    assert len(refusing_door.tokens) == 1
+
+
+@pytest.mark.usefixtures("refusing_door")
+async def test_a_join_daily_will_not_mint_still_records_the_arrival(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The arrival survives the provider failing**, which is why `/join`
+    commits before it mints. A party who pressed Join and was told "no link"
+    must not then be settled absent — the press is the signal, and it happened.
+
+    The same shared branch as the door's, reached through the other caller.
+    """
+    setup = await a_mentor_on(db_engine, "join-refused", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=1)
+
+    joined = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
+
+    assert joined.status_code == 200, joined.text
+    assert joined.json() == {"joined": True, "meeting_url": None}
+    mentee = next(r for r in await attendance_of(db_engine, session["id"]) if r["role"] == "mentee")
+    assert mentee["joined_at"] is not None
+    assert mentee["attendance_status"] == "attended"
+
+
+class NoRooms:
+    """A room provider that cannot make rooms, so provisioning leaves none."""
+
+    def create(self, **_kwargs: Any) -> MeetingRoom:
+        raise VenueUnavailableError("daily is down")
+
+    def token_for(self, **_kwargs: Any) -> str:  # pragma: no cover - no room to mint for
+        raise AssertionError("a door with no room must not ask for a token")
+
+
+async def test_a_session_whose_room_was_never_made_has_a_null_door(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The real "nowhere to meet" case.** Provisioning deliberately leaves the
+    room null rather than failing the booking when the provider is down, so the
+    session is real and running with no room behind it. The door says so with a
+    `200` and `null` — and asks Daily for nothing, since there is nothing to mint.
+
+    A first version of this test gave the mentor no venue and expected `null`.
+    It failed, correctly: a mentor who never chose gets the platform default,
+    which is Daily, so a room *was* made. The premise was wrong, not the code.
+    """
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.meeting_rooms = NoRooms()
+    app.state.calendar = FakeCalendar()
+    setup = await a_mentor_on(db_engine, "door-no-room", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=20)
+    assert (await venue_of(db_engine, session["id"]))["external_room_id"] is None
+
+    entered = await api_client.post(door_url(session), headers=setup["mentee_headers"])
+
+    assert entered.status_code == 200, entered.text
+    assert entered.json() == {"meeting_url": None}

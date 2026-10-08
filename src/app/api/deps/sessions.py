@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import Depends, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.calendar import _free_busy
@@ -477,7 +478,7 @@ WithdrawnSessionDep = Annotated[None, Depends(transitions("withdraw"))]
 CancelledSessionDep = Annotated[None, Depends(transitions("cancel"))]
 
 
-def _door_for(
+async def _door_for(
     request: Request, session_id: UUID, row: dict[str, Any], user: dict[str, Any]
 ) -> str | None:
     """Turn a venue row into the caller's way in, or ``None`` if there is none.
@@ -505,7 +506,17 @@ def _door_for(
     # request while this minted a token Daily had already stopped honouring.
     opens, closes = door_window(row["starts_at"], int(row["duration_minutes"]))
     try:
-        token = _rooms(request).token_for(
+        # **Off the event loop.** `token_for` is a blocking HTTP call with a
+        # fifteen-second timeout, and this route is async — so run inline, a
+        # slow Daily stalls every request on the worker, not just this one. That
+        # matters more here than it did on `/join` alone: a door is asked for on
+        # every reconnect, and a flaky connection reconnects often.
+        #
+        # A thread rather than an async client because the client is shared by
+        # every Daily call and #370 decides that standard once for all of them;
+        # this keeps the new hot path from blocking without deciding it here.
+        token = await run_in_threadpool(
+            _rooms(request).token_for,
             room=str(row["external_room_id"]),
             user_id=str(user["id"]),
             user_name=str(user.get("first_name") or "Guest"),
@@ -542,7 +553,7 @@ async def joined_session(
     # Committed before the door is minted: the arrival is the thing asked for,
     # and a provider failure afterwards must not take it back.
     await session.commit()
-    return _door_for(request, session_id, row, user)
+    return await _door_for(request, session_id, row, user)
 
 
 async def session_door(
@@ -567,7 +578,7 @@ async def session_door(
     # refreshing participant, and enough of them starve unrelated endpoints.
     # Rolled back rather than committed because there is nothing to keep.
     await session.rollback()
-    return _door_for(request, session_id, row, user)
+    return await _door_for(request, session_id, row, user)
 
 
 JoinedSessionDep = Annotated[str | None, Depends(joined_session)]
