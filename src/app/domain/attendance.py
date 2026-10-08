@@ -46,10 +46,12 @@ from enum import StrEnum
 
 from app.core.config import Settings
 from app.domain.enums import SessionRole, SessionStatus
+from app.domain.sessions import CANCELLATION_CUTOFF
 
 __all__ = [
     "DOOR_STATUSES",
     "JOIN_CLOSES",
+    "JOIN_LEAD_CEILING",
     "AttendanceEvidence",
     "absent_party",
     "door_window",
@@ -96,6 +98,14 @@ class AttendanceEvidence(StrEnum):
     #: from, and `docs/daily-spike-guide.md` Q3 is the measurement that decides
     #: whether it is reachable at all.
     OBSERVED = "observed"
+
+
+#: The furthest ahead the window may open, which is the cancellation cutoff
+#: (Codex on #391). Earlier, and one party could be marked present and enter
+#: while the other could still cancel and release the session. The setting's
+#: bound in `core/config.py` repeats this as a literal, because config may not
+#: import the domain, and a test pins the two together.
+JOIN_LEAD_CEILING = CANCELLATION_CUTOFF
 
 
 def join_opens(settings: Settings) -> dt.timedelta:

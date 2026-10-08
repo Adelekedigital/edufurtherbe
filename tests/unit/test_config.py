@@ -12,6 +12,8 @@ from pydantic import SecretStr
 from pydantic import ValidationError as PydanticValidationError
 
 from app.core.config import Settings, env_key, get_settings
+from app.domain.attendance import JOIN_LEAD_CEILING
+from app.domain.sessions import CANCELLATION_CUTOFF
 
 
 def test_settings_default_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -306,12 +308,26 @@ def test_the_join_window_opens_ten_minutes_early_unless_configured() -> None:
     assert Settings(_env_file=None).join_window_opens_minutes == 10
 
 
-@pytest.mark.parametrize("value", [-1, 61])
-def test_a_join_lead_outside_an_hour_is_refused(value: int) -> None:
-    """Bounded so a typo cannot open a room a day early or close it before it
-    opens: 0 (at the start) to 60 minutes."""
+CEILING_MINUTES = int(JOIN_LEAD_CEILING.total_seconds() // 60)
+
+
+@pytest.mark.parametrize("value", [-1, CEILING_MINUTES + 1, 60])
+def test_a_join_lead_past_the_cancellation_cutoff_is_refused(value: int) -> None:
+    """**Capped at the cancellation cutoff** (Codex on #391). A party may cancel
+    until ten minutes before the start, so a window opening earlier would let
+    one party be marked present and enter while the other could still cancel
+    and release the session."""
     with pytest.raises(PydanticValidationError):
         Settings(_env_file=None, join_window_opens_minutes=value)
+
+
+def test_the_join_lead_ceiling_is_the_cancellation_cutoff() -> None:
+    """**One rule, pinned across a layer the config cannot import.** The setting's
+    bound is a literal in `core/config.py`, which may not import the domain, so
+    this fails the moment the bound and the cutoff diverge. The ceiling itself
+    is accepted."""
+    assert JOIN_LEAD_CEILING == CANCELLATION_CUTOFF
+    assert Settings(_env_file=None, join_window_opens_minutes=CEILING_MINUTES)
 
 
 @pytest.mark.parametrize(

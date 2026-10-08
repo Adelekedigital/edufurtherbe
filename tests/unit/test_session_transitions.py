@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
+from app.domain.attendance import within_join_window
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     RESPONSE_WINDOW,
@@ -61,13 +64,36 @@ def test_the_cutoff_is_one_sided() -> None:
     assert not too_late_to_cancel(now + dt.timedelta(minutes=30), now)
 
 
-def test_the_boundary_is_exclusive() -> None:
-    """Exactly ten minutes out is still cancellable. Stated because a boundary
-    nobody wrote down is a boundary two readers will implement differently."""
+def test_the_boundary_belongs_to_joining_not_cancelling() -> None:
+    """Exactly ten minutes out is **too late** to cancel; a second earlier is not.
+
+    This used to say the opposite, which was harmless while the join window
+    opened at five minutes. Once it could open at ten (#391), that one instant
+    was both cancellable and joinable, so one party could be marked present
+    while the other released the session. The join window is half-open
+    `[start - lead, ...)`, so the cutoff must close at exactly that instant."""
     now = dt.datetime(2026, 8, 18, 12, 0, tzinfo=dt.UTC)
 
-    assert not too_late_to_cancel(now + CANCELLATION_CUTOFF, now)
-    assert too_late_to_cancel(now + CANCELLATION_CUTOFF - dt.timedelta(seconds=1), now)
+    assert too_late_to_cancel(now + CANCELLATION_CUTOFF, now)
+    assert not too_late_to_cancel(now + CANCELLATION_CUTOFF + dt.timedelta(seconds=1), now)
+
+
+@pytest.mark.parametrize("lead_minutes", range(0, 11))
+@pytest.mark.parametrize("seconds_before", [-60, -1, 0, 1, 59, 60, 599, 600, 601, 3600])
+def test_no_instant_is_both_cancellable_and_joinable(
+    lead_minutes: int, seconds_before: int
+) -> None:
+    """**Joining and cancelling never overlap**, at every lead the setting allows
+    (0 to 10). A session one party has entered must not be one the other can
+    still call off."""
+    starts_at = dt.datetime(2026, 8, 18, 12, 0, tzinfo=dt.UTC)
+    now = starts_at - dt.timedelta(seconds=seconds_before)
+    lead = dt.timedelta(minutes=lead_minutes)
+
+    joinable = within_join_window(starts_at, 60, now, opens_before=lead)
+    cancellable = not too_late_to_cancel(starts_at, now)
+
+    assert not (joinable and cancellable)
 
 
 def test_the_response_window_leaves_the_mentor_time_at_the_booking_floor() -> None:

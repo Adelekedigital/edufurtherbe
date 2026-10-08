@@ -48,9 +48,9 @@ __all__ = [
 #: How close to the start a confirmed session stops being cancellable.
 #:
 #: **Not a grace period and not the join window.** Those are the two things it
-#: sits between and is neither: the join window (``-5`` to ``+15`` minutes)
-#: decides *attendance*, and the response window decides when an unanswered
-#: *request* dies. This decides when calling off a session stops being a
+#: sits between and is neither: the join window (from the configured lead, at
+#: most ten, to ``+15`` minutes) decides *attendance*, and the response window
+#: decides when an unanswered *request* dies. This decides when calling off a session stops being a
 #: cancellation and starts being not turning up — which is the honest record,
 #: because by then the other party is already on their way to the call.
 CANCELLATION_CUTOFF = dt.timedelta(minutes=10)
@@ -212,8 +212,13 @@ def too_late_to_cancel(starts_at: dt.datetime, now: dt.datetime) -> bool:
     ``now`` is passed in rather than read here, following every other
     clock-dependent function in this project: one that reads its own clock
     cannot be tested at a boundary without moving the machine's time.
+
+    **Exactly the cutoff is already too late** (`<=`). The join window is
+    half-open from `start - lead`, and the lead may be the whole cutoff, so
+    that instant belongs to joining: with `<` it was both, and one party could
+    be marked present while the other released the session (#391 review).
     """
-    return starts_at - now < CANCELLATION_CUTOFF
+    return starts_at - now <= CANCELLATION_CUTOFF
 
 
 #: How many service offerings one session type may cover (#205). The owner's

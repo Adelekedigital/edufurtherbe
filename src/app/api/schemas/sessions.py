@@ -257,12 +257,12 @@ class SessionRead(BaseModel):
     join_opens_at: dt.datetime | None = Field(
         default=None,
         description=(
-            "When either party may first mark themselves present — five "
-            "minutes before the start.\n\n"
+            "When either party may first mark themselves present: ten minutes "
+            "before the start unless the platform is configured otherwise, and "
+            "never more than ten, because cancelling stays open until then.\n\n"
             "**Sent rather than left to the client to compute**, because the "
-            "offsets are a product rule that will become a mentor preference. "
-            "A client hardcoding five and fifteen drifts from us the day that "
-            "lands, and drifts silently."
+            "lead is a setting. A client hardcoding any number drifts from us "
+            "the day it changes, and drifts silently."
         ),
     )
     join_closes_at: dt.datetime | None = Field(

@@ -350,6 +350,42 @@ async def test_with_no_app_origin_the_invite_still_goes_out_without_a_link(
     assert len(call["attendee_emails"]) == 2
 
 
+async def test_the_room_opens_at_the_ceiling_and_the_token_at_the_setting(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
+) -> None:
+    """**A config change must not strand provisioned rooms** (Codex on #391).
+
+    A room's opening is fixed when it is created. If it carried the configured
+    lead, raising the setting later would publish a Join button ahead of rooms
+    already made, and Daily would refuse at the room. So every room opens at the
+    ceiling, and the per-request token carries the configured lead. Daily
+    enforces both, so the token decides, and a changed setting applies to every
+    session at once. The room is private, so it admits nobody without a token.
+    """
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.settings = app.state.settings.model_copy(update={"join_window_opens_minutes": 3})
+    setup = await a_mentor_on(db_engine, "lead-ceiling", "daily")
+    # The room is made at booking, against the start as booked.
+    session = await started(db_engine, api_client, setup, minutes_ago=-2)
+    booked_start = dt.datetime.fromisoformat(session["starts_at"])
+    # The token is minted at /join, against the start as it now stands.
+    async with db_engine.connect() as conn:
+        moved_start = (
+            await conn.execute(
+                text("SELECT starts_at FROM sessions WHERE id = :i"), {"i": session["id"]}
+            )
+        ).scalar_one()
+
+    joined = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
+
+    assert joined.status_code == 200, joined.text
+    (room,) = door.calls
+    assert room["opens_at"] == booked_start - dt.timedelta(minutes=10)
+    assert door.tokens[-1]["opens_at"] == moved_start - dt.timedelta(minutes=3)
+
+
 async def test_the_room_outlives_the_join_window(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, fakes: tuple[FakeRooms, FakeCalendar]
 ) -> None:

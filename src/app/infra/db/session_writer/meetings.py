@@ -4,7 +4,6 @@ it when the session will not happen.
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
 from typing import Any
 from uuid import UUID
@@ -13,6 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.attendance import (
+    JOIN_LEAD_CEILING,
     door_window,
 )
 from app.domain.enums import (
@@ -39,7 +39,6 @@ async def provision_meeting(
     rooms: Any,
     calendar: Any,
     app_base_url: str,
-    opens_before: dt.timedelta,
 ) -> None:
     """Give a newly confirmed session somewhere to meet. Does not commit.
 
@@ -113,8 +112,14 @@ async def provision_meeting(
     # The room is open exactly as long as the door: from the join window opening
     # to the session's end. One definition, so a door is never issued onto a
     # room that has closed or not yet opened.
+    # **The room opens at the ceiling, not at the configured lead** (Codex on
+    # #391). A room's opening is fixed when it is made, so one carrying the
+    # setting would strand every existing room when the setting is raised. The
+    # room is private and admits nobody without a token, and each token carries
+    # the configured lead, so the token decides and a changed setting applies
+    # to every session at once.
     opens, closes = door_window(
-        row["starts_at"], int(row["duration_minutes"]), opens_before=opens_before
+        row["starts_at"], int(row["duration_minutes"]), opens_before=JOIN_LEAD_CEILING
     )
     try:
         if plan.needs_room:

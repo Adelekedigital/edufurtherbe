@@ -238,7 +238,6 @@ async def _provision(request: Request, session: AsyncSession, session_id: UUID) 
         rooms=_rooms(request),
         calendar=_calendar(request),
         app_base_url=_configured(request).app_base_url or "",
-        opens_before=_join_lead(request),
     )
 
 
