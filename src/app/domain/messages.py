@@ -181,8 +181,8 @@ def session_page_url(app_base_url: str, session_id: str) -> str | None:
 def _session_url(context: MessageContext) -> str:
     """The EduFurther **session page** — never the meeting link.
 
-    Meeting links are deliberately withheld until the join window opens, five
-    minutes before the start, so that nobody joins early and so a Join press is
+    Meeting links are deliberately withheld until the join window opens
+    (`join_opens_at`), so that nobody joins early and so a Join press is
     something the platform can record. Putting `meeting_url` here would hand the
     room out days in advance and undo both.
     """

@@ -340,13 +340,13 @@ class SessionRead(BaseModel):
     )
 
     @classmethod
-    def from_row(cls, row: dict[str, object]) -> SessionRead:
+    def from_row(cls, row: dict[str, object], *, opens_before: dt.timedelta) -> SessionRead:
         # Derived here rather than stored, because it is `starts_at` plus two
         # constants and a stored copy would be a second definition to drift.
         starts_at = cast(dt.datetime, row["starts_at"])
         length = int(str(row["duration_minutes"]))
-        opens, closes = join_window(starts_at, length)
-        _, door_closes = door_window(starts_at, length)
+        opens, closes = join_window(starts_at, length, opens_before=opens_before)
+        _, door_closes = door_window(starts_at, length, opens_before=opens_before)
         # Null rather than a time when there is no door, reusing the one set that
         # says which sessions have one — so this field and the endpoint cannot
         # disagree about whether a cancelled session can be entered.

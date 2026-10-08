@@ -362,7 +362,9 @@ async def test_the_room_outlives_the_join_window(
 
     (call,) = rooms.calls
     starts_at = dt.datetime.fromisoformat(session["starts_at"])
-    assert call["opens_at"] == starts_at - dt.timedelta(minutes=5)
+    # The room opens with the join window: ten minutes early by default (owner,
+    # 2026-10-08), so nobody is handed a Join button onto a shut room.
+    assert call["opens_at"] == starts_at - dt.timedelta(minutes=10)
     assert call["closes_at"] == starts_at + dt.timedelta(minutes=60)
 
 
@@ -999,7 +1001,8 @@ async def test_the_door_mints_the_same_credential_the_join_does(
     by_join, by_door = door.tokens
     assert by_join == by_door
     assert by_door["is_owner"] is True
-    assert by_door["closes_at"] - by_door["opens_at"] == dt.timedelta(minutes=65)
+    # Ten minutes early (the default lead) to the end of an hour-long session.
+    assert by_door["closes_at"] - by_door["opens_at"] == dt.timedelta(minutes=70)
     assert joined.json()["meeting_url"] == entered.json()["meeting_url"]
 
 

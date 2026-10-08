@@ -40,7 +40,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
-from app.domain.attendance import door_window
+from app.domain.attendance import door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionStatus
 from app.domain.sessions import TRANSITIONS
@@ -215,6 +215,17 @@ def _rooms(request: Request) -> Any:
     return DailyRooms(key.get_secret_value()) if key else NullRooms()
 
 
+def _join_lead(request: Request) -> dt.timedelta:
+    """How long before the start the join window opens, from this app's settings.
+    The one place the request layer reads it, so `/join`, `/door`, the room, the
+    token and the published `join_opens_at` cannot each read it differently."""
+    return join_opens(_configured(request))
+
+
+#: The configured join lead, for a route that publishes `join_opens_at`.
+JoinLeadDep = Annotated[dt.timedelta, Depends(_join_lead)]
+
+
 async def _provision(request: Request, session: AsyncSession, session_id: UUID) -> None:
     """Give a confirmed session its venue and invite, wired from this app.
 
@@ -227,6 +238,7 @@ async def _provision(request: Request, session: AsyncSession, session_id: UUID) 
         rooms=_rooms(request),
         calendar=_calendar(request),
         app_base_url=_configured(request).app_base_url or "",
+        opens_before=_join_lead(request),
     )
 
 
@@ -321,7 +333,7 @@ async def booked_session(
     if row is None:  # pragma: no cover - the row was just written in this transaction
         raise NotFoundError("no such session")
 
-    body = SessionRead.from_row(row).model_dump(mode="json")
+    body = SessionRead.from_row(row, opens_before=_join_lead(request)).model_dump(mode="json")
     await record_response(session, reservation, status_code=CREATED, body=body)
     await session.commit()
     return body, CREATED, False
@@ -517,7 +529,9 @@ async def _door_for(
     # defined.** It was rebuilt here from its parts, which a review caught as the
     # same rule kept twice: change `door_window` and `/door` would accept a
     # request while this minted a token Daily had already stopped honouring.
-    opens, closes = door_window(row["starts_at"], int(row["duration_minutes"]))
+    opens, closes = door_window(
+        row["starts_at"], int(row["duration_minutes"]), opens_before=_join_lead(request)
+    )
     try:
         # **Off the event loop.** `token_for` is a blocking HTTP call with a
         # fifteen-second timeout, and this route is async — so run inline, a
@@ -562,7 +576,9 @@ async def joined_session(
     reasons a Daily URL is minted rather than stored are written down once.
     """
     now = dt.datetime.now(dt.UTC)
-    row = await record_arrival(session, session_id, user["id"], now=now)
+    row = await record_arrival(
+        session, session_id, user["id"], now=now, opens_before=_join_lead(request)
+    )
     # Committed before the door is minted: the arrival is the thing asked for,
     # and a provider failure afterwards must not take it back.
     await session.commit()
@@ -583,7 +599,13 @@ async def session_door(
     only ever used this would be settled absent — which is right: pressing Join
     is the signal of arrival, and this is a door, not an arrival.
     """
-    row = await door_row(session, session_id, user["id"], now=dt.datetime.now(dt.UTC))
+    row = await door_row(
+        session,
+        session_id,
+        user["id"],
+        now=dt.datetime.now(dt.UTC),
+        opens_before=_join_lead(request),
+    )
     # **Released before Daily is called**, as `joined_session` commits before
     # it. The read left a transaction open on a pooled connection, and the
     # token request is a blocking call with a fifteen-second timeout — so a slow

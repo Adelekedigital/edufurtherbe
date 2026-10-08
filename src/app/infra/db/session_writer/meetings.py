@@ -4,6 +4,7 @@ it when the session will not happen.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from typing import Any
 from uuid import UUID
@@ -38,6 +39,7 @@ async def provision_meeting(
     rooms: Any,
     calendar: Any,
     app_base_url: str,
+    opens_before: dt.timedelta,
 ) -> None:
     """Give a newly confirmed session somewhere to meet. Does not commit.
 
@@ -111,7 +113,9 @@ async def provision_meeting(
     # The room is open exactly as long as the door: from the join window opening
     # to the session's end. One definition, so a door is never issued onto a
     # room that has closed or not yet opened.
-    opens, closes = door_window(row["starts_at"], int(row["duration_minutes"]))
+    opens, closes = door_window(
+        row["starts_at"], int(row["duration_minutes"]), opens_before=opens_before
+    )
     try:
         if plan.needs_room:
             room = rooms.create(

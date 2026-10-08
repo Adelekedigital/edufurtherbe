@@ -301,6 +301,19 @@ def test_an_app_origin_without_a_web_scheme_is_refused(value: str) -> None:
         Settings(_env_file=None, app_base_url=value)
 
 
+def test_the_join_window_opens_ten_minutes_early_unless_configured() -> None:
+    """Owner, 2026-10-08: ten minutes before the start, as a setting."""
+    assert Settings(_env_file=None).join_window_opens_minutes == 10
+
+
+@pytest.mark.parametrize("value", [-1, 61])
+def test_a_join_lead_outside_an_hour_is_refused(value: int) -> None:
+    """Bounded so a typo cannot open a room a day early or close it before it
+    opens: 0 (at the start) to 60 minutes."""
+    with pytest.raises(PydanticValidationError):
+        Settings(_env_file=None, join_window_opens_minutes=value)
+
+
 @pytest.mark.parametrize(
     "value",
     [

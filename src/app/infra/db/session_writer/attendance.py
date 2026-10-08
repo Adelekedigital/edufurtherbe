@@ -99,7 +99,12 @@ def _require_status(row: dict[str, Any], allowed: frozenset[SessionStatus], *, t
 
 
 async def door_row(
-    session: AsyncSession, session_id: UUID, actor_id: UUID, *, now: dt.datetime
+    session: AsyncSession,
+    session_id: UUID,
+    actor_id: UUID,
+    *,
+    now: dt.datetime,
+    opens_before: dt.timedelta,
 ) -> dict[str, Any]:
     """The caller's way into a running session, **recording nothing** (#379).
 
@@ -112,8 +117,12 @@ async def door_row(
     """
     row = await _venue_row(session, session_id, actor_id)
     _require_status(row, DOOR_STATUSES, to="entered")
-    if not within_door_window(row["starts_at"], row["duration_minutes"], now):
-        opens, closes = door_window(row["starts_at"], row["duration_minutes"])
+    if not within_door_window(
+        row["starts_at"], row["duration_minutes"], now, opens_before=opens_before
+    ):
+        opens, closes = door_window(
+            row["starts_at"], row["duration_minutes"], opens_before=opens_before
+        )
         raise ConflictError(
             f"this session's room is open between {opens.isoformat()} and {closes.isoformat()}"
         )
@@ -121,7 +130,12 @@ async def door_row(
 
 
 async def record_arrival(
-    session: AsyncSession, session_id: UUID, actor_id: UUID, *, now: dt.datetime
+    session: AsyncSession,
+    session_id: UUID,
+    actor_id: UUID,
+    *,
+    now: dt.datetime,
+    opens_before: dt.timedelta,
 ) -> dict[str, Any]:
     """Mark the caller present at their own session.
 
@@ -148,8 +162,8 @@ async def record_arrival(
     row = await _venue_row(session, session_id, actor_id)
     _require_status(row, frozenset({SessionStatus.CONFIRMED}), to="joined")
     length = int(row["duration_minutes"])
-    if not within_join_window(row["starts_at"], length, now):
-        opens, closes = join_window(row["starts_at"], length)
+    if not within_join_window(row["starts_at"], length, now, opens_before=opens_before):
+        opens, closes = join_window(row["starts_at"], length, opens_before=opens_before)
         raise ConflictError(
             f"this session can be joined between {opens.isoformat()} and {closes.isoformat()}"
         )

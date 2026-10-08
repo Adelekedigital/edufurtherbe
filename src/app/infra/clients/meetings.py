@@ -201,7 +201,7 @@ class DailyRooms:
 
         ``nbf`` and ``exp`` are the room's own gate, and Daily **enforces**
         them: a tokened participant arriving early is refused with *"This
-        meeting is not ready yet"*. So "the room is shut until five minutes
+        meeting is not ready yet"*. So "the room is shut until the join window
         before" is a promise rather than a request.
 
         Both ``nbf``s are set together — one on the room, one on the token — so
