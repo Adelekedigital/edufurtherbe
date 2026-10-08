@@ -29,7 +29,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, Field
 
 from app.api.schemas.common import AvatarFocusRead, Normalised, SessionTypeRefRead
-from app.domain.attendance import join_window
+from app.domain.attendance import DOOR_STATUSES, door_window, join_window
 from app.domain.enums import (
     ActorType,
     AttendanceStatus,
@@ -145,6 +145,31 @@ class SuggestionRead(BaseModel):
     )
 
 
+class DoorRead(BaseModel):
+    """Your way into a running session's room (#379).
+
+    **A declared schema rather than a dict**, which Codex caught: returning
+    `dict[str, object]` published the response as an arbitrary object, so a
+    client generated from the spec got no `meeting_url` property at all and had
+    to cast — the opposite of what publishing the contract is for.
+
+    Deliberately carries no `joined`: this endpoint records nothing, and a field
+    a client could read an arrival into would undo the reason it exists apart
+    from `/join`.
+    """
+
+    meeting_url: str | None = Field(
+        description=(
+            "Where to go. For a Daily session it carries a token minted for you, "
+            "expiring when the session ends, and is never stored; for any other "
+            "venue it is the session's own address.\n\n"
+            "**`null` on a success** means the venue could not be reached or "
+            "none is configured — different from being refused, and worth "
+            "showing as such."
+        )
+    )
+
+
 class SessionRead(BaseModel):
     """One session, as either party sees it."""
 
@@ -232,6 +257,29 @@ class SessionRead(BaseModel):
             "somebody who arrived at 15:14."
         ),
     )
+    door_closes_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "Until when `POST /sessions/{id}/door` hands you a way back into the "
+            "room — the session's end. It opens at `join_opens_at`.\n\n"
+            "**It ends with the session, because the room does.** Arriving "
+            "stops fifteen minutes in, because that is when the outcome is "
+            "decided; getting back in after a dropped call does not, because "
+            "the session is still running. Show Rejoin until this instant.\n\n"
+            "**Not always later than `join_closes_at`.** For a session longer "
+            "than fifteen minutes it is — that stretch is what the door is "
+            "for. For a shorter one it is *earlier*: a ten-minute session's "
+            "room closes at ten minutes, so there is nothing to re-enter at "
+            "twelve even though the arrival window is still open. Compare the "
+            "two instants rather than assuming an order.\n\n"
+            "**`null` when the session has no door at all** — never agreed to, "
+            "or called off. It is *not* null once the session settles as "
+            "`completed` or `no_show`, so do not key Rejoin off `status`: the "
+            "outcome is decided while the room is still open.\n\n"
+            "Published so you never compute it. A client adding the duration to "
+            "`starts_at` itself drifts from us the day the rule changes."
+        ),
+    )
     created_at: dt.datetime = Field(description="When the session was booked.")
     suggestion: SuggestionRead | None = Field(
         default=None,
@@ -277,6 +325,14 @@ class SessionRead(BaseModel):
         # Derived here rather than stored, because it is `starts_at` plus two
         # constants and a stored copy would be a second definition to drift.
         opens, closes = join_window(row["starts_at"])  # type: ignore[arg-type]
+        _, door_closes = door_window(
+            row["starts_at"],  # type: ignore[arg-type]
+            int(str(row["duration_minutes"])),
+        )
+        # Null rather than a time when there is no door, reusing the one set that
+        # says which sessions have one — so this field and the endpoint cannot
+        # disagree about whether a cancelled session can be entered.
+        has_door = SessionStatus(str(row["status"])) in DOOR_STATUSES
         return cls(
             id=str(row["id"]),
             mentor_id=str(row["mentor_id"]),
@@ -299,6 +355,7 @@ class SessionRead(BaseModel):
             respond_by=row.get("respond_by"),  # type: ignore[arg-type]
             join_opens_at=opens,
             join_closes_at=closes,
+            door_closes_at=door_closes if has_door else None,
             created_at=row["created_at"],  # type: ignore[arg-type]
             suggestion=_suggestion(row),
             answers_preview=_answers_preview(row),
