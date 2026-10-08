@@ -86,11 +86,12 @@ make check                     # the full local gate — CI runs it on every pus
 
 ## How we work
 
-Eleven rules. The first six came out of a retrospective on M1 — each is there
+Twelve rules. The first six came out of a retrospective on M1 — each is there
 because it cost real time, and that count is in `failure-modes.md`. Rules 7–9 were
 added 2026-08-17, when the approval gate itself turned out to be one of the costs;
 rule 10 on 2026-09-27, when the duplicated local gate turned out to be another;
-rule 11 on 2026-09-29, when deferred work was found living only in chat.
+rule 11 on 2026-09-29, when deferred work was found living only in chat; rule 12
+on 2026-10-08, when code review moved to Codex after the push.
 
 1. ~~**Never stack pull requests.**~~ **Reversed 2026-08-16, deliberately.**
    Stacking is allowed: branch from the PR you build on, merge in order. The
@@ -164,8 +165,10 @@ rule 11 on 2026-09-29, when deferred work was found living only in chat.
     full local run (~12 min) agreed with CI on every PR it was compared on, and
     a review fix made #230 pay it twice. Before committing, run the fast checks
     (format, lint, types, layers, bandit), **the test files the change
-    touches**, and the mutation batch, then `/security-review` and
-    `/code-review`. The full suite runs in CI, and work is done only when **CI
+    touches**, and the mutation batch, then `/security-review`. **No
+    `/code-review` at its default level** (amended 2026-10-08): Codex reviews
+    every PR on GitHub, and a local review, if run at all, is `/code-review
+    low`. The full suite runs in CI, and work is done only when **CI
     is green on the PR's exact head commit**. Check the SHA, because a stale
     green has been reported before (#35). A CI failure is fixed on the branch
     like any red gate. Run `make check` locally only to reproduce a CI failure.
@@ -174,6 +177,14 @@ rule 11 on 2026-09-29, when deferred work was found living only in chat.
     engineering follow-up), with what it is, why it was deferred, when to
     revisit it, and links. Not a chat note, not only a memory, not only a
     decision row. The how is in `project-conventions` → *Deferred work*.
+12. **Nothing is pushed with a known bug or a corner cut.** Added 2026-10-08,
+    when the local code review moved to Codex on GitHub: Codex reviews *after*
+    the push, so whatever it finds has already shipped to the branch. The bar
+    before pushing is no bugs and no tech debt — not "few". Rule 11 still
+    governs work **outside** a change; a shortcut taken **inside** one is not
+    deferred work, and recording it as an issue does not make it shippable.
+    The pre-push checks that carry this are in `project-conventions` →
+    *Before pushing*.
 
 Working alone in the repository is assumed. When another session may be active,
 use `git worktree` rather than switching the shared checkout.

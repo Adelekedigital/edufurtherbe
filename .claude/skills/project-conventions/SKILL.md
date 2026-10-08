@@ -443,6 +443,49 @@ and everything waiting on a later call `--label deferred`.
 
 Backfilled 2026-09-29: #269–#278, plus the labels added to #12 and #231.
 
+**Not for corners cut inside a change** (CLAUDE.md rule 12). An issue is for work
+*outside* what is being built. A known defect or a shortcut *in* the diff is
+fixed before the push, and writing it up as an issue does not make it shippable.
+
+## Before pushing
+
+CLAUDE.md rule 12: **nothing is pushed with a known bug or a corner cut.** Code
+review moved to Codex on GitHub on 2026-10-08, and Codex reviews *after* the
+push — so these checks are what stands between a defect and the branch. Every
+item is here because skipping it let a real defect through in the week the rule
+was written.
+
+1. **Watch each new test fail, for the reason it exists.** A red from a
+   `NameError` or a warning-as-error proves nothing — both happened, and both
+   looked like the guard working. Then watch it pass.
+2. **Mutation-test every new guard**: break the rule it protects and confirm the
+   test goes red, then restore the file byte-for-byte. A guard that survives its
+   mutation is decoration. A mutation that survives *can* also reveal a second
+   layer of protection — find out which before changing the test.
+3. **Run the jobs that touch the change.** The hourly settlement moved sessions
+   out of `confirmed` while the new rejoin endpoint required it; every test
+   passed because none ran a settlement. Sweeps, settlement, the outbox drain,
+   the next-available refresh — if one writes what the change reads, a test runs
+   it.
+4. **Exercise the edges of every permitted range**, not the comfortable middle.
+   `SESSION_DURATION_MINUTES` starts at five; a claim that held for an hour-long
+   session was false for a ten-minute one.
+5. **Hold every published sentence against the case it does not picture** — docs,
+   OpenAPI descriptions, error messages and comments alike. A sentence true of
+   the case the writer imagined, stated as though true in general, is the defect
+   found most often here, and no gate can see it (`failure-modes.md`).
+6. **Make every error branch run at least once.** An `except` that returns a
+   fallback is behaviour; one no test reaches has never been executed.
+7. **A new response field is optional in the spec and registered in the
+   exact-field guard**, and a new endpoint declares a `response_model` — an
+   untyped `dict` publishes an arbitrary object, and a generated client loses
+   the field entirely.
+8. **`/security-review`**, always. A local code review, if run at all, is
+   `/code-review low`.
+
+Then push, and the work is done when CI is green on the PR's exact head commit
+**and** every Codex finding is fixed or answered in its thread.
+
 ## Guardrails
 
 Every build preserves these, whatever it is doing. They become the "guardrails"
