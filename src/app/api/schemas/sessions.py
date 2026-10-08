@@ -145,6 +145,31 @@ class SuggestionRead(BaseModel):
     )
 
 
+class DoorRead(BaseModel):
+    """Your way into a running session's room (#379).
+
+    **A declared schema rather than a dict**, which Codex caught: returning
+    `dict[str, object]` published the response as an arbitrary object, so a
+    client generated from the spec got no `meeting_url` property at all and had
+    to cast — the opposite of what publishing the contract is for.
+
+    Deliberately carries no `joined`: this endpoint records nothing, and a field
+    a client could read an arrival into would undo the reason it exists apart
+    from `/join`.
+    """
+
+    meeting_url: str | None = Field(
+        description=(
+            "Where to go. For a Daily session it carries a token minted for you, "
+            "expiring when the session ends, and is never stored; for any other "
+            "venue it is the session's own address.\n\n"
+            "**`null` on a success** means the venue could not be reached or "
+            "none is configured — different from being refused, and worth "
+            "showing as such."
+        )
+    )
+
+
 class SessionRead(BaseModel):
     """One session, as either party sees it."""
 
@@ -237,10 +262,16 @@ class SessionRead(BaseModel):
         description=(
             "Until when `POST /sessions/{id}/door` hands you a way back into the "
             "room — the session's end. It opens at `join_opens_at`.\n\n"
-            "**Later than `join_closes_at`, and that is the point.** Arriving "
+            "**It ends with the session, because the room does.** Arriving "
             "stops fifteen minutes in, because that is when the outcome is "
             "decided; getting back in after a dropped call does not, because "
             "the session is still running. Show Rejoin until this instant.\n\n"
+            "**Not always later than `join_closes_at`.** For a session longer "
+            "than fifteen minutes it is — that stretch is what the door is "
+            "for. For a shorter one it is *earlier*: a ten-minute session's "
+            "room closes at ten minutes, so there is nothing to re-enter at "
+            "twelve even though the arrival window is still open. Compare the "
+            "two instants rather than assuming an order.\n\n"
             "**`null` when the session has no door at all** — never agreed to, "
             "or called off. It is *not* null once the session settles as "
             "`completed` or `no_show`, so do not key Rejoin off `status`: the "

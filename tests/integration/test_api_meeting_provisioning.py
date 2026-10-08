@@ -1037,3 +1037,63 @@ async def test_a_cancelled_session_publishes_no_door(
 
     assert shown["status"] == "cancelled"
     assert shown["door_closes_at"] is None
+
+
+# --------------------------------------------------------------------------
+# Short sessions (Codex on #380)
+#
+# `SESSION_DURATION_MINUTES` permits five to four hundred and eighty minutes, so
+# a session can end before its fifteen-minute arrival window does. The door
+# closes with the room and the room closes with the session — so for a short
+# one the door is the *earlier* of the two. The first version of this contract
+# said the door was always later, which was true of an hour-long session and
+# false of a ten-minute one.
+# --------------------------------------------------------------------------
+
+
+async def shortened(engine: AsyncEngine, session_id: str, minutes: int) -> None:
+    """Make a booked session `minutes` long — a duration the product permits."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET duration_minutes = :d WHERE id = :i"),
+            {"d": minutes, "i": session_id},
+        )
+
+
+@pytest.mark.usefixtures("door")
+async def test_a_short_session_s_door_closes_before_its_arrival_window(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The ordering is not fixed**, and the published field has to admit it.
+    A client assuming the door always outlasts `join_closes_at` would offer
+    Rejoin into a room that has already shut."""
+    setup = await a_mentor_on(db_engine, "door-short-order", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=2)
+    await shortened(db_engine, session["id"], 10)
+
+    shown = await read_session(api_client, session, setup["mentee_headers"])
+
+    door_closes = dt.datetime.fromisoformat(shown["door_closes_at"])
+    joining_ends = dt.datetime.fromisoformat(shown["join_closes_at"])
+    assert door_closes < joining_ends
+    assert door_closes - dt.datetime.fromisoformat(shown["starts_at"]) == dt.timedelta(minutes=10)
+
+
+@pytest.mark.usefixtures("door")
+async def test_after_a_short_session_ends_there_is_no_door_even_while_arrival_is_open(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Twelve minutes into a ten-minute session the room has closed, so there is
+    nothing to re-enter — while an arrival can still be recorded, because the
+    arrival window is about the outcome rather than the room.
+
+    The accepting half, a door during a running session, is covered by every
+    other door test; this pins the refusing half the short case makes possible.
+    """
+    setup = await a_mentor_on(db_engine, "door-short-ended", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=12)
+    await shortened(db_engine, session["id"], 10)
+
+    entered = await api_client.post(door_url(session), headers=setup["mentee_headers"])
+
+    assert entered.status_code == 409, entered.text

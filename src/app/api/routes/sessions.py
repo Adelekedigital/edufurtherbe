@@ -42,7 +42,7 @@ from app.api.deps import (
 )
 from app.api.schemas.common import Page
 from app.api.schemas.intake import SessionAnswerRead
-from app.api.schemas.sessions import SessionEventRead, SessionRead
+from app.api.schemas.sessions import DoorRead, SessionEventRead, SessionRead
 
 router = APIRouter(prefix="/api/v1", tags=["sessions"])
 
@@ -519,6 +519,11 @@ async def join_session(door: JoinedSessionDep) -> dict[str, object]:
         "outcome becomes decidable, and an arrival recorded later would change "
         "a verdict already reached. Getting *in* has no such constraint, so a "
         "party who drops at minute twenty of an hour can still get back.\n\n"
+        "**It closes when the room does, which is the session's end** — so "
+        "for a session shorter than fifteen minutes it closes *before* "
+        "`/join` does. There is no room to re-enter after a short session "
+        "ends, even while an arrival could still be recorded. Read "
+        "`door_closes_at` rather than assuming it outlasts `join_closes_at`.\n\n"
         "**Call `/join` to arrive and this to re-enter.** Calling only this "
         "records nothing: `joined_at` and `attendance_status` are untouched, so "
         "a party who never pressed Join is still settled absent. That is "
@@ -541,9 +546,10 @@ async def join_session(door: JoinedSessionDep) -> dict[str, object]:
         "A session that is not yours is a `404`, indistinguishable from one "
         "that does not exist."
     ),
+    response_model=DoorRead,
     responses=DOOR_RESPONSES,
 )
-async def enter_session(door: SessionDoorDep) -> dict[str, object]:
-    """Same response shape as `/join` minus the claim that you joined, because
-    this endpoint makes no such claim and a client must not read one into it."""
-    return {"meeting_url": door}
+async def enter_session(door: SessionDoorDep) -> DoorRead:
+    """`/join`'s door without its claim that you joined — this endpoint makes no
+    such claim, and the response schema leaves no field to read one into."""
+    return DoorRead(meeting_url=door)
