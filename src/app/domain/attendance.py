@@ -53,6 +53,7 @@ __all__ = [
     "door_window",
     "join_window",
     "outcome",
+    "session_ends_at",
     "window_has_closed",
     "within_door_window",
     "within_join_window",
@@ -102,14 +103,26 @@ JOIN_OPENS = dt.timedelta(minutes=5)
 JOIN_CLOSES = dt.timedelta(minutes=15)
 
 
-def join_window(starts_at: dt.datetime) -> tuple[dt.datetime, dt.datetime]:
+def session_ends_at(starts_at: dt.datetime, duration_minutes: int) -> dt.datetime:
+    """When a session is over: the room closes, the door shuts, and no arrival
+    is recorded after it. One definition, because three places needed it."""
+    return starts_at + dt.timedelta(minutes=duration_minutes)
+
+
+def join_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datetime, dt.datetime]:
     """The half-open interval a party may mark themselves present in.
+
+    **Closes fifteen minutes in, or when the session ends if that is sooner**
+    (owner's decision, 2026-10-08). A session may be as short as five minutes,
+    and a fixed fifteen let a party arrive at a session already over: marked
+    present for it, and handed a token for a room that had closed.
 
     Returned as a pair rather than as two calls so the two ends cannot be
     derived from different constants by two callers — the shape the response
     window's own history warns about.
     """
-    return starts_at - JOIN_OPENS, starts_at + JOIN_CLOSES
+    closes = min(starts_at + JOIN_CLOSES, session_ends_at(starts_at, duration_minutes))
+    return starts_at - JOIN_OPENS, closes
 
 
 #: Which sessions may be entered at all: agreed to, and not called off.
@@ -131,8 +144,8 @@ def door_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datet
     opening until the session's end (#379).
 
     **Not the join window, and the difference is the point.** That window
-    closes fifteen minutes after the start because it is also when the outcome
-    becomes decidable — an arrival recorded later would change a verdict
+    closes fifteen minutes in (or at a shorter session's end) because it is also
+    when the outcome becomes decidable — an arrival recorded later would change a verdict
     already reached. Getting *in* has no such constraint, and the room and its
     token already last the session's length for exactly this reason. With only
     one window, a party who dropped at minute twenty — or merely refreshed the
@@ -141,8 +154,8 @@ def door_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datet
     Opens with the join window rather than earlier: the room's own token is not
     valid before it, so a door issued sooner would open onto nothing.
     """
-    opens, _ = join_window(starts_at)
-    return opens, starts_at + dt.timedelta(minutes=duration_minutes)
+    opens, _ = join_window(starts_at, duration_minutes)
+    return opens, session_ends_at(starts_at, duration_minutes)
 
 
 def within_door_window(starts_at: dt.datetime, duration_minutes: int, now: dt.datetime) -> bool:
@@ -152,7 +165,7 @@ def within_door_window(starts_at: dt.datetime, duration_minutes: int, now: dt.da
     return opens <= now < closes
 
 
-def within_join_window(starts_at: dt.datetime, now: dt.datetime) -> bool:
+def within_join_window(starts_at: dt.datetime, duration_minutes: int, now: dt.datetime) -> bool:
     """Whether ``now`` is inside the window.
 
     **Half-open**: the closing instant is already too late, so this and
@@ -160,15 +173,16 @@ def within_join_window(starts_at: dt.datetime, now: dt.datetime) -> bool:
     both. Without that a settlement running exactly on the boundary could mark a
     party absent in the same second they were still allowed to arrive.
     """
-    opens, closes = join_window(starts_at)
+    opens, closes = join_window(starts_at, duration_minutes)
     return opens <= now < closes
 
 
-def window_has_closed(starts_at: dt.datetime, now: dt.datetime) -> bool:
+def window_has_closed(starts_at: dt.datetime, duration_minutes: int, now: dt.datetime) -> bool:
     """Whether the outcome is decidable yet. The exact complement of the upper
     bound above, written as its own function because the settlement asks the
     question in SQL and the two must agree on the boundary."""
-    return now >= starts_at + JOIN_CLOSES
+    _, closes = join_window(starts_at, duration_minutes)
+    return now >= closes
 
 
 def outcome(*, mentor_attended: bool, mentee_attended: bool) -> SessionStatus:

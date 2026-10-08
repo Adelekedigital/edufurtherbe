@@ -1040,14 +1040,15 @@ async def test_a_cancelled_session_publishes_no_door(
 
 
 # --------------------------------------------------------------------------
-# Short sessions (Codex on #380)
+# Short sessions
 #
 # `SESSION_DURATION_MINUTES` permits five to four hundred and eighty minutes, so
-# a session can end before its fifteen-minute arrival window does. The door
-# closes with the room and the room closes with the session — so for a short
-# one the door is the *earlier* of the two. The first version of this contract
-# said the door was always later, which was true of an hour-long session and
-# false of a ten-minute one.
+# a session can end before the fifteen-minute arrival edge. #380 found the door
+# closing first in that case and documented it. The owner then closed the cause
+# (2026-10-08): **arrivals stop when the session ends**, so a party is never
+# marked present at a session that is over, or handed a token for a closed room.
+# The door and the arrival window now close together on a short session, and the
+# door outlasts it on a long one — never the other way round.
 # --------------------------------------------------------------------------
 
 
@@ -1061,42 +1062,82 @@ async def shortened(engine: AsyncEngine, session_id: str, minutes: int) -> None:
 
 
 @pytest.mark.usefixtures("door")
-async def test_a_short_session_s_door_closes_before_its_arrival_window(
+async def test_a_short_session_stops_taking_arrivals_when_it_ends(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """**The ordering is not fixed**, and the published field has to admit it.
-    A client assuming the door always outlasts `join_closes_at` would offer
-    Rejoin into a room that has already shut."""
-    setup = await a_mentor_on(db_engine, "door-short-order", "daily")
+    """`join_closes_at` is the session's end, not fifteen minutes in, and the
+    door closes at the same instant — so the door never closes first."""
+    setup = await a_mentor_on(db_engine, "join-short-closes", "daily")
     session = await started(db_engine, api_client, setup, minutes_ago=2)
     await shortened(db_engine, session["id"], 10)
 
     shown = await read_session(api_client, session, setup["mentee_headers"])
 
-    door_closes = dt.datetime.fromisoformat(shown["door_closes_at"])
-    joining_ends = dt.datetime.fromisoformat(shown["join_closes_at"])
-    assert door_closes < joining_ends
-    assert door_closes - dt.datetime.fromisoformat(shown["starts_at"]) == dt.timedelta(minutes=10)
+    starts_at = dt.datetime.fromisoformat(shown["starts_at"])
+    ends = starts_at + dt.timedelta(minutes=10)
+    assert dt.datetime.fromisoformat(shown["join_closes_at"]) == ends
+    assert dt.datetime.fromisoformat(shown["door_closes_at"]) == ends
 
 
 @pytest.mark.usefixtures("door")
-async def test_after_a_short_session_ends_there_is_no_door_even_while_arrival_is_open(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+async def test_a_join_after_a_short_session_ends_is_refused_and_records_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
 ) -> None:
-    """Twelve minutes into a ten-minute session the room has closed, so there is
-    nothing to re-enter — while an arrival can still be recorded, because the
-    arrival window is about the outcome rather than the room.
-
-    The accepting half, a door during a running session, is covered by every
-    other door test; this pins the refusing half the short case makes possible.
-    """
-    setup = await a_mentor_on(db_engine, "door-short-ended", "daily")
+    """**The bug option A closes.** Twelve minutes into a ten-minute session the
+    arrival was recorded and a token minted for a room that had already shut.
+    Now it is a `409`, the mentee's row stays `pending`, and Daily is not asked."""
+    setup = await a_mentor_on(db_engine, "join-short-ended", "daily")
     session = await started(db_engine, api_client, setup, minutes_ago=12)
     await shortened(db_engine, session["id"], 10)
 
-    entered = await api_client.post(door_url(session), headers=setup["mentee_headers"])
+    joined = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
 
-    assert entered.status_code == 409, entered.text
+    assert joined.status_code == 409, joined.text
+    mentee = next(r for r in await attendance_of(db_engine, session["id"]) if r["role"] == "mentee")
+    assert mentee["attendance_status"] == "pending"
+    assert door.tokens == []
+
+
+@pytest.mark.usefixtures("door")
+async def test_a_join_just_before_a_short_session_ends_still_counts(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The positive half: nine minutes into a ten-minute session is still on time."""
+    setup = await a_mentor_on(db_engine, "join-short-late", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=9)
+    await shortened(db_engine, session["id"], 10)
+
+    joined = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
+
+    assert joined.status_code == 200, joined.text
+    assert joined.json()["joined"] is True
+
+
+@pytest.mark.usefixtures("door")
+async def test_a_short_session_settles_at_its_end_not_fifteen_minutes_in(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The settlement's SQL follows the same rule as `/join`.** If it still
+    waited fifteen minutes, a short session would sit undecided after arrivals
+    had stopped. If it ran sooner than `/join` closed, it could brand somebody
+    absent while they could still arrive. Both directions are checked: unsettled
+    a minute before the end, settled a minute after."""
+    early_setup = await a_mentor_on(db_engine, "settle-short-early", "daily")
+    early = await started(db_engine, api_client, early_setup, minutes_ago=9)
+    await shortened(db_engine, early["id"], 10)
+    await settle(db_engine)
+    assert await status_of(db_engine, early["id"]) == "confirmed"
+
+    # A second mentor: one mentee may hold one live booking per mentor.
+    late_setup = await a_mentor_on(db_engine, "settle-short-late", "daily")
+    late = await started(db_engine, api_client, late_setup, minutes_ago=11)
+    await shortened(db_engine, late["id"], 10)
+    await settle(db_engine)
+    assert await status_of(db_engine, late["id"]) == "no_show"
 
 
 # --------------------------------------------------------------------------

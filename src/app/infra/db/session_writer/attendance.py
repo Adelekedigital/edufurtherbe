@@ -147,8 +147,9 @@ async def record_arrival(
     """
     row = await _venue_row(session, session_id, actor_id)
     _require_status(row, frozenset({SessionStatus.CONFIRMED}), to="joined")
-    if not within_join_window(row["starts_at"], now):
-        opens, closes = join_window(row["starts_at"])
+    length = int(row["duration_minutes"])
+    if not within_join_window(row["starts_at"], length, now):
+        opens, closes = join_window(row["starts_at"], length)
         raise ConflictError(
             f"this session can be joined between {opens.isoformat()} and {closes.isoformat()}"
         )
@@ -180,15 +181,16 @@ async def record_arrival(
 
 
 def _window_shut(now: dt.datetime) -> Any:
-    """Sessions whose join window has shut, in SQL.
+    """Sessions whose join window has shut, in SQL: fifteen minutes in, or the
+    session's end if that is sooner — :func:`join_window`'s rule.
 
-    Built from :data:`JOIN_CLOSES` rather than from a literal, so this boundary
-    and :func:`window_has_closed`'s are one definition rather than two that
-    happen to agree today. A settlement running a minute early would mark
-    somebody absent while they still had time to arrive.
+    Built from :data:`JOIN_CLOSES` rather than from a literal, and pinned to the
+    domain function by a test across lengths, because a settlement running a
+    minute early would mark somebody absent while they still had time to arrive.
     """
-    shut = text(f"interval '{int(JOIN_CLOSES.total_seconds())} seconds'")
-    return Session.starts_at + shut <= now
+    fifteen = text(f"interval '{int(JOIN_CLOSES.total_seconds())} seconds'")
+    length = func.make_interval(0, 0, 0, 0, 0, Session.duration_minutes)
+    return Session.starts_at + func.least(fifteen, length) <= now
 
 
 async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:

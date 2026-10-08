@@ -42,7 +42,7 @@ from app.api.deps import (
 )
 from app.api.schemas.common import Page
 from app.api.schemas.intake import SessionAnswerRead
-from app.api.schemas.sessions import DoorRead, SessionEventRead, SessionRead
+from app.api.schemas.sessions import DoorRead, JoinRead, SessionEventRead, SessionRead
 
 router = APIRouter(prefix="/api/v1", tags=["sessions"])
 
@@ -464,7 +464,10 @@ async def cancel_session(_: CancelledSessionDep) -> dict[str, bool]:
     summary="Record that you arrived",
     description=(
         "Marks **you** present, from five minutes before the start to fifteen "
-        "minutes after it. Either party calls it for themselves; neither can "
+        "minutes after it — or to the session's end, if it is shorter than "
+        "that: nobody is marked present at a session that is over. Read "
+        "`join_closes_at` rather than computing it. Either party calls it for "
+        "themselves; neither can "
         "call it for the other, because attendance drives both parties' "
         "reliability figures and marking somebody present is editing their "
         "record.\n\n"
@@ -493,9 +496,10 @@ async def cancel_session(_: CancelledSessionDep) -> dict[str, bool]:
         "configured, which is a different thing from being refused entry and "
         "should be shown as such."
     ),
+    response_model=JoinRead,
     responses=TRANSITION_RESPONSES,
 )
-async def join_session(door: JoinedSessionDep) -> dict[str, object]:
+async def join_session(door: JoinedSessionDep) -> JoinRead:
     """`meeting_url` is where to go, and it is **not** the stored one for Daily.
 
     A private room refuses anybody without a token, so the address on the
@@ -504,7 +508,7 @@ async def join_session(door: JoinedSessionDep) -> dict[str, object]:
     returned rather than stored, and why the response is the only place it
     exists.
     """
-    return {"joined": True, "meeting_url": door}
+    return JoinRead(joined=True, meeting_url=door)
 
 
 @router.post(
@@ -514,16 +518,13 @@ async def join_session(door: JoinedSessionDep) -> dict[str, object]:
         "Your way into the room, **without recording an arrival** — for after "
         "a dropped call or a refreshed tab.\n\n"
         "**Open from five minutes before the start until the session ends**, "
-        "not until fifteen minutes after it like `/join`. The difference is "
-        "deliberate: `/join` closes then because that is when the session's "
-        "outcome becomes decidable, and an arrival recorded later would change "
-        "a verdict already reached. Getting *in* has no such constraint, so a "
-        "party who drops at minute twenty of an hour can still get back.\n\n"
-        "**It closes when the room does, which is the session's end** — so "
-        "for a session shorter than fifteen minutes it closes *before* "
-        "`/join` does. There is no room to re-enter after a short session "
-        "ends, even while an arrival could still be recorded. Read "
-        "`door_closes_at` rather than assuming it outlasts `join_closes_at`.\n\n"
+        "which is never earlier than `/join` closes: arrivals stop fifteen "
+        "minutes in, or at the end of a shorter session. The difference is "
+        "deliberate: `/join` closes when the session's outcome becomes "
+        "decidable, and an arrival recorded later would change a verdict "
+        "already reached. Getting *in* has no such constraint, so a party who "
+        "drops at minute twenty of an hour can still get back. On a session "
+        "of fifteen minutes or less the two close together.\n\n"
         "**Call `/join` to arrive and this to re-enter.** Calling only this "
         "records nothing: `joined_at` and `attendance_status` are untouched, so "
         "a party who never pressed Join is still settled absent. That is "

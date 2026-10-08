@@ -23,7 +23,7 @@ as one problem would be applying a rule past its reason.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field
@@ -145,6 +145,26 @@ class SuggestionRead(BaseModel):
     )
 
 
+class JoinRead(BaseModel):
+    """Your arrival, recorded, and where to go (#379 follow-up).
+
+    Declared for the reason `DoorRead` is: an untyped dict published the
+    response as an arbitrary object, and a generated client got neither field.
+    """
+
+    joined: bool = Field(description="Always `true`: a refused arrival is a `409`, never `false`.")
+    meeting_url: str | None = Field(
+        description=(
+            "Where to go. For a Daily session it carries a token minted for you, "
+            "expiring when the session ends, and is never stored; for any other "
+            "venue it is the session's own address.\n\n"
+            "**`null` on a success** means your arrival is recorded but the "
+            "venue could not be reached or none is configured — different from "
+            "being refused, and worth showing as such."
+        )
+    )
+
+
 class DoorRead(BaseModel):
     """Your way into a running session's room (#379).
 
@@ -248,9 +268,10 @@ class SessionRead(BaseModel):
     join_closes_at: dt.datetime | None = Field(
         default=None,
         description=(
-            "When the window shuts — fifteen minutes after the start. Joining "
-            "after it is refused, and the session's outcome is decided from "
-            "this instant.\n\n"
+            "When the window shuts — fifteen minutes after the start, or the "
+            "session's end if it is shorter than that. Joining after it is "
+            "refused, and the session's outcome is decided from this "
+            "instant.\n\n"
             "**This is the instant a waiting participant needs**, and the "
             'reason it is here: *"your mentor can still join until 15:15"* is '
             'correct, where *"wait up to fifteen minutes"* is wrong for '
@@ -266,12 +287,10 @@ class SessionRead(BaseModel):
             "stops fifteen minutes in, because that is when the outcome is "
             "decided; getting back in after a dropped call does not, because "
             "the session is still running. Show Rejoin until this instant.\n\n"
-            "**Not always later than `join_closes_at`.** For a session longer "
-            "than fifteen minutes it is — that stretch is what the door is "
-            "for. For a shorter one it is *earlier*: a ten-minute session's "
-            "room closes at ten minutes, so there is nothing to re-enter at "
-            "twelve even though the arrival window is still open. Compare the "
-            "two instants rather than assuming an order.\n\n"
+            "**Never earlier than `join_closes_at`.** For a session longer than "
+            "fifteen minutes it is later — that stretch is what the door is "
+            "for. For a shorter one the two are equal: arrivals stop when the "
+            "session ends, as the room does.\n\n"
             "**`null` when the session has no door at all** — never agreed to, "
             "or called off. It is *not* null once the session settles as "
             "`completed` or `no_show`, so do not key Rejoin off `status`: the "
@@ -324,11 +343,10 @@ class SessionRead(BaseModel):
     def from_row(cls, row: dict[str, object]) -> SessionRead:
         # Derived here rather than stored, because it is `starts_at` plus two
         # constants and a stored copy would be a second definition to drift.
-        opens, closes = join_window(row["starts_at"])  # type: ignore[arg-type]
-        _, door_closes = door_window(
-            row["starts_at"],  # type: ignore[arg-type]
-            int(str(row["duration_minutes"])),
-        )
+        starts_at = cast(dt.datetime, row["starts_at"])
+        length = int(str(row["duration_minutes"]))
+        opens, closes = join_window(starts_at, length)
+        _, door_closes = door_window(starts_at, length)
         # Null rather than a time when there is no door, reusing the one set that
         # says which sessions have one — so this field and the endpoint cannot
         # disagree about whether a cancelled session can be entered.
