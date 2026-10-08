@@ -215,6 +215,21 @@ def _rooms(request: Request) -> Any:
     return DailyRooms(key.get_secret_value()) if key else NullRooms()
 
 
+async def _provision(request: Request, session: AsyncSession, session_id: UUID) -> None:
+    """Give a confirmed session its venue and invite, wired from this app.
+
+    The one way the two confirmation points call `provision_meeting`, so a new
+    argument cannot reach one of them and not the other.
+    """
+    await provision_meeting(
+        session,
+        session_id,
+        rooms=_rooms(request),
+        calendar=_calendar(request),
+        app_base_url=_configured(request).app_base_url or "",
+    )
+
+
 def _calendar(request: Request) -> Any:
     wired = getattr(request.app.state, "calendar", None)
     if wired is not None:
@@ -301,7 +316,7 @@ async def booked_session(
     # `/accept` — and that guard is inside `provision_meeting` rather than here,
     # because this call site and the transition one would both have to remember
     # it.
-    await provision_meeting(session, session_id, rooms=_rooms(request), calendar=_calendar(request))
+    await _provision(request, session, session_id)
     row = await get_session_row(session, session_id, user["id"])
     if row is None:  # pragma: no cover - the row was just written in this transaction
         raise NotFoundError("no such session")
@@ -407,9 +422,7 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
         # that produces `confirmed` — declining, withdrawing and cancelling all
         # end a session rather than starting one.
         if action == "accept":
-            await provision_meeting(
-                session, session_id, rooms=_rooms(request), calendar=_calendar(request)
-            )
+            await _provision(request, session, session_id)
             # **The second place a session becomes real**, and therefore the
             # second place its reminders are published. Booking covers the
             # offering that confirms itself; this covers the one that waited.

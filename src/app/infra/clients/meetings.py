@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -299,18 +300,18 @@ class NullCalendar:
         self,
         *,
         organiser_id: str,
-        attendee_email: str,
+        attendee_emails: Sequence[str],
         starts_at: dt.datetime,
         duration_minutes: int,
         summary: str,
         wants_conference: bool,
-        meeting_url: str | None,
+        join_url: str | None,
     ) -> CalendarEvent | None:
         # Every argument is named and unused on purpose: the signature is the
         # contract the orchestration is written against, and trimming it to what
         # a null implementation happens to touch would make the real adapter's
         # arrival a signature change at every call site.
-        del attendee_email, duration_minutes, summary, meeting_url
+        del attendee_emails, duration_minutes, summary, join_url
         logger.info(
             "no calendar configured; not writing an event for %s at %s (conference requested: %s)",
             organiser_id,
@@ -324,7 +325,8 @@ class NullCalendar:
 
 
 class GoogleCalendar:
-    """The platform's own Google account, creating the event and inviting both.
+    """The platform's own Google account, creating the event and inviting both
+    parties.
 
     **Plain REST rather than the Google SDK.** `google-api-python-client` brings
     a discovery mechanism and a large dependency tree to do what two POSTs do —
@@ -366,35 +368,47 @@ class GoogleCalendar:
         self,
         *,
         organiser_id: str,
-        attendee_email: str,
+        attendee_emails: Sequence[str],
         starts_at: dt.datetime,
         duration_minutes: int,
         summary: str,
         wants_conference: bool,
-        meeting_url: str | None,
+        join_url: str | None,
     ) -> CalendarEvent | None:
-        """One event, both parties invited, and a Meet link only when asked.
+        """One event, every party invited, and a Meet link only when asked.
 
         **`wants_conference` is the line that matters.** Requesting one for a
         session held in Daily would put a second link on the event, and the
         invitee clicks whichever the client renders first — a failure that
         errors nowhere and surfaces when somebody joins an empty room.
 
-        The venue's own URL goes in the description rather than the location,
-        because a Daily room is not a place and a client rendering `location`
-        as a map pin would be confidently wrong.
+        **`join_url` is the session page, never a venue's own URL** (#389). The
+        page is where Join is pressed and recorded, and it stays safe whatever
+        later happens to the session. A Daily room's URL used to go here, and
+        a bare room URL is refused without a token. It sits in the description
+        rather than the location, which some clients render as a map pin.
         """
         ends_at = starts_at + dt.timedelta(minutes=duration_minutes)
         body: dict[str, Any] = {
             "summary": summary,
             "start": {"dateTime": starts_at.isoformat()},
             "end": {"dateTime": ends_at.isoformat()},
-            # Both parties, and neither completes an OAuth flow — settled
-            # decision #15, which the spike's Q1 measured working on a consumer
-            # Gmail account.
-            "attendees": [{"email": attendee_email}],
+            # **Every party, and neither completes an OAuth flow** (settled
+            # decision #15). Meet admits without knocking only the addresses
+            # invited (ADR 0012 §4), so a party left off knocks on a call whose
+            # only admitter, this account, is never in it. A missing address is
+            # left off rather than sent empty.
+            "attendees": [{"email": email} for email in attendee_emails if email],
+            # **Invited, not introduced.** Google defaults both to true: guests
+            # would see each other's personal addresses, which the API itself
+            # withholds, and either could add a third person, who on Meet joins
+            # without knocking. Owner, 2026-10-08, from the #389 security review.
+            "guestsCanSeeOtherGuests": False,
+            "guestsCanInviteOthers": False,
             "extendedProperties": {"private": {"edufurther_session_id": organiser_id}},
         }
+        if join_url:
+            body["description"] = f"Join here: {join_url}"
         params = {"sendUpdates": "all"}
         if wants_conference:
             body["conferenceData"] = {
@@ -406,8 +420,6 @@ class GoogleCalendar:
             # Measured, not assumed: without this the write succeeds and the
             # conference is dropped in silence.
             params["conferenceDataVersion"] = "1"
-        elif meeting_url:
-            body["description"] = f"Join here: {meeting_url}"
 
         event = self._call(
             "POST",

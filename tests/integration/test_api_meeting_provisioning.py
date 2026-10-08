@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_availability, add_session_type, make_public_mentor
 from tests.integration.test_api_attendance import settle
 
+from app.domain.messages import MessageContext, build_variables
 from app.infra.clients.meetings import CalendarEvent, MeetingRoom, VenueUnavailableError
 from conftest import api_token, bearer, fund_by_auth
 
@@ -194,6 +195,132 @@ async def test_daily_creates_a_room_and_must_not_ask_for_a_conference(
     stored = await venue_of(db_engine, session["id"])
     assert stored["meeting_url"] == "https://ef.daily.co/room"
     assert stored["external_room_id"] == "room-1"
+
+
+# --------------------------------------------------------------------------
+# Who is invited, and where the invite points (#389)
+#
+# ADR 0012 decided "both parties, by invitation" and the adapter's docstring
+# said so, while the call invited the mentee alone for seven weeks — every test
+# here checked that an event was made, none checked who was on it. And the
+# invite carried a Daily room's bare URL, which Daily refuses without a token.
+# --------------------------------------------------------------------------
+
+APP = "https://app.example.test"
+
+
+def serving_the_app_at(api_client: httpx.AsyncClient, origin: str | None) -> None:
+    """Run the app with `APP_BASE_URL` set, the one thing the link is built from."""
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.settings = app.state.settings.model_copy(update={"app_base_url": origin})
+
+
+async def emails_of(engine: AsyncEngine, session_id: str) -> tuple[str, str]:
+    """The mentee's and the mentor's addresses, read from the database."""
+    async with engine.connect() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT mentee.email AS mentee, mentor.email AS mentor "
+                        "FROM sessions s "
+                        "JOIN users mentee ON mentee.id = s.mentee_id "
+                        "JOIN users mentor ON mentor.id = s.mentor_id "
+                        "WHERE s.id = :i"
+                    ),
+                    {"i": session_id},
+                )
+            )
+            .mappings()
+            .one()
+        )
+    return str(row["mentee"]), str(row["mentor"])
+
+
+@pytest.mark.parametrize("provider", ["daily", "google_meet", "custom"])
+async def test_both_parties_are_invited_whatever_the_venue(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    fakes: tuple[FakeRooms, FakeCalendar],
+    provider: str,
+) -> None:
+    """**Exactly the mentee and the mentor**: a missing party fails, and so does
+    an extra. On Meet, an uninvited mentor knocks on a call nobody present can
+    admit them to (ADR 0012 §4)."""
+    _, calendar = fakes
+    calendar.hands_back_a_link = provider == "google_meet"
+    setup = await a_mentor_on(db_engine, f"inv-both-{provider}", provider)
+
+    session = await book(api_client, setup)
+
+    (call,) = calendar.calls
+    assert list(call["attendee_emails"]) == list(await emails_of(db_engine, session["id"]))
+
+
+@pytest.mark.parametrize("provider", ["daily", "google_meet", "custom"])
+async def test_every_invite_links_to_the_session_page_and_never_to_the_venue(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    fakes: tuple[FakeRooms, FakeCalendar],
+    provider: str,
+) -> None:
+    """**The session page, for every venue** — the page the emails already link
+    to, where Join is pressed and recorded. Never the room: a Daily room's URL
+    is refused without a token, and a custom venue's would skip the press."""
+    _, calendar = fakes
+    calendar.hands_back_a_link = provider == "google_meet"
+    serving_the_app_at(api_client, APP)
+    setup = await a_mentor_on(db_engine, f"inv-link-{provider}", provider)
+
+    session = await book(api_client, setup)
+
+    (call,) = calendar.calls
+    assert call["join_url"] == f"{APP}/sessions/{session['id']}"
+    venue = (await venue_of(db_engine, session["id"]))["meeting_url"]
+    assert venue is None or venue not in repr(call)
+
+
+async def test_the_invite_and_the_emails_share_one_link(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    fakes: tuple[FakeRooms, FakeCalendar],
+) -> None:
+    """**One definition** (non-negotiable #8): the invite's link is what an email's
+    `sessionUrl` resolves to, so the two cannot drift to different pages."""
+    _, calendar = fakes
+    serving_the_app_at(api_client, APP)
+    setup = await a_mentor_on(db_engine, "inv-one-link", "daily")
+
+    session = await book(api_client, setup)
+
+    context = MessageContext(
+        recipient_name="Ada",
+        recipient_timezone="UTC",
+        mentor_name="Mo",
+        mentee_name="Ada",
+        session_id=session["id"],
+        app_base_url=APP,
+    )
+    emailed = build_variables(("sessionUrl",), context)
+    assert calendar.calls[0]["join_url"] == emailed["sessionUrl"]
+
+
+async def test_with_no_app_origin_the_invite_still_goes_out_without_a_link(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    fakes: tuple[FakeRooms, FakeCalendar],
+) -> None:
+    """No `APP_BASE_URL`, no link to give — and no venue URL put there instead.
+    The booking still succeeds and both parties still get the time."""
+    _, calendar = fakes
+    serving_the_app_at(api_client, None)
+    setup = await a_mentor_on(db_engine, "inv-no-origin", "daily")
+
+    await book(api_client, setup)
+
+    (call,) = calendar.calls
+    assert call["join_url"] is None
+    assert len(call["attendee_emails"]) == 2
 
 
 async def test_the_room_outlives_the_join_window(

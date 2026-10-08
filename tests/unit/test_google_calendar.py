@@ -56,15 +56,26 @@ def created(**overrides: Any) -> Any:
     return lambda _: httpx.Response(200, json=body)
 
 
-def insert(api: GoogleCalendar, *, wants_conference: bool, url: str | None = None) -> Any:
+MENTEE = "mentee@example.test"
+MENTOR = "mentor@example.test"
+SESSION_PAGE = "https://app.example.test/sessions/sess-1"
+
+
+def insert(
+    api: GoogleCalendar,
+    *,
+    wants_conference: bool,
+    join_url: str | None = SESSION_PAGE,
+    guests: tuple[str, ...] = (MENTEE, MENTOR),
+) -> Any:
     return api.create_event(
         organiser_id="sess-1",
-        attendee_email="mentee@example.test",
+        attendee_emails=guests,
         starts_at=STARTS,
         duration_minutes=60,
         summary="EduFurther session",
         wants_conference=wants_conference,
-        meeting_url=url,
+        join_url=join_url,
     )
 
 
@@ -94,15 +105,41 @@ def test_a_daily_session_does_not_ask_for_one() -> None:
     until somebody joins an empty room."""
     api, seen = calendar(created())
 
-    event = insert(api, wants_conference=False, url="https://ef.daily.co/room")
+    event = insert(api, wants_conference=False)
 
     (request,) = seen
     body = json.loads(request.content)
     assert "conferenceDataVersion" not in request.url.params
     assert "conferenceData" not in body
-    assert "https://ef.daily.co/room" in body["description"]
     assert event is not None
     assert event.meeting_url is None, "the venue's own URL is not Google's to return"
+
+
+@pytest.mark.parametrize("wants_conference", [False, True])
+def test_every_invite_links_to_the_session_page(wants_conference: bool) -> None:
+    """**The session page, for every venue (#389).** It is where Join is pressed
+    and recorded, and the page redirects whatever later happens to the session,
+    so it is safe on an invite that outlives a cancellation. A Daily room's own
+    URL was written here before, and a bare room URL is *refused* by Daily
+    without a token (`docs/daily-spike-guide.md` Q1): every Daily invite sent
+    linked to a room that turned its guest away."""
+    api, seen = calendar(created(hangoutLink="https://meet.google.com/abc"))
+
+    insert(api, wants_conference=wants_conference)
+
+    assert SESSION_PAGE in json.loads(seen[0].content).get("description", "")
+
+
+def test_with_no_session_page_the_event_is_still_written_without_a_link() -> None:
+    """No `APP_BASE_URL` means no link to give. The event still goes out, so both
+    parties have the time in their calendars; a bare path or a venue URL would
+    each be worse than nothing."""
+    api, seen = calendar(created())
+
+    event = insert(api, wants_conference=False, join_url=None)
+
+    assert "description" not in json.loads(seen[0].content)
+    assert event is not None
 
 
 def test_a_silently_dropped_conference_is_caught() -> None:
@@ -117,17 +154,54 @@ def test_a_silently_dropped_conference_is_caught() -> None:
     assert "conferenceDataVersion" in str(raised.value)
 
 
-def test_the_mentee_is_invited_and_the_session_is_recorded_on_the_event() -> None:
-    """The mentee is a guest of the platform's account and completes no OAuth
-    flow, which the spike measured working on a consumer Gmail. The session id
-    rides along so an event can be traced back without a database."""
+def test_both_parties_are_invited_and_the_session_is_recorded_on_the_event() -> None:
+    """**Mentee and mentor, both guests of the platform's account** (#389).
+
+    This test used to assert the mentee *alone*, and so pinned the defect: the
+    adapter's own docstring and ADR 0012 both said both parties are invited, and
+    for seven weeks the gate defended a list of one. The guest list matters
+    beyond the calendar entry: Meet admits without knocking only the addresses
+    on the invitation (ADR 0012 §4), so an uninvited mentor knocks on a call
+    whose only admitter, the platform account, is never in it.
+
+    The session id rides along so an event can be traced back without a database.
+    """
     api, seen = calendar(created(hangoutLink="https://meet.google.com/abc"))
 
     insert(api, wants_conference=True)
 
     body = json.loads(seen[0].content)
-    assert body["attendees"] == [{"email": "mentee@example.test"}]
+    assert body["attendees"] == [{"email": MENTEE}, {"email": MENTOR}]
     assert body["extendedProperties"]["private"]["edufurther_session_id"] == "sess-1"
+
+
+def test_guests_cannot_see_each_other_or_add_anyone() -> None:
+    """**Inviting both parties must not introduce them** (security review, #389).
+
+    Google's defaults are `guestsCanSeeOtherGuests: true` and
+    `guestsCanInviteOthers: true`. The first would show each party the other's
+    personal address in the event and the invitation, where the API itself
+    withholds it. The second would let either party add a third person, who on
+    Meet joins without knocking (ADR 0012 §4). Owner, 2026-10-08: both off.
+    """
+    api, seen = calendar(created(hangoutLink="https://meet.google.com/abc"))
+
+    insert(api, wants_conference=True)
+
+    body = json.loads(seen[0].content)
+    # `.get`: absent means Google's default, `true`, and should fail as such.
+    assert body.get("guestsCanSeeOtherGuests", True) is False
+    assert body.get("guestsCanInviteOthers", True) is False
+
+
+def test_a_missing_address_is_left_off_rather_than_sent_empty() -> None:
+    """A party with no email on file is left off the guest list rather than sent
+    as an empty address, which invites nobody and is not a valid guest."""
+    api, seen = calendar(created())
+
+    insert(api, wants_conference=False, guests=(MENTEE, ""))
+
+    assert json.loads(seen[0].content)["attendees"] == [{"email": MENTEE}]
 
 
 def test_the_calendar_id_is_configurable() -> None:
