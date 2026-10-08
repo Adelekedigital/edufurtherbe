@@ -25,6 +25,7 @@ from app.infra.db.models.sessions import (
     Session,
 )
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 from app.infra.db.session_type_store import resolve_venue
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,9 @@ async def provision_meeting(
         return
 
     found = await session.execute(
-        select(User.id, User.email).where(User.id.in_((row["mentee_id"], row["mentor_id"])))
+        # `LIVE`: a party who has deleted their account is invisible, so their
+        # retained address never reaches Google (Codex on #390).
+        select(User.id, User.email).where(User.id.in_((row["mentee_id"], row["mentor_id"])), LIVE)
     )
     emails: dict[UUID, str] = dict(found.tuples().all())
 

@@ -301,7 +301,33 @@ def test_an_app_origin_without_a_web_scheme_is_refused(value: str) -> None:
         Settings(_env_file=None, app_base_url=value)
 
 
-@pytest.mark.parametrize("value", ["https://app.edufurther.org", "http://localhost:3000"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://app.example.test?tenant=a",
+        "https://app.example.test/?tenant=a",
+        "https://app.example.test#top",
+        "https://",
+    ],
+)
+def test_an_app_origin_with_a_query_fragment_or_no_host_is_refused(value: str) -> None:
+    """Codex on #390: every link is the origin with a path *appended*, so a query
+    or fragment swallows the path — `?tenant=a/sessions/{id}` opens the home
+    page — and no host is no link at all. Refused at start-up, for the emails
+    and the calendar invite alike."""
+    with pytest.raises(PydanticValidationError):
+        Settings(_env_file=None, app_base_url=value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://app.edufurther.org",
+        "http://localhost:3000",
+        "https://app.edufurther.org/",
+        "https://example.test/app",
+    ],
+)
 def test_an_app_origin_with_a_web_scheme_is_kept(value: str) -> None:
     assert Settings(_env_file=None, app_base_url=value).app_base_url == value
 

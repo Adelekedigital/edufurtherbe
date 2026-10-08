@@ -321,12 +321,21 @@ class Settings(BaseSettings):
     @field_validator("app_base_url")
     @classmethod
     def an_absolute_web_origin(cls, value: str | None) -> str | None:
-        """Every email link is joined to this, so a value with no web scheme
-        would send links no mail client can open. Refused at start-up instead.
-        Unset stays allowed: then a message that links fails rather than sends.
+        """Every link into the app is this with a path appended, in emails and on
+        calendar invites, so a value that cannot take one is refused at start-up:
+        no web scheme sends links no client can open, no host is no link at all,
+        and a query or fragment swallows the path (Codex on #390 —
+        ``?tenant=a/sessions/{id}`` opens the home page). A path prefix is
+        fine. Unset stays allowed: then a message that links fails rather than
+        sends.
         """
-        if value and not value.startswith(("https://", "http://")):
+        if not value:
+            return value
+        parts = urlsplit(value)
+        if parts.scheme not in ("https", "http") or not parts.netloc:
             raise ValueError("APP_BASE_URL must be an absolute http(s) URL")
+        if parts.query or parts.fragment or value.rstrip("/").endswith(("?", "#")):
+            raise ValueError("APP_BASE_URL must not carry a query or fragment")
         return value
 
     @field_validator("cors_origins", mode="before")

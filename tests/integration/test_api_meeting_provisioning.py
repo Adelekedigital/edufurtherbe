@@ -305,6 +305,33 @@ async def test_the_invite_and_the_emails_share_one_link(
     assert calendar.calls[0]["join_url"] == emailed["sessionUrl"]
 
 
+async def test_a_party_who_deleted_their_account_is_not_invited(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    fakes: tuple[FakeRooms, FakeCalendar],
+) -> None:
+    """**Soft-deleted rows are invisible** (AGENTS.md), and Codex caught this
+    lookup missing the shared predicate. A mentee who deletes their account
+    while a request waits must not have their retained address sent to Google
+    when the mentor accepts. The mentor is still invited."""
+    _, calendar = fakes
+    setup = await a_mentor_on(db_engine, "inv-deleted", "daily", confirmation=True)
+    session = await book(api_client, setup)
+    mentee, mentor = await emails_of(db_engine, session["id"])
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE email = :e"), {"e": mentee}
+        )
+
+    accepted = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/accept", headers=setup["mentor_headers"]
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    (call,) = calendar.calls
+    assert [email for email in call["attendee_emails"] if email] == [mentor]
+
+
 async def test_with_no_app_origin_the_invite_still_goes_out_without_a_link(
     api_client: httpx.AsyncClient,
     db_engine: AsyncEngine,
