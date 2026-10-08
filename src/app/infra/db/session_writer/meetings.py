@@ -4,7 +4,6 @@ it when the session will not happen.
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
 from typing import Any
 from uuid import UUID
@@ -13,7 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.attendance import (
-    join_window,
+    door_window,
 )
 from app.domain.enums import (
     MeetingProvider,
@@ -99,18 +98,16 @@ async def provision_meeting(
     external_room_id: str | None = None
     external_event_id: str | None = None
 
-    # Only the opening edge: the room outlives the join window, so its close
-    # comes from the session's own length rather than from the window.
-    opens, _ = join_window(row["starts_at"])
+    # The room is open exactly as long as the door: from the join window opening
+    # to the session's end. One definition, so a door is never issued onto a
+    # room that has closed or not yet opened.
+    opens, closes = door_window(row["starts_at"], int(row["duration_minutes"]))
     try:
         if plan.needs_room:
             room = rooms.create(
                 name=room_name(str(session_id), provider),
                 opens_at=opens,
-                # The room outlives the join window by the session's own length:
-                # a room that shut at `join_closes_at` would evict everybody
-                # fifteen minutes into an hour-long session.
-                closes_at=row["starts_at"] + dt.timedelta(minutes=row["duration_minutes"]),
+                closes_at=closes,
             )
             meeting_url, external_room_id = room.url, room.external_id
     except (VenueUnavailableError, NotImplementedError) as exc:
