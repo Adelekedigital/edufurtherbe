@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import add_availability, add_session_type, make_public_mentor
 
-from app.domain.attendance import JOIN_CLOSES, JOIN_OPENS, outcome
+from app.domain.attendance import JOIN_CLOSES, outcome
 from app.domain.enums import SessionStatus
 from app.infra.db.session_writer import settle_attendance
 from conftest import api_token, bearer, fund
@@ -684,7 +684,9 @@ async def test_the_session_says_when_its_window_opens_and_shuts(
     ).json()
 
     starts_at = dt.datetime.fromisoformat(seen["starts_at"])
-    assert dt.datetime.fromisoformat(seen["join_opens_at"]) == starts_at - JOIN_OPENS
+    # Ten: the owner's default (2026-10-08), pinned as a literal so a changed
+    # default is a visible decision rather than a silent one.
+    assert dt.datetime.fromisoformat(seen["join_opens_at"]) == starts_at - dt.timedelta(minutes=10)
     assert dt.datetime.fromisoformat(seen["join_closes_at"]) == starts_at + JOIN_CLOSES
 
 
@@ -753,3 +755,63 @@ async def test_arrivals_travel_with_every_row_of_the_list(
     (row,) = page.json()["data"]
     assert row["mentee"]["attendance_status"] == "attended"
     assert row["mentor"]["attendance_status"] == "pending"
+
+
+# --------------------------------------------------------------------------
+# How early the window opens (owner, 2026-10-08: ten minutes, configurable)
+# --------------------------------------------------------------------------
+
+
+def with_join_lead(api_client: httpx.AsyncClient, minutes: int) -> None:
+    """Run the app with `JOIN_WINDOW_OPENS_MINUTES` set to `minutes`."""
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.settings = app.state.settings.model_copy(
+        update={"join_window_opens_minutes": minutes}
+    )
+
+
+async def test_joining_nine_minutes_early_counts(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Inside the ten-minute default. Under the old five it was refused."""
+    booking = await a_confirmed_session(
+        db_engine, api_client, "lead-nine", starts_in=dt.timedelta(minutes=9)
+    )
+
+    joined = await api_client.post(join_url(booking), headers=booking["mentee"])
+
+    assert joined.status_code == 200, joined.text
+
+
+async def test_joining_eleven_minutes_early_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Outside the default: the window has an edge, it is not merely wider."""
+    booking = await a_confirmed_session(
+        db_engine, api_client, "lead-eleven", starts_in=dt.timedelta(minutes=11)
+    )
+
+    joined = await api_client.post(join_url(booking), headers=booking["mentee"])
+
+    assert joined.status_code == 409, joined.text
+
+
+async def test_the_lead_is_read_from_configuration(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Configured, not hard-coded at ten.** With the setting at three, the
+    published `join_opens_at` and `/join` itself both move to three: the field a
+    client reads and the guard it meets cannot disagree."""
+    with_join_lead(api_client, 3)
+    booking = await a_confirmed_session(
+        db_engine, api_client, "lead-three", starts_in=dt.timedelta(minutes=5)
+    )
+
+    seen = (
+        await api_client.get(f"/api/v1/sessions/{booking['id']}", headers=booking["mentee"])
+    ).json()
+    joined = await api_client.post(join_url(booking), headers=booking["mentee"])
+
+    starts_at = dt.datetime.fromisoformat(seen["starts_at"])
+    assert dt.datetime.fromisoformat(seen["join_opens_at"]) == starts_at - dt.timedelta(minutes=3)
+    assert joined.status_code == 409, joined.text

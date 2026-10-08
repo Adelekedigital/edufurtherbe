@@ -7,11 +7,13 @@ straddles the start. An earlier draft of the build plan had one value doing both
 jobs, and they are not each other's fallback: one applies to
 confirmation-required offerings only, the other to every session once confirmed.
 
-``starts_at - 5 minutes`` to ``starts_at + 15 minutes``. Asymmetric, and both
-halves are the human behaviour rather than a round number: five minutes early is
-somebody arriving, and fifteen late is somebody who was held up rather than
-somebody who never came. Later a mentor preference, which is why the two are
-separate constants.
+``starts_at - lead`` to ``starts_at + 15 minutes``, where the lead is the
+``JOIN_WINDOW_OPENS_MINUTES`` setting (owner, 2026-10-08: ten; it was a fixed
+five). Asymmetric, and both halves are the human behaviour rather than a round
+number: a few minutes early is somebody arriving, and fifteen late is somebody
+who was held up rather than somebody who never came. The two ends are separate
+because they answer different questions: the opening is configurable, and the
+close is when the outcome becomes decidable.
 
 **Every outcome records how it was reached**, in ``session_events.metadata``.
 Today that is always ``AttendanceEvidence.REPORTED``, and saying so in the log
@@ -42,15 +44,19 @@ from __future__ import annotations
 import datetime as dt
 from enum import StrEnum
 
+from app.core.config import Settings
 from app.domain.enums import SessionRole, SessionStatus
+from app.domain.sessions import CANCELLATION_CUTOFF
 
 __all__ = [
     "DOOR_STATUSES",
     "JOIN_CLOSES",
-    "JOIN_OPENS",
+    "JOIN_LEAD_CEILING",
     "AttendanceEvidence",
     "absent_party",
     "door_window",
+    "join_closes_at",
+    "join_opens",
     "join_window",
     "outcome",
     "session_ends_at",
@@ -94,8 +100,25 @@ class AttendanceEvidence(StrEnum):
     OBSERVED = "observed"
 
 
-#: How early a party may mark themselves present.
-JOIN_OPENS = dt.timedelta(minutes=5)
+#: The furthest ahead the window may open, which is the cancellation cutoff
+#: (Codex on #391). Earlier, and one party could be marked present and enter
+#: while the other could still cancel and release the session. The setting's
+#: bound in `core/config.py` repeats this as a literal, because config may not
+#: import the domain, and a test pins the two together.
+JOIN_LEAD_CEILING = CANCELLATION_CUTOFF
+
+
+def join_opens(settings: Settings) -> dt.timedelta:
+    """How long before the start a party may press Join: the one reader of
+    `join_window_opens_minutes` (owner, 2026-10-08: ten, configurable).
+
+    **There is no constant to fall back on**, deliberately. Every window function
+    takes this as `opens_before`, so a caller that forgets it fails to type-check
+    rather than quietly using a stale lead. The room and its tokens open at the
+    same instant, because they are built from the same window.
+    """
+    return dt.timedelta(minutes=settings.join_window_opens_minutes)
+
 
 #: How late. **Also when the session's outcome becomes decidable**, which is the
 #: same instant deliberately: an outcome settled before the window shut would
@@ -109,7 +132,15 @@ def session_ends_at(starts_at: dt.datetime, duration_minutes: int) -> dt.datetim
     return starts_at + dt.timedelta(minutes=duration_minutes)
 
 
-def join_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datetime, dt.datetime]:
+def join_closes_at(starts_at: dt.datetime, duration_minutes: int) -> dt.datetime:
+    """When arrivals stop: fifteen minutes in, or the session's end if sooner.
+    Separate from the opening, which is configured, so settlement needs no setting."""
+    return min(starts_at + JOIN_CLOSES, session_ends_at(starts_at, duration_minutes))
+
+
+def join_window(
+    starts_at: dt.datetime, duration_minutes: int, *, opens_before: dt.timedelta
+) -> tuple[dt.datetime, dt.datetime]:
     """The half-open interval a party may mark themselves present in.
 
     **Closes fifteen minutes in, or when the session ends if that is sooner**
@@ -121,8 +152,7 @@ def join_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datet
     derived from different constants by two callers — the shape the response
     window's own history warns about.
     """
-    closes = min(starts_at + JOIN_CLOSES, session_ends_at(starts_at, duration_minutes))
-    return starts_at - JOIN_OPENS, closes
+    return starts_at - opens_before, join_closes_at(starts_at, duration_minutes)
 
 
 #: Which sessions may be entered at all: agreed to, and not called off.
@@ -139,7 +169,9 @@ def join_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datet
 DOOR_STATUSES = frozenset({SessionStatus.CONFIRMED, SessionStatus.COMPLETED, SessionStatus.NO_SHOW})
 
 
-def door_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datetime, dt.datetime]:
+def door_window(
+    starts_at: dt.datetime, duration_minutes: int, *, opens_before: dt.timedelta
+) -> tuple[dt.datetime, dt.datetime]:
     """When a party may be handed a way into the room: from the join window
     opening until the session's end (#379).
 
@@ -154,18 +186,22 @@ def door_window(starts_at: dt.datetime, duration_minutes: int) -> tuple[dt.datet
     Opens with the join window rather than earlier: the room's own token is not
     valid before it, so a door issued sooner would open onto nothing.
     """
-    opens, _ = join_window(starts_at, duration_minutes)
+    opens, _ = join_window(starts_at, duration_minutes, opens_before=opens_before)
     return opens, session_ends_at(starts_at, duration_minutes)
 
 
-def within_door_window(starts_at: dt.datetime, duration_minutes: int, now: dt.datetime) -> bool:
+def within_door_window(
+    starts_at: dt.datetime, duration_minutes: int, now: dt.datetime, *, opens_before: dt.timedelta
+) -> bool:
     """Whether a door may be issued at ``now``. Half-open, like the join window:
     the session's last instant is already over."""
-    opens, closes = door_window(starts_at, duration_minutes)
+    opens, closes = door_window(starts_at, duration_minutes, opens_before=opens_before)
     return opens <= now < closes
 
 
-def within_join_window(starts_at: dt.datetime, duration_minutes: int, now: dt.datetime) -> bool:
+def within_join_window(
+    starts_at: dt.datetime, duration_minutes: int, now: dt.datetime, *, opens_before: dt.timedelta
+) -> bool:
     """Whether ``now`` is inside the window.
 
     **Half-open**: the closing instant is already too late, so this and
@@ -173,7 +209,7 @@ def within_join_window(starts_at: dt.datetime, duration_minutes: int, now: dt.da
     both. Without that a settlement running exactly on the boundary could mark a
     party absent in the same second they were still allowed to arrive.
     """
-    opens, closes = join_window(starts_at, duration_minutes)
+    opens, closes = join_window(starts_at, duration_minutes, opens_before=opens_before)
     return opens <= now < closes
 
 
@@ -181,8 +217,7 @@ def window_has_closed(starts_at: dt.datetime, duration_minutes: int, now: dt.dat
     """Whether the outcome is decidable yet. The exact complement of the upper
     bound above, written as its own function because the settlement asks the
     question in SQL and the two must agree on the boundary."""
-    _, closes = join_window(starts_at, duration_minutes)
-    return now >= closes
+    return now >= join_closes_at(starts_at, duration_minutes)
 
 
 def outcome(*, mentor_attended: bool, mentee_attended: bool) -> SessionStatus:

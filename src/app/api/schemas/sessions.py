@@ -257,12 +257,12 @@ class SessionRead(BaseModel):
     join_opens_at: dt.datetime | None = Field(
         default=None,
         description=(
-            "When either party may first mark themselves present — five "
-            "minutes before the start.\n\n"
+            "When either party may first mark themselves present: ten minutes "
+            "before the start unless the platform is configured otherwise, and "
+            "never more than ten, because cancelling stays open until then.\n\n"
             "**Sent rather than left to the client to compute**, because the "
-            "offsets are a product rule that will become a mentor preference. "
-            "A client hardcoding five and fifteen drifts from us the day that "
-            "lands, and drifts silently."
+            "lead is a setting. A client hardcoding any number drifts from us "
+            "the day it changes, and drifts silently."
         ),
     )
     join_closes_at: dt.datetime | None = Field(
@@ -340,13 +340,13 @@ class SessionRead(BaseModel):
     )
 
     @classmethod
-    def from_row(cls, row: dict[str, object]) -> SessionRead:
+    def from_row(cls, row: dict[str, object], *, opens_before: dt.timedelta) -> SessionRead:
         # Derived here rather than stored, because it is `starts_at` plus two
         # constants and a stored copy would be a second definition to drift.
         starts_at = cast(dt.datetime, row["starts_at"])
         length = int(str(row["duration_minutes"]))
-        opens, closes = join_window(starts_at, length)
-        _, door_closes = door_window(starts_at, length)
+        opens, closes = join_window(starts_at, length, opens_before=opens_before)
+        _, door_closes = door_window(starts_at, length, opens_before=opens_before)
         # Null rather than a time when there is no door, reusing the one set that
         # says which sessions have one — so this field and the endpoint cannot
         # disagree about whether a cancelled session can be entered.

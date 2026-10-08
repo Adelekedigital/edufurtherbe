@@ -33,6 +33,7 @@ from app.api.deps import (
     CancelledSessionDep,
     DeclinedSessionDep,
     JoinedSessionDep,
+    JoinLeadDep,
     SessionAnswersDep,
     SessionDetailDep,
     SessionDoorDep,
@@ -104,9 +105,12 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=LIST_RESPONSES,
 )
-async def list_user_sessions(page: SessionsPageDep) -> Page[SessionRead]:
+async def list_user_sessions(page: SessionsPageDep, lead: JoinLeadDep) -> Page[SessionRead]:
     rows, next_cursor = page
-    return Page(data=[SessionRead.from_row(row) for row in rows], next_cursor=next_cursor)
+    return Page(
+        data=[SessionRead.from_row(row, opens_before=lead) for row in rows],
+        next_cursor=next_cursor,
+    )
 
 
 @router.get(
@@ -122,8 +126,8 @@ async def list_user_sessions(page: SessionsPageDep) -> Page[SessionRead]:
     ),
     responses=READ_RESPONSES,
 )
-async def read_session(session: SessionDetailDep) -> SessionRead:
-    return SessionRead.from_row(session)
+async def read_session(session: SessionDetailDep, lead: JoinLeadDep) -> SessionRead:
+    return SessionRead.from_row(session, opens_before=lead)
 
 
 @router.get(
@@ -346,8 +350,8 @@ DOOR_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_409_CONFLICT: {
         "description": (
             "Your session, but there is no room to enter: it was never agreed "
-            "to or was called off, or it is outside the span from five minutes "
-            "before its start to its end. The message names which."
+            "to or was called off, or it is outside the span from `join_opens_at` "
+            "to its end. The message names which."
         )
     },
 }
@@ -370,7 +374,7 @@ DOOR_RESPONSES: dict[int | str, dict[str, str]] = {
         "nothing created one, which this description went on claiming after that "
         "stopped being true.\n\n"
         "It is **not** returned to either party before the join window. The link "
-        "is handed over by `/join`, five minutes before the start, so that a "
+        "is handed over by `/join`, from `join_opens_at`, so that a "
         "press of Join is something the platform can record."
     ),
     responses=TRANSITION_RESPONSES,
@@ -463,7 +467,8 @@ async def cancel_session(_: CancelledSessionDep) -> dict[str, bool]:
     "/sessions/{session_id}/join",
     summary="Record that you arrived",
     description=(
-        "Marks **you** present, from five minutes before the start to fifteen "
+        "Marks **you** present, from `join_opens_at` (ten minutes before the "
+        "start unless configured otherwise) to fifteen "
         "minutes after it — or to the session's end, if it is shorter than "
         "that: nobody is marked present at a session that is over. Read "
         "`join_closes_at` rather than computing it. Either party calls it for "
@@ -517,7 +522,7 @@ async def join_session(door: JoinedSessionDep) -> JoinRead:
     description=(
         "Your way into the room, **without recording an arrival** — for after "
         "a dropped call or a refreshed tab.\n\n"
-        "**Open from five minutes before the start until the session ends**, "
+        "**Open from `join_opens_at` until the session ends**, "
         "which is never earlier than `/join` closes: arrivals stop fifteen "
         "minutes in, or at the end of a shorter session. The difference is "
         "deliberate: `/join` closes when the session's outcome becomes "

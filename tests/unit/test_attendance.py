@@ -11,9 +11,10 @@ import datetime as dt
 
 import pytest
 
+from app.core.config import Settings
 from app.domain.attendance import (
     JOIN_CLOSES,
-    JOIN_OPENS,
+    join_opens,
     join_window,
     outcome,
     window_has_closed,
@@ -27,13 +28,17 @@ STARTS_AT = dt.datetime(2026, 8, 18, 15, 0, tzinfo=dt.UTC)
 #: closes the window. The short case has its own tests below.
 HOUR = 60
 
+#: The configured lead, at its default. Every window function takes it as an
+#: argument, so no caller can fall back to a constant.
+LEAD = join_opens(Settings(_env_file=None))
+
 
 def test_the_window_straddles_the_start() -> None:
-    """Five minutes before to fifteen after, and the asymmetry is the point: it
-    is not a symmetric tolerance around the start but two different human facts
-    — arriving early, and being held up."""
-    assert join_window(STARTS_AT, HOUR) == (
-        STARTS_AT - dt.timedelta(minutes=5),
+    """Ten minutes before to fifteen after, by default, and the asymmetry is the
+    point: it is not a symmetric tolerance around the start but two different
+    human facts — arriving early, and being held up."""
+    assert join_window(STARTS_AT, HOUR, opens_before=LEAD) == (
+        STARTS_AT - dt.timedelta(minutes=10),
         STARTS_AT + dt.timedelta(minutes=15),
     )
 
@@ -41,8 +46,8 @@ def test_the_window_straddles_the_start() -> None:
 @pytest.mark.parametrize(
     ("offset", "inside"),
     [
-        (-JOIN_OPENS - dt.timedelta(seconds=1), False),
-        (-JOIN_OPENS, True),
+        (-LEAD - dt.timedelta(seconds=1), False),
+        (-LEAD, True),
         (dt.timedelta(0), True),
         (JOIN_CLOSES - dt.timedelta(seconds=1), True),
         (JOIN_CLOSES, False),
@@ -55,12 +60,12 @@ def test_the_window_is_half_open(offset: dt.timedelta, inside: bool) -> None:
     implement differently — and here the two readers are `within_join_window`
     and the settlement, which must not both claim the closing instant.
     """
-    assert within_join_window(STARTS_AT, HOUR, STARTS_AT + offset) is inside
+    assert within_join_window(STARTS_AT, HOUR, STARTS_AT + offset, opens_before=LEAD) is inside
 
 
 @pytest.mark.parametrize(
     "offset",
-    [-dt.timedelta(hours=1), -JOIN_OPENS, dt.timedelta(0), JOIN_CLOSES, dt.timedelta(hours=1)],
+    [-dt.timedelta(hours=1), -LEAD, dt.timedelta(0), JOIN_CLOSES, dt.timedelta(hours=1)],
 )
 def test_joining_and_settling_never_overlap(offset: dt.timedelta) -> None:
     """**The invariant the half-open boundary exists for.**
@@ -72,7 +77,8 @@ def test_joining_and_settling_never_overlap(offset: dt.timedelta) -> None:
     now = STARTS_AT + offset
 
     assert not (
-        within_join_window(STARTS_AT, HOUR, now) and window_has_closed(STARTS_AT, HOUR, now)
+        within_join_window(STARTS_AT, HOUR, now, opens_before=LEAD)
+        and window_has_closed(STARTS_AT, HOUR, now)
     )
 
 
@@ -83,8 +89,8 @@ def test_a_short_session_s_window_closes_when_the_session_ends() -> None:
     minutes after its room had closed: the party was marked present at a session
     already over and handed a token for a room that no longer existed.
     """
-    assert join_window(STARTS_AT, 10) == (
-        STARTS_AT - JOIN_OPENS,
+    assert join_window(STARTS_AT, 10, opens_before=LEAD) == (
+        STARTS_AT - LEAD,
         STARTS_AT + dt.timedelta(minutes=10),
     )
 
@@ -100,12 +106,12 @@ def test_a_short_session_s_window_closes_when_the_session_ends() -> None:
 def test_a_short_session_s_window_is_half_open_at_its_end(
     offset: dt.timedelta, inside: bool
 ) -> None:
-    assert within_join_window(STARTS_AT, 10, STARTS_AT + offset) is inside
+    assert within_join_window(STARTS_AT, 10, STARTS_AT + offset, opens_before=LEAD) is inside
 
 
 @pytest.mark.parametrize("minutes", [5, 10, 14, 15, 16, 60])
 @pytest.mark.parametrize(
-    "offset", [dt.timedelta(minutes=m) for m in (-6, -5, 0, 4, 5, 9, 10, 14, 15, 16, 60)]
+    "offset", [dt.timedelta(minutes=m) for m in (-11, -10, -6, -5, 0, 4, 5, 9, 10, 14, 15, 16, 60)]
 )
 def test_joining_and_settling_partition_the_timeline_at_every_length(
     minutes: int, offset: dt.timedelta
@@ -115,11 +121,11 @@ def test_joining_and_settling_partition_the_timeline_at_every_length(
     the invariant is restated across lengths on both sides of fifteen minutes,
     not only for the hour the original was written for."""
     now = STARTS_AT + offset
-    joinable = within_join_window(STARTS_AT, minutes, now)
+    joinable = within_join_window(STARTS_AT, minutes, now, opens_before=LEAD)
     settleable = window_has_closed(STARTS_AT, minutes, now)
 
     assert not (joinable and settleable)
-    if now >= STARTS_AT - JOIN_OPENS:
+    if now >= STARTS_AT - LEAD:
         assert joinable or settleable
 
 
@@ -156,3 +162,17 @@ def test_a_missing_record_is_absence_rather_than_doubt() -> None:
     """
     assert outcome(mentor_attended=True, mentee_attended=False) is SessionStatus.NO_SHOW
     assert outcome(mentor_attended=False, mentee_attended=False) is SessionStatus.NO_SHOW
+
+
+def test_the_window_opens_ten_minutes_early_by_default() -> None:
+    """Owner, 2026-10-08: ten minutes, as a setting rather than a constant."""
+    assert join_opens(Settings(_env_file=None)) == dt.timedelta(minutes=10)
+
+
+def test_the_opening_lead_is_read_from_the_setting() -> None:
+    """Configured, not hard-coded: a value other than the default comes through."""
+    settings = Settings(_env_file=None, join_window_opens_minutes=3)
+
+    assert join_window(STARTS_AT, HOUR, opens_before=join_opens(settings))[0] == (
+        STARTS_AT - dt.timedelta(minutes=3)
+    )

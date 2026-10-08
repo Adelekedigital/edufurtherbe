@@ -242,6 +242,19 @@ class Settings(BaseSettings):
         default=10, ge=1, le=1440, validation_alias=env_key("review_edit_window_minutes")
     )
 
+    #: How many minutes before the start a party may press Join, which is also
+    #: when the room and its tokens open. Owner, 2026-10-08: ten, as a setting.
+    #: What it *means* stays in `domain/attendance.py`, and `join_opens(settings)`
+    #: there is the single reader. **Capped at the cancellation cutoff, ten**
+    #: (Codex on #391): opening earlier would let one party be marked present
+    #: and enter while the other could still cancel. The cap repeats
+    #: `domain.attendance.JOIN_LEAD_CEILING` as a literal, because config may not
+    #: import the domain; a test pins the two. Zero opens it at the start.
+    #: Arrivals still stop as `join_window` defines.
+    join_window_opens_minutes: int = Field(
+        default=10, ge=0, le=10, validation_alias=env_key("join_window_opens_minutes")
+    )
+
     # ``NoDecode`` is load-bearing, not decoration. Without it pydantic-settings
     # JSON-decodes a complex type *inside the settings source*, before any
     # validator runs, and a bare origin typed into a cloud console fails as
