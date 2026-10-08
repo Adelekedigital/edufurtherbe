@@ -679,6 +679,10 @@ class SessionParticipant(TimestampMixin, Base):
     #: is null on every migrated row and `AttendanceStatus.LEFT_EARLY` is first
     #: written by the product.
     left_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: First time the provider saw this party in the room (#382): Daily's
+    #: `participant.joined`. **Not `joined_at`**, which stays the Join press and
+    #: gates re-entry. Null for Meet and custom venues, which report no presence.
+    in_room_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     attendance_status: Mapped[AttendanceStatus] = mapped_column(
         str_enum(AttendanceStatus), nullable=False, server_default=text("'pending'")
     )
