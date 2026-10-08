@@ -27,6 +27,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from app.core.errors import AppError
@@ -43,6 +44,7 @@ __all__ = [
     "MessageContext",
     "UnresolvedVariableError",
     "build_variables",
+    "session_page_url",
 ]
 
 
@@ -153,7 +155,27 @@ def _app_link(context: MessageContext, path: str, name: str) -> str:
     Every link goes through here: with no application origin configured a
     link would go out as a bare path that no mail client can open.
     """
-    return f"{_needs(context.app_base_url, name).rstrip('/')}{path}"
+    return _absolute(_needs(context.app_base_url, name), path)
+
+
+def _absolute(app_base_url: str, path: str) -> str:
+    """The origin and a path joined: the one place a link into the app is built."""
+    return f"{app_base_url.rstrip('/')}{path}"
+
+
+def session_page_url(app_base_url: str, session_id: str) -> str | None:
+    """The absolute link to a session's page, or ``None`` with no application
+    origin configured.
+
+    **The one link to a session the platform hands out**, in emails and on
+    calendar invites alike (#389), so the two cannot point at different pages.
+    It is where Join and Rejoin are pressed, and the page redirects a session it
+    does not draw, so the link stays safe on an invite that outlives a
+    cancellation. The id is encoded as a single path segment.
+    """
+    if not app_base_url:
+        return None
+    return _absolute(app_base_url, SESSION_PATH.format(session_id=quote(session_id, safe="")))
 
 
 def _session_url(context: MessageContext) -> str:
@@ -165,7 +187,7 @@ def _session_url(context: MessageContext) -> str:
     room out days in advance and undo both.
     """
     session_id = _needs(context.session_id, "sessionUrl")
-    return _app_link(context, SESSION_PATH.format(session_id=session_id), "sessionUrl")
+    return _needs(session_page_url(context.app_base_url, session_id), "sessionUrl")
 
 
 def _topic(context: MessageContext) -> str:

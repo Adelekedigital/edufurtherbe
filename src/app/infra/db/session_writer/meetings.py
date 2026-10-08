@@ -19,11 +19,13 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.domain.meetings import plan_for
+from app.domain.messages import session_page_url
 from app.infra.clients.meetings import VenueUnavailableError, room_name
 from app.infra.db.models.sessions import (
     Session,
 )
 from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 from app.infra.db.session_type_store import resolve_venue
 
 logger = logging.getLogger(__name__)
@@ -35,8 +37,12 @@ async def provision_meeting(
     *,
     rooms: Any,
     calendar: Any,
+    app_base_url: str,
 ) -> None:
     """Give a newly confirmed session somewhere to meet. Does not commit.
+
+    ``app_base_url`` builds the session page the calendar invite links to (#389);
+    empty, and the invite goes out with no link rather than a venue's.
 
     **Called at confirmation, which is two places rather than one:** booking, for
     an offering that auto-confirms, and ``/accept`` for one that does not. The
@@ -67,6 +73,7 @@ async def provision_meeting(
                     Session.duration_minutes,
                     Session.meeting_url,
                     Session.mentee_id,
+                    Session.mentor_id,
                 ).where(Session.id == session_id)
             )
         )
@@ -84,9 +91,12 @@ async def provision_meeting(
     if SessionStatus(row["status"]) is not SessionStatus.CONFIRMED:
         return
 
-    mentee_email = (
-        await session.execute(select(User.email).where(User.id == row["mentee_id"]))
-    ).scalar_one_or_none()
+    found = await session.execute(
+        # `LIVE`: a party who has deleted their account is invisible, so their
+        # retained address never reaches Google (Codex on #390).
+        select(User.id, User.email).where(User.id.in_((row["mentee_id"], row["mentor_id"])), LIVE)
+    )
+    emails: dict[UUID, str] = dict(found.tuples().all())
 
     resolved = await resolve_venue(session, row["session_type_id"])
     if resolved is None:  # pragma: no cover - the offering was just booked
@@ -116,10 +126,15 @@ async def provision_meeting(
     try:
         event = calendar.create_event(
             organiser_id=str(session_id),
-            # **The mentee is the guest.** The platform account organises and
-            # the mentor is told through the platform, so an empty address here
-            # would create an event nobody outside this service ever sees.
-            attendee_email=str(mentee_email or ""),
+            # **Both parties** (ADR 0012, #389). This invited the mentee alone,
+            # under a comment claiming the mentor "is told through the
+            # platform": mentors never had sessions on their own calendar, and
+            # on Meet an uninvited mentor knocks with nobody present to admit
+            # them.
+            attendee_emails=(
+                str(emails.get(row["mentee_id"]) or ""),
+                str(emails.get(row["mentor_id"]) or ""),
+            ),
             starts_at=row["starts_at"],
             duration_minutes=int(row["duration_minutes"]),
             summary="EduFurther session",
@@ -127,7 +142,10 @@ async def provision_meeting(
             # conference on a session held in Daily puts a second link on the
             # event, and the invitee clicks whichever the client renders first.
             wants_conference=plan.wants_conference,
-            meeting_url=meeting_url,
+            # **The session page, never the venue** (#389): the page the emails
+            # link to, where Join is pressed and recorded. A Daily room's URL
+            # went here, and Daily refuses a bare room URL without a token.
+            join_url=session_page_url(app_base_url, str(session_id)),
         )
     except (VenueUnavailableError, NotImplementedError) as exc:
         logger.info("no calendar event for session %s: %s", session_id, exc)
