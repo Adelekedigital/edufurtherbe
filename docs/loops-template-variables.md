@@ -126,7 +126,7 @@ know which one they are reading.
 | name | for | value |
 |---|---|---|
 | `hours` | request, request reminder | hours left to answer, from `respond_by` |
-| `intervalTime` | reminder | how far ahead this reminder is |
+| `intervalTime` | reminder | how far ahead this reminder is. For `session_reminder` it completes "is happening {intervaltime}": `Tomorrow`, `in 1 Hour` or `in 30 Minutes` (#385, the legacy wording; set in `SESSION_REMINDERS`) |
 | `reasonTitle` | declined, withdrawn | the coded reason, in words |
 | `reasonMessage` | declined, withdrawn, cancelled | what the person wrote |
 | `cancelInitiator` | cancelled | which party called it off |

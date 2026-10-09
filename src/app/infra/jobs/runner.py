@@ -26,8 +26,7 @@ from app.infra.clients.meetings import (
     NullRooms,
     free_busy,
 )
-from app.infra.clients.notifications import LoopsNotifier, NullNotifier
-from app.infra.clients.templates import LoopsTemplates
+from app.infra.clients.notifications import LoopsNotifier, NullNotifier, notifier_for
 from app.infra.db.calendar_store import check_connections, free_busy_reader
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
 from app.infra.db.credit_grants import grant_monthly_credits, unlocked_mentee_count
@@ -144,15 +143,7 @@ class RuntimeJobs:
         return JobResult(name=name, job_id=job_id, status=status, counts=counts)
 
     def _notifier(self) -> LoopsNotifier | NullNotifier:
-        key = self.settings.loops_api_key
-        if key is None:
-            return NullNotifier()
-        secret = key.get_secret_value()
-        return (
-            LoopsNotifier(secret)
-            .with_settings(self.settings)
-            .with_templates(LoopsTemplates(secret))
-        )
+        return notifier_for(self.settings)
 
     def _calendar(self) -> GoogleCalendar | NullCalendar:
         settings = self.settings
