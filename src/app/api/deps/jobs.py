@@ -120,10 +120,16 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
             kind=str(kind),
         )
         await session.commit()
-    if kind == LAST_REMINDER_KIND:
+    if queued and kind == LAST_REMINDER_KIND:
         # **The Meet arrives with the last reminder** (#384), after the email
         # has gone so a slow Google never delays it. A failure leaves the link
         # empty, and the first press of Join tries again.
+        #
+        # **Only when the reminder went out**, which means a still-confirmed
+        # session (Codex on #402): a callback QStash delivers after settlement
+        # finds the outcome decided, and a Meet made then is a way in after the
+        # fact. Join and the door keep their wider rule, for a party who
+        # pressed Join in time.
         await add_meet_link(session, UUID(str(session_id)), calendar=_calendar(request))
         await session.commit()
     return queued

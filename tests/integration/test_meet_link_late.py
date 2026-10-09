@@ -118,6 +118,27 @@ async def test_a_session_with_its_link_is_left_alone(
     assert calendar.conferences == []
 
 
+@pytest.mark.parametrize("status", ["completed", "no_show"])
+async def test_a_late_reminder_adds_no_meet_to_a_settled_session(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, status: str
+) -> None:
+    """**A reminder QStash delivers late** (Codex on #402): the session was
+    settled meanwhile, so its outcome is decided and the reminder is not sent.
+    A Meet made now would be a way in after the fact. Join and the door still
+    use their own wider rule, for a party who pressed Join in time."""
+    _, session = await a_meet_session(db_engine, api_client, f"late-settled-{status}")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET status = :s WHERE id = :i"),
+            {"s": status, "i": session["id"]},
+        )
+    calendar = FakeCalendar()
+
+    await remind(db_engine, calendar, session["id"], LAST_REMINDER_KIND)
+
+    assert calendar.conferences == []
+
+
 async def test_a_called_off_session_gets_no_meet(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
