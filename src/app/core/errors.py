@@ -101,6 +101,11 @@ class BookingWithMentorExistsError(ConflictError):
     """The mentee already has a live session with this mentor (#342)."""
 
 
+class JoinWindowClosedError(ConflictError):
+    """Arrivals have stopped and this party never pressed Join in time, so the
+    door is closed to them (owner, 2026-10-08)."""
+
+
 class BookingLimitReachedError(ConflictError):
     """The mentee already holds the most live sessions allowed at once (#342)."""
 

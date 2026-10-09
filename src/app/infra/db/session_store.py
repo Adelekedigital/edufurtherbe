@@ -172,10 +172,12 @@ _PARTY_COLUMNS = (
     _MENTEE_PROFILE.avatar_focus_y.label("mentee_avatar_focus_y"),
     _MENTEE.timezone.label("mentee_timezone"),
     _attendance(Session.mentor_id, SessionParticipant.joined_at, "mentor_joined_at"),
+    _attendance(Session.mentor_id, SessionParticipant.in_room_at, "mentor_in_room_at"),
     _attendance(
         Session.mentor_id, SessionParticipant.attendance_status, "mentor_attendance_status"
     ),
     _attendance(Session.mentee_id, SessionParticipant.joined_at, "mentee_joined_at"),
+    _attendance(Session.mentee_id, SessionParticipant.in_room_at, "mentee_in_room_at"),
     _attendance(
         Session.mentee_id, SessionParticipant.attendance_status, "mentee_attendance_status"
     ),

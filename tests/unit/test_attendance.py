@@ -17,6 +17,7 @@ from app.domain.attendance import (
     join_opens,
     join_window,
     outcome,
+    presence_decides,
     window_has_closed,
     within_join_window,
 )
@@ -176,3 +177,22 @@ def test_the_opening_lead_is_read_from_the_setting() -> None:
     assert join_window(STARTS_AT, HOUR, opens_before=join_opens(settings))[0] == (
         STARTS_AT - dt.timedelta(minutes=3)
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "has_room", "decides"),
+    [
+        ("daily", True, True),
+        ("daily", False, False),
+        ("google_meet", True, False),
+        ("custom", False, False),
+        (None, False, False),
+    ],
+)
+def test_presence_decides_only_a_daily_session_with_a_room(
+    provider: str | None, has_room: bool, decides: bool
+) -> None:
+    """Daily reports who was in the room; Meet and custom venues report nothing.
+    A Daily session whose room was never made has nowhere to be seen, so the
+    press decides there too (#382)."""
+    assert presence_decides(provider, has_room=has_room) is decides

@@ -58,7 +58,7 @@ from app.api.deps.interest import (
     RegisteredInterestDep,
     WithdrawnInterestDep,
 )
-from app.api.deps.jobs import ReminderCallbackDep, RuntimeJobDep
+from app.api.deps.jobs import DailyPresenceDep, ReminderCallbackDep, RuntimeJobDep
 from app.api.deps.mentors import (
     FeaturedMentorDep,
     MentorPageDep,
@@ -170,6 +170,7 @@ __all__ = [
     "CreatedReferralDep",
     "CreatedSessionTypeWindowDep",
     "CurrentUserDep",
+    "DailyPresenceDep",
     "DecidedMentorDep",
     "DecidedReportDep",
     "DeclinedSessionDep",

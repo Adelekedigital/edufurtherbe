@@ -131,6 +131,9 @@ async def test_party_keys_are_exactly_these(
         "avatar_focus",
         "timezone",
         "joined_at",
+        # #382: when Daily first saw this party in the room. Optional in the
+        # spec; `joined_at` stays the Join press.
+        "in_room_at",
         "attendance_status",
     }
 

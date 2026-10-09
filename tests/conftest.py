@@ -1034,3 +1034,20 @@ def ladder() -> CreditLadder:
     isolate. `fresh_settings` is for tests that deliberately override.
     """
     return credit_ladder(Settings(_env_file=None))
+
+
+@pytest.fixture
+def door(api_client: httpx.AsyncClient) -> Any:
+    """A room provider that mints tokens, and a calendar, wired onto the app.
+
+    Shared by the meeting, door and presence suites, so it lives here rather
+    than in one of them (one copy, non-negotiable #8). Imported lazily so this
+    file adds no dependency for suites that never ask for it.
+    """
+    from tests.integration.meeting_fakes import FakeCalendar, FakeDoor
+
+    rooms = FakeDoor()
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.meeting_rooms = rooms
+    app.state.calendar = FakeCalendar()
+    return rooms

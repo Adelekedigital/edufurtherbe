@@ -19,7 +19,13 @@ from app.domain.availability import booking_window
 from app.domain.credits import credit_ladder
 from app.domain.institutions import CatalogueError, CatalogueRow, to_catalogue_row
 from app.infra.clients.hipolabs import FileCatalogue, HipolabsCatalogue
-from app.infra.clients.meetings import GoogleCalendar, NullCalendar, free_busy
+from app.infra.clients.meetings import (
+    DailyRooms,
+    GoogleCalendar,
+    NullCalendar,
+    NullRooms,
+    free_busy,
+)
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier
 from app.infra.clients.templates import LoopsTemplates
 from app.infra.db.calendar_store import check_connections, free_busy_reader
@@ -37,7 +43,12 @@ from app.infra.db.mentor_status_store import remind_returning_mentors
 from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.outbox import drain
 from app.infra.db.session_type_store import finalise_scheduled_deletions
-from app.infra.db.session_writer import expire_requests, remind_unreviewed, settle_attendance
+from app.infra.db.session_writer import (
+    confirm_presence,
+    expire_requests,
+    remind_unreviewed,
+    settle_attendance,
+)
 from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
@@ -158,6 +169,11 @@ class RuntimeJobs:
             calendar_id=settings.google_calendar_id,
         )
 
+    def _rooms(self) -> DailyRooms | NullRooms:
+        """Daily's client for the meeting records, or none when unconfigured."""
+        key = self.settings.daily_api_key
+        return DailyRooms(key.get_secret_value()) if key else NullRooms()
+
     def _calendar_health(self) -> dict[str, str] | None:
         settings = self.settings
         if not (
@@ -178,13 +194,27 @@ class RuntimeJobs:
             async with AsyncSession(engine) as session:
                 now = dt.datetime.now(dt.UTC)
                 expired = await expire_requests(session, now=now, calendar=self._calendar())
-                settled = await settle_attendance(session, now=now)
+                # Presence first (#382): a party no webhook reported is read
+                # from Daily's records, and a session those cannot be read for
+                # waits rather than settling on silence.
+                check = await confirm_presence(session, now=now, rooms=self._rooms())
+                settled = await settle_attendance(
+                    session, now=now, unverified=check.waiting, unread=check.unread
+                )
                 # After attendance, so a session that ended this hour no longer
                 # holds its scheduled offering open (#218).
                 finalised = await finalise_scheduled_deletions(session)
                 nudged = await remind_unreviewed(session, now=now)
                 # Before the drain, so the reminder goes out in this same run.
                 returning = await remind_returning_mentors(session, now=now)
+                # **Attendance is committed before the slower checks** (Codex on
+                # #393). The records reads and the calendar health checks are
+                # both serial network calls under one 120s limit; if the
+                # calendar phase runs the job out, the outcomes and refunds
+                # decided above must not roll back with it. Each phase above is
+                # idempotent, so a retry after this point repeats nothing.
+                if not dry_run:
+                    await session.commit()
                 oauth = self._calendar_health()
                 health = (
                     {"checked": 0, "healthy": 0, "disconnected": 0, "unreachable": 0}

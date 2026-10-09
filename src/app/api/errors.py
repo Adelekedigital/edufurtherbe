@@ -33,6 +33,7 @@ from app.core.errors import (
     ConfigurationError,
     ConflictError,
     InsufficientCreditError,
+    JoinWindowClosedError,
     NotFoundError,
     OnboardingIncompleteError,
     RateLimitedError,
@@ -91,6 +92,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     BookingOverlapError: "/problems/booking-overlap",
     BookingWithMentorExistsError: "/problems/booking-with-mentor-exists",
     BookingLimitReachedError: "/problems/booking-limit-reached",
+    JoinWindowClosedError: "/problems/join-window-closed",
     RateLimitedError: "/problems/rate-limited",
 }
 

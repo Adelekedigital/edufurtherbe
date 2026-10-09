@@ -195,3 +195,50 @@ def test_a_network_failure_becomes_the_same_error() -> None:
         api.token_for(
             room="r", user_id="u", user_name="n", is_owner=False, opens_at=OPENS, closes_at=CLOSES
         )
+
+
+# --------------------------------------------------------------------------
+# Meeting records (#382)
+# --------------------------------------------------------------------------
+
+
+def test_the_records_are_read_for_that_room() -> None:
+    """`GET /meetings?room=`, the call the spike measured, and its participants
+    come back as sightings."""
+    api, seen = rooms(
+        ok({"data": [{"participants": [{"user_id": "u-1", "join_time": 1728432060}]}]})
+    )
+
+    found = api.sightings("ef-daily-abc")
+
+    (request,) = seen
+    assert request.method == "GET"
+    assert request.url.path.endswith("/meetings")
+    assert request.url.params["room"] == "ef-daily-abc"
+    assert [s.user_id for s in found] == ["u-1"]
+
+
+def test_unreadable_records_are_the_provider_being_unavailable() -> None:
+    """So the settlement waits for the next run instead of settling on silence."""
+    api, _ = rooms(lambda _: httpx.Response(503))
+
+    with pytest.raises(VenueUnavailableError):
+        api.sightings("ef-daily-abc")
+
+
+def test_a_records_body_that_cannot_be_read_is_the_provider_being_unavailable() -> None:
+    """A 200 with a body we cannot read is unreadable, so the settlement waits."""
+    api, _ = rooms(ok({"error": "changed-envelope"}))
+
+    with pytest.raises(VenueUnavailableError):
+        api.sightings("ef-daily-abc")
+
+
+def test_the_records_are_asked_for_a_full_page() -> None:
+    """One room is one session, so a hundred meetings is a hundred rejoins: the
+    page asked for is large enough that a partial one is a fault, not a norm."""
+    api, seen = rooms(ok({"total_count": 0, "data": []}))
+
+    api.sightings("ef-daily-abc")
+
+    assert seen[0].url.params["limit"] == "100"
