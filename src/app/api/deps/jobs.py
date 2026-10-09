@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from typing import Annotated, Any
 from uuid import UUID
@@ -19,6 +20,7 @@ from app.core.errors import (
 from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
 from app.domain.suggestions import SUGGESTION_REMINDER_KIND
 from app.infra.clients.daily_presence import sighting_from, verify_daily_signature
+from app.infra.clients.notifications import notifier_for
 from app.infra.clients.scheduler import (
     UntrustedCallbackError,
     verify_callback,
@@ -29,6 +31,7 @@ from app.infra.clients.scheduler import (
 # collision a reader resolves by scrolling, and the wrong one is a plausible
 # mistake rather than an obvious error — `bubble_id` shadowed a local the same
 # way in the M4 transform and raised `UnboundLocalError` far from the edit.
+from app.infra.db.outbox import drain
 from app.infra.db.session_writer import (
     observe_presence,
     remind_before_session,
@@ -94,7 +97,23 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
         queued = await remind_suggestion(session, UUID(str(session_id)), str(kind))
     else:
         queued = await remind_if_still_waiting(session, UUID(str(session_id)), str(kind))
+    # **Committed before anything is sent**, as the sweep does: if the send dies
+    # the row stays pending and the hourly sweep delivers it instead.
     await session.commit()
+    if queued:
+        # **The callback is the moment, so it sends** (Codex on #397). The
+        # outbox is otherwise drained only by the hourly settlement, which put a
+        # five-minute reminder half an hour into the session. Only the rows this
+        # callback queued; everything else stays the sweep's.
+        await drain(
+            session,
+            notifier=getattr(request.app.state, "notifier", None) or notifier_for(settings),
+            now=dt.datetime.now(dt.UTC),
+            settings=settings,
+            entity_id=UUID(str(session_id)),
+            kind=str(kind),
+        )
+        await session.commit()
     return queued
 
 

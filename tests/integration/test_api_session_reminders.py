@@ -15,6 +15,7 @@ review phase and is `Audience.MENTEE`.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -23,6 +24,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.test_api_notifications import a_booking, queued
+from tests.integration.test_api_reminder_callback import PATH, believing_client, signed_headers
 
 from app.core.config import Settings
 from app.domain.notifications import SESSION_REMINDERS, Notification
@@ -374,3 +376,88 @@ def test_only_the_five_minute_reminder_is_the_last_one() -> None:
         Notification.SESSION_REMINDER,
         Notification.SESSION_LAST_REMINDER,
     ]
+
+
+# --------------------------------------------------------------------------
+# Delivered when due, not at the next sweep (Codex on #397)
+# --------------------------------------------------------------------------
+
+
+class Recorder:
+    """A notifier that records what it was asked to send."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    def send(self, **kwargs: Any) -> None:
+        self.sent.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_reminder_is_sent_when_its_callback_fires(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The callback is the moment, so it sends.** The outbox was drained only by
+    the hourly settlement (`30 * * * *`), so a five-minute reminder queued at
+    09:55 went out at 10:30, half an hour into the session. Now the callback
+    sends the reminder it queued, and only that one: another message still
+    pending is left for the sweep."""
+    booking = await a_booking(db_engine, api_client, "sr-now")
+    callback_client = believing_client(db_engine)
+    recorder = Recorder()
+    callback_client._transport.app.state.notifier = recorder  # type: ignore[attr-defined]
+    async with db_engine.begin() as conn:
+        other = (
+            await conn.execute(
+                text(
+                    "INSERT INTO outbox_events (event_type, destination, payload, entity_type, "
+                    "entity_id, status) VALUES ('session_booked', 'email', "
+                    "jsonb_build_object('recipient_id', "
+                    "(SELECT mentee_id FROM sessions WHERE id = :i)), "
+                    "'session', :i, 'pending') RETURNING id"
+                ),
+                {"i": booking["id"]},
+            )
+        ).scalar_one()
+    # The same reminder, queued but unsent, for a *different* session: the
+    # callback must send its own session's rows and no one else's.
+    elsewhere = await a_booking(db_engine, api_client, "sr-now-other")
+    assert await fire(db_engine, elsewhere["id"], "s5") is True
+    body = json.dumps({"session_id": booking["id"], "kind": "s5"}).encode()
+
+    answered = await callback_client.post(PATH, content=body, headers=signed_headers(body))
+
+    assert answered.status_code == 200, answered.text
+    assert [s["notification"] for s in recorder.sent] == [
+        Notification.SESSION_LAST_REMINDER,
+        Notification.SESSION_LAST_REMINDER,
+    ]
+    async with db_engine.connect() as conn:
+        states = dict(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT id::text, status FROM outbox_events WHERE entity_id = :i "
+                        "AND (payload->>'kind' = 's5' OR id = :o)"
+                    ),
+                    {"i": booking["id"], "o": other},
+                )
+            ).all()
+        )
+    assert states.pop(str(other)) == "pending", "another message must wait for the sweep"
+    assert set(states.values()) == {"sent"}
+    async with db_engine.connect() as conn:
+        theirs = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT DISTINCT status FROM outbox_events "
+                        "WHERE entity_id = :i AND payload->>'kind' = 's5'"
+                    ),
+                    {"i": elsewhere["id"]},
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert theirs == ["pending"], "another session's reminder must not be sent"

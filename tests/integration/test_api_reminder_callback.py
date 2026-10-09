@@ -39,6 +39,11 @@ SIGNING_KEY = "not-a-real-signing-key-for-local-tests"
 
 @pytest.fixture
 def callback_client(db_engine: AsyncEngine) -> Any:
+    """An app configured to believe QStash; see :func:`believing_client`."""
+    return believing_client(db_engine)
+
+
+def believing_client(db_engine: AsyncEngine) -> httpx.AsyncClient:
     """An app configured to believe QStash, which the default fixture is not.
 
     Built here rather than in `conftest` because every other suite wants the

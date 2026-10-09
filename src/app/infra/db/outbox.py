@@ -17,11 +17,12 @@ failure, where three jobs is three.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text, update
+from sqlalchemy import select, text, true, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,8 +107,14 @@ async def drain(
     notifier: Any,
     now: dt.datetime,
     settings: Settings | None = None,
+    entity_id: UUID | None = None,
+    kind: str | None = None,
 ) -> dict[str, int]:
     """Send what is pending. Returns counts by outcome. Does not commit.
+
+    ``entity_id`` and ``kind`` narrow it to one message's rows (Codex on #397):
+    the reminder callback sends the reminder it just queued, when it is due,
+    rather than leaving it for the hourly sweep. Everything else is the sweep's.
 
     **Each row is attempted once per sweep and its outcome recorded**, so a
     provider that is down costs one attempt per message per hour rather than a
@@ -139,6 +146,8 @@ async def drain(
                 .where(
                     OutboxEvent.status == "pending",
                     OutboxEvent.attempts < MAX_ATTEMPTS,
+                    OutboxEvent.entity_id == entity_id if entity_id is not None else true(),
+                    OutboxEvent.payload["kind"].astext == kind if kind is not None else true(),
                 )
                 .order_by(OutboxEvent.created_at)
                 .limit(BATCH)
@@ -189,7 +198,10 @@ async def drain(
             counts["failed"] += 1
             continue
         try:
-            notifier.send(
+            # In a thread: a provider call blocks, and the reminder callback
+            # runs this inside a request on the event loop.
+            await asyncio.to_thread(
+                notifier.send,
                 notification=Notification(str(row["event_type"])),
                 channel=Channel(str(row["destination"])),
                 to=address,

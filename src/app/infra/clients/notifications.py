@@ -38,7 +38,7 @@ from app.core.config import Settings
 from app.core.errors import AppError, ConfigurationError
 from app.domain.messages import MessageContext, build_variables
 from app.domain.notifications import Channel, Notification
-from app.infra.clients.templates import StaticTemplates, TemplateVariables
+from app.infra.clients.templates import LoopsTemplates, StaticTemplates, TemplateVariables
 
 __all__ = [
     "DeliveryError",
@@ -247,3 +247,14 @@ class ZernioNotifier:
             "the Zernio adapter is not built — it needs the phone_* columns, an "
             "approved template per message, and the Facebook Business account resolved"
         )
+
+
+def notifier_for(settings: Settings) -> LoopsNotifier | NullNotifier:
+    """The notifier this deployment sends through: Loops with its templates when
+    a key is configured, otherwise nothing. The one place it is built, used by
+    the scheduled jobs and the reminder callback alike."""
+    key = settings.loops_api_key
+    if key is None:
+        return NullNotifier()
+    secret = key.get_secret_value()
+    return LoopsNotifier(secret).with_settings(settings).with_templates(LoopsTemplates(secret))
