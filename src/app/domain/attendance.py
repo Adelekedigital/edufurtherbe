@@ -45,13 +45,15 @@ import datetime as dt
 from enum import StrEnum
 
 from app.core.config import Settings
-from app.domain.enums import SessionRole, SessionStatus
+from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
 from app.domain.sessions import CANCELLATION_CUTOFF
 
 __all__ = [
     "DOOR_STATUSES",
     "JOIN_CLOSES",
     "JOIN_LEAD_CEILING",
+    "PRESENCE_RECORDS_PATIENCE",
+    "PRESENCE_REPORTING",
     "AttendanceEvidence",
     "absent_party",
     "door_window",
@@ -59,7 +61,9 @@ __all__ = [
     "join_opens",
     "join_window",
     "outcome",
+    "presence_decides",
     "session_ends_at",
+    "waits_for_records",
     "window_has_closed",
     "within_door_window",
     "within_join_window",
@@ -93,10 +97,10 @@ class AttendanceEvidence(StrEnum):
     #: outcome carries this today.
     REPORTED = "reported"
 
-    #: A provider reported per-participant join and leave, and the two
-    #: intervals overlapped. Nothing produces this yet; Daily is where it comes
-    #: from, and `docs/daily-spike-guide.md` Q3 is the measurement that decides
-    #: whether it is reachable at all.
+    #: The provider saw each party in the room (#382): Daily's
+    #: `participant.joined`, or its meeting records at settlement. Written for
+    #: every session :func:`presence_decides`; the Join press is then the way
+    #: in, not the evidence.
     OBSERVED = "observed"
 
 
@@ -218,6 +222,35 @@ def window_has_closed(starts_at: dt.datetime, duration_minutes: int, now: dt.dat
     bound above, written as its own function because the settlement asks the
     question in SQL and the two must agree on the boundary."""
     return now >= join_closes_at(starts_at, duration_minutes)
+
+
+#: Venues whose provider reports who was in the room (#382, owner 2026-10-08).
+#: For these, attendance is presence; everywhere else it is the Join press.
+PRESENCE_REPORTING = frozenset({MeetingProvider.DAILY})
+
+
+def presence_decides(provider: str | None, *, has_room: bool) -> bool:
+    """Whether a session's attendance is what the provider saw.
+
+    **Only when a room exists.** A Daily session whose room was never created
+    (provisioning leaves it null rather than failing the booking) has nowhere
+    anybody can be seen, so the press decides; otherwise every party would be
+    settled absent and the wrong person refunded. The settlement repeats this
+    in SQL, and a test holds the two together.
+    """
+    return has_room and provider in PRESENCE_REPORTING
+
+
+#: How long a session may wait for Daily's meeting records before it settles on
+#: what is known (#382). Unreachable records hold a session back, because
+#: settling on silence would brand both parties absent; a day bounds that, so
+#: a lasting outage cannot leave a session unsettled forever.
+PRESENCE_RECORDS_PATIENCE = dt.timedelta(hours=24)
+
+
+def waits_for_records(join_closed_at: dt.datetime, now: dt.datetime) -> bool:
+    """Whether a session whose records could not be read should wait another run."""
+    return now - join_closed_at < PRESENCE_RECORDS_PATIENCE
 
 
 def outcome(*, mentor_attended: bool, mentee_attended: bool) -> SessionStatus:

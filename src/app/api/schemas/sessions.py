@@ -83,7 +83,24 @@ class PartyRead(BaseModel):
             "not. **The first arrival, not the latest** — pressing Join again "
             "after a dropped call does not move it.\n\n"
             "`null` while a session is upcoming is the ordinary case, not a "
-            "signal."
+            "signal.\n\n"
+            "**This is the Join press, and it is what lets a party back in** "
+            "after arrivals stop. For an EduFurther video session it is not "
+            "attendance: that is `in_room_at` (#382)."
+        ),
+    )
+    in_room_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "When the video provider first saw this party in the room, for an "
+            "EduFurther video (Daily) session; `null` until it has, and always "
+            "`null` for Google Meet and custom venues, which report no "
+            "presence. **The earliest sighting**, so a dropped call and a "
+            "rejoin do not move it.\n\n"
+            "Use it for *Here now* and *Joined*; use `joined_at` to decide who "
+            "may re-enter. For a video session, attendance follows this: a "
+            "party seen before arrivals stop is `attended`, and pressing Join "
+            "without entering the room is not."
         ),
     )
     attendance_status: AttendanceStatus = Field(
@@ -423,6 +440,7 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
         ),
         timezone=_text(row.get(f"{side}_timezone")),
         joined_at=row.get(f"{side}_joined_at"),  # type: ignore[arg-type]
+        in_room_at=row.get(f"{side}_in_room_at"),  # type: ignore[arg-type]
         # A missing participant row arrives as `None` and becomes `pending`,
         # which is the same answer as an unsettled row and the right one: both
         # mean *we do not know*, and only a settled row can say otherwise.

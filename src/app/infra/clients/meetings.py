@@ -57,6 +57,7 @@ import httpx
 from app.core.errors import UpstreamError, ValidationError
 from app.domain.availability import CALENDAR_REVOKED, UtcInterval
 from app.domain.enums import ConferencingProvider
+from app.infra.clients.daily_presence import Sighting, sightings_from_records
 
 __all__ = [
     "FREEBUSY_SCOPE",
@@ -137,6 +138,11 @@ class CalendarEvent:
 
 class NullRooms:
     """Creates nothing and says so. The default."""
+
+    def sightings(self, room: str) -> list[Sighting]:
+        """No provider configured, so no records to read: settle on what is
+        known rather than wait for a source that will never answer."""
+        raise NotImplementedError("no room provider is configured")
 
     def create(self, *, name: str, opens_at: dt.datetime, closes_at: dt.datetime) -> MeetingRoom:
         raise VenueUnavailableError(
@@ -267,7 +273,24 @@ class DailyRooms:
         )
         return str(minted["token"])
 
+    def sightings(self, room: str) -> list[Sighting]:
+        """Everyone Daily's meeting records saw in ``room`` (#382): the
+        settlement's check on any party a webhook did not report. A failure is
+        `VenueUnavailableError`, so the caller can wait rather than settle on
+        silence."""
+        return sightings_from_records(room, self._call("GET", "/meetings", params={"room": room}))
+
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        return self._call("POST", path, json=body)
+
+    def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """One place where a Daily failure becomes ours.
 
         Every network error and every non-2xx becomes `VenueUnavailableError`,
@@ -277,7 +300,7 @@ class DailyRooms:
         had already done the thing the user asked for.
         """
         try:
-            response = self._client.post(path, json=body)
+            response = self._client.request(method, path, json=json, params=params)
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:

@@ -4,6 +4,7 @@ The fail-fast case matters most: a typo'd variable must stop the process rather
 than silently leave a default in place.
 """
 
+import base64
 import re
 from pathlib import Path
 
@@ -396,3 +397,38 @@ def test_env_example_documents_nothing_that_is_not_a_setting() -> None:
     keys = {env_key(name) for name in Settings.model_fields}
     stale = sorted(_documented() - keys - NOT_SETTINGS_FIELDS)
     assert not stale, f"in .env.example but not a Settings field: {stale}"
+
+
+#: Stand-ins for Daily's webhook secret. Named rather than inline because the
+#: secret scanner flags a literal in that position, correctly.
+NOT_BASE64_SECRET = "not base64 %%%"  # noqa: S105
+#: Built at runtime, so no secret-shaped literal lands in the repository.
+BASE64_SECRET = base64.b64encode(b"thirty-two-bytes-of-test-secret!").decode()
+SHORT_SECRET = "c2hvcnQ="  # noqa: S105 - "short", five bytes
+
+
+@pytest.mark.parametrize("value", [pytest.param("", id="empty"), pytest.param("   ", id="blank")])
+def test_an_empty_daily_webhook_secret_counts_as_not_configured(value: str) -> None:
+    """**An empty key is a key anyone holds** (security review, #382). Blank is
+    how `.env.example` ships it and how a Railway variable starts, and an HMAC
+    under an empty key is one any caller can compute. So blank means *not
+    configured*, which refuses every delivery, rather than a key."""
+    assert Settings(_env_file=None, daily_webhook_secret=value).daily_webhook_secret is None
+
+
+def test_a_daily_webhook_secret_under_sixteen_bytes_is_refused() -> None:
+    """Short enough to guess is short enough to forge with: refused at start-up."""
+    with pytest.raises(PydanticValidationError):
+        Settings(_env_file=None, daily_webhook_secret=SHORT_SECRET)
+
+
+def test_a_daily_webhook_secret_that_is_not_base64_is_refused() -> None:
+    """It would otherwise refuse every delivery at runtime as if forged (#382)."""
+    with pytest.raises(PydanticValidationError):
+        Settings(_env_file=None, daily_webhook_secret=NOT_BASE64_SECRET)
+
+
+def test_a_base64_daily_webhook_secret_is_kept() -> None:
+    settings = Settings(_env_file=None, daily_webhook_secret=BASE64_SECRET)
+    assert settings.daily_webhook_secret is not None
+    assert settings.daily_webhook_secret.get_secret_value() == BASE64_SECRET

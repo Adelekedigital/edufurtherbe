@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, status
 
-from app.api.deps import ReminderCallbackDep
+from app.api.deps import DailyPresenceDep, ReminderCallbackDep
 
 router = APIRouter(prefix="/api/v1/callbacks", tags=["callbacks"])
 
@@ -73,3 +73,38 @@ async def fire_reminder(queued: ReminderCallbackDep, request: Request) -> dict[s
     """
     del request
     return {"queued": queued}
+
+
+DAILY_RESPONSES: dict[int | str, dict[str, str]] = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "description": (
+            "`X-Webhook-Signature` is absent, not base64, made with a secret we "
+            "do not hold, or does not match `{X-Webhook-Timestamp}.{body}`; or "
+            "no secret is configured, in which case every delivery is refused."
+        )
+    },
+}
+
+
+@router.post(
+    "/daily",
+    summary="Record who Daily saw in a room",
+    description=(
+        "**Called by Daily, never by a person** (#382). Authenticated by "
+        "`X-Webhook-Signature`, an HMAC-SHA256 over `{X-Webhook-Timestamp}.{body}`, "
+        "verified against the raw body before anything is read.\n\n"
+        "A `participant.joined` marks that party present in that session, "
+        "matched by the session's own room **and** the `user_id` minted into the "
+        "party's meeting token, together; a sighting for anybody else matches "
+        "nothing. Only the earliest sighting is kept, so a repeated or "
+        "out-of-order delivery changes nothing, and one after arrivals stop is "
+        "kept but never counted.\n\n"
+        "**Every verified delivery gets `200`**, including Daily's creation "
+        "check and events this ignores, because refusing counts as a failed "
+        "delivery and three of those switch the webhook off. `recorded` says "
+        "whether a party's row matched."
+    ),
+    responses=DAILY_RESPONSES,
+)
+async def record_daily_presence(recorded: DailyPresenceDep) -> dict[str, bool]:
+    return {"recorded": recorded}

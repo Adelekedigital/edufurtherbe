@@ -4,22 +4,28 @@ once its join window has closed, which is also when reviews are requested.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import logging
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, insert, select, text, update
+from sqlalchemy import and_, case, func, insert, select, text, true, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, JoinWindowClosedError, NotFoundError
 from app.domain.attendance import (
     DOOR_STATUSES,
     JOIN_CLOSES,
+    PRESENCE_REPORTING,
     AttendanceEvidence,
     absent_party,
     door_window,
+    join_closes_at,
     join_window,
+    presence_decides,
+    waits_for_records,
     within_door_window,
     within_join_window,
 )
@@ -34,6 +40,8 @@ from app.domain.notifications import (
     Notification,
 )
 from app.domain.refunds import no_show_refund
+from app.infra.clients.daily_presence import Sighting
+from app.infra.clients.meetings import VenueUnavailableError
 from app.infra.db.credit_writer import refund_credit
 from app.infra.db.models.sessions import (
     Session,
@@ -43,6 +51,8 @@ from app.infra.db.models.sessions import (
 from app.infra.db.outbox import enqueue
 from app.infra.db.review_eligibility import within_interval
 from app.infra.db.session_store import is_a_party
+
+logger = logging.getLogger(__name__)
 
 
 async def _venue_row(session: AsyncSession, session_id: UUID, actor_id: UUID) -> dict[str, Any]:
@@ -68,6 +78,15 @@ async def _venue_row(session: AsyncSession, session_id: UUID, actor_id: UUID) ->
                     Session.meeting_provider,
                     Session.external_room_id,
                     (Session.mentor_id == actor_id).label("is_mentor"),
+                    # The caller's own press, for the door's late rule.
+                    select(SessionParticipant.joined_at)
+                    .where(
+                        SessionParticipant.session_id == Session.id,
+                        SessionParticipant.user_id == actor_id,
+                    )
+                    .correlate(Session)
+                    .scalar_subquery()
+                    .label("caller_joined_at"),
                 ).where(
                     Session.id == session_id,
                     is_a_party(actor_id),
@@ -126,6 +145,12 @@ async def door_row(
         raise ConflictError(
             f"this session's room is open between {opens.isoformat()} and {closes.isoformat()}"
         )
+    # **No late first-timers** (owner, 2026-10-08). Once arrivals stop, the door
+    # is for coming back, so only a party who pressed Join in time is let in.
+    # The frontend already offers Rejoin only then; this closes the direct call.
+    late = now >= join_closes_at(row["starts_at"], int(row["duration_minutes"]))
+    if late and row["caller_joined_at"] is None:
+        raise JoinWindowClosedError("arrivals have closed and you did not join in time")
     return row
 
 
@@ -176,7 +201,14 @@ async def record_arrival(
         )
         .values(
             joined_at=func.coalesce(SessionParticipant.joined_at, now),
-            attendance_status=AttendanceStatus.ATTENDED,
+            # **The press is the evidence only where nothing saw the room**
+            # (#382). For a Daily session it is the way in, and attendance waits
+            # for Daily to report the party present (`observe_presence`).
+            **(
+                {}
+                if presence_decides(row["meeting_provider"], has_room=bool(row["external_room_id"]))
+                else {"attendance_status": AttendanceStatus.ATTENDED}
+            ),
         )
     )
     # `rowcount` is a `CursorResult` attribute and `execute()` is typed as the
@@ -194,6 +226,24 @@ async def record_arrival(
     return row
 
 
+def _join_closes_sql() -> Any:
+    """When arrivals stop, in SQL: :func:`join_closes_at`'s rule, fifteen
+    minutes in or the session's end if sooner. One expression, read by the
+    settlement and by a sighting, so the two cannot disagree on the instant."""
+    fifteen = text(f"interval '{int(JOIN_CLOSES.total_seconds())} seconds'")
+    length = func.make_interval(0, 0, 0, 0, 0, Session.duration_minutes)
+    return Session.starts_at + func.least(fifteen, length)
+
+
+def _presence_decides_sql() -> Any:
+    """:func:`presence_decides` in SQL, held to it by a test: a venue that
+    reports presence, and a room that exists."""
+    return and_(
+        Session.meeting_provider.in_([str(p) for p in PRESENCE_REPORTING]),
+        Session.external_room_id.is_not(None),
+    )
+
+
 def _window_shut(now: dt.datetime) -> Any:
     """Sessions whose join window has shut, in SQL: fifteen minutes in, or the
     session's end if that is sooner — :func:`join_window`'s rule.
@@ -202,12 +252,12 @@ def _window_shut(now: dt.datetime) -> Any:
     domain function by a test across lengths, because a settlement running a
     minute early would mark somebody absent while they still had time to arrive.
     """
-    fifteen = text(f"interval '{int(JOIN_CLOSES.total_seconds())} seconds'")
-    length = func.make_interval(0, 0, 0, 0, 0, Session.duration_minutes)
-    return Session.starts_at + func.least(fifteen, length) <= now
+    return _join_closes_sql() <= now
 
 
-async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
+async def settle_attendance(
+    session: AsyncSession, *, now: dt.datetime, unverified: frozenset[UUID] = frozenset()
+) -> int:
     """Decide every confirmed session whose join window has shut. Returns the count.
 
     **This is the producer `session_stats` has been waiting for.** That module
@@ -233,9 +283,19 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
     external scheduler, because settled decision #13 rules out a platform-native
     cron — and an external scheduler is the kind that fires twice.
 
+    **``unverified`` waits for the next run** (#382): sessions whose presence
+    the meeting records could not confirm, because Daily could not be reached.
+    Settling them on silence would brand both parties absent and refund the
+    wrong person.
+
     Does not commit.
     """
-    due = select(Session.id).where(Session.status == SessionStatus.CONFIRMED, _window_shut(now))
+    ready = and_(
+        Session.status == SessionStatus.CONFIRMED,
+        _window_shut(now),
+        Session.id.not_in(unverified) if unverified else true(),
+    )
+    due = select(Session.id).where(ready)
 
     # 1. Everybody still unknown was absent. `pending` only, so an arrival
     #    already recorded by `record_arrival` is left exactly as it is.
@@ -282,7 +342,7 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
         (
             await session.execute(
                 update(Session)
-                .where(Session.status == SessionStatus.CONFIRMED, _window_shut(now))
+                .where(ready)
                 .values(
                     status=case(
                         (
@@ -306,6 +366,7 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
                     Session.mentee_id,
                     mentor_came.label("mentor_came"),
                     mentee_came.label("mentee_came"),
+                    _presence_decides_sql().label("observed"),
                 )
             )
         )
@@ -347,7 +408,13 @@ async def settle_attendance(session: AsyncSession, *, now: dt.datetime) -> int:
                 # dodge `Base.metadata`, and an ORM insert matches attribute
                 # names — the column name is accepted in silence and the
                 # server default written instead, which a test caught.
-                "metadata_": {"evidence": AttendanceEvidence.REPORTED},
+                "metadata_": {
+                    "evidence": (
+                        AttendanceEvidence.OBSERVED
+                        if row["observed"]
+                        else AttendanceEvidence.REPORTED
+                    )
+                },
             }
             for row in settled
         ],
@@ -448,3 +515,121 @@ def _absence_code(*, mentor_came: bool, mentee_came: bool) -> SessionReasonCode 
     if missed is SessionRole.MENTEE:
         return SessionReasonCode.MENTEE_NO_SHOW
     return None
+
+
+async def observe_presence(session: AsyncSession, sighting: Sighting) -> bool:
+    """Record that the provider saw a party in the room. Returns whether a row
+    matched. Does not commit.
+
+    **Room and user, together, in one statement** (#382). The room must be the
+    session's own Daily room and the user one of its parties, so a sighting for
+    anyone else, or for a party of another session, matches no row. Nothing is
+    read first and checked after.
+
+    **Order-free and repeatable.** Daily delivers "roughly, but not strictly, in
+    order" and may repeat, so ``in_room_at`` only ever moves earlier, and
+    replaying a sighting changes nothing.
+
+    **Counted only before arrivals stop.** A sighting after that is kept, so the
+    page can show it, but never turns a pending party present: the outcome is
+    decided at that instant, as it is for the press.
+    """
+    try:
+        user_id = UUID(sighting.user_id)
+    except ValueError:
+        # Not one of ours: every token we mint carries a user's uuid.
+        return False
+    in_time = and_(
+        sighting.at < _join_closes_sql(),
+        SessionParticipant.attendance_status == AttendanceStatus.PENDING,
+        Session.status == SessionStatus.CONFIRMED,
+    )
+    matched = await session.execute(
+        update(SessionParticipant)
+        .where(
+            SessionParticipant.session_id == Session.id,
+            SessionParticipant.user_id == user_id,
+            Session.external_room_id == sighting.room,
+            _presence_decides_sql(),
+        )
+        .values(
+            in_room_at=func.least(
+                func.coalesce(SessionParticipant.in_room_at, sighting.at), sighting.at
+            ),
+            attendance_status=case(
+                (in_time, AttendanceStatus.ATTENDED.value),
+                else_=SessionParticipant.attendance_status,
+            ),
+        )
+    )
+    return bool(cast("CursorResult[Any]", matched).rowcount)
+
+
+async def presence_to_confirm(
+    session: AsyncSession, *, now: dt.datetime
+) -> list[tuple[UUID, str, dt.datetime]]:
+    """Sessions to check against Daily's meeting records before settling (#382).
+
+    Due to settle, decided by presence, and with a party still pending, which
+    is a party no webhook reported. Each comes with its room and the instant
+    arrivals stopped, so the caller can tell how long it has waited.
+    """
+    pending = (
+        select(SessionParticipant.id)
+        .where(
+            SessionParticipant.session_id == Session.id,
+            SessionParticipant.attendance_status == AttendanceStatus.PENDING,
+        )
+        .correlate(Session)
+        .exists()
+    )
+    rows = await session.execute(
+        select(Session.id, Session.external_room_id, _join_closes_sql()).where(
+            Session.status == SessionStatus.CONFIRMED,
+            _window_shut(now),
+            _presence_decides_sql(),
+            pending,
+        )
+    )
+    return [(row[0], str(row[1]), row[2]) for row in rows.all()]
+
+
+async def confirm_presence(
+    session: AsyncSession, *, now: dt.datetime, rooms: Any
+) -> frozenset[UUID]:
+    """Check Daily's meeting records for every party no webhook reported, before
+    the settlement decides them (#382). Returns the sessions to leave unsettled
+    this run. Does not commit.
+
+    **The webhook can go quiet.** Daily stops sending after three failed
+    deliveries, and a party it never reported would otherwise be settled absent,
+    so each due session with a party still pending is read from the records,
+    through the same :func:`observe_presence` a webhook uses.
+
+    **Unreadable records hold the session back**, for up to
+    :data:`PRESENCE_RECORDS_PATIENCE`, because silence is not absence. A room
+    provider that is not configured (``NotImplementedError``) will never answer,
+    so it holds nothing.
+
+    The provider's client is blocking, so each read runs in a thread.
+    """
+    unverified: set[UUID] = set()
+    for session_id, room, closed_at in await presence_to_confirm(session, now=now):
+        try:
+            found = await asyncio.to_thread(rooms.sightings, room)
+        except NotImplementedError:
+            continue
+        except VenueUnavailableError as exc:
+            if waits_for_records(closed_at, now):
+                logger.warning(
+                    "meeting records unreadable for session %s; waiting: %s", session_id, exc
+                )
+                unverified.add(session_id)
+            else:
+                logger.warning(
+                    "meeting records unreadable for session %s; settling: %s", session_id, exc
+                )
+            continue
+        for sighting in found:
+            await observe_presence(session, sighting)
+    return frozenset(unverified)

@@ -23,6 +23,8 @@ than left for someone to discover, and a real reason to keep secrets out of
 optional fields whose absence is silent.
 """
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -331,6 +333,28 @@ class Settings(BaseSettings):
             part.split("=", 1) for part in (p.strip() for p in text.split(",")) if "=" in part
         )
 
+    @field_validator("daily_webhook_secret")
+    @classmethod
+    def a_base64_webhook_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        """Daily's secret: base64, at least 16 bytes, or not configured at all.
+
+        **Blank is not configured** (security review, #382). It is how
+        `.env.example` ships and how a Railway variable starts, and an HMAC
+        under an empty key is one any caller can compute: read as a key, it
+        would accept forged attendance. As ``None`` it refuses every delivery.
+        A value that is not base64 or decodes to under 16 bytes is refused at
+        start-up rather than verifying deliveries against a guessable key.
+        """
+        if value is None or not value.get_secret_value().strip():
+            return None
+        try:
+            key = base64.b64decode(value.get_secret_value(), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("DAILY_WEBHOOK_SECRET must be base64") from exc
+        if len(key) < 16:
+            raise ValueError("DAILY_WEBHOOK_SECRET must decode to at least 16 bytes")
+        return value
+
     @field_validator("app_base_url")
     @classmethod
     def an_absolute_web_origin(cls, value: str | None) -> str | None:
@@ -429,6 +453,12 @@ class Settings(BaseSettings):
     #: anywhere to meet, which is the state every environment is in until an
     #: operator sets this.
     daily_api_key: SecretStr | None = Field(default=None, validation_alias=env_key("daily_api_key"))
+    #: The base64 HMAC secret Daily signs its webhooks with (#382): the whole
+    #: authorization of `POST /callbacks/daily`, which records who was in a
+    #: room. Unset refuses every delivery rather than accepting them unchecked.
+    daily_webhook_secret: SecretStr | None = Field(
+        default=None, validation_alias=env_key("daily_webhook_secret")
+    )
     #: Loops' transactional key (ADR 0025). Carries every message this service
     #: sends; the Supabase auth code goes through Emailit's SMTP, configured in
     #: the Supabase console rather than here.
