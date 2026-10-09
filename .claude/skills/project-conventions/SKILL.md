@@ -492,6 +492,35 @@ must-fix, P2 fix-if-cheap (`AGENTS.md` → Severity). Answer a finding with a
 reply comment on the PR, because the next review reads the replies and will not
 raise an answered finding again.
 
+## Codex review loop
+
+The owner's process for every PR, recorded 2026-10-09. **Re-reviews are by
+comment, never automatic**: a push does not re-run the review, which keeps the
+cost per PR to the rounds someone chose to run.
+
+1. **Open the PR.** The review runs on its own, once (also on reopen, and when
+   a draft is marked ready). Drafts, forks and Dependabot are skipped.
+2. **Verify each finding** against the code, and against the platform's own
+   docs when it cites them. Codex has been wrong (#393, Daily's payload shape),
+   so a finding is a claim to check, not an instruction.
+3. **Fix what is real.** P0 and P1 always; P2 if cheap. Each fix gets a
+   failing-first test and a mutation, like any other change (rule 12).
+4. **Answer every finding in one reply comment** on the PR: *fixed in &lt;sha&gt;
+   and the test*, *not changed and why*, or *deferred to #issue*. The next
+   review reads the replies (only the reviewer's and people with write access
+   count) and does not raise an answered finding again.
+5. **Comment `/codex-review`** to re-review. It covers only the commits since the
+   last review. From Git Bash, post it with `MSYS_NO_PATHCONV=1`, or the leading
+   `/` is rewritten into a Windows path.
+6. **Repeat 2–5** until a review comes back `NO FINDINGS`, or only P2s the owner
+   accepts.
+7. **Merge** when that is true **and** CI is green on the PR's exact head commit
+   (rule 10), on the owner's word.
+
+A comment that does not start with `/codex-review` triggers nothing; a reply
+alone never starts a review. **To test a change to the workflow itself, close and
+reopen the PR**: a comment runs the workflow from `main`, not from the PR.
+
 ## Guardrails
 
 Every build preserves these, whatever it is doing. They become the "guardrails"
