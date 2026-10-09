@@ -54,9 +54,10 @@ class MeetingPlan:
     #: Daily, whose rooms are their own API objects.
     needs_room: bool
 
-    #: Whether the calendar event asks Google for a conference. True only for
-    #: Meet — for anything else the event carries an existing URL as ordinary
-    #: content, and asking would add a second link nobody chose.
+    #: Whether Google makes the conference. True only for Meet, and **never at
+    #: booking** (#384): the event is created without one and the Meet patched
+    #: on at the last reminder or the first press of Join. On any other venue
+    #: it would be a second link nobody chose.
     wants_conference: bool
 
     #: Whether the URL already exists and nothing needs to mint one. True only

@@ -70,6 +70,7 @@ from app.infra.db.session_store import (
     list_sessions,
 )
 from app.infra.db.session_writer import (
+    add_meet_link,
     book_session,
     door_row,
     provision_meeting,
@@ -503,7 +504,11 @@ CancelledSessionDep = Annotated[None, Depends(transitions("cancel"))]
 
 
 async def _door_for(
-    request: Request, session_id: UUID, row: dict[str, Any], user: dict[str, Any]
+    request: Request,
+    session: AsyncSession,
+    session_id: UUID,
+    row: dict[str, Any],
+    user: dict[str, Any],
 ) -> str | None:
     """Turn a venue row into the caller's way in, or ``None`` if there is none.
 
@@ -519,8 +524,18 @@ async def _door_for(
     every backup, outliving the session they open. For every other venue the
     door is the stored URL: a Meet link is on the calendar event, and a custom
     venue is the address the mentor typed.
+
+    **A Meet session may not have its link yet** (#384): it is added at the last
+    reminder, five minutes out, and the join window opens before that. So the
+    first way in adds it, committed so the other party is handed the same Meet.
     """
     stored = row["meeting_url"]
+    if not stored:
+        # The writer decides whether this venue gets a Meet; any other is
+        # simply left with no way in, as before.
+        link = await add_meet_link(session, session_id, calendar=_calendar(request))
+        await session.commit()
+        return link
     if row["meeting_provider"] != MeetingProvider.DAILY or not row["external_room_id"]:
         return str(stored) if stored else None
 
@@ -581,7 +596,7 @@ async def joined_session(
     # Committed before the door is minted: the arrival is the thing asked for,
     # and a provider failure afterwards must not take it back.
     await session.commit()
-    return await _door_for(request, session_id, row, user)
+    return await _door_for(request, session, session_id, row, user)
 
 
 async def session_door(
@@ -612,7 +627,7 @@ async def session_door(
     # refreshing participant, and enough of them starve unrelated endpoints.
     # Rolled back rather than committed because there is nothing to keep.
     await session.rollback()
-    return await _door_for(request, session_id, row, user)
+    return await _door_for(request, session, session_id, row, user)
 
 
 JoinedSessionDep = Annotated[str | None, Depends(joined_session)]

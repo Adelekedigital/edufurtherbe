@@ -12,12 +12,16 @@ from pydantic import BaseModel, ConfigDict
 from pydantic import ValidationError as PydanticValidationError
 
 from app.api.deps.core import SessionDep, _configured, logger
-from app.api.deps.sessions import _reminder_callback_url
+from app.api.deps.sessions import _calendar, _reminder_callback_url
 from app.core.errors import (
     AuthenticationError,
     ValidationError,
 )
-from app.domain.notifications import REMINDER_OFFSETS, SESSION_REMINDER_KINDS
+from app.domain.notifications import (
+    LAST_REMINDER_KIND,
+    REMINDER_OFFSETS,
+    SESSION_REMINDER_KINDS,
+)
 from app.domain.suggestions import SUGGESTION_REMINDER_KIND
 from app.infra.clients.daily_presence import sighting_from, verify_daily_signature
 from app.infra.clients.notifications import live_notifier
@@ -33,6 +37,7 @@ from app.infra.clients.scheduler import (
 # way in the M4 transform and raised `UnboundLocalError` far from the edit.
 from app.infra.db.outbox import drain
 from app.infra.db.session_writer import (
+    add_meet_link,
     observe_presence,
     remind_before_session,
     remind_if_still_waiting,
@@ -114,6 +119,12 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
             entity_id=UUID(str(session_id)),
             kind=str(kind),
         )
+        await session.commit()
+    if kind == LAST_REMINDER_KIND:
+        # **The Meet arrives with the last reminder** (#384), after the email
+        # has gone so a slow Google never delays it. A failure leaves the link
+        # empty, and the first press of Join tries again.
+        await add_meet_link(session, UUID(str(session_id)), calendar=_calendar(request))
         await session.commit()
     return queued
 

@@ -20,7 +20,6 @@ from tests.integration.meeting_fakes import FakeCalendar, FakeDoor
 from tests.integration.test_api_attendance import settle
 from tests.integration.test_api_meeting_provisioning import (
     CUSTOM_URL,
-    TrackingCalendar,
     a_mentor_on,
     move_start,
     pressed_in_time,
@@ -326,7 +325,7 @@ async def test_a_cancelled_session_has_no_door_even_inside_its_hour(
     """**The refusing case for the widened rule.** A settled session was agreed
     to and happened, or was meant to; a cancelled one was called off, and its
     room should not open for anybody however recent the start."""
-    api_client._transport.app.state.calendar = TrackingCalendar()  # type: ignore[attr-defined]
+    api_client._transport.app.state.calendar = FakeCalendar()  # type: ignore[attr-defined]
     setup = await a_mentor_on(db_engine, "door-cancelled", "daily")
     session = await started(db_engine, api_client, setup, minutes_ago=-30)
     cancelled = await api_client.post(
@@ -403,7 +402,7 @@ async def test_a_cancelled_session_publishes_no_door(
     and *"you can get back in until 15:00"* on a called-off session would be
     false rather than merely stale. `join_closes_at` stays as it always has;
     only the door, which is a promise of entry, goes null."""
-    api_client._transport.app.state.calendar = TrackingCalendar()  # type: ignore[attr-defined]
+    api_client._transport.app.state.calendar = FakeCalendar()  # type: ignore[attr-defined]
     api_client._transport.app.state.meeting_rooms = FakeDoor()  # type: ignore[attr-defined]
     setup = await a_mentor_on(db_engine, "door-closes-cancelled", "daily")
     session = await started(db_engine, api_client, setup, minutes_ago=-30)

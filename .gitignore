@@ -72,6 +72,7 @@ scripts/*client_secret*
 scripts/calendar_spike_token.json
 # The id of the calendar a run created, so --cleanup-only can find it.
 scripts/calendar_spike_state.json
+scripts/meet_patch_spike_state.json
 
 # Daily spike. The API key lives in `script-data-dev/`, which is ignored
 # wholesale; the state file records a room name and two meeting tokens, and a

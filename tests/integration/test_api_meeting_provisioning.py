@@ -9,7 +9,6 @@ wrong twice already in this codebase's integrations, silently both times.
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -132,20 +131,24 @@ def fakes(api_client: httpx.AsyncClient) -> tuple[FakeRooms, FakeCalendar]:
 # --------------------------------------------------------------------------
 
 
-async def test_meet_asks_the_calendar_for_a_conference_and_creates_no_room(
+async def test_meet_books_an_event_with_no_meet_on_it_yet(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, fakes: tuple[FakeRooms, FakeCalendar]
 ) -> None:
-    """One call, not two, and the link comes back on the event."""
+    """**The event, and no Meet until the last reminder** (#384). The link would
+    otherwise sit on both calendars from the moment of booking, a way in that
+    skips the session page where Join is recorded. No room either: Meet's is
+    the calendar's to make."""
     rooms, calendar = fakes
-    calendar.hands_back_a_link = True
     setup = await a_mentor_on(db_engine, "mp-meet", "google_meet")
 
     session = await book(api_client, setup)
 
     assert rooms.calls == []
-    assert calendar.calls[0]["wants_conference"] is True
+    assert len(calendar.calls) == 1
+    assert calendar.conferences == []
     stored = await venue_of(db_engine, session["id"])
-    assert stored["meeting_url"] == "https://meet.google.com/abc"
+    assert stored["meeting_provider"] == "google_meet"
+    assert stored["meeting_url"] is None
     assert stored["external_calendar_event_id"] == "event-1"
     assert stored["external_room_id"] is None
 
@@ -165,7 +168,7 @@ async def test_daily_creates_a_room_and_must_not_ask_for_a_conference(
     session = await book(api_client, setup)
 
     assert len(rooms.calls) == 1
-    assert calendar.calls[0]["wants_conference"] is False
+    assert calendar.conferences == []
     stored = await venue_of(db_engine, session["id"])
     assert stored["meeting_url"] == "https://ef.daily.co/room"
     assert stored["external_room_id"] == "room-1"
@@ -222,7 +225,6 @@ async def test_both_parties_are_invited_whatever_the_venue(
     an extra. On Meet, an uninvited mentor knocks on a call nobody present can
     admit them to (ADR 0012 §4)."""
     _, calendar = fakes
-    calendar.hands_back_a_link = provider == "google_meet"
     setup = await a_mentor_on(db_engine, f"inv-both-{provider}", provider)
 
     session = await book(api_client, setup)
@@ -242,7 +244,6 @@ async def test_every_invite_links_to_the_session_page_and_never_to_the_venue(
     to, where Join is pressed and recorded. Never the room: a Daily room's URL
     is refused without a token, and a custom venue's would skip the press."""
     _, calendar = fakes
-    calendar.hands_back_a_link = provider == "google_meet"
     serving_the_app_at(api_client, APP)
     setup = await a_mentor_on(db_engine, f"inv-link-{provider}", provider)
 
@@ -393,7 +394,7 @@ async def test_a_custom_venue_creates_nothing_and_keeps_the_mentors_url(
     session = await book(api_client, setup)
 
     assert rooms.calls == []
-    assert calendar.calls[0]["wants_conference"] is False
+    assert calendar.conferences == []
     assert (await venue_of(db_engine, session["id"]))["meeting_url"] == CUSTOM_URL
 
 
@@ -410,7 +411,7 @@ async def test_a_mentor_with_no_option_falls_back_to_edufurther_video(
     session = await book(api_client, setup)
 
     assert len(rooms.calls) == 1
-    assert calendar.calls[0]["wants_conference"] is False
+    assert calendar.conferences == []
     assert (await venue_of(db_engine, session["id"]))["meeting_provider"] == "daily"
 
 
@@ -443,7 +444,7 @@ async def test_the_offerings_own_choice_beats_the_mentors_default(
     await book(api_client, setup)
 
     assert len(rooms.calls) == 1
-    assert calendar.calls[0]["wants_conference"] is False
+    assert calendar.conferences == []
 
 
 # --------------------------------------------------------------------------
@@ -708,19 +709,9 @@ async def test_a_refused_join_gets_no_door(
 # --------------------------------------------------------------------------
 
 
-@dataclass
-class TrackingCalendar(FakeCalendar):
-    """A calendar that also remembers what it was asked to remove."""
-
-    cancelled: list[str] = field(default_factory=list)
-
-    def cancel_event(self, external_id: str) -> None:
-        self.cancelled.append(external_id)
-
-
 @pytest.fixture
-def tracking(api_client: httpx.AsyncClient) -> TrackingCalendar:
-    calendar = TrackingCalendar()
+def tracking(api_client: httpx.AsyncClient) -> FakeCalendar:
+    calendar = FakeCalendar()
     app = api_client._transport.app  # type: ignore[attr-defined]
     app.state.meeting_rooms = FakeRooms()
     app.state.calendar = calendar
@@ -728,7 +719,7 @@ def tracking(api_client: httpx.AsyncClient) -> TrackingCalendar:
 
 
 async def test_cancelling_removes_the_calendar_event(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: TrackingCalendar
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: FakeCalendar
 ) -> None:
     """**The partner fix, and it was missing.** `external_calendar_event_id` was
     written by provisioning and read by nobody — harmless while no event existed
@@ -746,7 +737,7 @@ async def test_cancelling_removes_the_calendar_event(
 
 
 async def test_declining_removes_it_too(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: TrackingCalendar
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: FakeCalendar
 ) -> None:
     """Every transition that ends a session before it happens, not just cancel.
     A declined request whose event survives is the same stale invitation with a
@@ -765,7 +756,7 @@ async def test_declining_removes_it_too(
 
 
 async def test_accepting_creates_rather_than_removes(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: TrackingCalendar
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, tracking: FakeCalendar
 ) -> None:
     """`accept` is the one transition that provisions. Releasing there would
     delete the event it had just created."""
@@ -785,7 +776,7 @@ async def test_a_session_with_no_event_asks_nothing(
 ) -> None:
     """Most sessions today, since no calendar is configured. Calling the
     provider with a null id would be a request that can only fail."""
-    calendar = TrackingCalendar()
+    calendar = FakeCalendar()
     app = api_client._transport.app  # type: ignore[attr-defined]
     app.state.meeting_rooms = FakeRooms()
     app.state.calendar = calendar

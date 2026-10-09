@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -128,16 +129,11 @@ class MeetingRoom:
 
 @dataclass(frozen=True, slots=True)
 class CalendarEvent:
-    """What the calendar gave back.
-
-    ``meeting_url`` is populated **only** when the event was asked for a
-    conference — that is Meet's link, arriving by the one path that produces it.
-    For every other venue the URL was already known and the event merely carries
-    it, so this stays null and the caller keeps what it had.
-    """
+    """What the calendar gave back: the event's id, which is what a later Meet
+    is patched onto (#384) and what a cancellation removes. No link: no event is
+    made with a conference, so there is none to return."""
 
     external_id: str
-    meeting_url: str | None = None
 
 
 class NullRooms:
@@ -337,7 +333,6 @@ class NullCalendar:
         starts_at: dt.datetime,
         duration_minutes: int,
         summary: str,
-        wants_conference: bool,
         join_url: str | None,
     ) -> CalendarEvent | None:
         # Every argument is named and unused on purpose: the signature is the
@@ -346,15 +341,36 @@ class NullCalendar:
         # arrival a signature change at every call site.
         del attendee_emails, duration_minutes, summary, join_url
         logger.info(
-            "no calendar configured; not writing an event for %s at %s (conference requested: %s)",
+            "no calendar configured; not writing an event for %s at %s",
             organiser_id,
             starts_at.isoformat(),
-            wants_conference,
         )
         return None
 
+    def add_conference(self, external_id: str, *, request_id: str) -> str:
+        """Unreachable in practice, since no event was made to patch; raised
+        rather than returning nothing, as `NullRooms` does for a room."""
+        del request_id
+        raise NotImplementedError(f"no calendar configured; no Meet for event {external_id}")
+
     def cancel_event(self, external_id: str) -> None:
         logger.info("no calendar configured; not removing event %s", external_id)
+
+
+#: How many times a `pending` conference is read again, and how far apart.
+#: Google creates conferences asynchronously, and this runs inside a request
+#: (the last reminder's callback, or a press of Join), so the wait is bounded:
+#: five seconds, after which the caller treats it as a venue failure and the
+#: next press of Join tries again.
+CONFERENCE_POLLS = 5
+CONFERENCE_POLL_SECONDS = 1.0
+
+
+def _conference_status(event: dict[str, Any]) -> str | None:
+    """The conference's creation status: `pending`, `success` or `failure`."""
+    request = event.get("conferenceData", {}).get("createRequest", {})
+    status = request.get("status", {}).get("statusCode")
+    return str(status) if status else None
 
 
 class GoogleCalendar:
@@ -405,15 +421,15 @@ class GoogleCalendar:
         starts_at: dt.datetime,
         duration_minutes: int,
         summary: str,
-        wants_conference: bool,
         join_url: str | None,
     ) -> CalendarEvent | None:
-        """One event, every party invited, and a Meet link only when asked.
+        """One event, every party invited, and **no conference, for any venue**.
 
-        **`wants_conference` is the line that matters.** Requesting one for a
-        session held in Daily would put a second link on the event, and the
-        invitee clicks whichever the client renders first — a failure that
-        errors nowhere and surfaces when somebody joins an empty room.
+        A Meet is patched on later by :meth:`add_conference` (#384): asked for
+        here, its link would sit on both calendars from the moment of booking, a
+        way in that skips the session page where Join is recorded. For Daily or
+        a custom venue it would be a second link, and the guest clicks whichever
+        their calendar renders first.
 
         **`join_url` is the session page, never a venue's own URL** (#389). The
         page is where Join is pressed and recorded, and it stays safe whatever
@@ -442,34 +458,58 @@ class GoogleCalendar:
         }
         if join_url:
             body["description"] = f"Join here: {join_url}"
-        params = {"sendUpdates": "all"}
-        if wants_conference:
-            body["conferenceData"] = {
-                "createRequest": {
-                    "requestId": organiser_id,
-                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
-                }
-            }
-            # Measured, not assumed: without this the write succeeds and the
-            # conference is dropped in silence.
-            params["conferenceDataVersion"] = "1"
-
         event = self._call(
             "POST",
             f"/calendars/{self._calendar_id}/events",
-            params=params,
+            params={"sendUpdates": "all"},
             json=body,
         )
+        return CalendarEvent(external_id=str(event["id"]))
+
+    def add_conference(self, external_id: str, *, request_id: str) -> str:
+        """Patch a Meet onto an existing event and return its link (#384).
+
+        **Three parameters, each a trap.** ``conferenceDataVersion=1``, or Google
+        accepts the write and silently drops the conference (measured, ADR 0012
+        spike). ``sendUpdates=none``, or every guest is emailed a second time
+        minutes before the session. And ``request_id`` is the caller's: Google
+        ignores a create request whose id it has seen, so a retry, or two
+        parties pressing Join at once, is the same Meet rather than a second.
+
+        **Created asynchronously**, in Google's words: the answer can be
+        ``pending``, so the event is read again, a bounded number of times.
+        No link at the end, whether refused, still pending or a ``success``
+        without one, is :class:`VenueUnavailableError`.
+        """
+        path = f"/calendars/{self._calendar_id}/events/{external_id}"
+        version = {"conferenceDataVersion": "1"}
+        event = self._call(
+            "PATCH",
+            path,
+            params=version | {"sendUpdates": "none"},
+            json={
+                "conferenceData": {
+                    "createRequest": {
+                        "requestId": request_id,
+                        "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                    }
+                }
+            },
+        )
+        for _ in range(CONFERENCE_POLLS):
+            if _conference_status(event) != "pending":
+                break
+            time.sleep(CONFERENCE_POLL_SECONDS)
+            event = self._call("GET", path, params=version)
+        # The link is the evidence: Google sets it only on a conference that
+        # succeeded, so refused, still pending and a bare `success` all lack it.
         link = event.get("hangoutLink")
-        if wants_conference and not link:
-            # The silent drop, caught. A 200 with no link means the conference
-            # was refused or the version parameter was lost, and returning the
-            # event anyway would store an id for a meeting with nowhere to go.
+        if not link:
             raise VenueUnavailableError(
-                "Google accepted the event and returned no Meet link — "
-                "conferenceDataVersion was dropped or the scope is missing"
+                f"google gave event {external_id} no Meet "
+                f"(conference {_conference_status(event) or 'missing'})"
             )
-        return CalendarEvent(external_id=str(event["id"]), meeting_url=link)
+        return str(link)
 
     def cancel_event(self, external_id: str) -> None:
         """Remove the event, so a called-off session leaves both calendars.

@@ -20,6 +20,7 @@ from app.infra.db.session_writer.booking import (
     book_session,
 )
 from app.infra.db.session_writer.meetings import (
+    add_meet_link,
     provision_meeting,
     release_meeting,
 )
@@ -40,6 +41,7 @@ from app.infra.db.session_writer.transitions import (
 
 __all__ = [
     "DOUBLE_BOOKED",
+    "add_meet_link",
     "book_session",
     "confirm_presence",
     "door_row",

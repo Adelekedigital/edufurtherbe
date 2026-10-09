@@ -12,6 +12,7 @@ this codebase's integrations, silently both times.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from typing import Any
 from uuid import UUID, uuid4
@@ -22,7 +23,14 @@ import pytest
 from app.core.config import Settings
 from app.core.errors import ConfigurationError
 from app.domain.messages import MessageContext
-from app.domain.notifications import AUDIENCE, Channel, Notification, recipients
+from app.domain.notifications import (
+    AUDIENCE,
+    LAST_REMINDER_KIND,
+    SESSION_REMINDER_KINDS,
+    Channel,
+    Notification,
+    recipients,
+)
 from app.infra.clients.notifications import (
     DeliveryError,
     LoopsNotifier,
@@ -360,3 +368,12 @@ def test_the_whatsapp_adapter_refuses_rather_than_reporting_success() -> None:
             context=CONTEXT,
             idempotency_key="k",
         )
+
+
+def test_the_meet_arrives_with_the_last_reminder() -> None:
+    """**The owner's choice, pinned** (#384, 2026-10-08): the Meet is added at the
+    last reminder every party gets, the one sent as the last-reminder email,
+    five minutes out."""
+    last = SESSION_REMINDER_KINDS[LAST_REMINDER_KIND]
+    assert last.notification is Notification.SESSION_LAST_REMINDER
+    assert last.before == dt.timedelta(minutes=5)

@@ -17,7 +17,11 @@ from typing import Any
 import httpx
 import pytest
 
-from app.infra.clients.meetings import GoogleCalendar, VenueUnavailableError
+from app.infra.clients.meetings import (
+    CONFERENCE_POLLS,
+    GoogleCalendar,
+    VenueUnavailableError,
+)
 
 STARTS = dt.datetime(2026, 8, 25, 14, 0, tzinfo=dt.UTC)
 
@@ -64,7 +68,6 @@ SESSION_PAGE = "https://app.example.test/sessions/sess-1"
 def insert(
     api: GoogleCalendar,
     *,
-    wants_conference: bool,
     join_url: str | None = SESSION_PAGE,
     guests: tuple[str, ...] = (MENTEE, MENTOR),
 ) -> Any:
@@ -74,7 +77,6 @@ def insert(
         starts_at=STARTS,
         duration_minutes=60,
         summary="EduFurther session",
-        wants_conference=wants_conference,
         join_url=join_url,
     )
 
@@ -84,48 +86,32 @@ def insert(
 # --------------------------------------------------------------------------
 
 
-def test_a_meet_session_asks_for_a_conference_with_the_version_parameter() -> None:
-    """**The trap, asserted as a query parameter.** Without
-    `conferenceDataVersion=1` Google accepts the write and drops the conference,
-    and nothing in the response says so."""
-    api, seen = calendar(created(hangoutLink="https://meet.google.com/abc"))
-
-    event = insert(api, wants_conference=True)
-
-    (request,) = seen
-    assert request.url.params["conferenceDataVersion"] == "1"
-    assert json.loads(request.content)["conferenceData"]["createRequest"]
-    assert event is not None
-    assert event.meeting_url == "https://meet.google.com/abc"
-
-
-def test_a_daily_session_does_not_ask_for_one() -> None:
-    """**Two links on one event is the failure with no error message.** The
-    invitee clicks whichever the client renders first, and nobody finds out
-    until somebody joins an empty room."""
+def test_no_event_asks_for_a_conference_when_it_is_created() -> None:
+    """**The invite carries no Meet link, whatever the venue** (#384). The Meet
+    is patched in at the last reminder, so the first way in is the session page,
+    where pressing Join is recorded. A conference asked for here would put the
+    link on the guests' calendars from the moment of booking."""
     api, seen = calendar(created())
 
-    event = insert(api, wants_conference=False)
+    event = insert(api)
 
     (request,) = seen
-    body = json.loads(request.content)
     assert "conferenceDataVersion" not in request.url.params
-    assert "conferenceData" not in body
+    assert "conferenceData" not in json.loads(request.content)
     assert event is not None
-    assert event.meeting_url is None, "the venue's own URL is not Google's to return"
+    assert event.external_id == "evt_1"
 
 
-@pytest.mark.parametrize("wants_conference", [False, True])
-def test_every_invite_links_to_the_session_page(wants_conference: bool) -> None:
+def test_every_invite_links_to_the_session_page() -> None:
     """**The session page, for every venue (#389).** It is where Join is pressed
     and recorded, and the page redirects whatever later happens to the session,
     so it is safe on an invite that outlives a cancellation. A Daily room's own
     URL was written here before, and a bare room URL is *refused* by Daily
     without a token (`docs/daily-spike-guide.md` Q1): every Daily invite sent
     linked to a room that turned its guest away."""
-    api, seen = calendar(created(hangoutLink="https://meet.google.com/abc"))
+    api, seen = calendar(created())
 
-    insert(api, wants_conference=wants_conference)
+    insert(api)
 
     assert SESSION_PAGE in json.loads(seen[0].content).get("description", "")
 
@@ -136,22 +122,99 @@ def test_with_no_session_page_the_event_is_still_written_without_a_link() -> Non
     each be worse than nothing."""
     api, seen = calendar(created())
 
-    event = insert(api, wants_conference=False, join_url=None)
+    event = insert(api, join_url=None)
 
     assert "description" not in json.loads(seen[0].content)
     assert event is not None
 
 
-def test_a_silently_dropped_conference_is_caught() -> None:
-    """**A 200 with no link is a failure**, and the one this suite exists for.
-    Returning the event anyway would store an id for a meeting with nowhere to
-    go, and the session would look provisioned."""
-    api, _ = calendar(created())
+# --------------------------------------------------------------------------
+# Adding the Meet later (#384)
+# --------------------------------------------------------------------------
 
-    with pytest.raises(VenueUnavailableError) as raised:
-        insert(api, wants_conference=True)
+MEET = "https://meet.google.com/abc-defg-hij"
 
-    assert "conferenceDataVersion" in str(raised.value)
+
+def conference(status: str, *, link: str | None = None) -> dict[str, Any]:
+    """An event as Google returns it, its conference at `status`."""
+    body: dict[str, Any] = {
+        "id": "evt_1",
+        "conferenceData": {"createRequest": {"status": {"statusCode": status}}},
+    }
+    if link:
+        body["hangoutLink"] = link
+    return body
+
+
+def answers(*bodies: dict[str, Any]) -> Any:
+    """Each call gets the next body; the last repeats."""
+    queue = list(bodies)
+    return lambda _: httpx.Response(200, json=queue.pop(0) if len(queue) > 1 else queue[0])
+
+
+@pytest.fixture(autouse=True)
+def no_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.infra.clients.meetings.CONFERENCE_POLL_SECONDS", 0)
+
+
+def test_the_meet_is_patched_in_silently_with_the_version_parameter() -> None:
+    """**Three parameters, each a trap.** Without `conferenceDataVersion=1`
+    Google accepts the write and drops the conference; without `sendUpdates=none`
+    every guest gets a second email minutes before the session; and the request
+    id is the caller's, so a repeat is the same Meet rather than a second."""
+    api, seen = calendar(answers(conference("success", link=MEET)))
+
+    link = api.add_conference("evt_1", request_id="sess-1")
+
+    (request,) = seen
+    assert request.method == "PATCH"
+    assert request.url.path.endswith("/events/evt_1")
+    assert request.url.params["conferenceDataVersion"] == "1"
+    assert request.url.params["sendUpdates"] == "none"
+    create = json.loads(request.content)["conferenceData"]["createRequest"]
+    assert create["requestId"] == "sess-1"
+    assert create["conferenceSolutionKey"] == {"type": "hangoutsMeet"}
+    assert link == MEET
+
+
+def test_a_pending_conference_is_waited_for() -> None:
+    """**Created asynchronously**, in Google's words: the patch can answer
+    `pending` and turn `success` later, so the link is read again rather than
+    taken as missing."""
+    api, seen = calendar(
+        answers(conference("pending"), conference("pending"), conference("success", link=MEET))
+    )
+
+    link = api.add_conference("evt_1", request_id="sess-1")
+
+    assert link == MEET
+    assert [request.method for request in seen] == ["PATCH", "GET", "GET"]
+    assert seen[1].url.params["conferenceDataVersion"] == "1"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [conference("failure"), conference("pending"), conference("success")],
+    ids=["refused", "never-ready", "success-without-a-link"],
+)
+def test_no_link_is_a_venue_failure(outcome: dict[str, Any]) -> None:
+    """**A 200 with no link is a failure**, whichever way it happens: refused,
+    still pending when the wait runs out, or `success` with the link missing.
+    Returning nothing quietly would leave a session nobody can enter."""
+    api, _ = calendar(answers(outcome))
+
+    with pytest.raises(VenueUnavailableError):
+        api.add_conference("evt_1", request_id="sess-1")
+
+
+def test_the_wait_is_bounded() -> None:
+    """It runs inside a request, so it gives up rather than holding the caller."""
+    api, seen = calendar(answers(conference("pending")))
+
+    with pytest.raises(VenueUnavailableError):
+        api.add_conference("evt_1", request_id="sess-1")
+
+    assert len(seen) == 1 + CONFERENCE_POLLS
 
 
 def test_both_parties_are_invited_and_the_session_is_recorded_on_the_event() -> None:
@@ -166,9 +229,9 @@ def test_both_parties_are_invited_and_the_session_is_recorded_on_the_event() -> 
 
     The session id rides along so an event can be traced back without a database.
     """
-    api, seen = calendar(created(hangoutLink="https://meet.google.com/abc"))
+    api, seen = calendar(created())
 
-    insert(api, wants_conference=True)
+    insert(api)
 
     body = json.loads(seen[0].content)
     assert body["attendees"] == [{"email": MENTEE}, {"email": MENTOR}]
@@ -184,9 +247,9 @@ def test_guests_cannot_see_each_other_or_add_anyone() -> None:
     withholds it. The second would let either party add a third person, who on
     Meet joins without knocking (ADR 0012 §4). Owner, 2026-10-08: both off.
     """
-    api, seen = calendar(created(hangoutLink="https://meet.google.com/abc"))
+    api, seen = calendar(created())
 
-    insert(api, wants_conference=True)
+    insert(api)
 
     body = json.loads(seen[0].content)
     # `.get`: absent means Google's default, `true`, and should fail as such.
@@ -199,7 +262,7 @@ def test_a_missing_address_is_left_off_rather_than_sent_empty() -> None:
     as an empty address, which invites nobody and is not a valid guest."""
     api, seen = calendar(created())
 
-    insert(api, wants_conference=False, guests=(MENTEE, ""))
+    insert(api, guests=(MENTEE, ""))
 
     assert json.loads(seen[0].content)["attendees"] == [{"email": MENTEE}]
 
@@ -207,9 +270,9 @@ def test_a_missing_address_is_left_off_rather_than_sent_empty() -> None:
 def test_the_calendar_id_is_configurable() -> None:
     """A secondary calendar keeps session events out of whatever else the
     platform account holds."""
-    api, seen = calendar(created(hangoutLink="x"), calendar_id="sessions@group.calendar")
+    api, seen = calendar(created(), calendar_id="sessions@group.calendar")
 
-    insert(api, wants_conference=True)
+    insert(api)
 
     assert "sessions%40group.calendar" in str(seen[0].url) or "sessions@group.calendar" in str(
         seen[0].url
@@ -254,8 +317,8 @@ def test_both_ends_of_a_booking_notify_the_same_way() -> None:
     announces neither and the outbox carries it — the failure is one end
     changing without the other. That is what happened, and no test objected.
     """
-    inviting, invited = calendar(created(hangoutLink="https://meet.google.com/abc"))
-    insert(inviting, wants_conference=True)
+    inviting, invited = calendar(created())
+    insert(inviting)
     cancelling, cancelled_call = calendar(lambda _: httpx.Response(204))
     cancelling.cancel_event("evt_1")
 
@@ -307,8 +370,8 @@ def test_the_access_token_is_reused_across_calls() -> None:
         client=httpx.Client(transport=httpx.MockTransport(route)),
     )
 
-    insert(api, wants_conference=True)
-    insert(api, wants_conference=True)
+    insert(api)
+    insert(api)
 
     assert exchanges == 1
 
@@ -329,4 +392,4 @@ def test_a_refused_refresh_is_a_venue_failure_not_a_crash() -> None:
     )
 
     with pytest.raises(VenueUnavailableError):
-        insert(api, wants_conference=True)
+        insert(api)

@@ -453,6 +453,12 @@ SESSION_REMINDERS: tuple[SessionReminder, ...] = (
 #: reaching a handler that has to guess.
 SESSION_REMINDER_KINDS = {reminder.kind: reminder for reminder in SESSION_REMINDERS}
 
+#: The reminder the Meet link arrives with (#384): the last one every party
+#: gets before the session, so the link spends as little time as possible on
+#: their calendars, where it is a way in that skips the session page. Derived,
+#: so a change to the cadence moves it.
+LAST_REMINDER_KIND = min(SESSION_REMINDERS, key=lambda reminder: reminder.before).kind
+
 #: How long after the request the mentee is nudged once.
 #:
 #: **A day, and only one.** Long enough that the session is behind them and
