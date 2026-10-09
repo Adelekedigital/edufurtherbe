@@ -69,6 +69,11 @@ def main() -> int:
         help="an address you control, not the one you sign in as; repeat to invite several",
     )
     parser.add_argument("--minutes", type=int, default=10, help="how far out the event starts")
+    parser.add_argument(
+        "--meet-at-creation",
+        action="store_true",
+        help="the control: make the Meet with the event, as today, and patch nothing",
+    )
     parser.add_argument("--cleanup-only", action="store_true")
     args = parser.parse_args()
     api = service(default_client_secrets())
@@ -83,23 +88,35 @@ def main() -> int:
         json.dumps({"calendar_ids": [*recorded(), calendar["id"]]}), encoding="utf-8"
     )
     start = dt.datetime.now(dt.UTC).replace(microsecond=0) + dt.timedelta(minutes=args.minutes)
-    event = (
-        api.events()
-        .insert(
-            calendarId=calendar["id"],
-            sendUpdates="all",
-            body={
-                "summary": "EduFurther #384 spike",
-                "start": {"dateTime": start.isoformat()},
-                "end": {"dateTime": (start + dt.timedelta(minutes=30)).isoformat()},
-                "attendees": [{"email": email} for email in args.attendee],
-                "guestsCanSeeOtherGuests": False,
-                "guestsCanInviteOthers": False,
-                "description": "Join here: https://example.invalid/sessions/spike",
-            },
+    body = {
+        "summary": "EduFurther #384 spike",
+        "start": {"dateTime": start.isoformat()},
+        "end": {"dateTime": (start + dt.timedelta(minutes=30)).isoformat()},
+        "attendees": [{"email": email} for email in args.attendee],
+        "guestsCanSeeOtherGuests": False,
+        "guestsCanInviteOthers": False,
+        "description": "Join here: https://example.invalid/sessions/spike",
+    }
+    if args.meet_at_creation:
+        # The control: the Meet made with the event, as `main` does today. A
+        # knock here too means the guests, not the late patch, are the cause.
+        body["conferenceData"] = {
+            "createRequest": {
+                "requestId": str(uuid.uuid4()),
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        }
+        event = (
+            api.events()
+            .insert(
+                calendarId=calendar["id"], sendUpdates="all", conferenceDataVersion=1, body=body
+            )
+            .execute()
         )
-        .execute()
-    )
+        print(f"CONTROL: created {event['id']} WITH its Meet: {event.get('hangoutLink')!r}")
+        print("join it as each guest, this account absent: straight in, or asked to wait?")
+        return 0
+    event = api.events().insert(calendarId=calendar["id"], sendUpdates="all", body=body).execute()
     print(f"created {event['id']} with no conference; hangoutLink={event.get('hangoutLink')!r}")
     print("check the guest's inbox and calendar now: the invite should carry no Meet link")
     # A pause rather than a prompt, so it runs from a non-interactive shell: long
