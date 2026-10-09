@@ -229,13 +229,22 @@ async def add_meet_link(session: AsyncSession, session_id: UUID, *, calendar: An
             request_id=str(session_id),
         )
     except (VenueUnavailableError, NotImplementedError) as exc:
-        logger.info("no Meet for session %s yet: %s", session_id, exc)
-        return None
+        # **Refused, but perhaps beaten to it**: Google rate-limits a second
+        # write to one event (#402's spike), so the party who pressed Join a
+        # moment later is refused while the first stores the Meet. Theirs is
+        # this session's link too, so hand it over rather than nothing.
+        logger.info("no Meet for session %s from this call: %s", session_id, exc)
+        return await _stored_link(session, session_id)
     await session.execute(
         update(Session)
         .where(Session.id == session_id, Session.meeting_url.is_(None))
         .values(meeting_url=link)
     )
+    return await _stored_link(session, session_id)
+
+
+async def _stored_link(session: AsyncSession, session_id: UUID) -> str | None:
+    """The link on the session now: the first one stored is everybody's."""
     stored = await session.scalar(select(Session.meeting_url).where(Session.id == session_id))
     return str(stored) if stored else None
 

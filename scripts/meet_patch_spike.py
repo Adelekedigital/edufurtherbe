@@ -44,20 +44,29 @@ def status_of(event: dict) -> str | None:
     )
 
 
-def cleanup(api: object) -> None:
+def recorded() -> list[str]:
+    """Every spike calendar not yet deleted. A list, so a second run before a
+    cleanup does not lose the first one's id (the old shape held one)."""
     if not STATE_PATH.exists():
-        print("nothing recorded to clean up")
-        return
-    calendar_id = json.loads(STATE_PATH.read_text(encoding="utf-8"))["calendar_id"]
-    api.calendars().delete(calendarId=calendar_id).execute()  # type: ignore[attr-defined]
-    STATE_PATH.unlink()
-    print(f"deleted {calendar_id}")
+        return []
+    state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    return list(state.get("calendar_ids") or [state["calendar_id"]])
+
+
+def cleanup(api: object) -> None:
+    for calendar_id in recorded():
+        api.calendars().delete(calendarId=calendar_id).execute()  # type: ignore[attr-defined]
+        print(f"deleted {calendar_id}")
+    STATE_PATH.unlink(missing_ok=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--attendee", required=False, help="an address you control, not the one you sign in as"
+        "--attendee",
+        action="append",
+        default=[],
+        help="an address you control, not the one you sign in as; repeat to invite several",
     )
     parser.add_argument("--minutes", type=int, default=10, help="how far out the event starts")
     parser.add_argument("--cleanup-only", action="store_true")
@@ -70,7 +79,9 @@ def main() -> int:
         parser.error("--attendee is required")
 
     calendar = api.calendars().insert(body={"summary": "EduFurther (#384 spike)"}).execute()
-    STATE_PATH.write_text(json.dumps({"calendar_id": calendar["id"]}), encoding="utf-8")
+    STATE_PATH.write_text(
+        json.dumps({"calendar_ids": [*recorded(), calendar["id"]]}), encoding="utf-8"
+    )
     start = dt.datetime.now(dt.UTC).replace(microsecond=0) + dt.timedelta(minutes=args.minutes)
     event = (
         api.events()
@@ -81,7 +92,7 @@ def main() -> int:
                 "summary": "EduFurther #384 spike",
                 "start": {"dateTime": start.isoformat()},
                 "end": {"dateTime": (start + dt.timedelta(minutes=30)).isoformat()},
-                "attendees": [{"email": args.attendee}],
+                "attendees": [{"email": email} for email in args.attendee],
                 "guestsCanSeeOtherGuests": False,
                 "guestsCanInviteOthers": False,
                 "description": "Join here: https://example.invalid/sessions/spike",
@@ -131,8 +142,13 @@ def main() -> int:
         status, link = status_of(got), got.get("hangoutLink")
         print(f"  {time.monotonic() - began:.1f}s: status={status!r} link={link!r}")
 
-    repeat = patch().get("hangoutLink")
-    print(f"Q1b same requestId again: link={repeat!r} (same Meet: {repeat == link})")
+    # Measured both ways on 2026-10-09: once the same Meet, once `403 Rate
+    # Limit Exceeded` a second after the first. Either is a result, so print it.
+    try:
+        repeat = patch().get("hangoutLink")
+        print(f"Q1b same requestId again: link={repeat!r} (same Meet: {repeat == link})")
+    except Exception as exc:
+        print(f"Q1b same requestId again: refused ({exc})")
 
     print()
     print("Q1 above. Now, by hand:")

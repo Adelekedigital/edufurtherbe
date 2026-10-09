@@ -146,6 +146,10 @@ def conference(status: str, *, link: str | None = None) -> dict[str, Any]:
     return body
 
 
+#: An event as created: no conference on it yet.
+NO_MEET: dict[str, Any] = {"id": "evt_1"}
+
+
 def answers(*bodies: dict[str, Any]) -> Any:
     """Each call gets the next body; the last repeats."""
     queue = list(bodies)
@@ -162,11 +166,13 @@ def test_the_meet_is_patched_in_silently_with_the_version_parameter() -> None:
     Google accepts the write and drops the conference; without `sendUpdates=none`
     every guest gets a second email minutes before the session; and the request
     id is the caller's, so a repeat is the same Meet rather than a second."""
-    api, seen = calendar(answers(conference("success", link=MEET)))
+    api, seen = calendar(answers(NO_MEET, conference("success", link=MEET)))
 
     link = api.add_conference("evt_1", request_id="sess-1")
 
-    (request,) = seen
+    read, request = seen
+    assert read.method == "GET"
+    assert read.url.params["conferenceDataVersion"] == "1"
     assert request.method == "PATCH"
     assert request.url.path.endswith("/events/evt_1")
     assert request.url.params["conferenceDataVersion"] == "1"
@@ -182,14 +188,43 @@ def test_a_pending_conference_is_waited_for() -> None:
     `pending` and turn `success` later, so the link is read again rather than
     taken as missing."""
     api, seen = calendar(
-        answers(conference("pending"), conference("pending"), conference("success", link=MEET))
+        answers(
+            NO_MEET,
+            conference("pending"),
+            conference("pending"),
+            conference("success", link=MEET),
+        )
     )
 
     link = api.add_conference("evt_1", request_id="sess-1")
 
     assert link == MEET
-    assert [request.method for request in seen] == ["PATCH", "GET", "GET"]
-    assert seen[1].url.params["conferenceDataVersion"] == "1"
+    assert [request.method for request in seen] == ["GET", "PATCH", "GET", "GET"]
+    assert seen[2].url.params["conferenceDataVersion"] == "1"
+
+
+def test_an_event_that_has_its_meet_is_not_written_again() -> None:
+    """**Measured on #402's spike:** a second patch a second after the first is
+    refused, `403 Rate Limit Exceeded`. Two parties pressing Join together, or
+    the reminder firing just after a press, would get no link for a Meet that
+    exists. So the event is read first, and a link already there is the answer."""
+    api, seen = calendar(answers(conference("success", link=MEET)))
+
+    link = api.add_conference("evt_1", request_id="sess-1")
+
+    assert link == MEET
+    assert [request.method for request in seen] == ["GET"]
+
+
+def test_a_conference_already_being_made_is_waited_for_not_requested_again() -> None:
+    """Another caller's patch is in flight: wait for it rather than write again,
+    which is what Google rate-limits."""
+    api, seen = calendar(answers(conference("pending"), conference("success", link=MEET)))
+
+    link = api.add_conference("evt_1", request_id="sess-1")
+
+    assert link == MEET
+    assert [request.method for request in seen] == ["GET", "GET"]
 
 
 @pytest.mark.parametrize(
@@ -209,12 +244,12 @@ def test_no_link_is_a_venue_failure(outcome: dict[str, Any]) -> None:
 
 def test_the_wait_is_bounded() -> None:
     """It runs inside a request, so it gives up rather than holding the caller."""
-    api, seen = calendar(answers(conference("pending")))
+    api, seen = calendar(answers(NO_MEET, conference("pending")))
 
     with pytest.raises(VenueUnavailableError):
         api.add_conference("evt_1", request_id="sess-1")
 
-    assert len(seen) == 1 + CONFERENCE_POLLS
+    assert len(seen) == 2 + CONFERENCE_POLLS
 
 
 def test_both_parties_are_invited_and_the_session_is_recorded_on_the_event() -> None:

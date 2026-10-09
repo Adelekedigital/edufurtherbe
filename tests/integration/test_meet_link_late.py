@@ -9,6 +9,7 @@ covers a reminder that failed or never ran.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -238,3 +239,41 @@ async def test_a_refused_meet_still_records_the_arrival(
             )
         ).scalar_one()
     assert pressed == 1
+
+
+class LosesTheRace(FakeCalendar):
+    """Another caller stores the Meet while this one's request is refused: the
+    rate-limited second patch #402's spike measured."""
+
+    def __init__(self, engine: AsyncEngine, session_id: str) -> None:
+        super().__init__(refuses=True)
+        self._engine, self._session_id = engine, session_id
+        self._loop = asyncio.get_running_loop()
+
+    def add_conference(self, external_id: str, *, request_id: str) -> str:
+        asyncio.run_coroutine_threadsafe(self._store_theirs(), self._loop).result()
+        return super().add_conference(external_id, request_id=request_id)
+
+    async def _store_theirs(self) -> None:
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE sessions SET meeting_url = :u WHERE id = :i"),
+                {"u": FAKE_MEET, "i": self._session_id},
+            )
+
+
+async def test_a_refused_patch_still_hands_over_the_meet_someone_else_stored(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Both parties pressing Join together**: one patch wins, the other is
+    refused. The loser is handed the winner's link rather than nothing."""
+    setup = await a_mentor_on(db_engine, "late-race", "google_meet")
+    session = await joinable(db_engine, api_client, setup)
+    api_client._transport.app.state.calendar = LosesTheRace(db_engine, session["id"])  # type: ignore[attr-defined]
+
+    joined = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/join", headers=setup["mentee_headers"]
+    )
+
+    assert joined.status_code == 200, joined.text
+    assert joined.json()["meeting_url"] == FAKE_MEET

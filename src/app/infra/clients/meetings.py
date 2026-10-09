@@ -476,6 +476,12 @@ class GoogleCalendar:
         ignores a create request whose id it has seen, so a retry, or two
         parties pressing Join at once, is the same Meet rather than a second.
 
+        **Read before writing.** A second patch a second after the first is
+        refused, ``403 Rate Limit Exceeded`` (measured on #402's spike), so a
+        Meet already on the event, or one already being made, is used rather
+        than requested again: two parties pressing Join together, or the
+        reminder firing just after a press, all get the one link.
+
         **Created asynchronously**, in Google's words: the answer can be
         ``pending``, so the event is read again, a bounded number of times.
         No link at the end, whether refused, still pending or a ``success``
@@ -483,19 +489,21 @@ class GoogleCalendar:
         """
         path = f"/calendars/{self._calendar_id}/events/{external_id}"
         version = {"conferenceDataVersion": "1"}
-        event = self._call(
-            "PATCH",
-            path,
-            params=version | {"sendUpdates": "none"},
-            json={
-                "conferenceData": {
-                    "createRequest": {
-                        "requestId": request_id,
-                        "conferenceSolutionKey": {"type": "hangoutsMeet"},
+        event = self._call("GET", path, params=version)
+        if not event.get("hangoutLink") and _conference_status(event) != "pending":
+            event = self._call(
+                "PATCH",
+                path,
+                params=version | {"sendUpdates": "none"},
+                json={
+                    "conferenceData": {
+                        "createRequest": {
+                            "requestId": request_id,
+                            "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                        }
                     }
-                }
-            },
-        )
+                },
+            )
         for _ in range(CONFERENCE_POLLS):
             if _conference_status(event) != "pending":
                 break
