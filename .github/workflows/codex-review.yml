@@ -26,14 +26,16 @@ env:
 
 jobs:
   review:
-    # Automatically on a pull request that is not a draft and not Dependabot's
-    # (it gets no secrets, and its PRs merge on green). Or on request: a comment
+    # Automatically on a pull request that is not a draft, not from a fork, and
+    # not Dependabot's: forks and Dependabot get no secrets, and a fork's token
+    # cannot comment (the repository is public). Or on request: a comment
     # starting `/codex-review` from someone who can write to the repository,
     # because issue_comment runs hold secrets and a passer-by must not be able
     # to spend the key.
     if: >-
       (github.event_name == 'pull_request' &&
        !github.event.pull_request.draft &&
+       !github.event.pull_request.head.repo.fork &&
        github.event.pull_request.user.login != 'dependabot[bot]') ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
@@ -72,6 +74,10 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.head }}
           fetch-depth: 0
+          # Keep the job token out of .git/config, which sits inside the folder
+          # Codex reads. The repository is public, so the base fetch below
+          # needs no credentials.
+          persist-credentials: false
 
       - name: Prepare the diff
         id: prepare
@@ -117,12 +123,22 @@ jobs:
           git diff "$from" "$HEAD" -- . \
             ':(exclude)uv.lock' ':(exclude)docs/**' ':(exclude)**/*.md' \
             ':(exclude).claude/**' ':(exclude).github/codex/**' > codex-review/pr.diff
+          # The rulebook is markdown, so the filter above drops it; a change to
+          # the rules is exactly what must be reviewed, so it goes back in.
+          git diff "$from" "$HEAD" -- AGENTS.md >> codex-review/pr.diff
+
+          # The rules Codex applies come from the base branch too: AGENTS.md in
+          # the checkout is the pull request's own and could rewrite them.
+          git show "origin/$BASE_REF:AGENTS.md" > codex-review/AGENTS.md
 
           # Findings raised on this PR and the replies to them, so a finding
-          # already fixed or answered as wrong is not raised again. Every
-          # comment, not only the reviewer's: the answer is the author's reply.
+          # already fixed or answered as wrong is not raised again. Only the
+          # reviewer's comments and replies from people who can write: the
+          # repository is public, and a stranger must not be able to silence a
+          # finding by commenting "false positive".
           gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
-            --jq '.[] | "--- \(.user.login):\n\(.body)\n"' | tail -c 20000 > codex-review/answered.md
+            --jq '.[] | select(.user.login == "github-actions[bot]" or (.author_association | IN("OWNER","MEMBER","COLLABORATOR"))) | "--- \(.user.login):\n\(.body)\n"' \
+            | tail -c 20000 > codex-review/answered.md
 
           lines=$(wc -l < codex-review/pr.diff)
           echo "lines=$lines" >> "$GITHUB_OUTPUT"
@@ -137,7 +153,9 @@ jobs:
       - name: Run Codex
         id: codex
         if: steps.prepare.outputs.verdict == 'review'
-        uses: openai/codex-action@v1
+        # Pinned to a commit, not the movable v1 tag: this step holds the key.
+        # Verified 2026-10-09 that v1 and v1.13 both resolve to this commit.
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: codex-review/prompt.md
@@ -179,7 +197,9 @@ jobs:
             else
               echo "**Codex review** of $SCOPE (\`${HEAD:0:7}\`, effort high)"
               echo
-              printf '%s\n' "$RESULT"
+              # A zero-width space after every @, so the review can never ping a
+              # person or team, whatever Codex writes.
+              printf '%s\n' "$RESULT" | sed 's/@/@\xe2\x80\x8b/g'
               # Marks the commit reviewed, so the next /codex-review covers only
               # what comes after it. Only written when a review actually ran.
               echo
