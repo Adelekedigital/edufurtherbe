@@ -237,3 +237,34 @@ That is a materially smaller onboarding requirement than the original design.
 * **A revoked mentor grant** degrades booking to no conflict checking rather than
   failing it. Whether that is acceptable silently, or must be surfaced, is open.
 * The mentee's calendar is not connected, so mentee-side conflicts are invisible.
+
+## The late Meet (#384), measured 2026-10-09
+
+`scripts/meet_patch_spike.py` creates an event with no conference, invites the
+guests, and patches a Meet on 20 seconds later the way #384 does
+(`conferenceDataVersion=1`, `sendUpdates=none`). `--meet-at-creation` is the
+control, with the Meet made at insert as before. Events were created as
+`edufurtherlearning@gmail.com`.
+
+| Question | Answer |
+|---|---|
+| The invite email carries no Meet link | **yes** |
+| The patch makes the conference | **yes**, `success` in about 1 s; no `pending` seen |
+| The same `requestId` again | the same Meet once; **`403 Rate Limit Exceeded`** once, a second after the first |
+| The link reaches the guests' calendars after a `sendUpdates=none` patch | **no**, and no second email |
+| Invited guests join without knocking, the creator absent | **yes**, both straight in |
+
+**The 403 is why `add_conference` reads before it writes**: a Meet already on
+the event, or one still being made, is used rather than requested again.
+
+**The link stays off the guests' calendars**, so the session page (Join, the
+door) is the only way to it. That is #384's whole aim.
+
+**Plus-addresses knock, before #384 as much as after it.** Guests invited as
+`theproductlog+27@` and `+32@` were asked to wait, and so were they on the
+control. The bypass is keyed to the invited address, and a `+` alias is not a
+Google account: Meet sees the base account, which was not invited.
+
+**The first run measured nothing about guests.** It invited
+`edufurtherlearning@gmail.com`, which is the creating account. Confirm the
+creator (`events.list` → `creator.email`) before reading a result.

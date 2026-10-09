@@ -4,6 +4,7 @@ it when the session will not happen.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from uuid import UUID
@@ -12,10 +13,12 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.attendance import (
+    DOOR_STATUSES,
     JOIN_LEAD_CEILING,
     door_window,
 )
 from app.domain.enums import (
+    ConferencingProvider,
     MeetingProvider,
     SessionStatus,
 )
@@ -147,10 +150,6 @@ async def provision_meeting(
             starts_at=row["starts_at"],
             duration_minutes=int(row["duration_minutes"]),
             summary="EduFurther session",
-            # **Only Meet, and this is the line that matters.** Asking for a
-            # conference on a session held in Daily puts a second link on the
-            # event, and the invitee clicks whichever the client renders first.
-            wants_conference=plan.wants_conference,
             # **The session page, never the venue** (#389): the page the emails
             # link to, where Join is pressed and recorded. A Daily room's URL
             # went here, and Daily refuses a bare room URL without a token.
@@ -161,11 +160,9 @@ async def provision_meeting(
         event = None
 
     if event is not None:
+        # A Meet session has no link yet: it is patched onto this event at the
+        # last reminder, or at the first press of Join (#384, `add_meet_link`).
         external_event_id = event.external_id
-        # Meet's link arrives by this path and no other, so it is taken only
-        # when the event was asked for one — otherwise the URL we already had
-        # stands.
-        meeting_url = event.meeting_url or meeting_url
 
     await session.execute(
         update(Session)
@@ -177,6 +174,79 @@ async def provision_meeting(
             external_calendar_event_id=external_event_id,
         )
     )
+
+
+async def add_meet_link(session: AsyncSession, session_id: UUID, *, calendar: Any) -> str | None:
+    """Patch the Meet onto a session's calendar event, and store its link (#384).
+    Returns the session's link, or ``None`` if it has none. Does not commit.
+
+    **Late, on purpose.** The event is made with no conference, so until now
+    the only way in was the session page, where pressing Join is recorded. Called
+    at the last reminder and at a press of Join or the door, whichever is first:
+    the join window opens before that reminder, and a press also retries a patch
+    that failed.
+
+    **Only a Meet session that can be entered and has an event but no link.**
+    Daily and custom venues have their own; a called-off session gets nothing;
+    a session booked before #384 already carries its link.
+
+    The session's id is the request id, so two parties pressing Join together
+    get one Meet, not two; and the write only fills an empty column, so the
+    first link stored is the one everybody is handed.
+    """
+    row = (
+        (
+            await session.execute(
+                select(
+                    Session.status,
+                    Session.meeting_provider,
+                    Session.meeting_url,
+                    Session.external_calendar_event_id,
+                ).where(Session.id == session_id)
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    # `plan_for` says which venue Google makes the conference for. A provider
+    # outside the plan's enum (a legacy `zoom` session) gets nothing.
+    if (
+        row is None
+        or row["meeting_provider"] not in ConferencingProvider
+        or not plan_for(ConferencingProvider(row["meeting_provider"])).wants_conference
+    ):
+        return None
+    if row["meeting_url"]:
+        return str(row["meeting_url"])
+    if SessionStatus(row["status"]) not in DOOR_STATUSES or not row["external_calendar_event_id"]:
+        return None
+    try:
+        # **Off the event loop**: an HTTP call that may wait out a `pending`
+        # conference, inside a request.
+        link = await asyncio.to_thread(
+            calendar.add_conference,
+            str(row["external_calendar_event_id"]),
+            request_id=str(session_id),
+        )
+    except (VenueUnavailableError, NotImplementedError) as exc:
+        # **Refused, but perhaps beaten to it**: Google rate-limits a second
+        # write to one event (#402's spike), so the party who pressed Join a
+        # moment later is refused while the first stores the Meet. Theirs is
+        # this session's link too, so hand it over rather than nothing.
+        logger.info("no Meet for session %s from this call: %s", session_id, exc)
+        return await _stored_link(session, session_id)
+    await session.execute(
+        update(Session)
+        .where(Session.id == session_id, Session.meeting_url.is_(None))
+        .values(meeting_url=link)
+    )
+    return await _stored_link(session, session_id)
+
+
+async def _stored_link(session: AsyncSession, session_id: UUID) -> str | None:
+    """The link on the session now: the first one stored is everybody's."""
+    stored = await session.scalar(select(Session.meeting_url).where(Session.id == session_id))
+    return str(stored) if stored else None
 
 
 async def release_meeting(session: AsyncSession, session_id: UUID, *, calendar: Any) -> None:
