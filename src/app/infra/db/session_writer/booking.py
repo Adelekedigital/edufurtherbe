@@ -28,6 +28,7 @@ flight.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 from typing import Any
@@ -484,7 +485,9 @@ async def book_session(
     # is tomorrow, for a request nobody has accepted, is the bug this branch
     # exists to avoid. That one is scheduled at `/accept` instead.
     if not requires_confirmation:
-        schedule_session_reminders(
+        # Off the event loop (#370): four QStash round trips per booking.
+        await asyncio.to_thread(
+            schedule_session_reminders,
             session_id,
             starts_at,
             scheduler=scheduler,
@@ -496,7 +499,8 @@ async def book_session(
     if deadline is not None and scheduler is not None and callback_url:
         for kind, at in reminders_for(deadline, now=now):
             try:
-                scheduler.schedule(
+                await asyncio.to_thread(
+                    scheduler.schedule,
                     url=callback_url,
                     body={"session_id": str(session_id), "kind": kind},
                     at=at,

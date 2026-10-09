@@ -1051,3 +1051,23 @@ def door(api_client: httpx.AsyncClient) -> Any:
     app.state.meeting_rooms = rooms
     app.state.calendar = FakeCalendar()
     return rooms
+
+
+@pytest.fixture(autouse=True)
+def outbound_calls_stay_off_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """**Every adapter a test wires onto `app.state` refuses the event loop** (#370).
+
+    Autouse and here, so no suite opts in and none can forget: a stand-in for
+    Google, Daily, QStash, Loops or storage that is called on the loop thread
+    fails the test, however many sync helpers the call went through. The why is
+    in `tests/off_the_loop.py`.
+    """
+    from starlette.datastructures import State
+    from tests.off_the_loop import ADAPTER_SEAMS, guarded
+
+    plain = State.__setattr__
+
+    def guarding(self: State, key: str, value: Any) -> None:
+        plain(self, key, guarded(key, value) if key in ADAPTER_SEAMS else value)
+
+    monkeypatch.setattr(State, "__setattr__", guarding)

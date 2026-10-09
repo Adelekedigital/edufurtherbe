@@ -58,7 +58,8 @@ def schedule_session_reminders(
     was slow would lose something unrecoverable to protect something that is
     not.
 
-    Not a coroutine: it touches no database. It is here rather than in `domain`
+    Not a coroutine: it touches no database, and its callers run it in a thread
+    (#370), one hop for all four QStash calls. It is here rather than in `domain`
     because publishing is I/O, and here rather than in the route because both
     call sites would otherwise have to remember the same four arguments.
     """

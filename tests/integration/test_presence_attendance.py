@@ -26,6 +26,7 @@ from tests.integration.test_api_meeting_provisioning import (
     started,
 )
 from tests.integration.test_api_session_door import attendance_of, status_of
+from tests.off_the_loop import guarded
 
 from app.core.config import Settings
 from app.infra.clients.daily_presence import Sighting
@@ -348,7 +349,7 @@ async def confirm_then_settle(engine: AsyncEngine, records: Records) -> None:
     """The settlement job's order: check the records, then settle the rest."""
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
         now = dt.datetime.now(dt.UTC)
-        check = await confirm_presence(session, now=now, rooms=records)
+        check = await confirm_presence(session, now=now, rooms=guarded("meeting_rooms", records))
         await settle_attendance(session, now=now, unverified=check.waiting, unread=check.unread)
         await session.commit()
 
@@ -655,7 +656,9 @@ async def test_once_the_read_budget_is_spent_the_rest_wait_for_the_next_run(
 
     async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
         now = dt.datetime.now(dt.UTC)
-        check = await confirm_presence(session, now=now, rooms=records, budget=dt.timedelta(0))
+        check = await confirm_presence(
+            session, now=now, rooms=guarded("meeting_rooms", records), budget=dt.timedelta(0)
+        )
         await settle_attendance(session, now=now, unverified=check.waiting, unread=check.unread)
         await session.commit()
 
@@ -678,7 +681,9 @@ async def test_a_stale_session_skipped_for_time_still_waits_for_a_real_read(
 
     async with async_sessionmaker(db_engine, expire_on_commit=False)() as session_:
         now = dt.datetime.now(dt.UTC)
-        check = await confirm_presence(session_, now=now, rooms=records, budget=dt.timedelta(0))
+        check = await confirm_presence(
+            session_, now=now, rooms=guarded("meeting_rooms", records), budget=dt.timedelta(0)
+        )
         await settle_attendance(session_, now=now, unverified=check.waiting, unread=check.unread)
         await session_.commit()
 
@@ -700,7 +705,7 @@ async def test_records_are_not_read_until_daily_has_had_time_to_write_them(
     async with async_sessionmaker(db_engine, expire_on_commit=False)() as session_:
         venue = await room_and_users(db_engine, session["id"])
         now = venue["starts_at"] + dt.timedelta(minutes=15, seconds=30)
-        check = await confirm_presence(session_, now=now, rooms=records)
+        check = await confirm_presence(session_, now=now, rooms=guarded("meeting_rooms", records))
         await settle_attendance(session_, now=now, unverified=check.waiting, unread=check.unread)
         await session_.commit()
 
