@@ -363,6 +363,12 @@ product backend and the migration are done.**
   `tests/off_the_loop.py`: every stand-in on an `app.state` adapter seam fails
   its test when called on the loop thread. A new seam is guarded by adding its
   name to `ADAPTER_SEAMS`.
+- **One HTTP client per process** (#370): an adapter given no client borrows
+  `infra/http/client.shared(timeout)`, never `httpx.Client(...)` of its own,
+  which nothing closed. Credentials, and any base URL, go on **each request**:
+  set on the shared client they would be every adapter's. A short-lived job
+  that wants its own client uses `with httpx.Client(...)` (`runner.py`).
+  `tests/unit/test_outbound_clients.py` fails when an adapter builds its own.
 - **Errors:** subclasses of `core.errors.AppError`, which is transport-agnostic.
   HTTP status codes are chosen in `api/`, never raised from `domain/`.
 - **Not-found vs not-yours:** both raise `NotFoundError`. Distinguishing them

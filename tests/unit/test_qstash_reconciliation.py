@@ -138,7 +138,9 @@ def test_create_sets_every_delivery_policy_header_explicitly() -> None:
 def test_list_is_sorted_and_accepts_base64_encoded_bodies() -> None:
     encoded = "eyJqb2JfaWQiOiJlZHVmdXJ0aGVyLXN0YWdpbmctc2V0dGxlLXNlc3Npb25zIn0="
 
-    def handle(_request: httpx.Request) -> httpx.Response:
+    def handle(request: httpx.Request) -> httpx.Response:
+        # The token travels on the request: the client is shared (#370).
+        assert request.headers["Authorization"] == "Bearer secret"
         return httpx.Response(
             200,
             json=[
@@ -175,16 +177,20 @@ def test_the_reconciler_talks_to_the_configured_region() -> None:
     pasted console URL carries one, and `https://host//v2/schedules` is a `404`
     wearing the same face as the wrong-region `404`.
     """
-    # `httpx` normalises a `base_url` to end in a slash, which is what makes
-    # `/v2/` + `schedules` resolve; the assertion matches that rather than
-    # pretending otherwise.
-    expected = "https://qstash-us-east-1.upstash.io/v2/"
+    # Asserted on the request, not on the client: the client is the process's
+    # shared one (#370) and carries no origin of its own.
+    seen: list[str] = []
 
-    with_slash = QStashSchedules("t", "https://qstash-us-east-1.upstash.io/")
-    without = QStashSchedules("t", "https://qstash-us-east-1.upstash.io")
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json=[])
 
-    assert str(without.client.base_url) == expected
-    assert str(with_slash.client.base_url) == expected
+    for origin in ("https://qstash-us-east-1.upstash.io/", "https://qstash-us-east-1.upstash.io"):
+        QStashSchedules(
+            "t", origin, client=httpx.Client(transport=httpx.MockTransport(record))
+        ).list()
+
+    assert seen == ["https://qstash-us-east-1.upstash.io/v2/schedules"] * 2
 
 
 def test_a_wrong_region_explains_itself_in_the_error() -> None:

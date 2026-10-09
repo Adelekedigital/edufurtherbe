@@ -58,6 +58,8 @@ def test_one_call_answers_for_every_template() -> None:
     assert api.declared("tmpl_a") == frozenset({"name"})
     assert api.declared("tmpl_b") == frozenset({"mentorName"})
     assert len(seen) == 1
+    # The key travels on the request: the client is the process's shared one (#370).
+    assert seen[0].headers["Authorization"] == f"Bearer {FAKE_KEY}"
 
 
 def test_the_cursor_is_followed_to_the_end() -> None:

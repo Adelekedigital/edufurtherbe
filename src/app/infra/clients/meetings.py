@@ -63,6 +63,7 @@ from app.infra.clients.daily_presence import (
     UnreadableRecordsError,
     sightings_from_records,
 )
+from app.infra.http.client import shared
 
 __all__ = [
     "FREEBUSY_SCOPE",
@@ -196,11 +197,10 @@ class DailyRooms:
     """
 
     def __init__(self, api_key: str, client: httpx.Client | None = None) -> None:
-        self._client = client or httpx.Client(
-            base_url=API_BASE,
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=TIMEOUT,
-        )
+        # The process's shared client (#370), with the key on each request:
+        # one set on a shared client would be every adapter's.
+        self._client = client or shared(TIMEOUT)
+        self._auth = {"Authorization": f"Bearer {api_key}"}
 
     def create(self, *, name: str, opens_at: dt.datetime, closes_at: dt.datetime) -> MeetingRoom:
         """A private room that exists between the two instants and no longer.
@@ -306,7 +306,9 @@ class DailyRooms:
         had already done the thing the user asked for.
         """
         try:
-            response = self._client.request(method, path, json=json, params=params)
+            response = self._client.request(
+                method, f"{API_BASE}{path}", json=json, params=params, headers=self._auth
+            )
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -409,7 +411,7 @@ class GoogleCalendar:
         self._client_secret = client_secret
         self._refresh_token = refresh_token
         self._calendar_id = calendar_id
-        self._client = client or httpx.Client(timeout=TIMEOUT)
+        self._client = client or shared(TIMEOUT)
         self._token: str | None = None
         self._token_expires: dt.datetime | None = None
 
@@ -832,7 +834,7 @@ def account_email(*, token: str, client: httpx.Client | None = None) -> str | No
         # Nothing to ask with. Returned rather than attempted, so a caller that
         # lost the token does not spend a round trip discovering it.
         return None
-    http = client or httpx.Client(timeout=TIMEOUT)
+    http = client or shared(TIMEOUT)
     try:
         response = http.get(GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {token}"})
         response.raise_for_status()
@@ -879,7 +881,7 @@ def free_busy(
     caller distinguishes those, because this raises rather than returning empty
     on failure.
     """
-    http = client or httpx.Client(timeout=TIMEOUT)
+    http = client or shared(TIMEOUT)
     token, _ = access_token(
         client_id=client_id,
         client_secret=client_secret,
@@ -937,7 +939,7 @@ def exchange_code(
     the grant was not fresh, and storing that gives a connection that works for
     an hour and then stops with no error anybody saw.
     """
-    http = client or httpx.Client(timeout=TIMEOUT)
+    http = client or shared(TIMEOUT)
     try:
         response = http.post(
             GOOGLE_TOKEN_URL,
