@@ -635,3 +635,27 @@ async def test_an_attended_row_with_no_sighting_does_not_count_for_a_daily_sessi
     assert records.asked, "the records must be read for a party with no sighting"
     assert await status_of(db_engine, session["id"]) == "no_show"
     assert (await party(db_engine, session["id"], "mentee"))["attendance_status"] == "no_show"
+
+
+@pytest.mark.usefixtures("door")
+async def test_once_the_read_budget_is_spent_the_rest_wait_for_the_next_run(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The job must finish** (Codex on #393). Reads are serial and each may
+    take Daily's full timeout, so past the budget the remaining sessions are
+    left for the next run instead of running the job past its own limit, where
+    nothing would settle and every retry would start over."""
+    first = await a_mentor_on(db_engine, "budget-a", "daily")
+    second = await a_mentor_on(db_engine, "budget-b", "daily")
+    sessions = [await started(db_engine, api_client, s, minutes_ago=20) for s in (first, second)]
+    records = Records()
+
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
+        now = dt.datetime.now(dt.UTC)
+        unverified = await confirm_presence(session, now=now, rooms=records, budget=dt.timedelta(0))
+        await settle_attendance(session, now=now, unverified=unverified)
+        await session.commit()
+
+    assert records.asked == []
+    for booked in sessions:
+        assert await status_of(db_engine, booked["id"]) == "confirmed"

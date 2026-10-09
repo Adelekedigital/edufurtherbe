@@ -13,6 +13,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,8 @@ from app.infra.clients.daily_presence import (
     sightings_from_records,
     verify_daily_signature,
 )
+from app.infra.clients.meetings import TIMEOUT
+from app.infra.db.session_writer.attendance import RECORDS_READ_BUDGET
 
 SECRET = base64.b64encode(b"a-test-webhook-secret").decode()
 TIMESTAMP = "1728432000000"
@@ -159,3 +162,16 @@ def test_a_record_that_cannot_be_read_is_unreadable_not_empty(records: dict[str,
     incomplete participant is the same mistake for one person."""
     with pytest.raises(UnreadableRecordsError):
         sightings_from_records(ROOM, records)
+
+
+def test_the_records_budget_leaves_the_settlement_job_room_to_finish() -> None:
+    """**Pinned to the schedule's own limit** (Codex on #393). The budget is
+    spent before the last read starts, so the worst case is the budget plus one
+    full client timeout, and that must stay well inside the job's timeout or the
+    settlement never commits."""
+    manifest = json.loads(Path("config/runtime-schedules.json").read_text(encoding="utf-8"))
+    job = next(j for j in manifest["jobs"] if j["name"] == "settle-sessions")
+    limit = dt.timedelta(seconds=int(str(job["timeout"]).rstrip("s")))
+    worst = RECORDS_READ_BUDGET + dt.timedelta(seconds=TIMEOUT.read or 0)
+
+    assert worst <= limit / 2

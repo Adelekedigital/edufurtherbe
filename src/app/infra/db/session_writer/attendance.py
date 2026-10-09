@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import time
 from typing import Any, cast
 from uuid import UUID
 
@@ -53,6 +54,13 @@ from app.infra.db.review_eligibility import within_interval
 from app.infra.db.session_store import is_a_party
 
 logger = logging.getLogger(__name__)
+
+#: How long the settlement may spend reading Daily's meeting records in one run
+#: (Codex on #393). Reads are serial and each may take the client's full
+#: timeout, so past this the remaining sessions wait for the next run rather
+#: than running the job past its own limit, where nothing would commit. A test
+#: holds this plus one client timeout to half the schedule's timeout.
+RECORDS_READ_BUDGET = dt.timedelta(seconds=45)
 
 
 async def _venue_row(session: AsyncSession, session_id: UUID, actor_id: UUID) -> dict[str, Any]:
@@ -619,7 +627,11 @@ async def presence_to_confirm(
 
 
 async def confirm_presence(
-    session: AsyncSession, *, now: dt.datetime, rooms: Any
+    session: AsyncSession,
+    *,
+    now: dt.datetime,
+    rooms: Any,
+    budget: dt.timedelta = RECORDS_READ_BUDGET,
 ) -> frozenset[UUID]:
     """Check Daily's meeting records for every party no webhook reported, before
     the settlement decides them (#382). Returns the sessions to leave unsettled
@@ -639,7 +651,13 @@ async def confirm_presence(
     The provider's client is blocking, so each read runs in a thread.
     """
     unverified: set[UUID] = set()
+    deadline = time.monotonic() + budget.total_seconds()
     for session_id, room, closed_at in await presence_to_confirm(session, now=now):
+        if time.monotonic() >= deadline:
+            # Out of time this run: unread, so it waits like any unreadable read.
+            if waits_for_records(closed_at, now):
+                unverified.add(session_id)
+            continue
         try:
             found = await asyncio.to_thread(rooms.sightings, room)
         except (VenueUnavailableError, NotImplementedError) as exc:
