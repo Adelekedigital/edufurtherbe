@@ -484,7 +484,13 @@ was written.
    `/code-review low`.
 
 Then push, and the work is done when CI is green on the PR's exact head commit
-**and** every Codex finding is fixed or answered in its thread.
+**and** every Codex finding is fixed or answered. Codex runs from
+`.github/workflows/codex-review.yml` (since 2026-10-09; it replaced the ChatGPT
+plugin): automatically when a PR opens, and on a `/codex-review` comment for a
+re-review, which covers only the commits since the last one. P0 and P1 are
+must-fix, P2 fix-if-cheap (`AGENTS.md` → Severity). Answer a finding with a
+reply comment on the PR, because the next review reads the replies and will not
+raise an answered finding again.
 
 ## Guardrails
 
@@ -586,6 +592,7 @@ skip into a failure.
 | `docs/edufurther-migration/` | The **target** schema, field mapping and runbook | repo root — **received, never edited here** (ADR 0007) |
 | `README.md` | Human-facing setup and layout | repo root |
 | `AGENTS.md` | Codex PR review rules (`## Code Review Rules`) — a **restatement** of this file for a reviewer that does not load it; this file wins | repo root |
+| `.github/codex/prompts/review.md` | The Codex review workflow's instructions. Points at `AGENTS.md` for the rules and severity rather than repeating them; read from the **base** branch at review time, so a PR cannot rewrite its own reviewer's prompt | `.github/codex/prompts/` |
 
 **Canonical copy rule.** Where a doc is duplicated, **name the one that wins** and
 edit only that. Duplicated facts drift, and the copy you forget becomes wrong.

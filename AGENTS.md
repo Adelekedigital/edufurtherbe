@@ -12,8 +12,20 @@ rule here traces to a defect this repository actually shipped or nearly shipped
 ## Code Review Rules
 
 Flag what would break a user, leak data, corrupt a row, or break a published
-contract. A finding is P1 if it is reachable with any value the configuration or
-the API permits, not only the defaults. State the input that triggers it.
+contract. Judge reachability with any value the configuration or the API permits,
+not only the defaults, and state the input that triggers it.
+
+### Severity
+
+The one definition, used by every reviewer of this repository (owner, 2026-10-09).
+
+- **P0, critical: must fix.** Leaks data across users, forges or corrupts money,
+  credits, refunds or attendance, bypasses authentication or authorization, or
+  loses committed data.
+- **P1, major: must fix.** Breaks a user flow or a published contract, corrupts
+  a row, or fails under a value the configuration or API permits.
+- **P2, minor: fix if cheap.** A real defect with a narrow trigger, or a published
+  description that contradicts the code. Not required to merge.
 
 ### Do not flag
 
