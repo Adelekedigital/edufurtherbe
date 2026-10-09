@@ -3,10 +3,13 @@
 Exempt from the layer check: this is the one place allowed to see everything.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTasks
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.api import errors
+from app.api.deps.core import get_session_factory
 from app.api.limits import BodyLimitMiddleware
 from app.api.per_viewer import PerViewerHeadersMiddleware
 from app.api.routes import (
@@ -36,6 +39,8 @@ from app.api.routes import (
 )
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.core.config import Settings, get_settings
+from app.infra.clients.notifications import live_notifier
+from app.infra.db.outbox import collect_queued, deliver, stop_collecting
 
 # Tag metadata, so /docs explains each group rather than listing bare paths.
 # A reader arriving at the schema cold should learn what a group is for and what
@@ -297,6 +302,47 @@ OPENAPI_TAGS: list[dict[str, str]] = [
 ]
 
 
+class SendWhatWasQueued(BaseHTTPMiddleware):
+    """Send the email a request queued as soon as its response has gone.
+
+    **The outbox was drained only by the hourly sweep**, so a booking
+    confirmation, an accept or a decline could arrive up to an hour late (owner,
+    2026-10-09: urgent). Each request now collects the rows `enqueue` wrote and,
+    after responding, sends exactly those in a session of its own, so the reply
+    is not slowed and a rolled-back request sends nothing. A failed send stays
+    pending for the sweep, which still runs.
+
+    Wired here because this is the composition root: the send needs the outbox
+    and the provider, which the `api` layer may not import.
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        rows, token = collect_queued()
+        try:
+            response = await call_next(request)
+        finally:
+            stop_collecting(token)
+        state = request.app.state
+        settings = state.settings
+        # **Only with a real provider.** Without one, sending now would spend
+        # each row's bounded attempts on a notifier that delivers nothing; the
+        # rows are left for the sweep, exactly as before this existed.
+        notifier = getattr(state, "notifier", None) or live_notifier(settings)
+        if rows and notifier is not None:
+            tasks = BackgroundTasks()
+            if response.background is not None:
+                tasks.add_task(response.background)
+            tasks.add_task(
+                deliver,
+                getattr(state, "session_factory", None) or get_session_factory(),
+                notifier=notifier,
+                settings=settings,
+                ids=list(rows),
+            )
+            response.background = tasks
+        return response
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application.
 
@@ -328,6 +374,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Inside CORS for the same reason as the body limit: every response under
     # the per-viewer prefixes, a `404` included, leaves with its cache headers.
     application.add_middleware(PerViewerHeadersMiddleware)
+
+    # Any position works: every middleware wraps the endpoint, so this one sees
+    # every row the endpoint queues. Inside CORS, which is added after it.
+    application.add_middleware(SendWhatWasQueued)
 
     # Added only when origins are configured. An empty list would install a
     # middleware that allows nothing, which is indistinguishable from no CORS at

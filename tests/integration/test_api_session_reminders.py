@@ -461,3 +461,30 @@ async def test_a_reminder_is_sent_when_its_callback_fires(
             .all()
         )
     assert theirs == ["pending"], "another session's reminder must not be sent"
+
+
+@pytest.mark.asyncio
+async def test_with_no_email_provider_the_callback_leaves_the_reminder_for_the_sweep(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**No provider, no send.** Sending through the null notifier would spend
+    the row's bounded attempts on nothing; it stays pending for the sweep."""
+    booking = await a_booking(db_engine, api_client, "sr-noprov")
+    callback_client = believing_client(db_engine)
+    body = json.dumps({"session_id": booking["id"], "kind": "s5"}).encode()
+
+    answered = await callback_client.post(PATH, content=body, headers=signed_headers(body))
+
+    assert answered.status_code == 200, answered.text
+    async with db_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT status, attempts FROM outbox_events "
+                    "WHERE entity_id = :i AND payload->>'kind' = 's5'"
+                ),
+                {"i": booking["id"]},
+            )
+        ).all()
+    assert rows
+    assert {(status, attempts) for status, attempts in rows} == {("pending", 0)}
