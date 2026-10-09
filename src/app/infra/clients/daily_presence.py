@@ -47,6 +47,17 @@ class Sighting:
     at: dt.datetime
 
 
+def _moment(value: object) -> dt.datetime | None:
+    """Daily's epoch seconds as a UTC instant, or ``None`` when no clock can hold
+    it (Codex on #393): `1e300` is a valid JSON number that overflows."""
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return None
+    try:
+        return dt.datetime.fromtimestamp(value, tz=dt.UTC)
+    except OverflowError, OSError, ValueError:
+        return None
+
+
 def verify_daily_signature(*, secret: str, timestamp: str, body: bytes, signature: str) -> None:
     """Prove a webhook came from Daily, or raise.
 
@@ -86,12 +97,11 @@ def sighting_from(event: dict[str, Any]) -> Sighting | None:
     payload = event.get("payload")
     if not isinstance(payload, dict):
         return None
-    room, user_id, joined_at = payload.get("room"), payload.get("user_id"), payload.get("joined_at")
-    if not room or not user_id or not isinstance(joined_at, int | float):
+    room, user_id = payload.get("room"), payload.get("user_id")
+    at = _moment(payload.get("joined_at"))
+    if not room or not user_id or at is None:
         return None
-    return Sighting(
-        room=str(room), user_id=str(user_id), at=dt.datetime.fromtimestamp(joined_at, tz=dt.UTC)
-    )
+    return Sighting(room=str(room), user_id=str(user_id), at=at)
 
 
 def sightings_from_records(room: str, records: dict[str, Any]) -> list[Sighting]:
@@ -123,8 +133,8 @@ def sightings_from_records(room: str, records: dict[str, Any]) -> list[Sighting]
             raise UnreadableRecordsError("a meeting carries no list of participants")
         for person in people:
             user_id = person.get("user_id") if isinstance(person, dict) else None
-            joined = person.get("join_time") if isinstance(person, dict) else None
-            if not user_id or not isinstance(joined, int | float):
-                raise UnreadableRecordsError("a participant has no user or join time")
-            found.append(Sighting(room, str(user_id), dt.datetime.fromtimestamp(joined, tz=dt.UTC)))
+            joined = _moment(person.get("join_time")) if isinstance(person, dict) else None
+            if not user_id or joined is None:
+                raise UnreadableRecordsError("a participant has no user or readable join time")
+            found.append(Sighting(room, str(user_id), joined))
     return found

@@ -105,6 +105,12 @@ class AttendanceEvidence(StrEnum):
     #: in, not the evidence.
     OBSERVED = "observed"
 
+    #: Decided by presence, but the provider's records could not be read for a
+    #: day and the session settled on what the webhook had reported (#393).
+    #: Distinct from `OBSERVED` so a payout rule can tell a verified empty room
+    #: from the day's patience running out.
+    UNVERIFIED = "unverified"
+
 
 #: The furthest ahead the window may open, which is the cancellation cutoff
 #: (Codex on #391). Earlier, and one party could be marked present and enter

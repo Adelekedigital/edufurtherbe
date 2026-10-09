@@ -27,9 +27,12 @@ from tests.integration.test_api_meeting_provisioning import (
 )
 from tests.integration.test_api_session_door import attendance_of, status_of
 
+from app.core.config import Settings
 from app.infra.clients.daily_presence import Sighting
 from app.infra.clients.meetings import VenueUnavailableError
 from app.infra.db.session_writer import confirm_presence, observe_presence, settle_attendance
+from app.infra.jobs import runner
+from app.infra.jobs.runner import RuntimeJobs
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -345,8 +348,8 @@ async def confirm_then_settle(engine: AsyncEngine, records: Records) -> None:
     """The settlement job's order: check the records, then settle the rest."""
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
         now = dt.datetime.now(dt.UTC)
-        unverified = await confirm_presence(session, now=now, rooms=records)
-        await settle_attendance(session, now=now, unverified=unverified)
+        check = await confirm_presence(session, now=now, rooms=records)
+        await settle_attendance(session, now=now, unverified=check.waiting, unread=check.unread)
         await session.commit()
 
 
@@ -652,8 +655,8 @@ async def test_once_the_read_budget_is_spent_the_rest_wait_for_the_next_run(
 
     async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
         now = dt.datetime.now(dt.UTC)
-        unverified = await confirm_presence(session, now=now, rooms=records, budget=dt.timedelta(0))
-        await settle_attendance(session, now=now, unverified=unverified)
+        check = await confirm_presence(session, now=now, rooms=records, budget=dt.timedelta(0))
+        await settle_attendance(session, now=now, unverified=check.waiting, unread=check.unread)
         await session.commit()
 
     assert records.asked == []
@@ -675,10 +678,8 @@ async def test_a_stale_session_skipped_for_time_still_waits_for_a_real_read(
 
     async with async_sessionmaker(db_engine, expire_on_commit=False)() as session_:
         now = dt.datetime.now(dt.UTC)
-        unverified = await confirm_presence(
-            session_, now=now, rooms=records, budget=dt.timedelta(0)
-        )
-        await settle_attendance(session_, now=now, unverified=unverified)
+        check = await confirm_presence(session_, now=now, rooms=records, budget=dt.timedelta(0))
+        await settle_attendance(session_, now=now, unverified=check.waiting, unread=check.unread)
         await session_.commit()
 
     assert records.asked == []
@@ -699,9 +700,55 @@ async def test_records_are_not_read_until_daily_has_had_time_to_write_them(
     async with async_sessionmaker(db_engine, expire_on_commit=False)() as session_:
         venue = await room_and_users(db_engine, session["id"])
         now = venue["starts_at"] + dt.timedelta(minutes=15, seconds=30)
-        unverified = await confirm_presence(session_, now=now, rooms=records)
-        await settle_attendance(session_, now=now, unverified=unverified)
+        check = await confirm_presence(session_, now=now, rooms=records)
+        await settle_attendance(session_, now=now, unverified=check.waiting, unread=check.unread)
         await session_.commit()
 
     assert records.asked == []
     assert await status_of(db_engine, session["id"]) == "confirmed"
+
+
+async def test_settlement_is_committed_before_the_slower_checks_run(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    migrated_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**A later step cannot undo attendance** (Codex on #393). The records reads
+    and the calendar health checks are both serial network calls inside one
+    job with a 120s limit; if the calendar phase runs the job out, the outcomes
+    and refunds already decided must not roll back with it."""
+    setup = await a_mentor_on(db_engine, "job-durable", "google_meet")
+    session = await started(db_engine, api_client, setup, minutes_ago=20)
+
+    async def calendar_check_dies(*_: Any, **__: Any) -> dict[str, int]:
+        raise RuntimeError("the calendar phase ran the job out")
+
+    monkeypatch.setattr(runner, "check_connections", calendar_check_dies)
+    monkeypatch.setattr(
+        RuntimeJobs,
+        "_calendar_health",
+        lambda _self: {"client_id": "c", "client_secret": "s", "key": "k"},
+    )
+    jobs = RuntimeJobs(Settings(_env_file=None, database_url=SecretStr(migrated_database)))
+    with pytest.raises(RuntimeError):
+        await jobs.run("settle-sessions")
+
+    assert await status_of(db_engine, session["id"]) == "no_show"
+
+
+@pytest.mark.usefixtures("door")
+async def test_a_session_settled_without_its_records_is_recorded_as_unverified(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Not `observed`** (Codex on #393). After a day of unreadable records the
+    session settles on what is known; nothing confirmed the room was empty, and
+    a later payout rule must be able to tell the two apart."""
+    setup = await a_mentor_on(db_engine, "rec-unverified", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=20)
+    await ended(db_engine, session["id"], 26 * 60)
+
+    await confirm_then_settle(db_engine, Records(error=VenueUnavailableError("daily is down")))
+
+    assert await status_of(db_engine, session["id"]) == "no_show"
+    assert await evidence_of(db_engine, session["id"]) == "unverified"

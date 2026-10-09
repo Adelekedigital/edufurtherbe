@@ -191,3 +191,23 @@ def test_a_complete_page_is_read() -> None:
     page = {"total_count": 1, "data": [{"participants": [{"user_id": "u", "join_time": 1}]}]}
 
     assert [s.user_id for s in sightings_from_records(ROOM, page)] == ["u"]
+
+
+def test_a_join_at_an_impossible_time_is_no_sighting() -> None:
+    """A number no clock can hold (`1e300`) passes the type check and then
+    overflows; it is ignored, not a crash of the webhook (Codex on #393)."""
+    event = {
+        "type": "participant.joined",
+        "payload": {"room": "r", "user_id": "u", "joined_at": 1e300},
+    }
+
+    assert sighting_from(event) is None
+
+
+def test_records_at_an_impossible_time_are_unreadable() -> None:
+    """The same in the records: unreadable, so the session waits, rather than an
+    overflow aborting the whole settlement (Codex on #393)."""
+    with pytest.raises(UnreadableRecordsError):
+        sightings_from_records(
+            ROOM, {"data": [{"participants": [{"user_id": "u", "join_time": 1e300}]}]}
+        )

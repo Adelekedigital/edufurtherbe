@@ -8,6 +8,7 @@ import asyncio
 import datetime as dt
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
 
@@ -55,6 +56,19 @@ from app.infra.db.review_eligibility import within_interval
 from app.infra.db.session_store import is_a_party
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PresenceCheck:
+    """What the records check decided before settling (#382, #393).
+
+    ``waiting``: leave unsettled this run. ``unread``: settle, but no records
+    were read, so the outcome is recorded as unverified rather than observed.
+    """
+
+    waiting: frozenset[UUID]
+    unread: frozenset[UUID]
+
 
 #: How long the settlement may spend reading Daily's meeting records in one run
 #: (Codex on #393). Reads are serial and each may take the client's full
@@ -275,7 +289,11 @@ def _window_shut(now: dt.datetime) -> Any:
 
 
 async def settle_attendance(
-    session: AsyncSession, *, now: dt.datetime, unverified: frozenset[UUID] = frozenset()
+    session: AsyncSession,
+    *,
+    now: dt.datetime,
+    unverified: frozenset[UUID] = frozenset(),
+    unread: frozenset[UUID] = frozenset(),
 ) -> int:
     """Decide every confirmed session whose join window has shut. Returns the count.
 
@@ -446,7 +464,9 @@ async def settle_attendance(
                 # server default written instead, which a test caught.
                 "metadata_": {
                     "evidence": (
-                        AttendanceEvidence.OBSERVED
+                        AttendanceEvidence.UNVERIFIED
+                        if row["id"] in unread
+                        else AttendanceEvidence.OBSERVED
                         if row["observed"]
                         else AttendanceEvidence.REPORTED
                     )
@@ -637,7 +657,7 @@ async def confirm_presence(
     now: dt.datetime,
     rooms: Any,
     budget: dt.timedelta = RECORDS_READ_BUDGET,
-) -> frozenset[UUID]:
+) -> PresenceCheck:
     """Check Daily's meeting records for every party no webhook reported, before
     the settlement decides them (#382). Returns the sessions to leave unsettled
     this run. Does not commit.
@@ -656,6 +676,7 @@ async def confirm_presence(
     The provider's client is blocking, so each read runs in a thread.
     """
     unverified: set[UUID] = set()
+    unread: set[UUID] = set()
     deadline = time.monotonic() + budget.total_seconds()
     for session_id, room, closed_at in await presence_to_confirm(session, now=now):
         if not records_written(closed_at, now):
@@ -680,10 +701,11 @@ async def confirm_presence(
                 )
                 unverified.add(session_id)
             else:
+                unread.add(session_id)
                 logger.warning(
                     "meeting records unreadable for session %s; settling: %s", session_id, exc
                 )
             continue
         for sighting in found:
             await observe_presence(session, sighting)
-    return frozenset(unverified)
+    return PresenceCheck(waiting=frozenset(unverified), unread=frozenset(unread))

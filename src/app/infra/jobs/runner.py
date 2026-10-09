@@ -197,14 +197,24 @@ class RuntimeJobs:
                 # Presence first (#382): a party no webhook reported is read
                 # from Daily's records, and a session those cannot be read for
                 # waits rather than settling on silence.
-                unverified = await confirm_presence(session, now=now, rooms=self._rooms())
-                settled = await settle_attendance(session, now=now, unverified=unverified)
+                check = await confirm_presence(session, now=now, rooms=self._rooms())
+                settled = await settle_attendance(
+                    session, now=now, unverified=check.waiting, unread=check.unread
+                )
                 # After attendance, so a session that ended this hour no longer
                 # holds its scheduled offering open (#218).
                 finalised = await finalise_scheduled_deletions(session)
                 nudged = await remind_unreviewed(session, now=now)
                 # Before the drain, so the reminder goes out in this same run.
                 returning = await remind_returning_mentors(session, now=now)
+                # **Attendance is committed before the slower checks** (Codex on
+                # #393). The records reads and the calendar health checks are
+                # both serial network calls under one 120s limit; if the
+                # calendar phase runs the job out, the outcomes and refunds
+                # decided above must not roll back with it. Each phase above is
+                # idempotent, so a retry after this point repeats nothing.
+                if not dry_run:
+                    await session.commit()
                 oauth = self._calendar_health()
                 health = (
                     {"checked": 0, "healthy": 0, "disconnected": 0, "unreachable": 0}
