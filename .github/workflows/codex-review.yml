@@ -102,7 +102,7 @@ jobs:
           # Only what changed since the last review this workflow posted, when
           # that commit is still in the branch's history; otherwise the whole PR.
           reviews=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]") | .body')
+            --jq '.[] | select(.user.type == "Bot") | .body')
           last=$(printf '%s\n' "$reviews" | grep -o 'codex-review:head=[0-9a-f]\{40\}' | tail -1 | cut -d= -f2 || true)
           if [ -n "$last" ] && git merge-base --is-ancestor "$last" "$HEAD" 2>/dev/null; then
             from="$last"
@@ -153,8 +153,8 @@ jobs:
     permissions:
       pull-requests: write
     env:
-      GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+      HAS_APP: ${{ secrets.CODE_REVIEWER_APP_ID != '' && secrets.CODE_REVIEWER_PRIVATE_KEY != '' }}
       OUTCOME: ${{ needs.review.result }}
       VERDICT: ${{ needs.review.outputs.verdict }}
       HEAD: ${{ needs.review.outputs.head }}
@@ -163,7 +163,22 @@ jobs:
       RESULT: ${{ needs.review.outputs.result }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
+      # Posts as the reviewer GitHub App, so the comment carries its own name
+      # rather than "github-actions". A short-lived token, limited to writing
+      # pull-request comments. Without the app's secrets the built-in token is
+      # used instead, so a missing app never loses a review.
+      - name: Act as the reviewer app
+        id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CODE_REVIEWER_APP_ID }}
+          private-key: ${{ secrets.CODE_REVIEWER_PRIVATE_KEY }}
+          permission-pull-requests: write
+
       - name: Comment on the pull request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
         run: |
           {
             if [ "$OUTCOME" != "success" ]; then
