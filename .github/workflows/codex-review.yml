@@ -63,6 +63,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number || github.event.issue.number }}
       HAS_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+      # Repository variables, set by the owner, so neither value appears in
+      # this public file (owner, 2026-10-09).
+      MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
+      EFFORT: ${{ vars.CODEX_REVIEW_EFFORT }}
     steps:
       - name: Find the pull request
         id: pr
@@ -94,6 +98,12 @@ jobs:
             echo "verdict=no-key" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # No chosen model, no review: never fall back to the CLI's own default,
+          # which is not the owner's choice and moves with each release.
+          if [ -z "$MODEL" ]; then
+            echo "verdict=no-model" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # The prompt comes from the base branch, never from the pull request,
           # so a change cannot rewrite its own reviewer's instructions. Absent
@@ -112,7 +122,7 @@ jobs:
           last=$(printf '%s\n' "$reviews" | grep -o 'codex-review:head=[0-9a-f]\{40\}' | tail -1 | cut -d= -f2 || true)
           if [ -n "$last" ] && git merge-base --is-ancestor "$last" "$HEAD" 2>/dev/null; then
             from="$last"
-            echo "scope=commits since the last review (${last:0:7})" >> "$GITHUB_OUTPUT"
+            echo "scope=the commits since the last review" >> "$GITHUB_OUTPUT"
             echo "Partial: only the commits since ${last} are in pr.diff." > codex-review/range.txt
           else
             from=$(git merge-base "$BASE" "$HEAD")
@@ -159,7 +169,8 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: codex-review/prompt.md
-          effort: high
+          model: ${{ vars.CODEX_REVIEW_MODEL }}
+          effort: ${{ vars.CODEX_REVIEW_EFFORT }}
           sandbox: read-only
           safety-strategy: drop-sudo
 
@@ -188,6 +199,8 @@ jobs:
               echo "**Codex review did not complete** ($OUTCOME). [Run log]($RUN_URL)"
             elif [ "$VERDICT" = "no-prompt" ]; then
               echo "**Codex review skipped:** the review prompt is not on the base branch yet. It runs from the next PR after this one merges."
+            elif [ "$VERDICT" = "no-model" ]; then
+              echo "**Codex review skipped:** the \`CODEX_REVIEW_MODEL\` repository variable is not set."
             elif [ "$VERDICT" = "no-key" ]; then
               echo "**Codex review skipped:** the \`OPENAI_API_KEY\` secret is not set."
             elif [ "$VERDICT" = "empty" ]; then
@@ -195,7 +208,7 @@ jobs:
             elif [ "$VERDICT" = "too-large" ]; then
               echo "**Codex review skipped:** $LINES changed lines in $SCOPE, over the $MAX_DIFF_LINES-line limit. Split the PR, or raise \`MAX_DIFF_LINES\` deliberately."
             else
-              echo "**Codex review** of $SCOPE (\`${HEAD:0:7}\`, effort high)"
+              echo "**Codex review** of $SCOPE"
               echo
               # A zero-width space after every @, so the review can never ping a
               # person or team, whatever Codex writes.
