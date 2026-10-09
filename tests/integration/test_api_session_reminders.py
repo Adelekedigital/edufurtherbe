@@ -92,10 +92,14 @@ def test_both_nudges_are_published_for_a_session_far_enough_out() -> None:
         now=starts_at - dt.timedelta(days=5),
     )
 
-    assert count == 2
-    assert [job["body"]["kind"] for job in publisher.published] == ["s24", "s1"]
-    assert publisher.published[0]["at"] == starts_at - dt.timedelta(hours=24)
-    assert publisher.published[1]["at"] == starts_at - dt.timedelta(hours=1)
+    assert count == 4
+    assert [job["body"]["kind"] for job in publisher.published] == ["s24", "s1", "s30", "s5"]
+    assert [job["at"] for job in publisher.published] == [
+        starts_at - dt.timedelta(hours=24),
+        starts_at - dt.timedelta(hours=1),
+        starts_at - dt.timedelta(minutes=30),
+        starts_at - dt.timedelta(minutes=5),
+    ]
 
 
 def test_a_nudge_whose_moment_has_passed_is_dropped_rather_than_fired() -> None:
@@ -114,7 +118,7 @@ def test_a_nudge_whose_moment_has_passed_is_dropped_rather_than_fired() -> None:
         now=starts_at - dt.timedelta(hours=24),
     )
 
-    assert [job["body"]["kind"] for job in publisher.published] == ["s1"]
+    assert [job["body"]["kind"] for job in publisher.published] == ["s1", "s30", "s5"]
 
 
 def test_a_scheduler_that_is_down_does_not_take_the_confirmation_with_it() -> None:
@@ -206,6 +210,8 @@ async def test_accepting_a_request_publishes_them_then(
     assert [j["body"]["kind"] for j in publisher.published if j["body"]["kind"][0] == "s"] == [
         "s24",
         "s1",
+        "s30",
+        "s5",
     ]
 
 
@@ -225,23 +231,37 @@ async def test_a_confirmed_session_nudges_both_parties(
     rows = [r for r in await queued(db_engine, booking["id"]) if "reminder" in str(r["event_type"])]
 
     assert kinds_of(rows) == ["session_reminder", "session_reminder"], "one row per recipient"
-    assert {row["payload"]["interval"] for row in rows} == {"24 hours"}
+    assert {row["payload"]["interval"] for row in rows} == {"Tomorrow"}
 
 
 @pytest.mark.asyncio
 async def test_the_last_nudge_is_its_own_message(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """A separate member rather than the same one with a different interval:
-    the templates differ, because one is about preparing and one about
-    turning up."""
+    """**Five minutes before is the last one** (legacy `LoopSessionLastReminder`).
+    A separate template, because it is about turning up now, not preparing."""
     booking = await a_booking(db_engine, api_client, "sr-last")
 
-    await fire(db_engine, booking["id"], "s1")
+    await fire(db_engine, booking["id"], "s5")
     rows = [r for r in await queued(db_engine, booking["id"]) if "reminder" in str(r["event_type"])]
 
     assert set(kinds_of(rows)) == {"session_last_reminder"}
-    assert {row["payload"]["interval"] for row in rows} == {"1 hour"}
+
+
+@pytest.mark.parametrize(("kind", "words"), [("s1", "in 1 Hour"), ("s30", "in 30 Minutes")])
+@pytest.mark.asyncio
+async def test_the_hour_and_half_hour_nudges_are_the_regular_reminder(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, kind: str, words: str
+) -> None:
+    """One template, `Session Reminder`, with the time in `intervaltime`, as the
+    legacy app sent them (`MenteeSessionPush` / `MentorSessionPush`)."""
+    booking = await a_booking(db_engine, api_client, f"sr-{kind}")
+
+    await fire(db_engine, booking["id"], kind)
+    rows = [r for r in await queued(db_engine, booking["id"]) if "reminder" in str(r["event_type"])]
+
+    assert kinds_of(rows) == ["session_reminder", "session_reminder"]
+    assert {row["payload"]["interval"] for row in rows} == {words}
 
 
 @pytest.mark.parametrize("status", ["cancelled", "declined", "withdrawn", "expired"])
@@ -333,17 +353,24 @@ async def test_the_reminder_index_distinguishes_recipients(db_engine: AsyncEngin
 
 
 def test_every_reminder_carries_the_words_its_template_renders() -> None:
-    """`intervaltime` travels with the offset rather than being derived at send
-    time, so changing one moves the other — and a message cannot say "24 hours"
-    an hour before."""
-    assert [(r.kind, r.interval) for r in SESSION_REMINDERS] == [
-        ("s24", "24 hours"),
-        ("s1", "1 hour"),
+    """**The words complete the template's sentence**: "your session ... is
+    happening {intervaltime}", subject "... is {intervaltime}!". "24 hours" read
+    "is happening 24 hours"; the legacy wording is what the sentence was written
+    for (owner, 2026-10-09: the legacy cadence, 24h, 1h, 30m and 5m)."""
+    assert [(r.kind, r.before, r.interval) for r in SESSION_REMINDERS] == [
+        ("s24", dt.timedelta(hours=24), "Tomorrow"),
+        ("s1", dt.timedelta(hours=1), "in 1 Hour"),
+        ("s30", dt.timedelta(minutes=30), "in 30 Minutes"),
+        ("s5", dt.timedelta(minutes=5), "in 5 Minutes"),
     ]
 
 
-def test_the_two_reminders_are_different_messages() -> None:
-    assert {r.notification for r in SESSION_REMINDERS} == {
+def test_only_the_five_minute_reminder_is_the_last_one() -> None:
+    """Three on `Session Reminder`, and only the five-minute one on `Session
+    Last Reminder`, which has no `intervaltime` to fill."""
+    assert [r.notification for r in SESSION_REMINDERS] == [
+        Notification.SESSION_REMINDER,
+        Notification.SESSION_REMINDER,
         Notification.SESSION_REMINDER,
         Notification.SESSION_LAST_REMINDER,
-    }
+    ]

@@ -424,15 +424,28 @@ def credit_reminder_kind(reminder: CreditReminder, expires_at: dt.datetime) -> s
     return f"{reminder.kind}:{expires_at:%Y-%m}"
 
 
-#: When a confirmed session is nudged. **Twenty-four hours and one hour.**
+#: When a confirmed session is nudged: **24 hours, 1 hour, 30 minutes and 5
+#: minutes before**, the legacy app's cadence (owner, 2026-10-09, #385).
 #:
-#: The first is far enough out to prepare or to rearrange; the second is close
-#: enough that it is about turning up. The booking floor is also 24 hours, so a
-#: session booked at the minimum notice has its 24-hour reminder already behind
-#: it — dropped rather than fired, for the reason :func:`reminders_for` gives.
+#: The first three are `Session Reminder`, whose sentence reads "your session
+#: ... is happening {intervaltime}", so the words complete it: "Tomorrow", "in 1
+#: Hour", "in 30 Minutes", as the legacy app sent them (`MenteeSessionPush`,
+#: `MentorSessionPush`). Five minutes before is `Session Last Reminder`, the
+#: legacy `LoopSessionLastReminder`, about turning up now; its template has no
+#: `intervaltime`, so its words are never rendered.
+#:
+#: The booking floor is 24 hours, so a session booked at the minimum notice has
+#: its 24-hour reminder already behind it — dropped rather than fired, for the
+#: reason :func:`reminders_for` gives.
 SESSION_REMINDERS: tuple[SessionReminder, ...] = (
-    SessionReminder("s24", Notification.SESSION_REMINDER, dt.timedelta(hours=24), "24 hours"),
-    SessionReminder("s1", Notification.SESSION_LAST_REMINDER, dt.timedelta(hours=1), "1 hour"),
+    SessionReminder("s24", Notification.SESSION_REMINDER, dt.timedelta(hours=24), "Tomorrow"),
+    SessionReminder("s1", Notification.SESSION_REMINDER, dt.timedelta(hours=1), "in 1 Hour"),
+    SessionReminder(
+        "s30", Notification.SESSION_REMINDER, dt.timedelta(minutes=30), "in 30 Minutes"
+    ),
+    SessionReminder(
+        "s5", Notification.SESSION_LAST_REMINDER, dt.timedelta(minutes=5), "in 5 Minutes"
+    ),
 )
 
 #: The kinds a callback may carry, and what each one is about. Looked up rather
