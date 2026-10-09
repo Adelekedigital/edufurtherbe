@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import Depends, Query, Request
-from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.calendar import _free_busy
@@ -443,7 +443,8 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
             # `release_meeting` necessary.
             row = await get_session_row(session, session_id, user["id"])
             if row is not None:
-                schedule_session_reminders(
+                await asyncio.to_thread(
+                    schedule_session_reminders,
                     session_id,
                     row["starts_at"],
                     scheduler=_scheduler(request),
@@ -553,10 +554,8 @@ async def _door_for(
         # matters more here than it did on `/join` alone: a door is asked for on
         # every reconnect, and a flaky connection reconnects often.
         #
-        # A thread rather than an async client because the client is shared by
-        # every Daily call and #370 decides that standard once for all of them;
-        # this keeps the new hot path from blocking without deciding it here.
-        token = await run_in_threadpool(
+        # A thread, as for every outbound call on an async path (#370).
+        token = await asyncio.to_thread(
             _rooms(request).token_for,
             room=str(row["external_room_id"]),
             user_id=str(user["id"]),

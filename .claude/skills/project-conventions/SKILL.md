@@ -353,6 +353,16 @@ product backend and the migration are done.**
   new entries, never `UPDATE`s.
 - **Vendor SDKs:** may be imported only inside `infra/`. `domain/` expresses the
   need as a Protocol in `domain/ports.py`.
+- **Outbound HTTP** (#370): clients are synchronous `httpx`, and **async code
+  reaches them through `asyncio.to_thread`**, never by calling them directly
+  and never through `run_in_threadpool`. A direct call holds the event loop for
+  the whole round trip, so every other request on the worker waits on Google,
+  Daily, QStash, Loops or storage. That includes runtime jobs, which QStash
+  delivers as requests to this same app. A sync helper that makes several calls
+  is threaded once at its caller (`schedule_session_reminders`). Enforced by
+  `tests/off_the_loop.py`: every stand-in on an `app.state` adapter seam fails
+  its test when called on the loop thread. A new seam is guarded by adding its
+  name to `ADAPTER_SEAMS`.
 - **Errors:** subclasses of `core.errors.AppError`, which is transport-agnostic.
   HTTP status codes are chosen in `api/`, never raised from `domain/`.
 - **Not-found vs not-yours:** both raise `NotFoundError`. Distinguishing them

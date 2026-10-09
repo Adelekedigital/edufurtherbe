@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from functools import lru_cache
 from typing import Annotated, Any
 from uuid import UUID
@@ -10,7 +11,6 @@ import httpx
 from fastapi import Depends, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
-from starlette.concurrency import run_in_threadpool
 
 from app.api.deps.core import UPLOAD_TIMEOUT, CurrentUserDep, SessionDep, _configured
 from app.core.config import Settings, get_settings
@@ -120,7 +120,7 @@ async def intake_file_download(
         raise NotFoundError("no such file")
     storage = intake_storage(request)
     try:
-        upstream = await run_in_threadpool(storage.open_stream, row["storage_key"])
+        upstream = await asyncio.to_thread(storage.open_stream, row["storage_key"])
     except StorageError as exc:
         raise UpstreamError("the file could not be read from storage") from exc
     return StreamingResponse(

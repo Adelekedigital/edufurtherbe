@@ -25,6 +25,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_slots import at, make_mentee, make_mentor
+from tests.off_the_loop import guarded
 
 from app.core.config import Settings
 from app.domain.availability import UtcInterval
@@ -78,7 +79,7 @@ def wire(client: httpx.AsyncClient, google: FakeGoogle | None) -> None:
             client_id="cid",
             client_secret="gcs",  # noqa: S106
             key=KEY,
-            reader=google,
+            reader=guarded("free/busy reader", google),
             # The app's own factory, which the test bound to its disposable
             # database — so the dead-grant write lands where the assertions look.
             session_factory=app.state.session_factory,

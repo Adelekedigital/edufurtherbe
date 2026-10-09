@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -91,7 +92,7 @@ def _free_busy(request: Request) -> Any:
     )
 
 
-def _named_account(request: Request, tokens: dict[str, Any]) -> str | None:
+async def _named_account(request: Request, tokens: dict[str, Any]) -> str | None:
     """The connected account's email, or ``None`` without reaching Google.
 
     **No access token means no call.** Google always returns one beside the
@@ -103,7 +104,7 @@ def _named_account(request: Request, tokens: dict[str, Any]) -> str | None:
     access = str(tokens.get("access_token") or "")
     if not access:
         return None
-    found: str | None = _name_of(request)(token=access)
+    found: str | None = await asyncio.to_thread(_name_of(request), token=access)
     return found
 
 
@@ -168,7 +169,9 @@ async def calendar_connected(
         raise AuthenticationError(str(exc)) from exc
     user_id = UUID(str(opened["user_id"]))
 
-    tokens = _token_exchange(request)(
+    # Off the event loop (#370), like every outbound call on an async path.
+    tokens = await asyncio.to_thread(
+        _token_exchange(request),
         code=code,
         client_id=client_id,
         client_secret=client_secret,
@@ -196,7 +199,7 @@ async def calendar_connected(
         # it. `account_email` answers `None` rather than raising for exactly
         # that reason, so a userinfo failure costs the label and not the
         # connection.
-        account_email=_named_account(request, tokens),
+        account_email=await _named_account(request, tokens),
         # **`external_account_id` stays null**, and that is now the only part
         # of this still true: ADR 0012 was amended on 2026-10-06 and the consent
         # does ask for `openid email`, so the account *is* named — by

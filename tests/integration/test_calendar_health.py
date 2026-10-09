@@ -26,6 +26,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import make_public_mentor
+from tests.off_the_loop import guarded
 
 from app.domain.availability import UtcInterval
 from app.infra.clients.meetings import CalendarAccessRevokedError, VenueUnavailableError
@@ -62,7 +63,8 @@ async def sweep(engine: AsyncEngine, google: FakeGoogle, **kwargs: Any) -> dict[
         counts = await check_connections(
             session,
             now=kwargs.pop("now", NOW),
-            reader=google,
+            # Guarded (#370): the sweep must call Google off the event loop.
+            reader=guarded("calendar health reader", google),
             client_id="cid",
             client_secret="secret",  # noqa: S106
             key=KEY,

@@ -372,7 +372,9 @@ async def check_connections(
             # **A one-hour window, because the answer is not what is wanted.**
             # This asks whether the grant still works, and the narrowest
             # question Google will answer is the cheapest one to ask.
-            reader(
+            # Off the event loop (#370): jobs arrive as requests to this app.
+            await asyncio.to_thread(
+                reader,
                 client_id=client_id,
                 client_secret=client_secret,
                 refresh_token=token,

@@ -124,9 +124,13 @@ async def provision_meeting(
     opens, closes = door_window(
         row["starts_at"], int(row["duration_minutes"]), opens_before=JOIN_LEAD_CEILING
     )
+    # **Every provider call off the event loop** (#370): these are blocking
+    # HTTP round trips inside a booking or an accept, and on the loop each one
+    # would hold every other request the worker is serving.
     try:
         if plan.needs_room:
-            room = rooms.create(
+            room = await asyncio.to_thread(
+                rooms.create,
                 name=room_name(str(session_id), provider),
                 opens_at=opens,
                 closes_at=closes,
@@ -136,7 +140,8 @@ async def provision_meeting(
         logger.info("no room for session %s: %s", session_id, exc)
 
     try:
-        event = calendar.create_event(
+        event = await asyncio.to_thread(
+            calendar.create_event,
             organiser_id=str(session_id),
             # **Both parties** (ADR 0012, #389). This invited the mentee alone,
             # under a comment claiming the mentor "is told through the
@@ -278,7 +283,7 @@ async def release_meeting(session: AsyncSession, session_id: UUID, *, calendar: 
         return
 
     try:
-        calendar.cancel_event(str(external_id))
+        await asyncio.to_thread(calendar.cancel_event, str(external_id))
     except (VenueUnavailableError, NotImplementedError) as exc:
         logger.info("calendar event for session %s not removed: %s", session_id, exc)
         return

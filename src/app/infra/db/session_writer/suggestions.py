@@ -24,6 +24,7 @@ Owner decisions of 2026-10-03 (settled decision 230), in the order they act:
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 from typing import Any
@@ -158,7 +159,8 @@ async def suggest_time(
     at = suggestion_reminder_at(until)
     if scheduler is not None and callback_url and at > now:
         try:
-            scheduler.schedule(
+            await asyncio.to_thread(
+                scheduler.schedule,
                 url=callback_url,
                 body={"session_id": str(session_id), "kind": SUGGESTION_REMINDER_KIND},
                 at=at,
