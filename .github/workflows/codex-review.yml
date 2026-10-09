@@ -63,10 +63,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number || github.event.issue.number }}
       HAS_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
-      # Repository variables, set by the owner, so neither value appears in
-      # this public file (owner, 2026-10-09).
-      MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
-      EFFORT: ${{ vars.CODEX_REVIEW_EFFORT }}
+      # Repository secrets, set by the owner (2026-10-09): neither value appears
+      # in this public file, and GitHub masks both in the public run logs.
+      MODEL: ${{ secrets.CODEX_REVIEW_MODEL }}
+      EFFORT: ${{ secrets.CODEX_REVIEW_EFFORT }}
     steps:
       - name: Find the pull request
         id: pr
@@ -169,8 +169,8 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: codex-review/prompt.md
-          model: ${{ vars.CODEX_REVIEW_MODEL }}
-          effort: ${{ vars.CODEX_REVIEW_EFFORT }}
+          model: ${{ secrets.CODEX_REVIEW_MODEL }}
+          effort: ${{ secrets.CODEX_REVIEW_EFFORT }}
           sandbox: read-only
           safety-strategy: drop-sudo
 
@@ -200,7 +200,7 @@ jobs:
             elif [ "$VERDICT" = "no-prompt" ]; then
               echo "**Codex review skipped:** the review prompt is not on the base branch yet. It runs from the next PR after this one merges."
             elif [ "$VERDICT" = "no-model" ]; then
-              echo "**Codex review skipped:** the \`CODEX_REVIEW_MODEL\` repository variable is not set."
+              echo "**Codex review skipped:** the \`CODEX_REVIEW_MODEL\` repository secret is not set."
             elif [ "$VERDICT" = "no-key" ]; then
               echo "**Codex review skipped:** the \`OPENAI_API_KEY\` secret is not set."
             elif [ "$VERDICT" = "empty" ]; then
