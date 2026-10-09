@@ -140,8 +140,8 @@ class NullRooms:
     """Creates nothing and says so. The default."""
 
     def sightings(self, room: str) -> list[Sighting]:
-        """No provider configured, so no records to read: settle on what is
-        known rather than wait for a source that will never answer."""
+        """No provider configured, so no records to read. The caller treats this
+        as unreadable, not empty, and waits its day before settling (#393)."""
         raise NotImplementedError("no room provider is configured")
 
     def create(self, *, name: str, opens_at: dt.datetime, closes_at: dt.datetime) -> MeetingRoom:

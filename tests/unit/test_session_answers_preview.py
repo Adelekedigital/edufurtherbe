@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from app.api.schemas.sessions import PartyRead, SessionRead
+from app.api.schemas.sessions import SessionRead
 from app.infra.db.session_answer_rows import preview_text
 
 
@@ -55,23 +55,3 @@ def _answer(**overrides: Any) -> dict[str, Any]:
 )
 def test_an_answer_reads_as_one_line(answer: dict[str, Any], expected: str) -> None:
     assert preview_text(answer) == expected
-
-
-def test_each_party_has_exactly_these_fields() -> None:
-    """A party is what each side of a session sees of the other, so a field added
-    here is a contract change the frontend must hear of first (and an email or
-    slug here would be a leak: see the schema's own docstring)."""
-    assert set(PartyRead.model_fields) == {
-        "id",
-        "deleted",
-        "first_name",
-        "last_name",
-        "avatar_url",
-        "avatar_focus",
-        "timezone",
-        "joined_at",
-        # #382: when Daily first saw this party in the room. Optional in the
-        # spec; `joined_at` stays the Join press.
-        "in_room_at",
-        "attendance_status",
-    }

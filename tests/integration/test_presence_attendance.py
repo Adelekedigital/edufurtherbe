@@ -252,13 +252,16 @@ async def test_pressing_join_without_entering_a_daily_room_is_a_no_show(
     session = await started(db_engine, api_client, setup, minutes_ago=1)
     for headers in (setup["mentee_headers"], setup["mentor_headers"]):
         assert (await api_client.post(join_url(session), headers=headers)).status_code == 200
-    venue = await room_and_users(db_engine, session["id"])
-    await seen(db_engine, Sighting(venue["room"], str(venue["mentor_id"]), venue["starts_at"]))
     async with db_engine.begin() as conn:
         await conn.execute(
             text("UPDATE sessions SET starts_at = now() - interval '20 minutes' WHERE id = :i"),
             {"i": session["id"]},
         )
+    # Seen inside the window as it now stands: a sighting is judged against
+    # when arrivals stopped, so it must fall before that.
+    venue = await room_and_users(db_engine, session["id"])
+    in_time = venue["starts_at"] + dt.timedelta(minutes=1)
+    await seen(db_engine, Sighting(venue["room"], str(venue["mentor_id"]), in_time))
 
     await settle(db_engine)
 
@@ -406,19 +409,6 @@ async def test_after_a_day_unreadable_records_no_longer_hold_the_session(
     await ended(db_engine, session["id"], 26 * 60)
 
     await confirm_then_settle(db_engine, Records(error=VenueUnavailableError("daily is down")))
-
-    assert await status_of(db_engine, session["id"]) == "no_show"
-
-
-@pytest.mark.usefixtures("door")
-async def test_with_no_provider_configured_the_session_settles_on_what_is_known(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """No Daily key means no records will ever answer, so nothing waits."""
-    setup = await a_mentor_on(db_engine, "rec-none", "daily")
-    session = await started(db_engine, api_client, setup, minutes_ago=20)
-
-    await confirm_then_settle(db_engine, Records(error=NotImplementedError("no provider")))
 
     assert await status_of(db_engine, session["id"]) == "no_show"
 
@@ -598,3 +588,50 @@ async def test_the_session_read_shows_when_each_party_was_seen_in_the_room(
     assert dt.datetime.fromisoformat(shown["mentee"]["in_room_at"]) == at
     assert shown["mentor"]["in_room_at"] is None
     assert shown["mentee"]["joined_at"] is None
+
+
+# --------------------------------------------------------------------------
+# Codex on #393
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("door")
+async def test_an_unconfigured_provider_waits_like_an_unreachable_one(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**A removed key must not settle on silence.** Rooms provisioned while a
+    key was set still had parties in them; with the key gone the records cannot
+    be read, which is the same as unreachable, so the session waits its day."""
+    setup = await a_mentor_on(db_engine, "rec-unconfigured", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=20)
+
+    await confirm_then_settle(db_engine, Records(error=NotImplementedError("no provider")))
+
+    assert await status_of(db_engine, session["id"]) == "confirmed"
+
+
+@pytest.mark.usefixtures("door")
+async def test_an_attended_row_with_no_sighting_does_not_count_for_a_daily_session(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Presence decides, whatever the row says.** A press recorded by the old
+    code during a rolling deploy left `attended` with no `in_room_at`; settling
+    on that would call a session nobody entered `completed`. The records are
+    checked for it, and without a sighting it is a no-show."""
+    setup = await a_mentor_on(db_engine, "rec-old-press", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=20)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_participants SET attendance_status = 'attended', "
+                "joined_at = now() WHERE session_id = :i"
+            ),
+            {"i": session["id"]},
+        )
+    records = Records()
+
+    await confirm_then_settle(db_engine, records)
+
+    assert records.asked, "the records must be read for a party with no sighting"
+    assert await status_of(db_engine, session["id"]) == "no_show"
+    assert (await party(db_engine, session["id"], "mentee"))["attendance_status"] == "no_show"

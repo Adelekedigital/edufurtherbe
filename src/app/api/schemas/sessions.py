@@ -97,10 +97,13 @@ class PartyRead(BaseModel):
             "`null` for Google Meet and custom venues, which report no "
             "presence. **The earliest sighting**, so a dropped call and a "
             "rejoin do not move it.\n\n"
-            "Use it for *Here now* and *Joined*; use `joined_at` to decide who "
-            "may re-enter. For a video session, attendance follows this: a "
-            "party seen before arrivals stop is `attended`, and pressing Join "
-            "without entering the room is not."
+            "**It means *has been in the room*, not *is in the room now*.** "
+            "Leaving does not clear it, so do not use it for a live *Here now*: "
+            "a party who joined and left still has it. Use it for *Joined* / "
+            "*Didn't join*, and `joined_at` to decide who may re-enter. For a "
+            "video session, attendance follows this: a party seen before "
+            "arrivals stop is `attended`, and pressing Join without entering "
+            "the room is not."
         ),
     )
     attendance_status: AttendanceStatus = Field(

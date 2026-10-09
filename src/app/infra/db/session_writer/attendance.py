@@ -10,7 +10,7 @@ import logging
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, insert, select, text, true, update
+from sqlalchemy import and_, case, func, insert, or_, select, text, true, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -244,6 +244,16 @@ def _presence_decides_sql() -> Any:
     )
 
 
+def _not_seen_in_time() -> Any:
+    """A participant the provider has not seen in the room before arrivals
+    stopped, in SQL, correlated to ``Session``. Read by the records check and by
+    the settlement, so the party looked up is the party judged."""
+    return or_(
+        SessionParticipant.in_room_at.is_(None),
+        SessionParticipant.in_room_at >= _join_closes_sql(),
+    )
+
+
 def _window_shut(now: dt.datetime) -> Any:
     """Sessions whose join window has shut, in SQL: fifteen minutes in, or the
     session's end if that is sooner — :func:`join_window`'s rule.
@@ -299,11 +309,28 @@ async def settle_attendance(
 
     # 1. Everybody still unknown was absent. `pending` only, so an arrival
     #    already recorded by `record_arrival` is left exactly as it is.
+    #
+    #    **Except where presence decides** (Codex on #393): there a party
+    #    not seen in the room in time is absent *whatever the row says*. A
+    #    press recorded by the code before #382, during a rolling deploy,
+    #    left `attended` with no sighting; settling on it would call a session
+    #    nobody entered `completed`.
+    unseen = (
+        select(Session.id)
+        .where(
+            Session.id == SessionParticipant.session_id,
+            ready,
+            _presence_decides_sql(),
+            _not_seen_in_time(),
+        )
+        .correlate(SessionParticipant)
+        .exists()
+    )
     await session.execute(
         update(SessionParticipant)
         .where(
             SessionParticipant.session_id.in_(due),
-            SessionParticipant.attendance_status == AttendanceStatus.PENDING,
+            or_(SessionParticipant.attendance_status == AttendanceStatus.PENDING, unseen),
         )
         .values(attendance_status=AttendanceStatus.NO_SHOW)
     )
@@ -576,10 +603,7 @@ async def presence_to_confirm(
     """
     pending = (
         select(SessionParticipant.id)
-        .where(
-            SessionParticipant.session_id == Session.id,
-            SessionParticipant.attendance_status == AttendanceStatus.PENDING,
-        )
+        .where(SessionParticipant.session_id == Session.id, _not_seen_in_time())
         .correlate(Session)
         .exists()
     )
@@ -607,9 +631,10 @@ async def confirm_presence(
     through the same :func:`observe_presence` a webhook uses.
 
     **Unreadable records hold the session back**, for up to
-    :data:`PRESENCE_RECORDS_PATIENCE`, because silence is not absence. A room
-    provider that is not configured (``NotImplementedError``) will never answer,
-    so it holds nothing.
+    :data:`PRESENCE_RECORDS_PATIENCE`, because silence is not absence. That
+    includes a provider that is not configured (``NotImplementedError``): a key
+    removed after rooms were made leaves records nobody can read, which is
+    unreadable, not empty (Codex on #393).
 
     The provider's client is blocking, so each read runs in a thread.
     """
@@ -617,9 +642,10 @@ async def confirm_presence(
     for session_id, room, closed_at in await presence_to_confirm(session, now=now):
         try:
             found = await asyncio.to_thread(rooms.sightings, room)
-        except NotImplementedError:
-            continue
-        except VenueUnavailableError as exc:
+        except (VenueUnavailableError, NotImplementedError) as exc:
+            # **Unconfigured waits too** (Codex on #393): a key removed after
+            # rooms were made leaves records nobody can read, which is the same
+            # as unreachable, not the same as nobody there.
             if waits_for_records(closed_at, now):
                 logger.warning(
                     "meeting records unreadable for session %s; waiting: %s", session_id, exc
