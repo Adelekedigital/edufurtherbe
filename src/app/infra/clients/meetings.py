@@ -57,7 +57,11 @@ import httpx
 from app.core.errors import UpstreamError, ValidationError
 from app.domain.availability import CALENDAR_REVOKED, UtcInterval
 from app.domain.enums import ConferencingProvider
-from app.infra.clients.daily_presence import Sighting, sightings_from_records
+from app.infra.clients.daily_presence import (
+    Sighting,
+    UnreadableRecordsError,
+    sightings_from_records,
+)
 
 __all__ = [
     "FREEBUSY_SCOPE",
@@ -278,7 +282,11 @@ class DailyRooms:
         settlement's check on any party a webhook did not report. A failure is
         `VenueUnavailableError`, so the caller can wait rather than settle on
         silence."""
-        return sightings_from_records(room, self._call("GET", "/meetings", params={"room": room}))
+        records = self._call("GET", "/meetings", params={"room": room})
+        try:
+            return sightings_from_records(room, records)
+        except UnreadableRecordsError as exc:
+            raise VenueUnavailableError(f"daily /meetings unreadable: {exc}") from exc
 
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         return self._call("POST", path, json=body)

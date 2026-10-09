@@ -224,3 +224,11 @@ def test_unreadable_records_are_the_provider_being_unavailable() -> None:
 
     with pytest.raises(VenueUnavailableError):
         api.sightings("ef-daily-abc")
+
+
+def test_a_records_body_that_cannot_be_read_is_the_provider_being_unavailable() -> None:
+    """A 200 with a body we cannot read is unreadable, so the settlement waits."""
+    api, _ = rooms(ok({"error": "changed-envelope"}))
+
+    with pytest.raises(VenueUnavailableError):
+        api.sightings("ef-daily-abc")

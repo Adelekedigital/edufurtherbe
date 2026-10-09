@@ -26,11 +26,16 @@ from app.infra.clients.scheduler import UntrustedCallbackError
 
 __all__ = [
     "Sighting",
+    "UnreadableRecordsError",
     "UntrustedCallbackError",
     "sighting_from",
     "sightings_from_records",
     "verify_daily_signature",
 ]
+
+
+class UnreadableRecordsError(ValueError):
+    """Daily's meeting records came back in a shape we cannot read."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,24 +100,26 @@ def sightings_from_records(room: str, records: dict[str, Any]) -> list[Sighting]
     **The shape is the one our spike observed** (`docs/daily-spike-guide.md`,
     Q3 and Q4): ``GET /meetings?room=`` returns meetings under ``data``, each
     with ``participants`` carrying the ``user_id`` we minted and a ``join_time``
-    in epoch seconds. Daily's own reference is inconsistent about this endpoint,
-    so anything short of a user and a time is skipped rather than guessed at. A
-    room holds a meeting per rejoin, so every meeting is read.
+    in epoch seconds. A room holds a meeting per rejoin, so every meeting is read.
+
+    **Anything else raises** :class:`UnreadableRecordsError` (Codex on #393).
+    Daily's reference is inconsistent about this endpoint, and a changed or
+    error body read as an empty room would settle every party absent and move a
+    refund. Raised, the session waits like any unreadable read. Only a
+    well-formed ``data`` with nobody in it is an empty room.
     """
-    found: list[Sighting] = []
     meetings = records.get("data")
     if not isinstance(meetings, list):
-        return found
+        raise UnreadableRecordsError("the records carry no list of meetings")
+    found: list[Sighting] = []
     for meeting in meetings:
         people = meeting.get("participants") if isinstance(meeting, dict) else None
         if not isinstance(people, list):
-            continue
+            raise UnreadableRecordsError("a meeting carries no list of participants")
         for person in people:
-            if not isinstance(person, dict):
-                continue
-            user_id, joined = person.get("user_id"), person.get("join_time")
-            if user_id and isinstance(joined, int | float):
-                found.append(
-                    Sighting(room, str(user_id), dt.datetime.fromtimestamp(joined, tz=dt.UTC))
-                )
+            user_id = person.get("user_id") if isinstance(person, dict) else None
+            joined = person.get("join_time") if isinstance(person, dict) else None
+            if not user_id or not isinstance(joined, int | float):
+                raise UnreadableRecordsError("a participant has no user or join time")
+            found.append(Sighting(room, str(user_id), dt.datetime.fromtimestamp(joined, tz=dt.UTC)))
     return found

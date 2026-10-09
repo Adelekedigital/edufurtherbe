@@ -18,6 +18,7 @@ import pytest
 
 from app.infra.clients.daily_presence import (
     Sighting,
+    UnreadableRecordsError,
     UntrustedCallbackError,
     sighting_from,
     sightings_from_records,
@@ -131,19 +132,30 @@ def test_every_participant_in_every_meeting_of_the_room_is_a_sighting() -> None:
     ]
 
 
+def test_no_meetings_is_an_empty_room() -> None:
+    """A well-formed answer with no meetings is genuinely nobody: settle on it."""
+    assert sightings_from_records(ROOM, {"data": []}) == []
+
+
 @pytest.mark.parametrize(
     "records",
     [
-        {},
-        {"data": "not a list"},
-        {"data": [{"participants": "not a list"}]},
-        {"data": [{"participants": [{"join_time": 1}]}]},  # no user
-        {"data": [{"participants": [{"user_id": "u"}]}]},  # no time
-        {"data": [{"participants": [{"user_id": "u", "join_time": "soon"}]}]},
-        {"data": ["not an object"]},
+        pytest.param({}, id="no data"),
+        pytest.param({"data": "not a list"}, id="data not a list"),
+        pytest.param({"error": "invalid-request"}, id="an error body"),
+        pytest.param({"data": ["not an object"]}, id="a meeting not an object"),
+        pytest.param({"data": [{"participants": "not a list"}]}, id="participants not a list"),
+        pytest.param({"data": [{"participants": [{"join_time": 1}]}]}, id="no user"),
+        pytest.param({"data": [{"participants": [{"user_id": "u"}]}]}, id="no time"),
+        pytest.param(
+            {"data": [{"participants": [{"user_id": "u", "join_time": "soon"}]}]}, id="bad time"
+        ),
     ],
 )
-def test_a_record_that_is_not_a_complete_participant_is_skipped(records: dict[str, object]) -> None:
-    """Daily's reference documents this endpoint inconsistently, so anything
-    short of a user and a time is skipped rather than guessed at."""
-    assert sightings_from_records(ROOM, records) == []
+def test_a_record_that_cannot_be_read_is_unreadable_not_empty(records: dict[str, object]) -> None:
+    """**Unreadable is not empty** (Codex on #393). A changed or error body read
+    as an empty room would settle every party absent and move a refund; raised,
+    the session waits its day like any other unreadable read. Skipping one
+    incomplete participant is the same mistake for one person."""
+    with pytest.raises(UnreadableRecordsError):
+        sightings_from_records(ROOM, records)
