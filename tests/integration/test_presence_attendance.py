@@ -659,3 +659,27 @@ async def test_once_the_read_budget_is_spent_the_rest_wait_for_the_next_run(
     assert records.asked == []
     for booked in sessions:
         assert await status_of(db_engine, booked["id"]) == "confirmed"
+
+
+@pytest.mark.usefixtures("door")
+async def test_a_stale_session_skipped_for_time_still_waits_for_a_real_read(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Skipped is not read** (Codex on #393). The day's patience covers records
+    Daily would not give; a session the budget never reached was never asked, so
+    it waits for a run that asks, however old it is."""
+    setup = await a_mentor_on(db_engine, "budget-stale", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=20)
+    await ended(db_engine, session["id"], 26 * 60)
+    records = Records()
+
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as session_:
+        now = dt.datetime.now(dt.UTC)
+        unverified = await confirm_presence(
+            session_, now=now, rooms=records, budget=dt.timedelta(0)
+        )
+        await settle_attendance(session_, now=now, unverified=unverified)
+        await session_.commit()
+
+    assert records.asked == []
+    assert await status_of(db_engine, session["id"]) == "confirmed"

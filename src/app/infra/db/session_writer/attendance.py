@@ -616,12 +616,16 @@ async def presence_to_confirm(
         .exists()
     )
     rows = await session.execute(
-        select(Session.id, Session.external_room_id, _join_closes_sql()).where(
+        select(Session.id, Session.external_room_id, _join_closes_sql())
+        .where(
             Session.status == SessionStatus.CONFIRMED,
             _window_shut(now),
             _presence_decides_sql(),
             pending,
         )
+        # Oldest first, so a session the read budget skips is reached on a
+        # later run rather than skipped behind newer ones indefinitely.
+        .order_by(_join_closes_sql())
     )
     return [(row[0], str(row[1]), row[2]) for row in rows.all()]
 
@@ -654,9 +658,10 @@ async def confirm_presence(
     deadline = time.monotonic() + budget.total_seconds()
     for session_id, room, closed_at in await presence_to_confirm(session, now=now):
         if time.monotonic() >= deadline:
-            # Out of time this run: unread, so it waits like any unreadable read.
-            if waits_for_records(closed_at, now):
-                unverified.add(session_id)
+            # **Out of time is not unreadable** (Codex on #393): never asked, so
+            # it waits for a run that asks, however old. The patience below is
+            # for records Daily would not give, not for reads we skipped.
+            unverified.add(session_id)
             continue
         try:
             found = await asyncio.to_thread(rooms.sightings, room)
