@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
+from collections.abc import Sequence
+from contextvars import ContextVar, Token
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select, text, true, update
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
@@ -37,7 +40,16 @@ from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
 
-__all__ = ["MAX_ATTEMPTS", "drain", "enqueue"]
+__all__ = [
+    "MAX_ATTEMPTS",
+    "collect_queued",
+    "deliver",
+    "drain",
+    "enqueue",
+    "stop_collecting",
+]
+
+logger = logging.getLogger(__name__)
 
 #: How many times a message is retried before it is left alone.
 #:
@@ -55,6 +67,25 @@ MAX_ATTEMPTS = 5
 #: load — it bounds how long one run holds a transaction open, which matters
 #: because a slow provider makes every row slow at once.
 BATCH = 100
+
+#: The rows this request has queued, when a request is collecting them.
+#:
+#: **Set per request by the app** (`main.py`), so the response can send what the
+#: request owes as soon as it has gone, rather than leaving it to the hourly
+#: sweep (owner, 2026-10-09: urgent; a confirmation could arrive an hour late).
+#: Unset in jobs and scripts, where `enqueue` behaves exactly as before.
+_queued: ContextVar[list[UUID] | None] = ContextVar("outbox_queued", default=None)
+
+
+def collect_queued() -> tuple[list[UUID], Token[list[UUID] | None]]:
+    """Start collecting the rows queued in this context. Returns the list the
+    ids will land in, and the token that stops collection."""
+    rows: list[UUID] = []
+    return rows, _queued.set(rows)
+
+
+def stop_collecting(token: Token[list[UUID] | None]) -> None:
+    _queued.reset(token)
 
 
 async def enqueue(
@@ -98,7 +129,14 @@ async def enqueue(
     # and kind is a no-op rather than an error. Nothing else carries a `kind`,
     # so the index this defers to skips every other message and the conflict
     # target can never match one.
-    await session.execute(statement.on_conflict_do_nothing(index_where=text("payload ? 'kind'")))
+    inserted = await session.execute(
+        statement.on_conflict_do_nothing(index_where=text("payload ? 'kind'")).returning(
+            OutboxEvent.id
+        )
+    )
+    collecting = _queued.get()
+    if collecting is not None:
+        collecting.extend(inserted.scalars().all())
 
 
 async def drain(
@@ -109,6 +147,7 @@ async def drain(
     settings: Settings | None = None,
     entity_id: UUID | None = None,
     kind: str | None = None,
+    ids: Sequence[UUID] | None = None,
 ) -> dict[str, int]:
     """Send what is pending. Returns counts by outcome. Does not commit.
 
@@ -148,6 +187,7 @@ async def drain(
                     OutboxEvent.attempts < MAX_ATTEMPTS,
                     OutboxEvent.entity_id == entity_id if entity_id is not None else true(),
                     OutboxEvent.payload["kind"].astext == kind if kind is not None else true(),
+                    OutboxEvent.id.in_(ids) if ids is not None else true(),
                 )
                 .order_by(OutboxEvent.created_at)
                 .limit(BATCH)
@@ -434,3 +474,29 @@ async def _address_for(session: AsyncSession, user_id: UUID, channel: Channel) -
     return (
         await session.execute(select(User.email).where(User.id == user_id, LIVE))
     ).scalar_one_or_none()
+
+
+async def deliver(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    notifier: Any,
+    settings: Settings,
+    ids: Sequence[UUID],
+) -> None:
+    """Send these rows now, in a session of their own, after the request that
+    queued them has committed and responded.
+
+    **Only these rows**: anything else pending is the sweep's. A row whose
+    request rolled back never existed, so there is nothing to send. A failure is
+    logged and left pending; the hourly sweep retries it, as it always has.
+    """
+    if not ids:
+        return
+    try:
+        async with factory() as session:
+            await drain(
+                session, notifier=notifier, now=dt.datetime.now(dt.UTC), settings=settings, ids=ids
+            )
+            await session.commit()
+    except Exception:
+        logger.exception("could not send %d queued message(s) now; the sweep will retry", len(ids))

@@ -249,12 +249,22 @@ class ZernioNotifier:
         )
 
 
-def notifier_for(settings: Settings) -> LoopsNotifier | NullNotifier:
-    """The notifier this deployment sends through: Loops with its templates when
-    a key is configured, otherwise nothing. The one place it is built, used by
-    the scheduled jobs and the reminder callback alike."""
+def live_notifier(settings: Settings) -> LoopsNotifier | None:
+    """The notifier for sending **now**, or ``None`` with no provider configured.
+
+    The immediate senders (a request's own email, the reminder callback) use
+    this: with no provider they leave the row pending for the sweep, rather than
+    passing it to a `NullNotifier` that marks it sent and spends its attempts.
+    """
     key = settings.loops_api_key
     if key is None:
-        return NullNotifier()
+        return None
     secret = key.get_secret_value()
     return LoopsNotifier(secret).with_settings(settings).with_templates(LoopsTemplates(secret))
+
+
+def notifier_for(settings: Settings) -> LoopsNotifier | NullNotifier:
+    """The notifier the scheduled sweep sends through: the live one, or a
+    `NullNotifier` that records what it would have sent. The one place either
+    is built."""
+    return live_notifier(settings) or NullNotifier()
