@@ -4,9 +4,10 @@
 # review. Re-review after pushing fixes by commenting `/codex-review`: that run
 # covers only the commits since the last review. Pushes do not re-run it on
 # their own, which is the main cost control. The diff leaves out lock files,
-# docs, CI config and scripts (owner, 2026-10-09: a review costs about 100k
-# tokens, and most of the first day's went on the workflow's own PRs), so a PR
-# touching only those is not reviewed at all. An oversized diff is refused.
+# docs and CI config (owner, 2026-10-09: a review costs about 100k tokens, and
+# most of the first day's went on the workflow's own PRs), so a PR touching only
+# those is not reviewed at all. `scripts/` stays in: it holds the gate's own
+# thresholds and the jobs CI runs against staging. An oversized diff is refused.
 #
 # Two jobs, so the one holding the API key can read the code and nothing else,
 # and only the small posting job can write to the pull request.
@@ -134,7 +135,7 @@ jobs:
 
           git diff "$from" "$HEAD" -- . \
             ':(exclude)uv.lock' ':(exclude)docs/**' ':(exclude)**/*.md' \
-            ':(exclude).claude/**' ':(exclude).github/**' ':(exclude)scripts/**'             > codex-review/pr.diff
+            ':(exclude).claude/**' ':(exclude).github/**' > codex-review/pr.diff
           # The rulebook is markdown, so the filter above drops it; a change to
           # the rules is exactly what must be reviewed, so it goes back in.
           git diff "$from" "$HEAD" -- AGENTS.md >> codex-review/pr.diff
@@ -206,7 +207,7 @@ jobs:
             elif [ "$VERDICT" = "no-key" ]; then
               echo "**Codex review skipped:** the \`OPENAI_API_KEY\` secret is not set."
             elif [ "$VERDICT" = "empty" ]; then
-              echo "**Codex review:** nothing to review in $SCOPE (docs, CI config and scripts are not reviewed)."
+              echo "**Codex review:** nothing to review in $SCOPE (docs and CI config are not reviewed)."
             elif [ "$VERDICT" = "too-large" ]; then
               echo "**Codex review skipped:** $LINES changed lines in $SCOPE, over the $MAX_DIFF_LINES-line limit. Split the PR, or raise \`MAX_DIFF_LINES\` deliberately."
             else
