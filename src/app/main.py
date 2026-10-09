@@ -3,10 +3,9 @@
 Exempt from the layer check: this is the one place allowed to see everything.
 """
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.background import BackgroundTasks
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api import errors
 from app.api.deps.core import get_session_factory
@@ -302,45 +301,53 @@ OPENAPI_TAGS: list[dict[str, str]] = [
 ]
 
 
-class SendWhatWasQueued(BaseHTTPMiddleware):
+class SendWhatWasQueued:
     """Send the email a request queued as soon as its response has gone.
 
     **The outbox was drained only by the hourly sweep**, so a booking
     confirmation, an accept or a decline could arrive up to an hour late (owner,
     2026-10-09: urgent). Each request now collects the rows `enqueue` wrote and,
-    after responding, sends exactly those in a session of its own, so the reply
-    is not slowed and a rolled-back request sends nothing. A failed send stays
-    pending for the sweep, which still runs.
+    once its response has been sent, sends exactly those in a session of its
+    own, so the reply is not slowed and a rolled-back request sends nothing. A
+    failed send stays pending for the sweep, which still runs.
 
-    Wired here because this is the composition root: the send needs the outbox
-    and the provider, which the `api` layer may not import.
+    **Plain ASGI, like the other middlewares here**, not `BaseHTTPMiddleware`:
+    that one wraps the request body stream, and a response sent before the body
+    was read (a 401 on an upload) never reached the client (CI on #401,
+    `test_a_real_multipart_upload_survives_http_framing`). Wired here because
+    this is the composition root: the send needs the outbox and the provider,
+    which the `api` layer may not import.
     """
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
         rows, token = collect_queued()
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send)
         finally:
             stop_collecting(token)
-        state = request.app.state
+        if not rows:
+            return
+        state = scope["app"].state
         settings = state.settings
         # **Only with a real provider.** Without one, sending now would spend
         # each row's bounded attempts on a notifier that delivers nothing; the
         # rows are left for the sweep, exactly as before this existed.
         notifier = getattr(state, "notifier", None) or live_notifier(settings)
-        if rows and notifier is not None:
-            tasks = BackgroundTasks()
-            if response.background is not None:
-                tasks.add_task(response.background)
-            tasks.add_task(
-                deliver,
-                getattr(state, "session_factory", None) or get_session_factory(),
-                notifier=notifier,
-                settings=settings,
-                ids=list(rows),
-            )
-            response.background = tasks
-        return response
+        if notifier is None:
+            return
+        # The app has returned, so the response is already with the client.
+        await deliver(
+            getattr(state, "session_factory", None) or get_session_factory(),
+            notifier=notifier,
+            settings=settings,
+            ids=list(rows),
+        )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
