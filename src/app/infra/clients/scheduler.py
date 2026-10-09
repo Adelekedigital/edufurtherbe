@@ -26,6 +26,7 @@ import httpx
 import jwt
 
 from app.core.errors import AppError
+from app.infra.http.client import shared
 from app.infra.http.upstream import trim_origin, why
 
 __all__ = [
@@ -104,9 +105,9 @@ class QStashScheduler:
         future edit makes without noticing, not this one.
         """
         self._publish = f"{trim_origin(origin)}/v2/publish"
-        self._client = client or httpx.Client(
-            headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT
-        )
+        # Shared (#370); the token travels on each request instead.
+        self._client = client or shared(TIMEOUT)
+        self._auth = {"Authorization": f"Bearer {token}"}
 
     def schedule(self, *, url: str, body: dict[str, Any], at: dt.datetime) -> None:
         """Ask to be called at ``url`` with ``body``, not before ``at``.
@@ -119,7 +120,7 @@ class QStashScheduler:
             response = self._client.post(
                 f"{self._publish}/{url}",
                 json=body,
-                headers={"Upstash-Not-Before": str(int(at.timestamp()))},
+                headers=self._auth | {"Upstash-Not-Before": str(int(at.timestamp()))},
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:

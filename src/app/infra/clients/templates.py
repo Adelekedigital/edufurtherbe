@@ -20,6 +20,7 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.errors import UpstreamError
+from app.infra.http.client import shared
 
 __all__ = [
     "LOOPS_TRANSACTIONAL_API",
@@ -82,9 +83,9 @@ class LoopsTemplates:
     """
 
     def __init__(self, api_key: str, client: httpx.Client | None = None) -> None:
-        self._client = client or httpx.Client(
-            headers={"Authorization": f"Bearer {api_key}"}, timeout=TIMEOUT
-        )
+        # Shared (#370); the key travels on each request instead.
+        self._client = client or shared(TIMEOUT)
+        self._auth = {"Authorization": f"Bearer {api_key}"}
         self._cache: dict[str, frozenset[str]] = {}
         self._primed = False
 
@@ -138,7 +139,7 @@ class LoopsTemplates:
     def _call(self, url: str, params: dict[str, str] | None) -> dict[str, Any]:
         """One place where a Loops failure becomes ours, as `DailyRooms` does."""
         try:
-            response = self._client.get(url, params=params)
+            response = self._client.get(url, params=params, headers=self._auth)
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:

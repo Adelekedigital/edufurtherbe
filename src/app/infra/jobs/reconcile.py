@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from app.core.errors import ConfigurationError, UpstreamError
+from app.infra.http.client import shared
 from app.infra.http.upstream import trim_origin, why
 from app.infra.jobs.manifest import ResolvedSchedule
 
@@ -127,15 +128,15 @@ class QStashSchedules:
         """``url`` is the QStash **origin** — region-scoped, see `Settings.qstash_url`."""
         if not token:
             raise ConfigurationError("QSTASH_TOKEN is required to reconcile schedules")
-        self.client = client or httpx.Client(
-            base_url=f"{trim_origin(url)}/v2",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=TIMEOUT,
-        )
+        # Shared (#370), with the token on each request and absolute URLs: a
+        # base URL or header set on a shared client would be every caller's.
+        self.client = client or shared(TIMEOUT)
+        self._base = f"{trim_origin(url)}/v2"
+        self._auth = {"Authorization": f"Bearer {token}"}
 
     def list(self) -> tuple[ExistingSchedule, ...]:
         try:
-            response = self.client.get("/schedules")
+            response = self.client.get(f"{self._base}/schedules", headers=self._auth)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise UpstreamError(f"could not list QStash schedules: {why(exc)}") from exc
@@ -183,9 +184,9 @@ class QStashSchedules:
         }
         try:
             response = self.client.post(
-                f"/schedules/{schedule.destination}",
+                f"{self._base}/schedules/{schedule.destination}",
                 content=schedule.canonical_body,
-                headers=headers,
+                headers=self._auth | headers,
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -195,7 +196,7 @@ class QStashSchedules:
 
     def delete(self, identity: str) -> None:
         try:
-            response = self.client.delete(f"/schedules/{identity}")
+            response = self.client.delete(f"{self._base}/schedules/{identity}", headers=self._auth)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise UpstreamError(f"could not delete QStash schedule {identity}: {why(exc)}") from exc

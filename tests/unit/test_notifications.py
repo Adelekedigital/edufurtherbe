@@ -278,6 +278,8 @@ def test_the_outbox_row_id_is_the_idempotency_key() -> None:
     send(notifier, key=row_id)
 
     assert seen[0].headers["Idempotency-Key"] == row_id
+    # The key travels on the request: the client is the process's shared one (#370).
+    assert seen[0].headers["Authorization"] == "Bearer key"
 
 
 def test_a_recipient_never_becomes_a_contact() -> None:

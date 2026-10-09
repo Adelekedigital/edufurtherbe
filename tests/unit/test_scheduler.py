@@ -95,6 +95,8 @@ def test_a_callback_is_published_for_an_instant_not_a_delay() -> None:
 
     (request,) = seen
     assert request.headers["Upstash-Not-Before"] == str(int(at.timestamp()))
+    # The token travels on the request: the client is the process's shared one (#370).
+    assert request.headers["Authorization"] == "Bearer token"
     assert URL in str(request.url)
     assert json.loads(request.content)["kind"] == "t12"
 

@@ -39,6 +39,7 @@ from app.core.errors import AppError, ConfigurationError
 from app.domain.messages import MessageContext, build_variables
 from app.domain.notifications import Channel, Notification
 from app.infra.clients.templates import LoopsTemplates, StaticTemplates, TemplateVariables
+from app.infra.http.client import shared
 
 __all__ = [
     "DeliveryError",
@@ -143,9 +144,9 @@ class LoopsNotifier:
         # — so an adapter nobody wired discovery into produces failed rows
         # naming the problem, never blank emails.
         self._templates: TemplateVariables = StaticTemplates()
-        self._client = client or httpx.Client(
-            headers={"Authorization": f"Bearer {api_key}"}, timeout=TIMEOUT
-        )
+        # Shared (#370); the key travels on each request instead.
+        self._client = client or shared(TIMEOUT)
+        self._auth = {"Authorization": f"Bearer {api_key}"}
 
     def with_templates(self, templates: TemplateVariables) -> LoopsNotifier:
         """Wire what tells this adapter which merge fields each template wants.
@@ -190,7 +191,7 @@ class LoopsNotifier:
         try:
             response = self._client.post(
                 LOOPS_API,
-                headers={"Idempotency-Key": idempotency_key},
+                headers=self._auth | {"Idempotency-Key": idempotency_key},
                 json={
                     "email": to,
                     "transactionalId": template,
