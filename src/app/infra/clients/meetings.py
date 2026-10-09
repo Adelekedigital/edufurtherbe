@@ -282,7 +282,9 @@ class DailyRooms:
         settlement's check on any party a webhook did not report. A failure is
         `VenueUnavailableError`, so the caller can wait rather than settle on
         silence."""
-        records = self._call("GET", "/meetings", params={"room": room})
+        # A room is one session, so a hundred meetings is a hundred rejoins: a
+        # page this size makes a partial one a fault, which the parser refuses.
+        records = self._call("GET", "/meetings", params={"room": room, "limit": "100"})
         try:
             return sightings_from_records(room, records)
         except UnreadableRecordsError as exc:

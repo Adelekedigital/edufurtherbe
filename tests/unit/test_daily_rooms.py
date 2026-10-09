@@ -232,3 +232,13 @@ def test_a_records_body_that_cannot_be_read_is_the_provider_being_unavailable() 
 
     with pytest.raises(VenueUnavailableError):
         api.sightings("ef-daily-abc")
+
+
+def test_the_records_are_asked_for_a_full_page() -> None:
+    """One room is one session, so a hundred meetings is a hundred rejoins: the
+    page asked for is large enough that a partial one is a fault, not a norm."""
+    api, seen = rooms(ok({"total_count": 0, "data": []}))
+
+    api.sightings("ef-daily-abc")
+
+    assert seen[0].url.params["limit"] == "100"

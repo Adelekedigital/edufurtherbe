@@ -52,6 +52,7 @@ __all__ = [
     "DOOR_STATUSES",
     "JOIN_CLOSES",
     "JOIN_LEAD_CEILING",
+    "PRESENCE_RECORDS_LAG",
     "PRESENCE_RECORDS_PATIENCE",
     "PRESENCE_REPORTING",
     "AttendanceEvidence",
@@ -62,6 +63,7 @@ __all__ = [
     "join_window",
     "outcome",
     "presence_decides",
+    "records_written",
     "session_ends_at",
     "waits_for_records",
     "window_has_closed",
@@ -246,6 +248,19 @@ def presence_decides(provider: str | None, *, has_room: bool) -> bool:
 #: settling on silence would brand both parties absent; a day bounds that, so
 #: a lasting outage cannot leave a session unsettled forever.
 PRESENCE_RECORDS_PATIENCE = dt.timedelta(hours=24)
+
+
+#: How long after arrivals stop before Daily's records are trusted (#393).
+#: Daily "generally do[es] not write a 'meeting join' record until a user has
+#: stayed in a room for at least 10 seconds", and join times have ~15-second
+#: granularity (docs.daily.co, Meetings). Read at the boundary, a party who
+#: arrived at the last moment looks absent, so the session waits this out.
+PRESENCE_RECORDS_LAG = dt.timedelta(minutes=2)
+
+
+def records_written(join_closed_at: dt.datetime, now: dt.datetime) -> bool:
+    """Whether Daily has had time to write every in-time join to its records."""
+    return now - join_closed_at >= PRESENCE_RECORDS_LAG
 
 
 def waits_for_records(join_closed_at: dt.datetime, now: dt.datetime) -> bool:

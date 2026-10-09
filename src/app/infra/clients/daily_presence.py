@@ -111,6 +111,11 @@ def sightings_from_records(room: str, records: dict[str, Any]) -> list[Sighting]
     meetings = records.get("data")
     if not isinstance(meetings, list):
         raise UnreadableRecordsError("the records carry no list of meetings")
+    # **A page is not the room** (Codex on #393): `/meetings` is paginated, and
+    # a join on a page we did not read would settle a party absent.
+    total = records.get("total_count")
+    if isinstance(total, int) and total > len(meetings):
+        raise UnreadableRecordsError(f"one page of {total} meetings is not the room")
     found: list[Sighting] = []
     for meeting in meetings:
         people = meeting.get("participants") if isinstance(meeting, dict) else None

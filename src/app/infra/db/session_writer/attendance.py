@@ -26,6 +26,7 @@ from app.domain.attendance import (
     join_closes_at,
     join_window,
     presence_decides,
+    records_written,
     waits_for_records,
     within_door_window,
     within_join_window,
@@ -657,6 +658,10 @@ async def confirm_presence(
     unverified: set[UUID] = set()
     deadline = time.monotonic() + budget.total_seconds()
     for session_id, room, closed_at in await presence_to_confirm(session, now=now):
+        if not records_written(closed_at, now):
+            # Too soon: Daily may not have written a last-moment join yet.
+            unverified.add(session_id)
+            continue
         if time.monotonic() >= deadline:
             # **Out of time is not unreadable** (Codex on #393): never asked, so
             # it waits for a run that asks, however old. The patience below is

@@ -683,3 +683,25 @@ async def test_a_stale_session_skipped_for_time_still_waits_for_a_real_read(
 
     assert records.asked == []
     assert await status_of(db_engine, session["id"]) == "confirmed"
+
+
+@pytest.mark.usefixtures("door")
+async def test_records_are_not_read_until_daily_has_had_time_to_write_them(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Daily writes a join only after ten seconds in the room** (docs.daily.co,
+    Meetings), with ~15s granularity. Read at the boundary, a party who arrived
+    at the last moment looks absent, so the session waits out the lag."""
+    setup = await a_mentor_on(db_engine, "rec-lag", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=15)
+    records = Records()
+
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as session_:
+        venue = await room_and_users(db_engine, session["id"])
+        now = venue["starts_at"] + dt.timedelta(minutes=15, seconds=30)
+        unverified = await confirm_presence(session_, now=now, rooms=records)
+        await settle_attendance(session_, now=now, unverified=unverified)
+        await session_.commit()
+
+    assert records.asked == []
+    assert await status_of(db_engine, session["id"]) == "confirmed"

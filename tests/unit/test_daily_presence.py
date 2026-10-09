@@ -175,3 +175,19 @@ def test_the_records_budget_leaves_the_settlement_job_room_to_finish() -> None:
     worst = RECORDS_READ_BUDGET + dt.timedelta(seconds=TIMEOUT.read or 0)
 
     assert worst <= limit / 2
+
+
+def test_a_partial_page_of_meetings_is_unreadable_not_complete() -> None:
+    """**A page is not the room** (Codex on #393). `/meetings` is paginated and
+    reports `total_count`; a join on a page we did not read would settle a party
+    absent. Fewer meetings than the total is unreadable, so the session waits."""
+    page = {"total_count": 3, "data": [{"participants": [{"user_id": "u", "join_time": 1}]}]}
+
+    with pytest.raises(UnreadableRecordsError):
+        sightings_from_records(ROOM, page)
+
+
+def test_a_complete_page_is_read() -> None:
+    page = {"total_count": 1, "data": [{"participants": [{"user_id": "u", "join_time": 1}]}]}
+
+    assert [s.user_id for s in sightings_from_records(ROOM, page)] == ["u"]
