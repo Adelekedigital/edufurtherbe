@@ -65,8 +65,8 @@ jobs:
       HAS_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
       # Repository secrets, set by the owner (2026-10-09): neither value appears
       # in this public file, and GitHub masks both in the public run logs.
-      MODEL: ${{ secrets.CODEX_REVIEW_MODEL }}
-      EFFORT: ${{ secrets.CODEX_REVIEW_EFFORT }}
+      # Presence only: the value itself never enters a shell step.
+      HAS_MODEL: ${{ secrets.CODEX_REVIEW_MODEL != '' }}
     steps:
       - name: Find the pull request
         id: pr
@@ -100,7 +100,7 @@ jobs:
           fi
           # No chosen model, no review: never fall back to the CLI's own default,
           # which is not the owner's choice and moves with each release.
-          if [ -z "$MODEL" ]; then
+          if [ "$HAS_MODEL" != "true" ]; then
             echo "verdict=no-model" >> "$GITHUB_OUTPUT"
             exit 0
           fi
