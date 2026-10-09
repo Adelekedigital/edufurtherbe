@@ -167,8 +167,9 @@ on 2026-10-08, when code review moved to Codex after the push.
     (format, lint, types, layers, bandit), **the test files the change
     touches**, and the mutation batch, then `/security-review`. **No
     `/code-review` at its default level** (amended 2026-10-08): Codex reviews
-    every PR on GitHub, and a local review, if run at all, is `/code-review
-    low`. The full suite runs in CI, and work is done only when **CI
+    every PR on GitHub, through `.github/workflows/codex-review.yml` since
+    2026-10-09 (automatically on open; comment `/codex-review` to re-review
+    after fixes), and a local review, if run at all, is `/code-review low`. The full suite runs in CI, and work is done only when **CI
     is green on the PR's exact head commit**. Check the SHA, because a stale
     green has been reported before (#35). A CI failure is fixed on the branch
     like any red gate. Run `make check` locally only to reproduce a CI failure.

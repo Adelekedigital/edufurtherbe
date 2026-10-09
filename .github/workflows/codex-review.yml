@@ -1,0 +1,177 @@
+# Codex code review (owner, 2026-10-09; replaces the ChatGPT plugin).
+#
+# Runs on its own when a pull request is opened, reopened or marked ready for
+# review. Re-review after pushing fixes by commenting `/codex-review`: that run
+# covers only the commits since the last review. Pushes do not re-run it on
+# their own, which is the main cost control. The diff leaves out lock files and
+# docs, and an oversized diff is refused rather than reviewed.
+#
+# Two jobs, so the one holding the API key can read the code and nothing else,
+# and only the small posting job can write to the pull request.
+
+name: Codex review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+env:
+  # A diff larger than this is refused with a note rather than reviewed.
+  MAX_DIFF_LINES: "3000"
+
+jobs:
+  review:
+    # Automatically on a pull request that is not a draft and not Dependabot's
+    # (it gets no secrets, and its PRs merge on green). Or on request: a comment
+    # starting `/codex-review` from someone who can write to the repository,
+    # because issue_comment runs hold secrets and a passer-by must not be able
+    # to spend the key.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       !github.event.pull_request.draft &&
+       github.event.pull_request.user.login != 'dependabot[bot]') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/codex-review') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # On the job, not the workflow: every comment on a pull request starts a
+    # run of this workflow, and a workflow-level group would let an unrelated
+    # comment cancel a review in progress. Only a newer /codex-review replaces
+    # an older one.
+    concurrency:
+      group: codex-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      verdict: ${{ steps.prepare.outputs.verdict }}
+      head: ${{ steps.pr.outputs.head }}
+      scope: ${{ steps.prepare.outputs.scope }}
+      lines: ${{ steps.prepare.outputs.lines }}
+      result: ${{ steps.codex.outputs.final-message }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+      HAS_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+    steps:
+      - name: Find the pull request
+        id: pr
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" \
+            --jq '"head=\(.head.sha)\nbase=\(.base.sha)\nbase_ref=\(.base.ref)"' >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.head }}
+          fetch-depth: 0
+
+      - name: Prepare the diff
+        id: prepare
+        env:
+          HEAD: ${{ steps.pr.outputs.head }}
+          BASE: ${{ steps.pr.outputs.base }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+        run: |
+          mkdir -p codex-review
+
+          # The prompt comes from the base branch, never from the pull request,
+          # so a change cannot rewrite its own reviewer's instructions.
+          git fetch --quiet origin "$BASE_REF"
+          git show "origin/$BASE_REF:.github/codex/prompts/review.md" > codex-review/prompt.md
+
+          # Only what changed since the last review this workflow posted, when
+          # that commit is still in the branch's history; otherwise the whole PR.
+          reviews=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .body')
+          last=$(printf '%s\n' "$reviews" | grep -o 'codex-review:head=[0-9a-f]\{40\}' | tail -1 | cut -d= -f2 || true)
+          if [ -n "$last" ] && git merge-base --is-ancestor "$last" "$HEAD" 2>/dev/null; then
+            from="$last"
+            echo "scope=commits since the last review (${last:0:7})" >> "$GITHUB_OUTPUT"
+            echo "Partial: only the commits since ${last} are in pr.diff." > codex-review/range.txt
+          else
+            from=$(git merge-base "$BASE" "$HEAD")
+            echo "scope=the whole pull request" >> "$GITHUB_OUTPUT"
+            echo "Whole pull request." > codex-review/range.txt
+          fi
+
+          git diff "$from" "$HEAD" -- . \
+            ':(exclude)uv.lock' ':(exclude)docs/**' ':(exclude)**/*.md' \
+            ':(exclude).claude/**' ':(exclude).github/codex/**' > codex-review/pr.diff
+
+          # Findings raised on this PR and the replies to them, so a finding
+          # already fixed or answered as wrong is not raised again. Every
+          # comment, not only the reviewer's: the answer is the author's reply.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq '.[] | "--- \(.user.login):\n\(.body)\n"' | tail -c 20000 > codex-review/answered.md
+
+          lines=$(wc -l < codex-review/pr.diff)
+          echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "verdict=no-key" >> "$GITHUB_OUTPUT"
+          elif [ "$lines" -eq 0 ]; then
+            echo "verdict=empty" >> "$GITHUB_OUTPUT"
+          elif [ "$lines" -gt "$MAX_DIFF_LINES" ]; then
+            echo "verdict=too-large" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=review" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Codex
+        id: codex
+        if: steps.prepare.outputs.verdict == 'review'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: codex-review/prompt.md
+          effort: high
+          sandbox: read-only
+          safety-strategy: drop-sudo
+
+  post:
+    needs: review
+    if: always() && needs.review.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+      OUTCOME: ${{ needs.review.result }}
+      VERDICT: ${{ needs.review.outputs.verdict }}
+      HEAD: ${{ needs.review.outputs.head }}
+      SCOPE: ${{ needs.review.outputs.scope }}
+      LINES: ${{ needs.review.outputs.lines }}
+      RESULT: ${{ needs.review.outputs.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Comment on the pull request
+        run: |
+          {
+            if [ "$OUTCOME" != "success" ]; then
+              echo "**Codex review did not complete** ($OUTCOME). [Run log]($RUN_URL)"
+            elif [ "$VERDICT" = "no-key" ]; then
+              echo "**Codex review skipped:** the \`OPENAI_API_KEY\` secret is not set."
+            elif [ "$VERDICT" = "empty" ]; then
+              echo "**Codex review:** nothing to review in $SCOPE."
+            elif [ "$VERDICT" = "too-large" ]; then
+              echo "**Codex review skipped:** $LINES changed lines in $SCOPE, over the $MAX_DIFF_LINES-line limit. Split the PR, or raise \`MAX_DIFF_LINES\` deliberately."
+            else
+              echo "**Codex review** of $SCOPE (\`${HEAD:0:7}\`, effort high)"
+              echo
+              printf '%s\n' "$RESULT"
+              # Marks the commit reviewed, so the next /codex-review covers only
+              # what comes after it. Only written when a review actually ran.
+              echo
+              echo "<!-- codex-review:head=$HEAD -->"
+            fi
+          } > comment.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
