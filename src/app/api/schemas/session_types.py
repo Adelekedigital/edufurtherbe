@@ -213,6 +213,10 @@ class SessionTypeRead(BaseModel):
         description=("The one offering this mentor puts first (at most one); it is listed first."),
     )
     requires_booking_confirmation: bool = Field(
+        # Always sent. The default only keeps it out of the spec's `required`, so
+        # the frontend's CI, which pulls the published spec, does not break the
+        # day this field appears (FE, 2026-10-09; the `in_room_at` precedent).
+        default=False,
         description=(
             "Whether booking this offering is a **request** the mentor must accept "
             "(`true`), or confirms at once (`false`). **Resolved**: the offering's own "
