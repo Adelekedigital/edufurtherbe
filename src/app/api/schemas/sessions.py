@@ -140,7 +140,12 @@ class PartyRead(BaseModel):
 class AnswerPreviewFirstRead(BaseModel):
     """The first answered question, as one line."""
 
-    question_text: str = Field(description="The question as it reads now.")
+    question_text: str = Field(
+        description=(
+            "The question as it was asked at booking; for answers from before that "
+            "wording was kept, as it reads now."
+        )
+    )
     text: str = Field(
         description=(
             "The answer as plain text: the written answer, the chosen options "
@@ -154,10 +159,17 @@ class AnswerPreviewRead(BaseModel):
 
     count: int = Field(
         ge=1,
-        description="How many questions were answered, the length of `GET /sessions/{id}/answers`.",
+        description=(
+            "How many questions were **answered**: the entries of "
+            "`GET /sessions/{id}/answers` with `answered: true`. That list also "
+            "carries the questions left blank, which are not counted here."
+        ),
     )
     first: AnswerPreviewFirstRead = Field(
-        description="The first answered question in the form's order, the first entry of that list."
+        description=(
+            "The first **answered** question in the form's order: the first entry of "
+            "that list with `answered: true`, skipping any blank before it."
+        )
     )
 
 
