@@ -27,9 +27,14 @@ from tests.integration.test_api_credit_refunds import balance_of
 from tests.integration.test_api_session_reminders import wire
 from tests.integration.test_api_session_transitions import a_booking
 
+from app.core.config import Settings
 from app.core.errors import ConflictError
+from app.domain.refunds import refund_policy
 from app.domain.suggestions import SUGGESTION_REMINDER_KIND, SUGGESTION_REMINDER_LEAD
 from conftest import PLATFORM_WINDOW
+
+#: The deployment default: `MENTEE_CANCEL_REFUND_HOURS` unset.
+REFUNDS = refund_policy(Settings(_env_file=None))  # type: ignore[call-arg]
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -288,7 +293,16 @@ async def test_a_booking_racing_a_suggestion_is_refused_at_the_lock(
     mentor = UUID(str(booking["mentor_id"]))
 
     async with factory() as first, factory() as second:
-        await transition(first, UUID(booking["id"]), mentor, "decline", {}, now=now, notify=False)
+        await transition(
+            first,
+            UUID(booking["id"]),
+            mentor,
+            "decline",
+            {},
+            now=now,
+            refunds=REFUNDS,
+            notify=False,
+        )
         await suggest_time(
             first,
             UUID(booking["id"]),
@@ -728,7 +742,16 @@ async def test_a_stranger_racing_into_the_held_break_is_refused_at_the_lock(
     mentor = UUID(str(booking["mentor_id"]))
 
     async with factory() as first, factory() as second:
-        await transition(first, UUID(booking["id"]), mentor, "decline", {}, now=now, notify=False)
+        await transition(
+            first,
+            UUID(booking["id"]),
+            mentor,
+            "decline",
+            {},
+            now=now,
+            refunds=REFUNDS,
+            notify=False,
+        )
         await suggest_time(
             first,
             UUID(booking["id"]),

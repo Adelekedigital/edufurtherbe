@@ -432,3 +432,32 @@ def test_a_base64_daily_webhook_secret_is_kept() -> None:
     settings = Settings(_env_file=None, daily_webhook_secret=BASE64_SECRET)
     assert settings.daily_webhook_secret is not None
     assert settings.daily_webhook_secret.get_secret_value() == BASE64_SECRET
+
+
+def test_the_mentee_refund_window_defaults_to_twelve_hours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset, the rule is unchanged: twelve hours (decision 229)."""
+    monkeypatch.delenv("MENTEE_CANCEL_REFUND_HOURS", raising=False)
+
+    assert Settings(_env_file=None).mentee_cancel_refund_hours == 12  # type: ignore[call-arg]
+
+
+def test_the_mentee_refund_window_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MENTEE_CANCEL_REFUND_HOURS", "6")
+
+    assert Settings(_env_file=None).mentee_cancel_refund_hours == 6  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "twelve", "1.5", "8761", "120000000"])
+def test_a_refund_window_that_is_not_a_positive_whole_hour_refuses_to_boot(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """**A typo fails the boot**, rather than refunding everyone (0), nobody, or
+    crashing every session read on an overflow (a slipped run of zeros)."""
+    monkeypatch.setenv("MENTEE_CANCEL_REFUND_HOURS", value)
+
+    with pytest.raises(PydanticValidationError, match="MENTEE_CANCEL_REFUND_HOURS"):
+        Settings(_env_file=None)  # type: ignore[call-arg]

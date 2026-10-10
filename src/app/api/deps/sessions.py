@@ -43,6 +43,7 @@ from app.core.errors import (
 from app.domain.attendance import door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionStatus
+from app.domain.refunds import RefundPolicy, refund_policy
 from app.domain.sessions import TRANSITIONS
 from app.infra.clients.meetings import (
     DailyRooms,
@@ -227,6 +228,17 @@ def _join_lead(request: Request) -> dt.timedelta:
 JoinLeadDep = Annotated[dt.timedelta, Depends(_join_lead)]
 
 
+def _refund_policy(request: Request) -> RefundPolicy:
+    """The refund window this app runs on (`MENTEE_CANCEL_REFUND_HOURS`). The
+    one place the request layer reads it, so the refund a cancellation pays and
+    the `refund_until` every session publishes cannot disagree."""
+    return refund_policy(_configured(request))
+
+
+#: The configured refund policy, for a route that applies or publishes it.
+RefundPolicyDep = Annotated[RefundPolicy, Depends(_refund_policy)]
+
+
 async def _provision(request: Request, session: AsyncSession, session_id: UUID) -> None:
     """Give a confirmed session its venue and invite, wired from this app.
 
@@ -333,7 +345,9 @@ async def booked_session(
     if row is None:  # pragma: no cover - the row was just written in this transaction
         raise NotFoundError("no such session")
 
-    body = SessionRead.from_row(row, opens_before=_join_lead(request)).model_dump(mode="json")
+    body = SessionRead.from_row(
+        row, opens_before=_join_lead(request), refunds=_refund_policy(request)
+    ).model_dump(mode="json")
     await record_response(session, reservation, status_code=CREATED, body=body)
     await session.commit()
     return body, CREATED, False
@@ -409,6 +423,7 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
             action,
             body,
             now=now,
+            refunds=_refund_policy(request),
             # A suggestion tells the mentee itself, in one email with the news.
             notify=suggested is None,
         )

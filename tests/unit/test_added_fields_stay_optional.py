@@ -16,7 +16,8 @@ from app.main import create_app
 #: Each schema, and the fields added to it after the frontend first consumed it.
 ADDED = {
     "PartyRead": ("in_room_at", "degree", "institution"),
-    "SessionRead": ("mentee_attendance_sessions",),
+    "SessionRead": ("mentee_attendance_sessions", "refund_until"),
+    "UserRead": ("mentee_cancel_refund_hours",),
     "SessionTypeRead": ("requires_booking_confirmation",),
     "SessionAnswerRead": ("answered", "required"),
 }

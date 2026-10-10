@@ -225,3 +225,12 @@ class UserRead(NormalisedEmail):
     #: dashboard headings. `as_mentee` is always present; only `as_mentor` needs
     #: a mentor profile (decision 228).
     booking_counts: BookingCountsRead = Field(default_factory=lambda: BookingCountsRead())
+    mentee_cancel_refund_hours: int = Field(
+        default=12,
+        description=(
+            "How many hours before the start a mentee may cancel and get the credit "
+            "back: the deployment's `MENTEE_CANCEL_REFUND_HOURS`. For copy that "
+            "explains the rule without a session to hand; a session's own deadline "
+            "is its `refund_until`."
+        ),
+    )
