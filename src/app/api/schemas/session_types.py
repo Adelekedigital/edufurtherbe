@@ -212,6 +212,18 @@ class SessionTypeRead(BaseModel):
         default=False,
         description=("The one offering this mentor puts first (at most one); it is listed first."),
     )
+    requires_booking_confirmation: bool = Field(
+        # Always sent. The default only keeps it out of the spec's `required`, so
+        # the frontend's CI, which pulls the published spec, does not break the
+        # day this field appears (FE, 2026-10-09; the `in_room_at` precedent).
+        default=False,
+        description=(
+            "Whether booking this offering is a **request** the mentor must accept "
+            "(`true`), or confirms at once (`false`). **Resolved**: the offering's own "
+            "setting, else its mentor's, exactly as `POST /api/v1/sessions` applies it. "
+            "Show it before the mentee sends the request."
+        ),
+    )
     booking_window_days: int = Field(
         description=(
             "How many days ahead this offering can be booked, **resolved**: its own "
@@ -246,6 +258,7 @@ class SessionTypeRead(BaseModel):
             ),
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
+            requires_booking_confirmation=bool(row["requires_booking_confirmation"]),
             booking_window_days=int(str(row["booking_window_days"])),
             questions=[
                 QuestionRead.from_row(q)

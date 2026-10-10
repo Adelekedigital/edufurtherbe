@@ -27,6 +27,7 @@ __all__ = [
     "effective_break_minutes",
     "effective_duration_minutes",
     "effective_min_notice_minutes",
+    "effective_requires_confirmation",
     "effective_window_days",
     "inherits_duration",
     "inherits_min_notice",
@@ -84,6 +85,18 @@ def effective_min_notice_minutes(
         mentor.default_min_notice_minutes,
         literal(DEFAULT_MIN_NOTICE_MINUTES),
     )
+
+
+def effective_requires_confirmation(
+    config: Any = SessionTypeBookingConfig, mentor: Any = MentorProfile
+) -> Any:
+    """Whether booking the offering is a request the mentor must accept (#106).
+
+    The offering's own setting, else its mentor's, which is `NOT NULL`, so there
+    is no platform default to fall to. Booking obeys this, and the public read
+    shows it, so a mentee is told before "Send request" what booking will do.
+    """
+    return func.coalesce(config.requires_booking_confirmation, mentor.requires_booking_confirmation)
 
 
 def inherits_duration(config: Any = SessionTypeBookingConfig) -> Any:

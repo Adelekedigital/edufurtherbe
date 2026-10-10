@@ -391,3 +391,46 @@ async def test_a_tie_rounds_away_from_zero(
 
     assert latest is not None
     assert await rate(api_client, pair, latest) == 63
+
+
+# --------------------------------------------------------------------------
+# The count beside the rate: "90% (12 sessions)"
+# --------------------------------------------------------------------------
+
+
+async def counted(client: httpx.AsyncClient, pair: dict[str, Any], session_id: UUID) -> Any:
+    response = await client.get(f"/api/v1/sessions/{session_id}", headers=pair["mentor_headers"])
+    assert response.status_code == 200, response.text
+    return response.json()["mentee_attendance_sessions"]
+
+
+async def test_the_count_is_what_the_rate_is_measured_over(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The rate's own denominator**, so "67% (3 sessions)" is two of three.
+    A cancelled session and one still ahead are in neither number."""
+    pair = await a_pair(db_engine, "count-three")
+    await add_session(db_engine, pair, status="no_show", mentee_attended="no_show", days_ago=2)
+    for day in (4, 6):
+        await add_session(
+            db_engine, pair, status="completed", mentee_attended="attended", days_ago=day
+        )
+    await add_session(db_engine, pair, status="cancelled", mentee_attended="pending", days_ago=8)
+    current = await add_session(
+        db_engine, pair, status="confirmed", mentee_attended="pending", days_ago=-3
+    )
+
+    assert await rate(api_client, pair, current) == 67
+    assert await counted(api_client, pair, current) == 3
+
+
+async def test_a_new_mentee_has_a_count_of_zero(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Zero beside a null rate: "New mentee", with nothing counted."""
+    pair = await a_pair(db_engine, "count-new")
+    upcoming = await add_session(
+        db_engine, pair, status="confirmed", mentee_attended="pending", days_ago=-3
+    )
+
+    assert await counted(api_client, pair, upcoming) == 0

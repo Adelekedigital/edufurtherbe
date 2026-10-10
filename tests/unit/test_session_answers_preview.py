@@ -37,6 +37,9 @@ def test_the_session_read_has_exactly_these_fields() -> None:
         "suggestion",
         "answers_preview",
         "mentee_attendance_rate",
+        # The rate's denominator, the pending card's "(12 sessions)". Not
+        # optional in the spec: tell the FE before merging (it marks fields required).
+        "mentee_attendance_sessions",
     }
 
 

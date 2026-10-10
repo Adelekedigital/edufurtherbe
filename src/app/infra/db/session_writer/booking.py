@@ -34,7 +34,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,7 +62,11 @@ from app.domain.sessions import (
     respond_by,
 )
 from app.infra.clients.scheduler import SchedulerError
-from app.infra.db.booking_rules import effective_break_minutes, effective_duration_minutes
+from app.infra.db.booking_rules import (
+    effective_break_minutes,
+    effective_duration_minutes,
+    effective_requires_confirmation,
+)
 from app.infra.db.credit_writer import spend_credit
 from app.infra.db.holds import active_hold, held_offer, holds_against, lock_mentor_slots
 from app.infra.db.intake_file_store import link_files, usable_file_ids
@@ -149,10 +153,7 @@ async def _offering(
                     # Measured against a held time under the lock (#339), the way
                     # the grid measures it.
                     effective_break_minutes().label("break_minutes"),
-                    func.coalesce(
-                        SessionTypeBookingConfig.requires_booking_confirmation,
-                        MentorProfile.requires_booking_confirmation,
-                    ).label("requires_confirmation"),
+                    effective_requires_confirmation().label("requires_confirmation"),
                 )
                 .select_from(SessionType)
                 .join(
