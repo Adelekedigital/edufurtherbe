@@ -396,6 +396,9 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         "is_featured",
         # How far ahead it can be booked, resolved and clamped (Round 5).
         "booking_window_days",
+        # Whether booking is a request, **resolved** (#409). The owner's nullable
+        # override is not here: resolved values are public, inheritance is not.
+        "requires_booking_confirmation",
     }
     assert "is_active" not in offering
     # Resolved length and notice are public; whether they were inherited is not.
