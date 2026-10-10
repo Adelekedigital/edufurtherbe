@@ -66,12 +66,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Narrow the vocabulary back.
+    """Narrow the vocabulary back, and **refuse** while anything uses ``other``.
 
-    **An event coded ``other`` loses its code**, set to NULL, because the old
-    vocabulary has no faithful equivalent and the narrower CHECK would refuse
-    the row. Its ``reason_text`` stays. Not reversible for those rows.
+    ``ADD CONSTRAINT`` validates existing rows, so an event already coded
+    ``other`` makes this fail with *check constraint is violated by some row*,
+    the behaviour ``e7b4d29c3f16`` chose for ``withdrawn``. Rewriting those codes
+    to NULL would destroy the very data this column was widened to collect
+    (Codex, #414); deciding what an ``other`` should become is an operator's
+    data migration to write first, not something a downgrade does silently.
     """
     op.execute("SET lock_timeout = '3s'")
-    op.execute("UPDATE session_events SET reason_code = NULL WHERE reason_code = 'other'")
     _swap("session_events", "reason_code", WITHOUT_OTHER)
