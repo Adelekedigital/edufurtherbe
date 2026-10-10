@@ -149,6 +149,41 @@ async def test_the_mentor_declines_with_a_reason(
     assert event["reason_text"] == "Conference clash"
 
 
+@pytest.mark.parametrize(
+    ("action", "who", "confirmed", "text"),
+    [
+        ("decline", "mentor", False, "Travelling that week"),
+        ("cancel", "mentor", True, None),
+        ("cancel", "mentee", True, "Plans changed"),
+    ],
+    ids=["mentor-declines", "mentor-cancels", "mentee-cancels"],
+)
+async def test_either_party_may_give_other_as_the_reason(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    action: str,
+    who: str,
+    confirmed: bool,
+    text: str | None,
+) -> None:
+    """**"Other", the last choice in the list** (owner, 2026-10-10): coded, so
+    "none of these" is countable rather than arriving as a blank. The text that
+    explains it stays optional."""
+    booking = await a_booking(
+        db_engine, api_client, f"tr-other-{action}-{who}", confirmed=confirmed
+    )
+    body: dict[str, str] = {"reason_code": "other"}
+    if text is not None:
+        body["reason_text"] = text
+
+    moved = await api_client.post(url(booking, action), json=body, headers=booking[who])
+
+    assert moved.status_code == 200, moved.text
+    event = (await events_of(api_client, booking))[-1]
+    assert event["reason_code"] == "other"
+    assert event["reason_text"] == text
+
+
 async def test_the_mentee_withdraws_a_request_nobody_answered(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -381,10 +416,10 @@ async def test_a_session_that_has_started_cannot_be_cancelled(
 async def test_a_mentee_may_not_give_the_mentors_reason(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """**Authorization, not tidiness.** `SessionReasonCode` says the codes are
-    what refund policy runs on — `mentor_unavailable` refunds where
-    `mentee_no_longer_needed` does not — so a mentee free to send the mentor's
-    code is a mentee who can claim a refund by choosing a value."""
+    """**The record, not the refund.** Refunds read who acted and when, never
+    the code (decision 229), so this protects what the code *says*: a mentee
+    sending `mentor_unavailable` would put a false statement about the mentor
+    into the history every report groups by."""
     booking = await a_booking(db_engine, api_client, "tr-wrong-reason", confirmed=True)
 
     refused = await api_client.post(
