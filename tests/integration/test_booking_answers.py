@@ -229,16 +229,31 @@ async def test_text_and_choice_answers_are_saved_with_the_booking(
     assert {r["selected_option_id"] for r in by_question[multi]} == {ielts, toefl}
 
 
-async def test_no_answers_writes_no_submission(
+async def test_an_offering_with_no_form_writes_no_submission(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
+    """Nothing was asked, so there is nothing to keep."""
     mentor, session_type = await a_bookable_offering(db_engine, "ans-none")
-    await add_question(db_engine, session_type, "Anything else?")
 
     response = await book(api_client, db_engine, "ans-none", mentor, session_type, None)
 
     assert response.status_code == 201
     assert await submissions(db_engine, mentor) == 0
+
+
+async def test_a_form_left_blank_is_still_a_submission(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Changed on purpose** (owner, 2026-10-10): this was "no answers writes
+    no submission". The form is now kept as it stood, so a mentor can see the
+    questions that went unanswered rather than no form at all."""
+    mentor, session_type = await a_bookable_offering(db_engine, "ans-blank")
+    await add_question(db_engine, session_type, "Anything else?")
+
+    response = await book(api_client, db_engine, "ans-blank", mentor, session_type, None)
+
+    assert response.status_code == 201
+    assert await submissions(db_engine, mentor) == 1
 
 
 @pytest_asyncio.fixture
@@ -264,7 +279,9 @@ async def test_a_missing_required_answer_books_while_enforcement_is_off(
     response = await book(api_client, db_engine, "ans-off", mentor, session_type, None)
 
     assert response.status_code == 201, response.text
-    assert await submissions(db_engine, mentor) == 0
+    # The form is kept even unanswered (owner, 2026-10-10), so the booking is a
+    # submission with no answers rather than none at all.
+    assert await submissions(db_engine, mentor) == 1
 
 
 async def test_a_missing_required_answer_is_refused_by_name(

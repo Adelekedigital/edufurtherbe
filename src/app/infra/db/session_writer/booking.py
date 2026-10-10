@@ -431,7 +431,9 @@ async def book_session(
         a | {"file_storage_key": keys[a["file_id"]]} if a.get("file_id") is not None else a
         for a in answers
     ]
-    await record_answers(session, session_id=session_id, mentee_id=mentee_id, answers=answers)
+    await record_answers(
+        session, session_id=session_id, mentee_id=mentee_id, answers=answers, form=form
+    )
 
     # **The participant rows, in the same transaction as the session**, which
     # is what `SessionParticipant`'s own docstring promises: written together,

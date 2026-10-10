@@ -107,6 +107,10 @@ async def test_the_mentor_reads_every_answer_in_form_order(
         "text": "MSc Public Policy",
         "options": [],
         "file": None,
+        # The form is kept at booking: every question listed, each saying
+        # whether it was answered and was required (owner, 2026-10-10).
+        "answered": True,
+        "required": False,
     }
     # The form's order, not the order the mentee picked them in.
     assert choice_answer["options"] == [

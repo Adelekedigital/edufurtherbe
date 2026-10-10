@@ -18,6 +18,7 @@ ADDED = {
     "PartyRead": ("in_room_at", "degree", "institution"),
     "SessionRead": ("mentee_attendance_sessions",),
     "SessionTypeRead": ("requires_booking_confirmation",),
+    "SessionAnswerRead": ("answered", "required"),
 }
 
 

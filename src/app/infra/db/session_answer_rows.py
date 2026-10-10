@@ -26,13 +26,21 @@ from app.domain.enums import QuestionType
 from app.infra.db.models.intake import (
     IntakeAnswer,
     IntakeFile,
+    IntakeFormQuestion,
     IntakeSubmission,
     SessionTypeQuestion,
     SessionTypeQuestionOption,
 )
 from app.infra.db.models.sessions import Session
 
-__all__ = ["answer_previews", "answer_rows", "fold_answers", "preview_text"]
+__all__ = [
+    "answer_previews",
+    "answer_rows",
+    "fold_answers",
+    "form_rows",
+    "preview_text",
+    "with_form",
+]
 
 
 def answer_rows(*filters: Any) -> Select[Any]:
@@ -96,6 +104,9 @@ def fold_answers(rows: Iterable[RowMapping]) -> dict[UUID, list[dict[str, Any]]]
                 "text": None,
                 "options": [],
                 "file": None,
+                "answered": True,
+                # Known only from the form kept at booking; `with_form` fills it.
+                "required": None,
             },
         )
         # **The type is the answer's form, not the question's type now.** A
@@ -118,6 +129,66 @@ def fold_answers(rows: Iterable[RowMapping]) -> dict[UUID, list[dict[str, Any]]]
                 "available": row["file_available"],
             }
     return {session_id: list(entries.values()) for session_id, entries in sessions.items()}
+
+
+def form_rows(*filters: Any) -> Select[Any]:
+    """The form each booking was made against, in the order it was asked.
+
+    Empty for a booking made before the form was kept, and for one with no form.
+    Scoping is the caller's, as for :func:`answer_rows`.
+    """
+    return (
+        select(
+            IntakeSubmission.session_id,
+            IntakeFormQuestion.question_id,
+            IntakeFormQuestion.question_text,
+            IntakeFormQuestion.question_type,
+            IntakeFormQuestion.is_required,
+            SessionTypeQuestion.deleted_at.is_not(None).label("retired"),
+        )
+        .select_from(IntakeFormQuestion)
+        .join(IntakeSubmission, IntakeSubmission.id == IntakeFormQuestion.submission_id)
+        .join(Session, Session.id == IntakeSubmission.session_id)
+        .join(SessionTypeQuestion, SessionTypeQuestion.id == IntakeFormQuestion.question_id)
+        .where(*filters)
+        .order_by(IntakeFormQuestion.sort_order, IntakeFormQuestion.question_id)
+    )
+
+
+def with_form(answers: list[dict[str, Any]], form: Sequence[Any]) -> list[dict[str, Any]]:
+    """Every question of the form kept at booking, in the order asked, each
+    answer in its place and every skipped question marked unanswered.
+
+    **Without a kept form, the answers alone**, unchanged: a booking from before
+    the form was kept cannot say what else it asked, and merging today's form in
+    could show a question that was never asked.
+    """
+    if not form:
+        return answers
+    given = {answer["question_id"]: answer for answer in answers}
+    merged: list[dict[str, Any]] = []
+    for question in form:
+        answer = given.pop(question["question_id"], None)
+        if answer is not None:
+            merged.append(answer | {"required": question["is_required"]})
+            continue
+        merged.append(
+            {
+                "question_id": question["question_id"],
+                "question_text": question["question_text"],
+                # Unanswered, so the type is the question's as asked.
+                "question_type": QuestionType(str(question["question_type"])),
+                "retired": question["retired"],
+                "text": None,
+                "options": [],
+                "file": None,
+                "answered": False,
+                "required": question["is_required"],
+            }
+        )
+    # An answer to a question the kept form lacks cannot happen through booking,
+    # which checks answers against that form; kept rather than dropped if it does.
+    return merged + list(given.values())
 
 
 def preview_text(answer: Mapping[str, Any]) -> str:
