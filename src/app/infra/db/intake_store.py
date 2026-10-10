@@ -25,6 +25,7 @@ from app.domain.enums import IntakeStatus, QuestionType
 from app.domain.intake import MAX_QUESTIONS
 from app.infra.db.models.intake import (
     IntakeAnswer,
+    IntakeFormQuestion,
     IntakeSubmission,
     SessionTypeQuestion,
     SessionTypeQuestionOption,
@@ -412,13 +413,21 @@ async def record_answers(
     session_id: UUID,
     mentee_id: UUID,
     answers: list[dict[str, Any]],
+    form: list[dict[str, Any]],
 ) -> None:
-    """Store a booking's answers: one submission, one row per answer or option.
+    """Store a booking's form and answers: one submission, a copy of every
+    question asked, and one row per answer or option.
+
+    **The form is copied whole, answered or not** (owner, 2026-10-10), in the
+    order the mentee saw it: without it a mentor cannot tell "they skipped this"
+    from "I never asked this". So a form with questions is a submission even
+    when every one was skipped; only an offering with no form writes nothing.
+    ``form`` is the one booking already loaded to check the answers, so the copy
+    is exactly the form those answers were checked against.
 
     **Called only with answers already checked** by `answer_problems` against
     this offering's form, so every question and option id here is one it asks.
-    Nothing is written for no answers — an empty form is not a submission. A
-    multiple-choice answer is one row per chosen option (#207); a file answer
+    A multiple-choice answer is one row per chosen option (#207); a file answer
     carries the `file_storage_key` its upload was linked under. Does not commit:
     the booking's transaction owns it, so a session and its answers land
     together or not at all.
@@ -427,9 +436,8 @@ async def record_answers(
     a choice row's option text, as they read now, so a later rewording never
     puts an old answer under new words.
     """
-    if not answers:
+    if not answers and not form:
         return
-    question_text, option_text = await _wording(session, answers)
     submission_id = (
         await session.execute(
             insert(IntakeSubmission)
@@ -442,6 +450,24 @@ async def record_answers(
             .returning(IntakeSubmission.id)
         )
     ).scalar_one()
+    if form:
+        await session.execute(
+            insert(IntakeFormQuestion),
+            [
+                {
+                    "submission_id": submission_id,
+                    "question_id": question["id"],
+                    "question_text": question["question_text"],
+                    "question_type": question["question_type"],
+                    "is_required": question["is_required"],
+                    "sort_order": position,
+                }
+                for position, question in enumerate(form)
+            ],
+        )
+    if not answers:
+        return
+    question_text, option_text = await _wording(session, answers)
     rows: list[dict[str, Any]] = []
     for answer in answers:
         base = {

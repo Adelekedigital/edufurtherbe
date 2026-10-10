@@ -233,6 +233,22 @@ class SessionAnswerRead(BaseModel):
         description="For `multi_choice`, in the order the form lists them.",
     )
     file: AnsweredFileRead | None = Field(default=None, description="For `file_upload`.")
+    answered: bool = Field(
+        default=True,
+        description=(
+            "`false` for a question on the form that the mentee left blank: show "
+            "it as *No answer*. A booking's form is kept as it stood when it was "
+            "made, so every question asked is listed, in that order. Bookings made "
+            "before the form was kept list only their answers, all `true`."
+        ),
+    )
+    required: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the question was required when the booking was made; `null` "
+            "for a booking made before the form was kept."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> SessionAnswerRead:
@@ -242,6 +258,8 @@ class SessionAnswerRead(BaseModel):
             question_text=row["question_text"],
             question_type=QuestionType(str(row["question_type"])),
             retired=row["retired"],
+            answered=row.get("answered", True),
+            required=row.get("required"),
             text=row["text"],
             options=[AnsweredOptionRead(**option) for option in row["options"]],
             file=(

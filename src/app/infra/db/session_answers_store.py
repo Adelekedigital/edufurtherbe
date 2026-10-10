@@ -31,7 +31,7 @@ from sqlalchemy import literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.sessions import Session
-from app.infra.db.session_answer_rows import answer_rows, fold_answers
+from app.infra.db.session_answer_rows import answer_rows, fold_answers, form_rows, with_form
 from app.infra.db.session_store import is_a_party
 
 __all__ = ["session_answers"]
@@ -45,7 +45,7 @@ def _readable_by(caller_id: UUID, caller_is_admin: bool) -> Any:
 async def session_answers(
     session: AsyncSession, session_id: UUID, *, caller_id: UUID, caller_is_admin: bool
 ) -> list[dict[str, Any]] | None:
-    """The answers, one entry per answered question in form order; ``None`` if unreadable.
+    """The booking's form and answers, in the order asked; ``None`` if unreadable.
 
     ``None`` is "no such session **or** not yours", which the route turns into
     one 404. A readable session with no form, or a migrated one, is an empty
@@ -59,7 +59,10 @@ async def session_answers(
 
     # Scoped again here rather than trusting the check above: the rows are
     # personal data, and the predicate costs one join.
-    rows = await session.execute(
-        answer_rows(Session.id == session_id, _readable_by(caller_id, caller_is_admin))
-    )
-    return fold_answers(rows.mappings()).get(session_id, [])
+    scope = (Session.id == session_id, _readable_by(caller_id, caller_is_admin))
+    rows = await session.execute(answer_rows(*scope))
+    answers = fold_answers(rows.mappings()).get(session_id, [])
+    # Every question of the form kept at booking, skipped ones included
+    # (owner, 2026-10-10), read under the same scope as the answers.
+    form = (await session.execute(form_rows(*scope))).mappings().all()
+    return with_form(answers, form)
