@@ -102,6 +102,8 @@ EXPECTED_MODELS = {
     "IntakeSubmission",
     "IntakeAnswer",
     "IntakeFile",
+    # A booking's form as it stood at booking (owner, 2026-10-10).
+    "IntakeFormQuestion",
     "Session",
     "SessionParticipant",
     "SessionSuggestion",
