@@ -497,26 +497,24 @@ was written.
    exact-field guard**, and a new endpoint declares a `response_model` — an
    untyped `dict` publishes an arbitrary object, and a generated client loses
    the field entirely.
-8. **`/security-review`**, always. A local code review, if run at all, is
-   `/code-review low`.
+8. **`/security-review` and `/code-review`**, always, with every finding fixed
+   or answered before the push. **Local review is the merge gate, for now**
+   (owner, 2026-10-10: Codex cost about $15 in two days).
 
 Then push, and the work is done when CI is green on the PR's exact head commit
-**and** every Codex finding is fixed or answered. Codex runs from
-`.github/workflows/codex-review.yml` (since 2026-10-09; it replaced the ChatGPT
-plugin): automatically when a PR opens, and on a `/codex-review` comment for a
-re-review, which covers only the commits since the last one. P0 and P1 are
-must-fix, P2 fix-if-cheap (`AGENTS.md` → Severity). Answer a finding with a
-reply comment on the PR, because the next review reads the replies and will not
-raise an answered finding again.
+and the local review's findings are fixed or answered in the PR body. Codex
+(`.github/workflows/codex-review.yml`) no longer runs when a PR opens; it runs
+only on a `/codex-review` comment, which the owner posts when a PR is worth the
+spend. When it does run, the loop below applies.
 
 ## Codex review loop
 
-The owner's process for every PR, recorded 2026-10-09. **Re-reviews are by
-comment, never automatic**: a push does not re-run the review, which keeps the
-cost per PR to the rounds someone chose to run.
+For a PR the owner sends to Codex, recorded 2026-10-09. **Every review is by
+comment, never automatic** (since 2026-10-10): neither opening a PR nor pushing
+runs one, which keeps the cost to the rounds someone chose to run.
 
-1. **Open the PR.** The review runs on its own, once (also on reopen, and when
-   a draft is marked ready). Drafts, forks and Dependabot are skipped.
+1. **Comment `/codex-review`.** The first run covers the whole PR. Drafts, forks
+   and Dependabot are skipped.
 2. **Verify each finding** against the code, and against the platform's own
    docs when it cites them. Codex has been wrong (#393, Daily's payload shape),
    so a finding is a claim to check, not an instruction.
@@ -535,8 +533,9 @@ cost per PR to the rounds someone chose to run.
    (rule 10), on the owner's word.
 
 A comment that does not start with `/codex-review` triggers nothing; a reply
-alone never starts a review. **To test a change to the workflow itself, close and
-reopen the PR**: a comment runs the workflow from `main`, not from the PR.
+alone never starts a review. **A comment runs the workflow from `main`, not from
+the PR**, so a change to the workflow itself is tested only after it merges, or
+by restoring the `pull_request` trigger on the branch and reopening the PR.
 
 ## Guardrails
 
