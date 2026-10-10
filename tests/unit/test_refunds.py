@@ -6,22 +6,27 @@ import datetime as dt
 
 import pytest
 
+from app.core.config import Settings
 from app.domain.attendance import absent_party
 from app.domain.enums import CreditReason, SessionRole, SessionStatus
 from app.domain.refunds import (
-    REFUND_POLICY,
     RefundPolicy,
     never_agreed_refund,
     no_show_refund,
+    refund_policy,
     transition_refund,
 )
 
 NOW = dt.datetime(2026, 10, 3, 12, 0, tzinfo=dt.UTC)
-NOTICE = REFUND_POLICY.mentee_cancel_notice
+#: The deployment default: `MENTEE_CANCEL_REFUND_HOURS` unset.
+POLICY = refund_policy(Settings(_env_file=None))  # type: ignore[call-arg]
+NOTICE = POLICY.mentee_cancel_notice
 
 
 def cancelled(actor: SessionRole | None, notice: dt.timedelta) -> CreditReason | None:
-    return transition_refund(SessionStatus.CANCELLED, actor=actor, starts_at=NOW + notice, now=NOW)
+    return transition_refund(
+        SessionStatus.CANCELLED, actor=actor, starts_at=NOW + notice, now=NOW, policy=POLICY
+    )
 
 
 def test_the_mentee_notice_is_twelve_hours() -> None:
@@ -56,14 +61,16 @@ def test_nobody_else_cancelling_refunds() -> None:
 )
 def test_a_request_that_never_became_a_session_refunds(to: SessionStatus) -> None:
     assert (
-        transition_refund(to, actor=None, starts_at=NOW, now=NOW)
+        transition_refund(to, actor=None, starts_at=NOW, now=NOW, policy=POLICY)
         is CreditReason.REQUEST_UNFULFILLED
     )
 
 
 def test_accepting_refunds_nothing() -> None:
     assert (
-        transition_refund(SessionStatus.CONFIRMED, actor=SessionRole.MENTOR, starts_at=NOW, now=NOW)
+        transition_refund(
+            SessionStatus.CONFIRMED, actor=SessionRole.MENTOR, starts_at=NOW, now=NOW, policy=POLICY
+        )
         is None
     )
 

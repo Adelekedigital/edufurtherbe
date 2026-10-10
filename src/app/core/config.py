@@ -257,6 +257,18 @@ class Settings(BaseSettings):
         default=10, ge=0, le=10, validation_alias=env_key("join_window_opens_minutes")
     )
 
+    #: How many hours' notice a mentee's cancellation needs for the credit to
+    #: come back (decision 229; a deploy setting since the owner's call of
+    #: 2026-10-10). Read through `domain.refunds.refund_policy`, the one reader.
+    #: **A whole, positive number of hours, or the boot fails**: zero would
+    #: refund every late cancellation and garbage nothing, both silently. Not
+    #: the ten-minute `CANCELLATION_CUTOFF`, which decides whether cancelling is
+    #: allowed at all. **At most a year**, far past any real window and far
+    #: short of the overflow a slipped extra zero would raise on every read.
+    mentee_cancel_refund_hours: int = Field(
+        default=12, gt=0, le=8760, validation_alias=env_key("mentee_cancel_refund_hours")
+    )
+
     # ``NoDecode`` is load-bearing, not decoration. Without it pydantic-settings
     # JSON-decodes a complex type *inside the settings source*, before any
     # validator runs, and a bare origin typed into a cloud console fails as

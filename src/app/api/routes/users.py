@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep
+from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep, RefundPolicyDep
 from app.api.schemas.common import AvatarFocusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import BookingCountsRead, CreditsRead, UserProfileRead, UserRead
@@ -90,7 +90,10 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
     responses=ME_RESPONSES,
 )
 async def read_me(
-    user: CurrentUserDep, attributes: OwnAttributesDep, window: BookingWindowDep
+    user: CurrentUserDep,
+    attributes: OwnAttributesDep,
+    window: BookingWindowDep,
+    refunds: RefundPolicyDep,
 ) -> UserRead:
     profile = (
         UserProfileRead(
@@ -121,4 +124,5 @@ async def read_me(
             attributes["booking_counts"],
             mentor=mentor_profile is not None,
         ),
+        mentee_cancel_refund_hours=int(refunds.mentee_cancel_notice.total_seconds() // 3600),
     )

@@ -38,6 +38,7 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.domain.intake import MAX_ANSWER_LENGTH, MAX_OPTIONS, MAX_QUESTIONS
+from app.domain.refunds import RefundPolicy
 
 
 class PartyRead(BaseModel):
@@ -396,9 +397,25 @@ class SessionRead(BaseModel):
             "`0` with a `null` rate is a new mentee."
         ),
     )
+    refund_until: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "Until when **the mentee** cancelling gets the credit back: `starts_at` "
+            "minus the deployment's refund window (`MENTEE_CANCEL_REFUND_HOURS`, "
+            "twelve unless configured). Cancelling at exactly this instant still "
+            "refunds. Read it rather than repeating the number, so changed "
+            "configuration cannot leave the copy stating an old window.\n\n"
+            "Set on a **confirmed** session only, `null` otherwise. A pending "
+            "request withdrawn or declined always refunds, and a finished or "
+            "called-off session has nothing left to refund. It is about the "
+            "mentee's cancellation: a mentor cancelling always refunds the mentee."
+        ),
+    )
 
     @classmethod
-    def from_row(cls, row: dict[str, object], *, opens_before: dt.timedelta) -> SessionRead:
+    def from_row(
+        cls, row: dict[str, object], *, opens_before: dt.timedelta, refunds: RefundPolicy
+    ) -> SessionRead:
         # Derived here rather than stored, because it is `starts_at` plus two
         # constants and a stored copy would be a second definition to drift.
         starts_at = cast(dt.datetime, row["starts_at"])
@@ -409,6 +426,7 @@ class SessionRead(BaseModel):
         # says which sessions have one — so this field and the endpoint cannot
         # disagree about whether a cancelled session can be entered.
         has_door = SessionStatus(str(row["status"])) in DOOR_STATUSES
+        confirmed = SessionStatus(str(row["status"])) is SessionStatus.CONFIRMED
         return cls(
             id=str(row["id"]),
             mentor_id=str(row["mentor_id"]),
@@ -441,6 +459,7 @@ class SessionRead(BaseModel):
                 else None
             ),
             mentee_attendance_sessions=int(str(row.get("mentee_attendance_sessions") or 0)),
+            refund_until=(starts_at - refunds.mentee_cancel_notice if confirmed else None),
         )
 
 

@@ -34,6 +34,7 @@ from app.api.deps import (
     DeclinedSessionDep,
     JoinedSessionDep,
     JoinLeadDep,
+    RefundPolicyDep,
     SessionAnswersDep,
     SessionDetailDep,
     SessionDoorDep,
@@ -105,10 +106,12 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=LIST_RESPONSES,
 )
-async def list_user_sessions(page: SessionsPageDep, lead: JoinLeadDep) -> Page[SessionRead]:
+async def list_user_sessions(
+    page: SessionsPageDep, lead: JoinLeadDep, refunds: RefundPolicyDep
+) -> Page[SessionRead]:
     rows, next_cursor = page
     return Page(
-        data=[SessionRead.from_row(row, opens_before=lead) for row in rows],
+        data=[SessionRead.from_row(row, opens_before=lead, refunds=refunds) for row in rows],
         next_cursor=next_cursor,
     )
 
@@ -126,8 +129,10 @@ async def list_user_sessions(page: SessionsPageDep, lead: JoinLeadDep) -> Page[S
     ),
     responses=READ_RESPONSES,
 )
-async def read_session(session: SessionDetailDep, lead: JoinLeadDep) -> SessionRead:
-    return SessionRead.from_row(session, opens_before=lead)
+async def read_session(
+    session: SessionDetailDep, lead: JoinLeadDep, refunds: RefundPolicyDep
+) -> SessionRead:
+    return SessionRead.from_row(session, opens_before=lead, refunds=refunds)
 
 
 @router.get(

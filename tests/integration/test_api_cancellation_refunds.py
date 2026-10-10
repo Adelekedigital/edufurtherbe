@@ -21,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_attendance import a_confirmed_session, join_url, settle
 from tests.integration.test_api_credit_refunds import balance_of
+from tests.integration.test_api_reminder_callback import a_pending_request
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -237,3 +238,87 @@ async def test_a_session_nobody_paid_for_mints_no_credit(
 
     assert cancelled.status_code == 200, cancelled.text
     assert await balance_of(db_engine, booking["mentee_id"]) == FUNDED - 1
+
+
+# --------------------------------------------------------------------------
+# The window is a setting, and published (owner, 2026-10-10)
+# --------------------------------------------------------------------------
+
+
+def with_window(client: httpx.AsyncClient, hours: int) -> None:
+    """Run this app on a `MENTEE_CANCEL_REFUND_HOURS` of ``hours``."""
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.state.settings = app.state.settings.model_copy(update={"mentee_cancel_refund_hours": hours})
+
+
+@pytest.mark.parametrize(
+    ("starts_in", "refunded"),
+    [(dt.timedelta(hours=7), True), (dt.timedelta(hours=5), False)],
+    ids=["outside-six", "inside-six"],
+)
+async def test_the_window_follows_the_setting(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    starts_in: dt.timedelta,
+    refunded: bool,
+) -> None:
+    """**Six hours configured, six hours applied**, not the twelve that were a
+    constant until the owner made it a deploy setting."""
+    with_window(api_client, 6)
+    booking = await a_confirmed_session(
+        db_engine, api_client, f"cr-window-{refunded}".lower(), starts_in=starts_in
+    )
+
+    cancelled = await cancel(api_client, booking, "mentee")
+
+    assert cancelled.status_code == 200, cancelled.text
+    assert (await refunds_of(db_engine, booking["id"])) == (
+        ["session_cancelled_refund"] if refunded else []
+    )
+
+
+@pytest.mark.parametrize("hours", [12, 6])
+async def test_a_confirmed_session_publishes_its_refund_deadline(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, hours: int
+) -> None:
+    """**The frontend reads the deadline rather than repeating the number**, so
+    a changed setting cannot leave the copy stating the old one."""
+    with_window(api_client, hours)
+    booking = await a_confirmed_session(
+        db_engine, api_client, f"cr-deadline-{hours}", starts_in=dt.timedelta(hours=20)
+    )
+
+    read = await api_client.get(f"/api/v1/sessions/{booking['id']}", headers=booking["mentee"])
+
+    body = read.json()
+    starts_at = dt.datetime.fromisoformat(body["starts_at"])
+    assert dt.datetime.fromisoformat(body["refund_until"]) == starts_at - dt.timedelta(hours=hours)
+
+
+async def test_me_publishes_the_window(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """For the credits explainer, which has no session to read a deadline from."""
+    with_window(api_client, 6)
+    booking = await a_confirmed_session(
+        db_engine, api_client, "cr-me-window", starts_in=dt.timedelta(hours=20)
+    )
+
+    me = await api_client.get("/api/v1/me", headers=booking["mentee"])
+
+    assert me.json()["mentee_cancel_refund_hours"] == 6
+
+
+async def test_a_pending_request_publishes_no_refund_deadline(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Only a confirmed session has one.** Withdrawing or declining a pending
+    request always refunds, so a deadline there would be a false warning."""
+    pending = await a_pending_request(db_engine, api_client, "cr-pending-deadline")
+
+    read = await api_client.get(
+        f"/api/v1/sessions/{pending['id']}", headers=pending["mentor_headers"]
+    )
+
+    assert read.json()["status"] == "pending_mentor_approval"
+    assert read.json()["refund_until"] is None

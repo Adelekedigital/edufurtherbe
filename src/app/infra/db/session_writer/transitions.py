@@ -22,7 +22,7 @@ from app.domain.notifications import (
     Notification,
     recipients,
 )
-from app.domain.refunds import never_agreed_refund, transition_refund
+from app.domain.refunds import RefundPolicy, never_agreed_refund, transition_refund
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
@@ -69,6 +69,7 @@ async def transition(
     payload: dict[str, Any],
     *,
     now: dt.datetime,
+    refunds: RefundPolicy,
     notify: bool = True,
 ) -> None:
     """Move one session along, and record who moved it and why.
@@ -195,11 +196,14 @@ async def transition(
 
     # **Whether the mentee's credit comes back is `domain.refunds`'s call**
     # (decision 229): a request that never became a session always refunds; a
-    # mentor's cancellation always refunds; a mentee's only with twelve hours'
-    # notice. Asked here and written here, so the status and the refund commit
-    # together — a session marked cancelled with the credit still owed is the
-    # state a retry cannot fix, because the transition already happened.
-    owed = transition_refund(rule.to, actor=role, starts_at=row["starts_at"], now=now)
+    # mentor's cancellation always refunds; a mentee's only with the
+    # deployment's notice (`refunds`, twelve hours unless configured). Asked here
+    # and written here, so the status and the refund commit together — a
+    # session marked cancelled with the credit still owed is the state a retry
+    # cannot fix, because the transition already happened.
+    owed = transition_refund(
+        rule.to, actor=role, starts_at=row["starts_at"], now=now, policy=refunds
+    )
     if owed is not None:
         await refund_credit(session, row["mentee_id"], session_id, reason=owed, now=now)
 

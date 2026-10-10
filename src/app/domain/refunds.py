@@ -19,7 +19,8 @@ writers that would have to agree.
   missed, which no single party can be blamed for.
 
 **Parameters, not constants in a handler** (the open question this closed asked
-for exactly that), so moving the window is one value. The ten-minute
+for exactly that), so moving the window is one value: since 2026-10-10 the
+deploy setting ``MENTEE_CANCEL_REFUND_HOURS``, read by :func:`refund_policy`. The ten-minute
 :data:`app.domain.sessions.CANCELLATION_CUTOFF` is a different rule — it decides
 whether cancelling is allowed at all — and is left where it is.
 """
@@ -29,14 +30,15 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 
+from app.core.config import Settings
 from app.domain.attendance import absent_party
 from app.domain.enums import CreditReason, SessionRole, SessionStatus
 
 __all__ = [
-    "REFUND_POLICY",
     "RefundPolicy",
     "never_agreed_refund",
     "no_show_refund",
+    "refund_policy",
     "transition_refund",
 ]
 
@@ -45,10 +47,22 @@ __all__ = [
 class RefundPolicy:
     #: How much notice a mentee's cancellation needs to get the credit back.
     #: Exactly this much refunds: the boundary belongs to the mentee.
-    mentee_cancel_notice: dt.timedelta = dt.timedelta(hours=12)
+    mentee_cancel_notice: dt.timedelta
 
 
-REFUND_POLICY = RefundPolicy()
+def refund_policy(settings: Settings) -> RefundPolicy:
+    """The policy this deployment runs on: the one reader of
+    `mentee_cancel_refund_hours`.
+
+    **There is no constant to fall back on**, as for :func:`join_opens`: the
+    refund and the deadline every session publishes both take this, so a caller
+    that forgets it fails to type-check rather than quietly using a stale
+    window and telling the mentee a different one.
+    """
+    return RefundPolicy(
+        mentee_cancel_notice=dt.timedelta(hours=settings.mentee_cancel_refund_hours)
+    )
+
 
 #: Terminal statuses for a request that never became a session.
 _NEVER_AGREED = frozenset({SessionStatus.DECLINED, SessionStatus.WITHDRAWN, SessionStatus.EXPIRED})
@@ -67,7 +81,7 @@ def transition_refund(
     actor: SessionRole | None,
     starts_at: dt.datetime,
     now: dt.datetime,
-    policy: RefundPolicy = REFUND_POLICY,
+    policy: RefundPolicy,
 ) -> CreditReason | None:
     """The refund a move to ``to`` owes the mentee, or ``None``.
 
