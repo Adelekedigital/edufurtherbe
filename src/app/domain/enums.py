@@ -541,6 +541,12 @@ class SessionReasonCode(StrEnum):
     EXPIRED_NO_RESPONSE = "expired_no_response"
     RESCHEDULED = "rescheduled"
     ADMIN_ACTION = "admin_action"
+    #: **None of the coded reasons**, picked by a person (owner, 2026-10-10).
+    #: A coded `other` rather than a null code, so "how often is it none of
+    #: these" is countable and tells when a new reason has earned its own code;
+    #: a null is indistinguishable from a migrated row or a client that sent
+    #: nothing. Any explanation goes in `reason_text`, which stays optional.
+    OTHER = "other"
 
 
 class ActorType(StrEnum):

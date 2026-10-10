@@ -76,6 +76,7 @@ REASON_TITLES: dict[SessionReasonCode, str] = {
     SessionReasonCode.EXPIRED_NO_RESPONSE: "No response in time",
     SessionReasonCode.RESCHEDULED: "Rescheduled",
     SessionReasonCode.ADMIN_ACTION: "Changed by EduFurther",
+    SessionReasonCode.OTHER: "Other",
 }
 
 

@@ -413,3 +413,11 @@ def test_a_link_with_no_app_origin_is_refused(name: str) -> None:
     which no mail client can open. A message that cannot link should not go."""
     with pytest.raises(UnresolvedVariableError, match=name):
         build_variables([name], context(app_base_url=""))
+
+
+def test_other_reads_as_other() -> None:
+    """**"Other" is a reason a person picks** (owner, 2026-10-10), so the email
+    names it rather than falling back to "No reason given"."""
+    built = build_variables(["reasonTitle"], context(extras={"reason_code": "other"}))
+
+    assert built["reasonTitle"] == "Other"
