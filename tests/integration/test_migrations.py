@@ -155,6 +155,8 @@ EXPECTED_TABLES = [
     # its model for why shipping it early is now cheap.
     "intake_answers",
     "intake_files",
+    # A booking's form as it stood at booking (owner, 2026-10-10).
+    "intake_form_questions",
     "intake_submissions",
     "session_type_question_options",
     "session_type_questions",

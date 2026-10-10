@@ -298,6 +298,48 @@ class IntakeAnswer(TimestampMixin, Base):
     )
 
 
+class IntakeFormQuestion(TimestampMixin, Base):
+    """One question of a booking's form, **as it stood when the booking was made**.
+
+    Answers alone cannot say what was asked: a mentor reading a booking could not
+    tell "they skipped this" from "I never asked this" (owner, 2026-10-10). So
+    booking keeps every question of the form beside the answers, answered or not,
+    with the wording, type, order and requirement it had then. A later edit to the
+    live question changes none of these.
+
+    **One row per question per submission** (`UNIQUE (submission_id,
+    question_id)`), so a form is a set. The submission cascades: the copy has no
+    meaning apart from the booking. The question **restricts**, as an answer's
+    does: a copy of a question is evidence of what was asked.
+
+    No backfill. A booking made before this table existed has no copy, and its
+    form cannot be reconstructed; readers treat it as answers-only.
+    """
+
+    __tablename__ = "intake_form_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    submission_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("intake_submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("session_type_questions.id", ondelete="RESTRICT"), nullable=False
+    )
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    question_type: Mapped[QuestionType] = mapped_column(str_enum(QuestionType), nullable=False)
+    is_required: Mapped[bool] = mapped_column(nullable=False)
+    sort_order: Mapped[int] = mapped_column(nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("submission_id", "question_id"),
+        CheckConstraint(
+            check_is_known("question_type", QuestionType), name="question_type_is_known"
+        ),
+    )
+
+
 class IntakeFile(TimestampMixin, Base):
     """A file a mentee uploaded, before and after it answers a question.
 

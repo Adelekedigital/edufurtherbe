@@ -26,6 +26,7 @@ from app.infra.db.models.education import DegreeLevel, EducationEntry, Instituti
 from app.infra.db.models.intake import (
     IntakeAnswer,
     IntakeFile,
+    IntakeFormQuestion,
     IntakeSubmission,
     SessionTypeQuestion,
     SessionTypeQuestionOption,
@@ -84,6 +85,7 @@ __all__ = [
     "Institution",
     "IntakeAnswer",
     "IntakeFile",
+    "IntakeFormQuestion",
     "IntakeSubmission",
     "Language",
     "LegalDocument",
