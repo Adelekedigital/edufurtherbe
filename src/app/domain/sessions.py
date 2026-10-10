@@ -130,6 +130,8 @@ _MENTOR_REASONS = frozenset(
         SessionReasonCode.MENTOR_UNAVAILABLE,
         SessionReasonCode.SCHEDULING_CONFLICT,
         SessionReasonCode.TECHNICAL_ISSUE,
+        # "None of these", the last choice in the list (owner, 2026-10-10).
+        SessionReasonCode.OTHER,
     }
 )
 
@@ -140,6 +142,7 @@ _MENTEE_REASONS = frozenset(
         SessionReasonCode.MENTEE_NO_LONGER_NEEDED,
         SessionReasonCode.SCHEDULING_CONFLICT,
         SessionReasonCode.TECHNICAL_ISSUE,
+        SessionReasonCode.OTHER,
     }
 )
 
