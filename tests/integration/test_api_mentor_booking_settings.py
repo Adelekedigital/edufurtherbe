@@ -351,3 +351,42 @@ async def test_a_patch_that_says_nothing_about_confirmation_leaves_it_alone(
     )
 
     assert await stored_confirmation(db_engine, mentor) is True
+
+
+# --------------------------------------------------------------------------
+# What a mentee is told before booking
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mentor_waits", "override", "expected"),
+    [(True, None, True), (False, None, False), (True, False, False), (False, True, True)],
+    ids=["inherits-waits", "inherits-instant", "offering-instant", "offering-waits"],
+)
+async def test_a_mentee_can_see_whether_an_offering_waits_for_the_mentor(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    mentor_waits: bool,
+    override: bool | None,
+    expected: bool,
+) -> None:
+    """**The public offering says whether booking it is a request.** Only the
+    mentor could read it before, so a mentee pressed "Send request" without
+    knowing the session would wait for acceptance. The value is the one booking
+    obeys: the offering's own setting, else the mentor's (#106)."""
+    mentor, _ = await as_mentor(db_engine, f"public-wait-{mentor_waits}-{override}".lower())
+    await add_session_type(db_engine, mentor, name="SOP review")
+    await set_confirmation(db_engine, mentor, mentor_waits)
+    if override is not None:
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE session_type_booking_configs c SET requires_booking_confirmation = :o "
+                    "FROM session_types t WHERE t.id = c.session_type_id AND t.mentor_user_id = :u"
+                ),
+                {"o": override, "u": mentor},
+            )
+
+    offerings = (await api_client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
+
+    assert [o["requires_booking_confirmation"] for o in offerings] == [expected]

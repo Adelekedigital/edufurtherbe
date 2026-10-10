@@ -135,6 +135,9 @@ async def test_party_keys_are_exactly_these(
         # spec; `joined_at` stays the Join press.
         "in_room_at",
         "attendance_status",
+        # The pending card's "BSc Student at FUTA": `top_qualification`.
+        "degree",
+        "institution",
     }
 
 
@@ -186,3 +189,58 @@ async def test_a_session_with_no_offering_has_none(
 
     assert body["session_type"] is None
     assert body["session_type_id"] is None
+
+
+# --------------------------------------------------------------------------
+# Who each party is (the pending card's "BSc Student at FUTA")
+# --------------------------------------------------------------------------
+
+
+async def add_degree(engine: AsyncEngine, user: UUID, degree: str, school: str) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO education_entries (user_id, school_name_raw, degree_abbreviation) "
+                "VALUES (:u, :s, :d)"
+            ),
+            {"u": user, "s": school, "d": degree},
+        )
+
+
+@pytest.mark.parametrize("read", ["detail", "list"])
+async def test_each_party_is_described_by_their_top_qualification(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, read: str
+) -> None:
+    """**What a mentor reads before accepting**: the mentee's degree and
+    institution, chosen by the rule that describes a mentor on the discovery
+    card and a reviewer on a review (`top_qualification`). A party with no
+    education has neither."""
+    mentor, mentor_auth, mentee, _ = await pair(db_engine, f"zone-degree-{read}")
+    await add_degree(db_engine, mentee, "BSc", "FUTA")
+    session_id = await make_session(db_engine, mentor, mentee)
+
+    body = (
+        await detail(api_client, session_id, mentor_auth)
+        if read == "detail"
+        else await first_row(api_client, mentor, mentor_auth)
+    )
+
+    assert body["mentee"]["degree"] == "BSc"  # type: ignore[index]
+    assert body["mentee"]["institution"] == "FUTA"  # type: ignore[index]
+    assert body["mentor"]["degree"] is None  # type: ignore[index]
+    assert body["mentor"]["institution"] is None  # type: ignore[index]
+
+
+async def test_a_deleted_party_has_no_qualification(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Gone with their name (decision #93): the session stays, the person goes."""
+    mentor, mentor_auth, mentee, _ = await pair(db_engine, "zone-degree-gone")
+    await add_degree(db_engine, mentee, "BSc", "FUTA")
+    session_id = await make_session(db_engine, mentor, mentee)
+    await delete_account(db_engine, mentee)
+
+    body = await detail(api_client, session_id, mentor_auth)
+
+    assert body["mentee"]["degree"] is None  # type: ignore[index]
+    assert body["mentee"]["institution"] is None  # type: ignore[index]

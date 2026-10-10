@@ -62,6 +62,7 @@ from app.domain.sessions import first_stage, named_stages, stage_label_problem
 from app.infra.db.booking_rules import (
     effective_duration_minutes,
     effective_min_notice_minutes,
+    effective_requires_confirmation,
     effective_window_days,
     inherits_duration,
     inherits_min_notice,
@@ -289,6 +290,8 @@ def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
             # default, else the platform's. The field stays an int.
             effective_duration_minutes().label("duration_minutes"),
             effective_min_notice_minutes().label("min_notice_minutes"),
+            # What booking will do, so a mentee is told before "Send request".
+            effective_requires_confirmation().label("requires_booking_confirmation"),
             # Resolved and clamped (Round 5): what the booking modal may show.
             effective_window_days(window).label("booking_window_days"),
             # Resolved, not read. See `_resolved_venue`.

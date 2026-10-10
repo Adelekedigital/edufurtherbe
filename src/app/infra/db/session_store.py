@@ -40,7 +40,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, case, func, literal, or_, select, tuple_
+from sqlalchemy import Select, and_, case, func, literal, or_, select, true, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -50,8 +50,9 @@ from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipa
 from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.predicates import live
+from app.infra.db.qualifications import top_qualification
 from app.infra.db.session_answer_rows import answer_previews
-from app.infra.db.session_stats import MENTEE, attendance_rate
+from app.infra.db.session_stats import MENTEE, attendance_rate, attendance_sessions
 
 __all__ = ["get_session", "is_a_party", "list_session_events", "list_sessions"]
 
@@ -88,6 +89,8 @@ _SESSION_COLUMNS = (
     # mentor rate here: that one is already on the public profile, and adding a
     # second copy scoped differently is how a number acquires two definitions.
     attendance_rate(Session.mentee_id, MENTEE).label("mentee_attendance_rate"),
+    # Its denominator, from the same base: the "(12 sessions)" beside it.
+    attendance_sessions(Session.mentee_id, MENTEE).label("mentee_attendance_sessions"),
     # **Another time the mentor offered** when ending this session (#339). Its
     # status is read from `holds.active_hold`, the rule the grid and booking
     # obey, so "active" here is exactly "still held" there.
@@ -124,6 +127,8 @@ _MENTOR = aliased(User, name="mentor_user")
 _MENTEE = aliased(User, name="mentee_user")
 _MENTOR_PROFILE = aliased(UserProfile, name="mentor_profile")
 _MENTEE_PROFILE = aliased(UserProfile, name="mentee_profile")
+_MENTOR_QUALIFICATION = top_qualification(_MENTOR.id, name="mentor_qualification")
+_MENTEE_QUALIFICATION = top_qualification(_MENTEE.id, name="mentee_qualification")
 
 #: Each party's attendance, correlated per side.
 #:
@@ -171,6 +176,13 @@ _PARTY_COLUMNS = (
     _MENTEE_PROFILE.avatar_focus_x.label("mentee_avatar_focus_x"),
     _MENTEE_PROFILE.avatar_focus_y.label("mentee_avatar_focus_y"),
     _MENTEE.timezone.label("mentee_timezone"),
+    # Each party's top qualification, the pending card's "BSc Student at
+    # FUTA". Correlated on the **live** alias, so a party who left loses it
+    # with their name.
+    _MENTOR_QUALIFICATION.c.degree.label("mentor_degree"),
+    _MENTOR_QUALIFICATION.c.institution.label("mentor_institution"),
+    _MENTEE_QUALIFICATION.c.degree.label("mentee_degree"),
+    _MENTEE_QUALIFICATION.c.institution.label("mentee_institution"),
     _attendance(Session.mentor_id, SessionParticipant.joined_at, "mentor_joined_at"),
     _attendance(Session.mentor_id, SessionParticipant.in_room_at, "mentor_in_room_at"),
     _attendance(
@@ -204,6 +216,9 @@ def _with_parties(statement: Select[Any]) -> Select[Any]:
         .outerjoin(_MENTEE, and_(_MENTEE.id == Session.mentee_id, live(_MENTEE)))
         .outerjoin(_MENTOR_PROFILE, _MENTOR_PROFILE.user_id == _MENTOR.id)
         .outerjoin(_MENTEE_PROFILE, _MENTEE_PROFILE.user_id == _MENTEE.id)
+        # One row each by construction (`limit 1`), so a page is not multiplied.
+        .outerjoin(_MENTOR_QUALIFICATION, true())
+        .outerjoin(_MENTEE_QUALIFICATION, true())
         # On its primary key and unfiltered, so no row is gained or lost.
         .outerjoin(SessionType, SessionType.id == Session.session_type_id)
         # Unique on `session_id`, so at most one row joins and the page holds.

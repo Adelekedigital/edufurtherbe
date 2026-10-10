@@ -76,6 +76,23 @@ class PartyRead(BaseModel):
             "hour is for them. `null` when they deleted their account."
         ),
     )
+    degree: str | None = Field(
+        default=None,
+        description=(
+            "The degree that best describes this party, as the discovery card "
+            "and a review's byline describe a person: their highest, then most "
+            'recent ("BSc"). With `institution`, the pending card\'s '
+            '"BSc Student at FUTA"; the wording is the client\'s. `null` with no '
+            "education entry, or when they deleted their account."
+        ),
+    )
+    institution: str | None = Field(
+        default=None,
+        description=(
+            "Where that degree is from: the registry's name, else what the person "
+            "typed. `null` as for `degree`."
+        ),
+    )
     joined_at: dt.datetime | None = Field(
         default=None,
         description=(
@@ -358,6 +375,15 @@ class SessionRead(BaseModel):
             "is why the two are never pooled."
         ),
     )
+    mentee_attendance_sessions: int = Field(
+        default=0,
+        description=(
+            "How many sessions `mentee_attendance_rate` is measured over: the "
+            '"(12 sessions)" beside "90%". The rate\'s own denominator, so '
+            "finished sessions where the mentee was expected, no-shows included. "
+            "`0` with a `null` rate is a new mentee."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object], *, opens_before: dt.timedelta) -> SessionRead:
@@ -402,6 +428,7 @@ class SessionRead(BaseModel):
                 if row.get("mentee_attendance_rate") is not None
                 else None
             ),
+            mentee_attendance_sessions=int(str(row.get("mentee_attendance_sessions") or 0)),
         )
 
 
@@ -442,6 +469,8 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
             row.get(f"{side}_avatar_focus_x"), row.get(f"{side}_avatar_focus_y")
         ),
         timezone=_text(row.get(f"{side}_timezone")),
+        degree=_text(row.get(f"{side}_degree")),
+        institution=_text(row.get(f"{side}_institution")),
         joined_at=row.get(f"{side}_joined_at"),  # type: ignore[arg-type]
         in_room_at=row.get(f"{side}_in_room_at"),  # type: ignore[arg-type]
         # A missing participant row arrives as `None` and becomes `pending`,
