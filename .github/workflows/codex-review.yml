@@ -1,9 +1,12 @@
 # Codex code review (owner, 2026-10-09; replaces the ChatGPT plugin).
 #
-# Runs on its own when a pull request is opened, reopened or marked ready for
-# review. Re-review after pushing fixes by commenting `/codex-review`: that run
-# covers only the commits since the last review. Pushes do not re-run it on
-# their own, which is the main cost control. The diff leaves out lock files,
+# **On request only, for now** (owner, 2026-10-10: about $15 in two days). The
+# `pull_request` trigger is removed, so nothing runs when a PR opens; review is
+# done locally before merge (project-conventions, *Before pushing*). The
+# `pull_request` branches below are kept so restoring the trigger is one block.
+# Review a PR by commenting `/codex-review`: the first run covers the whole PR,
+# and a later one only the commits since the last review. Pushes never run it.
+# The diff leaves out lock files,
 # docs and CI config (owner, 2026-10-09: a review costs about 100k tokens, and
 # most of the first day's went on the workflow's own PRs), so a PR touching only
 # those is not reviewed at all. `scripts/` stays in: it holds the gate's own
@@ -15,8 +18,6 @@
 name: Codex review
 
 on:
-  pull_request:
-    types: [opened, reopened, ready_for_review]
   issue_comment:
     types: [created]
 

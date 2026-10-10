@@ -165,11 +165,10 @@ on 2026-10-08, when code review moved to Codex after the push.
     full local run (~12 min) agreed with CI on every PR it was compared on, and
     a review fix made #230 pay it twice. Before committing, run the fast checks
     (format, lint, types, layers, bandit), **the test files the change
-    touches**, and the mutation batch, then `/security-review`. **No
-    `/code-review` at its default level** (amended 2026-10-08): Codex reviews
-    every PR on GitHub, through `.github/workflows/codex-review.yml` since
-    2026-10-09 (automatically on open; comment `/codex-review` to re-review
-    after fixes), and a local review, if run at all, is `/code-review low`. The full suite runs in CI, and work is done only when **CI
+    touches**, and the mutation batch, then `/security-review` and
+    `/code-review`. **Review is local again, for now** (owner, 2026-10-10, on
+    cost): Codex no longer runs on PR open, only on a `/codex-review` comment
+    the owner chooses to post. The full suite runs in CI, and work is done only when **CI
     is green on the PR's exact head commit**. Check the SHA, because a stale
     green has been reported before (#35). A CI failure is fixed on the branch
     like any red gate. Run `make check` locally only to reproduce a CI failure.
@@ -179,8 +178,8 @@ on 2026-10-08, when code review moved to Codex after the push.
     revisit it, and links. Not a chat note, not only a memory, not only a
     decision row. The how is in `project-conventions` → *Deferred work*.
 12. **Nothing is pushed with a known bug or a corner cut.** Added 2026-10-08,
-    when the local code review moved to Codex on GitHub: Codex reviews *after*
-    the push, so whatever it finds has already shipped to the branch. The bar
+    when the local code review moved to Codex on GitHub: a review after the
+    push finds what has already shipped to the branch. The bar
     before pushing is no bugs and no tech debt — not "few". Rule 11 still
     governs work **outside** a change; a shortcut taken **inside** one is not
     deferred work, and recording it as an issue does not make it shippable.
