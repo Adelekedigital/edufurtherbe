@@ -22,7 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_availability, add_session_type, make_public_mentor
 
-from conftest import api_token, bearer, fund
+from conftest import A_REASON, api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -189,7 +189,9 @@ async def test_the_mentee_withdraws_a_request_nobody_answered(
 ) -> None:
     booking = await a_booking(db_engine, api_client, "tr-withdraw")
 
-    withdrawn = await api_client.post(url(booking, "withdraw"), headers=booking["mentee"])
+    withdrawn = await api_client.post(
+        url(booking, "withdraw"), headers=booking["mentee"], json=A_REASON
+    )
 
     assert withdrawn.status_code == 200, withdrawn.text
     assert await status_of(db_engine, booking["id"]) == "withdrawn"
@@ -204,8 +206,12 @@ async def test_either_party_may_cancel_a_confirmed_session(
     by_mentor = await a_booking(db_engine, api_client, "tr-cancel-mentor", confirmed=True)
     by_mentee = await a_booking(db_engine, api_client, "tr-cancel-mentee", confirmed=True)
 
-    theirs = await api_client.post(url(by_mentor, "cancel"), headers=by_mentor["mentor"])
-    mine = await api_client.post(url(by_mentee, "cancel"), headers=by_mentee["mentee"])
+    theirs = await api_client.post(
+        url(by_mentor, "cancel"), headers=by_mentor["mentor"], json=A_REASON
+    )
+    mine = await api_client.post(
+        url(by_mentee, "cancel"), headers=by_mentee["mentee"], json=A_REASON
+    )
 
     assert theirs.status_code == 200, theirs.text
     assert mine.status_code == 200, mine.text
@@ -243,7 +249,9 @@ async def test_a_mentee_may_not_decline(
     `withdraw` and this one is not theirs."""
     booking = await a_booking(db_engine, api_client, "tr-mentee-decline")
 
-    refused = await api_client.post(url(booking, "decline"), headers=booking["mentee"])
+    refused = await api_client.post(
+        url(booking, "decline"), headers=booking["mentee"], json=A_REASON
+    )
 
     assert refused.status_code == 404, refused.text
     assert await status_of(db_engine, booking["id"]) == "pending_mentor_approval"
@@ -258,7 +266,9 @@ async def test_a_mentor_may_not_withdraw(
     own statistics."""
     booking = await a_booking(db_engine, api_client, "tr-mentor-withdraw")
 
-    refused = await api_client.post(url(booking, "withdraw"), headers=booking["mentor"])
+    refused = await api_client.post(
+        url(booking, "withdraw"), headers=booking["mentor"], json=A_REASON
+    )
 
     assert refused.status_code == 404, refused.text
 
@@ -326,7 +336,9 @@ async def test_a_confirmed_session_cannot_be_declined(
     different status because breaking an agreement is a different fact."""
     booking = await a_booking(db_engine, api_client, "tr-late-decline", confirmed=True)
 
-    refused = await api_client.post(url(booking, "decline"), headers=booking["mentor"])
+    refused = await api_client.post(
+        url(booking, "decline"), headers=booking["mentor"], json=A_REASON
+    )
 
     assert refused.status_code == 409, refused.text
     assert await status_of(db_engine, booking["id"]) == "confirmed"
@@ -340,7 +352,9 @@ async def test_a_pending_request_cannot_be_cancelled(
     rather than quietly writing the wrong status into somebody's history."""
     booking = await a_booking(db_engine, api_client, "tr-early-cancel")
 
-    refused = await api_client.post(url(booking, "cancel"), headers=booking["mentee"])
+    refused = await api_client.post(
+        url(booking, "cancel"), headers=booking["mentee"], json=A_REASON
+    )
 
     assert refused.status_code == 409, refused.text
     assert await status_of(db_engine, booking["id"]) == "pending_mentor_approval"
@@ -353,9 +367,9 @@ async def test_a_cancelled_session_cannot_be_cancelled_again(
     transition's `allowed_from`, and a table missing that guard would let a
     session be re-cancelled forever, each time writing another event."""
     booking = await a_booking(db_engine, api_client, "tr-recancel", confirmed=True)
-    await api_client.post(url(booking, "cancel"), headers=booking["mentee"])
+    await api_client.post(url(booking, "cancel"), headers=booking["mentee"], json=A_REASON)
 
-    again = await api_client.post(url(booking, "cancel"), headers=booking["mentee"])
+    again = await api_client.post(url(booking, "cancel"), headers=booking["mentee"], json=A_REASON)
 
     assert again.status_code == 409, again.text
     assert len(await events_of(api_client, booking)) == 2
@@ -383,7 +397,9 @@ async def test_a_session_cannot_be_cancelled_inside_the_cutoff(
             {"i": booking["id"]},
         )
 
-    refused = await api_client.post(url(booking, "cancel"), headers=booking["mentee"])
+    refused = await api_client.post(
+        url(booking, "cancel"), headers=booking["mentee"], json=A_REASON
+    )
 
     assert refused.status_code == 409, refused.text
     assert "10 minutes" in refused.json()["detail"]
@@ -403,7 +419,9 @@ async def test_a_session_that_has_started_cannot_be_cancelled(
             {"i": booking["id"]},
         )
 
-    refused = await api_client.post(url(booking, "cancel"), headers=booking["mentor"])
+    refused = await api_client.post(
+        url(booking, "cancel"), headers=booking["mentor"], json=A_REASON
+    )
 
     assert refused.status_code == 409, refused.text
 
@@ -429,6 +447,7 @@ async def test_a_mentee_may_not_give_the_mentors_reason(
     )
 
     assert refused.status_code == 422, refused.text
+    assert [e["pointer"] for e in refused.json()["errors"]] == ["/reason_code"]
     assert await status_of(db_engine, booking["id"]) == "confirmed"
 
 
@@ -466,16 +485,63 @@ async def test_no_party_may_give_a_system_reason(
     assert refused.status_code == 422, refused.text
 
 
-async def test_a_reason_is_optional(api_client: httpx.AsyncClient, db_engine: AsyncEngine) -> None:
-    """Requiring one turns a clear-cut decision into a form to argue with, and
-    every migrated event already carries none."""
-    booking = await a_booking(db_engine, api_client, "tr-no-reason")
+@pytest.mark.parametrize(
+    ("action", "who", "confirmed"),
+    [("decline", "mentor", False), ("withdraw", "mentee", False), ("cancel", "mentee", True)],
+)
+@pytest.mark.parametrize(
+    "body", [None, {}, {"reason_text": "Clash"}], ids=["none", "empty", "text"]
+)
+async def test_ending_a_session_needs_a_reason_code(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    action: str,
+    who: str,
+    confirmed: bool,
+    body: dict[str, str] | None,
+) -> None:
+    """**A reason is a choice a person must make** (owner, 2026-10-10), so the
+    reasons can be analysed; `other` is there for "none of these". Free text
+    alone is not enough, because the code is what reporting groups by. The
+    session stays as it was."""
+    booking = await a_booking(db_engine, api_client, f"tr-need-{action}", confirmed=confirmed)
 
-    declined = await api_client.post(url(booking, "decline"), headers=booking["mentor"])
+    refused = await api_client.post(url(booking, action), json=body, headers=booking[who])
 
-    assert declined.status_code == 200, declined.text
-    (_, event) = await events_of(api_client, booking)
-    assert event["reason_code"] is None
+    assert refused.status_code == 422, refused.text
+    if body is not None:
+        # A body with no code points at the field, so the app can mark its picker.
+        assert [e["pointer"] for e in refused.json()["errors"]] == ["/reason_code"]
+    assert await status_of(db_engine, booking["id"]) == (
+        "confirmed" if confirmed else "pending_mentor_approval"
+    )
+
+    allowed = await api_client.post(url(booking, action), json=A_REASON, headers=booking[who])
+    assert allowed.status_code == 200, allowed.text
+
+
+@pytest.mark.parametrize("action", ["decline", "withdraw", "cancel"])
+async def test_a_stranger_with_no_reason_still_gets_a_404(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, action: str
+) -> None:
+    """**The party check comes before the reason check**, or a `422` would tell
+    a stranger the session exists where a `404` tells them nothing."""
+    booking = await a_booking(db_engine, api_client, f"tr-stranger-{action}", confirmed=True)
+    stranger = uuid4()
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO users (email, auth_id, primary_role, timezone) "
+                "VALUES (:e, :a, 'mentee', 'Africa/Lagos')"
+            ),
+            {"e": f"stranger-{stranger}@example.test", "a": stranger},
+        )
+
+    refused = await api_client.post(
+        url(booking, action), json={}, headers=bearer(api_token(stranger))
+    )
+
+    assert refused.status_code == 404, refused.text
 
 
 # --------------------------------------------------------------------------
@@ -492,7 +558,7 @@ async def test_every_transition_records_where_it_came_from(
     booking = await a_booking(db_engine, api_client, "tr-log")
 
     await api_client.post(url(booking, "accept"), headers=booking["mentor"])
-    await api_client.post(url(booking, "cancel"), headers=booking["mentor"])
+    await api_client.post(url(booking, "cancel"), headers=booking["mentor"], json=A_REASON)
 
     created, accepted, cancelled = await events_of(api_client, booking)
     assert created["from_status"] is None
@@ -532,7 +598,7 @@ async def test_a_withdrawn_request_frees_its_slot(
         return [str(slot["start"]) for slot in response.json()["data"]]
 
     assert booking["starts_at"] not in await offered()
-    await api_client.post(url(booking, "withdraw"), headers=booking["mentee"])
+    await api_client.post(url(booking, "withdraw"), headers=booking["mentee"], json=A_REASON)
     assert booking["starts_at"] in await offered()
 
 
@@ -572,7 +638,7 @@ async def test_a_cancelled_session_frees_its_slot(
     booking = await a_booking(db_engine, api_client, "tr-frees", confirmed=True)
     mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
 
-    await api_client.post(url(booking, "cancel"), headers=booking["mentor"])
+    await api_client.post(url(booking, "cancel"), headers=booking["mentor"], json=A_REASON)
 
     assert booking["starts_at"] in await _offered_by(api_client, mentor, session_type)
 
@@ -590,7 +656,7 @@ async def test_a_mentor_who_is_not_free_blocks_the_time_instead(
     mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
 
     response = await api_client.post(
-        url(booking, "cancel"), headers=booking["mentor"], json={"release_slot": False}
+        url(booking, "cancel"), headers=booking["mentor"], json={**A_REASON, "release_slot": False}
     )
 
     assert response.status_code == 200, response.text
@@ -628,7 +694,7 @@ async def test_a_mentee_cannot_hold_a_mentors_hour(
     mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
 
     response = await api_client.post(
-        url(booking, "cancel"), headers=booking["mentee"], json={"release_slot": False}
+        url(booking, "cancel"), headers=booking["mentee"], json={**A_REASON, "release_slot": False}
     )
 
     assert response.status_code == 200, response.text
@@ -642,10 +708,10 @@ async def test_a_mentee_cannot_hold_a_mentors_hour(
         ).scalar_one() == 0
 
 
-async def test_cancelling_with_no_body_frees_the_hour(
+async def test_cancelling_without_release_slot_frees_the_hour(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The default, exercised through the path a client most easily takes.
+    """The default, exercised by leaving `release_slot` out.
 
     `release_slot` defaults to releasing because the two ways of being wrong are
     not equally visible: an hour offered while the mentor is busy arrives as a
@@ -655,7 +721,7 @@ async def test_cancelling_with_no_body_frees_the_hour(
     booking = await a_booking(db_engine, api_client, "tr-nobody", confirmed=True)
     mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
 
-    await api_client.post(url(booking, "cancel"), headers=booking["mentor"])
+    await api_client.post(url(booking, "cancel"), headers=booking["mentor"], json=A_REASON)
 
     assert booking["starts_at"] in await _offered_by(api_client, mentor, session_type)
 
@@ -690,7 +756,7 @@ async def test_a_session_crossing_the_mentors_midnight_can_still_be_cancelled(
         )
 
     response = await api_client.post(
-        url(booking, "cancel"), headers=booking["mentor"], json={"release_slot": False}
+        url(booking, "cancel"), headers=booking["mentor"], json={**A_REASON, "release_slot": False}
     )
 
     assert response.status_code == 200, response.text
@@ -725,7 +791,7 @@ async def test_removing_the_block_returns_the_hour(
     booking = await a_booking(db_engine, api_client, "tr-unblock", confirmed=True)
     mentor, session_type = await _mentor_and_offering(db_engine, booking["id"])
     await api_client.post(
-        url(booking, "cancel"), headers=booking["mentor"], json={"release_slot": False}
+        url(booking, "cancel"), headers=booking["mentor"], json={**A_REASON, "release_slot": False}
     )
 
     async with db_engine.begin() as conn:

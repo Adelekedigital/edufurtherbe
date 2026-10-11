@@ -60,7 +60,10 @@ DELETED_PARTY_LABELS = {"mentor": "your mentor", "mentee": "your mentee"}
 #: The dev outbox showed the cost of refusing these (2026-10-03): most bookings
 #: carry no topic and no decline carries a reason code, so `session_requested`
 #: and `request_declined` failed and nobody was told. An unknown *name* is still
-#: refused; these are only for values a real event often lacks.
+#: refused; these are only for values a real event often lacks. A decline,
+#: withdrawal or cancellation has required a code since 2026-10-10 (decision
+#: 237), so `NO_REASON_TITLE` now serves events written before that. Still
+#: needed: an offer of another time ends a session with no code.
 SESSION_TOPIC_FALLBACK = "Mentorship session"
 VENUE_FALLBACK = "Online"
 NO_REASON_TITLE = "No reason given"

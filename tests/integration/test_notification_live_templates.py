@@ -18,8 +18,9 @@ from tests.integration.test_api_notifications import Recorder, a_booking, sweep
 from tests.unit.test_template_registry import live_variables
 
 from app.domain.enums import SessionReasonCode
-from app.domain.messages import NO_REASON_TITLE, REASON_TITLES, build_variables
+from app.domain.messages import REASON_TITLES, build_variables
 from app.domain.notifications import Notification
+from conftest import A_REASON
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -49,12 +50,17 @@ async def test_a_request_with_no_topic_reaches_the_mentor_named_by_its_offering(
     assert variables["discuss"] == ""
 
 
-async def test_a_decline_with_no_reason_reaches_the_mentee(
+async def test_a_decline_with_only_a_code_reaches_the_mentee(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
+    """A code is required now (decision 237), so the bare minimum a decline
+    carries is one, with no message. The "No reason given" fallback is for older
+    events and is pinned in `test_message_variables`."""
     booking = await a_booking(db_engine, api_client, "lt-decline", confirmation=True)
     declined = await api_client.post(
-        f"/api/v1/sessions/{booking['id']}/decline", json={}, headers=booking["mentor_headers"]
+        f"/api/v1/sessions/{booking['id']}/decline",
+        json=A_REASON,
+        headers=booking["mentor_headers"],
     )
     assert declined.status_code in (200, 204), declined.text
     recorder = Recorder()
@@ -62,7 +68,7 @@ async def test_a_decline_with_no_reason_reaches_the_mentee(
     await sweep(db_engine, recorder)
 
     (variables,) = sent(recorder, Notification.REQUEST_DECLINED)
-    assert variables["reasonTitle"] == NO_REASON_TITLE
+    assert variables["reasonTitle"] == REASON_TITLES[SessionReasonCode.OTHER]
     assert variables["reasonMessage"] == ""
 
 
@@ -89,7 +95,7 @@ async def test_a_cancellation_names_who_called_it_off(
 ) -> None:
     booking = await a_booking(db_engine, api_client, "lt-cancel")
     cancelled = await api_client.post(
-        f"/api/v1/sessions/{booking['id']}/cancel", json={}, headers=booking["mentee_headers"]
+        f"/api/v1/sessions/{booking['id']}/cancel", json=A_REASON, headers=booking["mentee_headers"]
     )
     assert cancelled.status_code in (200, 204), cancelled.text
     recorder = Recorder()

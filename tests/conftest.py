@@ -126,6 +126,12 @@ def bearer(value: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {value}"}
 
 
+#: A body every party may send to decline, withdraw or cancel: a reason code is
+#: required (owner, 2026-10-10), and `other` is the one both sides may give. For
+#: tests whose subject is not the reason.
+A_REASON: dict[str, str] = {"reason_code": "other"}
+
+
 @pytest.fixture
 def api_storage() -> SupabaseStorage | None:
     """No bucket by default; overridden by the tests that upload.

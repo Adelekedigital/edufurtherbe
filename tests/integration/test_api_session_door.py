@@ -29,6 +29,7 @@ from tests.integration.test_api_meeting_provisioning import (
 )
 
 from app.infra.clients.meetings import MeetingRoom, VenueUnavailableError
+from conftest import A_REASON
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -329,7 +330,7 @@ async def test_a_cancelled_session_has_no_door_even_inside_its_hour(
     setup = await a_mentor_on(db_engine, "door-cancelled", "daily")
     session = await started(db_engine, api_client, setup, minutes_ago=-30)
     cancelled = await api_client.post(
-        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"], json=A_REASON
     )
     assert cancelled.status_code == 200, cancelled.text
     await move_start(db_engine, session["id"], minutes_ago=20)
@@ -407,7 +408,7 @@ async def test_a_cancelled_session_publishes_no_door(
     setup = await a_mentor_on(db_engine, "door-closes-cancelled", "daily")
     session = await started(db_engine, api_client, setup, minutes_ago=-30)
     await api_client.post(
-        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"], json=A_REASON
     )
 
     shown = await read_session(api_client, session, setup["mentee_headers"])

@@ -26,6 +26,7 @@ from app.domain.refunds import RefundPolicy, never_agreed_refund, transition_ref
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
+    reason_required,
     records_unavailability,
     too_late_to_cancel,
 )
@@ -70,7 +71,7 @@ async def transition(
     *,
     now: dt.datetime,
     refunds: RefundPolicy,
-    notify: bool = True,
+    offers_another_time: bool,
 ) -> None:
     """Move one session along, and record who moved it and why.
 
@@ -90,14 +91,16 @@ async def transition(
     Raises :class:`ConflictError` when the caller is the right party and the
     session is in the wrong state, and when a cancellation lands inside the
     cutoff. Raises :class:`ValidationError` for a reason code this actor may not
-    give.
+    give, or for none where one is required.
 
     **Does not commit.** The caller owns the transaction, as everything in this
     module does.
 
-    ``notify=False`` leaves the message to the caller: a decline or cancel that
-    carries a suggested time (#339) tells the mentee both in one email, sent by
-    the suggestion, rather than two seconds apart.
+    ``offers_another_time`` is a decline or cancel that carries a suggested
+    time (#339). It needs no reason code (:func:`reason_required`), and it leaves
+    the message to the caller: the suggestion tells the mentee both in one email
+    rather than two seconds apart. Required rather than defaulted, so every
+    caller says which it is.
     """
     rule = TRANSITIONS[action]
 
@@ -158,12 +161,21 @@ async def transition(
         raise ConflictError(f"a session cannot be cancelled within {minutes} minutes of its start")
 
     reason_code = payload.get("reason_code")
-    if reason_code is not None and reason_code not in rule.reasons.get(role, frozenset()):
+    if reason_code is None:
+        if reason_required(action, offers_another_time=offers_another_time):
+            raise ValidationError(
+                f"a reason_code is required to {action}",
+                field_errors=(("/reason_code", "Choose a reason; `other` if none fits."),),
+            )
+    elif reason_code not in rule.reasons.get(role, frozenset()):
         # A 422 rather than silently dropping it. Each side reports with its own
         # codes, so a mentee sending the mentor's would misfile the reason — and
         # a request that was partly honoured is worse than one refused, because
         # the client believes the reason was recorded.
-        raise ValidationError(f"{reason_code} is not a reason you may give for {action}")
+        raise ValidationError(
+            f"{reason_code} is not a reason you may give for {action}",
+            field_errors=(("/reason_code", "Not a reason your side may give."),),
+        )
 
     await session.execute(update(Session).where(Session.id == session_id).values(status=rule.to))
 
@@ -210,7 +222,7 @@ async def transition(
     # **The party who did not act.** `cancel` is the only action either of them
     # may take, which is why `recipients` needs the actor at all — for the other
     # three the answer follows from the action.
-    if not notify:
+    if offers_another_time:
         return
     told = TRANSITION_NOTICE[action]
     await enqueue(

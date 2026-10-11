@@ -543,8 +543,10 @@ class SessionEventRead(BaseModel):
     reason_code: SessionReasonCode | None = Field(
         default=None,
         description=(
-            "The coded reason, which policy runs on. Null on every migrated "
-            "event: legacy held only free text."
+            "The coded reason, which reporting groups by. Null where nothing "
+            "was coded: booking, accepting, a session that ran or that both "
+            "parties missed, a decline or cancel that offered another time "
+            "instead, and every migrated event (legacy held only free text)."
         ),
     )
     reason_text: str | None = Field(
@@ -638,7 +640,7 @@ class SessionBookingWrite(BaseModel):
 
 
 class SessionTransitionWrite(BaseModel):
-    """Why a session was declined, withdrawn or cancelled. Both fields optional.
+    """Why a session was declined, withdrawn or cancelled.
 
     **The two are not one field**, per package D6 and `SessionReasonCode`'s own
     docstring: the text is what a person wrote and the code is what policy runs
@@ -651,9 +653,8 @@ class SessionTransitionWrite(BaseModel):
     field. Each side reports with its own vocabulary — a mentee cannot file a
     cancellation as `mentor_unavailable` — so what the codes count stays true.
     **A code never decides a refund**: that is decision 229, from the actor's
-    side and the notice given. The permitted sets are not published per-role
-    here because they are the *domain's* table, not the schema's — sending one
-    you may not give tells you so by name.
+    side and the notice given. Each endpoint's description lists the codes each
+    side may give, generated from the domain's table.
 
     **Accepting takes no body at all.** Agreeing explains itself, and a reason
     field on it would be one more thing for a client to send and for policy to
@@ -663,9 +664,12 @@ class SessionTransitionWrite(BaseModel):
     reason_code: SessionReasonCode | None = Field(
         default=None,
         description=(
-            "The coded reason, which policy runs on. Optional — a required one "
-            "turns a clear-cut decision into a form to argue with, and every "
-            "migrated event carries none because legacy held only free text."
+            "The coded reason, which reporting groups by. **Required**, so the "
+            "reasons can be analysed — `other` when none fits — except when "
+            "offering another time with `suggested_starts_at`, where the offer is "
+            "the answer. Missing where required is a `422` at `/reason_code`. "
+            "Typed optional for that one exemption. Migrated events carry none, "
+            "because legacy held only free text."
         ),
     )
     reason_text: str | None = Field(

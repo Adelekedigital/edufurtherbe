@@ -45,8 +45,31 @@ from app.api.deps import (
 from app.api.schemas.common import Page
 from app.api.schemas.intake import SessionAnswerRead
 from app.api.schemas.sessions import DoorRead, JoinRead, SessionEventRead, SessionRead
+from app.domain.enums import SessionReasonCode
+from app.domain.sessions import TRANSITIONS
 
 router = APIRouter(prefix="/api/v1", tags=["sessions"])
+
+
+def reason_codes_doc(action: str, *, offers: bool) -> str:
+    """The reason codes each side may give for ``action``, as published.
+
+    **Generated from the domain's table**, never written out, so the list a
+    client reads cannot drift from the one the server enforces. Listed in the
+    enum's order, which puts `other` last. ``offers`` is whether the action's
+    body carries `suggested_starts_at`, which lifts the requirement.
+    """
+    sides = "\n".join(
+        f"- {role.value}: " + ", ".join(f"`{code}`" for code in SessionReasonCode if code in codes)
+        for role, codes in TRANSITIONS[action].reasons.items()
+    )
+    unless = ", unless a mentor offers another time with `suggested_starts_at`" if offers else ""
+    return (
+        f"**`reason_code` is required**{unless}. The codes each side may give:\n\n"
+        f"{sides}\n\n"
+        "Any other code, or none where one is required, is a `422`."
+    )
+
 
 READ_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -151,8 +174,9 @@ async def read_session(
         "A **null `actor_id`** means no person acted — an expiry or no-show "
         "sweep — or that a migrated row records an action the legacy app did "
         "not attribute. Read it alongside `actor_type`.\n\n"
-        "`reason_code` is null on every migrated event: the legacy app held "
-        "only free text, so there is nothing to code them from."
+        "`reason_code` is null where nothing was coded (see the field), "
+        "including every migrated event: the legacy app held only free text, "
+        "so there is nothing to code them from."
     ),
     responses=READ_RESPONSES,
 )
@@ -331,9 +355,11 @@ TRANSITION_RESPONSES: dict[int | str, dict[str, str]] = {
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": (
-            "The body failed validation, or `reason_code` is not one your side "
-            "of the session may give. Each side reports with its own codes, so "
-            "they are restricted per party; a code never decides a refund."
+            "The body failed validation, or `reason_code` is missing where one "
+            "is required or is not one your side of the session may give; "
+            "both point at `/reason_code`. Each side reports with its own "
+            "codes, so they are restricted per party; a code never decides a "
+            "refund."
         )
     },
 }
@@ -399,12 +425,10 @@ async def accept_session(_: AcceptedSessionDep) -> dict[str, bool]:
         "is the mentor refusing a request, that is the mentee taking one back. "
         "Both act on a request nobody has agreed to yet, which is what "
         "separates them from `cancel`.\n\n"
-        "A reason is optional. Better to give one, but requiring it turns a "
-        "clear-cut decision into a form to argue with — and every migrated "
-        "event carries none, because legacy held only free text.\n\n"
         "**`suggested_starts_at` offers another time instead** (#339): see the "
         "field. The request still ends `declined` and the credit still comes "
-        "back; the offer is separate, held for the mentee for two hours."
+        "back; the offer is separate, held for the mentee for two hours.\n\n"
+        + reason_codes_doc("decline", offers=True)
     ),
     responses=TRANSITION_RESPONSES,
 )
@@ -422,7 +446,7 @@ async def decline_session(_: DeclinedSessionDep) -> dict[str, bool]:
         "booking broken after agreement, and mentor-reliability statistics "
         "count them apart. A withdrawn request always returns your credit.\n\n"
         "The slot goes back on the grid immediately — nothing was agreed, so "
-        "there is nothing to protect."
+        "there is nothing to protect.\n\n" + reason_codes_doc("withdraw", offers=False)
     ),
     responses=TRANSITION_RESPONSES,
 )
@@ -453,17 +477,17 @@ async def withdraw_session(_: WithdrawnSessionDep) -> dict[str, bool]:
         "*unavailable*, not *reserved for somebody* — this endpoint has no way to "
         "hold time for a particular person.\n\n"
         "**The mentee's credit:** a **mentor** cancelling always refunds it, "
-        "whatever reason is given. A **mentee** cancelling gets it back with at "
-        "least **twelve hours** to go, the boundary included; inside that the "
-        "credit is used. A refund is a new `refund` lot: it never expires if the "
-        "credit it replaces never did, and otherwise expires at the end of the "
-        "current month (UTC), whatever date the original carried.\n\n"
-        "Which reason codes you may give depends on which side you are on. "
-        "Sending one you may not is a `422` that names it, rather than a "
-        "silently dropped field. The code does not decide the refund.\n\n"
+        "whatever reason is given. A **mentee** cancelling gets it back up to "
+        "the session's `refund_until` (`/me.mentee_cancel_refund_hours` before "
+        "the start), the boundary included; after that the credit is used. A "
+        "refund is a new `refund` lot: it never expires if the credit it "
+        "replaces never did, and otherwise expires at the end of the current "
+        "month (UTC), whatever date the original carried.\n\n"
         "**A mentor may offer another time instead** with `suggested_starts_at` "
         "(#339): the session still ends `cancelled`, refunded as above, and the "
-        "offered time is held for the mentee for two hours."
+        "offered time is held for the mentee for two hours.\n\n"
+        + reason_codes_doc("cancel", offers=True)
+        + " The code does not decide the refund."
     ),
     responses=TRANSITION_RESPONSES,
 )

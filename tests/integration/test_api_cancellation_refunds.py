@@ -23,6 +23,8 @@ from tests.integration.test_api_attendance import a_confirmed_session, join_url,
 from tests.integration.test_api_credit_refunds import balance_of
 from tests.integration.test_api_reminder_callback import a_pending_request
 
+from conftest import A_REASON
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 #: What `conftest.fund` gives every test mentee.
@@ -45,7 +47,7 @@ async def cancel(
     client: httpx.AsyncClient, booking: dict[str, Any], by: str, **body: Any
 ) -> httpx.Response:
     return await client.post(
-        f"/api/v1/sessions/{booking['id']}/cancel", json=body, headers=booking[by]
+        f"/api/v1/sessions/{booking['id']}/cancel", json={**A_REASON, **body}, headers=booking[by]
     )
 
 
@@ -57,8 +59,8 @@ async def cancel(
 async def test_a_mentor_cancelling_refunds_the_mentee(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """No reason given, an hour to go: the mentee still gets the credit back.
-    The reason code decides nothing, because the design sends none."""
+    """An hour to go: the mentee still gets the credit back. The reason code
+    decides nothing; codes are for reporting (decision 237)."""
     booking = await a_confirmed_session(
         db_engine, api_client, "cr-mentor", starts_in=dt.timedelta(hours=1)
     )

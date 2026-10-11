@@ -27,7 +27,7 @@ from tests.integration.factories import add_availability, add_session_type, make
 from app.domain.attendance import JOIN_CLOSES, outcome
 from app.domain.enums import SessionStatus
 from app.infra.db.session_writer import settle_attendance
-from conftest import api_token, bearer, fund
+from conftest import A_REASON, api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -434,7 +434,9 @@ async def test_a_cancelled_session_is_not_settled(
     booking = await a_confirmed_session(
         db_engine, api_client, "at-cancelled", starts_in=dt.timedelta(hours=2)
     )
-    await api_client.post(f"/api/v1/sessions/{booking['id']}/cancel", headers=booking["mentee"])
+    await api_client.post(
+        f"/api/v1/sessions/{booking['id']}/cancel", headers=booking["mentee"], json=A_REASON
+    )
     async with db_engine.begin() as conn:
         await conn.execute(
             text("UPDATE sessions SET starts_at = now() - interval '1 hour' WHERE id = :i"),
