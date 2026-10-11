@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_response_deadline import a_request, status_of, sweep
 
-from conftest import api_token, bearer
+from conftest import A_REASON, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -126,7 +126,7 @@ async def test_a_started_undated_request_cannot_be_answered(
     await undated(db_engine, request["id"], started=True)
 
     refused = await api_client.post(
-        f"/api/v1/sessions/{request['id']}/{action}", headers=request["mentor"]
+        f"/api/v1/sessions/{request['id']}/{action}", headers=request["mentor"], json=A_REASON
     )
 
     assert refused.status_code == 409, refused.text

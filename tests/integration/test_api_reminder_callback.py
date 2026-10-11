@@ -28,7 +28,7 @@ from app.domain.notifications import Notification
 from app.infra.auth.supabase import SupabaseTokenVerifier
 from app.infra.db.engine import create_session_factory
 from app.main import create_app
-from conftest import SECRET, api_token, bearer, fund_by_auth
+from conftest import A_REASON, SECRET, api_token, bearer, fund_by_auth
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -225,7 +225,9 @@ async def test_an_answered_request_gets_no_reminder(
     scheduled work, and the bug is the one somebody forgets — so the test is
     parametrised over all of them rather than asserting the shape once."""
     request = await a_pending_request(db_engine, api_client, f"cb-{action}")
-    await api_client.post(f"/api/v1/sessions/{request['id']}/{action}", headers=request[actor])
+    await api_client.post(
+        f"/api/v1/sessions/{request['id']}/{action}", headers=request[actor], json=A_REASON
+    )
 
     async with callback_client as client:
         fired = await fire(client, request["id"])
