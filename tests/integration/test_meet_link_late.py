@@ -27,6 +27,7 @@ from tests.integration.test_api_meeting_provisioning import (
 from tests.integration.test_api_reminder_callback import PATH, believing_client, signed_headers
 
 from app.domain.notifications import LAST_REMINDER_KIND, SESSION_REMINDERS
+from conftest import A_REASON
 
 # `door` wires a fake room provider and calendar onto the app for every test.
 pytestmark = [pytest.mark.db, pytest.mark.asyncio, pytest.mark.usefixtures("door")]
@@ -146,7 +147,7 @@ async def test_a_called_off_session_gets_no_meet(
     (`release_meeting` keeps the id then): the status decides, not the event."""
     setup, session = await a_meet_session(db_engine, api_client, "late-off")
     cancelled = await api_client.post(
-        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"], json=A_REASON
     )
     assert cancelled.status_code == 200, cancelled.text
     async with db_engine.begin() as conn:

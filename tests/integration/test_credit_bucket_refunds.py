@@ -20,6 +20,7 @@ from app.core.config import Settings
 from app.domain.credits import credit_ladder
 from app.infra.db.credit_store import CreditSummary, get_credit_summary
 from app.infra.db.engine import create_session_factory
+from conftest import A_REASON
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -69,7 +70,7 @@ async def book_then_decline(
     assert booked.status_code == 201, booked.text
     declined = await client.post(
         f"{SESSIONS}/{booked.json()['id']}/decline",
-        json={},
+        json=A_REASON,
         headers=await mentor_token(engine, mentor),
     )
     assert declined.status_code == 200, declined.text
@@ -149,7 +150,7 @@ async def test_two_refunds_each_go_back_to_their_own_part(
         await request_one(db_engine, api_client, f"{tag}-x", other_token, slot=index - 1)
         declined = await api_client.post(
             f"{SESSIONS}/{session_id}/decline",
-            json={},
+            json=A_REASON,
             headers=await mentor_token(db_engine, mentor),
         )
         assert declined.status_code == 200, declined.text

@@ -424,8 +424,9 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
             body,
             now=now,
             refunds=_refund_policy(request),
-            # A suggestion tells the mentee itself, in one email with the news.
-            notify=suggested is None,
+            # A suggestion needs no reason code, and tells the mentee itself, in
+            # one email with the news.
+            offers_another_time=suggested is not None,
         )
         # **Another time offered, in the same transaction** (#339): the session
         # ends as it would have, and the offer is written beside it — or, if the
@@ -478,13 +479,15 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
     # FastAPI reads it to build the request schema, so cancelling can only ask
     # its extra question by being annotated differently — and `accept` must not
     # inherit a field it would have to ignore. The body stays in one place; only
-    # the shape the client sends differs.
+    # the shape the client sends differs. **The three endings require a body**,
+    # because each requires a `reason_code` or an offer (decision 237); `accept`
+    # takes none at all.
     async def cancelling(
         session_id: UUID,
         user: CurrentUserDep,
         session: SessionDep,
         request: Request,
-        payload: SessionCancellationWrite | None = None,
+        payload: SessionCancellationWrite,
     ) -> None:
         await run(session_id, user, session, request, payload)
 
@@ -493,24 +496,31 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
         user: CurrentUserDep,
         session: SessionDep,
         request: Request,
-        payload: SessionDeclineWrite | None = None,
+        payload: SessionDeclineWrite,
     ) -> None:
         await run(session_id, user, session, request, payload)
 
-    async def ending(
+    async def withdrawing(
         session_id: UUID,
         user: CurrentUserDep,
         session: SessionDep,
         request: Request,
-        payload: SessionTransitionWrite | None = None,
+        payload: SessionTransitionWrite,
     ) -> None:
         await run(session_id, user, session, request, payload)
+
+    async def accepting(
+        session_id: UUID, user: CurrentUserDep, session: SessionDep, request: Request
+    ) -> None:
+        await run(session_id, user, session, request, None)
 
     if action == "cancel":
         return cancelling
     if action == "decline":
         return declining
-    return ending
+    if action == "withdraw":
+        return withdrawing
+    return accepting
 
 
 AcceptedSessionDep = Annotated[None, Depends(transitions("accept"))]

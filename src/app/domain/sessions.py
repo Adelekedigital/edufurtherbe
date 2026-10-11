@@ -204,6 +204,17 @@ TRANSITIONS: dict[str, Transition] = {
 }
 
 
+def reason_required(action: str, *, offers_another_time: bool) -> bool:
+    """Whether ending a session this way must carry a ``reason_code``.
+
+    **Every action that takes a reason requires one** (owner, 2026-10-10), so the
+    reasons can be analysed; ``other`` covers "none of these". Accepting takes
+    none. **Offering another time instead is exempt** (#339, owner the same day):
+    the offer is the mentor's answer, and the app asks no reason on that path.
+    """
+    return bool(TRANSITIONS[action].reasons) and not offers_another_time
+
+
 def too_late_to_cancel(starts_at: dt.datetime, now: dt.datetime) -> bool:
     """Whether the start is inside :data:`CANCELLATION_CUTOFF`.
 

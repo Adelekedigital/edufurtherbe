@@ -31,7 +31,7 @@ from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.domain.refunds import refund_policy
 from app.domain.suggestions import SUGGESTION_REMINDER_KIND, SUGGESTION_REMINDER_LEAD
-from conftest import PLATFORM_WINDOW
+from conftest import A_REASON, PLATFORM_WINDOW
 
 #: The deployment default: `MENTEE_CANCEL_REFUND_HOURS` unset.
 REFUNDS = refund_policy(Settings(_env_file=None))  # type: ignore[call-arg]
@@ -63,6 +63,8 @@ async def another_slot(client: httpx.AsyncClient, booking: dict[str, Any]) -> st
 async def end_with_suggestion(
     client: httpx.AsyncClient, booking: dict[str, Any], action: str, at: str, *, by: str = "mentor"
 ) -> httpx.Response:
+    """**No `reason_code`, deliberately**: offering another time is exempt from
+    the required reason (`reason_required`), and every test here leans on it."""
     return await client.post(
         f"/api/v1/sessions/{booking['id']}/{action}",
         json={"suggested_starts_at": at, "reason_text": "Clash that day"},
@@ -155,7 +157,9 @@ async def test_a_plain_decline_still_sends_the_decline_email(
     """The positive case for `notify`: no suggestion, the usual message."""
     booking = await a_booking(db_engine, api_client, "sg-plain")
 
-    await api_client.post(f"/api/v1/sessions/{booking['id']}/decline", headers=booking["mentor"])
+    await api_client.post(
+        f"/api/v1/sessions/{booking['id']}/decline", headers=booking["mentor"], json=A_REASON
+    )
 
     assert await outbox_types(db_engine, booking["id"]) == ["request_declined"]
     assert await suggestion_of(api_client, booking) is None
@@ -301,7 +305,7 @@ async def test_a_booking_racing_a_suggestion_is_refused_at_the_lock(
             {},
             now=now,
             refunds=REFUNDS,
-            notify=False,
+            offers_another_time=True,
         )
         await suggest_time(
             first,
@@ -750,7 +754,7 @@ async def test_a_stranger_racing_into_the_held_break_is_refused_at_the_lock(
             {},
             now=now,
             refunds=REFUNDS,
-            notify=False,
+            offers_another_time=True,
         )
         await suggest_time(
             first,

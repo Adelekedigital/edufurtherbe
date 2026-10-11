@@ -21,7 +21,7 @@ from tests.integration.meeting_fakes import FakeCalendar, FakeDoor, FakeRooms
 
 from app.domain.messages import MessageContext, build_variables
 from app.infra.clients.meetings import VenueUnavailableError
-from conftest import api_token, bearer, fund_by_auth
+from conftest import A_REASON, api_token, bearer, fund_by_auth
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -496,7 +496,7 @@ async def test_declining_mints_nothing(
     session = await book(api_client, setup)
 
     await api_client.post(
-        f"/api/v1/sessions/{session['id']}/decline", headers=setup["mentor_headers"]
+        f"/api/v1/sessions/{session['id']}/decline", headers=setup["mentor_headers"], json=A_REASON
     )
 
     assert rooms.calls == []
@@ -729,7 +729,7 @@ async def test_cancelling_removes_the_calendar_event(
     session = await book(api_client, setup)
 
     await api_client.post(
-        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"], json=A_REASON
     )
 
     assert tracking.cancelled == ["event-1"]
@@ -749,7 +749,7 @@ async def test_declining_removes_it_too(
     )
 
     await api_client.post(
-        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentor_headers"]
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentor_headers"], json=A_REASON
     )
 
     assert tracking.cancelled == ["event-1"]
@@ -789,7 +789,7 @@ async def test_a_session_with_no_event_asks_nothing(
         )
 
     await api_client.post(
-        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"], json=A_REASON
     )
 
     assert calendar.cancelled == []
@@ -819,7 +819,7 @@ async def test_a_provider_that_refuses_leaves_the_id_in_place(
     session = await book(api_client, setup)
 
     cancelled = await api_client.post(
-        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"]
+        f"/api/v1/sessions/{session['id']}/cancel", headers=setup["mentee_headers"], json=A_REASON
     )
 
     assert cancelled.status_code == 200, cancelled.text

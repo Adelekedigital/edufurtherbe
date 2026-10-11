@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import make_bookable_mentor
 from tests.integration.test_api_me_mentee_sessions import sign_in
 
+from conftest import A_REASON
+
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 URL = "/api/v1/me"
@@ -209,7 +211,9 @@ async def test_a_mentor_cannot_answer_a_request_past_its_deadline(
     headers = await sign_in(db_engine, mentor)
 
     refused = await api_client.post(f"/api/v1/sessions/{lapsed}/accept", headers=headers)
-    declined = await api_client.post(f"/api/v1/sessions/{lapsed}/decline", headers=headers)
+    declined = await api_client.post(
+        f"/api/v1/sessions/{lapsed}/decline", headers=headers, json=A_REASON
+    )
     accepted = await api_client.post(f"/api/v1/sessions/{live}/accept", headers=headers)
 
     assert refused.status_code == 409, refused.text

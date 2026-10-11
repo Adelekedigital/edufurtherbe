@@ -22,7 +22,7 @@ from tests.integration.factories import add_availability, add_session_type, make
 from app.domain.notifications import Channel, Notification
 from app.infra.db.outbox import MAX_ATTEMPTS, drain
 from app.infra.db.session_writer import expire_requests
-from conftest import api_token, bearer, fund
+from conftest import A_REASON, api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -184,10 +184,14 @@ async def test_a_cancellation_queues_for_whoever_did_not_cancel(
     by_mentee = await a_booking(db_engine, api_client, "nf-cancel-b")
 
     await api_client.post(
-        f"/api/v1/sessions/{by_mentor['id']}/cancel", headers=by_mentor["mentor_headers"]
+        f"/api/v1/sessions/{by_mentor['id']}/cancel",
+        headers=by_mentor["mentor_headers"],
+        json=A_REASON,
     )
     await api_client.post(
-        f"/api/v1/sessions/{by_mentee['id']}/cancel", headers=by_mentee["mentee_headers"]
+        f"/api/v1/sessions/{by_mentee['id']}/cancel",
+        headers=by_mentee["mentee_headers"],
+        json=A_REASON,
     )
 
     theirs = [

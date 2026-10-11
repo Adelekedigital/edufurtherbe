@@ -23,6 +23,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_booking import a_bookable_offering, a_mentee
 
+from conftest import A_REASON
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 SESSIONS = "/api/v1/sessions"
@@ -121,7 +123,7 @@ async def test_a_declined_request_returns_the_credit(
 
     declined = await api_client.post(
         f"{SESSIONS}/{session_id}/decline",
-        json={},
+        json=A_REASON,
         headers=await mentor_token(db_engine, mentor),
     )
 
@@ -143,7 +145,9 @@ async def test_a_withdrawn_request_returns_the_credit(
     """The mentee changed their mind before anybody committed anything."""
     mentee, _, token, session_id = await a_request(db_engine, api_client, "rf-withdraw")
 
-    withdrawn = await api_client.post(f"{SESSIONS}/{session_id}/withdraw", json={}, headers=token)
+    withdrawn = await api_client.post(
+        f"{SESSIONS}/{session_id}/withdraw", json=A_REASON, headers=token
+    )
 
     assert withdrawn.status_code == 200, withdrawn.text
     assert await balance_of(db_engine, mentee) == 1
@@ -222,7 +226,7 @@ async def test_the_refunded_credit_is_a_fresh_lot(
 
     await api_client.post(
         f"{SESSIONS}/{session_id}/decline",
-        json={},
+        json=A_REASON,
         headers=await mentor_token(db_engine, mentor),
     )
 
@@ -246,7 +250,7 @@ async def test_the_refund_can_be_spent_again(
     mentee, mentor, token, session_id = await a_request(db_engine, api_client, "rf-respend")
     await api_client.post(
         f"{SESSIONS}/{session_id}/decline",
-        json={},
+        json=A_REASON,
         headers=await mentor_token(db_engine, mentor),
     )
 
