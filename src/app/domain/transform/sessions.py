@@ -95,6 +95,7 @@ from app.domain.enums import (
     SessionRole,
     SessionStatus,
 )
+from app.domain.sessions import LIVE_SESSION_STATUSES
 from app.domain.transform.availability import CREATOR_FIELD, DroppedRow
 from app.domain.transform.identity import TransformError
 from app.domain.transform.profiles import (
@@ -695,9 +696,6 @@ def _terminal_actor(
     return cancelled_by, ActorType.USER
 
 
-GUARDED_STATUSES = frozenset({SessionStatus.PENDING_MENTOR_APPROVAL, SessionStatus.CONFIRMED})
-
-
 def overlapping_windows(sessions: list[SessionRow]) -> list[Disagreement]:
     """Live windows colliding for one mentor or one mentee — the extract-time
     pre-flight.
@@ -723,7 +721,7 @@ def _overlaps_for(sessions: list[SessionRow], side: str) -> list[Disagreement]:
     """One constraint's worth of overlaps: the same window for the same party."""
     party = attrgetter(f"{side}_bubble_id")
     live = sorted(
-        (row for row in sessions if row.status in GUARDED_STATUSES),
+        (row for row in sessions if row.status in LIVE_SESSION_STATUSES),
         key=lambda row: (party(row), row.starts_at),
     )
     found: list[Disagreement] = []

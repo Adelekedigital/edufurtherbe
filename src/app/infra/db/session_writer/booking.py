@@ -61,7 +61,7 @@ from app.domain.notifications import (
 from app.domain.sessions import (
     respond_by,
 )
-from app.infra.clients.scheduler import SchedulerError
+from app.infra.clients.scheduler import SchedulerError, SchedulerPort
 from app.infra.db.booking_rules import (
     effective_break_minutes,
     effective_duration_minutes,
@@ -181,7 +181,7 @@ async def book_session(
     payload: dict[str, Any],
     *,
     now: dt.datetime,
-    scheduler: Any = None,
+    scheduler: SchedulerPort | None = None,
     callback_url: str | None = None,
     external_busy: Any = None,
     require_answers: bool,

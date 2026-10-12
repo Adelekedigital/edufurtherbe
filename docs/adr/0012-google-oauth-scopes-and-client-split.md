@@ -169,6 +169,9 @@ and calendar live in separate Cloud projects.**
    a write target and an on-demand free/busy read, never polled and never
    mirrored — is untouched and still governs.
 
+   *(2026-10-12: the port exists — `infra/clients/meetings.CalendarPort`, chosen
+   by `calendar_for(settings)`; decision 239.)*
+
    The reason is in the two records themselves rather than in a new preference.
    ADR 0004 was written believing calendar needed the **sensitive** tier, so
    verification was unavoidable and managed auth looked like help. The scope

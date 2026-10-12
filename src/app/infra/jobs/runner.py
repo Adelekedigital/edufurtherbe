@@ -20,11 +20,11 @@ from app.domain.credits import credit_ladder
 from app.domain.institutions import CatalogueError, CatalogueRow, to_catalogue_row
 from app.infra.clients.hipolabs import FileCatalogue, HipolabsCatalogue
 from app.infra.clients.meetings import (
-    DailyRooms,
-    GoogleCalendar,
-    NullCalendar,
-    NullRooms,
+    CalendarPort,
+    RoomsPort,
+    calendar_for,
     free_busy,
+    rooms_for,
 )
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier, notifier_for
 from app.infra.db.calendar_store import check_connections, free_busy_reader
@@ -145,25 +145,12 @@ class RuntimeJobs:
     def _notifier(self) -> LoopsNotifier | NullNotifier:
         return notifier_for(self.settings)
 
-    def _calendar(self) -> GoogleCalendar | NullCalendar:
-        settings = self.settings
-        if not (
-            settings.google_oauth_client_id
-            and settings.google_oauth_client_secret
-            and settings.google_calendar_refresh_token
-        ):
-            return NullCalendar()
-        return GoogleCalendar(
-            client_id=settings.google_oauth_client_id,
-            client_secret=settings.google_oauth_client_secret.get_secret_value(),
-            refresh_token=settings.google_calendar_refresh_token.get_secret_value(),
-            calendar_id=settings.google_calendar_id,
-        )
+    def _calendar(self) -> CalendarPort:
+        return calendar_for(self.settings)
 
-    def _rooms(self) -> DailyRooms | NullRooms:
+    def _rooms(self) -> RoomsPort:
         """Daily's client for the meeting records, or none when unconfigured."""
-        key = self.settings.daily_api_key
-        return DailyRooms(key.get_secret_value()) if key else NullRooms()
+        return rooms_for(self.settings)
 
     def _calendar_health(self) -> dict[str, str] | None:
         settings = self.settings

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import exists, select
@@ -24,7 +23,7 @@ from app.domain.notifications import (
     recipients,
     session_reminders_for,
 )
-from app.infra.clients.scheduler import SchedulerError
+from app.infra.clients.scheduler import SchedulerError, SchedulerPort
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import (
     Session,
@@ -39,7 +38,7 @@ def schedule_session_reminders(
     session_id: UUID,
     starts_at: dt.datetime,
     *,
-    scheduler: Any,
+    scheduler: SchedulerPort | None,
     callback_url: str,
     now: dt.datetime,
 ) -> int:

@@ -44,7 +44,7 @@ from app.domain.notifications import (
 )
 from app.domain.refunds import no_show_refund
 from app.infra.clients.daily_presence import Sighting
-from app.infra.clients.meetings import VenueUnavailableError
+from app.infra.clients.meetings import RoomsPort, VenueUnavailableError
 from app.infra.db.credit_writer import refund_credit
 from app.infra.db.models.sessions import (
     Session,
@@ -655,7 +655,7 @@ async def confirm_presence(
     session: AsyncSession,
     *,
     now: dt.datetime,
-    rooms: Any,
+    rooms: RoomsPort,
     budget: dt.timedelta = RECORDS_READ_BUDGET,
 ) -> PresenceCheck:
     """Check Daily's meeting records for every party no webhook reported, before

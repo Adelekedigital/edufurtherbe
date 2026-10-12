@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -24,7 +23,7 @@ from app.domain.enums import (
 )
 from app.domain.meetings import plan_for
 from app.domain.messages import session_page_url
-from app.infra.clients.meetings import VenueUnavailableError, room_name
+from app.infra.clients.meetings import CalendarPort, RoomsPort, VenueUnavailableError, room_name
 from app.infra.db.models.sessions import (
     Session,
 )
@@ -39,8 +38,8 @@ async def provision_meeting(
     session: AsyncSession,
     session_id: UUID,
     *,
-    rooms: Any,
-    calendar: Any,
+    rooms: RoomsPort,
+    calendar: CalendarPort,
     app_base_url: str,
 ) -> None:
     """Give a newly confirmed session somewhere to meet. Does not commit.
@@ -181,7 +180,9 @@ async def provision_meeting(
     )
 
 
-async def add_meet_link(session: AsyncSession, session_id: UUID, *, calendar: Any) -> str | None:
+async def add_meet_link(
+    session: AsyncSession, session_id: UUID, *, calendar: CalendarPort
+) -> str | None:
     """Patch the Meet onto a session's calendar event, and store its link (#384).
     Returns the session's link, or ``None`` if it has none. Does not commit.
 
@@ -254,7 +255,9 @@ async def _stored_link(session: AsyncSession, session_id: UUID) -> str | None:
     return str(stored) if stored else None
 
 
-async def release_meeting(session: AsyncSession, session_id: UUID, *, calendar: Any) -> None:
+async def release_meeting(
+    session: AsyncSession, session_id: UUID, *, calendar: CalendarPort
+) -> None:
     """Remove the calendar event a session no longer needs. Does not commit.
 
     **The partner fix to `provision_meeting`, and it was missing.**

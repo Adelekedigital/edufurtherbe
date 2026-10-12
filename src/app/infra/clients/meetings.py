@@ -50,11 +50,12 @@ import logging
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlencode
 
 import httpx
 
+from app.core.config import Settings
 from app.core.errors import UpstreamError, ValidationError
 from app.domain.availability import CALENDAR_REVOKED, UtcInterval
 from app.domain.enums import ConferencingProvider
@@ -137,6 +138,48 @@ class CalendarEvent:
     external_id: str
 
 
+class RoomsPort(Protocol):
+    """What the session code needs of a room provider. `DailyRooms` and
+    `NullRooms` both satisfy it, and mypy holds them to it through `rooms_for`."""
+
+    def create(
+        self, *, name: str, opens_at: dt.datetime, closes_at: dt.datetime
+    ) -> MeetingRoom: ...
+
+    def token_for(
+        self,
+        *,
+        room: str,
+        user_id: str,
+        user_name: str,
+        is_owner: bool,
+        opens_at: dt.datetime,
+        closes_at: dt.datetime,
+    ) -> str: ...
+
+    def sightings(self, room: str) -> list[Sighting]: ...
+
+
+class CalendarPort(Protocol):
+    """What the session code needs of the platform calendar (ADR 0012's
+    CalendarPort). `GoogleCalendar` and `NullCalendar` both satisfy it."""
+
+    def create_event(
+        self,
+        *,
+        organiser_id: str,
+        attendee_emails: Sequence[str],
+        starts_at: dt.datetime,
+        duration_minutes: int,
+        summary: str,
+        join_url: str | None,
+    ) -> CalendarEvent | None: ...
+
+    def add_conference(self, external_id: str, *, request_id: str) -> str: ...
+
+    def cancel_event(self, external_id: str) -> None: ...
+
+
 class NullRooms:
     """Creates nothing and says so. The default."""
 
@@ -150,6 +193,21 @@ class NullRooms:
             f"no room provider configured — cannot create {name!r} "
             f"for {opens_at.isoformat()}-{closes_at.isoformat()}"
         )
+
+    def token_for(
+        self,
+        *,
+        room: str,
+        user_id: str,
+        user_name: str,
+        is_owner: bool,
+        opens_at: dt.datetime,
+        closes_at: dt.datetime,
+    ) -> str:
+        """A Daily room made while a key was set, asked for after it was removed:
+        no door, which `/door` answers as such rather than as a 500."""
+        del user_id, user_name, is_owner, opens_at, closes_at
+        raise VenueUnavailableError(f"no room provider configured — no token for {room!r}")
 
 
 class DailyRooms:
@@ -976,3 +1034,33 @@ def room_name(session_id: str, provider: ConferencingProvider) -> str:
     history and screenshots — and a room name is not access-controlled.
     """
     return f"ef-{provider}-{session_id}"
+
+
+def rooms_for(settings: Settings) -> RoomsPort:
+    """Daily when a key is set, otherwise `NullRooms`. The one place either is
+    chosen, for the request path and the job runner alike."""
+    key = settings.daily_api_key
+    return DailyRooms(key.get_secret_value()) if key else NullRooms()
+
+
+def calendar_for(settings: Settings) -> CalendarPort:
+    """The platform's Google calendar, or `NullCalendar`. The one place either is
+    chosen.
+
+    **All three or none.** A refresh token is useless without the client that
+    minted it, and two of three configured is the shape most likely to be a
+    half-finished setup — failing to `NullCalendar` there is quieter than
+    failing every booking with an OAuth error.
+    """
+    if not (
+        settings.google_oauth_client_id
+        and settings.google_oauth_client_secret
+        and settings.google_calendar_refresh_token
+    ):
+        return NullCalendar()
+    return GoogleCalendar(
+        client_id=settings.google_oauth_client_id,
+        client_secret=settings.google_oauth_client_secret.get_secret_value(),
+        refresh_token=settings.google_calendar_refresh_token.get_secret_value(),
+        calendar_id=settings.google_calendar_id,
+    )

@@ -46,16 +46,13 @@ from app.domain.enums import MeetingProvider, SessionStatus
 from app.domain.refunds import RefundPolicy, refund_policy
 from app.domain.sessions import TRANSITIONS
 from app.infra.clients.meetings import (
-    DailyRooms,
-    GoogleCalendar,
-    NullCalendar,
-    NullRooms,
+    CalendarPort,
+    RoomsPort,
     VenueUnavailableError,
+    calendar_for,
+    rooms_for,
 )
-from app.infra.clients.scheduler import (
-    NullScheduler,
-    QStashScheduler,
-)
+from app.infra.clients.scheduler import SchedulerPort, scheduler_for
 from app.infra.db.idempotency import Replayed, record_response
 
 # `get_session` is aliased: this module already has one, and it is the **database
@@ -197,7 +194,7 @@ async def viewer_session_events(
 
 #: What the fingerprint and the stored row call this endpoint. One string, so a
 #: replay can never be served across endpoints because two literals drifted.
-def _rooms(request: Request) -> Any:
+def _rooms(request: Request) -> RoomsPort:
     """The room provider, or the null one.
 
     **Read off `app.state` rather than constructed here**, following
@@ -205,7 +202,7 @@ def _rooms(request: Request) -> Any:
     exists, and everything else keeps working against a default that creates
     nothing. `main.py` and this module are the sanctioned wiring points.
     """
-    wired = getattr(request.app.state, "meeting_rooms", None)
+    wired: RoomsPort | None = getattr(request.app.state, "meeting_rooms", None)
     if wired is not None:
         return wired
     # **Built per request rather than at startup**, so a key added to the
@@ -213,8 +210,7 @@ def _rooms(request: Request) -> Any:
     # so a test that sets no key gets the null adapter without unsetting
     # anything. The client it constructs is cheap; Daily is called at most twice
     # per session.
-    key = _configured(request).daily_api_key
-    return DailyRooms(key.get_secret_value()) if key else NullRooms()
+    return rooms_for(_configured(request))
 
 
 def _join_lead(request: Request) -> dt.timedelta:
@@ -254,27 +250,11 @@ async def _provision(request: Request, session: AsyncSession, session_id: UUID) 
     )
 
 
-def _calendar(request: Request) -> Any:
-    wired = getattr(request.app.state, "calendar", None)
+def _calendar(request: Request) -> CalendarPort:
+    wired: CalendarPort | None = getattr(request.app.state, "calendar", None)
     if wired is not None:
         return wired
-    settings = _configured(request)
-    # **All three or none.** A refresh token is useless without the client that
-    # minted it, and two of three configured is the shape most likely to be a
-    # half-finished setup — failing to `NullCalendar` there is quieter than
-    # failing every booking with an OAuth error.
-    if not (
-        settings.google_oauth_client_id
-        and settings.google_oauth_client_secret
-        and settings.google_calendar_refresh_token
-    ):
-        return NullCalendar()
-    return GoogleCalendar(
-        client_id=settings.google_oauth_client_id,
-        client_secret=settings.google_oauth_client_secret.get_secret_value(),
-        refresh_token=settings.google_calendar_refresh_token.get_secret_value(),
-        calendar_id=settings.google_calendar_id,
-    )
+    return calendar_for(_configured(request))
 
 
 #: Where QStash is told to call back. One constant, because the value is
@@ -356,7 +336,7 @@ async def booked_session(
 BookedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(booked_session)]
 
 
-def _scheduler(request: Request) -> Any:
+def _scheduler(request: Request) -> SchedulerPort:
     """The real scheduler when a token is configured, and a loud nothing else.
 
     Built per call rather than wired at startup, following `_rooms`: a token
@@ -369,14 +349,10 @@ def _scheduler(request: Request) -> Any:
     needed to assert *that a reminder was published* rather than what happened
     when one was: there was no seam to put a fake in.
     """
-    wired = getattr(request.app.state, "scheduler", None)
+    wired: SchedulerPort | None = getattr(request.app.state, "scheduler", None)
     if wired is not None:
         return wired
-    settings = _configured(request)
-    token = settings.qstash_token
-    return (
-        QStashScheduler(token.get_secret_value(), settings.qstash_url) if token else NullScheduler()
-    )
+    return scheduler_for(_configured(request))
 
 
 def _reminder_callback_url(request: Request) -> str | None:
