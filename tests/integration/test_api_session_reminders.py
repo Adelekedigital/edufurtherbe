@@ -29,7 +29,8 @@ from tests.integration.test_api_reminder_callback import PATH, believing_client,
 from app.core.config import Settings
 from app.domain.notifications import SESSION_REMINDERS, Notification
 from app.infra.clients.scheduler import SchedulerError
-from app.infra.db.session_writer import remind_before_session, schedule_session_reminders
+from app.infra.db.session_writer import remind_before_session
+from app.infra.db.session_writer.reminders import schedule_session_reminders
 
 pytestmark = pytest.mark.db
 

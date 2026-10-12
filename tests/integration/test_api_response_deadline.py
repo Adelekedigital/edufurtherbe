@@ -345,3 +345,28 @@ async def test_the_freed_slot_can_be_booked_by_somebody_else(
     )
 
     assert rebooked.status_code == 201, rebooked.text
+
+
+async def test_an_expired_request_leaves_no_calendar_event(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The sweep releases what it ends, like every other ending. No path gives a
+    pending request an event today, so the event is seeded: this pins the
+    sweep's release, which nothing tested before, for whichever path first
+    gives a pending request an invite."""
+    from tests.integration.meeting_fakes import FakeCalendar
+
+    request = await a_request(db_engine, api_client, "rb-event")
+    await make_overdue(db_engine, request["id"])
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET external_calendar_event_id = 'evt-9' WHERE id = :i"),
+            {"i": request["id"]},
+        )
+    calendar = FakeCalendar()
+
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
+        assert await expire_requests(session, now=dt.datetime.now(dt.UTC), calendar=calendar) == 1
+        await session.commit()
+
+    assert calendar.cancelled == ["evt-9"]

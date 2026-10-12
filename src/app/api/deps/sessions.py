@@ -68,13 +68,13 @@ from app.infra.db.session_store import (
     list_sessions,
 )
 from app.infra.db.session_writer import (
+    FollowUps,
     add_meet_link,
     book_session,
     door_row,
-    provision_meeting,
+    on_confirmed,
+    on_ended,
     record_arrival,
-    release_meeting,
-    schedule_session_reminders,
     suggest_time,
     transition,
 )
@@ -235,17 +235,14 @@ def _refund_policy(request: Request) -> RefundPolicy:
 RefundPolicyDep = Annotated[RefundPolicy, Depends(_refund_policy)]
 
 
-async def _provision(request: Request, session: AsyncSession, session_id: UUID) -> None:
-    """Give a confirmed session its venue and invite, wired from this app.
-
-    The one way the two confirmation points call `provision_meeting`, so a new
-    argument cannot reach one of them and not the other.
-    """
-    await provision_meeting(
-        session,
-        session_id,
+def _follow_ups(request: Request) -> FollowUps:
+    """What `on_confirmed` needs, wired from this app: the one place both
+    confirmation points get it, so a new argument reaches both."""
+    return FollowUps(
         rooms=_rooms(request),
         calendar=_calendar(request),
+        scheduler=_scheduler(request),
+        callback_url=_reminder_callback_url(request),
         app_base_url=_configured(request).app_base_url or "",
     )
 
@@ -303,11 +300,14 @@ async def booked_session(
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
 
+    # One instant for the booking and its reminders, so a nudge the booking
+    # counted as ahead is not dropped as past after the venue calls.
+    now = dt.datetime.now(dt.UTC)
     session_id = await book_session(
         session,
         user["id"],
         payload.model_dump(),
-        now=dt.datetime.now(dt.UTC),
+        now=now,
         scheduler=_scheduler(request),
         callback_url=_reminder_callback_url(request),
         external_busy=_free_busy(request),
@@ -316,11 +316,10 @@ async def booked_session(
     )
     # **In the booking's own transaction**, so a session cannot be committed
     # without whatever venue it was going to get. It no-ops unless the session
-    # confirmed — a request that waits for the mentor gets its link at
-    # `/accept` — and that guard is inside `provision_meeting` rather than here,
-    # because this call site and the transition one would both have to remember
-    # it.
-    await _provision(request, session, session_id)
+    # confirmed — a request that waits for the mentor gets its venue and
+    # reminders at `/accept` — and that guard is inside `on_confirmed`, so
+    # neither confirmation point has to remember it.
+    await on_confirmed(session, session_id, _follow_ups(request), now=now)
     row = await get_session_row(session, session_id, user["id"])
     if row is None:  # pragma: no cover - the row was just written in this transaction
         raise NotFoundError("no such session")
@@ -426,29 +425,14 @@ def transitions(action: str) -> Callable[..., Awaitable[None]]:
         # that produces `confirmed` — declining, withdrawing and cancelling all
         # end a session rather than starting one.
         if action == "accept":
-            await _provision(request, session, session_id)
-            # **The second place a session becomes real**, and therefore the
-            # second place its reminders are published. Booking covers the
-            # offering that confirms itself; this covers the one that waited.
-            # Missing it would leave every confirmation-required session
-            # silently unreminded — which is exactly the shape of gap that made
-            # `release_meeting` necessary.
-            row = await get_session_row(session, session_id, user["id"])
-            if row is not None:
-                await asyncio.to_thread(
-                    schedule_session_reminders,
-                    session_id,
-                    row["starts_at"],
-                    scheduler=_scheduler(request),
-                    callback_url=_reminder_callback_url(request) or "",
-                    now=dt.datetime.now(dt.UTC),
-                )
+            # The second place a session becomes real: booking covers the
+            # offering that confirms itself, this the one that waited.
+            await on_confirmed(session, session_id, _follow_ups(request), now=now)
         else:
-            # **Every other transition ends the session**, and an ended session
-            # must not leave a live event in either calendar. Decline, withdraw
+            # **Every other transition ends the session.** Decline, withdraw
             # and cancel are the three; `accept` is the only one that creates
             # rather than releases.
-            await release_meeting(session, session_id, calendar=_calendar(request))
+            await on_ended(session, session_id, calendar=_calendar(request))
         await session.commit()
 
     # **Two signatures over one body**, because the annotation is the contract.
