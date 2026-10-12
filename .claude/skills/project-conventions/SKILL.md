@@ -499,22 +499,24 @@ was written.
    exact-field guard**, and a new endpoint declares a `response_model` — an
    untyped `dict` publishes an arbitrary object, and a generated client loses
    the field entirely.
-8. **`/security-review` and `/code-review`**, always, with every finding fixed
-   or answered before the push. **Local review is the merge gate, for now**
-   (owner, 2026-10-10: Codex cost about $15 in two days).
+8. **`/security-review` and `/code-review`** (medium effort; low for Tier 3),
+   always, with every finding fixed or answered before the push. **And the
+   GitHub reviewer after it** (below): two reviews, because each has caught
+   what the other missed (owner, 2026-10-12).
 
 Then push, and the work is done when CI is green on the PR's exact head commit
-and the local review's findings are fixed or answered in the PR body. The
-GitHub reviewer (`.github/workflows/code-reviewer.yml`) never runs when a PR
-opens; it runs only on a `/code-reviewer` comment, which the owner posts when a
-PR is worth the spend. When it does run, the loop below applies.
+**and** the local and GitHub reviewers' findings are all fixed or answered. The reviewer
+(`.github/workflows/code-reviewer.yml`) never runs on its own; **the builder
+comments `/code-reviewer` on every PR that changes code** (owner, 2026-10-12,
+once Claude's monthly API credit paid for it; it had been owner-only since
+2026-10-10 on Codex's cost). A docs- or CI-only PR is skipped: the reviewer
+excludes those paths and would only answer "nothing to review".
 
 ## GitHub review loop
 
-For a PR the owner sends to the GitHub reviewer, recorded 2026-10-09 for Codex.
-**Every review is by comment, never automatic** (since 2026-10-10): neither
-opening a PR nor pushing runs one, which keeps the cost to the rounds someone
-chose to run.
+For every PR that changes code, recorded 2026-10-09 for Codex. **Every review
+is by comment, never automatic** (since 2026-10-10): neither opening a PR nor
+pushing runs one, so each round is one somebody chose to run.
 
 **Which reviewer** (owner, 2026-10-12): Claude, paid from the Max plan's monthly
 API credit, and **Kimi when the Claude run fails for any reason**, a spent
@@ -543,10 +545,10 @@ pinned Claude Code CLI, read-only, with the pull request's own `CLAUDE.md` and
 5. **Comment `/code-reviewer`** to re-review. It covers only the commits since the
    last review. From Git Bash, post it with `MSYS_NO_PATHCONV=1`, or the leading
    `/` is rewritten into a Windows path.
-6. **Repeat 2–5** until a review comes back `NO FINDINGS`, or only P2s the owner
-   accepts.
+6. **Repeat 2–5** until a review comes back `NO FINDINGS`, or only P2s answered
+   in the reply as not worth the change.
 7. **Merge** when that is true **and** CI is green on the PR's exact head commit
-   (rule 10), on the owner's word.
+   (rule 10). No separate word from the owner (standing since 2026-10-10).
 
 A comment that does not start with `/code-reviewer` triggers nothing; a reply
 alone never starts a review. **A comment runs the workflow from `main`, not from
