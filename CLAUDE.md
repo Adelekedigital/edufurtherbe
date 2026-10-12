@@ -167,8 +167,9 @@ on 2026-10-08, when code review moved to Codex after the push.
     (format, lint, types, layers, bandit), **the test files the change
     touches**, and the mutation batch, then `/security-review` and
     `/code-review`. **Review is local again, for now** (owner, 2026-10-10, on
-    cost): Codex no longer runs on PR open, only on a `/codex-review` comment
-    the owner chooses to post. The full suite runs in CI, and work is done only when **CI
+    cost): the GitHub reviewer no longer runs on PR open, only on a
+    `/code-reviewer` comment the owner chooses to post (Claude, falling back to
+    Kimi; 2026-10-12). The full suite runs in CI, and work is done only when **CI
     is green on the PR's exact head commit**. Check the SHA, because a stale
     green has been reported before (#35). A CI failure is fixed on the branch
     like any red gate. Run `make check` locally only to reproduce a CI failure.
