@@ -84,7 +84,6 @@ from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
-from app.infra.db.session_writer.reminders import schedule_session_reminders
 from app.infra.db.slot_store import offered_slot
 
 logger = logging.getLogger(__name__)
@@ -471,10 +470,12 @@ async def book_session(
         recipient_ids=recipients(booked, mentor_id=mentor_id, mentee_id=mentee_id),
     )
 
-    # **The reminders, scheduled here and fired by a callback later.**
+    # **The request's deadline nudges, scheduled here and fired by a callback
+    # later.** These are not the session reminders: a session confirmed outright
+    # gets those from `follow_ups.on_confirmed`, which the caller runs after this.
     #
-    # Only for a request that waits: an auto-confirmed session has nobody to
-    # nudge. And only for the ones still ahead — at the 24-hour booking floor
+    # Only for a request that waits: an auto-confirmed session has no deadline
+    # to nudge the mentor about. And only for the ones still ahead — at the 24-hour booking floor
     # the deadline is eighteen hours away, so `t24` is already behind and
     # sending it now would be the booking message again, thirty seconds later.
     #
@@ -483,21 +484,6 @@ async def book_session(
     # arrives on its own. Refusing the booking because a scheduler was slow
     # would lose something that cannot be recovered to protect something that
     # can.
-    # **A session confirmed outright is real now**, so its own reminders are
-    # published here. One that waits is not: telling both parties their session
-    # is tomorrow, for a request nobody has accepted, is the bug this branch
-    # exists to avoid. That one is scheduled at `/accept` instead.
-    if not requires_confirmation:
-        # Off the event loop (#370): four QStash round trips per booking.
-        await asyncio.to_thread(
-            schedule_session_reminders,
-            session_id,
-            starts_at,
-            scheduler=scheduler,
-            callback_url=callback_url or "",
-            now=now,
-        )
-
     deadline = respond_by(starts_at, requires_confirmation=requires_confirmation)
     if deadline is not None and scheduler is not None and callback_url:
         for kind, at in reminders_for(deadline, now=now):

@@ -40,7 +40,7 @@ from app.infra.db.models.sessions import (
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.pending_requests import lapsed_request
-from app.infra.db.session_writer.meetings import release_meeting
+from app.infra.db.session_writer.follow_ups import on_ended
 
 #: What a mentor reads beside this block in their own availability.
 #:
@@ -343,9 +343,9 @@ async def expire_requests(
         )
 
     # **An expired request ends a session too, so its event goes with it.**
-    # The calendar is optional here where it is required elsewhere: this runs in
-    # a sweep that predates the integration, and a caller passing none simply
-    # leaves the ids in place for a later run to clear.
+    # The calendar is optional only for tests; the runner always passes one. A
+    # caller passing none leaves the ids in place, and nothing comes back for
+    # them (#423).
     #
     # `expired` is a sequence of row mappings, not of ids — it is built with
     # `.mappings()` and the notification block above reads `row["id"]` from it.
@@ -353,5 +353,5 @@ async def expire_requests(
     # verbatim would hand `release_meeting` a mapping where it wants a `UUID`.
     if calendar is not None:
         for row in expired:
-            await release_meeting(session, row["id"], calendar=calendar)
+            await on_ended(session, row["id"], calendar=calendar)
     return len(expired)

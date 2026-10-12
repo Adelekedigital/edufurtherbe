@@ -19,16 +19,16 @@ from app.infra.db.session_writer.booking import (
     DOUBLE_BOOKED,
     book_session,
 )
-from app.infra.db.session_writer.meetings import (
-    add_meet_link,
-    provision_meeting,
-    release_meeting,
+from app.infra.db.session_writer.follow_ups import (
+    FollowUps,
+    on_confirmed,
+    on_ended,
 )
+from app.infra.db.session_writer.meetings import add_meet_link
 from app.infra.db.session_writer.reminders import (
     remind_before_session,
     remind_if_still_waiting,
     remind_unreviewed,
-    schedule_session_reminders,
 )
 from app.infra.db.session_writer.suggestions import (
     remind_suggestion,
@@ -41,21 +41,21 @@ from app.infra.db.session_writer.transitions import (
 
 __all__ = [
     "DOUBLE_BOOKED",
+    "FollowUps",
     "add_meet_link",
     "book_session",
     "confirm_presence",
     "door_row",
     "expire_requests",
     "observe_presence",
+    "on_confirmed",
+    "on_ended",
     "presence_to_confirm",
-    "provision_meeting",
     "record_arrival",
-    "release_meeting",
     "remind_before_session",
     "remind_if_still_waiting",
     "remind_suggestion",
     "remind_unreviewed",
-    "schedule_session_reminders",
     "settle_attendance",
     "suggest_time",
     "transition",
