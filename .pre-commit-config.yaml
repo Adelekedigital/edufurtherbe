@@ -60,6 +60,8 @@ repos:
             # stubs are typeshed's, as in the project's dev group.
             defusedxml,
             types-defusedxml,
+            # Error reporting (ADR 0030), started in infra/observability.py.
+            "sentry-sdk>=2.66.0",
           ]
         files: ^src/
 

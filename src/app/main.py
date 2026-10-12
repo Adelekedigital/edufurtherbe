@@ -11,6 +11,8 @@ from app.api import errors
 from app.api.deps.core import get_session_factory
 from app.api.limits import BodyLimitMiddleware
 from app.api.per_viewer import PerViewerHeadersMiddleware
+from app.api.request_id import HEADER as REQUEST_ID_HEADER
+from app.api.request_id import RequestIdMiddleware
 from app.api.routes import (
     admin,
     availability,
@@ -41,6 +43,7 @@ from app.core.config import Settings, get_settings, production_gaps
 from app.core.errors import ConfigurationError
 from app.infra.clients.notifications import live_notifier
 from app.infra.db.outbox import collect_queued, deliver, stop_collecting
+from app.infra.observability import configure_logging, configure_sentry
 
 # Tag metadata, so /docs explains each group rather than listing bare paths.
 # A reader arriving at the schema cold should learn what a group is for and what
@@ -363,6 +366,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # while sending nothing; every gap is named at once, not one per deploy.
     if resolved.environment == "production" and (gaps := production_gaps(resolved)):
         raise ConfigurationError("Not fit for production: " + "; ".join(gaps) + ".")
+    # Before anything logs, so the first line is already structured (ADR 0030).
+    configure_logging(resolved)
+    configure_sentry(resolved)
     application = FastAPI(
         title="EduFurther API",
         version="0.1.0",
@@ -408,6 +414,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # on the app and ignored by the verifier.
     application.state.settings = resolved
 
+    # Outside everything but CORS, so a refusal from the body limit carries an
+    # id too, and CORS can expose the header it adds.
+    application.add_middleware(RequestIdMiddleware)
+
     if resolved.cors_origins:
         application.add_middleware(
             CORSMiddleware,
@@ -423,7 +433,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Response headers a browser hides from another origin's script
             # unless exposed: the replay flag a retry reads, a created
             # resource's `Location`, and a rate limit's `Retry-After` (#281).
-            expose_headers=[REPLAYED_HEADER, "Location", "Retry-After"],
+            expose_headers=[REPLAYED_HEADER, "Location", "Retry-After", REQUEST_ID_HEADER],
         )
     application.include_router(health.router)
     application.include_router(users.router)
