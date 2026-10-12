@@ -503,21 +503,35 @@ was written.
    (owner, 2026-10-10: Codex cost about $15 in two days).
 
 Then push, and the work is done when CI is green on the PR's exact head commit
-and the local review's findings are fixed or answered in the PR body. Codex
-(`.github/workflows/codex-review.yml`) no longer runs when a PR opens; it runs
-only on a `/codex-review` comment, which the owner posts when a PR is worth the
-spend. When it does run, the loop below applies.
+and the local review's findings are fixed or answered in the PR body. The
+GitHub reviewer (`.github/workflows/code-reviewer.yml`) never runs when a PR
+opens; it runs only on a `/code-reviewer` comment, which the owner posts when a
+PR is worth the spend. When it does run, the loop below applies.
 
-## Codex review loop
+## GitHub review loop
 
-For a PR the owner sends to Codex, recorded 2026-10-09. **Every review is by
-comment, never automatic** (since 2026-10-10): neither opening a PR nor pushing
-runs one, which keeps the cost to the rounds someone chose to run.
+For a PR the owner sends to the GitHub reviewer, recorded 2026-10-09 for Codex.
+**Every review is by comment, never automatic** (since 2026-10-10): neither
+opening a PR nor pushing runs one, which keeps the cost to the rounds someone
+chose to run.
 
-1. **Comment `/codex-review`.** The first run covers the whole PR. Drafts, forks
+**Which reviewer** (owner, 2026-10-12): Claude, paid from the Max plan's monthly
+API credit, and **Kimi when the Claude run fails for any reason**, a spent
+credit included; the comment names which one wrote it. `/code-reviewer kimi`,
+`/code-reviewer claude` or `/code-reviewer codex` picks one with no fallback;
+the repository variable `CODE_REVIEWER_PROVIDER` changes the default. Codex is
+kept only for reactivation. Keys are secrets (`ANTHROPIC_API_KEY`,
+`MOONSHOT_API_KEY`, `OPENAI_API_KEY`); models and efforts are **variables**
+(`CLAUDE_REVIEW_MODEL`, optional `CLAUDE_REVIEW_EFFORT`, `KIMI_REVIEW_MODEL`,
+`CODEX_REVIEW_MODEL`, `CODEX_REVIEW_EFFORT`), because GitHub drops a job output
+containing a secret's value and a review naming its model would arrive empty. Claude and Kimi run through the same
+pinned Claude Code CLI, read-only, with the pull request's own `CLAUDE.md` and
+`.claude/` deleted first, so a change cannot instruct its own reviewer.
+
+1. **Comment `/code-reviewer`.** The first run covers the whole PR. Drafts, forks
    and Dependabot are skipped.
 2. **Verify each finding** against the code, and against the platform's own
-   docs when it cites them. Codex has been wrong (#393, Daily's payload shape),
+   docs when it cites them. The reviewer has been wrong (#393, Daily's payload shape),
    so a finding is a claim to check, not an instruction.
 3. **Fix what is real.** P0 and P1 always; P2 if cheap. Each fix gets a
    failing-first test and a mutation, like any other change (rule 12).
@@ -525,7 +539,7 @@ runs one, which keeps the cost to the rounds someone chose to run.
    and the test*, *not changed and why*, or *deferred to #issue*. The next
    review reads the replies (only the reviewer's and people with write access
    count) and does not raise an answered finding again.
-5. **Comment `/codex-review`** to re-review. It covers only the commits since the
+5. **Comment `/code-reviewer`** to re-review. It covers only the commits since the
    last review. From Git Bash, post it with `MSYS_NO_PATHCONV=1`, or the leading
    `/` is rewritten into a Windows path.
 6. **Repeat 2–5** until a review comes back `NO FINDINGS`, or only P2s the owner
@@ -533,7 +547,7 @@ runs one, which keeps the cost to the rounds someone chose to run.
 7. **Merge** when that is true **and** CI is green on the PR's exact head commit
    (rule 10), on the owner's word.
 
-A comment that does not start with `/codex-review` triggers nothing; a reply
+A comment that does not start with `/code-reviewer` triggers nothing; a reply
 alone never starts a review. **A comment runs the workflow from `main`, not from
 the PR**, so a change to the workflow itself is tested only after it merges, or
 by restoring the `pull_request` trigger on the branch and reopening the PR.
@@ -637,8 +651,8 @@ skip into a failure.
 | `docs/bubble-data-model.md` | Legacy Bubble shape, fields, and row counts | repo root |
 | `docs/edufurther-migration/` | The **target** schema, field mapping and runbook | repo root — **received, never edited here** (ADR 0007) |
 | `README.md` | Human-facing setup and layout | repo root |
-| `AGENTS.md` | Codex PR review rules (`## Code Review Rules`) — a **restatement** of this file for a reviewer that does not load it; this file wins | repo root |
-| `.github/codex/prompts/review.md` | The Codex review workflow's instructions. Points at `AGENTS.md` for the rules and severity rather than repeating them; read from the **base** branch at review time, so a PR cannot rewrite its own reviewer's prompt | `.github/codex/prompts/` |
+| `AGENTS.md` | GitHub PR review rules (`## Code Review Rules`) — a **restatement** of this file for a reviewer that does not load it; this file wins | repo root |
+| `.github/code-reviewer/prompt.md` | The GitHub review workflow's instructions, for every reviewer. Points at `AGENTS.md` for the rules and severity rather than repeating them; read from the **base** branch at review time, so a PR cannot rewrite its own reviewer's prompt | `.github/code-reviewer/` |
 
 **Canonical copy rule.** Where a doc is duplicated, **name the one that wins** and
 edit only that. Duplicated facts drift, and the copy you forget becomes wrong.

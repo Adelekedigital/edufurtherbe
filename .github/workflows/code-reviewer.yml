@@ -1,0 +1,364 @@
+# Code review on GitHub (owner, 2026-10-09 as Codex; 2026-10-12 Claude first).
+#
+# **On request only** (owner, 2026-10-10: Codex cost about $15 in two days).
+# Nothing runs when a PR opens or a branch is pushed; review is done locally
+# before merge (project-conventions, *Before pushing*). The `pull_request`
+# branches below are kept so restoring that trigger is one block.
+#
+# Review a PR by commenting `/code-reviewer`, optionally naming the reviewer:
+# `/code-reviewer claude`, `/code-reviewer kimi` or `/code-reviewer codex`.
+# Unnamed, the repository variable `CODE_REVIEWER_PROVIDER` decides, and
+# `claude` when that is unset. **Claude falls back to Kimi**: Claude is paid
+# from the Max plan's monthly API credit (owner, 2026-10-12), and a review that
+# fails on Claude for any reason, the spent credit included, is run again on
+# Kimi rather than lost. A reviewer named in the comment has no fallback. Codex
+# is kept for reactivation and runs only when named.
+#
+# The first run covers the whole PR, and a later one only the commits since the
+# last review. The diff leaves out lock files, docs and CI config (owner,
+# 2026-10-09: a review costs about 100k tokens), so a PR touching only those is
+# not reviewed at all. `scripts/` stays in: it holds the gate's own thresholds
+# and the jobs CI runs against staging. An oversized diff is refused.
+#
+# Two jobs, so the one holding the API keys can read the code and nothing else,
+# and only the small posting job can write to the pull request.
+
+name: Code reviewer
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+env:
+  # A diff larger than this is refused with a note rather than reviewed.
+  MAX_DIFF_LINES: "3000"
+  # Pinned: the step running it holds the keys. Its flags were checked against
+  # this version (2026-10-12).
+  CLAUDE_CODE_VERSION: "2.1.296"
+  # Moonshot's Anthropic-compatible endpoint; `/anthropic`, not `/v1`, which
+  # is its OpenAI-compatible one.
+  MOONSHOT_BASE_URL: "https://api.moonshot.ai/anthropic"
+  # Per Claude run, in Anthropic's prices. The CLI cannot price a Kimi model,
+  # so a Kimi run is bounded by the job's timeout instead.
+  CLAUDE_MAX_BUDGET_USD: "3"
+
+jobs:
+  review:
+    # The `pull_request` half is dormant (no such trigger above): restored, it
+    # reviews a pull request that is not a draft, not from a fork, and not
+    # Dependabot's, since forks and Dependabot get no secrets and a fork's token
+    # cannot comment (the repository is public). Live today, on request: a comment
+    # starting `/code-reviewer` from someone who can write to the repository,
+    # because issue_comment runs hold secrets and a passer-by must not be able
+    # to spend a key.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       !github.event.pull_request.draft &&
+       !github.event.pull_request.head.repo.fork &&
+       github.event.pull_request.user.login != 'dependabot[bot]') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/code-reviewer') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # On the job, not the workflow: every comment on a pull request starts a
+    # run of this workflow, and a workflow-level group would let an unrelated
+    # comment cancel a review in progress. Only a newer /code-reviewer replaces
+    # an older one.
+    concurrency:
+      group: code-reviewer-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      verdict: ${{ steps.prepare.outputs.verdict }}
+      head: ${{ steps.pr.outputs.head }}
+      scope: ${{ steps.prepare.outputs.scope }}
+      lines: ${{ steps.prepare.outputs.lines }}
+      missing: ${{ steps.choose.outputs.missing }}
+      reviewer: ${{ steps.claude.outputs.reviewer || (steps.codex.outcome == 'success' && 'Codex' || '') }}
+      result: ${{ steps.claude.outputs.result || steps.codex.outputs.final-message }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+    steps:
+      - name: Choose the reviewer
+        id: choose
+        env:
+          BODY: ${{ github.event.comment.body }}
+          DEFAULT: ${{ vars.CODE_REVIEWER_PROVIDER || 'claude' }}
+          # Presence only: no key enters this step. Models and efforts are
+          # repository variables, not secrets: GitHub drops any job output
+          # containing a secret's value, and a review naming its model, or
+          # saying "high", would arrive empty.
+          HAS_CLAUDE: ${{ secrets.ANTHROPIC_API_KEY != '' && vars.CLAUDE_REVIEW_MODEL != '' }}
+          HAS_KIMI: ${{ secrets.MOONSHOT_API_KEY != '' && vars.KIMI_REVIEW_MODEL != '' }}
+          HAS_CODEX: ${{ secrets.OPENAI_API_KEY != '' && vars.CODEX_REVIEW_MODEL != '' }}
+        run: |
+          # The word after the command, if any, names the reviewer.
+          named=$(printf '%s\n' "$BODY" | head -1 | tr -d '\r' | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+          case "$named" in
+            claude|kimi|codex) wanted="$named"; fallback=false ;;
+            *) wanted="$DEFAULT"; fallback=true ;;
+          esac
+          # Claude, then Kimi when the reviewer was not named; anything else alone.
+          case "$wanted" in
+            claude) chain="claude"; [ "$fallback" = true ] && chain="claude kimi" ;;
+            kimi) chain="kimi" ;;
+            codex) chain="codex" ;;
+            *) chain="" ;;
+          esac
+          ready=""
+          for p in $chain; do
+            case "$p" in
+              claude) [ "$HAS_CLAUDE" = true ] && ready="$ready claude" ;;
+              kimi) [ "$HAS_KIMI" = true ] && ready="$ready kimi" ;;
+              codex) [ "$HAS_CODEX" = true ] && ready="$ready codex" ;;
+            esac
+          done
+          ready=$(echo $ready)
+          echo "chain=$ready" >> "$GITHUB_OUTPUT"
+          [ -z "$ready" ] && echo "missing=${wanted:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "Wanted: $wanted. Will try: ${ready:-nothing configured}."
+
+      - name: Find the pull request
+        id: pr
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" \
+            --jq '"head=\(.head.sha)\nbase=\(.base.sha)\nbase_ref=\(.base.ref)"' >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.head }}
+          fetch-depth: 0
+          # Keep the job token out of .git/config, which sits inside the folder
+          # the reviewer reads. The repository is public, so the base fetch
+          # below needs no credentials.
+          persist-credentials: false
+
+      - name: Prepare the diff
+        id: prepare
+        env:
+          CHAIN: ${{ steps.choose.outputs.chain }}
+          HEAD: ${{ steps.pr.outputs.head }}
+          BASE: ${{ steps.pr.outputs.base }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+        run: |
+          mkdir -p code-review
+
+          # No configured reviewer, no review: decided first, so an unconfigured
+          # repo spends nothing and still says why. Never the CLI's own default
+          # model, which is not the owner's choice and moves with each release.
+          if [ -z "$CHAIN" ]; then
+            echo "verdict=no-reviewer" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The prompt comes from the base branch, never from the pull request,
+          # so a change cannot rewrite its own reviewer's instructions. Absent
+          # there (the PR that introduces it), the review is skipped rather than
+          # run on the PR's own copy.
+          git fetch --quiet origin "$BASE_REF"
+          if ! git show "origin/$BASE_REF:.github/code-reviewer/prompt.md" > code-review/prompt.md 2>/dev/null; then
+            echo "verdict=no-prompt" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Only what changed since the last review this workflow posted, when
+          # that commit is still in the branch's history; otherwise the whole PR.
+          # `codex-review:` is the marker before the rename, still read so a PR
+          # reviewed then is not reviewed whole again.
+          # One read of the comments serves the marker and answered.md below.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq '.[] | {login: .user.login, assoc: .author_association, body}' \
+            > code-review/comments.jsonl
+          reviews=$(jq -r 'select(.login == "github-actions[bot]") | .body' code-review/comments.jsonl)
+          last=$(printf '%s\n' "$reviews" | grep -oE '(codex-review|code-reviewer):head=[0-9a-f]{40}' | tail -1 | cut -d= -f2 || true)
+          if [ -n "$last" ] && git merge-base --is-ancestor "$last" "$HEAD" 2>/dev/null; then
+            from="$last"
+            echo "scope=the commits since the last review" >> "$GITHUB_OUTPUT"
+            echo "Partial: only the commits since ${last} are in pr.diff." > code-review/range.txt
+          else
+            from=$(git merge-base "$BASE" "$HEAD")
+            echo "scope=the whole pull request" >> "$GITHUB_OUTPUT"
+            echo "Whole pull request." > code-review/range.txt
+          fi
+
+          git diff "$from" "$HEAD" -- . \
+            ':(exclude)uv.lock' ':(exclude)docs/**' ':(exclude)**/*.md' \
+            ':(exclude).claude/**' ':(exclude).github/**' > code-review/pr.diff
+          # The rulebook is markdown, so the filter above drops it; a change to
+          # the rules is exactly what must be reviewed, so it goes back in.
+          git diff "$from" "$HEAD" -- AGENTS.md >> code-review/pr.diff
+
+          # The rules the reviewer applies come from the base branch too:
+          # AGENTS.md in the checkout is the pull request's own, and Codex loads
+          # it as instructions, so the base copy replaces it for every reviewer.
+          git show "origin/$BASE_REF:AGENTS.md" > code-review/AGENTS.md
+          cp code-review/AGENTS.md AGENTS.md
+
+          # Findings raised on this PR and the replies to them, so a finding
+          # already fixed or answered as wrong is not raised again. Only the
+          # reviewer's comments and replies from people who can write: the
+          # repository is public, and a stranger must not be able to silence a
+          # finding by commenting "false positive".
+          jq -r 'select(.login == "github-actions[bot]" or (.assoc | IN("OWNER","MEMBER","COLLABORATOR"))) | "--- \(.login):\n\(.body)\n"' \
+            code-review/comments.jsonl | tail -c 20000 > code-review/answered.md
+          rm code-review/comments.jsonl
+
+          lines=$(wc -l < code-review/pr.diff)
+          echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          if [ "$lines" -eq 0 ]; then
+            echo "verdict=empty" >> "$GITHUB_OUTPUT"
+          elif [ "$lines" -gt "$MAX_DIFF_LINES" ]; then
+            echo "verdict=too-large" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=review" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Claude Code
+        if: steps.prepare.outputs.verdict == 'review' && steps.choose.outputs.chain != 'codex'
+        # No key in this step: install scripts never see one.
+        run: npm install --global --no-fund --no-audit "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+
+      - name: Run Claude or Kimi
+        id: claude
+        if: steps.prepare.outputs.verdict == 'review' && steps.choose.outputs.chain != 'codex'
+        env:
+          CHAIN: ${{ steps.choose.outputs.chain }}
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_MODEL: ${{ vars.CLAUDE_REVIEW_MODEL }}
+          CLAUDE_EFFORT: ${{ vars.CLAUDE_REVIEW_EFFORT }}
+          MOONSHOT_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          KIMI_MODEL: ${{ vars.KIMI_REVIEW_MODEL }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          DISABLE_AUTOUPDATER: "1"
+        run: |
+          # Project instructions and settings in the checkout are the pull
+          # request's own, and Claude Code would load them as its instructions.
+          # The reviewer gets its rules from code-review/, taken from the base.
+          find . -path ./.git -prune -o \( -name CLAUDE.md -o -name CLAUDE.local.md \) -print -exec rm -f {} +
+          rm -rf .claude .mcp.json
+          # A symlink in the pull request could point the file tools outside
+          # the checkout (at /proc/self/environ, say); the diff already holds
+          # the change itself.
+          find . -path ./.git -prune -o -type l -print -exec rm -f {} +
+
+          # Read-only: no shell, no writes, no web, no MCP, no settings files.
+          # The CLI gets only the key its provider needs, never the other one
+          # or the job token.
+          review() {
+            env -u ANTHROPIC_KEY -u MOONSHOT_KEY -u GH_TOKEN \
+              claude -p --restricted --strict-mcp-config \
+              --tools "Read,Grep,Glob" --output-format text \
+              --max-budget-usd "$CLAUDE_MAX_BUDGET_USD" "$@" \
+              < code-review/prompt.md > code-review/result.md
+          }
+
+          used=""
+          for p in $CHAIN; do
+            case "$p" in
+              claude)
+                set -- --model "$CLAUDE_MODEL"
+                [ -n "$CLAUDE_EFFORT" ] && set -- "$@" --effort "$CLAUDE_EFFORT"
+                ANTHROPIC_API_KEY="$ANTHROPIC_KEY" review "$@" && label="Claude" ;;
+              kimi)
+                # Every model slot, so no background call asks Moonshot for a
+                # Claude model it does not serve.
+                ANTHROPIC_BASE_URL="$MOONSHOT_BASE_URL" \
+                ANTHROPIC_AUTH_TOKEN="$MOONSHOT_KEY" \
+                ANTHROPIC_MODEL="$KIMI_MODEL" \
+                ANTHROPIC_DEFAULT_OPUS_MODEL="$KIMI_MODEL" \
+                ANTHROPIC_DEFAULT_SONNET_MODEL="$KIMI_MODEL" \
+                ANTHROPIC_DEFAULT_HAIKU_MODEL="$KIMI_MODEL" \
+                ANTHROPIC_SMALL_FAST_MODEL="$KIMI_MODEL" \
+                  review --model "$KIMI_MODEL" && label="Kimi" ;;
+            esac
+            # A review is the prompt's shape, never an error line on exit 0.
+            if [ -n "${label:-}" ] && grep -qE '^(NO FINDINGS|### \[P[012]\])' code-review/result.md; then
+              used="$label"
+              break
+            fi
+            echo "::warning::The $p review did not complete; trying the next reviewer, if any."
+            label=""
+          done
+
+          if [ -z "$used" ]; then
+            echo "::error::No reviewer completed (tried: $CHAIN)."
+            exit 1
+          fi
+          # Name the fallback, so a Kimi review is never read as Claude's.
+          [ "$used" = Kimi ] && [ "${CHAIN%% *}" = claude ] && used="Kimi (Claude did not complete)"
+          echo "reviewer=$used" >> "$GITHUB_OUTPUT"
+          delim="EOF_$(openssl rand -hex 16)"
+          { echo "result<<$delim"; cat code-review/result.md; echo; echo "$delim"; } >> "$GITHUB_OUTPUT"
+
+      - name: Run Codex
+        id: codex
+        if: steps.prepare.outputs.verdict == 'review' && steps.choose.outputs.chain == 'codex'
+        # Pinned to a commit, not the movable v1 tag: this step holds the key.
+        # Verified 2026-10-09 that v1 and v1.13 both resolve to this commit.
+        # Kept for reactivation (owner, 2026-10-12); runs only when named.
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: code-review/prompt.md
+          model: ${{ vars.CODEX_REVIEW_MODEL }}
+          effort: ${{ vars.CODEX_REVIEW_EFFORT }}
+          sandbox: read-only
+          safety-strategy: drop-sudo
+
+  post:
+    needs: review
+    if: always() && needs.review.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+      OUTCOME: ${{ needs.review.result }}
+      VERDICT: ${{ needs.review.outputs.verdict }}
+      HEAD: ${{ needs.review.outputs.head }}
+      SCOPE: ${{ needs.review.outputs.scope }}
+      LINES: ${{ needs.review.outputs.lines }}
+      MISSING: ${{ needs.review.outputs.missing }}
+      REVIEWER: ${{ needs.review.outputs.reviewer }}
+      RESULT: ${{ needs.review.outputs.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Comment on the pull request
+        run: |
+          {
+            if [ "$OUTCOME" != "success" ]; then
+              echo "**Code review did not complete** ($OUTCOME). [Run log]($RUN_URL)"
+            elif [ "$VERDICT" = "no-prompt" ]; then
+              echo "**Code review skipped:** the review prompt is not on the base branch yet. It runs from the next PR after this one merges."
+            elif [ "$VERDICT" = "no-reviewer" ]; then
+              echo "**Code review skipped:** \`$MISSING\` is not configured (its API key secret or model variable is not set), and no fallback is."
+            elif [ "$VERDICT" = "empty" ]; then
+              echo "**Code review:** nothing to review in $SCOPE (docs and CI config are not reviewed)."
+            elif [ "$VERDICT" = "review" ] && [ -z "$RESULT" ]; then
+              # No text, no marker: these commits stay unreviewed.
+              echo "**Code review returned nothing** (GitHub drops an output it takes for a secret). [Run log]($RUN_URL)"
+            elif [ "$VERDICT" = "too-large" ]; then
+              echo "**Code review skipped:** $LINES changed lines in $SCOPE, over the $MAX_DIFF_LINES-line limit. Split the PR, or raise \`MAX_DIFF_LINES\` deliberately."
+            else
+              echo "**Code review by ${REVIEWER:-the reviewer}** of $SCOPE"
+              echo
+              # A zero-width space after every @, so the review can never ping a
+              # person or team, whatever the reviewer writes.
+              printf '%s\n' "$RESULT" | sed 's/@/@\xe2\x80\x8b/g'
+              # Marks the commit reviewed, so the next /code-reviewer covers only
+              # what comes after it. Only written when a review actually ran.
+              echo
+              echo "<!-- code-reviewer:head=$HEAD -->"
+            fi
+          } > comment.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
