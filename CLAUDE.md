@@ -165,12 +165,12 @@ on 2026-10-08, when code review moved to Codex after the push.
     full local run (~12 min) agreed with CI on every PR it was compared on, and
     a review fix made #230 pay it twice. Before committing, run the fast checks
     (format, lint, types, layers, bandit), **the test files the change
-    touches**, and the mutation batch, then `/security-review` and
-    `/code-review`. **Review is local again, for now** (owner, 2026-10-10, on
-    cost): the GitHub reviewer no longer runs on PR open, only on a
-    `/code-reviewer` comment the owner chooses to post (Claude, falling back to
-    Kimi; 2026-10-12). The full suite runs in CI, and work is done only when **CI
-    is green on the PR's exact head commit**. Check the SHA, because a stale
+    touches**, the mutation batch, and `/security-review`. **Code review runs on
+    GitHub** (owner, 2026-10-12): the builder comments `/code-reviewer` on every
+    PR that changes code (Claude, falling back to Kimi, paid from the Max API
+    credit) and fixes or answers each finding before merging; the local
+    `/code-review` is no longer the gate. The full suite runs in CI, and work is
+    done only when **CI is green on the PR's exact head commit**. Check the SHA, because a stale
     green has been reported before (#35). A CI failure is fixed on the branch
     like any red gate. Run `make check` locally only to reproduce a CI failure.
 11. **Anything deferred that is worth exploring later becomes a GitHub issue.**

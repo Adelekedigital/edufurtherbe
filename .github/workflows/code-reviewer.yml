@@ -1,9 +1,10 @@
 # Code review on GitHub (owner, 2026-10-09 as Codex; 2026-10-12 Claude first).
 #
 # **On request only** (owner, 2026-10-10: Codex cost about $15 in two days).
-# Nothing runs when a PR opens or a branch is pushed; review is done locally
-# before merge (project-conventions, *Before pushing*). The `pull_request`
-# branches below are kept so restoring that trigger is one block.
+# Nothing runs when a PR opens or a branch is pushed; since 2026-10-12 the
+# builder comments `/code-reviewer` on every PR that changes code
+# (project-conventions, *Before pushing*). The `pull_request` branches below are
+# kept so restoring that trigger is one block.
 #
 # Review a PR by commenting `/code-reviewer`, optionally naming the reviewer:
 # `/code-reviewer claude`, `/code-reviewer kimi` or `/code-reviewer codex`.
