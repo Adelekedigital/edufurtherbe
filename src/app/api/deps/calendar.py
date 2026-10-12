@@ -89,6 +89,8 @@ def _free_busy(request: Request) -> Any:
         # recorded whether the surrounding read commits or the surrounding
         # booking rolls back, and it must never commit either of them.
         getattr(request.app.state, "session_factory", None) or get_session_factory(),
+        # Shared by every request this process serves (decision 242).
+        budget=getattr(request.app.state, "free_busy_budget", None),
     )
 
 

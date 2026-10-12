@@ -41,6 +41,7 @@ from app.api.routes import (
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.core.config import Settings, get_settings, production_gaps
 from app.core.errors import ConfigurationError
+from app.domain.rate_limits import SlidingWindow
 from app.infra.clients.notifications import live_notifier
 from app.infra.db.outbox import collect_queued, deliver, stop_collecting
 from app.infra.observability import configure_logging, configure_sentry
@@ -413,6 +414,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # configuration. Found by a callback suite whose signing key was configured
     # on the app and ignored by the verifier.
     application.state.settings = resolved
+    # Per app, so a test's app starts with an empty budget (decision 242).
+    application.state.free_busy_budget = SlidingWindow(
+        resolved.free_busy_calls_per_minute, window_seconds=60.0
+    )
 
     # Outside everything but CORS, so a refusal from the body limit carries an
     # id too, and CORS can expose the header it adds.

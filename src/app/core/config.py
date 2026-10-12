@@ -735,6 +735,14 @@ class Settings(BaseSettings):
         default=10, ge=1, le=1000, validation_alias=env_key("intake_uploads_per_hour")
     )
 
+    #: How many Google free/busy calls one worker process makes in any minute,
+    #: for every caller together (decision 242). The public `/slots` read can
+    #: call Google per request; past this, a read answers from declared hours as
+    #: in a Google outage. Per process: N workers or instances, N times this.
+    free_busy_calls_per_minute: int = Field(
+        default=300, ge=1, le=100_000, validation_alias=env_key("free_busy_calls_per_minute")
+    )
+
     @field_validator(
         "supabase_intake_bucket",
         "intake_file_retention_days",
