@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -28,7 +29,7 @@ from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole
 from app.domain.idempotency import request_fingerprint
-from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims
+from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims, issuer_for
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.first_sign_in import provision_first_sign_in
 from app.infra.db.idempotency import Held, Mismatched, Replayed, reserve
@@ -68,6 +69,7 @@ def get_verifier() -> SupabaseTokenVerifier:
             if settings.supabase_jwt_secret
             else None
         ),
+        issuer=issuer_for(settings.supabase_url),
     )
 
 
@@ -110,7 +112,9 @@ async def get_claims(
         raise AuthenticationError("no bearer token")
 
     verifier = getattr(request.app.state, "token_verifier", None) or get_verifier()
-    return verifier.verify(credentials.credentials)
+    # In a thread: a key-set refetch is a blocking HTTP call, and on the event
+    # loop it would stall every request in the process while it waits.
+    return await asyncio.to_thread(verifier.verify, credentials.credentials)
 
 
 ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]

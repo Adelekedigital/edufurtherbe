@@ -138,6 +138,12 @@ belongs in the database holding bookings and sessions.
 
 - **Which Supabase plan**, decided against the point-in-time-recovery need during
   the migration window rather than against monthly cost.
-- **Pooling mode** for the application's database connections.
+- **Pooling mode** for the application's database connections. Still open.
+  Timeouts no longer wait on it (2026-10-12): every connection from
+  `create_database_engine` (the app and the job runner) gets `statement_timeout`
+  (`DATABASE_STATEMENT_TIMEOUT_SECONDS`, default 60s) and migrations
+  `lock_timeout = 10s`, both as a plain `SET` once connected — effective on a
+  direct connection or a session-mode pooler, not the transaction pooler. The
+  one-off loaders build their own engines and carry neither.
 - **Whether Supabase Auth's magic-link flow satisfies decision #7 exactly**, in
   particular for the 1,200 migrated users matching on email. Not yet tested.

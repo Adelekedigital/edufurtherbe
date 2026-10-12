@@ -57,6 +57,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
 from app.domain.provisioning import Candidate
 from app.infra.auth.dev_tokens import mint_dev_token
+from app.infra.auth.supabase import issuer_for
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.db.provisioning_store import ProvisioningStore
 
@@ -154,6 +155,7 @@ async def run(args: argparse.Namespace) -> int:
         secret=secret,
         ttl=timedelta(hours=args.ttl_hours),
         email=user.email,
+        issuer=issuer_for(settings.supabase_url),
     )
     print(
         f"{user.email}  ->  {user.auth_id}   valid {args.ttl_hours}h   via {host}",

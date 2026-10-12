@@ -37,7 +37,8 @@ from app.api.routes import (
     users,
 )
 from app.api.routes.sessions import REPLAYED_HEADER
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, get_settings, production_gaps
+from app.core.errors import ConfigurationError
 from app.infra.clients.notifications import live_notifier
 from app.infra.db.outbox import collect_queued, deliver, stop_collecting
 
@@ -357,6 +358,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     process environment or the cached ``get_settings`` singleton.
     """
     resolved = settings or get_settings()
+    # **Production refuses to start half-configured.** Unset, most providers
+    # fall back to a null adapter, and the service would pass its health check
+    # while sending nothing; every gap is named at once, not one per deploy.
+    if resolved.environment == "production" and (gaps := production_gaps(resolved)):
+        raise ConfigurationError("Not fit for production: " + "; ".join(gaps) + ".")
     application = FastAPI(
         title="EduFurther API",
         version="0.1.0",

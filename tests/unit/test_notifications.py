@@ -356,6 +356,21 @@ def test_the_default_notifier_delivers_nothing_and_raises_nothing() -> None:
     )
 
 
+def test_the_default_notifier_never_logs_the_address(caplog: pytest.LogCaptureFixture) -> None:
+    """The log outlives the address, and it is personal data."""
+    with caplog.at_level("INFO"):
+        NullNotifier().send(
+            notification=REMINDER,
+            channel=Channel.EMAIL,
+            to="somebody@example.test",
+            context=CONTEXT,
+            idempotency_key="k",
+        )
+
+    assert "not sent" in caplog.text
+    assert "somebody@example.test" not in caplog.text
+
+
 def test_the_whatsapp_adapter_refuses_rather_than_reporting_success() -> None:
     """A stub that returned success would make the first real send the first
     time anybody discovered the shape was wrong — and the drain would mark the
