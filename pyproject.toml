@@ -13,6 +13,9 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "structlog>=24.4.0",
+    # Error reporting (ADR 0030). Declared rather than left to arrive through
+    # fastapi-cloud-cli, so dropping that (#19) cannot remove it unseen.
+    "sentry-sdk>=2.66.0",
     # Persistence. The `asyncio` extra pulls greenlet, which SQLAlchemy's async
     # layer requires rather than merely benefits from.
     "sqlalchemy[asyncio]>=2.0.36",
@@ -326,18 +329,10 @@ api = [
 # `core/` is configuration and the base error taxonomy. Listed so that "no vendor
 # SDK outside infra/" is true of every layer rather than of two of the three.
 #
-# ON `sentry_sdk` SPECIFICALLY, AND THE LIMIT OF LISTING IT HERE. The entry stops
-# `domain/`, `api/` and `core/` importing it â€” but NOT the composition roots. Both
-# `exempt` paths are skipped, and `main.py` is skipped before exemption is even
-# consulted because it sits outside any layer. `sentry_sdk.init(dsn=â€¦)` in `main.py`
-# is exactly how error reporting would be wired, and exactly what this list does not
-# see. It also does nothing about the package shipping in the production image.
-#
-# What makes that safe is not this entry: `sentry_sdk` is inert without an `init()`
-# call, nothing calls it, and no DSN is configured. Treat the entry as preventing an
-# accidental import, not as a control. Initialising it deliberately is an ADR â€” an
-# observability vendor plus stack traces carrying user emails and ids â€” not a
-# one-line change to `main.py`.
+# ON `sentry_sdk` SPECIFICALLY. The entry stops `domain/`, `api/` and `core/`
+# importing it. It is started in exactly one place, `infra/observability.py`
+# (ADR 0030), called from `main.py`, and only when `SENTRY_DSN` is set — with
+# no request bodies, headers or frame locals, and every event scrubbed.
 core = [
     # Pillow. Deliberately absent from `domain` above â€” `domain/images.py` is
     # where decoding belongs, and it is a pure library rather than a vendor or a

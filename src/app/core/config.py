@@ -158,6 +158,34 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # ------------------------------------------------------------------
+    # Observability (ADR 0030)
+
+    #: The lowest level written. INFO in every deployed environment: the
+    #: business events (`extra=` fields) are logged at INFO.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
+        default="INFO", validation_alias=env_key("log_level")
+    )
+    #: `json` for a log platform, `console` for a person. Unset means console
+    #: locally and in CI, JSON anywhere deployed.
+    log_format: Literal["json", "console"] | None = Field(
+        default=None, validation_alias=env_key("log_format")
+    )
+    #: Where errors are reported. **Unset means Sentry is off** — the switch is
+    #: this value, not the environment name (owner, 2026-10-12: production
+    #: now, development later). A secret because it lets anyone file events.
+    sentry_dsn: SecretStr | None = Field(default=None, validation_alias=env_key("sentry_dsn"))
+    #: The share of requests traced for performance. Zero keeps Sentry to
+    #: errors only, at no tracing cost, until somebody decides otherwise.
+    sentry_traces_sample_rate: float = Field(
+        default=0.0, ge=0.0, le=1.0, validation_alias=env_key("sentry_traces_sample_rate")
+    )
+    #: The commit Railway deployed, which Railway sets itself; Sentry's
+    #: `release`, so an error names the build it came from.
+    railway_git_commit_sha: str | None = Field(
+        default=None, validation_alias=env_key("railway_git_commit_sha")
+    )
+
+    # ------------------------------------------------------------------
     # The credit ladder
     #
     # **Configuration because the economics are still moving**, not because the
@@ -707,7 +735,14 @@ class Settings(BaseSettings):
         default=10, ge=1, le=1000, validation_alias=env_key("intake_uploads_per_hour")
     )
 
-    @field_validator("supabase_intake_bucket", "intake_file_retention_days", mode="before")
+    @field_validator(
+        "supabase_intake_bucket",
+        "intake_file_retention_days",
+        "sentry_dsn",
+        "log_format",
+        "railway_git_commit_sha",
+        mode="before",
+    )
     @classmethod
     def blank_means_unset(cls, value: object) -> object:
         """An empty variable is "not set", not a zero or an empty name.
@@ -838,6 +873,8 @@ PRODUCTION_REQUIRED = (
     "google_calendar_client_secret",
     "calendar_token_key",
     "supabase_intake_bucket",
+    # Production reports its errors (owner, 2026-10-12; ADR 0030).
+    "sentry_dsn",
 )
 
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
+import sentry_sdk
 from pydantic import SecretStr
 
 from app.core.config import PRODUCTION_REQUIRED, Settings, env_key, production_gaps
@@ -13,11 +16,15 @@ PROJECT = "https://abcdefghijklmnopqrst.supabase.co"
 
 
 @pytest.fixture(autouse=True)
-def no_process_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+def no_process_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """`_env_file=None` still reads the process environment; a developer's
-    exported `DATABASE_URL` must not fill a gap these tests expect."""
+    exported `DATABASE_URL` must not fill a gap these tests expect. And a
+    complete configuration starts Sentry, which is switched off again after."""
     for name in Settings.model_fields:
         monkeypatch.delenv(env_key(name), raising=False)
+    yield
+    sentry_sdk.get_client().close()
+    sentry_sdk.init()
 
 
 def complete(**overrides: object) -> Settings:
@@ -26,6 +33,7 @@ def complete(**overrides: object) -> Settings:
     values |= {
         "database_url": SecretStr("postgresql://u:p@localhost:5432/db"),
         "daily_webhook_secret": SecretStr("MDEyMzQ1Njc4OWFiY2RlZg=="),
+        "sentry_dsn": SecretStr("https://public@o0.ingest.sentry.io/1"),
         "supabase_url": PROJECT,
         "public_base_url": "https://api.example.test",
         "app_base_url": "https://app.example.test",
@@ -73,6 +81,7 @@ def test_an_empty_production_names_everything_it_needs() -> None:
         "GOOGLE_CALENDAR_CLIENT_SECRET is not set",
         "CALENDAR_TOKEN_KEY is not set",
         "SUPABASE_INTAKE_BUCKET is not set",
+        "SENTRY_DSN is not set",
         "neither SUPABASE_JWKS_URL nor SUPABASE_JWT_SECRET is set",
         "CORS_ORIGINS is empty",
     ]

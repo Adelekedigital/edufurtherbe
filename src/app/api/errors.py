@@ -18,10 +18,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.api.request_id import HEADER as REQUEST_ID_HEADER
 from app.core.errors import (
     AccountExistsError,
     AlreadyReviewedError,
@@ -239,16 +241,20 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
 
     **It is logged with its traceback**, because a 500 that says nothing to the
     caller *and* nothing to the operator is worse than the plain-text one it
-    replaces. Stdlib logging rather than structlog: nothing in this application
-    configures logging yet, and standing that up is its own piece of work — this
-    line at least reaches uvicorn's handler today.
+    replaces. Stdlib logging, which `infra/observability.py` renders as JSON with
+    the request's id, scrubbed, and reports to Sentry when a DSN is set.
     """
     # `exc` is unused: it is logged through `.exception()`, which reads the active
     # exception, and it must never reach the response body.
     logging.getLogger(__name__).exception(
         "unhandled error serving %s %s", request.method, request.url.path
     )
-    return problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
+    response = problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
+    # Set here because this handler runs outside every middleware, where
+    # `RequestIdMiddleware` cannot add it: the id a user quotes for a 500.
+    if request_id := structlog.contextvars.get_contextvars().get("request_id"):
+        response.headers[REQUEST_ID_HEADER] = request_id
+    return response
 
 
 async def handle_request_validation_error(
