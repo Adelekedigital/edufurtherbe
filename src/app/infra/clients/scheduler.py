@@ -20,11 +20,12 @@ import base64
 import datetime as dt
 import hashlib
 import logging
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 import jwt
 
+from app.core.config import Settings
 from app.core.errors import AppError
 from app.infra.http.client import shared
 from app.infra.http.upstream import trim_origin, why
@@ -62,6 +63,13 @@ class UntrustedCallbackError(AppError):
     check out, and this means a request arrived at a public endpoint carrying a
     signature we did not issue.
     """
+
+
+class SchedulerPort(Protocol):
+    """What booking and reminders need of a scheduler. `QStashScheduler` and
+    `NullScheduler` both satisfy it, held to it through `scheduler_for`."""
+
+    def schedule(self, *, url: str, body: dict[str, Any], at: dt.datetime) -> None: ...
 
 
 class NullScheduler:
@@ -172,3 +180,12 @@ def verify_callback(*, token: str, body: bytes, url: str, signing_keys: tuple[st
         return
 
     raise UntrustedCallbackError("no configured signing key verifies this callback")
+
+
+def scheduler_for(settings: Settings) -> SchedulerPort:
+    """QStash when a token is set, otherwise `NullScheduler`. The one place
+    either is chosen."""
+    token = settings.qstash_token
+    if not token:
+        return NullScheduler()
+    return QStashScheduler(token.get_secret_value(), settings.qstash_url)

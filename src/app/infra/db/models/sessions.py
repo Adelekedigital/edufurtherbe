@@ -75,17 +75,19 @@ from app.domain.enums import (
     SessionStatus,
     SessionTypeIcon,
 )
+from app.domain.sessions import LIVE_SESSION_STATUSES
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
 #: The statuses a session is still *live* in — awaiting a decision, or agreed.
 #:
-#: Written once and reused by all three partial indexes, and by the exclusion
-#: constraint that lands in the next pull request. Non-negotiable #8: this
-#: predicate existing in a second place is a defect, and a predicate inside a
-#: `text()` string is not a symbol any linter can bind — which is exactly how
-#: `deleted_at IS NULL` reached five statements here and was missed on the fifth.
-LIVE_STATUSES = "status IN ('pending_mentor_approval', 'confirmed')"
+#: Written once and reused by all three partial indexes and the exclusion
+#: constraint, and **built from `domain.sessions.LIVE_SESSION_STATUSES`** rather
+#: than typed, so the SQL and the domain cannot disagree (non-negotiable #8). A
+#: predicate inside a `text()` string is not a symbol any linter can bind, which
+#: is how `deleted_at IS NULL` reached five statements and was missed on the fifth.
+_LIVE_VALUES = ", ".join(f"'{status.value}'" for status in LIVE_SESSION_STATUSES)
+LIVE_STATUSES = f"status IN ({_LIVE_VALUES})"
 
 #: The statuses whose session no longer occupies the mentor's time, and
 #: therefore no longer blocks a slot.

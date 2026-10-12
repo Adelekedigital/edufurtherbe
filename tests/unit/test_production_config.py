@@ -36,7 +36,7 @@ def complete(**overrides: object) -> Settings:
         "cors_origins": ["https://app.example.test"],
         "environment": "production",
     }
-    return Settings(_env_file=None, **(values | overrides))  # type: ignore[arg-type]
+    return Settings(_env_file=None, **(values | overrides))
 
 
 def test_a_complete_production_configuration_has_no_gaps_and_starts() -> None:
@@ -54,7 +54,7 @@ def test_each_required_value_is_named_when_missing(name: str) -> None:
 def test_an_empty_production_names_everything_it_needs() -> None:
     """Spelled out, not derived from `PRODUCTION_REQUIRED`: dropping a name from
     that tuple must fail here, not shrink the test with it."""
-    settings = Settings(_env_file=None, environment="production")  # type: ignore[arg-type]
+    settings = Settings(_env_file=None, environment="production")
 
     assert production_gaps(settings) == [
         "DATABASE_URL is not set",
@@ -115,7 +115,7 @@ def test_production_refuses_to_start_and_names_every_gap_at_once() -> None:
 def test_other_environments_start_with_nothing_configured(environment: str) -> None:
     """Only the web app in production is held to this: tests, local runs and the
     staging deployment keep their null adapters."""
-    settings = Settings(_env_file=None, environment=environment)  # type: ignore[arg-type]
+    settings = Settings(_env_file=None, environment=environment)
 
     assert production_gaps(settings)
     assert create_app(settings).state.settings is settings
@@ -124,6 +124,6 @@ def test_other_environments_start_with_nothing_configured(environment: str) -> N
 def test_settings_themselves_never_refuse_production() -> None:
     """Migrations and scripts build `Settings` with only a DSN; the check
     living in a validator would stop `alembic upgrade` in production."""
-    settings = Settings(_env_file=None, environment="production")  # type: ignore[arg-type]
+    settings = Settings(_env_file=None, environment="production")
 
     assert settings.environment == "production"

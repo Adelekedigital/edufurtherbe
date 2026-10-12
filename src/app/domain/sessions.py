@@ -55,6 +55,14 @@ __all__ = [
 #: because by then the other party is already on their way to the call.
 CANCELLATION_CUTOFF = dt.timedelta(minutes=10)
 
+#: The statuses a session is still *live* in: awaiting a decision, or agreed.
+#: The one definition: the SQL predicate `LIVE_STATUSES` and the extract's
+#: overlap check are built from it. **The exclusion constraint and the partial
+#: indexes are not** — they live in migrations, so changing this set needs a new
+#: migration, and `test_models` fails until one restates it. Ordered, so the SQL
+#: text is stable.
+LIVE_SESSION_STATUSES = (SessionStatus.PENDING_MENTOR_APPROVAL, SessionStatus.CONFIRMED)
+
 #: How long before the session an unanswered request dies.
 #:
 #: **Measured backwards from the session, not forwards from the request**, and

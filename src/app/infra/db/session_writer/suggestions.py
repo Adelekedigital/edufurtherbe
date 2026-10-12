@@ -41,7 +41,7 @@ from app.domain.suggestions import (
     held_until,
     suggestion_reminder_at,
 )
-from app.infra.clients.scheduler import SchedulerError
+from app.infra.clients.scheduler import SchedulerError, SchedulerPort
 from app.infra.db.holds import active_hold, lock_mentor_slots
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.suggestions import SessionSuggestion
@@ -71,7 +71,7 @@ async def suggest_time(
     now: dt.datetime,
     window: BookingWindow,
     external_busy: Any = None,
-    scheduler: Any = None,
+    scheduler: SchedulerPort | None = None,
     callback_url: str | None = None,
 ) -> UUID:
     """Offer ``starts_at`` in place of a session the mentor just ended.

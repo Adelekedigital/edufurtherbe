@@ -30,6 +30,7 @@ from app.domain.sessions import (
     records_unavailability,
     too_late_to_cancel,
 )
+from app.infra.clients.meetings import CalendarPort
 from app.infra.db.availability_writer import block_session_window
 from app.infra.db.credit_writer import refund_credit
 from app.infra.db.models.sessions import (
@@ -257,7 +258,9 @@ def _past(action: str) -> str:
     return str(TRANSITIONS[action].to)
 
 
-async def expire_requests(session: AsyncSession, *, now: dt.datetime, calendar: Any = None) -> int:
+async def expire_requests(
+    session: AsyncSession, *, now: dt.datetime, calendar: CalendarPort | None = None
+) -> int:
     """Kill every unanswered request past its deadline. Returns the count.
 
     **This is what stops an abandoned request holding a mentor's hour forever.**
