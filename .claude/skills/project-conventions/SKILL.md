@@ -499,12 +499,13 @@ was written.
    exact-field guard**, and a new endpoint declares a `response_model` — an
    untyped `dict` publishes an arbitrary object, and a generated client loses
    the field entirely.
-8. **`/security-review`**, always, with every finding fixed or answered before
-   the push. Code review is the GitHub reviewer's, after the push (below);
-   the local `/code-review` stopped being the gate on 2026-10-12.
+8. **`/security-review` and `/code-review`** (medium effort; low for Tier 3),
+   always, with every finding fixed or answered before the push. **And the
+   GitHub reviewer after it** (below): two reviews, because each has caught
+   what the other missed (owner, 2026-10-12).
 
 Then push, and the work is done when CI is green on the PR's exact head commit
-**and** the GitHub reviewer's findings are fixed or answered. The reviewer
+**and** the local and GitHub reviewers' findings are all fixed or answered. The reviewer
 (`.github/workflows/code-reviewer.yml`) never runs on its own; **the builder
 comments `/code-reviewer` on every PR that changes code** (owner, 2026-10-12,
 once Claude's monthly API credit paid for it; it had been owner-only since
