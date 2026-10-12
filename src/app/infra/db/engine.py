@@ -4,8 +4,10 @@ The only place the database URL is read. Nothing else calls
 ``settings.database_url.get_secret_value()``.
 """
 
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -17,6 +19,10 @@ from app.core.config import Settings
 from app.core.errors import ConfigurationError
 
 ASYNC_DRIVER = "postgresql+asyncpg"
+
+#: Seconds asyncpg waits to open a connection. Its default is 60, which turns an
+#: unreachable database into a minute-long hang per request.
+CONNECT_TIMEOUT = 10
 
 # Supabase, Heroku and most managed providers hand out a bare ``postgresql://``
 # (and sometimes the legacy ``postgres://``). SQLAlchemy reads the scheme to pick
@@ -125,7 +131,34 @@ def create_database_engine(settings: Settings) -> AsyncEngine:
     statement cache. Not configured here because it has not been tested against
     a real project, and guessing would produce a setting nobody can justify.
     """
-    return create_async_engine(resolve_async_dsn(settings), pool_pre_ping=True, echo=False)
+    engine = create_async_engine(
+        resolve_async_dsn(settings),
+        pool_pre_ping=True,
+        echo=False,
+        connect_args={"timeout": CONNECT_TIMEOUT},
+    )
+    apply_on_connect(engine, statement_timeout=f"{settings.database_statement_timeout_seconds}s")
+    return engine
+
+
+def apply_on_connect(engine: AsyncEngine, **parameters: str) -> None:
+    """Set Postgres session parameters on every new connection.
+
+    **A plain ``SET`` once connected, not a startup parameter**: a pooler in
+    front of Postgres may refuse startup parameters it does not know.
+    Session-level, so it holds for the connection's whole life in the pool,
+    across transactions — on a direct connection or a session-mode pooler. A
+    transaction-mode pooler would scatter it across backends; that mode is
+    unsupported until ADR 0005 settles pooling (it also breaks prepared
+    statements). Raw
+    asyncpg, so the SQLAlchemy adapter opens no transaction around it.
+    """
+    statements = [f"SET {name} = '{value}'" for name, value in parameters.items()]
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _apply(dbapi_connection: Any, _record: Any) -> None:
+        for statement in statements:
+            dbapi_connection.run_async(lambda conn, sql=statement: conn.execute(sql))
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

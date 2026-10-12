@@ -32,6 +32,7 @@ def mint_dev_token(
     secret: str,
     ttl: timedelta = DEFAULT_TTL,
     email: str | None = "someone@example.com",
+    issuer: str | None = None,
     **overrides: Any,
 ) -> str:
     """A signed access token for ``subject``.
@@ -40,7 +41,8 @@ def mint_dev_token(
     lets a caller mint a token which is expired, or addressed to another
     audience, without keeping a second copy of the claim set in step — the
     rejection tests need exactly those shapes, and they are the tests that
-    matter here.
+    matter here. ``issuer`` is what a verifier checking `iss` expects
+    (`issuer_for`); left out, the token carries none.
     """
     claims: dict[str, Any] = {
         "sub": str(subject),
@@ -48,4 +50,6 @@ def mint_dev_token(
         "exp": datetime.now(UTC) + ttl,
         "email": email,
     }
+    if issuer is not None:
+        claims["iss"] = issuer
     return jwt.encode(claims | overrides, secret, algorithm=SYMMETRIC_ALGORITHM)

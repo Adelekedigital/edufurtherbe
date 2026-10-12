@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import get_settings
 from app.infra.db import models
 from app.infra.db.base import Base
-from app.infra.db.engine import resolve_async_dsn, to_async_dsn
+from app.infra.db.engine import apply_on_connect, resolve_async_dsn, to_async_dsn
 
 config = context.config
 
@@ -100,6 +100,10 @@ async def run_async_migrations() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
+    # A migration waiting on a lock queues every query behind it; ten seconds
+    # then fails it, to be retried, rather than stalling the live service.
+    apply_on_connect(connectable, lock_timeout="10s")
 
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

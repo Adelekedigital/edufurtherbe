@@ -426,6 +426,14 @@ class Settings(BaseSettings):
     # and only inside ``infra/``.
     database_url: SecretStr | None = Field(default=None, validation_alias=env_key("database_url"))
 
+    #: The longest one statement from this service may run before Postgres
+    #: cancels it. Server-side, so a stuck query frees its connection and locks
+    #: instead of holding them until the client gives up. Generous because the
+    #: scheduled jobs share the engine; migrations have their own.
+    database_statement_timeout_seconds: int = Field(
+        default=60, ge=1, le=3600, validation_alias=env_key("database_statement_timeout_seconds")
+    )
+
     # The Bubble Data API, used to extract the legacy snapshot. Both optional for
     # the same reason as ``database_url``: the application imports on machines
     # that will never run an extract, and the script raises at the point of use.
@@ -475,9 +483,10 @@ class Settings(BaseSettings):
     #: sends; the Supabase auth code goes through Emailit's SMTP, configured in
     #: the Supabase console rather than here.
     #:
-    #: Unset means `NullNotifier`, so the outbox still fills and drains and
-    #: every message is recorded as **skipped** rather than lost — a missing key
-    #: is then visible in a table rather than in nobody's inbox.
+    #: Unset means `NullNotifier`: the outbox still fills and drains, and each
+    #: message is marked **sent** without leaving the process — the platform
+    #: chose not to send it. Production refuses to start without it
+    #: (`production_gaps`).
     loops_api_key: SecretStr | None = Field(default=None, validation_alias=env_key("loops_api_key"))
 
     #: The platform's own Google account, which creates every session's calendar
@@ -807,6 +816,51 @@ class Settings(BaseSettings):
                 "whole env file rather than a variable at a time."
             )
         return self
+
+
+#: What a production web process may not start without (owner, 2026-10-12).
+#: Each one unset either swaps in a null adapter that degrades without an
+#: error, or fails a shipped feature on its first request.
+PRODUCTION_REQUIRED = (
+    "database_url",
+    "supabase_url",
+    "loops_api_key",
+    "daily_api_key",
+    "daily_webhook_secret",
+    "qstash_token",
+    "qstash_current_signing_key",
+    "public_base_url",
+    "app_base_url",
+    "google_oauth_client_id",
+    "google_oauth_client_secret",
+    "google_calendar_refresh_token",
+    "google_calendar_client_id",
+    "google_calendar_client_secret",
+    "calendar_token_key",
+    "supabase_intake_bucket",
+)
+
+
+def production_gaps(settings: Settings) -> list[str]:
+    """Every reason ``settings`` is unfit for production, empty when it is fit.
+
+    **Checked by the web app at startup, never by ``Settings``**: migrations and
+    every script build the same object and need only a DSN, so a model
+    validator would stop ``alembic upgrade`` in production too.
+    """
+    gaps = []
+    for name in PRODUCTION_REQUIRED:
+        value = getattr(settings, name)
+        raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+        if raw is None or not str(raw).strip():
+            gaps.append(f"{env_key(name)} is not set")
+    if not (settings.supabase_jwks_url or settings.supabase_jwt_secret):
+        gaps.append("neither SUPABASE_JWKS_URL nor SUPABASE_JWT_SECRET is set")
+    if not settings.cors_origins:
+        gaps.append("CORS_ORIGINS is empty")
+    if settings.debug:
+        gaps.append(f"{env_key('debug')} is on")
+    return gaps
 
 
 @lru_cache(maxsize=1)

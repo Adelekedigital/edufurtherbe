@@ -31,6 +31,7 @@ from app.domain.notifications import (
     Notification,
     recipients,
 )
+from app.infra.clients import notifications
 from app.infra.clients.notifications import (
     DeliveryError,
     LoopsNotifier,
@@ -354,6 +355,26 @@ def test_the_default_notifier_delivers_nothing_and_raises_nothing() -> None:
         )
         is None
     )
+
+
+def test_the_default_notifier_never_logs_the_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The log outlives the address, and it is personal data. The call itself is
+    recorded, not captured output: other tests reconfigure logging, which made
+    `caplog` order-dependent."""
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(notifications.logger, "info", lambda *args: calls.append(args))
+
+    NullNotifier().send(
+        notification=REMINDER,
+        channel=Channel.EMAIL,
+        to="somebody@example.test",
+        context=CONTEXT,
+        idempotency_key="k",
+    )
+
+    (logged,) = calls
+    assert "not sent" in str(logged[0])
+    assert "somebody@example.test" not in " ".join(map(str, logged))
 
 
 def test_the_whatsapp_adapter_refuses_rather_than_reporting_success() -> None:

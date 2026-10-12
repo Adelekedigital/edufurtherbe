@@ -110,11 +110,11 @@ class NullNotifier:
         context: MessageContext,
         idempotency_key: str,
     ) -> None:
-        del context, idempotency_key
+        # Never the address: it is personal data, and the log outlives it.
+        del to, context, idempotency_key
         logger.info(
-            "notification not sent (no provider configured): %s to %s over %s",
+            "notification not sent (no provider configured): %s over %s",
             notification,
-            to,
             channel,
         )
 

@@ -31,6 +31,23 @@ AUDIENCE = "authenticated"
 # locally minted token fails verification for a reason neither side reports.
 SYMMETRIC_ALGORITHM = "HS256"
 
+#: Seconds a key-set fetch may take. PyJWT's own default is 30, which a slow
+#: Supabase turns into 30 seconds of a worker thread per refetch.
+JWKS_TIMEOUT = 10
+
+
+def issuer_for(supabase_url: str | None) -> str | None:
+    """The `iss` Supabase writes into a user's access token for this project,
+    or `None` when no project is named.
+
+    Supabase's own guidance is to check it: a token from another project signed
+    with a shared or leaked secret otherwise passes.
+    """
+    trimmed = (supabase_url or "").strip().rstrip("/")
+    # Trimmed: a value pasted with a trailing space or newline would otherwise
+    # expect an `iss` no real token carries, refusing every sign-in.
+    return f"{trimmed}/auth/v1" if trimmed else None
+
 
 @dataclass(frozen=True, slots=True)
 class TokenClaims:
@@ -49,7 +66,13 @@ class SupabaseTokenVerifier:
     redeploying beats a shared secret that cannot.
     """
 
-    def __init__(self, *, jwks_url: str | None = None, secret: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        jwks_url: str | None = None,
+        secret: str | None = None,
+        issuer: str | None = None,
+    ) -> None:
         if not jwks_url and not secret:
             # Raised at construction rather than per request: a verifier with no
             # key cannot fail closed on a per-request basis without silently
@@ -59,9 +82,13 @@ class SupabaseTokenVerifier:
                 "Both are under Settings -> API -> JWT Keys in the Supabase dashboard."
             )
         self._secret = secret
-        # `PyJWKClient` caches the key set, so this is one fetch per key rotation
-        # rather than one per request.
-        self._jwks = PyJWKClient(jwks_url) if jwks_url else None
+        # Checked when known. Unset only where no Supabase project is named,
+        # which production refuses (`production_gaps`).
+        self._issuer = issuer
+        # `PyJWKClient` caches the key set for five minutes and refetches early
+        # at most once per 30 seconds for an unknown `kid`, under a lock — so a
+        # fetch is rare, but one may hold the verifying threads for the timeout.
+        self._jwks = PyJWKClient(jwks_url, timeout=JWKS_TIMEOUT) if jwks_url else None
 
     def verify(self, token: str) -> TokenClaims:
         """Return the claims of a valid token, or raise.
@@ -88,14 +115,19 @@ class SupabaseTokenVerifier:
             raise AuthenticationError("token subject is not a uuid") from exc
 
     def _decode(self, token: str) -> dict[str, Any]:
+        # `exp` is required, not merely checked when present: PyJWT accepts a
+        # token with no expiry, which would be valid forever.
+        checks: dict[str, Any] = {
+            "audience": AUDIENCE,
+            "issuer": self._issuer,
+            "options": {"require": ["exp"]},
+        }
         if self._jwks is not None:
             key = self._jwks.get_signing_key_from_jwt(token).key
             # Algorithms are named explicitly. Passing the header's `alg` back to
             # the verifier is the classic JWT confusion attack: a token claiming
             # `alg: none`, or an RS256 public key used as an HS256 shared secret.
-            return dict(jwt.decode(token, key, algorithms=["RS256", "ES256"], audience=AUDIENCE))
+            return dict(jwt.decode(token, key, algorithms=["RS256", "ES256"], **checks))
 
         assert self._secret is not None  # noqa: S101 — guaranteed by __init__
-        return dict(
-            jwt.decode(token, self._secret, algorithms=[SYMMETRIC_ALGORITHM], audience=AUDIENCE)
-        )
+        return dict(jwt.decode(token, self._secret, algorithms=[SYMMETRIC_ALGORITHM], **checks))
