@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -472,6 +473,7 @@ class GoogleCalendar:
         self._client = client or shared(TIMEOUT)
         self._token: str | None = None
         self._token_expires: dt.datetime | None = None
+        self._token_lock = threading.Lock()
 
     def create_event(
         self,
@@ -621,19 +623,24 @@ class GoogleCalendar:
         every booking to re-acquire something still valid. The headroom is
         because a token that expires between the check and the call fails in a
         way that looks like a permissions problem.
-        """
-        now = dt.datetime.now(dt.UTC)
-        if self._token and self._token_expires and now < self._token_expires:
-            return self._token
 
-        self._token, lifetime = access_token(
-            client_id=self._client_id,
-            client_secret=self._client_secret,
-            refresh_token=self._refresh_token,
-            client=self._client,
-        )
-        self._token_expires = now + dt.timedelta(seconds=lifetime - 60)
-        return self._token
+        **Under a lock.** `calendar_for` shares one instance across the
+        `to_thread` workers (#421), and threads finding it expired together
+        would each exchange the refresh token.
+        """
+        with self._token_lock:
+            now = dt.datetime.now(dt.UTC)
+            if self._token and self._token_expires and now < self._token_expires:
+                return self._token
+
+            self._token, lifetime = access_token(
+                client_id=self._client_id,
+                client_secret=self._client_secret,
+                refresh_token=self._refresh_token,
+                client=self._client,
+            )
+            self._token_expires = now + dt.timedelta(seconds=lifetime - 60)
+            return self._token
 
     def _call(
         self,
@@ -1058,9 +1065,28 @@ def calendar_for(settings: Settings) -> CalendarPort:
         and settings.google_calendar_refresh_token
     ):
         return NullCalendar()
-    return GoogleCalendar(
-        client_id=settings.google_oauth_client_id,
-        client_secret=settings.google_oauth_client_secret.get_secret_value(),
-        refresh_token=settings.google_calendar_refresh_token.get_secret_value(),
-        calendar_id=settings.google_calendar_id,
+    key = (
+        settings.google_oauth_client_id,
+        settings.google_oauth_client_secret.get_secret_value(),
+        settings.google_calendar_refresh_token.get_secret_value(),
+        settings.google_calendar_id,
     )
+    with _calendars_lock:
+        found = _calendars.get(key)
+        if found is None:
+            client_id, secret, refresh, calendar_id = key
+            found = _calendars[key] = GoogleCalendar(
+                client_id=client_id,
+                client_secret=secret,
+                refresh_token=refresh,
+                calendar_id=calendar_id,
+            )
+        return found
+
+
+#: One `GoogleCalendar` per set of credentials, for the life of the process
+#: (#421). The token is cached on the instance, so a calendar per call paid an
+#: OAuth exchange before every accept, cancel and runner tick. Keyed on the
+#: values, so another account never borrows this one's token.
+_calendars: dict[tuple[str, str, str, str], GoogleCalendar] = {}
+_calendars_lock = threading.Lock()

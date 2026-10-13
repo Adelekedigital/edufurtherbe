@@ -1077,3 +1077,13 @@ def outbound_calls_stay_off_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
         plain(self, key, guarded(key, value) if key in ADAPTER_SEAMS else value)
 
     monkeypatch.setattr(State, "__setattr__", guarding)
+
+
+@pytest.fixture(autouse=True)
+def calendars_start_unbuilt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """**Every test starts with no calendar memoized** (#421). `calendar_for`
+    keeps one per credentials for the process, holding the client and token it
+    was built with, so one test's stub would otherwise answer the next's."""
+    from app.infra.clients import meetings
+
+    monkeypatch.setattr(meetings, "_calendars", {})

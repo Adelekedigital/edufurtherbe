@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
@@ -428,3 +431,33 @@ def test_a_refused_refresh_is_a_venue_failure_not_a_crash() -> None:
 
     with pytest.raises(VenueUnavailableError):
         insert(api)
+
+
+def test_threads_sharing_one_calendar_exchange_the_token_once() -> None:
+    """The factory hands one calendar to every `to_thread` caller (#421), so
+    threads arriving together must not each refresh the token."""
+    exchanges: list[int] = []
+    arrived = threading.Barrier(8)
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if "oauth2" in str(request.url):
+            exchanges.append(1)
+            time.sleep(0.05)
+            return httpx.Response(200, json={"access_token": "at", "expires_in": 3600})
+        return httpx.Response(204)
+
+    api = GoogleCalendar(
+        client_id="cid",
+        client_secret=FAKE_SECRET,
+        refresh_token=FAKE_REFRESH,
+        client=httpx.Client(transport=httpx.MockTransport(route)),
+    )
+
+    def cancel(n: int) -> None:
+        arrived.wait()
+        api.cancel_event(f"evt_{n}")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(cancel, range(8)))
+
+    assert len(exchanges) == 1
