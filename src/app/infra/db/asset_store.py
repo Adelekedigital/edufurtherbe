@@ -262,17 +262,28 @@ async def _finish_in_thread(call: Callable[[str], bool], argument: str) -> bool:
 
     **However often it is cancelled** (#362): each wait is shielded and a cancel
     is only noted, so a second cancel cannot interrupt the wait the first one
-    started. The cancel is re-raised once, after the thread is done.
+    started. The first cancel is re-raised, after the thread is done, and a
+    failure of the thread's own is logged first, since the cancel replaces it.
+    Bounded by the storage client's timeout and retry cap. A loop shutting down
+    that cancels this task's thread wrapper too ends the wait early, but then
+    the database connection closes with it and the lock goes either way.
     """
     task = asyncio.ensure_future(asyncio.to_thread(call, argument))
-    cancelled = False
+    cancel: asyncio.CancelledError | None = None
     while not task.done():
         try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled = True
-    if cancelled:
-        raise asyncio.CancelledError
+            # `wait`, not `await task`: cancelling the waiter leaves the task
+            # alone, and a finished task's own failure is not raised here.
+            await asyncio.wait({task})
+        except asyncio.CancelledError as exc:
+            cancel = cancel or exc
+    if cancel is not None:
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning(
+                "an image delete failed while its request was cancelled",
+                exc_info=task.exception(),
+            )
+        raise cancel
     return task.result()
 
 

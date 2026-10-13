@@ -127,11 +127,12 @@ async def wait_until_blocked(engine: AsyncEngine, held: HeldDelete) -> None:
             if held.uploading.is_set():
                 pytest.fail("the upload wrote its object while the delete was still in flight")
             waiting = await conn.scalar(
-                # Only the image lock's namespace, so another test's advisory
-                # lock (should tests ever run in parallel) is not counted.
+                # Only the image lock: its namespace, in the two-key form
+                # (`objsubid = 2`), so another advisory lock (should tests ever
+                # run in parallel) is not counted.
                 text(
                     "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
-                    "AND NOT granted AND classid = CAST(:ns AS oid)"
+                    "AND NOT granted AND classid = CAST(:ns AS oid) AND objsubid = 2"
                 ),
                 {"ns": IMAGE_LOCK_NAMESPACE},
             )
