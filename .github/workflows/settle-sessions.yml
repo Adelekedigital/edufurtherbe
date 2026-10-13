@@ -2,7 +2,17 @@ name: Settle sessions (manual recovery)
 
 # QStash owns runtime cadence. This dispatch invokes the same RuntimeJobs
 # surface only for exceptional operator recovery.
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which environment's database to run against
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
 
 permissions:
   contents: read
@@ -10,7 +20,10 @@ permissions:
 jobs:
   settle:
     runs-on: ubuntu-latest
-    environment: staging
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: settle-sessions-${{ inputs.environment }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -19,5 +32,16 @@ jobs:
       - run: uv sync --all-extras --dev
       - name: Settle sessions
         env:
+          EDUFURTHER_ENVIRONMENT: ${{ inputs.environment }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # The providers settlement sends and cleans up through. In production
+          # the job refuses to start without them, rather than marking queued
+          # emails sent through a null notifier.
+          LOOPS_API_KEY: ${{ secrets.LOOPS_API_KEY }}
+          EMAIL_TEMPLATES: ${{ vars.EMAIL_TEMPLATES }}
+          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+          DAILY_API_KEY: ${{ secrets.DAILY_API_KEY }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_CALENDAR_REFRESH_TOKEN: ${{ secrets.GOOGLE_CALENDAR_REFRESH_TOKEN }}
         run: uv run python scripts/settle_sessions.py
