@@ -39,6 +39,13 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
+    # **Writers wait for this one statement.** Without it, an API write that
+    # gives a column-only type its set after this statement's snapshot, with a
+    # different offering, lands beside the stale column value, both at
+    # position 0. `SHARE ROW EXCLUSIVE` blocks inserts and deletes on the set
+    # (and itself) but not reads, and lasts only to the end of the migration's
+    # transaction; the statement then sees every committed set.
+    op.execute("LOCK TABLE session_type_offerings IN SHARE ROW EXCLUSIVE MODE")
     op.execute(
         "INSERT INTO session_type_offerings (session_type_id, service_offering_id, position) "
         "SELECT t.id, t.service_offering_id, 0 FROM session_types t "
