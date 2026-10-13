@@ -1348,3 +1348,37 @@ def test_a_type_with_its_offering_only_in_the_column_gets_its_row(
     # is untouched (one row, not the column's); nothing is invented.
     assert rows == "column-only=1/1,has-set=1/0,unclassified=0/0"
     assert scalar(disposable_database, "SELECT count(*) FROM session_type_offerings") == 2
+
+
+def test_dropping_the_legacy_offering_column_and_back(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`b8f4d2e6a913` drops `session_types.service_offering_id` (#274); its
+    downgrade brings the column back holding each type's set position 0, which
+    is all the column ever said, and NULL for an unclassified type."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "a7e3c1d9b452")
+    execute(disposable_database, _THREE_TYPES)
+
+    command.upgrade(config, "b8f4d2e6a913")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name = 'session_types' AND column_name = 'service_offering_id'",
+        )
+        == 0
+    )
+
+    command.downgrade(config, "a7e3c1d9b452")
+
+    restored = scalar(
+        disposable_database,
+        "SELECT string_agg(t.name || '=' || "
+        "(t.service_offering_id IS NOT DISTINCT FROM "
+        " (SELECT o.service_offering_id FROM session_type_offerings o "
+        "   WHERE o.session_type_id = t.id AND o.position = 0))::text, ',' ORDER BY t.name) "
+        "FROM session_types t WHERE t.name IN ('column-only', 'has-set', 'unclassified')",
+    )
+    assert restored == "column-only=true,has-set=true,unclassified=true"
