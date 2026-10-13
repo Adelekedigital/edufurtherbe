@@ -4,8 +4,9 @@ The grid steps by the offering's *current* length from each window's start, so
 a 60-minute offering offers every hour and a 45-minute one offers 00:00, 00:45,
 01:30 and so on. An hour offered while the offering ran 60 minutes is then off
 the grid, though nothing about the hour changed. An offer is booked at the length
-it was offered at (decision 230), so it is checked as that interval: inside the
-mentor's declared hours, clear of everything taken, and not too soon.
+it was offered at (decision 230), so it is looked for on the grid drawn at that
+length, where it was when it was offered; everything else about the grid (hours,
+busy times, notice) is the mentor's current one.
 """
 
 from __future__ import annotations
@@ -82,22 +83,28 @@ async def test_an_approved_offer_past_its_hold_survives_the_change_too(
     await end_with_suggestion(api_client, booking, "decline", at)
     await lapse(db_engine, booking)
     await shorten_to(db_engine, session_type, 45)
+    # The premise, checked rather than assumed: past the hold the time is public,
+    # and the 45-minute grid really does not offer it.
+    assert at not in await open_slots(api_client, booking)
 
     booked = await book(api_client, session_type, at, booking["mentee"])
 
     assert booked.status_code == 201, booked.text
     assert booked.json()["status"] == "confirmed"
+    assert booked.json()["duration_minutes"] == 60
 
 
 async def test_an_offer_outside_the_mentors_hours_is_still_refused(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """**The negative case**: checking the interval instead of the grid is not
-    a pass. A mentor who no longer declares that hour has withdrawn it."""
+    """**The negative case, on the same path**: the length changed too, so the
+    grid is drawn at the offer's length, and only the mentor's hours refuse it.
+    A mentor who no longer declares that hour has withdrawn it."""
     booking = await a_booking(db_engine, api_client, "len-outside")
     session_type = await offering_of(api_client, booking)
     at = await off_the_45_minute_grid(api_client, booking)
     await end_with_suggestion(api_client, booking, "decline", at)
+    await shorten_to(db_engine, session_type, 45)
     async with db_engine.begin() as conn:
         await conn.execute(
             text("UPDATE availability_rules SET end_time = '01:00' WHERE mentor_user_id = :m"),
