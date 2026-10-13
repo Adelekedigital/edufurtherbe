@@ -10,7 +10,6 @@ delete lands (#320, #359).
 from __future__ import annotations
 
 import asyncio
-import logging
 import threading
 from typing import Any
 
@@ -103,10 +102,20 @@ async def test_uncancelled_a_failure_of_the_thread_is_raised() -> None:
 
 
 async def test_cancelled_a_failure_of_the_thread_is_logged_not_lost(
-    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The cancel is what propagates, so the thread's own failure is logged
-    rather than dropped with nothing to show for the orphaned object."""
+    rather than dropped with nothing to show for the orphaned object.
+
+    Read from the module's logger itself, not `caplog`: the app's logging setup
+    (JSON, #425) can stop records reaching the root logger depending on which
+    tests ran first, which made a `caplog` assertion order-dependent in CI."""
+    logged: list[BaseException | None] = []
+    monkeypatch.setattr(
+        asset_store.logger,
+        "warning",
+        lambda *_args, exc_info=None, **_kwargs: logged.append(exc_info),
+    )
     call = Blocking(error=RuntimeError("storage broke"))
     task = asyncio.create_task(_finish_in_thread(call, "url"))
     await started(call)
@@ -114,7 +123,8 @@ async def test_cancelled_a_failure_of_the_thread_is_logged_not_lost(
     await asyncio.sleep(0.05)
     call.release.set()
 
-    with caplog.at_level(logging.WARNING), pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert any(r.exc_info and isinstance(r.exc_info[1], RuntimeError) for r in caplog.records)
+    assert len(logged) == 1
+    assert isinstance(logged[0], RuntimeError)
