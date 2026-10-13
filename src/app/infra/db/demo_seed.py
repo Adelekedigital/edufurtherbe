@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import BOOKING_WINDOW_CEILING
 from app.domain.enums import ApplicationStage
 from app.domain.sessions import first_stage
+from app.infra.db.offerings import set_session_type_offerings
 from app.infra.db.stages import write_session_type_stages
 
 __all__ = [
@@ -109,6 +110,22 @@ def _email(key: str) -> str:
     return f"{key}@{DEMO_DOMAIN}"
 
 
+async def _classify(session: AsyncSession, type_id: Any, slug: str | None) -> None:
+    """Give a seeded type its offering set, through the writer the API uses.
+
+    **The set, not the legacy column** (#274): reads take a type's offerings
+    from `session_type_offerings`, and the column is going. The writer also
+    keeps the column in step while it exists, and replaces the set on a re-seed,
+    so a set a tester edited converges on the template as the stages do.
+    """
+    offering = (
+        await _one(session, "SELECT id FROM service_offerings WHERE slug = :s", {"s": slug})
+        if slug
+        else None
+    )
+    await set_session_type_offerings(session, type_id, [offering] if offering else [])
+
+
 async def _one(session: AsyncSession, sql: str, params: dict[str, Any]) -> Any:
     return (await session.execute(text(sql), params)).scalar_one()
 
@@ -171,11 +188,11 @@ async def create_demo_mentor(
     else:
         session_type = await _one(
             session,
-            "INSERT INTO session_types (mentor_user_id, name, service_offering_id, is_active) "
-            "VALUES (:u, :n, (SELECT id FROM service_offerings WHERE slug = :s), true) "
-            "RETURNING id",
-            {"u": user, "n": LEGACY_SESSION_TYPE, "s": mentor.offerings[0]},
+            "INSERT INTO session_types (mentor_user_id, name, is_active) "
+            "VALUES (:u, :n, true) RETURNING id",
+            {"u": user, "n": LEGACY_SESSION_TYPE},
         )
+        await _classify(session, session_type, mentor.offerings[0])
         await session.execute(
             text(
                 "INSERT INTO session_type_booking_configs "
@@ -247,16 +264,14 @@ async def apply_demo_session_types(
             "u": user,
             "n": template.name,
             "d": template.description,
-            "o": template.offering,
             "st": first_stage(stages),
         }
         if type_id is None:
             type_id = await _one(
                 session,
                 "INSERT INTO session_types (mentor_user_id, name, description, "
-                " service_offering_id, application_stage, is_active) "
-                "VALUES (:u, :n, :d, (SELECT id FROM service_offerings WHERE slug = :o), "
-                "        :st, true) "
+                " application_stage, is_active) "
+                "VALUES (:u, :n, :d, :st, true) "
                 "RETURNING id",
                 values,
             )
@@ -271,7 +286,6 @@ async def apply_demo_session_types(
             await session.execute(
                 text(
                     "UPDATE session_types SET name = :n, description = :d, "
-                    " service_offering_id = (SELECT id FROM service_offerings WHERE slug = :o), "
                     " application_stage = :st, custom_stage_label = NULL, is_active = true, "
                     # Converges on the template, shown: a schedule a tester left
                     # must go too, or showing it trips the hidden-while-scheduled
@@ -289,6 +303,7 @@ async def apply_demo_session_types(
                 {"t": type_id, "m": template.duration, "n": template.notice},
             )
         await write_session_type_stages(session, type_id, stages)
+        await _classify(session, type_id, template.offering)
         has_questions = await _one(
             session,
             "SELECT EXISTS (SELECT 1 FROM session_type_questions "
