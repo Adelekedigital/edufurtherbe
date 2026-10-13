@@ -46,10 +46,11 @@ known to have tested two things rather than one thing twice.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import logging
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlencode
@@ -434,6 +435,57 @@ def _conference_status(event: dict[str, Any]) -> str | None:
     return str(status) if status else None
 
 
+class _TokenCache:
+    """The platform calendar's access tokens, held for the process (#421).
+
+    **Here rather than on the adapter**, because `calendar_for` builds an
+    adapter per call: a token cached on the instance was exchanged again before
+    every accept, cancel, expiry, Meet-link add and runner tick.
+
+    **Keyed on what the token is minted from**: the client id and a SHA-256 of
+    the secret and refresh token, so no credential is held in a second place.
+    The calendar id is not in the key; the token is the grant's, not the
+    calendar's.
+
+    **A minute of headroom.** Google's tokens last an hour, and one that expires
+    between the check and the call fails like a permissions problem.
+
+    **One lock, held across the exchange.** Adapters run in `to_thread` workers,
+    so callers finding no token together would each exchange one; under the
+    lock the first exchanges and the rest find its token.
+    """
+
+    def __init__(self) -> None:
+        self._held: dict[tuple[str, str], tuple[str, dt.datetime]] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def key(client_id: str, client_secret: str, refresh_token: str) -> tuple[str, str]:
+        grant = hashlib.sha256(f"{client_secret}\0{refresh_token}".encode()).hexdigest()
+        return client_id, grant
+
+    def get(self, key: tuple[str, str], exchange: Callable[[], tuple[str, int]]) -> str:
+        with self._lock:
+            now = dt.datetime.now(dt.UTC)
+            held = self._held.get(key)
+            if held and now < held[1]:
+                return held[0]
+            token, lifetime = exchange()
+            self._held[key] = (token, now + dt.timedelta(seconds=lifetime - 60))
+            return token
+
+    def forget(self, key: tuple[str, str], token: str) -> None:
+        """Drop `token` if it is still the one held: another thread may already
+        have replaced it with a good one."""
+        with self._lock:
+            held = self._held.get(key)
+            if held and held[0] == token:
+                del self._held[key]
+
+
+_tokens = _TokenCache()
+
+
 class GoogleCalendar:
     """The platform's own Google account, creating the event and inviting both
     parties.
@@ -471,9 +523,7 @@ class GoogleCalendar:
         self._refresh_token = refresh_token
         self._calendar_id = calendar_id
         self._client = client or shared(TIMEOUT)
-        self._token: str | None = None
-        self._token_expires: dt.datetime | None = None
-        self._token_lock = threading.Lock()
+        self._token_key = _TokenCache.key(client_id, client_secret, refresh_token)
 
     def create_event(
         self,
@@ -616,31 +666,17 @@ class GoogleCalendar:
             raise
 
     def _access_token(self) -> str:
-        """A cached access token, refreshed when it is close to expiring.
-
-        **Cached on the instance with a minute of headroom.** Google's tokens
-        last an hour, and a refresh per call would be a second round trip on
-        every booking to re-acquire something still valid. The headroom is
-        because a token that expires between the check and the call fails in a
-        way that looks like a permissions problem.
-
-        **Under a lock.** `calendar_for` shares one instance across the
-        `to_thread` workers (#421), and threads finding it expired together
-        would each exchange the refresh token.
-        """
-        with self._token_lock:
-            now = dt.datetime.now(dt.UTC)
-            if self._token and self._token_expires and now < self._token_expires:
-                return self._token
-
-            self._token, lifetime = access_token(
+        """This grant's access token from the process cache (`_TokenCache`),
+        exchanged when it is missing or close to expiring."""
+        return _tokens.get(
+            self._token_key,
+            lambda: access_token(
                 client_id=self._client_id,
                 client_secret=self._client_secret,
                 refresh_token=self._refresh_token,
                 client=self._client,
-            )
-            self._token_expires = now + dt.timedelta(seconds=lifetime - 60)
-            return self._token
+            ),
+        )
 
     def _call(
         self,
@@ -656,15 +692,29 @@ class GoogleCalendar:
         for the reason `DailyRooms` gives: the caller's decision is the same for
         all of them, and a third party's bad afternoon must not become a 500 on
         a request that has already done what the user asked.
+
+        **A `401` drops the cached token and retries once.** The token outlives
+        this instance (#421), so one revoked or rotated early would otherwise
+        fail every call for up to an hour, and a dead grant would go unreported
+        until it expired. The fresh exchange is what raises
+        `CalendarAccessRevokedError`; a second `401` fails like any non-2xx.
         """
-        try:
-            response = self._client.request(
+
+        def send(token: str) -> httpx.Response:
+            return self._client.request(
                 method,
                 f"{GOOGLE_CALENDAR_API}{path}",
                 params=params,
                 json=json,
-                headers={"Authorization": f"Bearer {self._access_token()}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
+
+        try:
+            token = self._access_token()
+            response = send(token)
+            if response.status_code == httpx.codes.UNAUTHORIZED:
+                _tokens.forget(self._token_key, token)
+                response = send(self._access_token())
             response.raise_for_status()
             if not response.content:
                 return {}
@@ -1065,28 +1115,9 @@ def calendar_for(settings: Settings) -> CalendarPort:
         and settings.google_calendar_refresh_token
     ):
         return NullCalendar()
-    key = (
-        settings.google_oauth_client_id,
-        settings.google_oauth_client_secret.get_secret_value(),
-        settings.google_calendar_refresh_token.get_secret_value(),
-        settings.google_calendar_id,
+    return GoogleCalendar(
+        client_id=settings.google_oauth_client_id,
+        client_secret=settings.google_oauth_client_secret.get_secret_value(),
+        refresh_token=settings.google_calendar_refresh_token.get_secret_value(),
+        calendar_id=settings.google_calendar_id,
     )
-    with _calendars_lock:
-        found = _calendars.get(key)
-        if found is None:
-            client_id, secret, refresh, calendar_id = key
-            found = _calendars[key] = GoogleCalendar(
-                client_id=client_id,
-                client_secret=secret,
-                refresh_token=refresh,
-                calendar_id=calendar_id,
-            )
-        return found
-
-
-#: One `GoogleCalendar` per set of credentials, for the life of the process
-#: (#421). The token is cached on the instance, so a calendar per call paid an
-#: OAuth exchange before every accept, cancel and runner tick. Keyed on the
-#: values, so another account never borrows this one's token.
-_calendars: dict[tuple[str, str, str, str], GoogleCalendar] = {}
-_calendars_lock = threading.Lock()

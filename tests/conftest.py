@@ -1080,10 +1080,10 @@ def outbound_calls_stay_off_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def calendars_start_unbuilt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """**Every test starts with no calendar memoized** (#421). `calendar_for`
-    keeps one per credentials for the process, holding the client and token it
-    was built with, so one test's stub would otherwise answer the next's."""
+def google_tokens_start_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """**No access token carried from one test to the next** (#421). The
+    platform calendar caches its token for the process, so a token one test's
+    stub minted would otherwise skip the next test's exchange."""
     from app.infra.clients import meetings
 
-    monkeypatch.setattr(meetings, "_calendars", {})
+    monkeypatch.setattr(meetings, "_tokens", meetings._TokenCache())
