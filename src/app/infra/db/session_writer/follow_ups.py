@@ -15,18 +15,28 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.availability import SESSION_DURATION_MINUTES
 from app.domain.enums import SessionStatus
-from app.infra.clients.meetings import CalendarPort, NullCalendar, RoomsPort
+from app.infra.clients.meetings import TIMEOUT, CalendarPort, NullCalendar, RoomsPort
 from app.infra.clients.scheduler import SchedulerPort
 from app.infra.db.models.sessions import FREES_THE_HOUR, Session
-from app.infra.db.session_writer.meetings import provision_meeting, release_meeting
+from app.infra.db.session_writer.meetings import (
+    ReleaseOutcome,
+    provision_meeting,
+    release_meeting,
+)
 from app.infra.db.session_writer.reminders import schedule_session_reminders
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,38 +90,56 @@ async def on_confirmed(
     )
 
 
-async def on_ended(session: AsyncSession, session_id: UUID, *, calendar: CalendarPort) -> None:
+async def on_ended(
+    session: AsyncSession, session_id: UUID, *, calendar: CalendarPort
+) -> ReleaseOutcome:
     """An ended session leaves no live event in either party's calendar.
     Does not commit."""
-    await release_meeting(session, session_id, calendar=calendar)
+    return await release_meeting(session, session_id, calendar=calendar)
 
 
-#: How many ended sessions one settlement run retries (#423). Each can wait out
-#: Google's 15s timeout, more than once with a token refresh, and the job has
-#: 120s; a backlog drains over a few hours rather than running the job out.
+#: How many ended sessions one settlement run retries at most (#423).
 RELEASE_RETRIES_PER_RUN = 5
 
+#: The budget a row needs before it is started: Google's read timeout twice,
+#: for the call and the retry a stale token earns it.
+RELEASE_ROW_ALLOWANCE_SECONDS = 2 * float(TIMEOUT.read or 0.0)
 
-async def _unreleased(session: AsyncSession, *, now: dt.datetime, limit: int) -> list[UUID]:
-    """Ended sessions still ahead that kept their event, soonest first.
+
+async def _unreleased(
+    session: AsyncSession, *, now: dt.datetime, untouched_since: dt.datetime, limit: int
+) -> list[UUID]:
+    """Ended sessions that kept their event and have not yet run their course,
+    in a random order.
 
     **Ended is `FREES_THE_HOUR`**: exactly the statuses whose transitions call
     `on_ended`, and not `completed` or `no_show`, whose event is a true record.
 
-    **Still ahead only.** The harm is an invitation to a session that is not
-    happening; once its time has passed nobody can turn up to it, and deleting
-    the event would email both parties a cancellation of something already over
-    (every migrated ended session that carries an event id would get one). It
-    also ends a permanent refusal's turn at the head of the queue.
+    **Until the session would have ended.** The invite still tells both parties
+    the hour is on, even after the start; once the session's window has closed
+    nobody can turn up, and deleting the event would email both a cancellation
+    of something already over (every migrated ended session with an event id
+    would get one).
+
+    **Untouched since the run began**, so a row this run's own ending just
+    tried is not tried twice.
+
+    **Random, not soonest first.** With a fixed bound, events Google always
+    refuses would hold every slot of an ordered queue until their sessions
+    ended; drawn at random, every candidate gets a turn.
     """
+    ends_at = func.upper(func.session_window(Session.starts_at, Session.duration_minutes))
     ids = await session.scalars(
         select(Session.id)
         .where(
             Session.status.in_(FREES_THE_HOUR),
             Session.external_calendar_event_id.is_not(None),
-            Session.starts_at > now,
+            Session.updated_at < untouched_since,
+            # Only bounds the scan to `ix_sessions_starts_at`; `ends_at` decides.
+            Session.starts_at > now - dt.timedelta(minutes=SESSION_DURATION_MINUTES[1]),
+            ends_at > now,
         )
-        .order_by(Session.starts_at, Session.id)
+        .order_by(func.random())
         .limit(limit)
     )
     return list(ids)
@@ -122,6 +150,9 @@ async def retry_releases(
     *,
     now: dt.datetime,
     calendar: CalendarPort,
+    deadline: float,
+    untouched_since: dt.datetime,
+    clock: Callable[[], float] = time.monotonic,
     dry_run: bool = False,
     limit: int = RELEASE_RETRIES_PER_RUN,
 ) -> int:
@@ -132,7 +163,13 @@ async def retry_releases(
     the one way an ending releases its event (decision 240), and is **committed
     on its own**: a refusal keeps that row's id and the next row still runs.
     Returns how many events were removed, or on a dry run how many would be
-    tried.
+    tried, calling nothing.
+
+    **Paced by `deadline`**, a reading of `clock`: no row is started without
+    `RELEASE_ROW_ALLOWANCE_SECONDS` left, so the retry cannot run its job out.
+
+    **A dead platform grant stops the run**, with one warning: every other row
+    would fail the same way, and each would keep its id regardless.
 
     **Nothing to call, nothing cleared.** `NullCalendar` removes nothing and
     reports success, so clearing ids on it would lose the only handle on events
@@ -140,15 +177,18 @@ async def retry_releases(
     """
     if isinstance(calendar, NullCalendar):
         return 0
-    pending = await _unreleased(session, now=now, limit=limit)
+    pending = await _unreleased(session, now=now, untouched_since=untouched_since, limit=limit)
     if dry_run:
         return len(pending)
     released = 0
     for session_id in pending:
-        await on_ended(session, session_id, calendar=calendar)
-        kept = await session.scalar(
-            select(Session.external_calendar_event_id).where(Session.id == session_id)
-        )
-        released += kept is None
+        if clock() + RELEASE_ROW_ALLOWANCE_SECONDS > deadline:
+            logger.info("calendar release retries stopped at the job's time budget")
+            break
+        outcome = await on_ended(session, session_id, calendar=calendar)
         await session.commit()
+        if outcome is ReleaseOutcome.REVOKED:
+            logger.warning("platform calendar access revoked; calendar releases paused")
+            break
+        released += outcome is ReleaseOutcome.RELEASED
     return released

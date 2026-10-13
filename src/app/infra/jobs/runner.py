@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -53,7 +55,7 @@ from app.infra.db.session_writer import (
 )
 from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
-from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
+from app.infra.jobs.manifest import RUNTIME_JOB_NAMES, job_timeout
 from app.infra.storage.supabase import intake_storage_for
 
 logger = logging.getLogger(__name__)
@@ -196,12 +198,21 @@ class RuntimeJobs:
         }
 
     async def _settle_sessions(self, *, dry_run: bool) -> dict[str, int]:
+        # The delivery's budget is QStash's timeout for this job (#423).
+        deadline = time.monotonic() + job_timeout("settle-sessions").total_seconds()
         engine = create_database_engine(self.settings)
         try:
             async with AsyncSession(engine) as session:
                 now = dt.datetime.now(dt.UTC)
+                # The database's clock at the run's first transaction: every
+                # row this run writes gets an `updated_at` at or after it.
+                run_started = (await session.execute(select(func.now()))).scalar_one()
                 calendar = self._calendar()
-                expired = await expire_requests(session, now=now, calendar=calendar)
+                # **A dry run deletes nothing in Google**: rolling back the
+                # database does not unsend the cancellation Google emails.
+                expired = await expire_requests(
+                    session, now=now, calendar=NullCalendar() if dry_run else calendar
+                )
                 # Presence first (#382): a party no webhook reported is read
                 # from Daily's records, and a session those cannot be read for
                 # waits rather than settling on silence.
@@ -254,9 +265,15 @@ class RuntimeJobs:
                 else:
                     await session.commit()
                 # Last, after everything above is committed: Google round
-                # trips, bounded and committed per row (#423).
+                # trips, bounded, paced and committed per row (#423). A dry run
+                # only counts.
                 released = await retry_releases(
-                    session, now=now, calendar=calendar, dry_run=dry_run
+                    session,
+                    now=now,
+                    calendar=calendar,
+                    deadline=deadline,
+                    untouched_since=run_started,
+                    dry_run=dry_run,
                 )
                 return {
                     "expired_requests": expired,

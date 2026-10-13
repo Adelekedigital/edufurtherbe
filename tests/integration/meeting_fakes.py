@@ -10,7 +10,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.infra.clients.meetings import CalendarEvent, MeetingRoom, VenueUnavailableError
+from app.infra.clients.meetings import (
+    CalendarAccessRevokedError,
+    CalendarEvent,
+    MeetingRoom,
+    VenueUnavailableError,
+)
 
 
 @dataclass
@@ -37,6 +42,8 @@ class FakeCalendar:
     #: Makes `cancel_event` fail the way Google can: `True` for every event,
     #: or the ids it refuses.
     refuses_cancel: bool | frozenset[str] = False
+    #: Makes `cancel_event` fail as a dead platform grant does.
+    revoked: bool = False
     calls: list[dict[str, Any]] = field(default_factory=list)
     conferences: list[dict[str, Any]] = field(default_factory=list)
     #: Every event asked to be removed, refused or not.
@@ -70,6 +77,8 @@ class FakeCalendar:
 
     def cancel_event(self, external_id: str) -> None:
         self.asked_to_cancel.append(external_id)
+        if self.revoked:
+            raise CalendarAccessRevokedError("invalid_grant")
         if self.refuses_cancel is True or (
             isinstance(self.refuses_cancel, frozenset) and external_id in self.refuses_cancel
         ):

@@ -5,15 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict
-from pathlib import Path
 
 from app.core.config import get_settings
 from app.core.errors import ConfigurationError
-from app.infra.jobs.manifest import load_manifest, resolve_manifest
+from app.infra.jobs.manifest import MANIFEST_PATH, load_manifest, resolve_manifest
 from app.infra.jobs.reconcile import QStashSchedules, apply_reconciliation, plan_reconciliation
-
-ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "config" / "runtime-schedules.json"
 
 
 def main() -> int:
@@ -35,7 +31,7 @@ def main() -> int:
         raise ConfigurationError("QSTASH_TOKEN is required to inspect schedules")
 
     resolved = resolve_manifest(
-        load_manifest(MANIFEST),
+        load_manifest(MANIFEST_PATH),
         environment=args.environment,
         public_base_url=settings.public_base_url,
         overrides=settings.qstash_schedule_overrides,

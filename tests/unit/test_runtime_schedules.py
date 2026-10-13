@@ -11,7 +11,9 @@ from pydantic import ValidationError
 
 from app.core.config import QSTASH_EU, Settings
 from app.infra.jobs.manifest import (
+    MANIFEST_PATH,
     ManifestError,
+    job_timeout,
     load_manifest,
     resolve_manifest,
     schedule_id,
@@ -19,6 +21,42 @@ from app.infra.jobs.manifest import (
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "config" / "runtime-schedules.json"
+
+
+def test_the_app_reads_the_checked_in_manifest() -> None:
+    """The jobs pace themselves against it (#423), so the app's path must be
+    the repository's file, not a copy or a path that only works from a test."""
+    assert MANIFEST_PATH == MANIFEST
+    assert MANIFEST_PATH.is_file()
+
+
+def test_a_jobs_budget_is_its_manifest_timeout() -> None:
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    declared = next(job["timeout"] for job in raw["jobs"] if job["name"] == "settle-sessions")
+
+    assert job_timeout("settle-sessions").total_seconds() == int(declared.removesuffix("s"))
+
+
+@pytest.mark.parametrize("timeout", ["2m", "s", "1.5s", "120"])
+def test_a_budget_that_is_not_whole_seconds_is_refused(tmp_path: Path, timeout: str) -> None:
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    raw["jobs"][0]["timeout"] = timeout
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="whole seconds"):
+        job_timeout(raw["jobs"][0]["name"], path)
+
+
+def test_a_budget_for_an_unscheduled_job_is_refused(tmp_path: Path) -> None:
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    name = raw["jobs"][0]["name"]
+    raw["jobs"] = raw["jobs"][1:]
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="no schedule"):
+        job_timeout(name, path)
 
 
 def test_the_manifest_declares_the_seven_runtime_jobs_in_utc() -> None:
