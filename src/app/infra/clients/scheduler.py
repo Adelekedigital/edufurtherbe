@@ -77,8 +77,9 @@ class NullScheduler:
 
     Not a fake: it is the state of a deployment with no QStash token, where
     reminders simply do not fire. Booking still works, the deadline still
-    passes, and the expiry sweep still frees the slot — the mentor is just
-    never nudged.
+    passes, and the hourly expiry sweep still frees the slot, though up to an
+    hour after the deadline rather than at it (decision 245) — the mentor is
+    just never nudged.
     """
 
     def schedule(self, *, url: str, body: dict[str, Any], at: dt.datetime) -> None:

@@ -153,8 +153,9 @@ async def transition(
         raise ConflictError(f"a {row['status']} session cannot be {_past(action)}")
     if role is SessionRole.MENTOR and row["lapsed"]:
         # Past `respond_by` the request is expired in all but the stored word,
-        # which the hourly sweep writes; answering it now would confirm an hour
-        # the mentee was told had lapsed.
+        # which the deadline callback writes seconds later (decision 245, the
+        # hourly sweep as backstop); answering it now would confirm an hour the
+        # mentee was told had lapsed.
         raise ConflictError(
             f"this request passed its answer deadline and cannot be {_past(action)}"
         )

@@ -105,8 +105,16 @@ async def test_an_early_or_late_callback_changes_nothing(db_engine: AsyncEngine)
         late = await fire(client, answered["id"], kind=EXPIRY_KIND)
 
     assert early.status_code == 200 and late.status_code == 200
-    assert (await row(db_engine, waiting["id"]))["status"] == "pending_mentor_approval"
-    assert (await row(db_engine, answered["id"]))["status"] == "confirmed"
+    assert early.json() == late.json() == {"queued": False}
+    # Nothing written at all, not merely the status left alone.
+    early_row = await row(db_engine, waiting["id"])
+    late_row = await row(db_engine, answered["id"])
+    assert (early_row["status"], early_row["events"], early_row["emails"]) == (
+        "pending_mentor_approval",
+        0,
+        0,
+    )
+    assert (late_row["status"], late_row["events"], late_row["emails"]) == ("confirmed", 0, 0)
 
 
 async def test_firing_twice_expires_once(db_engine: AsyncEngine) -> None:
