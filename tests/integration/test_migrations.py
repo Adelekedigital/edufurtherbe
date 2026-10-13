@@ -1317,7 +1317,9 @@ _THREE_TYPES = """
         RETURNING id, name, service_offering_id
     )
     INSERT INTO session_type_offerings (session_type_id, service_offering_id, position)
-    SELECT id, service_offering_id, 0 FROM types WHERE name = 'has-set'
+    -- A set whose first item differs from its column, so skipping a type with a
+    -- set is told apart from inserting and ignoring a conflict.
+    SELECT t.id, (SELECT id FROM first_two WHERE n = 3), 0 FROM types t WHERE t.name = 'has-set'
 """
 
 
@@ -1336,9 +1338,13 @@ def test_a_type_with_its_offering_only_in_the_column_gets_its_row(
         disposable_database,
         "SELECT string_agg(t.name || '=' || "
         "(SELECT count(*) FROM session_type_offerings o "
-        " WHERE o.session_type_id = t.id AND o.service_offering_id IS NOT DISTINCT FROM "
-        " t.service_offering_id AND o.position = 0)::text, ',' ORDER BY t.name) "
+        " WHERE o.session_type_id = t.id)::text || '/' || "
+        "(SELECT count(*) FROM session_type_offerings o "
+        " WHERE o.session_type_id = t.id AND o.service_offering_id = t.service_offering_id"
+        " AND o.position = 0)::text, ',' ORDER BY t.name) "
         "FROM session_types t WHERE t.name IN ('column-only', 'has-set', 'unclassified')",
     )
-    assert rows == "column-only=1,has-set=1,unclassified=0"
+    # rows/rows matching the column: the column-only type gets its row; the set
+    # is untouched (one row, not the column's); nothing is invented.
+    assert rows == "column-only=1/1,has-set=1/0,unclassified=0/0"
     assert scalar(disposable_database, "SELECT count(*) FROM session_type_offerings") == 2

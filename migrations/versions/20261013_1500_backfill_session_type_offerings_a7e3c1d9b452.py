@@ -11,6 +11,16 @@ given its row first, or it would read as unclassified.
 type that has a set already keeps it untouched: the API wrote it, and it is the
 truth the column was only a copy of.
 
+**Where a set exists but its first item differs from the column**, the set is
+left as it is. Reads already take the set over the column, so that is what
+every client sees today; dropping the column changes nothing visible. Only a
+demo re-seed could cause the mismatch (it updated the column alone), and the
+seed now writes the set itself (#439).
+
+**Soft-deleted and scheduled-for-deletion types are included**: this is a
+faithful copy of what each row says, and every reader of the set already
+filters on its parent type, as it filtered the column.
+
 Data only, expand-safe and re-runnable: nothing reads differently afterwards,
 because the fallback already showed exactly this row. Merged alone, before the
 code that drops the fallback (project-conventions, *Migration ordering*).
@@ -34,7 +44,10 @@ def upgrade() -> None:
         "SELECT t.id, t.service_offering_id, 0 FROM session_types t "
         "WHERE t.service_offering_id IS NOT NULL "
         "AND NOT EXISTS ("
-        "SELECT 1 FROM session_type_offerings o WHERE o.session_type_id = t.id)"
+        "SELECT 1 FROM session_type_offerings o WHERE o.session_type_id = t.id) "
+        # A set the API writes while this runs, committed after the statement's
+        # snapshot, would otherwise abort the deploy on the pair index.
+        "ON CONFLICT (session_type_id, service_offering_id) DO NOTHING"
     )
 
 
