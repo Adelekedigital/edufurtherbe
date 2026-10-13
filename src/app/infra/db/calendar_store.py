@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 from uuid import UUID
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.domain.availability import CALENDAR_CREDENTIAL_UNREADABLE, UtcInterval
 from app.domain.notifications import Notification
+from app.domain.rate_limits import SlidingWindow
 from app.infra.clients.meetings import (
     CalendarAccessRevokedError,
     VenueUnavailableError,
@@ -444,6 +446,7 @@ class MentorFreeBusy:
         reader: Callable[..., tuple[UtcInterval, ...]] = free_busy,
         session_factory: Callable[[], AsyncSession] | None = None,
         fail_open: bool = True,
+        budget: SlidingWindow | None = None,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
@@ -454,6 +457,11 @@ class MentorFreeBusy:
         #: The next-free-time job must not, because it would store that answer
         #: and show it to everyone for a whole cycle — so it raises instead.
         self._fail_open = fail_open
+        #: How many Google calls this process may make per window, from every
+        #: caller together (decision 242). Spent, a read answers from declared
+        #: hours, exactly as when Google is down. Only the public slot read is
+        #: given one; booking, suggestions and the job are not.
+        self._budget = budget
 
     async def _mark_dead(self, session: AsyncSession, user_id: UUID, reason: str) -> None:
         """Record a dead grant **outside the caller's transaction**.
@@ -509,6 +517,21 @@ class MentorFreeBusy:
             await self._mark_dead(session, user_id, "the stored credential could not be opened")
             return ()
 
+        # **A bulkhead in front of Google** (decision 242). The public slot read
+        # turns anonymous traffic into Google calls, so past the budget the call
+        # is skipped and the read fails open, as it does in an outage: no
+        # lockout, only availability that ignores Google for under a minute.
+        if self._budget is not None and not self._budget.allow(time.monotonic()):
+            # Once per spell, not per request: a flood must not become a log flood.
+            if self._budget.refusals == 1:
+                logger.warning(
+                    "free/busy budget spent; answering from declared hours",
+                    extra={"user_id": str(user_id), "limit": self._budget.limit},
+                )
+            if not self._fail_open:
+                raise VenueUnavailableError("the free/busy budget is spent")
+            return ()
+
         try:
             # **On a worker thread.** The reader is synchronous `httpx` — a token
             # refresh then the free/busy request — and called inline it froze
@@ -546,6 +569,7 @@ def free_busy_reader(
     session_factory: Callable[[], AsyncSession] | None,
     *,
     fail_open: bool = True,
+    budget: SlidingWindow | None = None,
 ) -> MentorFreeBusy | NullFreeBusy:
     """Each mentor's Google free/busy, or a reader that subtracts nothing.
 
@@ -573,4 +597,5 @@ def free_busy_reader(
         key=settings.calendar_token_key.get_secret_value(),
         session_factory=session_factory,
         fail_open=fail_open,
+        budget=budget,
     )

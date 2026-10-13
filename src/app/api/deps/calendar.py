@@ -69,7 +69,7 @@ def _calendar_oauth(request: Request) -> tuple[str, str, str, str]:
     )
 
 
-def _free_busy(request: Request) -> Any:
+def _free_busy(request: Request, *, budgeted: bool = False) -> Any:
     """The mentor's external calendar, or a reader that subtracts nothing.
 
     **Null unless all three settings are present**, which is the same shape
@@ -89,6 +89,11 @@ def _free_busy(request: Request) -> Any:
         # recorded whether the surrounding read commits or the surrounding
         # booking rolls back, and it must never commit either of them.
         getattr(request.app.state, "session_factory", None) or get_session_factory(),
+        # **Only the anonymous slot read is budgeted** (decision 242). Booking
+        # and suggesting a time are signed in, paid for and idempotent, and must
+        # always see the mentor's calendar: an anonymous flood draining a shared
+        # budget would otherwise let a real booking skip it.
+        budget=getattr(request.app.state, "free_busy_budget", None) if budgeted else None,
     )
 
 
