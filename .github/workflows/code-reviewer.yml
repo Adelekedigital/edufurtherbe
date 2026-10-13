@@ -203,6 +203,13 @@ jobs:
           git show "origin/$BASE_REF:AGENTS.md" > code-review/AGENTS.md
           cp code-review/AGENTS.md AGENTS.md
 
+          # The project's settled decisions, from the base branch for the same
+          # reason (owner, 2026-10-12): rules such as "only /slots spends the
+          # free/busy budget" live there, and a reviewer without them passed a
+          # change that broke one. About 280 KB, so the prompt has the reviewer
+          # search it rather than read it whole. Absent on an old base: none.
+          git show "origin/$BASE_REF:.claude/skills/project-conventions/SKILL.md"             > code-review/conventions.md 2>/dev/null || : > code-review/conventions.md
+
           # Findings raised on this PR and the replies to them, so a finding
           # already fixed or answered as wrong is not raised again. Only the
           # reviewer's comments and replies from people who can write: the
