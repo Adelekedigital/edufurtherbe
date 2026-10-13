@@ -10,6 +10,15 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING: the single `service_offering` field on session types (#274).**
+  `GET /users/{id}/session-types` and `GET /me/session-types` no longer return
+  `service_offering`, which only repeated the first item of `service_offerings`;
+  read the list. Creating or patching a session type with `service_offering_id`
+  is now a `422` pointing at that field; send `service_offering_ids`. The
+  frontend moved to the list first (frontend PR #230).
+
 ### Changed
 
 - **QStash now owns application-runtime scheduling.** The five recurring jobs

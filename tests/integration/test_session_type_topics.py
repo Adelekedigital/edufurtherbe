@@ -59,8 +59,6 @@ async def test_a_type_can_cover_several_offerings_in_order(
 
     assert created.status_code == 201
     assert codes(row) == [DOCS, SCHOLARSHIPS, TESTS]
-    # The single field this release keeps is the first of the set.
-    assert row["service_offerings"][0]["code"] == DOCS  # type: ignore[index]
 
 
 async def test_the_public_read_carries_the_set_too(
@@ -98,6 +96,8 @@ async def test_the_removed_single_field_is_refused_not_ignored(
     )
 
     assert response.status_code == 422, response.text
+    # Pointing at the field, so a form can mark it, and naming what replaces it.
+    assert [e["pointer"] for e in response.json()["errors"]] == ["/service_offering_id"]
     assert "service_offering_ids" in response.text
     async with db_engine.begin() as conn:
         written = await conn.execute(
@@ -128,7 +128,6 @@ async def test_an_unclassified_type_has_an_empty_set(
     created = (await api_client.post(URL, json=body(), headers=bearer(api_token(auth)))).json()
     row = await own(api_client, auth, created["id"])
 
-    assert row["service_offerings"] == []
     assert row["service_offerings"] == []
 
 
@@ -198,7 +197,6 @@ async def test_patching_replaces_the_set_and_empty_clears_it(
     assert codes(replaced) == [INTERVIEW, TESTS]
     assert replaced["service_offerings"][0]["code"] == INTERVIEW  # type: ignore[index]
     assert cleared["service_offerings"] == []
-    assert cleared["service_offerings"] == []
 
 
 async def test_patching_the_removed_single_field_is_refused(
@@ -218,6 +216,7 @@ async def test_patching_the_removed_single_field_is_refused(
     )
 
     assert refused.status_code == 422, refused.text
+    assert [e["pointer"] for e in refused.json()["errors"]] == ["/service_offering_id"]
     assert codes(await own(api_client, auth, created["id"])) == [TESTS, DOCS]
 
 

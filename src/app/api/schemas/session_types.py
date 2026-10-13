@@ -35,7 +35,8 @@ import datetime as dt
 from typing import Self, cast
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from app.api.schemas.common import Normalised, publish_window_minimum
 from app.api.schemas.intake import QuestionRead, QuestionWrite
@@ -73,30 +74,14 @@ def _offerings(row: dict[str, object]) -> list[LookupRef]:
     return [LookupRef(**o) for o in row.get("service_offerings") or []]  # type: ignore[attr-defined]
 
 
-#: Write fields removed from the API, each with what replaces it (#274).
-REMOVED_WRITE_FIELDS = {"service_offering_id": "service_offering_ids"}
-
-
-def _refuse_removed_fields(data: object) -> object:
-    """**Refused, not ignored.** An unknown key is otherwise dropped silently, so
-    a client still sending a removed field would get a `2xx` for a change that
-    never happened: a type left unclassified that it believes it classified."""
-    if isinstance(data, dict):
-        for removed, instead in REMOVED_WRITE_FIELDS.items():
-            if removed in data:
-                raise ValueError(f"{removed} was removed; send {instead} instead")
-    return data
-
-
 def _refuse_two_set_fields(model: BaseModel) -> None:
     """Each set and its legacy single field: `application_stages` beside
     `application_stage` (#215). A request sending both of a pair has two answers
     and no rule for which wins. (`service_offering_id` was the other pair until
     #274 removed it.)"""
     fields = model.model_fields_set
-    for plural, single in (("application_stages", "application_stage"),):
-        if plural in fields and single in fields:
-            raise ValueError(f"send {plural} or {single}, not both")
+    if "application_stages" in fields and "application_stage" in fields:
+        raise ValueError("send application_stages or application_stage, not both")
     # `[]` is any stage and absent is unchanged; `null` would be a third
     # spelling of one of them, so it is refused rather than guessed at (#215).
     if "application_stages" in fields and getattr(model, "application_stages", None) is None:
@@ -511,7 +496,26 @@ def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePa
     return model
 
 
-class MentorSessionTypeWrite(Normalised):
+class _SessionTypeWriteBase(Normalised):
+    """What every session-type write refuses, declared once for create and patch.
+
+    **A removed field is refused, not ignored** (#274). An unknown key is
+    otherwise dropped silently, so a client still sending one would get a `2xx`
+    for a change that never happened: a type left unclassified that it believes
+    it classified. Declared as a hidden field rather than checked on the raw
+    body so the `422` points at it (`/service_offering_id`); never dumped, never
+    published, and never valid.
+    """
+
+    service_offering_id: SkipJsonSchema[object] = Field(default=None, exclude=True)
+
+    @field_validator("service_offering_id", mode="before")
+    @classmethod
+    def _removed(cls, _value: object) -> object:
+        raise ValueError("service_offering_id was removed; send service_offering_ids instead")
+
+
+class MentorSessionTypeWrite(_SessionTypeWriteBase):
     """A new offering, as its mentor describes it.
 
     **`meeting_venue` is deliberately absent.** An offering is held on one of the
@@ -638,18 +642,13 @@ class MentorSessionTypeWrite(Normalised):
         ),
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _no_removed_fields(cls, data: object) -> object:
-        return _refuse_removed_fields(data)
-
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
         _refuse_two_set_fields(self)
         return _refuse_mismatched_label(self)
 
 
-class MentorSessionTypePatch(Normalised):
+class MentorSessionTypePatch(_SessionTypeWriteBase):
     """A change to one offering. Every field optional; absent is not null.
 
     **`is_active` appears here and not on the create model.** Deactivating is a
@@ -754,11 +753,6 @@ class MentorSessionTypePatch(Normalised):
             "`false` un-features it. Only an offering on offer can be featured."
         ),
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _no_removed_fields(cls, data: object) -> object:
-        return _refuse_removed_fields(data)
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
