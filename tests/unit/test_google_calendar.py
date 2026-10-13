@@ -12,13 +12,20 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import threading
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
 
+from app.infra.clients import meetings
 from app.infra.clients.meetings import (
     CONFERENCE_POLLS,
+    CalendarAccessRevokedError,
     GoogleCalendar,
     VenueUnavailableError,
 )
@@ -32,27 +39,83 @@ FAKE_SECRET = "not-a-real-client-secret"  # noqa: S105
 FAKE_REFRESH = "not-a-real-refresh-token"
 
 
+#: Every client a `Google` builds, closed when its test ends.
+_clients: list[httpx.Client] = []
+
+
+@pytest.fixture(autouse=True)
+def isolated(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """An empty token cache per test, since the platform's token is cached for
+    the process (#421), and every stub's client closed afterwards."""
+    monkeypatch.setattr(meetings, "_tokens", meetings._TokenCache())
+    yield
+    while _clients:
+        _clients.pop().close()
+
+
+class Google:
+    """The one stand-in for Google here: its token endpoint and its calendar.
+
+    Tokens are numbered as minted (`at-1`, `at-2`), or taken from `grants` while
+    any are left. Calendar calls are recorded and answered by `handler`.
+    `before_exchange` runs, per refresh token, before its exchange is answered.
+    """
+
+    def __init__(
+        self,
+        handler: Callable[[httpx.Request], httpx.Response] | None = None,
+        *,
+        grants: Sequence[httpx.Response] = (),
+        before_exchange: Mapping[str, Callable[[], object]] | None = None,
+    ) -> None:
+        self.exchanges: list[dict[str, list[str]]] = []
+        self.calls: list[httpx.Request] = []
+        self._handler = handler or (lambda _: httpx.Response(204))
+        self._grants = list(grants)
+        self._before_exchange = before_exchange or {}
+        self.client = httpx.Client(transport=httpx.MockTransport(self._route))
+        _clients.append(self.client)
+
+    def _route(self, request: httpx.Request) -> httpx.Response:
+        if request.url == meetings.GOOGLE_TOKEN_URL:
+            form = parse_qs(request.content.decode())
+            self.exchanges.append(form)
+            self._before_exchange.get(form["refresh_token"][0], lambda: None)()
+            if self._grants:
+                return self._grants.pop(0)
+            token = f"at-{len(self.exchanges)}"
+            return httpx.Response(200, json={"access_token": token, "expires_in": 3600})
+        self.calls.append(request)
+        return self._handler(request)
+
+    def adapter(
+        self, *, refresh: str = FAKE_REFRESH, calendar_id: str = "primary"
+    ) -> GoogleCalendar:
+        """A fresh adapter, as `calendar_for` builds one per call."""
+        return GoogleCalendar(
+            client_id="cid",
+            client_secret=FAKE_SECRET,
+            refresh_token=refresh,
+            calendar_id=calendar_id,
+            client=self.client,
+        )
+
+    def bearers(self) -> list[str]:
+        return [r.headers["Authorization"] for r in self.calls]
+
+
 def calendar(
-    handler: Any, *, calendar_id: str = "primary"
+    handler: Callable[[httpx.Request], httpx.Response], *, calendar_id: str = "primary"
 ) -> tuple[GoogleCalendar, list[httpx.Request]]:
-    """An adapter whose calls are captured, with the token exchange stubbed."""
-    seen: list[httpx.Request] = []
+    """An adapter whose calendar calls are captured."""
+    google = Google(handler)
+    return google.adapter(calendar_id=calendar_id), google.calls
 
-    def route(request: httpx.Request) -> httpx.Response:
-        if "oauth2" in str(request.url):
-            return httpx.Response(200, json={"access_token": "at", "expires_in": 3600})
-        seen.append(request)
-        return handler(request)
 
-    client = httpx.Client(transport=httpx.MockTransport(route))
-    api = GoogleCalendar(
-        client_id="cid",
-        client_secret=FAKE_SECRET,
-        refresh_token=FAKE_REFRESH,
-        calendar_id=calendar_id,
-        client=client,
-    )
-    return api, seen
+def replies(*responses: httpx.Response) -> Callable[[httpx.Request], httpx.Response]:
+    """Each calendar call gets the next response, then `204`."""
+    queue = list(responses)
+    return lambda _: queue.pop(0) if queue else httpx.Response(204)
 
 
 def created(**overrides: Any) -> Any:
@@ -381,6 +444,17 @@ def test_a_real_failure_still_raises() -> None:
         api.cancel_event("evt_1")
 
 
+@pytest.mark.parametrize("event_id", ["evt_404", "evt_410"])
+def test_gone_is_read_from_the_status_not_the_message(event_id: str) -> None:
+    """The event id is in the error's text, so matching `404` there took a 500
+    on `evt_404` for an event already gone, and the caller cleared the id it
+    needed to try again."""
+    api, _ = calendar(lambda _: httpx.Response(500, json={"error": "boom"}))
+
+    with pytest.raises(VenueUnavailableError):
+        api.cancel_event(event_id)
+
+
 # --------------------------------------------------------------------------
 # The token
 # --------------------------------------------------------------------------
@@ -389,42 +463,218 @@ def test_a_real_failure_still_raises() -> None:
 def test_the_access_token_is_reused_across_calls() -> None:
     """A refresh per call is a second round trip to Google on every booking, to
     re-acquire something still valid for the best part of an hour."""
-    exchanges = 0
-
-    def route(request: httpx.Request) -> httpx.Response:
-        nonlocal exchanges
-        if "oauth2" in str(request.url):
-            exchanges += 1
-            return httpx.Response(200, json={"access_token": "at", "expires_in": 3600})
-        return httpx.Response(200, json={"id": "evt", "hangoutLink": "x"})
-
-    api = GoogleCalendar(
-        client_id="cid",
-        client_secret=FAKE_SECRET,
-        refresh_token=FAKE_REFRESH,
-        client=httpx.Client(transport=httpx.MockTransport(route)),
-    )
+    google = Google(lambda _: httpx.Response(200, json={"id": "evt", "hangoutLink": "x"}))
+    api = google.adapter()
 
     insert(api)
     insert(api)
 
-    assert exchanges == 1
+    assert len(google.exchanges) == 1
 
 
 def test_a_refused_refresh_is_a_venue_failure_not_a_crash() -> None:
     """An expired or revoked refresh token is an operator problem, and the
     caller's answer is the same as for every other Google failure: carry on
     without a calendar rather than fail the booking."""
-    api = GoogleCalendar(
-        client_id="cid",
-        client_secret=FAKE_SECRET,
-        refresh_token=FAKE_REFRESH,
-        client=httpx.Client(
-            transport=httpx.MockTransport(
-                lambda _: httpx.Response(400, json={"error": "invalid_grant"})
-            )
-        ),
-    )
+    google = Google(grants=[httpx.Response(400, json={"error": "invalid_grant"})])
 
     with pytest.raises(VenueUnavailableError):
-        insert(api)
+        insert(google.adapter())
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        httpx.Response(200, json={"expires_in": 3600}),
+        httpx.Response(200, json=["at"]),
+        httpx.Response(200, json={"access_token": "at", "expires_in": "soon"}),
+        httpx.Response(200, text="<html>not json</html>"),
+    ],
+    ids=["no-token", "not-an-object", "bad-lifetime", "not-json"],
+)
+def test_a_token_answer_without_a_usable_token_is_a_venue_failure(answer: httpx.Response) -> None:
+    """A `KeyError` or `TypeError` here escaped every caller's `except` for
+    Google failures and became a 500 on a booking that had already succeeded."""
+    google = Google(grants=[answer])
+
+    with pytest.raises(VenueUnavailableError):
+        google.adapter().cancel_event("evt_1")
+
+    assert google.calls == []
+
+
+def test_two_calendars_with_one_account_exchange_the_token_once() -> None:
+    """#421: `calendar_for` builds an adapter per call, so a token cached on
+    the instance was re-exchanged before every accept, cancel and runner tick."""
+    google = Google()
+
+    google.adapter().cancel_event("evt_1")
+    google.adapter().cancel_event("evt_2")
+
+    assert len(google.exchanges) == 1
+    assert google.bearers() == ["Bearer at-1", "Bearer at-1"]
+
+
+def test_another_refresh_token_gets_its_own_token() -> None:
+    """Keyed on the grant, so one account never borrows another's token."""
+    google = Google()
+
+    google.adapter().cancel_event("evt_1")
+    google.adapter(refresh="another-refresh-token").cancel_event("evt_2")
+
+    assert [e["refresh_token"] for e in google.exchanges] == [
+        [FAKE_REFRESH],
+        ["another-refresh-token"],
+    ]
+    assert google.bearers() == ["Bearer at-1", "Bearer at-2"]
+
+
+def test_another_calendar_on_one_account_shares_the_token() -> None:
+    """The token belongs to the grant, not the calendar it is used on."""
+    google = Google()
+
+    google.adapter().cancel_event("evt_1")
+    google.adapter(calendar_id="team").cancel_event("evt_2")
+
+    assert len(google.exchanges) == 1
+    assert "/calendars/team/" in str(google.calls[1].url)
+
+
+def test_threads_arriving_together_exchange_the_token_once() -> None:
+    """Calendars are reached through `asyncio.to_thread`, so callers finding
+    no token at the same moment must not each exchange one."""
+    google = Google(before_exchange={FAKE_REFRESH: lambda: time.sleep(0.05)})
+    arrived = threading.Barrier(8)
+
+    def cancel(n: int) -> None:
+        arrived.wait()
+        google.adapter().cancel_event(f"evt_{n}")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(cancel, range(8)))
+
+    assert len(google.exchanges) == 1
+    assert len(google.calls) == 8
+
+
+def test_a_slow_exchange_does_not_hold_up_another_grant() -> None:
+    """Single-flight per grant: one lock across every exchange would make each
+    caller of one grant wait out another grant's slow token endpoint. And the
+    other grant's lookup must not prune the slow one while it is mid-exchange,
+    or the token it is fetching is lost."""
+    entered, release = threading.Event(), threading.Event()
+
+    def held() -> None:
+        entered.set()
+        release.wait(timeout=30)
+
+    google = Google(before_exchange={"slow-refresh-token": held})
+    slow_grant = google.adapter(refresh="slow-refresh-token")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        slow = pool.submit(slow_grant.cancel_event, "evt_1")
+        assert entered.wait(timeout=5)
+        fast = pool.submit(google.adapter().cancel_event, "evt_2")
+        try:
+            # Finishes while the slow exchange is still held, or never would.
+            fast.result(timeout=5)
+        finally:
+            release.set()
+        slow.result(timeout=5)
+    slow_grant.cancel_event("evt_3")
+
+    assert len(google.exchanges) == 2
+
+
+def test_a_rejected_cached_token_is_exchanged_again_and_the_call_retried() -> None:
+    """A token revoked or rotated before it expires answers `401`. Without a
+    retry the cache would fail every call with it for up to an hour."""
+    google = Google(replies(httpx.Response(204), httpx.Response(401)))
+
+    google.adapter().cancel_event("evt_1")
+    google.adapter().cancel_event("evt_2")
+    google.adapter().cancel_event("evt_3")
+
+    assert len(google.exchanges) == 2
+    assert google.bearers() == ["Bearer at-1", "Bearer at-1", "Bearer at-2", "Bearer at-2"]
+
+
+def test_a_401_on_a_token_just_exchanged_is_not_retried() -> None:
+    """A fresh token refused is not a stale one: exchanging again would ask
+    the same question twice and double the calls on every failure."""
+    google = Google(replies(httpx.Response(401)))
+
+    with pytest.raises(VenueUnavailableError, match="401"):
+        google.adapter().cancel_event("evt_1")
+
+    assert len(google.exchanges) == 1
+    assert len(google.calls) == 1
+
+
+def test_a_second_401_is_a_venue_failure_after_one_retry() -> None:
+    google = Google(replies(httpx.Response(204), httpx.Response(401), httpx.Response(401)))
+    google.adapter().cancel_event("evt_1")
+
+    with pytest.raises(VenueUnavailableError, match="401"):
+        google.adapter().cancel_event("evt_2")
+
+    assert len(google.exchanges) == 2
+    assert len(google.calls) == 3
+
+
+def test_a_grant_revoked_behind_a_cached_token_is_still_reported_as_revoked() -> None:
+    """The `401` is what makes the dead grant visible again: the re-exchange
+    hears `invalid_grant`, as an uncached call would have."""
+    google = Google(
+        replies(httpx.Response(204), httpx.Response(401)),
+        grants=[
+            httpx.Response(200, json={"access_token": "at-1", "expires_in": 3600}),
+            httpx.Response(400, json={"error": "invalid_grant"}),
+        ],
+    )
+    google.adapter().cancel_event("evt_1")
+
+    with pytest.raises(CalendarAccessRevokedError):
+        google.adapter().cancel_event("evt_2")
+
+    assert len(google.exchanges) == 2
+    assert google.bearers() == ["Bearer at-1", "Bearer at-1"]
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def minted(token: str) -> Callable[[], tuple[str, int]]:
+    return lambda: (token, 3600)
+
+
+def test_a_token_is_exchanged_again_a_minute_before_it_expires() -> None:
+    """Measured on a monotonic clock, so a wall-clock step cannot keep a dead
+    token or drop a live one."""
+    clock = Clock()
+    cache = meetings._TokenCache(clock=clock)
+    grant = meetings._TokenCache.key("cid", FAKE_SECRET, FAKE_REFRESH)
+
+    assert cache.get(grant, minted("at-1")) == ("at-1", True)
+    clock.now += 3600 - 61
+    assert cache.get(grant, minted("at-2")) == ("at-1", False)
+    clock.now += 2
+    assert cache.get(grant, minted("at-2")) == ("at-2", True)
+
+
+def test_a_rotated_refresh_token_leaves_no_entry_behind() -> None:
+    """Expired entries are dropped, so the cache holds what is live rather than
+    every grant the process has ever used."""
+    clock = Clock()
+    cache = meetings._TokenCache(clock=clock)
+    cache.get(meetings._TokenCache.key("cid", FAKE_SECRET, "old"), minted("at-1"))
+    clock.now += 3600
+
+    cache.get(meetings._TokenCache.key("cid", FAKE_SECRET, "rotated"), minted("at-2"))
+
+    assert len(cache) == 1
