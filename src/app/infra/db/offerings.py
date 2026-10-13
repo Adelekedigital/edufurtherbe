@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, exists, func, insert, literal, select, update
+from sqlalchemy import delete, exists, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
@@ -31,7 +31,6 @@ from app.infra.db.models.mentoring import (
     ServiceOffering,
     SessionTypeOffering,
 )
-from app.infra.db.models.sessions import SessionType
 
 __all__ = [
     "goal_overlap_count",
@@ -213,12 +212,12 @@ async def offerings_for_session_types(
 ) -> dict[Any, list[dict[str, Any]]]:
     """Each session type's offerings, in the mentor's order, as `code`/`display_name`.
 
-    **One statement for a whole list**, keyed by session type. A type with rows
-    in `session_type_offerings` reads them; **a type with none falls back to the
-    legacy `service_offering_id`** (#205) — which is what code from before the
-    table, the demo seed and the ETL still write, so none of them reads as
-    unclassified. Retired offerings are still named: retiring one does not change
-    what an existing session type was about.
+    **One statement for a whole list**, keyed by session type, from
+    `session_type_offerings` alone. The fallback to the legacy
+    `session_types.service_offering_id` went in #274, after every type was given
+    its set (migration `a7e3c1d9b452`) and the demo seed moved onto the set; a
+    type with no rows is unclassified. Retired offerings are still named:
+    retiring one does not change what an existing session type was about.
     """
     if not session_type_ids:
         return {}
@@ -233,21 +232,7 @@ async def offerings_for_session_types(
         .join(ServiceOffering, ServiceOffering.id == SessionTypeOffering.service_offering_id)
         .where(SessionTypeOffering.session_type_id.in_(session_type_ids))
     )
-    legacy = (
-        select(
-            SessionType.id.label("type_id"),
-            ServiceOffering.id.label("offering_id"),
-            ServiceOffering.slug,
-            ServiceOffering.display_name,
-            literal(0).label("position"),
-        )
-        .join(ServiceOffering, ServiceOffering.id == SessionType.service_offering_id)
-        .where(
-            SessionType.id.in_(session_type_ids),
-            ~exists().where(SessionTypeOffering.session_type_id == SessionType.id),
-        )
-    )
-    rows = await session.execute(joined.union_all(legacy).order_by("type_id", "position"))
+    rows = await session.execute(joined.order_by("type_id", "position"))
     result: dict[Any, list[dict[str, Any]]] = {}
     for row in rows:
         result.setdefault(row.type_id, []).append(
@@ -259,13 +244,12 @@ async def offerings_for_session_types(
 async def set_session_type_offerings(
     session: AsyncSession, session_type_id: Any, offering_ids: Sequence[UUID]
 ) -> None:
-    """Replace one session type's set, in order, and dual-write the legacy column.
+    """Replace one session type's set, in order.
 
     **Every id must name an offering the platform still offers** — a `422`
     naming the unknown ones otherwise, rather than the foreign-key 500 an unknown
-    id used to produce. The first of the set is written to
-    `session_types.service_offering_id` (#205: the expand step), so code reading
-    only that column this release still sees the type's main offering.
+    id used to produce. The legacy `session_types.service_offering_id` is no
+    longer written (#274): nothing reads it, and its migration drops it.
     """
     wanted = list(offering_ids)
     if wanted:
@@ -296,8 +280,3 @@ async def set_session_type_offerings(
                 for index, value in enumerate(wanted)
             ],
         )
-    await session.execute(
-        update(SessionType)
-        .where(SessionType.id == session_type_id)
-        .values(service_offering_id=wanted[0] if wanted else None)
-    )

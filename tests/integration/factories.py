@@ -92,23 +92,31 @@ async def add_session_type(
             await conn.execute(
                 text(
                     "INSERT INTO session_types "
-                    "(mentor_user_id, name, description, service_offering_id, "
+                    "(mentor_user_id, name, description, "
                     " application_stage, custom_stage_label, is_active) "
-                    "VALUES (:u, :n, :d, "
-                    "        (SELECT id FROM service_offerings WHERE slug = :c), "
-                    "        :s, :label, :active) RETURNING id"
+                    "VALUES (:u, :n, :d, :s, :label, :active) RETURNING id"
                 ),
                 {
                     "u": mentor,
                     "n": name,
                     "d": description,
-                    "c": service_offering,
                     "s": application_stage,
                     "label": "My own wording" if application_stage == "other" else None,
                     "active": active,
                 },
             )
         ).scalar_one()
+        if service_offering is not None:
+            # The set is where a type's offerings live (#274); the legacy
+            # column is no longer read.
+            await conn.execute(
+                text(
+                    "INSERT INTO session_type_offerings "
+                    "(session_type_id, service_offering_id, position) "
+                    "SELECT :t, id, 0 FROM service_offerings WHERE slug = :c"
+                ),
+                {"t": session_type, "c": service_offering},
+            )
         if venue is not None:
             # **Venue is a reference now, not a column on the config.** The
             # offering points at one of the mentor's conferencing options, and

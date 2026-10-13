@@ -14,7 +14,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_availability, add_session_type
+from tests.integration.factories import add_availability
 from tests.integration.test_api_me_session_type_writes import URL, as_mentor, body
 
 from conftest import api_token, bearer
@@ -104,20 +104,6 @@ async def test_the_removed_single_field_is_refused_not_ignored(
             text("SELECT count(*) FROM session_types WHERE mentor_user_id = :u"), {"u": mentor}
         )
     assert written.scalar_one() == 0
-
-
-async def test_a_type_written_only_to_the_old_column_still_reads(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """Old code during a deploy, the demo seed and the factories write only
-    `service_offering_id`. Reads fall back to it rather than showing nothing."""
-    mentor, auth = await as_mentor(db_engine, "topics-fallback")
-    type_id = await add_session_type(db_engine, mentor, service_offering=SCHOLARSHIPS)
-
-    row = await own(api_client, auth, str(type_id))
-
-    assert codes(row) == [SCHOLARSHIPS]
-    assert row["service_offerings"][0]["code"] == SCHOLARSHIPS  # type: ignore[index]
 
 
 async def test_an_unclassified_type_has_an_empty_set(
@@ -235,38 +221,3 @@ async def test_a_patch_that_leaves_the_set_out_keeps_it(
     await api_client.patch(f"{URL}/{created['id']}", json={"name": "Renamed"}, headers=headers)
 
     assert codes(await own(api_client, auth, created["id"])) == [TESTS, DOCS]
-
-
-async def test_the_old_column_holds_the_first_of_the_set(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """The expand step: code from before this release reads only
-    `session_types.service_offering_id`, so it must hold the set's first — the
-    API cannot show this, because it derives the single field from the set."""
-    _, auth = await as_mentor(db_engine, "topics-dual")
-    ids = await offering_ids(db_engine)
-    headers = bearer(api_token(auth))
-    created = (
-        await api_client.post(
-            URL, json=body(service_offering_ids=[ids[DOCS], ids[TESTS]]), headers=headers
-        )
-    ).json()
-
-    async def column() -> str | None:
-        async with db_engine.begin() as conn:
-            value = (
-                await conn.execute(
-                    text("SELECT service_offering_id FROM session_types WHERE id = :t"),
-                    {"t": created["id"]},
-                )
-            ).scalar_one()
-        return None if value is None else str(value)
-
-    first = await column()
-    await api_client.patch(
-        f"{URL}/{created['id']}", json={"service_offering_ids": []}, headers=headers
-    )
-    cleared = await column()
-
-    assert first == ids[DOCS]
-    assert cleared is None

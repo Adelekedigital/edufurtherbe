@@ -209,7 +209,9 @@ async def session_types_of(engine: AsyncEngine, user: object) -> dict[str, dict[
                 "         WHERE q.session_type_id = t.id AND q.deleted_at IS NULL) AS questions "
                 "FROM session_types t "
                 "JOIN session_type_booking_configs c ON c.session_type_id = t.id "
-                "LEFT JOIN service_offerings o ON o.id = t.service_offering_id "
+                "LEFT JOIN session_type_offerings s ON s.session_type_id = t.id "
+                "     AND s.position = 0 "
+                "LEFT JOIN service_offerings o ON o.id = s.service_offering_id "
                 "WHERE t.mentor_user_id = :u AND t.deleted_at IS NULL"
             ),
             {"u": user},

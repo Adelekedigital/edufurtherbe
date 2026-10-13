@@ -158,6 +158,10 @@ class SessionType(TimestampMixin, Base):
     #: grouping — so a foreign key named `category` would point at a table with a
     #: different `category` one join away. `mentor_service_offerings` and
     #: `mentee_goal_needs` already use this name.
+    #:
+    #: **Retired (#274): no longer read or written.** A type's offerings live in
+    #: `session_type_offerings`. Still declared only because the column still
+    #: exists; the migration that drops it removes this too.
     service_offering_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("service_offerings.id", ondelete="RESTRICT")
     )
