@@ -26,7 +26,7 @@ import datetime as dt
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import Select, and_, func, literal, not_, or_, select, text
+from sqlalchemy import Select, and_, exists, func, literal, not_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.suggestions import APPROVED_IN_ADVANCE_AFTER
@@ -64,8 +64,10 @@ def approved_in_advance() -> Any:
     """Whether an offer carries the mentor's approval: it was made on ending a
     session in :data:`APPROVED_IN_ADVANCE_AFTER`, a decline (owner, 2026-10-13).
     Read from the original's status, so nothing new is stored."""
-    return SessionSuggestion.session_id.in_(
-        select(Session.id).where(Session.status.in_(APPROVED_IN_ADVANCE_AFTER))
+    # Correlated on the offer's own session: one primary-key probe per row.
+    return exists().where(
+        Session.id == SessionSuggestion.session_id,
+        Session.status.in_(APPROVED_IN_ADVANCE_AFTER),
     )
 
 
@@ -153,13 +155,21 @@ async def open_offer(
     Scoped to the mentee in the query: a time offered to somebody else is never
     theirs to spend. Read once unlocked, before the grid, for where the notice
     floor is measured from; and again under the lock, which is the read that
-    decides. ``approved`` says whether booking it confirms at once.
+    decides.
+
+    **Every offer of this time to this mentee is taken up together**, since
+    one mentor can offer the same hour twice (a decline's, then a cancel's). The
+    returned offer is a held one if any, so the hold check skips it; ``ids``
+    is all of them, which booking spends at once; ``approved`` is whether any
+    was approved in advance; ``held`` is whether the returned one still holds,
+    which is all the notice exemption may lean on.
     """
     statement = (
         select(
             SessionSuggestion.id,
             SessionSuggestion.duration_minutes,
             SessionSuggestion.created_at,
+            (SessionSuggestion.held_until > now).label("held"),
             approved_in_advance().label("approved"),
         )
         .where(
@@ -169,13 +179,19 @@ async def open_offer(
             *takeable(now),
         )
         .order_by(SessionSuggestion.created_at)
-        .limit(1)
     )
     if lock:
-        # The offer's row only: the original session is read, not claimed.
+        # The offers' rows only: the original sessions are read, not claimed.
         statement = statement.with_for_update(of=SessionSuggestion)
-    row = (await session.execute(statement)).mappings().first()
-    return dict(row) if row else None
+    rows = [dict(row) for row in (await session.execute(statement)).mappings()]
+    if not rows:
+        return None
+    offer = next((row for row in rows if row["held"]), rows[0])
+    return {
+        **offer,
+        "ids": tuple(row["id"] for row in rows),
+        "approved": any(row["approved"] for row in rows),
+    }
 
 
 async def holds_against(
@@ -186,9 +202,9 @@ async def holds_against(
     duration_minutes: int,
     break_minutes: int,
     now: dt.datetime,
-    except_id: UUID | None,
+    except_ids: tuple[UUID, ...] = (),
 ) -> bool:
-    """Whether any hold but the one being spent overlaps this booking.
+    """Whether any hold but the ones being spent overlaps this booking.
 
     Measured exactly as the grid measures it — the hold pushed earlier by this
     offering's break and later by its own, from the same `_active_holds` — so a
@@ -202,8 +218,8 @@ async def holds_against(
             holds.c.end + _minutes(holds.c.break_minutes),
         ).op("&&")(func.session_window(starts_at, duration_minutes))
     )
-    if except_id is not None:
-        statement = statement.where(holds.c.id != except_id)
+    if except_ids:
+        statement = statement.where(holds.c.id.not_in(except_ids))
     return await session.scalar(statement.limit(1)) is not None
 
 

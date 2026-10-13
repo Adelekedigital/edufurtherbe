@@ -26,6 +26,7 @@ from tests.integration.test_api_session_suggestions import (
     end_with_suggestion,
     lapse,
     offering_of,
+    open_slots,
     suggestion_of,
 )
 from tests.integration.test_api_session_transitions import a_booking
@@ -169,3 +170,72 @@ async def test_a_cancels_lapsed_offer_is_not_taken_up(
     assert booked.status_code == 201, booked.text
     assert booked.json()["status"] == "pending_mentor_approval"
     assert (await suggestion_of(api_client, booking))["status"] == "expired"
+
+
+async def test_past_the_hold_the_mentors_notice_applies_again(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The approval outlasts the hold; the notice measured from the offer does
+    not.** While held, notice is measured from when the time was offered, so a
+    time valid then stays bookable. Past the hold the time must be one the grid
+    offers now, or a lapsed offer would let a mentee confirm a session minutes
+    before it starts, with no approval and inside the mentor's notice."""
+    booking = await a_booking(db_engine, api_client, "pa-notice")
+    session_type = await offering_of(api_client, booking)
+    soon = next(s for s in await open_slots(api_client, booking) if s != booking["starts_at"])
+    await end_with_suggestion(api_client, booking, "decline", soon)
+    await lapse(db_engine, booking)
+    async with db_engine.begin() as conn:
+        # Offered a month ago, with a month's notice now: measured from the
+        # offer the time would pass, measured from now it cannot.
+        await conn.execute(
+            text(
+                "UPDATE session_suggestions SET created_at = now() - interval '31 days' "
+                "WHERE session_id = :i"
+            ),
+            {"i": booking["id"]},
+        )
+        changed = await conn.execute(
+            text(
+                "UPDATE session_type_booking_configs SET min_notice_minutes = 43200 "
+                "WHERE session_type_id = :t"
+            ),
+            {"t": session_type},
+        )
+        assert changed.rowcount == 1
+
+    refused = await book(api_client, session_type, soon, booking["mentee"])
+
+    assert refused.status_code == 422, refused.text
+    assert (await suggestion_of(api_client, booking))["booked_session_id"] is None
+
+
+async def test_a_decline_and_a_cancel_offering_one_time_book_it_once_confirmed(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Two offers of one time to one mentee**: a decline's, lapsed, and a later
+    cancel's, held. Booking it honours the hold (no conflict with their own
+    offer), confirms because one of them was approved in advance, and spends
+    both, so neither can be booked again."""
+    first = await a_booking(db_engine, api_client, "pa-two")
+    session_type = await offering_of(api_client, first)
+    at = await another_slot(api_client, first)
+    await end_with_suggestion(api_client, first, "decline", at)
+    await lapse(db_engine, first)
+    slots = [s for s in await open_slots(api_client, first) if s not in (at, first["starts_at"])]
+    second = await book(api_client, session_type, slots[-1], first["mentee"])
+    assert second.status_code == 201, second.text
+    accepted = await api_client.post(
+        f"/api/v1/sessions/{second.json()['id']}/accept", headers=first["mentor"]
+    )
+    assert accepted.status_code == 200, accepted.text
+    again = {**first, "id": second.json()["id"]}
+    cancelled = await end_with_suggestion(api_client, again, "cancel", at)
+    assert cancelled.status_code == 200, cancelled.text
+
+    booked = await book(api_client, session_type, at, first["mentee"])
+
+    assert booked.status_code == 201, booked.text
+    assert booked.json()["status"] == "confirmed"
+    assert (await suggestion_of(api_client, first))["status"] == "booked"
+    assert (await suggestion_of(api_client, again))["status"] == "booked"

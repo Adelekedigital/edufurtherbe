@@ -572,7 +572,7 @@ async def test_the_locked_recheck_counts_the_offerings_break(
             duration_minutes=60,
             break_minutes=0,
             now=now,
-            except_id=None,
+            except_ids=(),
         )
         after_break = await holds_against(
             session,
@@ -581,7 +581,7 @@ async def test_the_locked_recheck_counts_the_offerings_break(
             duration_minutes=60,
             break_minutes=0,
             now=now,
-            except_id=None,
+            except_ids=(),
         )
 
     assert next_hour is True
