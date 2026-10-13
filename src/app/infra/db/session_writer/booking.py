@@ -68,7 +68,7 @@ from app.infra.db.booking_rules import (
     effective_requires_confirmation,
 )
 from app.infra.db.credit_writer import spend_credit
-from app.infra.db.holds import active_hold, held_offer, holds_against, lock_mentor_slots
+from app.infra.db.holds import holds_against, lock_mentor_slots, open_offer, takeable
 from app.infra.db.intake_file_store import link_files, usable_file_ids
 from app.infra.db.intake_store import questions_by_type, record_answers
 from app.infra.db.mentee_limits import check_mentee_limits
@@ -259,8 +259,9 @@ async def book_session(
 
     # **A time offered to this mentee** (#339), read before the grid so its notice
     # floor is measured from when it was offered: a slot valid then stays
-    # bookable through its two-hour hold. Re-read under the lock below.
-    pending_offer = await held_offer(
+    # bookable through its two-hour hold, and a decline's offer after it too
+    # (`holds.takeable`). Re-read under the lock below.
+    pending_offer = await open_offer(
         session,
         mentor_id=mentor_id,
         mentee_id=mentee_id,
@@ -291,11 +292,6 @@ async def book_session(
         # re-read `/slots` — which the message says.
         raise ValidationError("that time is not available — re-read the mentor's slots")
 
-    requires_confirmation = bool(offering["requires_confirmation"])
-    status = (
-        SessionStatus.PENDING_MENTOR_APPROVAL if requires_confirmation else SessionStatus.CONFIRMED
-    )
-
     # **A hold is not a session, so the exclusion constraint cannot see it.**
     # The lock is taken *after* the grid was read, so two bookings racing for
     # one hour still meet at the constraint below as they always have; what it
@@ -306,7 +302,7 @@ async def book_session(
     # **The time offered to this mentee, if this is it** (#339) — booked at the
     # length it was offered at, as decision #10 snapshots what was agreed, so a
     # mentor editing the offering inside the hold cannot change what it becomes.
-    offer = await held_offer(
+    offer = await open_offer(
         session,
         mentor_id=mentor_id,
         mentee_id=mentee_id,
@@ -317,6 +313,16 @@ async def book_session(
     if pending_offer is not None and offer is None:
         # Spent or lapsed between the two reads; the grid was read on its terms.
         raise ConflictError("the suggested time is no longer held — re-read the mentor's slots")
+    # **A decline's offer is approved in advance** (owner, 2026-10-13): the mentor
+    # picked this time for this mentee instead of approving theirs, so booking it
+    # does not wait on them again. Decided from the locked read, which is the one
+    # that spends the offer.
+    requires_confirmation = bool(offering["requires_confirmation"]) and not (
+        offer is not None and offer["approved"]
+    )
+    status = (
+        SessionStatus.PENDING_MENTOR_APPROVAL if requires_confirmation else SessionStatus.CONFIRMED
+    )
     duration = int(offer["duration_minutes"] if offer else offering["duration_minutes"])
     if await holds_against(
         session,
@@ -402,18 +408,18 @@ async def book_session(
         spent = await session.scalar(
             update(SessionSuggestion)
             .where(
-                # Owner-scoped and still active in the write itself, not only in
-                # the read that found it.
+                # Owner-scoped and still takeable in the write itself, not only
+                # in the read that found it.
                 SessionSuggestion.id == offer["id"],
                 SessionSuggestion.mentee_id == mentee_id,
                 SessionSuggestion.mentor_id == mentor_id,
-                *active_hold(now),
+                *takeable(now),
             )
             .values(accepted_session_id=session_id)
             .returning(SessionSuggestion.id)
         )
         if spent is None:
-            # Unreachable while `held_offer` holds the row FOR UPDATE on the same
+            # Unreachable while `open_offer` holds the row FOR UPDATE on the same
             # predicates; refused rather than trusted, so a booking can never
             # commit with its offer left open. Raising rolls the booking back.
             raise ConflictError("the suggested time is no longer held — re-read the mentor's slots")

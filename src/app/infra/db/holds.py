@@ -10,6 +10,11 @@ and another at the door.
 **No sweep.** A hold is active while it is unbooked and ``held_until`` is ahead,
 so one that lapses stops counting the instant it does, with nothing to run.
 
+**Taking up an offer is wider than the hold** (owner, 2026-10-13): a decline's
+offer is approved in advance and stays bookable by its mentee after the hold
+lapses, so booking reads :func:`takeable`, not :func:`active_hold`. The hold
+still decides only who else may see and book the time.
+
 **The exemption is the offer, not the person.** A mentee may book the exact time
 offered to them, at the offering it was offered for; every other hold — anyone
 else's, or another of their own — is busy to them like any session.
@@ -21,21 +26,24 @@ import datetime as dt
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import Select, and_, func, literal, not_, select, text
+from sqlalchemy import Select, and_, func, literal, not_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.suggestions import APPROVED_IN_ADVANCE_AFTER
 from app.infra.db.booking_rules import effective_break_minutes
 from app.infra.db.models.mentoring import MentorProfile
-from app.infra.db.models.sessions import SessionTypeBookingConfig
+from app.infra.db.models.sessions import Session, SessionTypeBookingConfig
 from app.infra.db.models.suggestions import SessionSuggestion
 
 __all__ = [
     "active_hold",
-    "held_offer",
+    "approved_in_advance",
     "held_slots",
     "holds_against",
     "lock_mentor_slots",
+    "open_offer",
     "suggestion_reminder_state",
+    "takeable",
 ]
 
 #: Namespace for the per-mentor slot lock, beside `CREDIT_LOCK_NAMESPACE` and for
@@ -49,6 +57,25 @@ def active_hold(now: Any) -> list[Any]:
     return [
         SessionSuggestion.accepted_session_id.is_(None),
         SessionSuggestion.held_until > now,
+    ]
+
+
+def approved_in_advance() -> Any:
+    """Whether an offer carries the mentor's approval: it was made on ending a
+    session in :data:`APPROVED_IN_ADVANCE_AFTER`, a decline (owner, 2026-10-13).
+    Read from the original's status, so nothing new is stored."""
+    return SessionSuggestion.session_id.in_(
+        select(Session.id).where(Session.status.in_(APPROVED_IN_ADVANCE_AFTER))
+    )
+
+
+def takeable(now: Any) -> list[Any]:
+    """An offer its mentee may still book: unbooked, and **held or approved in
+    advance**. The hold hides the time from others for two hours; an approved
+    offer stays bookable after it, while the time is still free on the grid."""
+    return [
+        SessionSuggestion.accepted_session_id.is_(None),
+        or_(SessionSuggestion.held_until > now, approved_in_advance()),
     ]
 
 
@@ -111,7 +138,7 @@ def held_slots(
     return statement
 
 
-async def held_offer(
+async def open_offer(
     session: AsyncSession,
     *,
     mentor_id: UUID,
@@ -126,25 +153,27 @@ async def held_offer(
     Scoped to the mentee in the query: a time offered to somebody else is never
     theirs to spend. Read once unlocked, before the grid, for where the notice
     floor is measured from; and again under the lock, which is the read that
-    decides.
+    decides. ``approved`` says whether booking it confirms at once.
     """
     statement = (
         select(
             SessionSuggestion.id,
             SessionSuggestion.duration_minutes,
             SessionSuggestion.created_at,
+            approved_in_advance().label("approved"),
         )
         .where(
             SessionSuggestion.mentor_id == mentor_id,
             _the_offer(mentee_id, session_type_id),
             SessionSuggestion.starts_at == starts_at,
-            *active_hold(now),
+            *takeable(now),
         )
         .order_by(SessionSuggestion.created_at)
         .limit(1)
     )
     if lock:
-        statement = statement.with_for_update()
+        # The offer's row only: the original session is read, not claimed.
+        statement = statement.with_for_update(of=SessionSuggestion)
     row = (await session.execute(statement)).mappings().first()
     return dict(row) if row else None
 

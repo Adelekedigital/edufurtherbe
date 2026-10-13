@@ -19,7 +19,7 @@ Owner decisions of 2026-10-03 (settled decision 230), in the order they act:
    unscheduled, and a nudge for an offer already booked or lapsed does nothing.
 5. **Booking it is ordinary booking** — `POST /sessions` at the suggested time.
    The booking writer finds the offer under its lock, books it at the length
-   it was offered at, and marks it spent (`holds.held_offer`).
+   it was offered at, and marks it spent (`holds.open_offer`).
 """
 
 from __future__ import annotations

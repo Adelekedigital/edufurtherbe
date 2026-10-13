@@ -10,14 +10,20 @@ Owner decisions, 2026-10-03 (decision 230):
   not booked it yet;
 - booking it is an ordinary booking, which spends a credit as every booking does.
 
-Pure: these are the numbers and the clock arithmetic, and nothing else.
+- a time offered on a **decline** is approved in advance (owner, 2026-10-13):
+  booking it confirms at once, even after the hold lapses.
+
+Pure: these are the numbers, the rule and the clock arithmetic, and nothing else.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 
+from app.domain.enums import SessionStatus
+
 __all__ = [
+    "APPROVED_IN_ADVANCE_AFTER",
     "SUGGESTION_HOLD",
     "SUGGESTION_REMINDER_KIND",
     "SUGGESTION_REMINDER_LEAD",
@@ -27,6 +33,15 @@ __all__ = [
 
 #: How long a suggested slot is kept for the mentee it was offered to.
 SUGGESTION_HOLD = dt.timedelta(hours=2)
+
+#: **The ends whose offered time is approved in advance** (owner, 2026-10-13):
+#: booking it confirms at once, whatever the mentor's standing setting. Only a
+#: decline: it answered a pending request, so the mentor picked this time for this
+#: mentee instead of approving theirs. A cancel ended a session already agreed,
+#: so there was no approval for the offer to stand in for. **Not tied to the
+#: hold**: the hold only hides the time from others, and the approval lasts while
+#: the offer is unbooked and the time is still free to book.
+APPROVED_IN_ADVANCE_AFTER: frozenset[SessionStatus] = frozenset({SessionStatus.DECLINED})
 
 #: How long before the hold lapses the mentee is nudged.
 SUGGESTION_REMINDER_LEAD = dt.timedelta(minutes=30)
