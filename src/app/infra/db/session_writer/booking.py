@@ -289,6 +289,9 @@ async def book_session(
         # The time offered to *this* mentee at this offering is open to them;
         # every other hold is busy.
         holds_for=mentee_id,
+        # An offered time is checked at the length it was offered at, not
+        # against the grid the offering's current length draws (#347).
+        length_minutes=pending_offer["duration_minutes"] if pending_offer else None,
         notice_from=pending_offer["created_at"]
         if pending_offer and pending_offer["held"]
         else None,

@@ -59,6 +59,7 @@ __all__ = [
     "WeeklyWindow",
     "bookable",
     "booking_window",
+    "fits",
     "local_day_start",
     "normalise_timezone",
     "project",
@@ -369,6 +370,41 @@ def bookable(
                 slots.append(slot)
             cursor += step
     return tuple(slots)
+
+
+def fits(
+    *,
+    rules: Sequence[WeeklyWindow],
+    exceptions: Sequence[DatedException],
+    busy: Sequence[UtcInterval],
+    slot: UtcInterval,
+    min_notice_minutes: int,
+    now: dt.datetime,
+) -> bool:
+    """Whether this exact interval could be booked, off the grid or on it.
+
+    **For a time already offered** (#347): the grid steps by the offering's
+    *current* length, so a mentor changing that length moves every start and an
+    offered hour can fall between two steps although nothing about it changed.
+    An offer is booked at the length it was offered at, so it is checked as that
+    interval: whole inside one window of declared availability, clear of
+    everything taken, and not before ``now`` plus the notice. The same three
+    rules :func:`bookable` applies to each step, without the stepping.
+    """
+    if slot.start < now + dt.timedelta(minutes=min_notice_minutes):
+        return False
+    if _overlaps(slot, _merge(busy)):
+        return False
+    days = dt.timedelta(days=1)
+    return any(
+        window.start <= slot.start and slot.end <= window.end
+        for window in project(
+            rules=rules,
+            exceptions=exceptions,
+            start=slot.start.date() - days,
+            end=slot.end.date() + 2 * days,
+        )
+    )
 
 
 def _overlaps(slot: UtcInterval, taken: Sequence[UtcInterval]) -> bool:

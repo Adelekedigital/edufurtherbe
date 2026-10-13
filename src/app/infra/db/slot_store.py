@@ -54,6 +54,7 @@ from app.domain.availability import (
     UtcInterval,
     WeeklyWindow,
     bookable,
+    fits,
 )
 from app.domain.enums import AvailabilityExceptionType
 from app.infra.db.booking_rules import (
@@ -222,6 +223,7 @@ async def list_slots(
     range_cap: int | None = None,
     holds_for: UUID | None = None,
     notice_from: dt.datetime | None = None,
+    exactly: UtcInterval | None = None,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
 
@@ -261,6 +263,11 @@ async def list_slots(
     else: a time held for a mentee (#339) stays bookable through its hold even
     once the notice floor has passed it, so the floor is measured from when it
     was offered. Nothing earlier than ``now`` is ever offered either way.
+
+    ``exactly`` asks about one interval instead of the grid (#347): the answer
+    is ``[exactly]`` if it fits the same availability, busy times, notice and
+    window the grid is built from (``domain.availability.fits``), else ``[]``.
+    For a time already offered, whose length is its own and not the offering's.
     """
     external_busy = external_busy or NullFreeBusy()
     offering = (
@@ -404,30 +411,43 @@ async def list_slots(
     # **The window**: nothing starts later than this offering allows ahead of now.
     cutoff = now + dt.timedelta(days=int(offering["window_days"]))
 
+    rules_now = [
+        WeeklyWindow(
+            day_of_week=row["day_of_week"],
+            start_time=row["start_time"],
+            end_time=row["end_time"],
+            timezone=row["timezone"],
+        )
+        for row in windows
+    ]
+    blocked = [
+        DatedException(
+            kind=AvailabilityExceptionType(row["type"]),
+            start_date=row["start_date"],
+            end_date=row["end_date"],
+            timezone=row["timezone"],
+            start_time=row["start_time"],
+            end_time=row["end_time"],
+        )
+        for row in exceptions
+    ]
+    taken = ours + list(elsewhere)
+    if exactly is not None:
+        open_ = fits(
+            rules=rules_now,
+            exceptions=blocked,
+            busy=taken,
+            slot=exactly,
+            min_notice_minutes=offering["min_notice_minutes"],
+            now=notice_from or now,
+        )
+        return [exactly] if open_ and now <= exactly.start < cutoff else []
     return [
         slot
         for slot in bookable(
-            rules=[
-                WeeklyWindow(
-                    day_of_week=row["day_of_week"],
-                    start_time=row["start_time"],
-                    end_time=row["end_time"],
-                    timezone=row["timezone"],
-                )
-                for row in windows
-            ],
-            exceptions=[
-                DatedException(
-                    kind=AvailabilityExceptionType(row["type"]),
-                    start_date=row["start_date"],
-                    end_date=row["end_date"],
-                    timezone=row["timezone"],
-                    start_time=row["start_time"],
-                    end_time=row["end_time"],
-                )
-                for row in exceptions
-            ],
-            busy=ours + list(elsewhere),
+            rules=rules_now,
+            exceptions=blocked,
+            busy=taken,
             duration_minutes=offering["duration_minutes"],
             min_notice_minutes=offering["min_notice_minutes"],
             now=notice_from or now,
@@ -449,14 +469,24 @@ async def offered_slot(
     external_busy: FreeBusyReader | None = None,
     holds_for: UUID | None = None,
     notice_from: dt.datetime | None = None,
+    length_minutes: int | None = None,
 ) -> UtcInterval | None:
     """The slot the grid offers at exactly ``starts_at``, or ``None``.
 
     **The one legality check** booking and suggesting both make: a membership
     test against the public grid, asked over a span in the mentor's days so the
     timezone question stays where it is already answered.
+
+    ``length_minutes`` is a time already offered at that length (#347): it is
+    checked as its own interval, so a mentor changing the offering's length,
+    which moves the grid, does not move it off.
     """
     day = starts_at.astimezone(dt.UTC).date()
+    exactly = (
+        UtcInterval(starts_at, starts_at + dt.timedelta(minutes=length_minutes))
+        if length_minutes is not None
+        else None
+    )
     slots = await list_slots(
         session,
         user_id,
@@ -468,5 +498,6 @@ async def offered_slot(
         external_busy=external_busy,
         holds_for=holds_for,
         notice_from=notice_from,
+        exactly=exactly,
     )
     return next((slot for slot in slots or () if slot.start == starts_at), None)
