@@ -18,7 +18,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.domain.assets import AssetKind
-from app.infra.db.asset_store import clear_image, release_image, store_image
+from app.infra.db.asset_store import (
+    IMAGE_LOCK_NAMESPACE,
+    clear_image,
+    release_image,
+    store_image,
+)
 from app.infra.storage.supabase import SupabaseStorage
 from conftest import FakeStorage, image_bytes, storage_for
 
@@ -122,7 +127,14 @@ async def wait_until_blocked(engine: AsyncEngine, held: HeldDelete) -> None:
             if held.uploading.is_set():
                 pytest.fail("the upload wrote its object while the delete was still in flight")
             waiting = await conn.scalar(
-                text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")
+                # Only the image lock: its namespace, in the two-key form
+                # (`objsubid = 2`), so another advisory lock (should tests ever
+                # run in parallel) is not counted.
+                text(
+                    "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
+                    "AND NOT granted AND classid = CAST(:ns AS oid) AND objsubid = 2"
+                ),
+                {"ns": IMAGE_LOCK_NAMESPACE},
             )
             if waiting:
                 return
