@@ -55,12 +55,18 @@ from app.infra.db.session_writer import (
 )
 from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
-from app.infra.jobs.manifest import RUNTIME_JOB_NAMES, job_timeout
+from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
 from app.infra.storage.supabase import intake_storage_for
 
 logger = logging.getLogger(__name__)
 INSTITUTION_TABLES = ("institutions", "education_entries")
 CATALOGUE_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
+
+#: How long QStash waits on one `settle-sessions` delivery: the run paces its
+#: calendar retries against it (#423). A copy of the manifest's `timeout`,
+#: because the service may run without `config/`;
+#: `test_runtime_schedules` fails when the two diverge.
+SETTLE_SESSIONS_BUDGET = dt.timedelta(seconds=120)
 
 
 def retention_counts(files: dict[str, int], *, idempotency_keys: int) -> dict[str, int]:
@@ -198,8 +204,7 @@ class RuntimeJobs:
         }
 
     async def _settle_sessions(self, *, dry_run: bool) -> dict[str, int]:
-        # The delivery's budget is QStash's timeout for this job (#423).
-        deadline = time.monotonic() + job_timeout("settle-sessions").total_seconds()
+        deadline = time.monotonic() + SETTLE_SESSIONS_BUDGET.total_seconds()
         engine = create_database_engine(self.settings)
         try:
             async with AsyncSession(engine) as session:

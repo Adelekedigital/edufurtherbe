@@ -444,11 +444,11 @@ async def test_the_settlement_paces_the_retry_by_its_schedule_budget(
     migrated_database: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The deadline is the job's manifest timeout; with none left, no row starts."""
+    """The deadline is the job's QStash budget; with none left, no row starts."""
     session_id = await cancelled_while_google_refused(api_client, db_engine, "rt-budget")
     calendar = FakeCalendar()
     calendar_in_runner(monkeypatch, calendar)
-    monkeypatch.setattr(runner, "job_timeout", lambda _name: dt.timedelta(0))
+    monkeypatch.setattr(runner, "SETTLE_SESSIONS_BUDGET", dt.timedelta(0))
 
     result = await jobs_on(migrated_database).run("settle-sessions")
 

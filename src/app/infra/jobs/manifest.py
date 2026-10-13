@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,26 +111,6 @@ def load_manifest(path: Path) -> RuntimeScheduleManifest:
         return RuntimeScheduleManifest.model_validate(raw)
     except (OSError, json.JSONDecodeError) as exc:
         raise ManifestError(f"could not read schedule manifest: {exc}") from exc
-
-
-#: The checked-in schedule policy. The service runs from the repository
-#: checkout (`--app-dir src`), so the jobs and the reconcile script read one file.
-MANIFEST_PATH = Path(__file__).resolve().parents[4] / "config" / "runtime-schedules.json"
-
-
-def job_timeout(name: str, path: Path = MANIFEST_PATH) -> dt.timedelta:
-    """How long QStash waits on one delivery of `name`: the job's time budget.
-
-    Read from the manifest rather than restated, so a job that paces itself
-    against it moves when the policy does. Only whole seconds (`"120s"`), the
-    one form the manifest uses.
-    """
-    timeout = next((job.timeout for job in load_manifest(path).jobs if job.name == name), None)
-    if timeout is None:
-        raise ManifestError(f"no schedule for job {name!r}")
-    if not (timeout.endswith("s") and timeout[:-1].isdigit()):
-        raise ManifestError(f"timeout for {name} is not whole seconds: {timeout!r}")
-    return dt.timedelta(seconds=int(timeout[:-1]))
 
 
 def schedule_id(environment: str, name: str) -> str:
