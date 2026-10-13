@@ -149,8 +149,8 @@ class SessionType(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
 
-    #: What *kind* of help a type is lives in `session_type_offerings` (#266);
-    #: the single `service_offering_id` column was dropped in #274.
+    # What *kind* of help a type is lives in `session_type_offerings` (#266);
+    # the single `service_offering_id` column was dropped in #274.
 
     #: **The first of the offering's stage set** (#215), dual-written by the
     #: store; `session_type_stages` holds the set. Kept for code from before the

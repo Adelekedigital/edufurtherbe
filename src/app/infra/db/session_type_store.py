@@ -266,8 +266,10 @@ def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
     **`created_by` is absent on purpose** — internal attribution, null on every
     migrated row.
 
-    **`service_offering_id` and `application_stage` are no longer absent.** They
-    were withheld while they were free text with no vocabulary, because
+    **The service offerings (as the set, `service_offerings`) and
+    `application_stage` are no longer absent.** The single
+    `service_offering_id` is gone (#274). They were withheld while they were
+    free text with no vocabulary, because
     publishing them would have committed a public contract to a shape nobody had
     designed. Both have a designed shape now — a reference to the closed taxonomy
     and a five-value closed set — so the reason lapsed rather than being
