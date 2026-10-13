@@ -335,9 +335,9 @@ class SessionTypeOffering(TimestampMixin, Base):
     does this cover* — asked of one bookable offering instead of a mentor.
 
     **The set, in the mentor's order.** `position` keeps the order the mentor
-    chose; the first is what the legacy `session_types.service_offering_id`
-    still holds until its contract step (the single API field was removed in
-    #274). Three is a
+    chose. This table is the only place a type's offerings are read from: the
+    legacy `session_types.service_offering_id` is only kept equal to the first,
+    for a rollback, until its migration drops it (#274). Three is a
     product rule, enforced at the boundary — a per-group cardinality is not
     something a `CHECK` can express.
 

@@ -342,8 +342,10 @@ async def demo_mentor_offerings(session: AsyncSession) -> list[tuple[Any, tuple[
     rows = await session.execute(
         text(
             "SELECT u.id, "
-            "       (SELECT o.slug FROM session_types t JOIN service_offerings o "
-            "          ON o.id = t.service_offering_id "
+            "       (SELECT o.slug FROM session_types t "
+            "          JOIN session_type_offerings s ON s.session_type_id = t.id "
+            "           AND s.position = 0 "
+            "          JOIN service_offerings o ON o.id = s.service_offering_id "
             "        WHERE t.mentor_user_id = u.id AND t.deleted_at IS NULL "
             "        ORDER BY t.created_at LIMIT 1) AS first, "
             "       ARRAY(SELECT o.slug FROM mentor_service_offerings m "

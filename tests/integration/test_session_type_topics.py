@@ -106,20 +106,6 @@ async def test_the_removed_single_field_is_refused_not_ignored(
     assert written.scalar_one() == 0
 
 
-async def test_a_type_written_only_to_the_old_column_still_reads(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """Old code during a deploy, the demo seed and the factories write only
-    `service_offering_id`. Reads fall back to it rather than showing nothing."""
-    mentor, auth = await as_mentor(db_engine, "topics-fallback")
-    type_id = await add_session_type(db_engine, mentor, service_offering=SCHOLARSHIPS)
-
-    row = await own(api_client, auth, str(type_id))
-
-    assert codes(row) == [SCHOLARSHIPS]
-    assert row["service_offerings"][0]["code"] == SCHOLARSHIPS  # type: ignore[index]
-
-
 async def test_an_unclassified_type_has_an_empty_set(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -240,9 +226,9 @@ async def test_a_patch_that_leaves_the_set_out_keeps_it(
 async def test_the_old_column_holds_the_first_of_the_set(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The expand step: code from before this release reads only
-    `session_types.service_offering_id`, so it must hold the set's first — the
-    API cannot show this, because it derives the single field from the set."""
+    """Until the column is dropped (#274) it is kept equal to the set's first,
+    so a rollback to a release that reads it sees what the set says. Asked of
+    the column directly, because no API field reads it any more."""
     _, auth = await as_mentor(db_engine, "topics-dual")
     ids = await offering_ids(db_engine)
     headers = bearer(api_token(auth))
@@ -270,3 +256,25 @@ async def test_the_old_column_holds_the_first_of_the_set(
 
     assert first == ids[DOCS]
     assert cleared is None
+
+
+async def test_a_type_with_only_the_legacy_column_reads_as_unclassified(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Reads no longer fall back to the column** (#274): the set is the only
+    source. Every type was given its set before this (migration
+    `a7e3c1d9b452`), so a column-only type can only be written by hand."""
+    mentor, auth = await as_mentor(db_engine, "topics-no-fallback")
+    type_id = await add_session_type(db_engine, mentor)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_types SET service_offering_id = "
+                "(SELECT id FROM service_offerings WHERE slug = :s) WHERE id = :t"
+            ),
+            {"s": SCHOLARSHIPS, "t": type_id},
+        )
+
+    row = await own(api_client, auth, str(type_id))
+
+    assert row["service_offerings"] == []
