@@ -259,13 +259,21 @@ async def _finish_in_thread(call: Callable[[str], bool], argument: str) -> bool:
     delete still in flight could land after an identical upload took the lock
     and committed. Waiting for the thread before re-raising keeps the lock held
     until the delete has actually finished.
+
+    **However often it is cancelled** (#362): each wait is shielded and a cancel
+    is only noted, so a second cancel cannot interrupt the wait the first one
+    started. The cancel is re-raised once, after the thread is done.
     """
     task = asyncio.ensure_future(asyncio.to_thread(call, argument))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        await task
-        raise
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+    return task.result()
 
 
 async def release_image(
