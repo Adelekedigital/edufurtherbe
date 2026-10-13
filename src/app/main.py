@@ -61,10 +61,10 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     {
         "name": "health",
         "description": (
-            "Liveness. Deliberately touches no dependency — a health check that "
-            "fails when the database is slow causes a restart of a process that "
-            "was fine. Readiness is a separate concern, added when there is a "
-            "dependency worth reporting on."
+            "`/health` is liveness and touches no dependency: a check that fails "
+            "when the database is slow causes a restart of a process that was "
+            "fine. `/ready` is readiness: `503` when the database does not answer "
+            "within two seconds, the path for a deploy healthcheck."
         ),
     },
     {

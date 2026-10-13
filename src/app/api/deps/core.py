@@ -97,6 +97,25 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
+#: Seconds the database has to answer `/ready` before the process is reported
+#: not ready (decision 243).
+READY_TIMEOUT = 2.0
+
+
+async def database_ready(session: SessionDep) -> bool:
+    """Whether the database answers one row within `READY_TIMEOUT`. Here, not
+    in the route, because only the wiring layer may speak SQL."""
+    try:
+        await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=READY_TIMEOUT)
+    except Exception:
+        # The cause is for the operator; the caller learns only that it failed.
+        logger.warning("readiness check failed", extra={"check": "database"}, exc_info=True)
+        return False
+    return True
+
+
+DatabaseReadyDep = Annotated[bool, Depends(database_ready)]
+
 
 async def get_claims(
     request: Request,
