@@ -164,6 +164,16 @@ turns that skip into a failure: a skipped test and a passing test look identical
 in a summary line, so without it the entire database tier could disappear and the
 check would stay green.
 
+## Runbooks
+
+Operator steps for production, in [`docs/runbooks/`](docs/runbooks/):
+
+| Runbook | When |
+|---|---|
+| [Go-live](docs/runbooks/go-live.md) | Bringing production up for the first time |
+| [Rollback](docs/runbooks/rollback.md) | A release or a migration is bad |
+| [Backup and restore](docs/runbooks/backup-restore.md) | Data is lost, and the quarterly restore drill |
+
 ## Stack
 
 The pre-cutover set — what the initial build targets. This table is a record of
