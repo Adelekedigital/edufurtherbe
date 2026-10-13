@@ -17,8 +17,10 @@ The fields here are an allowlist rather than a projection of the table.
 `created_by` is internal attribution and null on every migrated row and stays
 out.
 
-**`service_offering` and `application_stage` are now published, and that
-reverses the reason they were withheld.** They were free text with no
+**The service offerings (as the list `service_offerings`) and `application_stage`
+are now published, and that reverses the reason they were withheld.** The single
+`service_offering`, which only repeated the list's first item, was removed in
+#274. They were free text with no
 constraint, no vocabulary and no value in any row, so publishing them would have
 committed this contract to a shape nobody had designed. Both have a designed
 shape now — a reference to the closed six-row taxonomy, and a five-value closed
@@ -71,23 +73,28 @@ def _offerings(row: dict[str, object]) -> list[LookupRef]:
     return [LookupRef(**o) for o in row.get("service_offerings") or []]  # type: ignore[attr-defined]
 
 
-def _taxonomy(row: dict[str, object]) -> LookupRef | None:
-    """The single `service_offering` kept this release: **the first of the set**
-    (#205), so the old field and the new list can never disagree."""
-    offerings = _offerings(row)
-    return offerings[0] if offerings else None
+#: Write fields removed from the API, each with what replaces it (#274).
+REMOVED_WRITE_FIELDS = {"service_offering_id": "service_offering_ids"}
+
+
+def _refuse_removed_fields(data: object) -> object:
+    """**Refused, not ignored.** An unknown key is otherwise dropped silently, so
+    a client still sending a removed field would get a `2xx` for a change that
+    never happened: a type left unclassified that it believes it classified."""
+    if isinstance(data, dict):
+        for removed, instead in REMOVED_WRITE_FIELDS.items():
+            if removed in data:
+                raise ValueError(f"{removed} was removed; send {instead} instead")
+    return data
 
 
 def _refuse_two_set_fields(model: BaseModel) -> None:
-    """Each set and its legacy single field: `service_offering_ids` beside
-    `service_offering_id` (#205), `application_stages` beside `application_stage`
-    (#215). A request sending both of a pair has two answers and no rule for
-    which wins."""
+    """Each set and its legacy single field: `application_stages` beside
+    `application_stage` (#215). A request sending both of a pair has two answers
+    and no rule for which wins. (`service_offering_id` was the other pair until
+    #274 removed it.)"""
     fields = model.model_fields_set
-    for plural, single in (
-        ("service_offering_ids", "service_offering_id"),
-        ("application_stages", "application_stage"),
-    ):
+    for plural, single in (("application_stages", "application_stage"),):
         if plural in fields and single in fields:
             raise ValueError(f"send {plural} or {single}, not both")
     # `[]` is any stage and absent is unchanged; `null` would be a third
@@ -149,21 +156,10 @@ class SessionTypeRead(BaseModel):
             "empty on a mentor who is free."
         )
     )
-    service_offering: LookupRef | None = Field(
-        default=None,
-        description=(
-            "What *kind* of help this is — one row of the closed taxonomy at "
-            "`/api/v1/catalog/service-offerings`, which is the axis mentee needs "
-            "and mentor offers are matched on. Null when the mentor has not "
-            "classified this offering, which is not an error: it simply matches "
-            "no filter."
-        ),
-    )
     service_offerings: list[LookupRef] = Field(
         default_factory=list,
         description=(
-            "Every service offering this type covers, at most three, in the "
-            "mentor's order. `service_offering` is the first of these."
+            "Every service offering this type covers, at most three, in the mentor's order."
         ),
     )
     application_stages: list[ApplicationStage] = Field(
@@ -249,7 +245,6 @@ class SessionTypeRead(BaseModel):
             duration_minutes=int(str(row["duration_minutes"])),
             min_notice_minutes=int(str(row["min_notice_minutes"])),
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
-            service_offering=_taxonomy(row),
             service_offerings=_offerings(row),
             application_stages=_stages(row),
             application_stage=_stage(row),
@@ -354,22 +349,9 @@ class OwnSessionTypeRead(BaseModel):
     # repository said these columns had "no value anywhere in the data", and the
     # migration that gave one a foreign key made all three false — a published
     # contract is the worst place to keep a fact with an expiry date on it.
-    service_offering: LookupRef | None = Field(
-        default=None,
-        description=(
-            "What kind of help this offering is, from the closed taxonomy at "
-            "`/api/v1/catalog/service-offerings`. **Was `category`, a free-text "
-            "string of your own** — it is now a reference to the axis mentees "
-            "are matched on, so classifying an offering is what makes it "
-            "findable rather than a private note."
-        ),
-    )
     service_offerings: list[LookupRef] = Field(
         default_factory=list,
-        description=(
-            "Every service offering this type covers, at most three, in your "
-            "order. `service_offering` is the first of these."
-        ),
+        description=("Every service offering this type covers, at most three, in your order."),
     )
     application_stages: list[ApplicationStage] = Field(
         default_factory=list,
@@ -482,7 +464,6 @@ class OwnSessionTypeRead(BaseModel):
             booking_window_days=_int_or_none(row.get("booking_window_days")),
             effective_booking_window_days=int(str(row["effective_booking_window_days"])),
             break_after_minutes=_int_or_none(row.get("break_after_minutes")),
-            service_offering=_taxonomy(row),
             service_offerings=_offerings(row),
             application_stages=_stages(row),
             application_stage=_stage(row),
@@ -584,19 +565,16 @@ class MentorSessionTypeWrite(Normalised):
             "to 72 hours); `null` follows your default, then 24 hours."
         ),
     )
-    #: The taxonomy row, by id. Optional: an unclassified offering is bookable
-    #: and simply matches no filter, and forcing a mentor to classify before they
-    #: can sell would put a required field in front of the thing they came to do.
-    service_offering_id: UUID | None = None
-    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#205). Its first is
-    #: what `service_offering_id` reports. `[]` clears it; absent leaves it.
+    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#205). An empty
+    #: list leaves the type unclassified, which is not an error: it simply
+    #: matches no filter. `[]` clears it; absent leaves it.
     service_offering_ids: list[UUID] | None = Field(
         default=None,
         max_length=MAX_SESSION_TYPE_OFFERINGS,
         description=(
             f"The service offerings this type covers, at most "
             f"{MAX_SESSION_TYPE_OFFERINGS}, in the order to show them; each once. "
-            "`[]` clears them. Send this or `service_offering_id`, not both."
+            "`[]` clears them."
         ),
     )
     #: The stage set, in order, each once (#215). `[]` means any stage; absent
@@ -660,6 +638,11 @@ class MentorSessionTypeWrite(Normalised):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _no_removed_fields(cls, data: object) -> object:
+        return _refuse_removed_fields(data)
+
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
         _refuse_two_set_fields(self)
@@ -700,19 +683,16 @@ class MentorSessionTypePatch(Normalised):
             "leaves it as it is."
         ),
     )
-    #: The taxonomy row, by id. Optional: an unclassified offering is bookable
-    #: and simply matches no filter, and forcing a mentor to classify before they
-    #: can sell would put a required field in front of the thing they came to do.
-    service_offering_id: UUID | None = None
-    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#205). Its first is
-    #: what `service_offering_id` reports. `[]` clears it; absent leaves it.
+    #: The set, in order, at most `MAX_SESSION_TYPE_OFFERINGS` (#205). An empty
+    #: list leaves the type unclassified, which is not an error: it simply
+    #: matches no filter. `[]` clears it; absent leaves it.
     service_offering_ids: list[UUID] | None = Field(
         default=None,
         max_length=MAX_SESSION_TYPE_OFFERINGS,
         description=(
             f"The service offerings this type covers, at most "
             f"{MAX_SESSION_TYPE_OFFERINGS}, in the order to show them; each once. "
-            "`[]` clears them. Send this or `service_offering_id`, not both."
+            "`[]` clears them."
         ),
     )
     #: The stage set, in order, each once (#215). `[]` means any stage; absent
@@ -774,6 +754,11 @@ class MentorSessionTypePatch(Normalised):
             "`false` un-features it. Only an offering on offer can be featured."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_removed_fields(cls, data: object) -> object:
+        return _refuse_removed_fields(data)
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:

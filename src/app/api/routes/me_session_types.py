@@ -91,7 +91,7 @@ OWNER_RESPONSES: dict[int | str, dict[str, str]] = {
         "window and break settings, and `duration_inherited` / "
         "`min_notice_inherited`, which say whether its length and notice are "
         "its own or follow your defaults. "
-        "`service_offering`, `application_stage` and `custom_stage_label` were "
+        "`service_offerings`, `application_stage` and `custom_stage_label` were "
         "owner-only while they were free text with no vocabulary — publishing "
         "them would have fixed a public contract to an undesigned shape — and "
         "both are public now that each has one.\n\n"

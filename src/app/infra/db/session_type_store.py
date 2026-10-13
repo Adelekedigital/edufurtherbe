@@ -570,15 +570,11 @@ def _refuse_stage_label(stages: list[ApplicationStage], label: str | None) -> No
 def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
     """The set a write asks for, or `None` when it names none (#205).
 
-    `service_offering_ids` is the set; the legacy `service_offering_id` is a set
-    of one, and `null` there clears it. The boundary refuses a payload sending
-    both, so at most one is present here.
+    `service_offering_ids` is the only way to name it since #274 removed the
+    single `service_offering_id`.
     """
     if "service_offering_ids" in payload and payload["service_offering_ids"] is not None:
         return list(payload["service_offering_ids"])
-    if "service_offering_id" in payload:
-        value = payload["service_offering_id"]
-        return [value] if value is not None else []
     return None
 
 
