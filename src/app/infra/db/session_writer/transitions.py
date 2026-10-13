@@ -344,8 +344,7 @@ async def expire_requests(
 
     # **An expired request ends a session too, so its event goes with it.**
     # The calendar is optional only for tests; the runner always passes one. A
-    # caller passing none leaves the ids in place, and nothing comes back for
-    # them (#423).
+    # caller passing none leaves the ids in place for `retry_releases` (#423).
     #
     # `expired` is a sequence of row mappings, not of ids — it is built with
     # `.mappings()` and the notification block above reads `row["id"]` from it.

@@ -212,3 +212,16 @@ def test_a_qstash_url_carrying_a_path_is_refused() -> None:
     exists to prevent."""
     with pytest.raises(ValidationError, match="/v2"):
         Settings(_env_file=None, qstash_url="https://qstash-us-east-1.upstash.io/v2")
+
+
+def test_the_settlement_budget_in_code_is_the_manifests_timeout() -> None:
+    """**One budget, two copies, pinned** (#423). The runner paces against a
+    constant because the service may run without `config/`; this fails the
+    moment the manifest's timeout moves without it."""
+    from app.infra.jobs.runner import SETTLE_SESSIONS_BUDGET
+
+    raw = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    declared = next(job["timeout"] for job in raw["jobs"] if job["name"] == "settle-sessions")
+
+    assert re.fullmatch(r"\d+s", declared)
+    assert SETTLE_SESSIONS_BUDGET.total_seconds() == int(declared[:-1])

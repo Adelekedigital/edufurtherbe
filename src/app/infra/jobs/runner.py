@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -48,6 +50,7 @@ from app.infra.db.session_writer import (
     confirm_presence,
     expire_requests,
     remind_unreviewed,
+    retry_releases,
     settle_attendance,
 )
 from app.infra.db.triggers import timestamps_from_source_across
@@ -58,6 +61,12 @@ from app.infra.storage.supabase import intake_storage_for
 logger = logging.getLogger(__name__)
 INSTITUTION_TABLES = ("institutions", "education_entries")
 CATALOGUE_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
+
+#: How long QStash waits on one `settle-sessions` delivery: the run paces its
+#: calendar retries against it (#423). A copy of the manifest's `timeout`,
+#: because the service may run without `config/`;
+#: `test_runtime_schedules` fails when the two diverge.
+SETTLE_SESSIONS_BUDGET = dt.timedelta(seconds=120)
 
 
 def retention_counts(files: dict[str, int], *, idempotency_keys: int) -> dict[str, int]:
@@ -195,11 +204,20 @@ class RuntimeJobs:
         }
 
     async def _settle_sessions(self, *, dry_run: bool) -> dict[str, int]:
+        deadline = time.monotonic() + SETTLE_SESSIONS_BUDGET.total_seconds()
         engine = create_database_engine(self.settings)
         try:
             async with AsyncSession(engine) as session:
                 now = dt.datetime.now(dt.UTC)
-                expired = await expire_requests(session, now=now, calendar=self._calendar())
+                # The database's clock at the run's first transaction: every
+                # row this run writes gets an `updated_at` at or after it.
+                run_started = (await session.execute(select(func.now()))).scalar_one()
+                calendar = self._calendar()
+                # **A dry run deletes nothing in Google**: rolling back the
+                # database does not unsend the cancellation Google emails.
+                expired = await expire_requests(
+                    session, now=now, calendar=NullCalendar() if dry_run else calendar
+                )
                 # Presence first (#382): a party no webhook reported is read
                 # from Daily's records, and a session those cannot be read for
                 # waits rather than settling on silence.
@@ -251,6 +269,17 @@ class RuntimeJobs:
                     await session.rollback()
                 else:
                     await session.commit()
+                # Last, after everything above is committed: Google round
+                # trips, bounded, paced and committed per row (#423). A dry run
+                # only counts.
+                released = await retry_releases(
+                    session,
+                    now=now,
+                    calendar=calendar,
+                    deadline=deadline,
+                    untouched_since=run_started,
+                    dry_run=dry_run,
+                )
                 return {
                     "expired_requests": expired,
                     "settled_sessions": settled,
@@ -259,6 +288,7 @@ class RuntimeJobs:
                     "return_reminders": returning,
                     "disconnected_calendars": health["disconnected"],
                     "messages": sum(sent.values()),
+                    "released_calendar_events": released,
                 }
         finally:
             await engine.dispose()

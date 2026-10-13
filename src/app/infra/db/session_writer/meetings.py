@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -23,7 +24,13 @@ from app.domain.enums import (
 )
 from app.domain.meetings import plan_for
 from app.domain.messages import session_page_url
-from app.infra.clients.meetings import CalendarPort, RoomsPort, VenueUnavailableError, room_name
+from app.infra.clients.meetings import (
+    CalendarAccessRevokedError,
+    CalendarPort,
+    RoomsPort,
+    VenueUnavailableError,
+    room_name,
+)
 from app.infra.db.models.sessions import (
     Session,
 )
@@ -32,6 +39,20 @@ from app.infra.db.predicates import LIVE
 from app.infra.db.session_type_store import resolve_venue
 
 logger = logging.getLogger(__name__)
+
+
+class ReleaseOutcome(StrEnum):
+    """What `release_meeting` did with a session's calendar event."""
+
+    #: The session carried no event.
+    NOTHING = "nothing"
+    #: The event is gone and its id cleared.
+    RELEASED = "released"
+    #: The calendar refused; the id is kept for a later run.
+    KEPT = "kept"
+    #: The platform's own Google grant is dead; the id is kept, and no other
+    #: release can succeed until the grant is replaced.
+    REVOKED = "revoked"
 
 
 async def provision_meeting(
@@ -257,7 +278,7 @@ async def _stored_link(session: AsyncSession, session_id: UUID) -> str | None:
 
 async def release_meeting(
     session: AsyncSession, session_id: UUID, *, calendar: CalendarPort
-) -> None:
+) -> ReleaseOutcome:
     """Remove the calendar event a session no longer needs. Does not commit.
 
     **The partner fix to `provision_meeting`, and it was missing.**
@@ -283,17 +304,26 @@ async def release_meeting(
         )
     ).scalar_one_or_none()
     if not external_id:
-        return
+        return ReleaseOutcome.NOTHING
 
     try:
         await asyncio.to_thread(calendar.cancel_event, str(external_id))
+    except CalendarAccessRevokedError:
+        # A warning, unlike a refusal: the grant will not come back on its own.
+        logger.warning(
+            "platform calendar access revoked; event for session %s not removed",
+            session_id,
+        )
+        return ReleaseOutcome.REVOKED
     except (VenueUnavailableError, NotImplementedError) as exc:
         logger.info("calendar event for session %s not removed: %s", session_id, exc)
-        return
+        return ReleaseOutcome.KEPT
 
-    # Cleared only on success, so a failed removal leaves the id in place and a
-    # later run can try again — where clearing it regardless would lose the only
-    # handle on an event still in somebody's calendar.
+    # Cleared only on success, so a failed removal leaves the id in place and
+    # the hourly `retry_releases` tries again (#423) — where clearing it
+    # regardless would lose the only handle on an event still in somebody's
+    # calendar.
     await session.execute(
         update(Session).where(Session.id == session_id).values(external_calendar_event_id=None)
     )
+    return ReleaseOutcome.RELEASED
