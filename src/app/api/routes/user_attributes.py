@@ -41,12 +41,17 @@ from app.api.deps import (
     UpsertedGoalDep,
     UpsertedProfileDep,
 )
+from app.api.schemas.acks import CreatedRead, UpdatedRead
 from app.api.schemas.common import AvatarFocusRead, Page
 from app.api.schemas.profile import (
     AvatarUploadRead,
     AwardRead,
+    BannerUploadedRead,
+    EducationCreatedRead,
     EducationRead,
     GoalRead,
+    ListingPausedRead,
+    ListingResumedRead,
     MentorProfileRead,
 )
 from app.core.errors import NotFoundError
@@ -178,6 +183,7 @@ CONFLICT_RESPONSE: dict[int | str, dict[str, str]] = {
 
 @router.post(
     "/education",
+    response_model=EducationCreatedRead,
     status_code=status.HTTP_201_CREATED,
     summary="Add a degree",
     description=(
@@ -192,25 +198,26 @@ CONFLICT_RESPONSE: dict[int | str, dict[str, str]] = {
     ),
     responses=WRITE_RESPONSES,
 )
-async def add_education(created: CreatedEducationDep, response: Response) -> dict[str, object]:
+async def add_education(created: CreatedEducationDep, response: Response) -> EducationCreatedRead:
     entry_id, institution_created = created
     response.headers["Location"] = f"/api/v1/users/me/education/{entry_id}"
     # `institution_created` is reported because the client should say so: the
     # school is saved but will not appear in search until an admin has seen it,
     # and silence there reads as search being broken.
-    return {"id": str(entry_id), "institution_created": institution_created}
+    return EducationCreatedRead(id=entry_id, institution_created=institution_created)
 
 
 @router.patch(
     "/education/{entry_id}",
+    response_model=UpdatedRead,
     summary="Change a degree",
     description="Only the fields sent are changed. Absent is not null.",
     responses=WRITE_RESPONSES,
 )
-async def edit_education(changed: UpdatedEducationDep) -> dict[str, bool]:
+async def edit_education(changed: UpdatedEducationDep) -> UpdatedRead:
     if not changed:
         raise NotFoundError("no such education entry")
-    return {"updated": True}
+    return UpdatedRead(updated=True)
 
 
 @router.delete(
@@ -231,6 +238,7 @@ async def remove_education(removed: DeletedEducationDep) -> None:
 
 @router.put(
     "/goal",
+    response_model=CreatedRead,
     summary="Set a user's study goal",
     description=(
         "Creates the goal or replaces it — a user has at most one, so this is a "
@@ -240,8 +248,8 @@ async def remove_education(removed: DeletedEducationDep) -> None:
     ),
     responses=WRITE_RESPONSES,
 )
-async def set_goal(goal_id: UpsertedGoalDep) -> dict[str, str]:
-    return {"id": str(goal_id)}
+async def set_goal(goal_id: UpsertedGoalDep) -> CreatedRead:
+    return CreatedRead(id=goal_id)
 
 
 @router.delete(
@@ -263,6 +271,7 @@ async def clear_goal(removed: DeletedGoalDep) -> None:
 
 @router.post(
     "/awards",
+    response_model=CreatedRead,
     status_code=status.HTTP_201_CREATED,
     summary="Add a scholarship or award",
     description=(
@@ -271,16 +280,21 @@ async def clear_goal(removed: DeletedGoalDep) -> None:
     ),
     responses=WRITE_RESPONSES,
 )
-async def add_award(award_id: CreatedAwardDep, response: Response) -> dict[str, str]:
+async def add_award(award_id: CreatedAwardDep, response: Response) -> CreatedRead:
     response.headers["Location"] = f"/api/v1/users/me/awards/{award_id}"
-    return {"id": str(award_id)}
+    return CreatedRead(id=award_id)
 
 
-@router.patch("/awards/{award_id}", summary="Change an award", responses=WRITE_RESPONSES)
-async def edit_award(changed: UpdatedAwardDep) -> dict[str, bool]:
+@router.patch(
+    "/awards/{award_id}",
+    response_model=UpdatedRead,
+    summary="Change an award",
+    responses=WRITE_RESPONSES,
+)
+async def edit_award(changed: UpdatedAwardDep) -> UpdatedRead:
     if not changed:
         raise NotFoundError("no such award")
-    return {"updated": True}
+    return UpdatedRead(updated=True)
 
 
 @router.delete(
@@ -297,6 +311,7 @@ async def remove_award(removed: DeletedAwardDep) -> None:
 
 @router.post(
     "/mentor-profile",
+    response_model=CreatedRead,
     status_code=status.HTTP_201_CREATED,
     summary="Apply to be a mentor",
     description=(
@@ -315,15 +330,14 @@ async def remove_award(removed: DeletedAwardDep) -> None:
     ),
     responses=WRITE_RESPONSES | CONFLICT_RESPONSE,
 )
-async def apply_as_mentor(
-    profile_id: CreatedMentorProfileDep, response: Response
-) -> dict[str, str]:
+async def apply_as_mentor(profile_id: CreatedMentorProfileDep, response: Response) -> CreatedRead:
     response.headers["Location"] = "/api/v1/users/me/mentor-profile"
-    return {"id": str(profile_id)}
+    return CreatedRead(id=profile_id)
 
 
 @router.patch(
     "/mentor-profile",
+    response_model=UpdatedRead,
     summary="Change a mentor profile",
     description=(
         "`approval_status`, `listing_status` and every audit field are not "
@@ -332,10 +346,10 @@ async def apply_as_mentor(
     ),
     responses=WRITE_RESPONSES,
 )
-async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> dict[str, bool]:
+async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> UpdatedRead:
     if not changed:
         raise NotFoundError("this user has no mentor profile")
-    return {"updated": True}
+    return UpdatedRead(updated=True)
 
 
 @router.patch(
@@ -382,6 +396,7 @@ async def set_languages(_: ReplacedLanguagesDep) -> None:
 
 @router.post(
     "/mentor-profile/pause",
+    response_model=ListingPausedRead,
     summary="Take yourself off the mentor listing",
     description=(
         "Removes the mentor from the directory and leaves their approval "
@@ -394,14 +409,15 @@ async def set_languages(_: ReplacedLanguagesDep) -> None:
     ),
     responses=WRITE_RESPONSES | PAUSE_CONFLICT,
 )
-async def pause_listing(paused: PausedSelfDep) -> dict[str, bool]:
+async def pause_listing(paused: PausedSelfDep) -> ListingPausedRead:
     if not paused:
         raise NotFoundError("this user has no mentor profile")
-    return {"paused": True}
+    return ListingPausedRead(paused=True)
 
 
 @router.post(
     "/mentor-profile/resume",
+    response_model=ListingResumedRead,
     summary="Return to the mentor listing",
     description=(
         "Only undoes **your own** pause. A mentor an admin unlisted cannot "
@@ -412,10 +428,10 @@ async def pause_listing(paused: PausedSelfDep) -> dict[str, bool]:
     ),
     responses=WRITE_RESPONSES,
 )
-async def resume_listing(resumed: ResumedSelfDep) -> dict[str, bool]:
+async def resume_listing(resumed: ResumedSelfDep) -> ListingResumedRead:
     if not resumed:
         raise NotFoundError("this listing is not yours to resume")
-    return {"resumed": True}
+    return ListingResumedRead(resumed=True)
 
 
 IMAGE_DESCRIPTION = (
@@ -467,12 +483,13 @@ async def upload_avatar(uploaded: UploadedAvatarDep) -> AvatarUploadRead:
 
 @router.post(
     "/banner",
+    response_model=BannerUploadedRead,
     summary="Upload a profile banner",
     description=IMAGE_DESCRIPTION,
     responses=UPLOAD_RESPONSES,
 )
-async def upload_banner(url: UploadedBannerDep) -> dict[str, str]:
-    return {"banner_url": url}
+async def upload_banner(url: UploadedBannerDep) -> BannerUploadedRead:
+    return BannerUploadedRead(banner_url=url)
 
 
 @router.delete(

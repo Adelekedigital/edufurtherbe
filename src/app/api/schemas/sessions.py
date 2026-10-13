@@ -740,3 +740,27 @@ class SessionCancellationWrite(SessionTransitionWrite):
     )
 
     suggested_starts_at: SuggestedStartsAt = None
+
+
+class SessionAcceptedRead(BaseModel):
+    """The mentor accepted a request."""
+
+    accepted: bool = Field(description="Always true: the session is confirmed.")
+
+
+class SessionDeclinedRead(BaseModel):
+    """The mentor declined a request."""
+
+    declined: bool = Field(description="Always true: the request is declined.")
+
+
+class SessionWithdrawnRead(BaseModel):
+    """The mentee withdrew a request."""
+
+    withdrawn: bool = Field(description="Always true: the request is withdrawn.")
+
+
+class SessionCancelledRead(BaseModel):
+    """A confirmed session was cancelled."""
+
+    cancelled: bool = Field(description="Always true: the session is cancelled.")

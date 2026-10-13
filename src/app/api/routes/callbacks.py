@@ -23,6 +23,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, status
 
 from app.api.deps import DailyPresenceDep, ReminderCallbackDep
+from app.api.schemas.jobs import PresenceRecordedRead, ReminderQueuedRead
 
 router = APIRouter(prefix="/api/v1/callbacks", tags=["callbacks"])
 
@@ -42,6 +43,7 @@ CALLBACK_RESPONSES: dict[int | str, dict[str, str]] = {
 
 @router.post(
     "/reminders",
+    response_model=ReminderQueuedRead,
     summary="Fire a scheduled response reminder",
     description=(
         "**Called by QStash, never by a person.** Authenticated by the "
@@ -62,7 +64,7 @@ CALLBACK_RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=CALLBACK_RESPONSES,
 )
-async def fire_reminder(queued: ReminderCallbackDep, request: Request) -> dict[str, bool]:
+async def fire_reminder(queued: ReminderCallbackDep, request: Request) -> ReminderQueuedRead:
     """Always `200` once the signature checks out.
 
     **A callback that reports failure is a callback QStash retries**, and there
@@ -72,7 +74,7 @@ async def fire_reminder(queued: ReminderCallbackDep, request: Request) -> dict[s
     else would turn a settled request into a scheduled job that never stops.
     """
     del request
-    return {"queued": queued}
+    return ReminderQueuedRead(queued=queued)
 
 
 DAILY_RESPONSES: dict[int | str, dict[str, str]] = {
@@ -88,6 +90,7 @@ DAILY_RESPONSES: dict[int | str, dict[str, str]] = {
 
 @router.post(
     "/daily",
+    response_model=PresenceRecordedRead,
     summary="Record who Daily saw in a room",
     description=(
         "**Called by Daily, never by a person** (#382). Authenticated by "
@@ -106,5 +109,5 @@ DAILY_RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=DAILY_RESPONSES,
 )
-async def record_daily_presence(recorded: DailyPresenceDep) -> dict[str, bool]:
-    return {"recorded": recorded}
+async def record_daily_presence(recorded: DailyPresenceDep) -> PresenceRecordedRead:
+    return PresenceRecordedRead(recorded=recorded)

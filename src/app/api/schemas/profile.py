@@ -710,3 +710,33 @@ class AvatarUploadRead(BaseModel):
 
     avatar_url: str
     avatar_focus: AvatarFocusRead | None = None
+
+
+class EducationCreatedRead(BaseModel):
+    """A degree was added."""
+
+    id: UUID = Field(description="The new education entry's id.")
+    institution_created: bool = Field(
+        description=(
+            "True when the school typed was new: it is saved but stays out of "
+            "search until an admin has reviewed it."
+        )
+    )
+
+
+class ListingPausedRead(BaseModel):
+    """A mentor paused their own listing."""
+
+    paused: bool = Field(description="Always true: the listing is paused.")
+
+
+class ListingResumedRead(BaseModel):
+    """A mentor resumed their own listing."""
+
+    resumed: bool = Field(description="Always true: the listing is live again.")
+
+
+class BannerUploadedRead(BaseModel):
+    """A profile banner was stored."""
+
+    banner_url: str = Field(description="Where the stored banner is served from.")

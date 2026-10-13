@@ -42,6 +42,11 @@ from app.api.deps import (
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.admin import (
     FeaturedWeekRead,
+    FeaturedWeekSetRead,
+    InstitutionApprovedRead,
+    InstitutionMergedRead,
+    MentorDecidedRead,
+    MentorListingChangedRead,
     PendingInstitutionRead,
     PendingMentorRead,
     StatusEventRead,
@@ -90,6 +95,7 @@ async def institution_queue(rows: PendingInstitutionsDep) -> Page[PendingInstitu
 
 @router.post(
     "/institutions/{institution_id}/approve",
+    response_model=InstitutionApprovedRead,
     summary="Approve an institution",
     description=(
         "Makes it selectable in search. Approving one that is already approved "
@@ -98,14 +104,15 @@ async def institution_queue(rows: PendingInstitutionsDep) -> Page[PendingInstitu
     ),
     responses=ADMIN_RESPONSES,
 )
-async def approve(changed: ApprovedInstitutionDep) -> dict[str, bool]:
+async def approve(changed: ApprovedInstitutionDep) -> InstitutionApprovedRead:
     if not changed:
         raise NotFoundError("no institution awaiting review with that id")
-    return {"approved": True}
+    return InstitutionApprovedRead(approved=True)
 
 
 @router.post(
     "/institutions/{institution_id}/merge",
+    response_model=InstitutionMergedRead,
     summary="Merge a duplicate institution",
     description=(
         "Moves every education entry from the duplicate onto the institution in "
@@ -125,8 +132,8 @@ async def approve(changed: ApprovedInstitutionDep) -> dict[str, bool]:
         }
     },
 )
-async def merge(moved: MergedInstitutionDep) -> dict[str, int]:
-    return {"entries_moved": moved}
+async def merge(moved: MergedInstitutionDep) -> InstitutionMergedRead:
+    return InstitutionMergedRead(entries_moved=moved)
 
 
 @router.get(
@@ -142,6 +149,7 @@ async def mentor_queue(rows: PendingMentorsDep) -> Page[PendingMentorRead]:
 
 @router.post(
     "/mentors/{user_id}/decision",
+    response_model=MentorDecidedRead,
     summary="Approve or decline a mentor application",
     description=(
         "**Approval and listing move together.** Approving sets both, so the "
@@ -158,14 +166,15 @@ async def mentor_queue(rows: PendingMentorsDep) -> Page[PendingMentorRead]:
     ),
     responses=ADMIN_RESPONSES,
 )
-async def decide(changed: DecidedMentorDep) -> dict[str, bool]:
+async def decide(changed: DecidedMentorDep) -> MentorDecidedRead:
     if not changed:
         raise NotFoundError("no mentor application for that user")
-    return {"decided": True}
+    return MentorDecidedRead(decided=True)
 
 
 @router.post(
     "/mentors/{user_id}/listing",
+    response_model=MentorListingChangedRead,
     summary="List or unlist a mentor",
     description=(
         "Moves a mentor's listing **without touching their approval** — the "
@@ -177,10 +186,10 @@ async def decide(changed: DecidedMentorDep) -> dict[str, bool]:
     ),
     responses=ADMIN_RESPONSES,
 )
-async def set_mentor_listing(changed: ListedMentorDep) -> dict[str, bool]:
+async def set_mentor_listing(changed: ListedMentorDep) -> MentorListingChangedRead:
     if not changed:
         raise NotFoundError("no mentor profile for that user")
-    return {"changed": True}
+    return MentorListingChangedRead(changed=True)
 
 
 @router.get(
@@ -343,6 +352,7 @@ async def admin_credit_history(page: AdminGrantHistoryDep) -> Page[AdminGrantHis
 
 @router.put(
     "/featured-mentor/{week_start}",
+    response_model=FeaturedWeekSetRead,
     summary="Choose the featured mentor for a week",
     description=(
         "Overrides the automatic rotation for one week: the current one, or up to "
@@ -360,8 +370,8 @@ async def admin_credit_history(page: AdminGrantHistoryDep) -> Page[AdminGrantHis
     ),
     responses=ADMIN_RESPONSES,
 )
-async def choose_featured(chosen: FeaturedWeekSetDep) -> dict[str, str]:
-    return {"week_start": chosen.isoformat()}
+async def choose_featured(chosen: FeaturedWeekSetDep) -> FeaturedWeekSetRead:
+    return FeaturedWeekSetRead(week_start=chosen)
 
 
 @router.delete(

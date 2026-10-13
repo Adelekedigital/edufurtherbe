@@ -27,6 +27,7 @@ from app.api.deps import (
     UpdatedOwnQuestionDep,
 )
 from app.api.routes.sessions import REPLAYED_HEADER
+from app.api.schemas.acks import CreatedRead, UpdatedRead
 from app.api.schemas.common import Page
 from app.api.schemas.intake import QuestionRead
 from app.core.errors import NotFoundError
@@ -83,6 +84,7 @@ async def read_own_questions(questions: OwnQuestionsDep) -> Page[QuestionRead]:
 
 @router.post(
     "/session-types/{session_type_id}/questions",
+    response_model=CreatedRead,
     status_code=status.HTTP_201_CREATED,
     summary="Add a question to one of your offerings",
     description=(
@@ -109,17 +111,18 @@ async def read_own_questions(questions: OwnQuestionsDep) -> Page[QuestionRead]:
 )
 async def create_own_question(
     created: CreatedOwnQuestionDep, session_type_id: str, response: Response
-) -> dict[str, str]:
+) -> CreatedRead:
     body, status_code, replayed = created
     response.status_code = status_code
     if replayed:
         response.headers[REPLAYED_HEADER] = "true"
     response.headers["Location"] = f"/api/v1/me/session-types/{session_type_id}/questions"
-    return body
+    return CreatedRead.model_validate(body)
 
 
 @router.patch(
     "/session-types/{session_type_id}/questions/{question_id}",
+    response_model=UpdatedRead,
     summary="Change one question",
     description=(
         "Every field optional and **absent is not null** — a field you do not "
@@ -131,10 +134,10 @@ async def create_own_question(
     ),
     responses=QUESTION_RESPONSES,
 )
-async def edit_own_question(changed: UpdatedOwnQuestionDep) -> dict[str, bool]:
+async def edit_own_question(changed: UpdatedOwnQuestionDep) -> UpdatedRead:
     if not changed:
         raise NotFoundError("no such question")
-    return {"updated": True}
+    return UpdatedRead(updated=True)
 
 
 @router.delete(

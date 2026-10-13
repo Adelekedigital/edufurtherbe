@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import Annotated, Self
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -295,3 +296,15 @@ class CalendarConnectionRead(BaseModel):
                 str(row["external_account_email"]) if row.get("external_account_email") else None
             ),
         )
+
+
+class CalendarConsentRead(BaseModel):
+    """Where to send the mentor to grant calendar access."""
+
+    consent_url: str = Field(description="Google's consent screen, to open in a popup.")
+
+
+class CalendarConnectedRead(BaseModel):
+    """A mentor's calendar was connected."""
+
+    connected: UUID = Field(description="The mentor whose calendar is now connected.")

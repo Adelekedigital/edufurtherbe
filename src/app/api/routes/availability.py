@@ -35,6 +35,7 @@ from app.api.deps import (
     DeletedAvailabilityRuleDep,
     UpdatedAvailabilityRuleDep,
 )
+from app.api.schemas.acks import CreatedRead, DeletedRead, UpdatedRead
 from app.api.schemas.availability import AvailabilityExceptionRead, AvailabilityRuleRead
 from app.core.errors import NotFoundError
 
@@ -99,6 +100,7 @@ async def list_availability_rules(rules: AvailabilityRulesDep) -> list[Availabil
 
 @router.post(
     "/rules",
+    response_model=CreatedRead,
     status_code=status.HTTP_201_CREATED,
     summary="Add a recurring window",
     description=(
@@ -114,13 +116,14 @@ async def list_availability_rules(rules: AvailabilityRulesDep) -> list[Availabil
 )
 async def add_availability_rule(
     created: CreatedAvailabilityRuleDep, user_id: str, response: Response
-) -> dict[str, str]:
+) -> CreatedRead:
     response.headers["Location"] = f"/api/v1/users/{user_id}/availability/rules/{created}"
-    return {"id": str(created)}
+    return CreatedRead(id=created)
 
 
 @router.patch(
     "/rules/{rule_id}",
+    response_model=UpdatedRead,
     summary="Change a recurring window",
     description=(
         "Only the fields sent are changed. Absent is not null.\n\n"
@@ -129,14 +132,15 @@ async def add_availability_rule(
     ),
     responses=WRITE_RESPONSES,
 )
-async def edit_availability_rule(changed: UpdatedAvailabilityRuleDep) -> dict[str, bool]:
+async def edit_availability_rule(changed: UpdatedAvailabilityRuleDep) -> UpdatedRead:
     if not changed:
         raise NotFoundError("no such availability rule")
-    return {"updated": True}
+    return UpdatedRead(updated=True)
 
 
 @router.delete(
     "/rules/{rule_id}",
+    response_model=DeletedRead,
     summary="Remove a recurring window",
     description=(
         "Soft delete. The window stops being offered and stops blocking the "
@@ -145,10 +149,10 @@ async def edit_availability_rule(changed: UpdatedAvailabilityRuleDep) -> dict[st
     ),
     responses=WRITE_RESPONSES,
 )
-async def remove_availability_rule(removed: DeletedAvailabilityRuleDep) -> dict[str, bool]:
+async def remove_availability_rule(removed: DeletedAvailabilityRuleDep) -> DeletedRead:
     if not removed:
         raise NotFoundError("no such availability rule")
-    return {"deleted": True}
+    return DeletedRead(deleted=True)
 
 
 @router.get(
@@ -172,6 +176,7 @@ async def list_availability_exceptions(
 
 @router.post(
     "/exceptions",
+    response_model=CreatedRead,
     status_code=status.HTTP_201_CREATED,
     summary="Add a dated exception",
     description=(
@@ -186,20 +191,21 @@ async def list_availability_exceptions(
 )
 async def add_availability_exception(
     created: CreatedAvailabilityExceptionDep, user_id: str, response: Response
-) -> dict[str, str]:
+) -> CreatedRead:
     response.headers["Location"] = f"/api/v1/users/{user_id}/availability/exceptions/{created}"
-    return {"id": str(created)}
+    return CreatedRead(id=created)
 
 
 @router.delete(
     "/exceptions/{exception_id}",
+    response_model=DeletedRead,
     summary="Remove a dated exception",
     description="Soft delete. The dates it covered return to whatever the weekly rules say.",
     responses=WRITE_RESPONSES,
 )
 async def remove_availability_exception(
     removed: DeletedAvailabilityExceptionDep,
-) -> dict[str, bool]:
+) -> DeletedRead:
     if not removed:
         raise NotFoundError("no such availability exception")
-    return {"deleted": True}
+    return DeletedRead(deleted=True)
