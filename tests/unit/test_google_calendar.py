@@ -58,6 +58,7 @@ class Google:
 
     Tokens are numbered as minted (`at-1`, `at-2`), or taken from `grants` while
     any are left. Calendar calls are recorded and answered by `handler`.
+    `before_exchange` runs, per refresh token, before its exchange is answered.
     """
 
     def __init__(
@@ -65,13 +66,13 @@ class Google:
         handler: Callable[[httpx.Request], httpx.Response] | None = None,
         *,
         grants: Sequence[httpx.Response] = (),
-        exchange_takes: Mapping[str, float] | None = None,
+        before_exchange: Mapping[str, Callable[[], object]] | None = None,
     ) -> None:
         self.exchanges: list[dict[str, list[str]]] = []
         self.calls: list[httpx.Request] = []
         self._handler = handler or (lambda _: httpx.Response(204))
         self._grants = list(grants)
-        self._exchange_takes = exchange_takes or {}
+        self._before_exchange = before_exchange or {}
         self.client = httpx.Client(transport=httpx.MockTransport(self._route))
         _clients.append(self.client)
 
@@ -79,7 +80,7 @@ class Google:
         if request.url == meetings.GOOGLE_TOKEN_URL:
             form = parse_qs(request.content.decode())
             self.exchanges.append(form)
-            time.sleep(self._exchange_takes.get(form["refresh_token"][0], 0))
+            self._before_exchange.get(form["refresh_token"][0], lambda: None)()
             if self._grants:
                 return self._grants.pop(0)
             token = f"at-{len(self.exchanges)}"
@@ -542,7 +543,7 @@ def test_another_calendar_on_one_account_shares_the_token() -> None:
 def test_threads_arriving_together_exchange_the_token_once() -> None:
     """Calendars are reached through `asyncio.to_thread`, so callers finding
     no token at the same moment must not each exchange one."""
-    google = Google(exchange_takes={FAKE_REFRESH: 0.05})
+    google = Google(before_exchange={FAKE_REFRESH: lambda: time.sleep(0.05)})
     arrived = threading.Barrier(8)
 
     def cancel(n: int) -> None:
@@ -561,20 +562,27 @@ def test_a_slow_exchange_does_not_hold_up_another_grant() -> None:
     caller of one grant wait out another grant's slow token endpoint. And the
     other grant's lookup must not prune the slow one while it is mid-exchange,
     or the token it is fetching is lost."""
-    google = Google(exchange_takes={"slow-refresh-token": 1.0})
+    entered, release = threading.Event(), threading.Event()
+
+    def held() -> None:
+        entered.set()
+        release.wait(timeout=30)
+
+    google = Google(before_exchange={"slow-refresh-token": held})
     slow_grant = google.adapter(refresh="slow-refresh-token")
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         slow = pool.submit(slow_grant.cancel_event, "evt_1")
-        while not google.exchanges:
-            time.sleep(0.005)
-        started = time.monotonic()
-        google.adapter().cancel_event("evt_2")
-        took = time.monotonic() - started
-        slow.result()
+        assert entered.wait(timeout=5)
+        fast = pool.submit(google.adapter().cancel_event, "evt_2")
+        try:
+            # Finishes while the slow exchange is still held, or never would.
+            fast.result(timeout=5)
+        finally:
+            release.set()
+        slow.result(timeout=5)
     slow_grant.cancel_event("evt_3")
 
-    assert took < 0.5
     assert len(google.exchanges) == 2
 
 
