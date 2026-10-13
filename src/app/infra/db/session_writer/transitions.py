@@ -5,6 +5,7 @@ the system's own expiry of requests nobody answered in time.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -259,7 +260,11 @@ def _past(action: str) -> str:
 
 
 async def expire_requests(
-    session: AsyncSession, *, now: dt.datetime, calendar: CalendarPort | None = None
+    session: AsyncSession,
+    *,
+    now: dt.datetime,
+    calendar: CalendarPort | None = None,
+    session_ids: Sequence[UUID] | None = None,
 ) -> int:
     """Kill every unanswered request past its deadline. Returns the count.
 
@@ -279,13 +284,19 @@ async def expire_requests(
     nothing and writes no second event. The two sweeps act on disjoint statuses,
     so their order in a run does not matter.
 
+    ``session_ids`` narrows it to those requests: the callback booking schedules
+    for one request's deadline expires that one through this same code, so a
+    request expired at its deadline and one expired by the sweep are the same
+    thing (owner, 2026-10-13).
+
     Does not commit.
     """
+    narrowed = [Session.id.in_(session_ids)] if session_ids is not None else []
     expired = (
         (
             await session.execute(
                 update(Session)
-                .where(*lapsed_request(now))
+                .where(*lapsed_request(now), *narrowed)
                 .values(status=SessionStatus.EXPIRED)
                 .returning(Session.id, Session.mentor_id, Session.mentee_id)
             )

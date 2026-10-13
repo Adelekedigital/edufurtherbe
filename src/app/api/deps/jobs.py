@@ -23,6 +23,7 @@ from app.domain.notifications import (
     REMINDER_OFFSETS,
     SESSION_REMINDER_KINDS,
 )
+from app.domain.sessions import EXPIRY_KIND
 from app.domain.suggestions import SUGGESTION_REMINDER_KIND
 from app.infra.clients.daily_presence import sighting_from, verify_daily_signature
 from app.infra.clients.notifications import live_notifier
@@ -39,6 +40,7 @@ from app.infra.clients.scheduler import (
 from app.infra.db.outbox import drain
 from app.infra.db.session_writer import (
     add_meet_link,
+    expire_requests,
     observe_presence,
     remind_before_session,
     remind_if_still_waiting,
@@ -84,7 +86,7 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     session_id = payload.get("session_id")
     kind = payload.get("kind")
     known = kind in REMINDER_OFFSETS or kind in SESSION_REMINDER_KINDS
-    if not session_id or not (known or kind == SUGGESTION_REMINDER_KIND):
+    if not session_id or not (known or kind in (SUGGESTION_REMINDER_KIND, EXPIRY_KIND)):
         raise ValidationError("not a reminder callback")
 
     # **Two kinds, one callback.** They differ in what they require: a response
@@ -97,6 +99,18 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     # it there.
     if kind in SESSION_REMINDER_KINDS:
         queued = await remind_before_session(session, UUID(str(session_id)), str(kind))
+    elif kind == EXPIRY_KIND:
+        # **The request's deadline** (owner, 2026-10-13): expired now, through
+        # the sweep's own code, if it is still unanswered and past it.
+        queued = (
+            await expire_requests(
+                session,
+                now=dt.datetime.now(dt.UTC),
+                calendar=_calendar(request),
+                session_ids=[UUID(str(session_id))],
+            )
+            > 0
+        )
     elif kind == SUGGESTION_REMINDER_KIND:
         # A suggested time's hold is about to lapse (#339): nudged only while
         # the offer is still unbooked and still held.
@@ -118,7 +132,8 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
             now=dt.datetime.now(dt.UTC),
             settings=settings,
             entity_id=UUID(str(session_id)),
-            kind=str(kind),
+            # An expiry's email carries no reminder kind; it is this session's.
+            kind=None if kind == EXPIRY_KIND else str(kind),
         )
         await session.commit()
     if queued and kind == LAST_REMINDER_KIND:
