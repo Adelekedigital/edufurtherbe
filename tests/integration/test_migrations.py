@@ -1298,3 +1298,47 @@ def test_the_mentee_overlap_constraint_applies_over_a_cancelled_twin(
         )
         is True
     )
+
+
+_THREE_TYPES = """
+    WITH u AS (
+        INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
+        VALUES ('backfill-274@example.test', gen_random_uuid(), 'Probe', 'mentor', 'UTC')
+        RETURNING id
+    ), p AS (
+        INSERT INTO mentor_profiles (user_id, headline) SELECT id, 'P' FROM u RETURNING user_id
+    ), first_two AS (
+        SELECT id, row_number() OVER (ORDER BY slug) AS n FROM service_offerings
+    ), types AS (
+        INSERT INTO session_types (mentor_user_id, name, service_offering_id)
+        SELECT p.user_id, v.name, (SELECT id FROM first_two WHERE n = v.n)
+        FROM p CROSS JOIN (VALUES ('column-only', 1), ('has-set', 2), ('unclassified', NULL))
+            AS v(name, n)
+        RETURNING id, name, service_offering_id
+    )
+    INSERT INTO session_type_offerings (session_type_id, service_offering_id, position)
+    SELECT id, service_offering_id, 0 FROM types WHERE name = 'has-set'
+"""
+
+
+def test_a_type_with_its_offering_only_in_the_column_gets_its_row(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`a7e3c1d9b452` gives a column-only type its set row (#274), leaves a type
+    that already has a set alone, and invents nothing for an unclassified one."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "5d8b3e1f7a24")
+    execute(disposable_database, _THREE_TYPES)
+
+    command.upgrade(config, "a7e3c1d9b452")
+
+    rows = scalar(
+        disposable_database,
+        "SELECT string_agg(t.name || '=' || "
+        "(SELECT count(*) FROM session_type_offerings o "
+        " WHERE o.session_type_id = t.id AND o.service_offering_id IS NOT DISTINCT FROM "
+        " t.service_offering_id AND o.position = 0)::text, ',' ORDER BY t.name) "
+        "FROM session_types t WHERE t.name IN ('column-only', 'has-set', 'unclassified')",
+    )
+    assert rows == "column-only=1,has-set=1,unclassified=0"
+    assert scalar(disposable_database, "SELECT count(*) FROM session_type_offerings") == 2
