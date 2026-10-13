@@ -222,6 +222,7 @@ async def list_slots(
     range_cap: int | None = None,
     holds_for: UUID | None = None,
     notice_from: dt.datetime | None = None,
+    length_minutes: int | None = None,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
 
@@ -261,6 +262,11 @@ async def list_slots(
     else: a time held for a mentee (#339) stays bookable through its hold even
     once the notice floor has passed it, so the floor is measured from when it
     was offered. Nothing earlier than ``now`` is ever offered either way.
+
+    ``length_minutes`` draws the grid at that length instead of the offering's
+    current one, and nothing else changes. For a time already offered (#347): it
+    was on the grid at its own length when it was offered, so a mentor changing
+    the offering's length, which moves every start, does not strand it.
     """
     external_busy = external_busy or NullFreeBusy()
     offering = (
@@ -428,7 +434,7 @@ async def list_slots(
                 for row in exceptions
             ],
             busy=ours + list(elsewhere),
-            duration_minutes=offering["duration_minutes"],
+            duration_minutes=length_minutes or offering["duration_minutes"],
             min_notice_minutes=offering["min_notice_minutes"],
             now=notice_from or now,
             start=start,
@@ -449,6 +455,7 @@ async def offered_slot(
     external_busy: FreeBusyReader | None = None,
     holds_for: UUID | None = None,
     notice_from: dt.datetime | None = None,
+    length_minutes: int | None = None,
 ) -> UtcInterval | None:
     """The slot the grid offers at exactly ``starts_at``, or ``None``.
 
@@ -468,5 +475,6 @@ async def offered_slot(
         external_busy=external_busy,
         holds_for=holds_for,
         notice_from=notice_from,
+        length_minutes=length_minutes,
     )
     return next((slot for slot in slots or () if slot.start == starts_at), None)

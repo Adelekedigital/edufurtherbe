@@ -266,7 +266,8 @@ async def book_session(
     # floor is measured from when it was offered: a slot valid then stays
     # bookable through its two-hour hold. Only through the hold: a decline's
     # offer stays takeable after it (`holds.takeable`), but then the time must
-    # be one the grid offers now, notice included. Re-read under the lock below.
+    # be one the grid offers now at the offer's length, notice included.
+    # Re-read under the lock below.
     pending_offer = await open_offer(
         session,
         mentor_id=mentor_id,
@@ -289,6 +290,10 @@ async def book_session(
         # The time offered to *this* mentee at this offering is open to them;
         # every other hold is busy.
         holds_for=mentee_id,
+        # An offered time is found on the grid drawn at the length it was
+        # offered at, where it was when offered, not the grid the offering's
+        # current length draws, which a length change moves (#347).
+        length_minutes=pending_offer["duration_minutes"] if pending_offer else None,
         notice_from=pending_offer["created_at"]
         if pending_offer and pending_offer["held"]
         else None,
@@ -320,6 +325,14 @@ async def book_session(
     )
     if pending_offer is not None and offer is None:
         # Spent or lapsed between the two reads; the grid was read on its terms.
+        raise ConflictError(OFFER_GONE)
+    if offer is not None and (
+        pending_offer is None or offer["duration_minutes"] != pending_offer["duration_minutes"]
+    ):
+        # Offered, or offered at another length, between the two reads: the
+        # grid was read at a length this booking would not be written at, so
+        # what it checked is not what would be booked. Refused rather than
+        # re-read; a retry reads both at the new offer's terms.
         raise ConflictError(OFFER_GONE)
     # **A decline's offer is approved in advance** (owner, 2026-10-13): the mentor
     # picked this time for this mentee instead of approving theirs, so booking it
