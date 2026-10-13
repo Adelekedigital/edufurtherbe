@@ -458,8 +458,9 @@ class MentorFreeBusy:
         #: and show it to everyone for a whole cycle — so it raises instead.
         self._fail_open = fail_open
         #: How many Google calls this process may make per window, from every
-        #: caller together (decision 242). Spent, a slot read answers from
-        #: declared hours, exactly as when Google is down.
+        #: caller together (decision 242). Spent, a read answers from declared
+        #: hours, exactly as when Google is down. Only the public slot read is
+        #: given one; booking, suggestions and the job are not.
         self._budget = budget
 
     async def _mark_dead(self, session: AsyncSession, user_id: UUID, reason: str) -> None:
@@ -521,7 +522,12 @@ class MentorFreeBusy:
         # is skipped and the read fails open, as it does in an outage: no
         # lockout, only availability that ignores Google for under a minute.
         if self._budget is not None and not self._budget.allow(time.monotonic()):
-            logger.warning("free/busy budget spent; %s answered from declared hours", user_id)
+            # Once per spell, not per request: a flood must not become a log flood.
+            if self._budget.refusals == 1:
+                logger.warning(
+                    "free/busy budget spent; answering from declared hours",
+                    extra={"user_id": str(user_id), "limit": self._budget.limit},
+                )
             if not self._fail_open:
                 raise VenueUnavailableError("the free/busy budget is spent")
             return ()

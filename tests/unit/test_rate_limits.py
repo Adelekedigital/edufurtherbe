@@ -31,3 +31,16 @@ def test_a_refusal_is_not_counted() -> None:
         window.allow(now=float(t))
 
     assert window.allow(now=60.0) is True
+
+
+def test_refusals_count_the_current_spell_so_it_is_reported_once() -> None:
+    window = SlidingWindow(limit=1, window_seconds=60)
+    window.allow(now=0.0)
+
+    window.allow(now=1.0)
+    first = window.refusals
+    window.allow(now=2.0)
+
+    assert (first, window.refusals) == (1, 2)
+    window.allow(now=61.0)
+    assert window.refusals == 0

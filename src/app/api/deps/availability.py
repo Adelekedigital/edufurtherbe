@@ -178,7 +178,7 @@ async def mentor_slots(
         end=end,
         now=dt.datetime.now(dt.UTC),
         window=window,
-        external_busy=_free_busy(request),
+        external_busy=_free_busy(request, budgeted=True),
         range_cap=window.range_cap_days,
         # **A signed-in mentee sees the time held for them open** (#339); to
         # everyone else, and to anybody without a token, it is busy.

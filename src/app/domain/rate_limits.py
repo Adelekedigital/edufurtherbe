@@ -18,6 +18,8 @@ class SlidingWindow:
     limit: int
     window_seconds: float
     _events: deque[float] = field(default_factory=deque)
+    #: Refusals since the last event was allowed; 1 marks the start of a spell.
+    refusals: int = 0
 
     def allow(self, now: float) -> bool:
         """Record an event at `now` if one is allowed, and say whether it was.
@@ -25,6 +27,8 @@ class SlidingWindow:
         while self._events and self._events[0] <= now - self.window_seconds:
             self._events.popleft()
         if len(self._events) >= self.limit:
+            self.refusals += 1
             return False
         self._events.append(now)
+        self.refusals = 0
         return True
