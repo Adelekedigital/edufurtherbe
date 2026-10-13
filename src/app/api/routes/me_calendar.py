@@ -33,7 +33,11 @@ from app.api.deps import (
     DisconnectedCalendarDep,
     OwnCalendarDep,
 )
-from app.api.schemas.availability import CalendarConnectionRead
+from app.api.schemas.availability import (
+    CalendarConnectedRead,
+    CalendarConnectionRead,
+    CalendarConsentRead,
+)
 from app.core.errors import NotFoundError
 
 router = APIRouter(prefix="/api/v1/me/calendar", tags=["availability"])
@@ -77,6 +81,7 @@ async def read_own_calendar(connection: OwnCalendarDep) -> CalendarConnectionRea
 
 @router.get(
     "/connect",
+    response_model=CalendarConsentRead,
     summary="Start connecting your calendar",
     description=(
         "Returns the Google URL to send the mentor to. **A URL rather than a "
@@ -92,8 +97,8 @@ async def read_own_calendar(connection: OwnCalendarDep) -> CalendarConnectionRea
     ),
     responses=OWNER_RESPONSES | UNCONFIGURED,
 )
-async def start_connecting(url: CalendarConsentDep) -> dict[str, str]:
-    return {"consent_url": url}
+async def start_connecting(url: CalendarConsentDep) -> CalendarConsentRead:
+    return CalendarConsentRead(consent_url=url)
 
 
 @router.delete(
@@ -136,6 +141,7 @@ callback_router = APIRouter(prefix="/api/v1/callbacks", tags=["callbacks"])
 
 @callback_router.get(
     "/google/calendar",
+    response_model=CalendarConnectedRead,
     summary="Complete a mentor's calendar consent",
     description=(
         "**Google redirects a browser here**, so there is no bearer token on "
@@ -180,7 +186,7 @@ callback_router = APIRouter(prefix="/api/v1/callbacks", tags=["callbacks"])
         },
     },
 )
-async def complete_calendar_consent(user_id: CalendarConnectedDep) -> dict[str, str]:
+async def complete_calendar_consent(user_id: CalendarConnectedDep) -> CalendarConnectedRead:
     """Returns the mentor's id rather than redirecting.
 
     **A redirect would need a front-end URL this service does not know.**
@@ -189,4 +195,4 @@ async def complete_calendar_consent(user_id: CalendarConnectedDep) -> dict[str, 
     opens this in a popup and closes it on the response, which is the ordinary
     shape for a consent flow in a single-page application.
     """
-    return {"connected": str(user_id)}
+    return CalendarConnectedRead(connected=user_id)

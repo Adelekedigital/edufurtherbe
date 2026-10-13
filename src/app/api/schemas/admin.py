@@ -112,3 +112,33 @@ class FeaturedWeekRead(BaseModel):
             "paused is skipped when the week arrives, and the rotation fills it."
         )
     )
+
+
+class InstitutionApprovedRead(BaseModel):
+    """An institution was approved."""
+
+    approved: bool = Field(description="Always true: the institution is now selectable.")
+
+
+class InstitutionMergedRead(BaseModel):
+    """A duplicate institution was merged into its winner."""
+
+    entries_moved: int = Field(description="Education entries repointed onto the winner.")
+
+
+class MentorDecidedRead(BaseModel):
+    """A mentor application was decided."""
+
+    decided: bool = Field(description="Always true: the decision was recorded.")
+
+
+class MentorListingChangedRead(BaseModel):
+    """A mentor's listing was moved."""
+
+    changed: bool = Field(description="Always true: the listing change was recorded.")
+
+
+class FeaturedWeekSetRead(BaseModel):
+    """The week whose featured mentor was chosen."""
+
+    week_start: date = Field(description="The week's Monday, UTC.")

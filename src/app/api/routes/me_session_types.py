@@ -35,6 +35,7 @@ from app.api.deps import (
     UpdatedSessionTypeWindowDep,
 )
 from app.api.routes.sessions import REPLAYED_HEADER
+from app.api.schemas.acks import CreatedRead, DeletedRead, UpdatedRead
 from app.api.schemas.availability import AvailabilityRuleRead
 from app.api.schemas.common import Page
 from app.api.schemas.session_types import (
@@ -175,6 +176,7 @@ async def create_own_session_type(
 
 @router.patch(
     "/session-types/{session_type_id}",
+    response_model=UpdatedRead,
     summary="Change one of your session types",
     description=(
         "Every field is optional and **absent is not null** — a field you do "
@@ -192,10 +194,10 @@ async def create_own_session_type(
     ),
     responses=WRITE_RESPONSES | NAME_CONFLICT,
 )
-async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> dict[str, bool]:
+async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> UpdatedRead:
     if not changed:
         raise NotFoundError("no such session type")
-    return {"updated": True}
+    return UpdatedRead(updated=True)
 
 
 @router.delete(
@@ -289,6 +291,7 @@ async def list_session_type_windows(windows: SessionTypeWindowsDep) -> Page[Avai
 
 @router.post(
     "/session-types/{session_type_id}/windows",
+    response_model=CreatedRead,
     status_code=status.HTTP_201_CREATED,
     summary="Add a weekly window to an offering",
     description=WINDOW_DESCRIPTION,
@@ -296,27 +299,29 @@ async def list_session_type_windows(windows: SessionTypeWindowsDep) -> Page[Avai
 )
 async def add_session_type_window(
     created: CreatedSessionTypeWindowDep, session_type_id: str, response: Response
-) -> dict[str, str]:
+) -> CreatedRead:
     response.headers["Location"] = f"/api/v1/me/session-types/{session_type_id}/windows/{created}"
-    return {"id": str(created)}
+    return CreatedRead(id=created)
 
 
 @router.patch(
     "/session-types/{session_type_id}/windows/{window_id}",
+    response_model=UpdatedRead,
     summary="Change one of an offering's windows",
     description=(
         "Only the fields sent change. Moving onto another window of this offering is a 409."
     ),
     responses=OWNER_RESPONSES,
 )
-async def edit_session_type_window(changed: UpdatedSessionTypeWindowDep) -> dict[str, bool]:
+async def edit_session_type_window(changed: UpdatedSessionTypeWindowDep) -> UpdatedRead:
     if not changed:
         raise NotFoundError("no such window")
-    return {"updated": True}
+    return UpdatedRead(updated=True)
 
 
 @router.delete(
     "/session-types/{session_type_id}/windows/{window_id}",
+    response_model=DeletedRead,
     summary="Remove one of an offering's windows",
     description=(
         "Soft delete: the window stops being offered and stops blocking its hours. "
@@ -324,7 +329,7 @@ async def edit_session_type_window(changed: UpdatedSessionTypeWindowDep) -> dict
     ),
     responses=OWNER_RESPONSES,
 )
-async def remove_session_type_window(removed: DeletedSessionTypeWindowDep) -> dict[str, bool]:
+async def remove_session_type_window(removed: DeletedSessionTypeWindowDep) -> DeletedRead:
     if not removed:
         raise NotFoundError("no such window")
-    return {"deleted": True}
+    return DeletedRead(deleted=True)

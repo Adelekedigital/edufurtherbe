@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Request
@@ -13,6 +13,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.api.deps.core import SessionDep, _configured, logger
 from app.api.deps.sessions import _calendar, _reminder_callback_url
+from app.api.schemas.jobs import RuntimeJobRead
 from app.core.errors import (
     AuthenticationError,
     ValidationError,
@@ -188,7 +189,7 @@ class RuntimeJobRequest(BaseModel):
     job_id: str
 
 
-async def runtime_job_delivery(job_name: str, request: Request) -> dict[str, Any]:
+async def runtime_job_delivery(job_name: str, request: Request) -> RuntimeJobRead:
     """Verify raw QStash bytes, then parse and call the shared job runner."""
     settings = _configured(request)
     keys = tuple(
@@ -232,12 +233,9 @@ async def runtime_job_delivery(job_name: str, request: Request) -> dict[str, Any
     )
     runner = getattr(request.app.state, "runtime_jobs", None) or RuntimeJobs(settings)
     result = await runner.run(job_name, job_id=payload.job_id, message_id=message_id)
-    return {
-        "job": result.name,
-        "job_id": result.job_id,
-        "status": result.status,
-        "counts": result.counts,
-    }
+    return RuntimeJobRead(
+        job=result.name, job_id=result.job_id, status=result.status, counts=result.counts
+    )
 
 
-RuntimeJobDep = Annotated[dict[str, Any], Depends(runtime_job_delivery)]
+RuntimeJobDep = Annotated[RuntimeJobRead, Depends(runtime_job_delivery)]

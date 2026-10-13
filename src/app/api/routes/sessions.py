@@ -44,7 +44,16 @@ from app.api.deps import (
 )
 from app.api.schemas.common import Page
 from app.api.schemas.intake import SessionAnswerRead
-from app.api.schemas.sessions import DoorRead, JoinRead, SessionEventRead, SessionRead
+from app.api.schemas.sessions import (
+    DoorRead,
+    JoinRead,
+    SessionAcceptedRead,
+    SessionCancelledRead,
+    SessionDeclinedRead,
+    SessionEventRead,
+    SessionRead,
+    SessionWithdrawnRead,
+)
 from app.domain.enums import SessionReasonCode
 from app.domain.sessions import TRANSITIONS
 
@@ -393,6 +402,7 @@ DOOR_RESPONSES: dict[int | str, dict[str, str]] = {
 
 @router.post(
     "/sessions/{session_id}/accept",
+    response_model=SessionAcceptedRead,
     summary="Accept a booking request",
     description=(
         "**The mentor's decision, and only the mentor's.** A mentee has no "
@@ -413,12 +423,13 @@ DOOR_RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=TRANSITION_RESPONSES,
 )
-async def accept_session(_: AcceptedSessionDep) -> dict[str, bool]:
-    return {"accepted": True}
+async def accept_session(_: AcceptedSessionDep) -> SessionAcceptedRead:
+    return SessionAcceptedRead(accepted=True)
 
 
 @router.post(
     "/sessions/{session_id}/decline",
+    response_model=SessionDeclinedRead,
     summary="Decline a booking request",
     description=(
         "**The mentor's other answer**, and the counterpart to `withdraw`: this "
@@ -432,12 +443,13 @@ async def accept_session(_: AcceptedSessionDep) -> dict[str, bool]:
     ),
     responses=TRANSITION_RESPONSES,
 )
-async def decline_session(_: DeclinedSessionDep) -> dict[str, bool]:
-    return {"declined": True}
+async def decline_session(_: DeclinedSessionDep) -> SessionDeclinedRead:
+    return SessionDeclinedRead(declined=True)
 
 
 @router.post(
     "/sessions/{session_id}/withdraw",
+    response_model=SessionWithdrawnRead,
     summary="Take back a booking request",
     description=(
         "**The mentee's, and only before the mentor answers.** Once a session "
@@ -450,12 +462,13 @@ async def decline_session(_: DeclinedSessionDep) -> dict[str, bool]:
     ),
     responses=TRANSITION_RESPONSES,
 )
-async def withdraw_session(_: WithdrawnSessionDep) -> dict[str, bool]:
-    return {"withdrawn": True}
+async def withdraw_session(_: WithdrawnSessionDep) -> SessionWithdrawnRead:
+    return SessionWithdrawnRead(withdrawn=True)
 
 
 @router.post(
     "/sessions/{session_id}/cancel",
+    response_model=SessionCancelledRead,
     summary="Call off a confirmed session",
     description=(
         "**The one action either party may take.** The difference from "
@@ -491,8 +504,8 @@ async def withdraw_session(_: WithdrawnSessionDep) -> dict[str, bool]:
     ),
     responses=TRANSITION_RESPONSES,
 )
-async def cancel_session(_: CancelledSessionDep) -> dict[str, bool]:
-    return {"cancelled": True}
+async def cancel_session(_: CancelledSessionDep) -> SessionCancelledRead:
+    return SessionCancelledRead(cancelled=True)
 
 
 @router.post(
