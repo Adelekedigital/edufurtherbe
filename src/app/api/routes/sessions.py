@@ -295,7 +295,10 @@ REPLAYED_HEADER = "Idempotent-Replayed"
         "**The status you get back is the mentor's setting, not your choice.** "
         "An offering that requires confirmation yields "
         "`pending_mentor_approval` and waits for them; one that does not yields "
-        "`confirmed` immediately.\n\n"
+        "`confirmed` immediately. **One exception:** the time a mentor offered "
+        "you when declining your request is approved in advance, so booking "
+        "exactly that time, at that offering, is `confirmed` immediately, even "
+        "after its hold has lapsed.\n\n"
         "**`Idempotency-Key` is required.** Send a fresh value per booking "
         "attempt and reuse it on every retry of that attempt: a retry replays "
         "the original response — the same session, the same `201` — instead of "
@@ -438,7 +441,10 @@ async def accept_session(_: AcceptedSessionDep) -> SessionAcceptedRead:
         "separates them from `cancel`.\n\n"
         "**`suggested_starts_at` offers another time instead** (#339): see the "
         "field. The request still ends `declined` and the credit still comes "
-        "back; the offer is separate, held for the mentee for two hours.\n\n"
+        "back; the offer is separate, held for the mentee for two hours. "
+        "**The offered time is approved in advance**: when the mentee books it, "
+        "the session is `confirmed` at once, without waiting for you again, "
+        "and that lasts past the hold while the time is still free.\n\n"
         + reason_codes_doc("decline", offers=True)
     ),
     responses=TRANSITION_RESPONSES,
@@ -498,7 +504,9 @@ async def withdraw_session(_: WithdrawnSessionDep) -> SessionWithdrawnRead:
         "month (UTC), whatever date the original carried.\n\n"
         "**A mentor may offer another time instead** with `suggested_starts_at` "
         "(#339): the session still ends `cancelled`, refunded as above, and the "
-        "offered time is held for the mentee for two hours.\n\n"
+        "offered time is held for the mentee for two hours. Unlike a decline's "
+        "offer it is not approved in advance: booking it follows the mentor's "
+        "usual approval setting.\n\n"
         + reason_codes_doc("cancel", offers=True)
         + " The code does not decide the refund."
     ),

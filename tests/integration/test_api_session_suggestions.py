@@ -423,7 +423,7 @@ async def test_only_the_mentee_it_was_offered_to_takes_up_the_offer(
 ) -> None:
     """At the store, because the API never lets a stranger reach a held time:
     the scope is the last wall, so it is tested on its own."""
-    from app.infra.db.holds import held_offer
+    from app.infra.db.holds import open_offer
 
     booking = await a_booking(db_engine, api_client, "sg-scope")
     session_type = await offering_of(api_client, booking)
@@ -439,8 +439,8 @@ async def test_only_the_mentee_it_was_offered_to_takes_up_the_offer(
     }
 
     async with factory() as session:
-        theirs = await held_offer(session, mentee_id=UUID(str(booking["mentee_id"])), **asked)
-        strangers = await held_offer(session, mentee_id=stranger, **asked)
+        theirs = await open_offer(session, mentee_id=UUID(str(booking["mentee_id"])), **asked)
+        strangers = await open_offer(session, mentee_id=stranger, **asked)
         await session.rollback()
 
     assert theirs is not None
@@ -572,7 +572,7 @@ async def test_the_locked_recheck_counts_the_offerings_break(
             duration_minutes=60,
             break_minutes=0,
             now=now,
-            except_id=None,
+            except_ids=(),
         )
         after_break = await holds_against(
             session,
@@ -581,7 +581,7 @@ async def test_the_locked_recheck_counts_the_offerings_break(
             duration_minutes=60,
             break_minutes=0,
             now=now,
-            except_id=None,
+            except_ids=(),
         )
 
     assert next_hour is True

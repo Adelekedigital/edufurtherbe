@@ -187,7 +187,11 @@ class SuggestionRead(BaseModel):
         description=(
             "`active` while held and unbooked; `booked` once the mentee booked "
             "it; `expired` once the hold lapsed unbooked. An expired time may "
-            "still be free — re-read `/slots` — but is no longer held."
+            "still be free — re-read `/slots` — but is no longer held. **On a "
+            "declined session the offer is approved in advance**, so even when "
+            "`expired` its mentee may still book that time while it is free, "
+            "and the booking confirms at once; `expired` only means it is no "
+            "longer kept for them alone."
         )
     )
     booked_session_id: str | None = Field(
@@ -695,7 +699,10 @@ SuggestedStartsAt = Annotated[
             "anyone else's booking — and they book it with an ordinary `POST "
             "/sessions` at that time. They are emailed once, with both the news "
             "and the offer, and reminded thirty minutes before the hold lapses. "
-            "The offer appears on this session as `suggestion`."
+            "The offer appears on this session as `suggestion`. **Offered on a "
+            "decline, the time is approved in advance**: booking it confirms at "
+            "once, even after the hold lapses. Offered on a cancel, it follows "
+            "the mentor's usual approval setting."
         ),
     ),
 ]
