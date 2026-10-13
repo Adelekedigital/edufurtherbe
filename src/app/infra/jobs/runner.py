@@ -14,13 +14,15 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
-from app.core.errors import ValidationError
+from app.core.errors import ConfigurationError, ValidationError
 from app.domain.availability import booking_window
 from app.domain.credits import credit_ladder
 from app.domain.institutions import CatalogueError, CatalogueRow, to_catalogue_row
 from app.infra.clients.hipolabs import FileCatalogue, HipolabsCatalogue
 from app.infra.clients.meetings import (
     CalendarPort,
+    NullCalendar,
+    NullRooms,
     RoomsPort,
     calendar_for,
     free_busy,
@@ -142,15 +144,41 @@ class RuntimeJobs:
         )
         return JobResult(name=name, job_id=job_id, status=status, counts=counts)
 
+    def _live_in_production(self, adapter: Any, null: type, setting: str) -> Any:
+        """The adapter, unless production would run on a null one.
+
+        **A job in production never runs on a null adapter.** The web app cannot
+        start that way (`production_gaps`), but a recovery script builds its own
+        settings, and on a null notifier `drain` marks every pending message
+        sent: real users' emails, lost with nothing to retry them.
+        """
+        if self.settings.environment == "production" and isinstance(adapter, null):
+            raise ConfigurationError(
+                f"{setting} is not set: refusing to run a production job that would "
+                "silently drop what it should send or clean up"
+            )
+        return adapter
+
     def _notifier(self) -> LoopsNotifier | NullNotifier:
-        return notifier_for(self.settings)
+        notifier: LoopsNotifier | NullNotifier = self._live_in_production(
+            notifier_for(self.settings), NullNotifier, "LOOPS_API_KEY"
+        )
+        return notifier
 
     def _calendar(self) -> CalendarPort:
-        return calendar_for(self.settings)
+        calendar: CalendarPort = self._live_in_production(
+            calendar_for(self.settings),
+            NullCalendar,
+            "GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET or GOOGLE_CALENDAR_REFRESH_TOKEN",
+        )
+        return calendar
 
     def _rooms(self) -> RoomsPort:
         """Daily's client for the meeting records, or none when unconfigured."""
-        return rooms_for(self.settings)
+        rooms: RoomsPort = self._live_in_production(
+            rooms_for(self.settings), NullRooms, "DAILY_API_KEY"
+        )
+        return rooms
 
     def _calendar_health(self) -> dict[str, str] | None:
         settings = self.settings
