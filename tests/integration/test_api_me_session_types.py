@@ -325,7 +325,6 @@ async def test_the_response_carries_the_three_owner_only_fields(
         # Whether length and notice are the offering's own or inherited (#216).
         "duration_inherited",
         "min_notice_inherited",
-        "service_offering",
         "service_offerings",
         "application_stages",
         "application_stage",
@@ -345,7 +344,7 @@ async def test_the_response_carries_the_three_owner_only_fields(
     # `category` was a free-text string of the mentor's own and is now a
     # reference to the taxonomy mentees are matched on, so the owner sees the
     # same `code`/`display_name` pair a client would render.
-    assert offering["service_offering"]["code"] == "document-preparation"
+    assert offering["service_offerings"][0]["code"] == "document-preparation"
     assert offering["application_stage"] == "other"
     assert offering["custom_stage_label"] == "My own wording"
 
@@ -383,7 +382,6 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         # The two vocabularies are published now that both have a designed
         # shape, so this set grew — but `is_active` is still owner-only, which
         # is what this test is actually about.
-        "service_offering",
         "service_offerings",
         # The stage set (#215); `application_stage` is its first, for a release.
         "application_stages",

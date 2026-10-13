@@ -1,9 +1,9 @@
 """A session type covers up to three service offerings (Session Types #9).
 
 Owner decision, 2026-09-28: "yes, several, up to 3". The set lives in
-`session_type_offerings`; `service_offering_id` and the single read field stay
-for this release, derived as the **first** of the set (expand/contract — the
-column goes in a later release).
+`session_type_offerings`. The single read field and the `service_offering_id`
+write were removed from the API in #274 (they only ever repeated the first of
+the set); the legacy column stays, dual-written, until its contract step.
 """
 
 from __future__ import annotations
@@ -59,8 +59,6 @@ async def test_a_type_can_cover_several_offerings_in_order(
 
     assert created.status_code == 201
     assert codes(row) == [DOCS, SCHOLARSHIPS, TESTS]
-    # The single field this release keeps is the first of the set.
-    assert row["service_offering"]["code"] == DOCS  # type: ignore[index]
 
 
 async def test_the_public_read_carries_the_set_too(
@@ -81,22 +79,31 @@ async def test_the_public_read_carries_the_set_too(
     (row,) = [t for t in public if t["id"] == created["id"]]
 
     assert codes(row) == [INTERVIEW, DOCS]
-    assert row["service_offering"]["code"] == INTERVIEW
+    assert row["service_offerings"][0]["code"] == INTERVIEW
 
 
-async def test_the_single_field_still_writes_a_set_of_one(
+async def test_the_removed_single_field_is_refused_not_ignored(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    _, auth = await as_mentor(db_engine, "topics-legacy")
+    """**Refused, naming the list**, rather than silently dropped: a client still
+    sending it would otherwise create an unclassified type and believe it had
+    classified it (#274)."""
+    mentor, auth = await as_mentor(db_engine, "topics-legacy")
     ids = await offering_ids(db_engine)
 
-    created = (
-        await api_client.post(
-            URL, json=body(service_offering_id=ids[TESTS]), headers=bearer(api_token(auth))
-        )
-    ).json()
+    response = await api_client.post(
+        URL, json=body(service_offering_id=ids[TESTS]), headers=bearer(api_token(auth))
+    )
 
-    assert codes(await own(api_client, auth, created["id"])) == [TESTS]
+    assert response.status_code == 422, response.text
+    # Pointing at the field, so a form can mark it, and naming what replaces it.
+    assert [e["pointer"] for e in response.json()["errors"]] == ["/service_offering_id"]
+    assert "service_offering_ids" in response.text
+    async with db_engine.begin() as conn:
+        written = await conn.execute(
+            text("SELECT count(*) FROM session_types WHERE mentor_user_id = :u"), {"u": mentor}
+        )
+    assert written.scalar_one() == 0
 
 
 async def test_a_type_written_only_to_the_old_column_still_reads(
@@ -110,7 +117,7 @@ async def test_a_type_written_only_to_the_old_column_still_reads(
     row = await own(api_client, auth, str(type_id))
 
     assert codes(row) == [SCHOLARSHIPS]
-    assert row["service_offering"]["code"] == SCHOLARSHIPS  # type: ignore[index]
+    assert row["service_offerings"][0]["code"] == SCHOLARSHIPS  # type: ignore[index]
 
 
 async def test_an_unclassified_type_has_an_empty_set(
@@ -122,12 +129,11 @@ async def test_an_unclassified_type_has_an_empty_set(
     row = await own(api_client, auth, created["id"])
 
     assert row["service_offerings"] == []
-    assert row["service_offering"] is None
 
 
 @pytest.mark.parametrize(
     "case",
-    ["four", "duplicate", "unknown", "both-fields"],
+    ["four", "duplicate", "unknown", "single-field"],
 )
 async def test_a_bad_set_is_refused(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, case: str
@@ -140,7 +146,7 @@ async def test_a_bad_set_is_refused(
         ),
         "duplicate": body(service_offering_ids=[ids[TESTS], ids[TESTS]]),
         "unknown": body(service_offering_ids=["019ffbe6-8cfc-759b-aaf9-bb480b8c29ad"]),
-        "both-fields": body(service_offering_ids=[ids[TESTS]], service_offering_id=ids[DOCS]),
+        "single-field": body(service_offering_ids=[ids[TESTS]], service_offering_id=ids[DOCS]),
     }[case]
 
     response = await api_client.post(URL, json=payload, headers=bearer(api_token(auth)))
@@ -189,12 +195,11 @@ async def test_patching_replaces_the_set_and_empty_clears_it(
     cleared = await own(api_client, auth, created["id"])
 
     assert codes(replaced) == [INTERVIEW, TESTS]
-    assert replaced["service_offering"]["code"] == INTERVIEW  # type: ignore[index]
+    assert replaced["service_offerings"][0]["code"] == INTERVIEW  # type: ignore[index]
     assert cleared["service_offerings"] == []
-    assert cleared["service_offering"] is None
 
 
-async def test_patching_the_single_field_sets_a_set_of_one(
+async def test_patching_the_removed_single_field_is_refused(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     _, auth = await as_mentor(db_engine, "topics-patch-legacy")
@@ -206,11 +211,13 @@ async def test_patching_the_single_field_sets_a_set_of_one(
         )
     ).json()
 
-    await api_client.patch(
+    refused = await api_client.patch(
         f"{URL}/{created['id']}", json={"service_offering_id": ids[INTERVIEW]}, headers=headers
     )
 
-    assert codes(await own(api_client, auth, created["id"])) == [INTERVIEW]
+    assert refused.status_code == 422, refused.text
+    assert [e["pointer"] for e in refused.json()["errors"]] == ["/service_offering_id"]
+    assert codes(await own(api_client, auth, created["id"])) == [TESTS, DOCS]
 
 
 async def test_a_patch_that_leaves_the_set_out_keeps_it(

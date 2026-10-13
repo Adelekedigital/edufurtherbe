@@ -259,8 +259,8 @@ async def test_classifying_an_offering_shows_the_taxonomy_on_both_reads(
         "code": "interview-preparation",
         "display_name": "Interview Preparation",
     }
-    assert owner[0]["service_offering"] == expected
-    assert public[0]["service_offering"] == expected
+    assert owner[0]["service_offerings"] == [expected]
+    assert public[0]["service_offerings"] == [expected]
 
 
 async def test_an_unclassified_offering_is_not_an_error(
@@ -279,5 +279,5 @@ async def test_an_unclassified_offering_is_not_an_error(
 
     assert len(owner) == 1
     assert len(public) == 1
-    assert owner[0]["service_offering"] is None
-    assert public[0]["service_offering"] is None
+    assert owner[0]["service_offerings"] == []
+    assert public[0]["service_offerings"] == []

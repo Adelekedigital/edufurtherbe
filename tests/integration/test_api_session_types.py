@@ -269,8 +269,10 @@ async def test_the_response_carries_nothing_it_should_not(
 ) -> None:
     """An allowlist, asserted as one.
 
-    **Changed deliberately: `service_offering`, `application_stage` and
-    `custom_stage_label` are now *in* the allowlist.** They were withheld because
+    **Changed deliberately: the service offerings, `application_stage` and
+    `custom_stage_label` are now *in* the allowlist.** (As the list
+    `service_offerings`; the single `service_offering`, which only repeated its
+    first item, was removed in #274.) They were withheld because
     they were free text with no vocabulary, so publishing them would have
     committed this contract to a shape nobody had designed. Both have a designed
     shape now — a reference to the closed taxonomy, and a five-value closed set —
@@ -304,7 +306,6 @@ async def test_the_response_carries_nothing_it_should_not(
         "duration_minutes",
         "min_notice_minutes",
         "meeting_venue",
-        "service_offering",
         "service_offerings",
         "application_stages",
         "application_stage",
@@ -319,7 +320,7 @@ async def test_the_response_carries_nothing_it_should_not(
         # Whether booking is a request, resolved: told before "Send request" (#409).
         "requires_booking_confirmation",
     }
-    assert offering["service_offering"] == {
+    assert offering["service_offerings"][0] == {
         "id": await offering_id(db_engine, "document-preparation"),
         "code": "document-preparation",
         "display_name": "Document Preparation",

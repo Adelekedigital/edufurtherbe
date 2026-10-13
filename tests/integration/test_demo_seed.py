@@ -424,3 +424,61 @@ async def test_reseeding_restores_a_type_a_tester_scheduled_for_deletion(
         ).one()
     assert shown is True
     assert scheduled is None
+
+
+async def offering_set(engine: AsyncEngine, type_id: object) -> list[str]:
+    async with engine.begin() as conn:
+        return [
+            r.slug
+            for r in await conn.execute(
+                text(
+                    "SELECT o.slug FROM session_type_offerings s "
+                    "JOIN service_offerings o ON o.id = s.service_offering_id "
+                    "WHERE s.session_type_id = :t ORDER BY s.position"
+                ),
+                {"t": type_id},
+            )
+        ]
+
+
+async def test_seeding_writes_the_offering_set_the_reads_use(db_engine: AsyncEngine) -> None:
+    """Reads take a type's offerings from `session_type_offerings`, and the
+    legacy column is going (#274), so a seed writing only the column would leave
+    its types unclassified once the column's fallback is removed."""
+    await seed(db_engine, replace(OPEN, key="demo-offerings", session_types=(MOCK, INTRO)))
+    user = await demo_user(db_engine, "demo-offerings")
+    types = await session_types_of(db_engine, user)
+
+    for template in (MOCK, INTRO):
+        expected = [template.offering] if template.offering else []
+        assert await offering_set(db_engine, types[template.name]["id"]) == expected
+    # Both shapes are covered: one classified template, one not.
+    assert MOCK.offering and not INTRO.offering
+
+
+async def test_reseeding_replaces_an_edited_offering_set(db_engine: AsyncEngine) -> None:
+    """A re-seed converges the set on the template, as it does the stage set,
+    rather than updating only the column beside a set the reads prefer."""
+    await seed(db_engine, replace(OPEN, key="demo-offerings-2", session_types=(MOCK, INTRO)))
+    user = await demo_user(db_engine, "demo-offerings-2")
+    mock = (await session_types_of(db_engine, user))[MOCK.name]["id"]
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM session_type_offerings WHERE session_type_id = :t"), {"t": mock}
+        )
+
+    async with AsyncSession(db_engine) as session:
+        await apply_demo_session_types(session, user, (MOCK, INTRO))
+        await session.commit()
+
+    assert await offering_set(db_engine, mock) == [MOCK.offering]
+
+
+async def test_the_legacy_type_has_its_offering_set_too(db_engine: AsyncEngine) -> None:
+    """A mentor seeded without session types gets one legacy type, classified
+    by their first offering; it reads from the set like any other."""
+    await seed(db_engine, replace(OPEN, key="demo-offerings-legacy", session_types=()))
+    user = await demo_user(db_engine, "demo-offerings-legacy")
+    (legacy,) = (await session_types_of(db_engine, user)).values()
+
+    assert await offering_set(db_engine, legacy["id"]) == [legacy["offering"]]
