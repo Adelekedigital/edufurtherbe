@@ -39,3 +39,24 @@ async def test_not_ready_and_says_nothing_more_when_it_does_not() -> None:
     assert "127.0.0.1" not in ready.text
     assert "secret" not in ready.text
     assert alive.status_code == 200
+
+
+async def test_a_database_that_does_not_answer_is_not_ready_within_the_timeout(
+    api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Accepting the connection and never answering is the case the timeout is
+    for: a refused port fails at once and proves nothing about it."""
+    import asyncio
+    import time
+
+    from app.api.deps import core
+
+    monkeypatch.setattr(core, "READY_TIMEOUT", 0.2)
+    real_text = core.text
+    monkeypatch.setattr(core, "text", lambda _sql: real_text("SELECT pg_sleep(5)"))
+
+    started = time.monotonic()
+    response = await asyncio.wait_for(api_client.get("/ready"), timeout=3)
+
+    assert response.status_code == 503
+    assert time.monotonic() - started < 2

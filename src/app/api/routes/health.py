@@ -5,10 +5,12 @@ when the database is slow gets a process restarted that was fine, and every
 instance restarted at once turns a blip into an outage.
 
 **`/ready` is readiness**: can this process serve traffic now? It asks the
-database for one row, briefly, and answers `503` if it cannot. Railway's
-deploy healthcheck points here, so a release that cannot reach its database
-never receives traffic. It names no host and no error: it is public.
+database for one row, briefly, and answers `503` if it cannot. It is the path
+for a deploy healthcheck, so a release that cannot reach its database gets no
+traffic. It names no host and no error: it is public.
 """
+
+from typing import Literal
 
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
@@ -24,8 +26,8 @@ class HealthResponse(BaseModel):
 
 
 class ReadinessResponse(BaseModel):
-    status: str
-    checks: dict[str, str]
+    status: Literal["ready", "not ready"]
+    checks: dict[str, Literal["ok", "unreachable"]]
 
 
 @router.get("/health")
@@ -44,9 +46,12 @@ def health() -> HealthResponse:
     },
 )
 async def ready(database: DatabaseReadyDep) -> JSONResponse:
-    if not database:
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "not ready", "checks": {"database": "unreachable"}},
-        )
-    return JSONResponse(content={"status": "ready", "checks": {"database": "ok"}})
+    # Built through the model, so the body cannot drift from the published shape.
+    body = ReadinessResponse(
+        status="ready" if database else "not ready",
+        checks={"database": "ok" if database else "unreachable"},
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if database else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=body.model_dump(),
+    )
