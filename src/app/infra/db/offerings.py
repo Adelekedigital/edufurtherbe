@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, exists, func, insert, select, update
+from sqlalchemy import delete, exists, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
@@ -31,7 +31,6 @@ from app.infra.db.models.mentoring import (
     ServiceOffering,
     SessionTypeOffering,
 )
-from app.infra.db.models.sessions import SessionType
 
 __all__ = [
     "goal_overlap_count",
@@ -249,9 +248,8 @@ async def set_session_type_offerings(
 
     **Every id must name an offering the platform still offers** — a `422`
     naming the unknown ones otherwise, rather than the foreign-key 500 an unknown
-    id used to produce. The legacy `session_types.service_offering_id` is still
-    kept equal to the set's first until its migration drops it (#274), for a
-    rollback's sake; nothing in this release reads it.
+    id used to produce. The set is the only place a type's offerings live; the
+    legacy `session_types.service_offering_id` is gone (#274).
     """
     wanted = list(offering_ids)
     if wanted:
@@ -282,11 +280,3 @@ async def set_session_type_offerings(
                 for index, value in enumerate(wanted)
             ],
         )
-    # **Still dual-written until the column is dropped** (#274), so rolling back
-    # to a release that reads it sees what the set says, and its foreign key
-    # never pins an offering nothing uses. Nothing in this release reads it.
-    await session.execute(
-        update(SessionType)
-        .where(SessionType.id == session_type_id)
-        .values(service_offering_id=wanted[0] if wanted else None)
-    )

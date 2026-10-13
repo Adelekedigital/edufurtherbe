@@ -449,7 +449,9 @@ def test_the_topic_backfill_carries_every_classified_session_type(
         """,
     )
 
-    command.upgrade(config, "head")
+    # To the backfill's own revision, not `head`: the column it copies from is
+    # dropped later (#274), so asserting against it is only meaningful here.
+    command.upgrade(config, "ceb7410fb394")
 
     assert (
         scalar(
@@ -1348,3 +1350,51 @@ def test_a_type_with_its_offering_only_in_the_column_gets_its_row(
     # is untouched (one row, not the column's); nothing is invented.
     assert rows == "column-only=1/1,has-set=1/0,unclassified=0/0"
     assert scalar(disposable_database, "SELECT count(*) FROM session_type_offerings") == 2
+
+
+_SLUGS = (
+    "SELECT string_agg(t.name || '=' || coalesce(o.slug, 'none'), ',' ORDER BY t.name) "
+    "FROM session_types t LEFT JOIN service_offerings o ON o.id = {source} "
+    "WHERE t.name IN ('column-only', 'has-set', 'unclassified')"
+)
+_COLUMN = _SLUGS.format(source="t.service_offering_id")
+_SET_FIRST = _SLUGS.format(
+    source="(SELECT s.service_offering_id FROM session_type_offerings s "
+    "WHERE s.session_type_id = t.id AND s.position = 0)"
+)
+
+
+def test_dropping_the_legacy_offering_column_and_back(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`b8f4d2e6a913` backfills once more, then drops the column (#274), so a
+    type whose offering appeared only in the column after `a7e3c1d9b452` ran
+    (the fixture's `column-only`, inserted after it) keeps it. The downgrade
+    brings the column back holding each type's set position 0. Asserted as
+    actual offerings, so a lost value cannot pass as NULL equalling NULL."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, "a7e3c1d9b452")
+    execute(disposable_database, _THREE_TYPES)
+    column_before = scalar(disposable_database, _COLUMN)
+    set_before = scalar(disposable_database, _SET_FIRST)
+
+    command.upgrade(config, "b8f4d2e6a913")
+
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name = 'session_types' AND column_name = 'service_offering_id'",
+        )
+        == 0
+    )
+    set_after = scalar(disposable_database, _SET_FIRST)
+    # The column-only type was carried into the set; the others are untouched.
+    column_only = column_before.split(",")[0]
+    assert column_only.startswith("column-only=") and not column_only.endswith("=none")
+    assert set_before.split(",")[0] == "column-only=none"
+    assert set_after == ",".join([column_only, *set_before.split(",")[1:]])
+
+    command.downgrade(config, "a7e3c1d9b452")
+
+    assert scalar(disposable_database, _COLUMN) == set_after

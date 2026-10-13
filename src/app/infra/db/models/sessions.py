@@ -149,23 +149,8 @@ class SessionType(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
 
-    #: What *kind* of help this offering is — a reference to the closed six-row
-    #: `service_offerings` taxonomy, which is the axis a mentee's need and a
-    #: mentor's offer already join on (#53). No new vocabulary.
-    #:
-    #: **Called `service_offering_id`, not `category`, and the rename is not
-    #: cosmetic.** `service_offerings` has its own `category` column — a display
-    #: grouping — so a foreign key named `category` would point at a table with a
-    #: different `category` one join away. `mentor_service_offerings` and
-    #: `mentee_goal_needs` already use this name.
-    #:
-    #: **Retired (#274): no longer read.** A type's offerings live in
-    #: `session_type_offerings`; this is kept equal to the set's first only so a
-    #: rollback reads what the set says. The migration that drops the column
-    #: removes this too.
-    service_offering_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("service_offerings.id", ondelete="RESTRICT")
-    )
+    # What *kind* of help a type is lives in `session_type_offerings` (#266);
+    # the single `service_offering_id` column was dropped in #274.
 
     #: **The first of the offering's stage set** (#215), dual-written by the
     #: store; `session_type_stages` holds the set. Kept for code from before the
