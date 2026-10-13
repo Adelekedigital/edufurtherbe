@@ -150,14 +150,17 @@ async def test_an_offering_cannot_point_at_a_service_offering_that_is_not_there(
     db_engine: AsyncEngine,
 ) -> None:
     """The foreign key, asserted rather than assumed. Free text accepted anything;
-    a reference must not."""
+    a reference must not. On the set, where a type's offerings live (#274)."""
     mentor = await make_public_mentor(db_engine, "bad-offering")
     session_type = await add_session_type(db_engine, mentor)
 
     with pytest.raises(IntegrityError):
         async with db_engine.begin() as conn:
             await conn.execute(
-                text("UPDATE session_types SET service_offering_id = :s WHERE id = :t"),
+                text(
+                    "INSERT INTO session_type_offerings "
+                    "(session_type_id, service_offering_id, position) VALUES (:t, :s, 0)"
+                ),
                 {"s": uuid4(), "t": session_type},
             )
 

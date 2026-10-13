@@ -14,7 +14,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_availability
+from tests.integration.factories import add_availability, add_session_type
 from tests.integration.test_api_me_session_type_writes import URL, as_mentor, body
 
 from conftest import api_token, bearer
@@ -221,3 +221,60 @@ async def test_a_patch_that_leaves_the_set_out_keeps_it(
     await api_client.patch(f"{URL}/{created['id']}", json={"name": "Renamed"}, headers=headers)
 
     assert codes(await own(api_client, auth, created["id"])) == [TESTS, DOCS]
+
+
+async def test_the_old_column_holds_the_first_of_the_set(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Until the column is dropped (#274) it is kept equal to the set's first,
+    so a rollback to a release that reads it sees what the set says. Asked of
+    the column directly, because no API field reads it any more."""
+    _, auth = await as_mentor(db_engine, "topics-dual")
+    ids = await offering_ids(db_engine)
+    headers = bearer(api_token(auth))
+    created = (
+        await api_client.post(
+            URL, json=body(service_offering_ids=[ids[DOCS], ids[TESTS]]), headers=headers
+        )
+    ).json()
+
+    async def column() -> str | None:
+        async with db_engine.begin() as conn:
+            value = (
+                await conn.execute(
+                    text("SELECT service_offering_id FROM session_types WHERE id = :t"),
+                    {"t": created["id"]},
+                )
+            ).scalar_one()
+        return None if value is None else str(value)
+
+    first = await column()
+    await api_client.patch(
+        f"{URL}/{created['id']}", json={"service_offering_ids": []}, headers=headers
+    )
+    cleared = await column()
+
+    assert first == ids[DOCS]
+    assert cleared is None
+
+
+async def test_a_type_with_only_the_legacy_column_reads_as_unclassified(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Reads no longer fall back to the column** (#274): the set is the only
+    source. Every type was given its set before this (migration
+    `a7e3c1d9b452`), so a column-only type can only be written by hand."""
+    mentor, auth = await as_mentor(db_engine, "topics-no-fallback")
+    type_id = await add_session_type(db_engine, mentor)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_types SET service_offering_id = "
+                "(SELECT id FROM service_offerings WHERE slug = :s) WHERE id = :t"
+            ),
+            {"s": SCHOLARSHIPS, "t": type_id},
+        )
+
+    row = await own(api_client, auth, str(type_id))
+
+    assert row["service_offerings"] == []

@@ -109,7 +109,7 @@ async def add_session_type(
         if service_offering is not None:
             # The set is where a type's offerings live (#274); the legacy
             # column is no longer read.
-            await conn.execute(
+            written = await conn.execute(
                 text(
                     "INSERT INTO session_type_offerings "
                     "(session_type_id, service_offering_id, position) "
@@ -117,6 +117,9 @@ async def add_session_type(
                 ),
                 {"t": session_type, "c": service_offering},
             )
+            # Loud on a typo: an unknown slug would otherwise insert nothing and
+            # leave the type silently unclassified.
+            assert written.rowcount == 1, f"no service offering {service_offering!r}"
         if venue is not None:
             # **Venue is a reference now, not a column on the config.** The
             # offering points at one of the mentor's conferencing options, and
