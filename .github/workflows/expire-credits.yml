@@ -1,7 +1,17 @@
 name: Expire credits (manual recovery)
 
 # QStash owns runtime cadence. This dispatch exists only for recovery.
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which environment's database to run against
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
 
 permissions:
   contents: read
@@ -9,7 +19,10 @@ permissions:
 jobs:
   expire:
     runs-on: ubuntu-latest
-    environment: staging
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: expire-credits-${{ inputs.environment }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -18,5 +31,6 @@ jobs:
       - run: uv sync --all-extras --dev
       - name: Expire credit lots
         env:
+          EDUFURTHER_ENVIRONMENT: ${{ inputs.environment }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: uv run python scripts/expire_credits.py

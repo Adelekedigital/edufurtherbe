@@ -2,7 +2,17 @@ name: Settle sessions (manual recovery)
 
 # QStash owns runtime cadence. This dispatch invokes the same RuntimeJobs
 # surface only for exceptional operator recovery.
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which environment's database to run against
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
 
 permissions:
   contents: read
@@ -10,7 +20,10 @@ permissions:
 jobs:
   settle:
     runs-on: ubuntu-latest
-    environment: staging
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: settle-sessions-${{ inputs.environment }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -19,5 +32,6 @@ jobs:
       - run: uv sync --all-extras --dev
       - name: Settle sessions
         env:
+          EDUFURTHER_ENVIRONMENT: ${{ inputs.environment }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: uv run python scripts/settle_sessions.py
