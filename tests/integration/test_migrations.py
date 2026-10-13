@@ -449,7 +449,9 @@ def test_the_topic_backfill_carries_every_classified_session_type(
         """,
     )
 
-    command.upgrade(config, "head")
+    # To the backfill's own revision, not `head`: the column it copies from is
+    # dropped later (#274), so asserting against it is only meaningful here.
+    command.upgrade(config, "ceb7410fb394")
 
     assert (
         scalar(
