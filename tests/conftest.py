@@ -1077,13 +1077,3 @@ def outbound_calls_stay_off_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
         plain(self, key, guarded(key, value) if key in ADAPTER_SEAMS else value)
 
     monkeypatch.setattr(State, "__setattr__", guarding)
-
-
-@pytest.fixture(autouse=True)
-def google_tokens_start_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """**No access token carried from one test to the next** (#421). The
-    platform calendar caches its token for the process, so a token one test's
-    stub minted would otherwise skip the next test's exchange."""
-    from app.infra.clients import meetings
-
-    monkeypatch.setattr(meetings, "_tokens", meetings._TokenCache())

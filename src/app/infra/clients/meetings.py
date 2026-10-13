@@ -51,7 +51,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlencode
 
@@ -447,40 +447,76 @@ class _TokenCache:
     The calendar id is not in the key; the token is the grant's, not the
     calendar's.
 
-    **A minute of headroom.** Google's tokens last an hour, and one that expires
-    between the check and the call fails like a permissions problem.
+    **A minute of headroom, on a monotonic clock.** Google's tokens last an
+    hour, and one that expires between the check and the call fails like a
+    permissions problem. A wall-clock step must not keep a dead token or drop a
+    live one.
 
-    **One lock, held across the exchange.** Adapters run in `to_thread` workers,
-    so callers finding no token together would each exchange one; under the
-    lock the first exchanges and the rest find its token.
+    **Single-flight per grant.** Adapters run in `to_thread` workers, so callers
+    finding no token together would each exchange one. Each grant has its own
+    lock, held across its exchange, so a slow token endpoint for one grant never
+    holds up another; the short lock over the dict only finds or makes it. After
+    a failed exchange the waiters on that grant each try in turn, which is
+    serial but bounded by the callers already waiting.
+
+    **Expired entries are dropped** on every lookup, so a rotated refresh token
+    does not leave its old grant behind. An entry dropped just as a caller is
+    about to refresh it costs at most one extra exchange.
     """
 
-    def __init__(self) -> None:
-        self._held: dict[tuple[str, str], tuple[str, dt.datetime]] = {}
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._grants: dict[tuple[str, str], _Grant] = {}
         self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        return len(self._grants)
 
     @staticmethod
     def key(client_id: str, client_secret: str, refresh_token: str) -> tuple[str, str]:
         grant = hashlib.sha256(f"{client_secret}\0{refresh_token}".encode()).hexdigest()
         return client_id, grant
 
-    def get(self, key: tuple[str, str], exchange: Callable[[], tuple[str, int]]) -> str:
-        with self._lock:
-            now = dt.datetime.now(dt.UTC)
-            held = self._held.get(key)
-            if held and now < held[1]:
-                return held[0]
+    def get(
+        self, key: tuple[str, str], exchange: Callable[[], tuple[str, int]]
+    ) -> tuple[str, bool]:
+        """The grant's live token, and whether it was exchanged for this call."""
+        grant = self._grant(key)
+        with grant.lock:
+            if grant.token and self._clock() < grant.expires:
+                return grant.token, False
             token, lifetime = exchange()
-            self._held[key] = (token, now + dt.timedelta(seconds=lifetime - 60))
-            return token
+            grant.token, grant.expires = token, self._clock() + lifetime - 60
+            return token, True
 
     def forget(self, key: tuple[str, str], token: str) -> None:
         """Drop `token` if it is still the one held: another thread may already
         have replaced it with a good one."""
+        grant = self._grant(key)
+        with grant.lock:
+            if grant.token == token:
+                grant.token = None
+
+    def _grant(self, key: tuple[str, str]) -> _Grant:
+        now = self._clock()
         with self._lock:
-            held = self._held.get(key)
-            if held and held[0] == token:
-                del self._held[key]
+            # A locked grant is mid-exchange, and its expiry is not yet set.
+            for stale in [
+                k
+                for k, g in self._grants.items()
+                if k != key and g.expires <= now and not g.lock.locked()
+            ]:
+                del self._grants[stale]
+            return self._grants.setdefault(key, _Grant())
+
+
+@dataclass
+class _Grant:
+    """One grant's token and the lock its exchange runs under."""
+
+    token: str | None = None
+    expires: float = 0.0
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 _tokens = _TokenCache()
@@ -661,13 +697,18 @@ class GoogleCalendar:
                 params={"sendUpdates": "all"},
             )
         except VenueUnavailableError as exc:
-            if "410" in str(exc) or "404" in str(exc):
+            # The status, never the message: the event id is in the message.
+            cause = exc.__cause__
+            if isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code in (
+                httpx.codes.NOT_FOUND,
+                httpx.codes.GONE,
+            ):
                 return
             raise
 
-    def _access_token(self) -> str:
+    def _access_token(self) -> tuple[str, bool]:
         """This grant's access token from the process cache (`_TokenCache`),
-        exchanged when it is missing or close to expiring."""
+        and whether it was exchanged for this call."""
         return _tokens.get(
             self._token_key,
             lambda: access_token(
@@ -693,11 +734,12 @@ class GoogleCalendar:
         all of them, and a third party's bad afternoon must not become a 500 on
         a request that has already done what the user asked.
 
-        **A `401` drops the cached token and retries once.** The token outlives
-        this instance (#421), so one revoked or rotated early would otherwise
-        fail every call for up to an hour, and a dead grant would go unreported
-        until it expired. The fresh exchange is what raises
-        `CalendarAccessRevokedError`; a second `401` fails like any non-2xx.
+        **A `401` on a cached token drops it and retries once.** The token
+        outlives this instance (#421), so one revoked or rotated early would
+        otherwise fail every call for up to an hour, and a dead grant would go
+        unreported until it expired. The fresh exchange is what raises
+        `CalendarAccessRevokedError`. A `401` on a token just exchanged, or a
+        second one, fails like any non-2xx.
         """
 
         def send(token: str) -> httpx.Response:
@@ -710,11 +752,11 @@ class GoogleCalendar:
             )
 
         try:
-            token = self._access_token()
+            token, exchanged = self._access_token()
             response = send(token)
-            if response.status_code == httpx.codes.UNAUTHORIZED:
+            if response.status_code == httpx.codes.UNAUTHORIZED and not exchanged:
                 _tokens.forget(self._token_key, token)
-                response = send(self._access_token())
+                response = send(self._access_token()[0])
             response.raise_for_status()
             if not response.content:
                 return {}
@@ -833,10 +875,13 @@ def access_token(
     try:
         response.raise_for_status()
         payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+        # A 200 without a usable token is Google failing: a `KeyError` or
+        # `TypeError` here escaped every caller's handling as a 500.
+        if not isinstance(payload, dict) or not payload.get("access_token"):
+            raise ValueError("the answer carries no access_token")
+        return str(payload["access_token"]), int(payload.get("expires_in", 3600))
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
         raise VenueUnavailableError(f"google token refresh failed: {exc}") from exc
-
-    return str(payload["access_token"]), int(payload.get("expires_in", 3600))
 
 
 #: The one scope a mentor is asked for. ADR 0012 narrowed the ask to this
