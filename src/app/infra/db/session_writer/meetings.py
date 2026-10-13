@@ -291,9 +291,10 @@ async def release_meeting(
         logger.info("calendar event for session %s not removed: %s", session_id, exc)
         return
 
-    # Cleared only on success, so a failed removal leaves the id in place and a
-    # later run can try again — where clearing it regardless would lose the only
-    # handle on an event still in somebody's calendar.
+    # Cleared only on success, so a failed removal leaves the id in place and
+    # the hourly `retry_releases` tries again (#423) — where clearing it
+    # regardless would lose the only handle on an event still in somebody's
+    # calendar.
     await session.execute(
         update(Session).where(Session.id == session_id).values(external_calendar_event_id=None)
     )

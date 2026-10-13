@@ -48,6 +48,7 @@ from app.infra.db.session_writer import (
     confirm_presence,
     expire_requests,
     remind_unreviewed,
+    retry_releases,
     settle_attendance,
 )
 from app.infra.db.triggers import timestamps_from_source_across
@@ -199,7 +200,8 @@ class RuntimeJobs:
         try:
             async with AsyncSession(engine) as session:
                 now = dt.datetime.now(dt.UTC)
-                expired = await expire_requests(session, now=now, calendar=self._calendar())
+                calendar = self._calendar()
+                expired = await expire_requests(session, now=now, calendar=calendar)
                 # Presence first (#382): a party no webhook reported is read
                 # from Daily's records, and a session those cannot be read for
                 # waits rather than settling on silence.
@@ -251,6 +253,11 @@ class RuntimeJobs:
                     await session.rollback()
                 else:
                     await session.commit()
+                # Last, after everything above is committed: Google round
+                # trips, bounded and committed per row (#423).
+                released = await retry_releases(
+                    session, now=now, calendar=calendar, dry_run=dry_run
+                )
                 return {
                     "expired_requests": expired,
                     "settled_sessions": settled,
@@ -259,6 +266,7 @@ class RuntimeJobs:
                     "return_reminders": returning,
                     "disconnected_calendars": health["disconnected"],
                     "messages": sum(sent.values()),
+                    "released_calendar_events": released,
                 }
         finally:
             await engine.dispose()

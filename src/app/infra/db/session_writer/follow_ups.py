@@ -22,9 +22,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import SessionStatus
-from app.infra.clients.meetings import CalendarPort, RoomsPort
+from app.infra.clients.meetings import CalendarPort, NullCalendar, RoomsPort
 from app.infra.clients.scheduler import SchedulerPort
-from app.infra.db.models.sessions import Session
+from app.infra.db.models.sessions import FREES_THE_HOUR, Session
 from app.infra.db.session_writer.meetings import provision_meeting, release_meeting
 from app.infra.db.session_writer.reminders import schedule_session_reminders
 
@@ -84,3 +84,71 @@ async def on_ended(session: AsyncSession, session_id: UUID, *, calendar: Calenda
     """An ended session leaves no live event in either party's calendar.
     Does not commit."""
     await release_meeting(session, session_id, calendar=calendar)
+
+
+#: How many ended sessions one settlement run retries (#423). Each can wait out
+#: Google's 15s timeout, more than once with a token refresh, and the job has
+#: 120s; a backlog drains over a few hours rather than running the job out.
+RELEASE_RETRIES_PER_RUN = 5
+
+
+async def _unreleased(session: AsyncSession, *, now: dt.datetime, limit: int) -> list[UUID]:
+    """Ended sessions still ahead that kept their event, soonest first.
+
+    **Ended is `FREES_THE_HOUR`**: exactly the statuses whose transitions call
+    `on_ended`, and not `completed` or `no_show`, whose event is a true record.
+
+    **Still ahead only.** The harm is an invitation to a session that is not
+    happening; once its time has passed nobody can turn up to it, and deleting
+    the event would email both parties a cancellation of something already over
+    (every migrated ended session that carries an event id would get one). It
+    also ends a permanent refusal's turn at the head of the queue.
+    """
+    ids = await session.scalars(
+        select(Session.id)
+        .where(
+            Session.status.in_(FREES_THE_HOUR),
+            Session.external_calendar_event_id.is_not(None),
+            Session.starts_at > now,
+        )
+        .order_by(Session.starts_at, Session.id)
+        .limit(limit)
+    )
+    return list(ids)
+
+
+async def retry_releases(
+    session: AsyncSession,
+    *,
+    now: dt.datetime,
+    calendar: CalendarPort,
+    dry_run: bool = False,
+    limit: int = RELEASE_RETRIES_PER_RUN,
+) -> int:
+    """Retry the calendar release an ending could not finish (#423).
+
+    `release_meeting` keeps the event id when Google refuses so that a later
+    run can try again; this is that run. Each session goes through `on_ended`,
+    the one way an ending releases its event (decision 240), and is **committed
+    on its own**: a refusal keeps that row's id and the next row still runs.
+    Returns how many events were removed, or on a dry run how many would be
+    tried.
+
+    **Nothing to call, nothing cleared.** `NullCalendar` removes nothing and
+    reports success, so clearing ids on it would lose the only handle on events
+    a configured calendar could still remove.
+    """
+    if isinstance(calendar, NullCalendar):
+        return 0
+    pending = await _unreleased(session, now=now, limit=limit)
+    if dry_run:
+        return len(pending)
+    released = 0
+    for session_id in pending:
+        await on_ended(session, session_id, calendar=calendar)
+        kept = await session.scalar(
+            select(Session.external_calendar_event_id).where(Session.id == session_id)
+        )
+        released += kept is None
+        await session.commit()
+    return released

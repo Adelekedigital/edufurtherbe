@@ -20,7 +20,6 @@ from tests.integration.factories import add_availability, add_session_type, make
 from tests.integration.meeting_fakes import FakeCalendar, FakeDoor, FakeRooms
 
 from app.domain.messages import MessageContext, build_variables
-from app.infra.clients.meetings import VenueUnavailableError
 from conftest import A_REASON, api_token, bearer, fund_by_auth
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -807,14 +806,9 @@ async def test_a_provider_that_refuses_leaves_the_id_in_place(
     disagreeing.
     """
 
-    class Refusing(FakeCalendar):
-        def cancel_event(self, external_id: str) -> None:
-            del external_id
-            raise VenueUnavailableError("google is down")
-
     app = api_client._transport.app  # type: ignore[attr-defined]
     app.state.meeting_rooms = FakeRooms()
-    app.state.calendar = Refusing()
+    app.state.calendar = FakeCalendar(refuses_cancel=True)
     setup = await a_mentor_on(db_engine, "rel-down", "daily")
     session = await book(api_client, setup)
 

@@ -23,6 +23,7 @@ from app.infra.db.session_writer.follow_ups import (
     FollowUps,
     on_confirmed,
     on_ended,
+    retry_releases,
 )
 from app.infra.db.session_writer.meetings import add_meet_link
 from app.infra.db.session_writer.reminders import (
@@ -56,6 +57,7 @@ __all__ = [
     "remind_if_still_waiting",
     "remind_suggestion",
     "remind_unreviewed",
+    "retry_releases",
     "settle_attendance",
     "suggest_time",
     "transition",
