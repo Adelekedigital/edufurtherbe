@@ -79,7 +79,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import Integer, Numeric, and_, case, cast, func, select, true
+from sqlalchemy import TIMESTAMP, Integer, Numeric, and_, case, cast, func, literal, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -101,6 +101,7 @@ __all__ = [
     "attendance_rate",
     "attendance_sessions",
     "cancellations",
+    "current_streak",
     "delivered",
     "held",
     "held_count",
@@ -415,6 +416,42 @@ def missed(user: Any, window: Bounds | None, side: Side = "mentor") -> Any:
 def missed_count(mentor: Any, window: Bounds) -> Any:
     """How many sessions `missed()` matches, as a scalar subquery."""
     return select(func.count()).select_from(Session).where(missed(mentor, window)).scalar_subquery()
+
+
+def current_streak(mentor: Any) -> Any:
+    """How many sessions the mentor has held since their own last failure, as an
+    uncorrelated scalar subquery (decision 250).
+
+    The failures are this module's own rules, never restated: a session
+    `missed()`, placed at its `starts_at`, and a cancellation `cancellations()`
+    attributes `BY_MENTOR`, placed at its `cancelled_at` (decision 246 places it
+    there too). The streak is the `held()` sessions starting strictly after the
+    later of the two; all of them when there is neither (``GREATEST`` ignores a
+    null, and ``-infinity`` stands in for no failure at all). One comparison, so
+    each failure's lookup runs once.
+    """
+    cancelled = cancellations(mentor, None)
+    last_cancelled = (
+        select(func.max(cancelled.c.cancelled_at))
+        .where(cancelled.c.canceller == BY_MENTOR)
+        .scalar_subquery()
+    )
+    # Its own `sessions` scan, so it must not correlate to the count's.
+    last_missed = (
+        select(func.max(Session.starts_at))
+        .where(missed(mentor, None))
+        .correlate(None)
+        .scalar_subquery()
+    )
+    never = cast(literal("-infinity"), TIMESTAMP(timezone=True))
+    broken = func.greatest(last_cancelled, last_missed, never)
+    return (
+        select(func.count())
+        .select_from(Session)
+        .where(held(mentor, None), Session.starts_at > broken)
+        .correlate(None)
+        .scalar_subquery()
+    )
 
 
 def _held_figures(counterpart: Any, among: Any = None) -> tuple[Any, Any, Any]:
