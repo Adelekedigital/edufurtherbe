@@ -346,11 +346,17 @@ async def own_mentor_stats(
 ) -> dict[str, Any]:
     """The caller's figures over two adjacent windows. Scoped to the caller in
     every statement; a non-mentor reads zeros and nulls, as `/me/session-types` answers
-    one with an empty page."""
+    one with an empty page. The streak (decision 250) is read in the same
+    statement and is the same on both rows."""
     current, previous = await mentor_window_stats(
         session, user["id"], trend_windows(dt.datetime.now(dt.UTC), window_days)
     )
-    return {"window_days": window_days, "current": current, "previous": previous}
+    return {
+        "window_days": window_days,
+        "current_streak": current["current_streak"],
+        "current": current,
+        "previous": previous,
+    }
 
 
 OwnMentorStatsDep = Annotated[dict[str, Any], Depends(own_mentor_stats)]

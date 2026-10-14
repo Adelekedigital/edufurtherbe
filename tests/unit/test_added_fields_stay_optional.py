@@ -22,7 +22,7 @@ ADDED = {
     "SessionAnswerRead": ("answered", "required"),
     # New with the mentor dashboard (decision 246): every figure optional from
     # the start. The window's bounds and the two blocks are required.
-    "MentorStatsRead": ("window_days",),
+    "MentorStatsRead": ("window_days", "current_streak"),
     "MentorStatsWindowRead": (
         "completed_sessions",
         "mentoring_minutes",

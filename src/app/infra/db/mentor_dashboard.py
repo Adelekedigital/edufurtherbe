@@ -30,6 +30,7 @@ from app.infra.db.session_stats import (
     BY_MENTOR,
     BY_OTHER,
     cancellations,
+    current_streak,
     held_count,
     mentor_window_figures,
     missed_count,
@@ -41,11 +42,14 @@ __all__ = ["mentor_monthly_stats", "mentor_window_stats"]
 async def mentor_window_stats(
     session: AsyncSession, mentor: UUID, windows: Sequence[Window]
 ) -> list[dict[str, Any]]:
-    """Every dashboard figure for each of ``windows``, in their order.
+    """Every dashboard figure for each of ``windows``, in their order, each row
+    also carrying the mentor's `current_streak` (decision 250), which no window
+    bounds.
 
     **One statement for all of them**, a `UNION ALL` of one row per window, so
     every window reads one snapshot: a session settling between two reads
-    would otherwise skew the trend the client computes from them.
+    would otherwise skew the trend the client computes from them, or the
+    streak beside it.
     """
     rows = (await session.execute(_statement(mentor, windows))).mappings().all()
     return [
@@ -56,7 +60,9 @@ async def mentor_window_stats(
 
 def _statement(mentor: UUID, windows: Sequence[Window]) -> Any:
     """One row per window, in the order given: `UNION ALL` promises no order,
-    so each row carries its position and the outer select sorts on it."""
+    so each row carries its position and the outer select sorts on it. The
+    streak is an uncorrelated scalar subquery on the outer select, so it runs
+    once (an `InitPlan`), not once per window."""
     parts = []
     for position, window in enumerate(windows):
         review_count, average_rating = window_summary(mentor, window)
@@ -68,7 +74,11 @@ def _statement(mentor: UUID, windows: Sequence[Window]) -> Any:
             )
         )
     statement = union_all(*parts).subquery("windows")
-    return statement.select().order_by(statement.c.position)
+    return (
+        statement.select()
+        .add_columns(current_streak(mentor).label("current_streak"))
+        .order_by(statement.c.position)
+    )
 
 
 async def mentor_monthly_stats(

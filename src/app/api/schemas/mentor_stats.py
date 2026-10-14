@@ -104,6 +104,16 @@ class MentorStatsRead(BaseModel):
     client computes the trend. Both blocks are read in one statement."""
 
     window_days: int = Field(default=DEFAULT_WINDOW_DAYS, description="The window's length.")
+    current_streak: int | None = Field(
+        default=None,
+        description=(
+            "Sessions you have held in a row since you last missed one or "
+            "cancelled one yourself (a cancellation counts from when you made "
+            "it), all time rather than in a window; nothing else (a cancellation "
+            "by anyone else, a mentee's no-show, a session not yet held) adds "
+            "to it or resets it, and it is 0 when you have held none since."
+        ),
+    )
     current: MentorStatsWindowRead = Field(description="The window ending now.")
     previous: MentorStatsWindowRead = Field(
         description="The equal window immediately before `current`."

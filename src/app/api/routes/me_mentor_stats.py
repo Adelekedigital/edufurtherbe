@@ -37,6 +37,9 @@ RESPONSES: dict[int | str, dict[str, str]] = {
         "was written in. Sessions, minutes, mentees and show-up rate follow "
         "the same rules as on your public profile. Both windows are read at "
         "one instant.\n\n"
+        "`current_streak` is not windowed: the sessions you have held in a "
+        "row since you last missed one or cancelled one yourself, read at the "
+        "same instant.\n\n"
         "Only ever your own sessions. **If you are not a mentor you get zeros "
         "and nulls**, not an error. Never cached by anyone but you."
     ),
@@ -46,6 +49,7 @@ async def read_own_mentor_stats(stats: OwnMentorStatsDep, response: Response) ->
     response.headers["Cache-Control"] = PRIVATE_NO_STORE
     return MentorStatsRead(
         window_days=stats["window_days"],
+        current_streak=int(stats["current_streak"]),
         current=MentorStatsWindowRead.of(stats["current"]),
         previous=MentorStatsWindowRead.of(stats["previous"]),
     )
