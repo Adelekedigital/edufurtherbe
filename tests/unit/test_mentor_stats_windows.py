@@ -72,3 +72,14 @@ def test_months_are_utc_whatever_zone_now_is_in() -> None:
 def test_a_naive_now_is_refused_for_months() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         month_windows(NOW.replace(tzinfo=None), 12)
+
+
+@pytest.mark.parametrize("months", [0, -1])
+def test_fewer_than_one_month_is_refused(months: int) -> None:
+    with pytest.raises(ValueError, match="at least one month"):
+        month_windows(NOW, months)
+
+
+def test_each_month_carries_its_utc_label() -> None:
+    """The `YYYY-MM` the API publishes is the domain's, read off `since` in UTC."""
+    assert [w.month for w in month_windows(NOW, 3)] == ["2026-01", "2026-02", "2026-03"]

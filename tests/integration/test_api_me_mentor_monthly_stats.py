@@ -18,9 +18,9 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import (
     add_session,
+    cancelled,
     ended_by,
     make_bookable_mentor,
-    mentee_of,
     token_for,
 )
 
@@ -53,27 +53,6 @@ async def series(engine: AsyncEngine, mentor: UUID) -> list[dict[str, Any]]:
         return await mentor_monthly_stats(session, mentor, [APRIL, MAY, JUNE])
 
 
-async def cancel(
-    engine: AsyncEngine,
-    mentor: UUID,
-    by: str,
-    *,
-    starts_at: dt.datetime,
-    at: dt.datetime,
-) -> UUID:
-    """A session for ``starts_at``, cancelled at ``at`` by `mentor`, `mentee`,
-    nobody (`system`), or the mentor's own id acting as an admin (`admin`)."""
-    session_id = await add_session(
-        engine, mentor, status="cancelled", attendance="pending", starts_at=starts_at
-    )
-    actor = await mentee_of(engine, session_id) if by == "mentee" else mentor
-    kind = {"mentor": "user", "mentee": "user", "system": "system", "admin": "admin"}[by]
-    await ended_by(
-        engine, session_id, None if by == "system" else actor, "cancelled", at=at, kind=kind
-    )
-    return session_id
-
-
 # --------------------------------------------------------------------------
 # The figures, at the store, where the clock is ours
 # --------------------------------------------------------------------------
@@ -89,11 +68,11 @@ async def test_each_month_counts_its_own_sessions(db_engine: AsyncEngine) -> Non
     await add_session(db_engine, mentor, starts_at=in_may)
     await add_session(db_engine, mentor, starts_at=in_may + dt.timedelta(days=1))
     await add_session(db_engine, mentor, status="no_show", attendance="no_show", starts_at=in_may)
-    await cancel(db_engine, mentor, "mentor", starts_at=in_may, at=in_may)
-    await cancel(db_engine, mentor, "mentor", starts_at=in_may, at=in_may)
-    await cancel(db_engine, mentor, "mentee", starts_at=in_may, at=in_may)
-    await cancel(db_engine, mentor, "system", starts_at=in_may, at=in_may)
-    await cancel(db_engine, mentor, "admin", starts_at=in_may, at=in_may)
+    await cancelled(db_engine, mentor, "mentor", starts_at=in_may, at=in_may)
+    await cancelled(db_engine, mentor, "mentor", starts_at=in_may, at=in_may)
+    await cancelled(db_engine, mentor, "mentee", starts_at=in_may, at=in_may)
+    await cancelled(db_engine, mentor, "system", starts_at=in_may, at=in_may)
+    await cancelled(db_engine, mentor, "admin", starts_at=in_may, at=in_may)
     declined = await add_session(
         db_engine, mentor, status="declined", attendance="pending", starts_at=in_may
     )
@@ -121,7 +100,7 @@ async def test_a_month_includes_its_first_instant(db_engine: AsyncEngine) -> Non
     await add_session(
         db_engine, mentor, status="no_show", attendance="no_show", starts_at=MAY.since
     )
-    await cancel(db_engine, mentor, "mentee", starts_at=JUNE.since, at=MAY.since)
+    await cancelled(db_engine, mentor, "mentee", starts_at=JUNE.since, at=MAY.since)
 
     rows = await series(db_engine, mentor)
 
@@ -141,7 +120,7 @@ async def test_a_month_excludes_its_last_instant(db_engine: AsyncEngine) -> None
     await add_session(
         db_engine, mentor, status="no_show", attendance="no_show", starts_at=MAY.until
     )
-    await cancel(db_engine, mentor, "mentor", starts_at=MAY.since, at=MAY.until)
+    await cancelled(db_engine, mentor, "mentor", starts_at=MAY.since, at=MAY.until)
 
     rows = await series(db_engine, mentor)
 
@@ -158,14 +137,14 @@ async def test_a_cancellation_counts_in_the_month_it_was_made(db_engine: AsyncEn
     """Cancelled in April for a June session is April's; cancelled before the
     series for a May session is in no month."""
     mentor = await make_bookable_mentor(db_engine, "monthly-cancel-when")
-    await cancel(
+    await cancelled(
         db_engine,
         mentor,
         "mentor",
         starts_at=JUNE.since + dt.timedelta(days=2),
         at=APRIL.since + dt.timedelta(days=5),
     )
-    await cancel(
+    await cancelled(
         db_engine,
         mentor,
         "mentee",
@@ -191,8 +170,8 @@ async def test_only_the_callers_sessions_count(db_engine: AsyncEngine) -> None:
     await add_session(db_engine, mentor, starts_at=in_may)
     await add_session(db_engine, other, starts_at=in_may)
     await add_session(db_engine, other, status="no_show", attendance="no_show", starts_at=in_may)
-    await cancel(db_engine, other, "mentor", starts_at=in_may, at=in_may)
-    await cancel(db_engine, other, "system", starts_at=in_may, at=in_may)
+    await cancelled(db_engine, other, "mentor", starts_at=in_may, at=in_may)
+    await cancelled(db_engine, other, "system", starts_at=in_may, at=in_may)
     await add_session(db_engine, other, mentee=mentor, starts_at=in_may)
     as_mentee = await add_session(
         db_engine, other, status="cancelled", attendance="pending", mentee=mentor, starts_at=in_may

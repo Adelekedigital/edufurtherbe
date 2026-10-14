@@ -143,10 +143,9 @@ class MentorMonthRead(BaseModel):
 
     @classmethod
     def of(cls, row: dict[str, Any]) -> MentorMonthRead:
-        since: dt.datetime = row["since"]
         return cls(
-            month=since.astimezone(dt.UTC).strftime("%Y-%m"),
-            since=since,
+            month=row["month"],
+            since=row["since"],
             until=row["until"],
             completed_sessions=int(row["completed_sessions"]),
             missed_by_mentor=int(row["missed_by_mentor"]),

@@ -19,10 +19,11 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import TIMESTAMP, Integer, column, func, literal, select, union_all, values
+from sqlalchemy import TIMESTAMP, Integer, and_, column, func, literal, select, union_all, values
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.mentor_stats import Window
+from app.infra.db.models.sessions import Session
 from app.infra.db.predicates import during
 from app.infra.db.review_stats import window_summary
 from app.infra.db.session_stats import (
@@ -30,9 +31,9 @@ from app.infra.db.session_stats import (
     BY_MENTOR,
     BY_OTHER,
     cancellations,
-    held_count,
+    held,
     mentor_window_figures,
-    missed_count,
+    missed,
 )
 
 __all__ = ["mentor_monthly_stats", "mentor_window_stats"]
@@ -74,27 +75,36 @@ def _statement(mentor: UUID, windows: Sequence[Window]) -> Any:
 async def mentor_monthly_stats(
     session: AsyncSession, mentor: UUID, months: Sequence[Window]
 ) -> list[dict[str, Any]]:
-    """The series' figures for each of ``months``, oldest first (decision 247).
+    """The series' figures for each of ``months``, in their order (decision 247).
 
     The same predicates as a dashboard window, with each month's edges as the
     window: held and missed by `starts_at`, a cancellation by when it was made
     and split by `canceller`. One statement, so every month reads one snapshot,
-    and a month with nothing in it is still a row.
+    and a month with nothing in it is still a row. Each row carries its
+    window's own edges and `month` label, so the label is spelled once.
     """
-    return [dict(row) for row in (await session.execute(_monthly(mentor, months))).mappings().all()]
+    rows = (await session.execute(_monthly(mentor, months))).mappings().all()
+    return [
+        {**row, "month": window.month, "since": window.since, "until": window.until}
+        for row, window in zip(rows, months, strict=True)
+    ]
 
 
 def _monthly(mentor: UUID, months: Sequence[Window]) -> Any:
-    """The months as a `VALUES` list, each row's counts beside it.
+    """The months as a `VALUES` list, with one grouped pass over the mentor's
+    sessions and one over their cancellations, joined by position.
 
     **`VALUES`, not `generate_series`**: the months come from
     `domain.mentor_stats.month_windows`, the one rule for a month's edges;
     stepping a `timestamptz` by `interval '1 month'` in SQL would be a second,
     and one that follows the connection's `TimeZone` rather than UTC.
 
-    Cancellations are read once over the whole series (one `LATERAL` per
-    cancelled session, as in a window) and joined to the month they were made
-    in; held and missed are counted per month by index scans.
+    **Two passes, not one join**: a session and a cancellation land in
+    different months (a cancellation is placed when it was made), so joining
+    both to a month in one `GROUP BY` would multiply one by the other. Each
+    pass reads its rows once and buckets them with `predicates.during`; the
+    figures are `FILTER`s by the window's own predicates (`held()`,
+    `missed()`, `canceller`).
     """
     bounds = (
         values(
@@ -104,25 +114,47 @@ def _monthly(mentor: UUID, months: Sequence[Window]) -> Any:
             name="months",
         )
         .data([(position, w.since, w.until) for position, w in enumerate(months)])
-        .alias("months")
+        .cte("months")
     )
     month = bounds.c
-    cancelled = cancellations(mentor, Window(since=months[0].since, until=months[-1].until))
+    sessions = (
+        select(
+            month.position,
+            func.count().filter(held(mentor, month)).label("completed_sessions"),
+            func.count().filter(missed(mentor, month)).label("missed_by_mentor"),
+        )
+        .select_from(
+            bounds.outerjoin(
+                Session, and_(Session.mentor_id == mentor, during(Session.starts_at, month))
+            )
+        )
+        .group_by(month.position)
+        .subquery("held")
+    )
+    cancelled = cancellations(mentor, None)
 
     def by(canceller: str) -> Any:
         return func.count().filter(cancelled.c.canceller == canceller)
 
-    return (
+    cancels = (
         select(
-            month.since,
-            month.until,
-            held_count(mentor, month).label("completed_sessions"),
-            missed_count(mentor, month).label("missed_by_mentor"),
+            month.position,
             by(BY_MENTOR).label("cancelled_by_mentor"),
             by(BY_MENTEE).label("cancelled_by_mentee"),
             by(BY_OTHER).label("cancelled_by_other"),
         )
         .select_from(bounds.outerjoin(cancelled, during(cancelled.c.cancelled_at, month)))
-        .group_by(month.position, month.since, month.until)
-        .order_by(month.position)
+        .group_by(month.position)
+        .subquery("cancels")
+    )
+    return (
+        select(
+            sessions.c.completed_sessions,
+            sessions.c.missed_by_mentor,
+            cancels.c.cancelled_by_mentor,
+            cancels.c.cancelled_by_mentee,
+            cancels.c.cancelled_by_other,
+        )
+        .join_from(sessions, cancels, cancels.c.position == sessions.c.position)
+        .order_by(sessions.c.position)
     )

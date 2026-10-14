@@ -246,6 +246,20 @@ async def test_only_the_mentors_own_cancellations_count(
     assert body["current"]["cancelled_by_mentor"] == 1
 
 
+async def test_an_admin_acting_under_the_mentors_id_is_not_the_mentor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Decision 247: the canceller is the actor acting as a user. The same id
+    acting through the console (`actor_type = 'admin'`) is somebody else's act."""
+    mentor = await make_bookable_mentor(db_engine, "dash-admin-cancel")
+    await cancelled(db_engine, mentor, "admin")
+    await cancelled(db_engine, mentor, "mentor")
+
+    body = await stats(api_client, await token_for(db_engine, mentor))
+
+    assert body["current"]["cancelled_by_mentor"] == 1
+
+
 async def test_only_the_cancel_event_names_the_canceller(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

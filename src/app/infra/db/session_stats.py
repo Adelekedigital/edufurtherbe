@@ -103,10 +103,10 @@ __all__ = [
     "cancellations",
     "delivered",
     "held",
-    "held_count",
     "mentee_completed_sessions",
     "mentor_stats",
     "mentor_window_figures",
+    "missed",
     "missed_by",
     "missed_count",
     "received",
@@ -292,10 +292,10 @@ def _attendance_of(user: Any, side: Any, window: Window | None, column: Any) -> 
     )
 
 
-def cancellations(mentor: Any, window: Window) -> Any:
+def cancellations(mentor: Any, window: Bounds | None) -> Any:
     """The mentor's cancelled sessions whose cancellation happened inside
-    ``window``, one row each, with when (`cancelled_at`) and by whom
-    (`canceller`: `BY_MENTOR`, `BY_MENTEE` or `BY_OTHER`).
+    ``window`` (ever, for ``None``), one row each, with when (`cancelled_at`)
+    and by whom (`canceller`: `BY_MENTOR`, `BY_MENTEE` or `BY_OTHER`).
 
     **Who is the event's actor, acting as a user** (decision 247): `actor_id`
     names the mentor or the mentee and `actor_type` is `user`. An admin acting
@@ -387,24 +387,19 @@ def held(mentor: Any, window: Bounds | None) -> Any:
     return and_(delivered(mentor), during(Session.starts_at, window))
 
 
-def held_count(mentor: Any, window: Bounds) -> Any:
-    """How many sessions `held()` matches, as a scalar subquery."""
-    return select(func.count()).select_from(Session).where(held(mentor, window)).scalar_subquery()
+def missed(mentor: Any, window: Bounds | None) -> Any:
+    """The predicate for a settled session of this mentor's, starting inside
+    ``window``, that they missed (`missed_by()`)."""
+    return and_(
+        Session.mentor_id == mentor,
+        during(Session.starts_at, window),
+        missed_by(Session.mentor_id),
+    )
 
 
 def missed_count(mentor: Any, window: Bounds) -> Any:
-    """How many settled sessions starting inside ``window`` the mentor missed
-    (`missed_by()`), as a scalar subquery."""
-    return (
-        select(func.count())
-        .select_from(Session)
-        .where(
-            Session.mentor_id == mentor,
-            during(Session.starts_at, window),
-            missed_by(Session.mentor_id),
-        )
-        .scalar_subquery()
-    )
+    """How many sessions `missed()` matches, as a scalar subquery."""
+    return select(func.count()).select_from(Session).where(missed(mentor, window)).scalar_subquery()
 
 
 def _delivered_figures(mentor: Any, window: Window | None) -> Any:

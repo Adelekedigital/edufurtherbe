@@ -54,6 +54,12 @@ class Window(NamedTuple):
     since: dt.datetime
     until: dt.datetime
 
+    @property
+    def month(self) -> str:
+        """`YYYY-MM` of the UTC month `since` falls in: a monthly series' label
+        (decision 247), the one place it is spelled."""
+        return self.since.astimezone(dt.UTC).strftime("%Y-%m")
+
 
 def trend_windows(now: dt.datetime, days: int) -> tuple[Window, Window]:
     """The window ending at `now`, and the equal one before it.
@@ -81,6 +87,8 @@ def month_windows(now: dt.datetime, months: int) -> list[Window]:
     """
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
+    if months < 1:
+        raise ValueError("a series needs at least one month")
     since = now.astimezone(dt.UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     windows = [Window(since=since, until=end_of_month(since))]
     for _ in range(months - 1):

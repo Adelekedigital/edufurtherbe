@@ -558,15 +558,30 @@ async def cancelled(
     *,
     days_ago: int = 3,
     cancelled_days_ago: int | None = None,
+    starts_at: dt.datetime | None = None,
+    at: dt.datetime | None = None,
 ) -> UUID:
-    """A session starting ``days_ago`` (negative is ahead), cancelled
-    ``cancelled_days_ago`` (default: the same day it was for) by `mentor`,
-    `mentee`, or nobody named."""
+    """A session starting ``days_ago`` (negative is ahead) or at ``starts_at``,
+    cancelled ``cancelled_days_ago`` (default: the same day it was for) or at
+    ``at``, by `mentor`, `mentee`, nobody named (`system`), or the mentor's own
+    id acting as an admin (`admin`)."""
     session_id = await add_session(
-        engine, mentor, status="cancelled", attendance="pending", days_ago=days_ago
+        engine,
+        mentor,
+        status="cancelled",
+        attendance="pending",
+        days_ago=days_ago,
+        starts_at=starts_at,
     )
-    actor = {"mentor": mentor, "mentee": await mentee_of(engine, session_id), "system": None}[by]
-    ago = days_ago if cancelled_days_ago is None else cancelled_days_ago
-    at = dt.datetime.now(dt.UTC) - dt.timedelta(days=ago)
-    await ended_by(engine, session_id, actor, "cancelled", at=at)
+    actor = {
+        "mentor": mentor,
+        "mentee": await mentee_of(engine, session_id),
+        "system": None,
+        "admin": mentor,
+    }[by]
+    if at is None:
+        ago = days_ago if cancelled_days_ago is None else cancelled_days_ago
+        at = dt.datetime.now(dt.UTC) - dt.timedelta(days=ago)
+    kind = "admin" if by == "admin" else None
+    await ended_by(engine, session_id, actor, "cancelled", at=at, kind=kind)
     return session_id
