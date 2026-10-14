@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.domain.mentor_stats import DEFAULT_WINDOW_DAYS
+from app.domain.mentor_stats import DEFAULT_MONTHS, DEFAULT_WINDOW_DAYS
 
 
 class MentorStatsWindowRead(BaseModel):
@@ -101,4 +101,67 @@ class MentorStatsRead(BaseModel):
     current: MentorStatsWindowRead = Field(description="The window ending now.")
     previous: MentorStatsWindowRead = Field(
         description="The equal window immediately before `current`."
+    )
+
+
+class MentorMonthRead(BaseModel):
+    """One UTC calendar month of the chart (decision 247): the same figures as
+    a dashboard window, with the month as the window."""
+
+    month: str = Field(description="The month, `YYYY-MM`, UTC.", examples=["2026-10"])
+    since: dt.datetime = Field(description="Start of the month, UTC, **inclusive**.")
+    until: dt.datetime = Field(description="Start of the next month, UTC, **exclusive**.")
+    completed_sessions: int = Field(
+        default=0,
+        description=(
+            "Sessions held: `completed`, starting in the month. The same rule as "
+            "`completed_sessions` in `/me/mentor-stats`."
+        ),
+    )
+    missed_by_mentor: int = Field(
+        default=0,
+        description=(
+            "Settled sessions starting in the month you were expected at and did "
+            "not attend, as in `/me/mentor-stats`."
+        ),
+    )
+    cancelled_by_mentor: int = Field(
+        default=0,
+        description="Sessions you cancelled **during the month**, whenever they were due.",
+    )
+    cancelled_by_mentee: int = Field(
+        default=0,
+        description="Sessions of yours your mentee cancelled during the month.",
+    )
+    cancelled_by_other: int = Field(
+        default=0,
+        description=(
+            "Sessions of yours cancelled during the month by anybody else: the "
+            "platform, an admin, or nobody recorded."
+        ),
+    )
+
+    @classmethod
+    def of(cls, row: dict[str, Any]) -> MentorMonthRead:
+        return cls(
+            month=row["month"],
+            since=row["since"],
+            until=row["until"],
+            completed_sessions=int(row["completed_sessions"]),
+            missed_by_mentor=int(row["missed_by_mentor"]),
+            cancelled_by_mentor=int(row["cancelled_by_mentor"]),
+            cancelled_by_mentee=int(row["cancelled_by_mentee"]),
+            cancelled_by_other=int(row["cancelled_by_other"]),
+        )
+
+
+class MentorMonthlyStatsRead(BaseModel):
+    """Your figures per UTC calendar month, oldest first, every month present."""
+
+    months: int = Field(default=DEFAULT_MONTHS, description="How many months `series` holds.")
+    series: list[MentorMonthRead] = Field(
+        description=(
+            "One entry per month, oldest first, ending with this month; a month "
+            "with nothing in it is zeros, never missing."
+        )
     )

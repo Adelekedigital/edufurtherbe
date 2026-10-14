@@ -14,11 +14,10 @@ fails any that omits it.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy import and_, true
 
-from app.domain.mentor_stats import Window
 from app.infra.db.models.user import User
 
 
@@ -37,12 +36,24 @@ def live(user: Any) -> Any:
 LIVE = live(User)
 
 
-def during(column: Any, window: Window | None) -> Any:
+class Bounds(Protocol):
+    """A window's two edges: instants (`Window`) or columns of a statement,
+    such as the monthly series' `VALUES` list of months (decision 247)."""
+
+    @property
+    def since(self) -> Any: ...
+
+    @property
+    def until(self) -> Any: ...
+
+
+def during(column: Any, window: Bounds | None) -> Any:
     """``column`` inside a half-open ``[since, until)`` window, or no condition
     at all for ``None`` (all time).
 
     One statement of the boundary, so the session figures and the review
-    figures of one dashboard window cannot disagree about which edge is in.
+    figures of one dashboard window, and every month of the series, cannot
+    disagree about which edge is in.
     """
     if window is None:
         return true()
