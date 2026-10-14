@@ -494,7 +494,8 @@ was written.
 2. **Mutation-test every new guard**: break the rule it protects and confirm the
    test goes red, then restore the file byte-for-byte. A guard that survives its
    mutation is decoration. A mutation that survives *can* also reveal a second
-   layer of protection — find out which before changing the test.
+   layer of protection — find out which before changing the test. Not required
+   for a purely additive response field (below).
 3. **Run the jobs that touch the change.** The hourly settlement moved sessions
    out of `confirmed` while the new rejoin endpoint required it; every test
    passed because none ran a settlement. Sweeps, settlement, the outbox drain,
@@ -517,6 +518,17 @@ was written.
    always, with every finding fixed or answered before the push. **And the
    GitHub reviewer after it** (below): two reviews, because each has caught
    what the other missed (owner, 2026-10-12).
+
+**A purely additive response field is Tier 3** (owner, 2026-10-14). The change
+must only add optional fields to existing responses. It must not remove, rename
+or retype a field, change what an existing field means, add an endpoint, need a
+migration, or touch auth or scoping. Such a change keeps items 1 and 7, the
+gates, CI and the GitHub reviewer, and drops the mutation batch (item 2);
+`/code-review` runs at low. A new counting rule with "what counts" questions
+stays Tier 2 even when it arrives as one field: decision 250's `current_streak`
+was one field and still Tier 2. The rule came from decision 252's
+`missed_by_mentee`, where the full Tier 2 cost took about 35 minutes for one
+field. As with any added field, tell the frontend before merging.
 
 Then push, and the work is done when CI is green on the PR's exact head commit
 **and** the local and GitHub reviewers' findings are all fixed or answered. The reviewer
