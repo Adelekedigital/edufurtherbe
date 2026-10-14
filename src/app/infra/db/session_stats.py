@@ -79,33 +79,43 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Integer, Numeric, and_, case, cast, func, select
+from sqlalchemy import Integer, Numeric, and_, case, cast, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.domain.enums import AttendanceStatus, SessionStatus
-from app.infra.db.models.sessions import Session, SessionParticipant
+from app.domain.mentor_stats import Window
+from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant
+from app.infra.db.predicates import during
 
 __all__ = [
     "ATTENDED",
     "EXPECTED",
     "MENTEE",
     "MENTOR",
+    "MISSED",
     "TERMINAL",
     "attendance_rate",
     "attendance_sessions",
+    "cancelled_by",
     "delivered",
     "mentee_completed_sessions",
     "mentor_stats",
+    "mentor_window_figures",
+    "missed_by",
     "received",
 ]
 
 #: The mentor turned up.
 ATTENDED = (AttendanceStatus.ATTENDED,)
 
+#: The party was expected and did not come: the half of the rate's
+#: denominator that is not `ATTENDED`, which is what "missed" counts.
+MISSED = (AttendanceStatus.NO_SHOW,)
+
 #: The mentor was expected *and* it is known whether they came. Listing what
 #: counts is how `pending` and `left_early` stay out without either being named.
-EXPECTED = (AttendanceStatus.ATTENDED, AttendanceStatus.NO_SHOW)
+EXPECTED = ATTENDED + MISSED
 
 #: Sessions that have happened, or should have. Not `cancelled` — nobody was
 #: expected — and not `confirmed`, which has not happened yet.
@@ -171,7 +181,7 @@ MENTOR = _RATE.mentor_id
 MENTEE = _RATE.mentee_id
 
 
-def attendance_rate(user: Any, side: Any) -> Any:
+def attendance_rate(user: Any, side: Any, window: Window | None = None) -> Any:
     """One party's attendance on one side of the table, as a percentage or ``NULL``.
 
     **The side is load-bearing and the two numbers are not interchangeable.** A
@@ -190,6 +200,8 @@ def attendance_rate(user: Any, side: Any) -> Any:
     up"; null says "no data yet". Somebody whose sessions have not been settled
     yet must not be branded the first — which is everybody whose only sessions
     are still ahead of them, and every mentee on their first booking.
+
+    ``window`` narrows it to sessions starting inside it; ``None`` is all time.
     """
     came = func.count().filter(SessionParticipant.attendance_status.in_(ATTENDED))
     due = _due()
@@ -200,6 +212,7 @@ def attendance_rate(user: Any, side: Any) -> Any:
     return _attendance_of(
         user,
         side,
+        window,
         case(
             # **`Numeric`, not a Python float, and the difference is which way
             # a tie goes.** `100.0` binds as `float8`, `float8 / bigint`
@@ -224,7 +237,7 @@ def attendance_sessions(user: Any, side: Any) -> Any:
 
     Not `mentee_completed_sessions`, which counts sessions *received* and leaves
     out no-shows; "90% of 12" needs the no-shows in the 12."""
-    return _attendance_of(user, side, _due())
+    return _attendance_of(user, side, None, _due())
 
 
 def _due() -> Any:
@@ -232,9 +245,10 @@ def _due() -> Any:
     return func.count().filter(SessionParticipant.attendance_status.in_(EXPECTED))
 
 
-def _attendance_of(user: Any, side: Any, column: Any) -> Any:
-    """``column`` over this party's settled sessions on one side: the one base
-    `attendance_rate` and `attendance_sessions` both read."""
+def _attendance_of(user: Any, side: Any, window: Window | None, column: Any) -> Any:
+    """``column`` over this party's settled sessions on one side, starting inside
+    ``window`` (all time for ``None``): the one base `attendance_rate` and
+    `attendance_sessions` both read."""
     return (
         select(column)
         .select_from(_RATE)
@@ -261,9 +275,96 @@ def _attendance_of(user: Any, side: Any, column: Any) -> Any:
                 SessionParticipant.user_id == user,
             ),
         )
-        .where(side == user, _RATE.status.in_(TERMINAL))
+        .where(side == user, _RATE.status.in_(TERMINAL), during(_RATE.starts_at, window))
         .scalar_subquery()
     )
+
+
+def cancelled_by(party: Any) -> Any:
+    """The predicate for a session ``party`` cancelled: `cancelled`, and the
+    event that moved it there names ``party`` as its actor.
+
+    **The event, not a column, because no column says who.** The transition
+    writes `actor_id` on the `cancelled` event in the same transaction as the
+    status (`session_writer.transitions`). The newest such event wins, so a
+    session is attributed to one actor at most. A migrated cancellation names
+    its canceller where legacy's `Canceled By` resolved to a user, and nobody
+    where it did not (orphan trackers); nobody is neither party.
+
+    `party` is a column of the enclosing `sessions` (`Session.mentor_id`), which
+    the event subquery correlates against. Served by `ix_session_events_session`.
+    """
+    canceller = (
+        select(SessionEvent.actor_id)
+        .where(
+            SessionEvent.session_id == Session.id,
+            SessionEvent.to_status == SessionStatus.CANCELLED,
+        )
+        .order_by(SessionEvent.created_at.desc(), SessionEvent.id.desc())
+        .limit(1)
+        .correlate(Session)
+        .scalar_subquery()
+    )
+    return and_(Session.status == SessionStatus.CANCELLED, canceller == party)
+
+
+def missed_by(party: Any) -> Any:
+    """The predicate for a settled session ``party`` was expected at and missed.
+
+    The rate's own terms, per session: `TERMINAL`, and the party's participant
+    row in `MISSED`. So "missed 2" beside "attendance 80%" counts the sessions
+    the rate's denominator holds and its numerator does not; a cancelled session
+    is not missed, and `pending` or no row is unknown, not absent. Read from the
+    participant row rather than `session_events.reason_code`, which names one
+    party only when exactly one was absent and is null on migrated rows.
+
+    `party` is a column of the enclosing `sessions` (`Session.mentor_id`).
+    """
+    absent = (
+        select(SessionParticipant.id)
+        .where(
+            SessionParticipant.session_id == Session.id,
+            SessionParticipant.user_id == party,
+            SessionParticipant.attendance_status.in_(MISSED),
+        )
+        .correlate(Session)
+        .exists()
+    )
+    return and_(Session.status.in_(TERMINAL), absent)
+
+
+def _delivered_figures(mentor: Any, window: Window | None) -> Any:
+    """The profile's four figures over sessions starting inside ``window``.
+
+    One statement for the all-time profile and every dashboard window, so the
+    two can only differ in which sessions they read.
+    """
+    return select(
+        func.count().label("completed_sessions"),
+        # `SUM` over no rows is `NULL`; zero is the real answer, and a nullable
+        # count makes every client write the same fallback.
+        func.coalesce(func.sum(Session.duration_minutes), 0).label("mentoring_minutes"),
+        func.count(func.distinct(Session.mentee_id)).label("mentees_mentored"),
+        attendance_rate(mentor, MENTOR, window).label("attendance_rate"),
+    ).where(delivered(mentor), during(Session.starts_at, window))
+
+
+def mentor_window_figures(mentor: Any, window: Window) -> Any:
+    """Every session figure of one dashboard window, as a one-row select: the
+    profile's four plus how many the mentor missed and how many they cancelled.
+    The two extra counts are a second subquery because they read sessions the
+    `delivered()` filter of the four excludes."""
+    figures = _delivered_figures(mentor, window).subquery("figures")
+    outcomes = (
+        select(
+            func.count().filter(missed_by(Session.mentor_id)).label("missed_by_mentor"),
+            func.count().filter(cancelled_by(Session.mentor_id)).label("cancelled_by_mentor"),
+        )
+        .where(Session.mentor_id == mentor, during(Session.starts_at, window))
+        .subquery("outcomes")
+    )
+    # Two one-row subqueries: joined on `true` so the single row is explicit.
+    return select(*figures.c, *outcomes.c).select_from(figures.join(outcomes, true()))
 
 
 async def mentor_stats(session: AsyncSession, mentor: UUID) -> dict[str, Any]:
@@ -281,14 +382,5 @@ async def mentor_stats(session: AsyncSession, mentor: UUID) -> dict[str, Any]:
     and ADR 0012 requests no scope that would reach them. One number with two
     definitions depending on venue is worse than one honest definition.
     """
-    statement = select(
-        func.count().label("completed_sessions"),
-        # `SUM` over no rows is `NULL`; zero is the real answer, and a nullable
-        # count makes every client write the same fallback.
-        func.coalesce(func.sum(Session.duration_minutes), 0).label("mentoring_minutes"),
-        func.count(func.distinct(Session.mentee_id)).label("mentees_mentored"),
-        attendance_rate(mentor, MENTOR).label("attendance_rate"),
-    ).where(delivered(mentor))
-
-    row = (await session.execute(statement)).mappings().one()
+    row = (await session.execute(_delivered_figures(mentor, None))).mappings().one()
     return dict(row)

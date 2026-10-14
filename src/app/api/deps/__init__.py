@@ -62,6 +62,7 @@ from app.api.deps.jobs import DailyPresenceDep, ReminderCallbackDep, RuntimeJobD
 from app.api.deps.mentors import (
     FeaturedMentorDep,
     MentorPageDep,
+    OwnMentorStatsDep,
     PublicMentorDep,
     SimilarMentorsDep,
 )
@@ -208,6 +209,7 @@ __all__ = [
     "OwnCalendarDep",
     "OwnConferencingDep",
     "OwnInterestsDep",
+    "OwnMentorStatsDep",
     "OwnOnboardingDep",
     "OwnQuestionsDep",
     "OwnReferralsDep",

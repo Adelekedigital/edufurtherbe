@@ -430,6 +430,8 @@ async def add_session(
     #: and a fixture with only the mentor's cannot tell a query scoped to the
     #: mentor from one that reads whichever row it finds first.
     mentee_attendance: str | None = None,
+    #: An exact start, overriding `days_ago`, for a test about a boundary.
+    starts_at: dt.datetime | None = None,
 ) -> UUID:
     """One session, with every axis a stat reads as a knob.
 
@@ -465,7 +467,7 @@ async def add_session(
                     "m": mentor,
                     "e": mentee,
                     "t": session_type,
-                    "s": dt.datetime.now(dt.UTC) - dt.timedelta(days=days_ago),
+                    "s": starts_at or dt.datetime.now(dt.UTC) - dt.timedelta(days=days_ago),
                     "d": minutes,
                     "st": status,
                 },

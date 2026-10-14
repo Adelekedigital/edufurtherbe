@@ -62,6 +62,7 @@ from sqlalchemy import Integer, Numeric, Select, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import SessionRole
+from app.domain.mentor_stats import Window
 from app.domain.reviews import (
     MENTOR_RATINGS,
     ORDINAL_SCALE,
@@ -70,6 +71,7 @@ from app.domain.reviews import (
     WOULD_RECOMMEND_FROM,
 )
 from app.infra.db.models.reviews import Review
+from app.infra.db.predicates import during
 
 __all__ = [
     "card_summary",
@@ -182,7 +184,7 @@ def _session_value() -> Any:
     )
 
 
-def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
+def card_summary(mentor: Any, window: Window | None = None) -> tuple[Select[Any], Select[Any]]:
     """The two figures a discovery card shows: how many, and how valuable.
 
     **Two scalar subqueries rather than a lateral, and the plan position is why.**
@@ -209,13 +211,16 @@ def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
     That is a different question from the profile's, not a smaller copy of it.
     What the two share is `published()` and the rounding helpers, which is where
     the rules actually live.
+
+    ``window`` narrows both to reviews *written* inside it (`created_at`), which
+    is the mentor dashboard's question: what mentees said this period. A
+    migrated review with no session still has one, so none is left out. The
+    card passes none.
     """
+    rows = and_(published(mentor), during(Review.created_at, window))
     return (
-        select(func.count()).select_from(Review).where(published(mentor)).correlate_except(Review),
-        select(_session_value())
-        .select_from(Review)
-        .where(published(mentor))
-        .correlate_except(Review),
+        select(func.count()).select_from(Review).where(rows).correlate_except(Review),
+        select(_session_value()).select_from(Review).where(rows).correlate_except(Review),
     )
 
 
