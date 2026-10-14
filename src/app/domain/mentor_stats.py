@@ -18,11 +18,17 @@ from __future__ import annotations
 import datetime as dt
 from typing import NamedTuple
 
+from app.domain.credits import end_of_month
+
 __all__ = [
+    "DEFAULT_MONTHS",
     "DEFAULT_WINDOW_DAYS",
+    "MAX_MONTHS",
     "MAX_WINDOW_DAYS",
+    "MIN_MONTHS",
     "MIN_WINDOW_DAYS",
     "Window",
+    "month_windows",
     "trend_windows",
 ]
 
@@ -34,6 +40,12 @@ MIN_WINDOW_DAYS = 7
 #: A year, so "this year against last" is askable. The previous window then
 #: reaches back two years, which is still a bounded read.
 MAX_WINDOW_DAYS = 365
+
+#: The monthly chart (decision 247): a year by default, two at most, so "this
+#: month against the same month last year" is askable.
+DEFAULT_MONTHS = 12
+MIN_MONTHS = 1
+MAX_MONTHS = 24
 
 
 class Window(NamedTuple):
@@ -55,3 +67,23 @@ def trend_windows(now: dt.datetime, days: int) -> tuple[Window, Window]:
     length = dt.timedelta(days=days)
     current = Window(since=now - length, until=now)
     return current, Window(since=current.since - length, until=current.since)
+
+
+def month_windows(now: dt.datetime, months: int) -> list[Window]:
+    """The last ``months`` UTC calendar months, oldest first, ending with the
+    month ``now`` is in (decision 247).
+
+    **UTC, the platform's month** (`credits.end_of_month`, whose rule closes
+    each month here): the windowed figures beside it are UTC too (decision
+    246), so a month and a window never disagree about where a session falls.
+    The current month runs to its end, not to `now`; nothing settled or
+    cancelled can be placed in the part still ahead.
+    """
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    since = now.astimezone(dt.UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    windows = [Window(since=since, until=end_of_month(since))]
+    for _ in range(months - 1):
+        until = windows[0].since
+        windows.insert(0, Window(since=(until - dt.timedelta(days=1)).replace(day=1), until=until))
+    return windows

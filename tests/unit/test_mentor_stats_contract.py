@@ -27,3 +27,21 @@ def test_a_bound_is_required_and_never_null_in_the_spec(bound: str) -> None:
 def test_a_window_cannot_be_built_without_its_bounds() -> None:
     with pytest.raises(ValidationError, match="since"):
         MentorStatsWindowRead()  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    ("schema", "field"),
+    [
+        ("MentorMonthRead", "month"),
+        ("MentorMonthRead", "since"),
+        ("MentorMonthRead", "until"),
+        ("MentorMonthlyStatsRead", "series"),
+    ],
+)
+def test_a_months_place_is_required_and_never_null(schema: str, field: str) -> None:
+    """Decision 247: a month without its edges cannot be charted, and a series
+    that may be null makes every client write the same fallback."""
+    spec = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"]  # type: ignore[call-arg]
+
+    assert field in spec[schema].get("required", [])
+    assert "anyOf" not in spec[schema]["properties"][field]

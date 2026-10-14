@@ -19,6 +19,8 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import (
     add_session,
+    cancelled,
+    ended_by,
     make_bookable_mentor,
     mentee_of,
     token_for,
@@ -55,48 +57,6 @@ async def stats(
 
 def figures(block: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in block.items() if key not in ("since", "until")}
-
-
-async def ended_by(
-    engine: AsyncEngine,
-    session_id: UUID,
-    actor: UUID | None,
-    to: str,
-    *,
-    at: dt.datetime | None = None,
-) -> None:
-    """The event a transition writes: who moved the session to ``to``, and when
-    (now unless ``at`` says otherwise)."""
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO session_events (session_id, from_status, to_status, actor_id, "
-                "actor_type, created_at) "
-                "VALUES (:s, 'confirmed', :to, :a, :t, COALESCE(CAST(:at AS timestamptz), now()))"
-            ),
-            {"s": session_id, "to": to, "a": actor, "t": "user" if actor else "system", "at": at},
-        )
-
-
-async def cancelled(
-    engine: AsyncEngine,
-    mentor: UUID,
-    by: str,
-    *,
-    days_ago: int = 3,
-    cancelled_days_ago: int | None = None,
-) -> UUID:
-    """A session starting ``days_ago`` (negative is ahead), cancelled
-    ``cancelled_days_ago`` (default: the same day it was for) by `mentor`,
-    `mentee`, or nobody named."""
-    session_id = await add_session(
-        engine, mentor, status="cancelled", attendance="pending", days_ago=days_ago
-    )
-    actor = {"mentor": mentor, "mentee": await mentee_of(engine, session_id), "system": None}[by]
-    ago = days_ago if cancelled_days_ago is None else cancelled_days_ago
-    at = dt.datetime.now(dt.UTC) - dt.timedelta(days=ago)
-    await ended_by(engine, session_id, actor, "cancelled", at=at)
-    return session_id
 
 
 async def review(
