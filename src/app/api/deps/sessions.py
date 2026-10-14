@@ -42,7 +42,7 @@ from app.core.errors import (
 )
 from app.domain.attendance import door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
-from app.domain.enums import MeetingProvider, SessionStatus
+from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
 from app.domain.refunds import RefundPolicy, refund_policy
 from app.domain.sessions import TRANSITIONS
 from app.infra.clients.meetings import (
@@ -130,6 +130,18 @@ async def target_sessions(
         Literal["asc", "desc"],
         Query(description="`desc` (default) is newest first; `asc` is soonest first."),
     ] = "desc",
+    as_: Annotated[
+        Literal["mentor", "mentee"] | None,
+        Query(
+            alias="as",
+            description=(
+                "Only the sessions where the user is on this side: `mentor` for "
+                "those they mentor, `mentee` for those they booked. Absent is "
+                "both, since one person may be either. Applied in the paged "
+                "query, so `limit` counts only matching sessions."
+            ),
+        ),
+    ] = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """One page of the sessions a user is a party to, optionally narrowed, and
     the cursor for the next — minted here because only here is the direction known.
@@ -153,6 +165,7 @@ async def target_sessions(
         starts_before=local_day_start(to, zone) if to is not None else None,
         statuses=[s.value for s in status or ()],
         ascending=ascending,
+        side=SessionRole(as_) if as_ is not None else None,
     )
     if not (has_more and rows):
         return rows, None

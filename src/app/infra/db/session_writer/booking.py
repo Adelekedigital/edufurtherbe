@@ -59,6 +59,8 @@ from app.domain.notifications import (
     reminders_for,
 )
 from app.domain.sessions import (
+    EXPIRY_GRACE,
+    EXPIRY_KIND,
     respond_by,
 )
 from app.infra.clients.scheduler import SchedulerError, SchedulerPort
@@ -516,7 +518,10 @@ async def book_session(
     # can.
     deadline = respond_by(starts_at, requires_confirmation=requires_confirmation)
     if deadline is not None and scheduler is not None and callback_url:
-        for kind, at in reminders_for(deadline, now=now):
+        # The nudges, then **the request's own expiry at its deadline** (owner,
+        # 2026-10-13), which the hourly sweep backs up if it is lost.
+        callbacks = [*reminders_for(deadline, now=now), (EXPIRY_KIND, deadline + EXPIRY_GRACE)]
+        for kind, at in callbacks:
             try:
                 await asyncio.to_thread(
                     scheduler.schedule,
@@ -525,7 +530,7 @@ async def book_session(
                     at=at,
                 )
             except (SchedulerError, NotImplementedError) as exc:
-                logger.info("reminder %s for session %s not scheduled: %s", kind, session_id, exc)
+                logger.info("callback %s for session %s not scheduled: %s", kind, session_id, exc)
 
     # **The event is written by the same transaction as the status**, per the
     # model's own note: a trigger projecting one onto the other would be a
