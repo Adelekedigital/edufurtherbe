@@ -27,6 +27,7 @@ from tests.integration.factories import (
     token_for,
 )
 
+from app.api.deps import PRIVATE_NO_STORE
 from conftest import bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -119,7 +120,7 @@ async def test_the_response_is_never_cached_by_anyone_but_the_caller(
 
     response = await api_client.get(URL, headers=bearer(await token_for(db_engine, mentee)))
 
-    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["cache-control"] == PRIVATE_NO_STORE
 
 
 async def test_a_token_is_required(api_client: httpx.AsyncClient) -> None:

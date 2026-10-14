@@ -24,6 +24,7 @@ from tests.integration.factories import (
     token_for,
 )
 
+from app.api.deps import PRIVATE_NO_STORE
 from app.domain.mentor_stats import month_windows
 from app.infra.db.mentor_dashboard import mentor_monthly_stats
 from conftest import bearer
@@ -220,7 +221,7 @@ async def test_the_series_is_every_month_oldest_first(
     response = await api_client.get(URL, headers=bearer(await token_for(db_engine, mentor)))
 
     assert response.status_code == 200, response.text
-    assert response.headers["Cache-Control"] == "private, no-store"
+    assert response.headers["Cache-Control"] == PRIVATE_NO_STORE
     body = response.json()
     assert body["months"] == 12
     assert [

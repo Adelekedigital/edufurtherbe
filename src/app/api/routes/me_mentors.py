@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import MetMentorsDep
+from app.api.deps import PRIVATE_NO_STORE, MetMentorsDep
 from app.api.schemas.common import Page
 from app.api.schemas.met_mentors import MetMentorRead
 
@@ -39,6 +39,6 @@ RESPONSES: dict[int | str, dict[str, str]] = {
     responses=RESPONSES,
 )
 async def list_mentors_met(page: MetMentorsDep, response: Response) -> Page[MetMentorRead]:
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
     rows, cursor = page
     return Page(data=[MetMentorRead.of(row) for row in rows], next_cursor=cursor)
