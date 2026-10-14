@@ -21,13 +21,19 @@ from app.domain.met_mentors import Bookability, bookability
 class MetMentorRead(BaseModel):
     """One mentor you have had at least one completed session with."""
 
-    id: str = Field(description="The mentor's user id. `/mentors/{id}` accepts it.")
+    id: str = Field(
+        description=(
+            "The mentor's user id: which mentor this card is. Identity, not a "
+            "link: a profile that is not public answers `404` by id as by slug."
+        )
+    )
     slug: str | None = Field(
         default=None,
         description=(
             "The mentor's public handle, **only while their profile is public** "
-            "(approved and listed), the one time `/mentors/{slug}` resolves. "
-            "Null otherwise, or when they have none: link by `id` then."
+            "(approved and listed): link the card to `/mentors/{slug}`. Null when "
+            "the profile is not public, or the mentor has no handle; then the "
+            "card is not linkable."
         ),
     )
     first_name: str | None = None

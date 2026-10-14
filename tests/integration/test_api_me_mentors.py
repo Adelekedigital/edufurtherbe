@@ -388,3 +388,18 @@ async def test_a_mentor_with_no_mentor_profile_is_listed_as_unavailable(
     assert await bookability(api_client, await token_for(db_engine, mentee)) == {
         bare: "unavailable"
     }
+
+
+async def test_a_session_in_progress_counts_as_upcoming(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Started ten minutes ago and not yet over: the mentee is still booked
+    with that mentor, so `open` would invite a second booking."""
+    mentor = await make_bookable_mentor(db_engine, "met-in-progress")
+    mentee = await met(db_engine, mentor, days_ago=5)
+    started = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=10)
+    await add_session(db_engine, mentor, mentee=mentee, status="confirmed", starts_at=started)
+
+    assert await bookability(api_client, await token_for(db_engine, mentee)) == {
+        mentor: "has_upcoming"
+    }
