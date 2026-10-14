@@ -22,7 +22,7 @@ __all__ = ["Bookability", "bookability"]
 class Bookability(StrEnum):
     """What a mentee can do next with a mentor they have met."""
 
-    #: A confirmed session with this mentor has not started yet.
+    #: A confirmed session with this mentor has not ended yet (in progress counts).
     HAS_UPCOMING = "has_upcoming"
     #: A request to this mentor is still waiting on their answer.
     PENDING = "pending"

@@ -65,7 +65,7 @@ class MetMentorRead(BaseModel):
     bookability: Bookability = Field(
         description=(
             "What you can do next with this mentor, one state by precedence: "
-            "`has_upcoming` (a confirmed session with them has not started), "
+            "`has_upcoming` (a confirmed session with them has not ended), "
             "then `pending` (a request to them awaits their answer), then "
             "`unavailable` (they are not taking bookings, as on their profile), "
             "else `open`. A client should treat a value it does not know as "
