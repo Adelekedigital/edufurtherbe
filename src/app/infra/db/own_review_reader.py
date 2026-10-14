@@ -18,37 +18,19 @@ without anybody noticing.
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, literal, select, tuple_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ValidationError
+from app.infra.db import keyset
 from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
 from app.infra.db.review_authors import author_columns, author_session_id, with_author
 from app.infra.db.review_stats import review_value
 
 __all__ = ["list_reviews_about"]
-
-
-def _after(cursor: tuple[str, UUID]) -> Any:
-    """Keyset, on the sort column plus the id — ADR 0016's amended form.
-
-    The same shape `review_reader._after` uses, and for the same reason: the
-    sort key is a timestamp rendered as text, so a token that survives base64
-    while holding something that is not a timestamp is a **client** error.
-    Raising here turns a 500 into the 422 the envelope documents.
-    """
-    raw, after_id = cursor
-    try:
-        after = dt.datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
-    # Descending, so the page moves *backwards* through time.
-    return tuple_(Review.created_at, Review.id) < tuple_(literal(after), literal(after_id))
 
 
 async def list_reviews_about(
@@ -101,7 +83,7 @@ async def list_reviews_about(
         )
         .where(
             Review.reviewed_for == subject,
-            *([_after(after)] if after is not None else []),
+            *([keyset.after(Review.created_at, Review.id, after)] if after is not None else []),
         )
         .order_by(Review.created_at.desc(), Review.id.desc())
         .limit(limit + 1)
