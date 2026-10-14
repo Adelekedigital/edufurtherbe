@@ -26,6 +26,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from conftest import api_token
+
 LAGOS = "Africa/Lagos"
 
 
@@ -492,3 +494,29 @@ async def add_session(
                 {"s": session_id, "u": mentee, "a": mentee_attendance},
             )
         return session_id
+
+
+async def token_for(engine: AsyncEngine, user: UUID) -> str:
+    """A bearer token authenticating as ``user``.
+
+    `users.auth_id` is what `get_current_user` matches the token's subject
+    against. `make_public_mentor` generates one and does not hand it back, and
+    `add_user` leaves it null — the state every migrated user starts in and one
+    no token can match. So this writes a known value rather than reading either
+    back, and one helper covers both. Shared once a third suite needed it.
+    """
+    auth_id = uuid4()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": user}
+        )
+    return api_token(auth_id)
+
+
+async def mentee_of(engine: AsyncEngine, session_id: UUID) -> UUID:
+    """Who a session made by `add_session` is with."""
+    async with engine.begin() as conn:
+        mentee = await conn.execute(
+            text("SELECT mentee_id FROM sessions WHERE id = :s"), {"s": session_id}
+        )
+        return UUID(str(mentee.scalar_one()))

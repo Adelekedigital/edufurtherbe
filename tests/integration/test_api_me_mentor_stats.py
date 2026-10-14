@@ -15,13 +15,19 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from tests.integration.factories import add_session, make_bookable_mentor
+from tests.integration.factories import (
+    add_session,
+    make_bookable_mentor,
+    mentee_of,
+    token_for,
+)
 
-from app.domain.mentor_stats import Window
+from app.domain.mentor_stats import Window, trend_windows
+from app.domain.reviews import OVERALL_STANDS_ALONE_FROM
 from app.infra.db.mentor_dashboard import mentor_window_stats
-from conftest import api_token, bearer
+from conftest import bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -35,17 +41,8 @@ ZEROS = {
     "missed_by_mentor": 0,
     "cancelled_by_mentor": 0,
     "review_count": 0,
-    "session_value": None,
+    "average_rating": None,
 }
-
-
-async def token_for(engine: AsyncEngine, user: UUID) -> str:
-    auth_id = uuid4()
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": user}
-        )
-    return api_token(auth_id)
 
 
 async def stats(
@@ -60,38 +57,45 @@ def figures(block: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in block.items() if key not in ("since", "until")}
 
 
-async def mentee_of(engine: AsyncEngine, session_id: UUID) -> UUID:
-    async with engine.begin() as conn:
-        return UUID(
-            str(
-                (
-                    await conn.execute(
-                        text("SELECT mentee_id FROM sessions WHERE id = :s"), {"s": session_id}
-                    )
-                ).scalar_one()
-            )
-        )
-
-
-async def ended_by(engine: AsyncEngine, session_id: UUID, actor: UUID | None, to: str) -> None:
-    """The event a transition writes: who moved the session to ``to``."""
+async def ended_by(
+    engine: AsyncEngine,
+    session_id: UUID,
+    actor: UUID | None,
+    to: str,
+    *,
+    at: dt.datetime | None = None,
+) -> None:
+    """The event a transition writes: who moved the session to ``to``, and when
+    (now unless ``at`` says otherwise)."""
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO session_events (session_id, from_status, to_status, actor_id, "
-                "actor_type) VALUES (:s, 'confirmed', :to, :a, :t)"
+                "actor_type, created_at) "
+                "VALUES (:s, 'confirmed', :to, :a, :t, COALESCE(CAST(:at AS timestamptz), now()))"
             ),
-            {"s": session_id, "to": to, "a": actor, "t": "user" if actor else "system"},
+            {"s": session_id, "to": to, "a": actor, "t": "user" if actor else "system", "at": at},
         )
 
 
-async def cancelled(engine: AsyncEngine, mentor: UUID, by: str, *, days_ago: int = 3) -> UUID:
-    """A cancelled session, cancelled by `mentor`, `mentee`, or nobody named."""
+async def cancelled(
+    engine: AsyncEngine,
+    mentor: UUID,
+    by: str,
+    *,
+    days_ago: int = 3,
+    cancelled_days_ago: int | None = None,
+) -> UUID:
+    """A session starting ``days_ago`` (negative is ahead), cancelled
+    ``cancelled_days_ago`` (default: the same day it was for) by `mentor`,
+    `mentee`, or nobody named."""
     session_id = await add_session(
         engine, mentor, status="cancelled", attendance="pending", days_ago=days_ago
     )
     actor = {"mentor": mentor, "mentee": await mentee_of(engine, session_id), "system": None}[by]
-    await ended_by(engine, session_id, actor, "cancelled")
+    ago = days_ago if cancelled_days_ago is None else cancelled_days_ago
+    at = dt.datetime.now(dt.UTC) - dt.timedelta(days=ago)
+    await ended_by(engine, session_id, actor, "cancelled", at=at)
     return session_id
 
 
@@ -163,7 +167,7 @@ async def test_each_figure_is_counted_in_the_current_window(
         "missed_by_mentor": 1,
         "cancelled_by_mentor": 1,
         "review_count": 2,
-        "session_value": 2.5,
+        "average_rating": 2.5,
     }
     assert figures(body["previous"]) == ZEROS
 
@@ -192,7 +196,7 @@ async def test_the_previous_window_holds_the_period_before(
         "missed_by_mentor": 0,
         "cancelled_by_mentor": 1,
         "review_count": 1,
-        "session_value": 4.0,
+        "average_rating": 4.0,
     }
 
 
@@ -244,8 +248,9 @@ async def test_a_non_mentor_reads_zeros_not_an_error(
             await conn.execute(
                 text(
                     "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES ('plain@example.test', 'mentee', 'UTC') RETURNING id"
-                )
+                    "VALUES (:e, 'mentee', 'UTC') RETURNING id"
+                ),
+                {"e": f"plain-{uuid4()}@example.test"},
             )
         ).scalar_one()
 
@@ -312,6 +317,21 @@ async def test_the_session_status_decides_it_was_cancelled(
     assert body["current"]["completed_sessions"] == 1
 
 
+async def test_a_cancellation_counts_in_the_window_it_was_made(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Cancelled today for ten days out is this window's; cancelled 40 days ago
+    for a session that would have been three days ago is the previous one's."""
+    mentor = await make_bookable_mentor(db_engine, "dash-cancel-when")
+    await cancelled(db_engine, mentor, "mentor", days_ago=-10, cancelled_days_ago=0)
+    await cancelled(db_engine, mentor, "mentor", days_ago=3, cancelled_days_ago=40)
+
+    body = await stats(api_client, await token_for(db_engine, mentor))
+
+    assert body["current"]["cancelled_by_mentor"] == 1
+    assert body["previous"]["cancelled_by_mentor"] == 1
+
+
 async def test_missed_counts_settled_sessions_the_mentor_did_not_attend(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -341,7 +361,28 @@ async def test_withdrawn_reviews_do_not_count(
     body = await stats(api_client, await token_for(db_engine, mentor))
 
     assert body["current"]["review_count"] == 1
-    assert body["current"]["session_value"] == 5.0
+    assert body["current"]["average_rating"] == 5.0
+
+
+async def test_every_window_averages_by_one_formula(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The busy window holds enough overall ratings for the profile's rule to
+    switch to them alone (5.0); the quiet one does not. Both are the mean of
+    every review's own value, so the busy one is (5 * 5 + 2) / 6 = 4.5."""
+    assert OVERALL_STANDS_ALONE_FROM <= 5  # else the fixture no longer crosses it
+    mentor = await make_bookable_mentor(db_engine, "dash-one-formula")
+    for _ in range(5):
+        await review(db_engine, mentor, overall=5)
+    await review(db_engine, mentor, overall=None, valuable=2)
+    before = dt.datetime.now(dt.UTC) - dt.timedelta(days=45)
+    await review(db_engine, mentor, overall=4, written=before)
+    await review(db_engine, mentor, overall=None, valuable=2, written=before)
+
+    body = await stats(api_client, await token_for(db_engine, mentor))
+
+    assert (body["current"]["review_count"], body["current"]["average_rating"]) == (6, 4.5)
+    assert (body["previous"]["review_count"], body["previous"]["average_rating"]) == (2, 3.0)
 
 
 # --------------------------------------------------------------------------
@@ -354,7 +395,7 @@ WINDOW = Window(since=NOW - dt.timedelta(days=7), until=NOW)
 
 async def window_stats(engine: AsyncEngine, mentor: UUID) -> dict[str, Any]:
     async with async_sessionmaker(engine)() as session:
-        return await mentor_window_stats(session, mentor, WINDOW)
+        return (await mentor_window_stats(session, mentor, [WINDOW]))[0]
 
 
 async def test_since_is_inside_the_window(db_engine: AsyncEngine) -> None:
@@ -363,10 +404,11 @@ async def test_since_is_inside_the_window(db_engine: AsyncEngine) -> None:
     await add_session(
         db_engine, mentor, status="no_show", attendance="no_show", starts_at=WINDOW.since
     )
+    # Cancelled on the edge, for a session after the window: the event places it.
     cancel = await add_session(
-        db_engine, mentor, status="cancelled", attendance="pending", starts_at=WINDOW.since
+        db_engine, mentor, status="cancelled", attendance="pending", starts_at=WINDOW.until
     )
-    await ended_by(db_engine, cancel, mentor, "cancelled")
+    await ended_by(db_engine, cancel, mentor, "cancelled", at=WINDOW.since)
     await review(db_engine, mentor, overall=4, written=WINDOW.since)
 
     row = await window_stats(db_engine, mentor)
@@ -382,16 +424,40 @@ async def test_until_is_outside_the_window(db_engine: AsyncEngine) -> None:
     await add_session(
         db_engine, mentor, status="no_show", attendance="no_show", starts_at=WINDOW.until
     )
+    # Cancelled on the edge, for a session inside the window: the event places it.
     cancel = await add_session(
-        db_engine, mentor, status="cancelled", attendance="pending", starts_at=WINDOW.until
+        db_engine, mentor, status="cancelled", attendance="pending", starts_at=WINDOW.since
     )
-    await ended_by(db_engine, cancel, mentor, "cancelled")
+    await ended_by(db_engine, cancel, mentor, "cancelled", at=WINDOW.until)
     await review(db_engine, mentor, overall=4, written=WINDOW.until)
 
     row = await window_stats(db_engine, mentor)
 
     assert {key: row[key] for key in ZEROS} == ZEROS
     assert (row["since"], row["until"]) == WINDOW
+
+
+async def test_both_windows_are_read_in_one_statement(db_engine: AsyncEngine) -> None:
+    """One statement is one snapshot: a session settling between two reads
+    cannot land in one window's figures and be missing from the other's."""
+    mentor = await make_bookable_mentor(db_engine, "dash-snapshot")
+    await add_session(db_engine, mentor, minutes=20, starts_at=NOW - dt.timedelta(days=2))
+    await add_session(db_engine, mentor, minutes=50, starts_at=NOW - dt.timedelta(days=9))
+    statements: list[str] = []
+
+    def record(*args: Any) -> None:
+        statements.append(args[2])
+
+    event.listen(db_engine.sync_engine, "before_cursor_execute", record)
+    try:
+        async with async_sessionmaker(db_engine)() as session:
+            current, previous = await mentor_window_stats(session, mentor, trend_windows(NOW, 7))
+    finally:
+        event.remove(db_engine.sync_engine, "before_cursor_execute", record)
+
+    assert len(statements) == 1, statements
+    assert (current["mentoring_minutes"], previous["mentoring_minutes"]) == (20, 50)
+    assert (current["since"], previous["until"]) == (WINDOW.since, WINDOW.since)
 
 
 # --------------------------------------------------------------------------

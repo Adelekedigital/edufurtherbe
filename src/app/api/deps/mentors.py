@@ -338,12 +338,10 @@ async def own_mentor_stats(
     """The caller's figures over two adjacent windows. Scoped to the caller in
     every statement; a non-mentor reads zeros and nulls, as `/me/session-types` answers
     one with an empty page."""
-    current, previous = trend_windows(dt.datetime.now(dt.UTC), window_days)
-    return {
-        "window_days": window_days,
-        "current": await mentor_window_stats(session, user["id"], current),
-        "previous": await mentor_window_stats(session, user["id"], previous),
-    }
+    current, previous = await mentor_window_stats(
+        session, user["id"], trend_windows(dt.datetime.now(dt.UTC), window_days)
+    )
+    return {"window_days": window_days, "current": current, "previous": previous}
 
 
 OwnMentorStatsDep = Annotated[dict[str, Any], Depends(own_mentor_stats)]

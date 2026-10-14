@@ -1,10 +1,11 @@
 """The windows a mentor's dashboard figures are measured over (decision 246).
 
-**Half-open, in UTC, and placed by `starts_at`.** A window is `[since, until)`,
-so two adjacent windows partition time and a session on the boundary is counted
-once, in the later one: the shape decision 130 gave the admin history for the
-same reason. A session belongs to the instant it was booked for, not to when it
-was settled or cancelled, because that is the one time every status has.
+**Half-open, in UTC.** A window is `[since, until)`, so two adjacent windows
+partition time and a row on the boundary is counted once, in the later one: the
+shape decision 130 gave the admin history for the same reason. A held or missed
+session belongs to the instant it was booked for (`starts_at`), not to when it
+was settled; a cancellation to when it was made, since cancelling a session a
+month out is this week's act; a review to when it was written.
 
 **The previous window is the same length, immediately before.** The client
 computes the trend from the two blocks; publishing a percentage change would put

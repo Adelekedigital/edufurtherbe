@@ -97,7 +97,7 @@ __all__ = [
     "TERMINAL",
     "attendance_rate",
     "attendance_sessions",
-    "cancelled_by",
+    "cancellations",
     "delivered",
     "mentee_completed_sessions",
     "mentor_stats",
@@ -280,32 +280,51 @@ def _attendance_of(user: Any, side: Any, window: Window | None, column: Any) -> 
     )
 
 
-def cancelled_by(party: Any) -> Any:
-    """The predicate for a session ``party`` cancelled: `cancelled`, and the
-    event that moved it there names ``party`` as its actor.
+def cancellations(mentor: Any, window: Window) -> Any:
+    """The mentor's cancelled sessions whose cancellation happened inside
+    ``window``, one row each, with `by_mentor` true when the mentor cancelled
+    it (false, or null, when anybody else or nobody named did).
 
-    **The event, not a column, because no column says who.** The transition
-    writes `actor_id` on the `cancelled` event in the same transaction as the
-    status (`session_writer.transitions`). The newest such event wins, so a
-    session is attributed to one actor at most. A migrated cancellation names
-    its canceller where legacy's `Canceled By` resolved to a user, and nobody
-    where it did not (orphan trackers); nobody is neither party.
+    **Placed by when the cancellation happened**, the `cancelled` event's
+    `created_at`, not by `starts_at`: cancelling a session a month out is this
+    week's act, and counting it only when the month arrives would hide it from
+    the window it happened in. Held and missed sessions stay placed by
+    `starts_at`, the time they were for.
 
-    `party` is a column of the enclosing `sessions` (`Session.mentor_id`), which
-    the event subquery correlates against. Served by `ix_session_events_session`.
+    **The event says who, because no column does.** The transition writes
+    `actor_id` on the `cancelled` event in the same transaction as the status
+    (`session_writer.transitions`); the newest such event is the one read. A
+    migrated cancellation names its canceller where legacy's `Canceled By`
+    resolved to a user and nobody where it did not (orphan trackers); one with
+    no event at all has no time and is in no window. The status is required
+    too, so a row contradicting its own event is read by the column it is
+    about (decision 101).
+
+    A `LATERAL` joined after `status = 'cancelled'` has filtered the mentor's
+    sessions, so the event lookup (`ix_session_events_session`) runs for
+    cancelled sessions only.
     """
-    canceller = (
-        select(SessionEvent.actor_id)
+    event = (
+        select(SessionEvent.actor_id, SessionEvent.created_at.label("cancelled_at"))
         .where(
             SessionEvent.session_id == Session.id,
             SessionEvent.to_status == SessionStatus.CANCELLED,
         )
         .order_by(SessionEvent.created_at.desc(), SessionEvent.id.desc())
         .limit(1)
-        .correlate(Session)
-        .scalar_subquery()
+        .lateral("cancellation")
     )
-    return and_(Session.status == SessionStatus.CANCELLED, canceller == party)
+    return (
+        select((event.c.actor_id == Session.mentor_id).label("by_mentor"))
+        .select_from(Session)
+        .join(event, true())
+        .where(
+            Session.mentor_id == mentor,
+            Session.status == SessionStatus.CANCELLED,
+            during(event.c.cancelled_at, window),
+        )
+        .subquery("cancellations")
+    )
 
 
 def missed_by(party: Any) -> Any:
@@ -351,20 +370,26 @@ def _delivered_figures(mentor: Any, window: Window | None) -> Any:
 
 def mentor_window_figures(mentor: Any, window: Window) -> Any:
     """Every session figure of one dashboard window, as a one-row select: the
-    profile's four plus how many the mentor missed and how many they cancelled.
-    The two extra counts are a second subquery because they read sessions the
-    `delivered()` filter of the four excludes."""
+    profile's four plus how many sessions the mentor missed (by `starts_at`)
+    and how many they cancelled (by when they cancelled)."""
     figures = _delivered_figures(mentor, window).subquery("figures")
-    outcomes = (
-        select(
-            func.count().filter(missed_by(Session.mentor_id)).label("missed_by_mentor"),
-            func.count().filter(cancelled_by(Session.mentor_id)).label("cancelled_by_mentor"),
+    missed = (
+        select(func.count())
+        .select_from(Session)
+        .where(
+            Session.mentor_id == mentor,
+            during(Session.starts_at, window),
+            missed_by(Session.mentor_id),
         )
-        .where(Session.mentor_id == mentor, during(Session.starts_at, window))
-        .subquery("outcomes")
+        .scalar_subquery()
     )
-    # Two one-row subqueries: joined on `true` so the single row is explicit.
-    return select(*figures.c, *outcomes.c).select_from(figures.join(outcomes, true()))
+    cancelled = cancellations(mentor, window)
+    by_mentor = select(func.count()).select_from(cancelled).where(cancelled.c.by_mentor)
+    return select(
+        *figures.c,
+        missed.label("missed_by_mentor"),
+        by_mentor.scalar_subquery().label("cancelled_by_mentor"),
+    ).select_from(figures)
 
 
 async def mentor_stats(session: AsyncSession, mentor: UUID) -> dict[str, Any]:

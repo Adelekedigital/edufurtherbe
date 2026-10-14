@@ -1,8 +1,12 @@
 """A mentor's own dashboard figures (decision 246).
 
-Every field has a default, so none is `required` in the spec: the frontend's
-fixtures build these by hand, and the project rule is optional and always sent
-(`tests/unit/test_added_fields_stay_optional.py`).
+**The window's bounds and blocks are required; every figure is optional.**
+`tests/unit/test_added_fields_stay_optional.py` exists for fields added to an
+object the frontend already builds in fixtures; it constrains what is
+registered there, and these models are new. A figure may still be added to
+later, so each has a default and is registered, the way a frontend-consumed
+field would be. The bounds are never null, and a default would have to be a
+made-up instant, so they are required like `MentorRelationshipRead`'s figures.
 """
 
 from __future__ import annotations
@@ -16,17 +20,12 @@ from app.domain.mentor_stats import DEFAULT_WINDOW_DAYS
 
 
 class MentorStatsWindowRead(BaseModel):
-    """One window's figures. Sessions belong to the window their `starts_at`
-    falls in; reviews to the window they were written in."""
+    """One window's figures. Held and missed sessions belong to the window their
+    `starts_at` falls in; a cancellation to the one it was made in; a review to
+    the one it was written in."""
 
-    since: dt.datetime | None = Field(
-        default=None,
-        description="Start of the window, UTC, **inclusive**. Always sent.",
-    )
-    until: dt.datetime | None = Field(
-        default=None,
-        description="End of the window, UTC, **exclusive**. Always sent.",
-    )
+    since: dt.datetime = Field(description="Start of the window, UTC, **inclusive**.")
+    until: dt.datetime = Field(description="End of the window, UTC, **exclusive**.")
     completed_sessions: int = Field(
         default=0,
         description=(
@@ -50,31 +49,35 @@ class MentorStatsWindowRead(BaseModel):
     missed_by_mentor: int = Field(
         default=0,
         description=(
-            "Settled sessions you were expected at and did not attend: the "
-            "attendance rate's denominator less its numerator."
+            "Settled sessions in the window you were expected at and did not "
+            "attend: the attendance rate's denominator less its numerator."
         ),
     )
     cancelled_by_mentor: int = Field(
         default=0,
         description=(
-            "Sessions you cancelled. Requests you declined are not cancellations, "
-            "and neither are sessions the mentee, an admin or the system ended."
+            "Sessions you cancelled **during the window**, whenever they were "
+            "due to start. Requests you declined are not cancellations, and "
+            "neither are sessions anybody else ended."
         ),
     )
     review_count: int = Field(
         default=0, description="Published reviews of you written in the window."
     )
-    session_value: float | None = Field(
+    average_rating: float | None = Field(
         default=None,
         description=(
-            "Average rating of those reviews, by the rule `session_value` on your "
-            "public profile uses. Null with no reviews."
+            "The mean of those reviews' own values (each review's overall "
+            "rating, or its older valuable rating), to two places. One formula "
+            "in every window, so two windows compare. Not your profile's "
+            "`session_value`, whose rule changes with how many reviews you "
+            "have. Null with no reviews."
         ),
     )
 
     @classmethod
     def of(cls, row: dict[str, Any]) -> MentorStatsWindowRead:
-        value = row["session_value"]
+        value = row["average_rating"]
         rate = row["attendance_rate"]
         return cls(
             since=row["since"],
@@ -86,20 +89,16 @@ class MentorStatsWindowRead(BaseModel):
             missed_by_mentor=int(row["missed_by_mentor"]),
             cancelled_by_mentor=int(row["cancelled_by_mentor"]),
             review_count=int(row["review_count"]),
-            session_value=None if value is None else float(value),
+            average_rating=None if value is None else float(value),
         )
 
 
 class MentorStatsRead(BaseModel):
     """Your figures over a window and over the equal window before it, so a
-    client computes the trend."""
+    client computes the trend. Both blocks are read in one statement."""
 
     window_days: int = Field(default=DEFAULT_WINDOW_DAYS, description="The window's length.")
-    current: MentorStatsWindowRead = Field(
-        default_factory=MentorStatsWindowRead,
-        description="The window ending now. Always sent.",
-    )
+    current: MentorStatsWindowRead = Field(description="The window ending now.")
     previous: MentorStatsWindowRead = Field(
-        default_factory=MentorStatsWindowRead,
-        description="The equal window immediately before `current`. Always sent.",
+        description="The equal window immediately before `current`."
     )

@@ -15,7 +15,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_session, make_bookable_mentor
+from tests.integration.factories import add_session, make_bookable_mentor, mentee_of
 
 from conftest import api_token, bearer
 
@@ -38,14 +38,6 @@ async def sign_in(engine: AsyncEngine, user: UUID) -> dict[str, str]:
             {"a": auth_id, "e": f"{auth_id}@example.com", "u": user},
         )
     return bearer(api_token(auth_id))
-
-
-async def mentee_of(engine: AsyncEngine, session_id: UUID) -> UUID:
-    async with engine.begin() as conn:
-        mentee = await conn.execute(
-            text("SELECT mentee_id FROM sessions WHERE id = :s"), {"s": session_id}
-        )
-        return UUID(str(mentee.scalar_one()))
 
 
 async def count(client: httpx.AsyncClient, headers: dict[str, str]) -> object:

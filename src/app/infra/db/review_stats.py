@@ -79,6 +79,7 @@ __all__ = [
     "profile_summary",
     "published",
     "review_value",
+    "window_summary",
 ]
 
 #: The top of each scale, which is what a percentage divides by. Register
@@ -184,7 +185,7 @@ def _session_value() -> Any:
     )
 
 
-def card_summary(mentor: Any, window: Window | None = None) -> tuple[Select[Any], Select[Any]]:
+def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
     """The two figures a discovery card shows: how many, and how valuable.
 
     **Two scalar subqueries rather than a lateral, and the plan position is why.**
@@ -211,16 +212,33 @@ def card_summary(mentor: Any, window: Window | None = None) -> tuple[Select[Any]
     That is a different question from the profile's, not a smaller copy of it.
     What the two share is `published()` and the rounding helpers, which is where
     the rules actually live.
+    """
+    return (
+        select(func.count()).select_from(Review).where(published(mentor)).correlate_except(Review),
+        select(_session_value())
+        .select_from(Review)
+        .where(published(mentor))
+        .correlate_except(Review),
+    )
 
-    ``window`` narrows both to reviews *written* inside it (`created_at`), which
-    is the mentor dashboard's question: what mentees said this period. A
-    migrated review with no session still has one, so none is left out. The
-    card passes none.
+
+def window_summary(mentor: Any, window: Window) -> tuple[Any, Any]:
+    """How many published reviews were written in ``window``, and their mean
+    `review_value()`, as two scalar subqueries (decision 246).
+
+    **One formula in every window, unlike the profile's.** `_session_value()`
+    switches from the blended mean to overall ratings alone once
+    `OVERALL_STANDS_ALONE_FROM` of them exist, which is right for an all-time
+    figure and wrong for a trend: a quiet window and a busy one would be
+    averaged by different rules. This is always the mean of each review's own
+    value, the `X/5` its badge shows, so two windows differ only in which
+    reviews they hold. Placed by when the review was written; a migrated
+    review with no session still has that time.
     """
     rows = and_(published(mentor), during(Review.created_at, window))
     return (
-        select(func.count()).select_from(Review).where(rows).correlate_except(Review),
-        select(_session_value()).select_from(Review).where(rows).correlate_except(Review),
+        select(func.count()).select_from(Review).where(rows).scalar_subquery(),
+        select(_average(review_value())).select_from(Review).where(rows).scalar_subquery(),
     )
 
 

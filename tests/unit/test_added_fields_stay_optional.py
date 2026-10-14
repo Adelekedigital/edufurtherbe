@@ -20,11 +20,10 @@ ADDED = {
     "UserRead": ("mentee_cancel_refund_hours",),
     "SessionTypeRead": ("requires_booking_confirmation",),
     "SessionAnswerRead": ("answered", "required"),
-    # New with the mentor dashboard (decision 246): optional from the start.
-    "MentorStatsRead": ("window_days", "current", "previous"),
+    # New with the mentor dashboard (decision 246): every figure optional from
+    # the start. The window's bounds and the two blocks are required.
+    "MentorStatsRead": ("window_days",),
     "MentorStatsWindowRead": (
-        "since",
-        "until",
         "completed_sessions",
         "mentoring_minutes",
         "mentees_mentored",
@@ -32,7 +31,7 @@ ADDED = {
         "missed_by_mentor",
         "cancelled_by_mentor",
         "review_count",
-        "session_value",
+        "average_rating",
     ),
 }
 
