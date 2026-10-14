@@ -13,7 +13,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_session
+from tests.integration.factories import add_session, add_session_type, make_public_mentor
 
 from conftest import add_user, api_token, bearer
 
@@ -393,6 +393,162 @@ async def test_a_live_reviewer_is_named_to_the_subject(
 
     assert row["author_deleted"] is False
     assert row["author_first_name"] == "Ada"
+
+
+# --------------------------------------------------------------------------
+# The session type -- which offering each review was about (decision 251)
+# --------------------------------------------------------------------------
+
+
+async def a_mentor(engine: AsyncEngine) -> tuple[UUID, UUID]:
+    """A mentor with a profile, which an offering needs; their id and auth id."""
+    mentor = await make_public_mentor(engine, uuid4().hex[:8])
+    async with engine.begin() as conn:
+        auth_id = (
+            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": mentor})
+        ).scalar_one()
+    return mentor, UUID(str(auth_id))
+
+
+async def of_type(engine: AsyncEngine, session_id: UUID, session_type: UUID) -> None:
+    """Point a session at one offering, rather than whichever `add_session` finds."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET session_type_id = :t WHERE id = :s"),
+            {"t": session_type, "s": session_id},
+        )
+
+
+async def test_a_review_of_a_session_names_its_session_type(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Two reviews of two offerings, so a join reading the wrong session's
+    type cannot pass by both rows naming the same one."""
+    subject, subject_auth = await a_mentor(db_engine)
+    cv = await add_session_type(db_engine, subject, name="CV review")
+    essay = await add_session_type(db_engine, subject, name="Essay review")
+    for offering, words in ((cv, "About the CV."), (essay, "About the essay.")):
+        author = await a_user(db_engine, uuid4())
+        review = await a_review(db_engine, about=subject, by=author, text_=words)
+        session_id = await a_reviewed_session(db_engine, review, mentor=subject, mentee=author)
+        await of_type(db_engine, session_id, offering)
+
+    rows = await listed(api_client, subject_auth)
+
+    assert {row["public_review"]: row["session_type"] for row in rows} == {
+        "About the CV.": {"id": str(cv), "name": "CV review"},
+        "About the essay.": {"id": str(essay), "name": "Essay review"},
+    }
+
+
+async def test_a_review_without_a_session_has_no_session_type(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A migrated review had no link to a session, so nothing says what it was about."""
+    subject, subject_auth = await a_mentor(db_engine)
+    await add_session_type(db_engine, subject, name="CV review")
+    await a_review(db_engine, about=subject, by=await a_user(db_engine, uuid4()))
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert "session_type" in row
+    assert row["session_type"] is None
+
+
+async def test_a_withdrawn_review_still_names_its_session_type(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    subject, subject_auth = await a_mentor(db_engine)
+    offering = await add_session_type(db_engine, subject, name="CV review")
+    author = await a_user(db_engine, uuid4())
+    review = await a_review(db_engine, about=subject, by=author)
+    await a_reviewed_session(db_engine, review, mentor=subject, mentee=author)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE reviews SET deleted_at = now() WHERE id = :r"), {"r": review}
+        )
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert row["withdrawn"] is True
+    assert row["session_type"] == {"id": str(offering), "name": "CV review"}
+
+
+async def test_a_deleted_reviewers_review_still_names_its_session_type(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**Unlike `session_id`.** The session would lead to the reviewer; the
+    offering's name does not, and the public list shows it to everybody."""
+    subject, subject_auth = await a_mentor(db_engine)
+    offering = await add_session_type(db_engine, subject, name="CV review")
+    author = await a_user(db_engine, uuid4())
+    review = await a_review(db_engine, about=subject, by=author)
+    await a_reviewed_session(db_engine, review, mentor=subject, mentee=author)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": author})
+
+    (row,) = await listed(api_client, subject_auth)
+
+    assert row["session_id"] is None
+    assert row["session_type"] == {"id": str(offering), "name": "CV review"}
+
+
+async def test_the_session_type_is_what_the_public_list_says(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**One answer to "what was this review about".** The subject's list and
+    the public one are pinned together -- including after the offering is
+    renamed and then retired, when both name it as it is now."""
+    subject, subject_auth = await a_mentor(db_engine)
+    cv = await add_session_type(db_engine, subject, name="CV review")
+    essay = await add_session_type(db_engine, subject, name="Essay review")
+    # Still bookable once `cv` is retired: a mentor with no offering left is
+    # hidden from the public list altogether (#15).
+    await add_session_type(db_engine, subject, name="Another offering")
+    for offering in (cv, essay):
+        author = await a_user(db_engine, uuid4())
+        review = await a_review(db_engine, about=subject, by=author)
+        await of_type(
+            db_engine,
+            await a_reviewed_session(db_engine, review, mentor=subject, mentee=author),
+            offering,
+        )
+    await a_review(db_engine, about=subject, by=await a_user(db_engine, uuid4()))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_types SET name = 'CV deep-dive', deleted_at = now() WHERE id = :t"
+            ),
+            {"t": cv},
+        )
+
+    public = (await api_client.get(f"/api/v1/mentors/{subject}/reviews")).json()["data"]
+    own = await listed(api_client, subject_auth)
+
+    assert {row["id"]: row["session_type"] for row in own} == {
+        row["id"]: row["session_type"] for row in public
+    }
+    assert {"id": str(cv), "name": "CV deep-dive"} in [row["session_type"] for row in own]
+    assert None in [row["session_type"] for row in own]
+
+
+async def test_the_platform_feedback_never_reaches_the_subject(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    subject_auth = uuid4()
+    subject = await a_user(db_engine, subject_auth, role="mentor")
+    review = await a_review(db_engine, about=subject, by=await a_user(db_engine, uuid4()))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE reviews SET private_review = 'For the platform.' WHERE id = :r"),
+            {"r": review},
+        )
+
+    body = (await api_client.get(MINE, headers=bearer(api_token(subject_auth)))).text
+
+    assert str(review) in body
+    assert "private_review" not in body
+    assert "For the platform." not in body
 
 
 async def test_no_token_is_refused(api_client: httpx.AsyncClient) -> None:

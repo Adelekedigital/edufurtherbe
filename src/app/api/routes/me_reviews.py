@@ -39,7 +39,11 @@ UNAUTHORISED: dict[int | str, dict[str, str]] = {
         "`report` is your own report on that review, or null. Null means not "
         "reported, which is a different state from reported-and-dismissed.\n\n"
         "The author is a first name and an initial, exactly as on the public "
-        "page — you do not get a fuller name than a stranger does."
+        "page — you do not get a fuller name than a stranger does.\n\n"
+        "`session_type` is the offering the review was about, named as the "
+        "public page names it, by its current name. Null when nothing "
+        "records one: a migrated review has no session, and a session may "
+        "name no offering."
     ),
     responses=UNAUTHORISED,
 )

@@ -64,6 +64,8 @@ ADDED = {
         "institution",
         "session_count",
     ),
+    # The mentor dashboard's review quote (decision 251).
+    "OwnReviewRead": ("session_type",),
 }
 
 

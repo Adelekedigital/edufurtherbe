@@ -27,9 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db import keyset
 from app.infra.db.models.reviews import Review
-from app.infra.db.models.sessions import Session, SessionType
+from app.infra.db.models.sessions import Session
 from app.infra.db.review_authors import author_columns, with_author
 from app.infra.db.review_stats import published, review_value
+from app.infra.db.review_topics import topic_columns, with_topic
 
 __all__ = ["get_review_row", "list_authored_reviews", "list_mentor_reviews"]
 
@@ -87,15 +88,11 @@ async def list_mentor_reviews(
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of a mentor's published reviews, newest first.
 
-    **Each review says which offering it was about**, reached through its
-    session — `reviews` holds only the session, because a second key to the
-    offering would be the same fact twice (the model's own note). Both joins are
-    outer: the 53 migrated reviews have no session, and they stay listed with no
-    topic rather than vanishing from a list whose length is `reviews.count`.
-    The offering is read whatever its state now: retiring it does not change
-    what an old session was about. `session_type` narrows the page to one
-    offering, and the cursor still works within it because the sort key is
-    unchanged.
+    **Each review says which offering it was about** — `review_topics`, shared
+    with the subject's own list. A migrated review has no session and stays
+    listed with no topic rather than vanishing from a list whose length is
+    `reviews.count`. `session_type` narrows the page to one offering, and the
+    cursor still works within it because the sort key is unchanged.
 
     **Ordered on `created_at`, with the id breaking ties** — ADR 0016's amended
     form, *"the cursor is the sort column plus the id"*.
@@ -132,20 +129,19 @@ async def list_mentor_reviews(
         # **This endpoint needs no token**, so a deleted reviewer's identity is
         # withheld by the join itself — see `review_authors`. Their review stays,
         # which is what keeps this list's length equal to the profile's count.
-        with_author(
-            select(
-                Review.id,
-                Review.created_at,
-                Review.public_review,
-                Review.overall_rating,
-                review_value().label("session_value"),
-                SessionType.id.label("session_type_id"),
-                SessionType.name.label("session_type_name"),
-                *author_columns(),
-            ).select_from(Review)
+        with_topic(
+            with_author(
+                select(
+                    Review.id,
+                    Review.created_at,
+                    Review.public_review,
+                    Review.overall_rating,
+                    review_value().label("session_value"),
+                    *topic_columns(),
+                    *author_columns(),
+                ).select_from(Review)
+            )
         )
-        .outerjoin(Session, Session.id == Review.session_id)
-        .outerjoin(SessionType, SessionType.id == Session.session_type_id)
         .where(
             published(mentor),
             *([keyset.after(Review.created_at, Review.id, after)] if after is not None else []),

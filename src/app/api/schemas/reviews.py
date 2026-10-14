@@ -420,6 +420,11 @@ class ReviewTopicRead(SessionTypeRefRead):
 
     id: UUID = Field(description="Pass as `?session_type=` to list only these reviews.")
 
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> ReviewTopicRead | None:
+        """From `review_topics.topic_columns()`; the one reading of its labels."""
+        return cls.of(row["session_type_id"], row["session_type_name"])
+
 
 class MentorReviewRead(BaseModel):
     """One review on a mentor's public profile.
@@ -465,5 +470,5 @@ class MentorReviewRead(BaseModel):
             author_last_initial=row["author_last_initial"],
             author_institution=row["author_institution"],
             author_deleted=bool(row["author_deleted"]),
-            session_type=ReviewTopicRead.of(row["session_type_id"], row["session_type_name"]),
+            session_type=ReviewTopicRead.from_row(row),
         )
