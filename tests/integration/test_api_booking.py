@@ -31,7 +31,7 @@ from tests.integration.factories import (
     until_blocked,
 )
 
-from conftest import PLATFORM_WINDOW, api_token, bearer, fund
+from conftest import PLATFORM_WINDOW, add_user, api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -47,15 +47,14 @@ async def a_mentee(engine: AsyncEngine, tag: str) -> tuple[UUID, dict[str, str]]
     """
     auth_id = uuid4()
     async with engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Mo', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"mentee-{tag}@example.test", "a": auth_id},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{tag}@example.test",
+            auth_id=auth_id,
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         # Booking spends a credit from PR 6 onward, so a test mentee has to
         # be able to pay for the sessions the test makes.
         await fund(conn, mentee)

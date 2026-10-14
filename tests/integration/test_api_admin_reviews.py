@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_education
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -27,16 +27,15 @@ async def a_user(
     engine: AsyncEngine, auth_id: UUID, *, role: str = "mentee", admin: str | None = None
 ) -> UUID:
     async with engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, last_name, "
-                    "primary_role, timezone) VALUES (:e, :a, 'Ada', 'Lovelace', :r, "
-                    "'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"{auth_id}@example.com", "a": auth_id, "r": role},
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            conn,
+            f"{auth_id}@example.com",
+            auth_id=auth_id,
+            first_name="Ada",
+            last_name="Lovelace",
+            primary_role=role,
+            timezone="Africa/Lagos",
+        )
         if admin is not None:
             await conn.execute(
                 text("INSERT INTO admin_users (user_id, admin_role) VALUES (:u, :r)"),

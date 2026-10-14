@@ -35,7 +35,7 @@ from app.infra.db.profile_store import get_mentor_profile, list_awards, list_edu
 from app.infra.db.review_reader import get_review_row
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import list_slots
-from conftest import PLATFORM_WINDOW, PROJECT_ROOT
+from conftest import PLATFORM_WINDOW, PROJECT_ROOT, add_user
 
 # `asyncio` is applied per test rather than to the module: the coverage check
 # below is synchronous, and a module-level mark makes pytest warn about it.
@@ -359,15 +359,13 @@ async def seed_reviews(conn: Any, user_id: UUID) -> None:
     permits a single review per session per author — a fixture reusing the
     session would fail on the constraint rather than on the rule under test.
     """
-    mentor = (
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, first_name, primary_role, timezone) "
-                "VALUES (:e, 'Mentor', 'mentor', 'Africa/Lagos') RETURNING id"
-            ),
-            {"e": f"review-mentor-{user_id}@example.test"},
-        )
-    ).scalar_one()
+    mentor = await add_user(
+        conn,
+        f"review-mentor-{user_id}@example.test",
+        first_name="Mentor",
+        primary_role="mentor",
+        timezone="Africa/Lagos",
+    )
     for label, withdrawn, offset in (("LIVE", False, 3), ("DELETED", True, 6)):
         session_id = (
             await conn.execute(
@@ -516,14 +514,7 @@ async def test_a_soft_deleted_row_is_not_returned(
     expected: list[str],
 ) -> None:
     async with db_engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES ('soft@example.com', 'mentee', 'UTC') RETURNING id"
-                )
-            )
-        ).scalar_one()
+        user_id = await add_user(conn, "soft@example.com", primary_role="mentee", timezone="UTC")
         await seed(conn, user_id)
 
     async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:

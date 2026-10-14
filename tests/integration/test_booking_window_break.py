@@ -23,7 +23,7 @@ from tests.integration.factories import add_availability, add_session_type, make
 from tests.integration.test_api_me_session_type_writes import URL, as_mentor, body
 
 from app.infra.db.slot_store import list_slots
-from conftest import PLATFORM_WINDOW, api_token, bearer
+from conftest import PLATFORM_WINDOW, add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -75,15 +75,13 @@ async def mentor_defaults(
 
 async def booked(engine: AsyncEngine, mentor: UUID, session_type: UUID, at: dt.datetime) -> None:
     async with engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:e, 'Mo', 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"mentee-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{uuid4()}@example.test",
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="UTC",
+        )
         await conn.execute(
             text(
                 "INSERT INTO sessions (mentor_id, mentee_id, session_type_id, starts_at, "

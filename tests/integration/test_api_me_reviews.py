@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -24,19 +24,14 @@ MINE = "/api/v1/me/reviews"
 
 async def a_user(engine: AsyncEngine, auth_id: UUID, *, role: str = "mentee") -> UUID:
     async with engine.begin() as conn:
-        return UUID(
-            str(
-                (
-                    await conn.execute(
-                        text(
-                            "INSERT INTO users (email, auth_id, first_name, last_name, "
-                            "primary_role, timezone) VALUES (:e, :a, 'Ada', 'Lovelace', "
-                            ":r, 'Africa/Lagos') RETURNING id"
-                        ),
-                        {"e": f"{auth_id}@example.com", "a": auth_id, "r": role},
-                    )
-                ).scalar_one()
-            )
+        return await add_user(
+            conn,
+            f"{auth_id}@example.com",
+            auth_id=auth_id,
+            first_name="Ada",
+            last_name="Lovelace",
+            primary_role=role,
+            timezone="Africa/Lagos",
         )
 
 

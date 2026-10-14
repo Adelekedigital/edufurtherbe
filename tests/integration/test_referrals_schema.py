@@ -29,6 +29,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from conftest import add_user
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 LAGOS = "Africa/Lagos"
@@ -50,15 +52,7 @@ RETURNING id
 
 
 async def make_user(conn: AsyncConnection, email: str, role: str = "mentee") -> str:
-    user_id = (
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, primary_role, timezone) "
-                "VALUES (:email, :role, :tz) RETURNING id"
-            ),
-            {"email": email, "role": role, "tz": LAGOS},
-        )
-    ).scalar_one()
+    user_id = await add_user(conn, email, primary_role=role, timezone=LAGOS)
     return str(user_id)
 
 

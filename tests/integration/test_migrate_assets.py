@@ -27,7 +27,7 @@ from app.infra.db.asset_store import AssetStore
 from app.infra.storage.source import AssetSource
 from conftest import STORAGE_BUCKET as BUCKET
 from conftest import SUPABASE_URL as SUPABASE
-from conftest import FakeStorage, image_bytes, storage_for
+from conftest import FakeStorage, add_user, image_bytes, storage_for
 
 pytestmark = pytest.mark.db
 
@@ -94,15 +94,13 @@ async def seed(
     engine: AsyncEngine, email: str, *, avatar: str | None = None, banner: str | None = None
 ) -> UUID:
     async with engine.begin() as connection:
-        user_id = (
-            await connection.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:email, 'Ada', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"email": email},
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            connection,
+            email,
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         await connection.execute(
             text(
                 "INSERT INTO user_profiles (user_id, avatar_url, banner_url, updated_at) "

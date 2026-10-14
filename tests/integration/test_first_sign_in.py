@@ -13,6 +13,7 @@ account.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 from uuid import UUID, uuid4
 
 import httpx
@@ -20,6 +21,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from conftest import add_user as add_user_row
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -55,14 +57,14 @@ async def add_user(
     engine: AsyncEngine, email: str, *, auth_id: UUID | None = None, deleted: bool = False
 ) -> UUID:
     async with engine.begin() as conn:
-        user = await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, primary_role, timezone, deleted_at) "
-                "VALUES (:e, :a, 'mentee', 'UTC', CASE WHEN :d THEN now() END) RETURNING id"
-            ),
-            {"e": email, "a": auth_id, "d": deleted},
+        return await add_user_row(
+            conn,
+            email,
+            auth_id=auth_id,
+            primary_role="mentee",
+            timezone="UTC",
+            deleted_at=dt.datetime.now(dt.UTC) if deleted else None,
         )
-        return UUID(str(user.scalar_one()))
 
 
 async def test_a_first_sign_in_creates_the_account(

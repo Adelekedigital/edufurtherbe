@@ -42,6 +42,7 @@ from app.domain.transform.sessions import (
 )
 from app.infra.etl.reconcile import reconcile_sessions
 from app.infra.etl.sessions import SessionLoader
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -102,15 +103,13 @@ async def loaded(db_engine: AsyncEngine) -> AsyncIterator[tuple[AsyncConnection,
             (MENTOR, "mentor@example.test", "mentor"),
             (MENTEE, "mentee@example.test", "mentee"),
         ):
-            users[bubble_id] = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO users (email, primary_role, timezone, legacy_bubble_id) "
-                        "VALUES (:e, :r, 'Africa/Lagos', :b) RETURNING id"
-                    ),
-                    {"e": email, "r": role, "b": bubble_id},
-                )
-            ).scalar_one()
+            users[bubble_id] = await add_user(
+                conn,
+                email,
+                primary_role=role,
+                timezone="Africa/Lagos",
+                legacy_bubble_id=bubble_id,
+            )
         await conn.execute(
             text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'M')"),
             {"u": users[MENTOR]},

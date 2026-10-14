@@ -18,6 +18,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from conftest import add_user
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 # The six parents of the legacy option set. **This tuple is the tripwire.**
@@ -69,15 +71,9 @@ async def add_institution(
     # mirrored row has no creator, because the sync made it.
     creator = None
     if source == "manual":
-        creator = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES (:e, 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"creator-{uuid.uuid4()}@example.com"},
-            )
-        ).scalar_one()
+        creator = await add_user(
+            conn, f"creator-{uuid.uuid4()}@example.com", primary_role="mentee", timezone="UTC"
+        )
 
     result = await conn.execute(
         text(

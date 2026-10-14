@@ -27,7 +27,7 @@ from tests.integration.factories import (
     token_for,
 )
 
-from conftest import A_REASON, api_token, bearer, fund
+from conftest import A_REASON, add_user, api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -48,15 +48,14 @@ async def a_booking(
     mentor_token = await token_for(engine, mentor)
     mentee_auth = uuid4()
     async with engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Mo', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"mentee-{tag}@example.test", "a": mentee_auth},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{tag}@example.test",
+            auth_id=mentee_auth,
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         # Booking spends a credit from PR 6 onward, so a test mentee has to
         # be able to pay for the sessions the test makes.
         await fund(conn, mentee)
@@ -284,12 +283,12 @@ async def test_a_stranger_may_not_transition_a_session(
     booking = await a_booking(db_engine, api_client, "tr-stranger")
     stranger = uuid4()
     async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                "VALUES (:e, :a, 'mentee', 'Africa/Lagos')"
-            ),
-            {"e": f"stranger-{stranger}@example.test", "a": stranger},
+        await add_user(
+            conn,
+            f"stranger-{stranger}@example.test",
+            auth_id=stranger,
+            primary_role="mentee",
+            timezone="Africa/Lagos",
         )
 
     refused = await api_client.post(url(booking, "accept"), headers=bearer(api_token(stranger)))
@@ -532,12 +531,12 @@ async def test_a_stranger_with_no_reason_still_gets_a_404(
     booking = await a_booking(db_engine, api_client, f"tr-stranger-{action}", confirmed=True)
     stranger = uuid4()
     async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                "VALUES (:e, :a, 'mentee', 'Africa/Lagos')"
-            ),
-            {"e": f"stranger-{stranger}@example.test", "a": stranger},
+        await add_user(
+            conn,
+            f"stranger-{stranger}@example.test",
+            auth_id=stranger,
+            primary_role="mentee",
+            timezone="Africa/Lagos",
         )
 
     refused = await api_client.post(

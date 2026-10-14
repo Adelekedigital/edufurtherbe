@@ -20,6 +20,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from conftest import add_user
+
 pytestmark = pytest.mark.db
 
 SEARCH = "/api/v1/institutions"
@@ -184,12 +186,7 @@ async def test_a_manual_institution_with_no_country_still_serialises(
     """`country_id` is nullable so an admin can complete it at review. The
     response model has to survive that, not 500 on it."""
     async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, primary_role, timezone) "
-                "VALUES ('creator@example.com', 'mentee', 'UTC')"
-            )
-        )
+        await add_user(conn, "creator@example.com", primary_role="mentee", timezone="UTC")
         # `created_by` is required for a `manual` row — `ck_institutions_manual_names_its_creator`,
         # added with the write endpoints. A user-created institution always names
         # who asked for it; a mirrored one never does.

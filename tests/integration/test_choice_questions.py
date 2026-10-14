@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session_type
 from tests.integration.test_api_me_intake import as_mentor, url
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -192,15 +192,9 @@ async def test_an_answered_option_cannot_be_removed(
     (question,) = await listed(api_client, session_type, headers)
     picked = question["options"][0]["id"]
     async with db_engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES (:e, 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"picker-{uuid4().hex[:6]}@example.test"},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn, f"picker-{uuid4().hex[:6]}@example.test", primary_role="mentee", timezone="UTC"
+        )
         mentor = (
             await conn.execute(
                 text("SELECT mentor_user_id FROM session_types WHERE id = :t"), {"t": session_type}

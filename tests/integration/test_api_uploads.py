@@ -29,7 +29,15 @@ from tests.integration.test_api_admin import make_user as make_user_with_role
 from app.api.limits import MAX_BODY_BYTES
 from app.domain.images import MAX_UPLOAD_BYTES
 from app.infra.storage.supabase import SupabaseStorage
-from conftest import PROBLEM_JSON, FakeStorage, api_token, bearer, image_bytes, storage_for
+from conftest import (
+    PROBLEM_JSON,
+    FakeStorage,
+    add_user,
+    api_token,
+    bearer,
+    image_bytes,
+    storage_for,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -48,15 +56,14 @@ def api_storage(fake_storage: FakeStorage) -> SupabaseStorage:
 
 async def make_user(engine: AsyncEngine, auth_id: UUID, email: str) -> UUID:
     async with engine.begin() as conn:
-        return (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": email, "a": auth_id},
-            )
-        ).scalar_one()
+        return await add_user(
+            conn,
+            email,
+            auth_id=auth_id,
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
 
 
 async def stored_urls(engine: AsyncEngine, user_id: UUID) -> tuple[str | None, str | None]:

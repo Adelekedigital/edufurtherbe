@@ -24,6 +24,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session_type, make_public_mentor
 
+from conftest import add_user
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 
@@ -63,15 +65,13 @@ async def add_option(engine: AsyncEngine, question: UUID, label: str = "Yes") ->
 async def add_session(engine: AsyncEngine, mentor: UUID, session_type: UUID) -> tuple[UUID, UUID]:
     """A booked session and its mentee. Returns `(session_id, mentee_id)`."""
     async with engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:e, 'Mo', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"mentee-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{uuid4()}@example.test",
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         session = (
             await conn.execute(
                 text(

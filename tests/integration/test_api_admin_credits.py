@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
 from app.domain.credits import credit_ladder
-from conftest import api_token, bearer, build_api_app, client_for
+from conftest import add_user, api_token, bearer, build_api_app, client_for
 
 #: Built from explicit settings, so these assertions are about the code
 #: rather than about the machine the suite runs on.
@@ -45,23 +45,14 @@ async def a_user(
 ) -> UUID:
     tag = uuid4()
     async with engine.begin() as conn:
-        user_id = UUID(
-            str(
-                (
-                    await conn.execute(
-                        text(
-                            "INSERT INTO users (email, auth_id, first_name, primary_role, "
-                            "timezone, deleted_at) VALUES (:e, :a, 'Ada', 'mentee', 'UTC', :d) "
-                            "RETURNING id"
-                        ),
-                        {
-                            "e": f"{tag}@example.com",
-                            "a": auth_id,
-                            "d": dt.datetime(2026, 1, 1, tzinfo=dt.UTC) if deleted else None,
-                        },
-                    )
-                ).scalar_one()
-            )
+        user_id = await add_user(
+            conn,
+            f"{tag}@example.com",
+            auth_id=auth_id,
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="UTC",
+            deleted_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC) if deleted else None,
         )
         if role:
             await conn.execute(

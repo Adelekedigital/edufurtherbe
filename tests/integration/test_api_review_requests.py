@@ -34,6 +34,7 @@ from app.domain.notifications import (
     Notification,
 )
 from app.infra.db.session_writer import remind_unreviewed, settle_attendance
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -145,15 +146,13 @@ async def world(db_engine: AsyncEngine) -> World:
     mentor = await make_public_mentor(db_engine, tag)
     offering = await add_session_type(db_engine, mentor, name=f"CV review {tag}")
     async with db_engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:e, 'Mo', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"mentee-{tag}@example.test"},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{tag}@example.test",
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
     return World(db_engine, mentor, UUID(str(mentee)), offering)
 
 
