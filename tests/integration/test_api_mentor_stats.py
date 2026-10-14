@@ -25,7 +25,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_session, make_bookable_mentor
+from tests.integration.factories import add_session, make_bookable_mentor, mentee_of
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -54,12 +54,7 @@ async def test_the_four_stats_are_reported(
     for index, minutes in enumerate((30, 45, 60)):
         session_id = await add_session(db_engine, mentor, minutes=minutes, days_ago=index + 1)
         if shared is None:
-            async with db_engine.begin() as conn:
-                shared = (
-                    await conn.execute(
-                        text("SELECT mentee_id FROM sessions WHERE id = :s"), {"s": session_id}
-                    )
-                ).scalar_one()
+            shared = await mentee_of(db_engine, session_id)
     # A fourth session with a mentee who already appeared, so DISTINCT matters.
     await add_session(db_engine, mentor, minutes=15, mentee=shared, days_ago=4)
 

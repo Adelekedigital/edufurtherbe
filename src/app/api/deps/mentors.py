@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from fastapi import Depends, Query
 from pydantic import StringConstraints
 
-from app.api.deps.core import BookingWindowDep, OptionalViewerDep, SessionDep
+from app.api.deps.core import BookingWindowDep, CurrentUserDep, OptionalViewerDep, SessionDep
 from app.api.deps.session_types import _with_forms
 from app.api.schemas.common import (
     MAX_PAGE_SIZE,
@@ -26,9 +26,16 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.mentor_stats import (
+    DEFAULT_WINDOW_DAYS,
+    MAX_WINDOW_DAYS,
+    MIN_WINDOW_DAYS,
+    trend_windows,
+)
 from app.infra.db.featured_store import (
     current_featured,
 )
+from app.infra.db.mentor_dashboard import mentor_window_stats
 from app.infra.db.mentor_public_store import (
     get_existing_mentor_id,
     get_public_mentor,
@@ -306,3 +313,35 @@ async def similar_to_mentor(
 
 
 SimilarMentorsDep = Annotated[list[dict[str, Any]], Depends(similar_to_mentor)]
+
+
+# --------------------------------------------------------------------------
+# A mentor's own dashboard figures (decision 246)
+# --------------------------------------------------------------------------
+
+
+async def own_mentor_stats(
+    user: CurrentUserDep,
+    session: SessionDep,
+    window_days: Annotated[
+        int,
+        Query(
+            ge=MIN_WINDOW_DAYS,
+            le=MAX_WINDOW_DAYS,
+            description=(
+                f"Window length in days, {MIN_WINDOW_DAYS}-{MAX_WINDOW_DAYS}. "
+                "`current` ends now; `previous` is the same length before it."
+            ),
+        ),
+    ] = DEFAULT_WINDOW_DAYS,
+) -> dict[str, Any]:
+    """The caller's figures over two adjacent windows. Scoped to the caller in
+    every statement; a non-mentor reads zeros and nulls, as `/me/session-types` answers
+    one with an empty page."""
+    current, previous = await mentor_window_stats(
+        session, user["id"], trend_windows(dt.datetime.now(dt.UTC), window_days)
+    )
+    return {"window_days": window_days, "current": current, "previous": previous}
+
+
+OwnMentorStatsDep = Annotated[dict[str, Any], Depends(own_mentor_stats)]

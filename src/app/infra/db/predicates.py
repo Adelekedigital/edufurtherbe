@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import and_, true
+
+from app.domain.mentor_stats import Window
 from app.infra.db.models.user import User
 
 
@@ -32,3 +35,15 @@ def live(user: Any) -> Any:
 #: statement that omits it is missing a *name* — something a reader and a test
 #: can both see — rather than missing a substring nobody notices.
 LIVE = live(User)
+
+
+def during(column: Any, window: Window | None) -> Any:
+    """``column`` inside a half-open ``[since, until)`` window, or no condition
+    at all for ``None`` (all time).
+
+    One statement of the boundary, so the session figures and the review
+    figures of one dashboard window cannot disagree about which edge is in.
+    """
+    if window is None:
+        return true()
+    return and_(column >= window.since, column < window.until)

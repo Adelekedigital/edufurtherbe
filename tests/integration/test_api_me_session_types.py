@@ -24,7 +24,7 @@ predicate is the only thing standing between mentor A and mentor B's offerings.
 
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 import pytest
@@ -32,10 +32,10 @@ from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from tests.integration.factories import add_session_type, make_public_mentor
+from tests.integration.factories import add_session_type, make_public_mentor, token_for
 
 from app.infra.db.session_type_store import _own_session_types, list_own_session_types
-from conftest import PLATFORM_WINDOW, add_user, api_token, bearer
+from conftest import PLATFORM_WINDOW, add_user, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -44,26 +44,6 @@ URL = "/api/v1/me/session-types"
 
 def public_url(mentor: UUID) -> str:
     return f"/api/v1/users/{mentor}/session-types"
-
-
-async def token_for(engine: AsyncEngine, user: UUID) -> str:
-    """A bearer token authenticating as ``user``.
-
-    `users.auth_id` is what `get_current_user` matches the token's subject
-    against. `make_public_mentor` generates one and does not hand it back, and
-    `add_user` leaves it null — the state every migrated user starts in and one
-    no token can match. So this writes a known value rather than reading either
-    back, and one helper covers both.
-
-    Local to this file deliberately: one other suite does the same `UPDATE`
-    inline, and two callers is not the threshold for a shared factory.
-    """
-    auth_id = uuid4()
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": user}
-        )
-    return api_token(auth_id)
 
 
 async def as_mentor(engine: AsyncEngine, tag: str, **knobs: object) -> tuple[UUID, str]:

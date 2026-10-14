@@ -62,6 +62,7 @@ from sqlalchemy import Integer, Numeric, Select, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import SessionRole
+from app.domain.mentor_stats import Window
 from app.domain.reviews import (
     MENTOR_RATINGS,
     ORDINAL_SCALE,
@@ -70,6 +71,7 @@ from app.domain.reviews import (
     WOULD_RECOMMEND_FROM,
 )
 from app.infra.db.models.reviews import Review
+from app.infra.db.predicates import during
 
 __all__ = [
     "card_summary",
@@ -77,6 +79,7 @@ __all__ = [
     "profile_summary",
     "published",
     "review_value",
+    "window_summary",
 ]
 
 #: The top of each scale, which is what a percentage divides by. Register
@@ -216,6 +219,26 @@ def card_summary(mentor: Any) -> tuple[Select[Any], Select[Any]]:
         .select_from(Review)
         .where(published(mentor))
         .correlate_except(Review),
+    )
+
+
+def window_summary(mentor: Any, window: Window) -> tuple[Any, Any]:
+    """How many published reviews were written in ``window``, and their mean
+    `review_value()`, as two scalar subqueries (decision 246).
+
+    **One formula in every window, unlike the profile's.** `_session_value()`
+    switches from the blended mean to overall ratings alone once
+    `OVERALL_STANDS_ALONE_FROM` of them exist, which is right for an all-time
+    figure and wrong for a trend: a quiet window and a busy one would be
+    averaged by different rules. This is always the mean of each review's own
+    value, the `X/5` its badge shows, so two windows differ only in which
+    reviews they hold. Placed by when the review was written; a migrated
+    review with no session still has that time.
+    """
+    rows = and_(published(mentor), during(Review.created_at, window))
+    return (
+        select(func.count()).select_from(Review).where(rows).scalar_subquery(),
+        select(_average(review_value())).select_from(Review).where(rows).scalar_subquery(),
     )
 
 
