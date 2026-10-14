@@ -20,7 +20,7 @@ from tests.integration.factories import token_for
 from tests.integration.test_api_reviews import World
 
 from app.api.deps import PRIVATE_NO_STORE
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -59,18 +59,12 @@ async def session_with(w: World, status: str, *, mentee: UUID | None = None) -> 
 
 async def another_mentee(w: World) -> UUID:
     async with w.engine.begin() as conn:
-        return UUID(
-            str(
-                (
-                    await conn.execute(
-                        text(
-                            "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                            "VALUES (:e, :a, 'mentee', 'UTC') RETURNING id"
-                        ),
-                        {"e": f"other-{uuid4().hex[:8]}@example.test", "a": uuid4()},
-                    )
-                ).scalar_one()
-            )
+        return await add_user(
+            conn,
+            f"other-{uuid4().hex[:8]}@example.test",
+            auth_id=uuid4(),
+            primary_role="mentee",
+            timezone="UTC",
         )
 
 
@@ -210,15 +204,13 @@ async def test_another_mentees_review_is_not_my_last_review(world: World) -> Non
     """Somebody else reviewing this mentor says nothing about when *I* did."""
     auth_id = uuid4()
     async with world.engine.begin() as conn:
-        other = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                    "VALUES (:e, :a, 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"reviewer-{uuid4().hex[:8]}@example.test", "a": auth_id},
-            )
-        ).scalar_one()
+        other = await add_user(
+            conn,
+            f"reviewer-{uuid4().hex[:8]}@example.test",
+            auth_id=auth_id,
+            primary_role="mentee",
+            timezone="UTC",
+        )
         session_id = (
             await conn.execute(
                 text(

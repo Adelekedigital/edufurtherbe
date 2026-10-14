@@ -45,7 +45,7 @@ from app.core.errors import AlreadyReviewedError, NotFoundError
 from app.domain.reviews import REVIEW_INTERVAL, edit_window
 from app.infra.db.review_writer import edit_review, write_review
 from app.infra.storage.supabase import SupabaseStorage
-from conftest import api_token, bearer, build_api_app
+from conftest import add_user, api_token, bearer, build_api_app
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -158,15 +158,14 @@ async def world(db_engine: AsyncEngine, api_client: httpx.AsyncClient) -> World:
 
     auth_id = uuid4()
     async with db_engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Mo', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"mentee-{tag}@example.test", "a": auth_id},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{tag}@example.test",
+            auth_id=auth_id,
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
 
     return World(
         engine=db_engine,
@@ -245,15 +244,13 @@ async def test_the_platform_feedback_is_never_published(world: World) -> None:
 async def test_somebody_elses_session_is_not_found(world: World) -> None:
     """`404`, not `403`: a `403` confirms the id names a real session."""
     async with world.engine.begin() as conn:
-        other = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:e, 'Other', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"other-{uuid4().hex[:8]}@example.test"},
-            )
-        ).scalar_one()
+        other = await add_user(
+            conn,
+            f"other-{uuid4().hex[:8]}@example.test",
+            first_name="Other",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         session_id = str(
             (
                 await conn.execute(
@@ -627,12 +624,13 @@ async def test_somebody_elses_review_cannot_be_edited(world: World) -> None:
     review = (await world.review(await world.completed(world.offering_a))).json()
     intruder_auth = uuid4()
     async with world.engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                "VALUES (:e, :a, 'Nosy', 'mentee', 'Africa/Lagos')"
-            ),
-            {"e": f"intruder-{uuid4().hex[:8]}@example.test", "a": intruder_auth},
+        await add_user(
+            conn,
+            f"intruder-{uuid4().hex[:8]}@example.test",
+            auth_id=intruder_auth,
+            first_name="Nosy",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
         )
 
     response = await world.client.patch(
@@ -1015,15 +1013,14 @@ async def test_somebody_elses_reviews_never_appear(world: World) -> None:
     mine = (await world.review(await world.completed(world.offering_a))).json()
     stranger = uuid4()
     async with world.engine.begin() as conn:
-        stranger_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"other-{stranger.hex[:8]}@example.test", "a": stranger},
-            )
-        ).scalar_one()
+        stranger_id = await add_user(
+            conn,
+            f"other-{stranger.hex[:8]}@example.test",
+            auth_id=stranger,
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
     theirs = await world.completed(None, mentee=stranger_id)
     strangers = await world.client.post(
         "/api/v1/reviews",
