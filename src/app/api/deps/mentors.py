@@ -29,15 +29,19 @@ from app.core.errors import (
     ValidationError,
 )
 from app.domain.mentor_stats import (
+    DEFAULT_MONTHS,
     DEFAULT_WINDOW_DAYS,
+    MAX_MONTHS,
     MAX_WINDOW_DAYS,
+    MIN_MONTHS,
     MIN_WINDOW_DAYS,
+    month_windows,
     trend_windows,
 )
 from app.infra.db.featured_store import (
     current_featured,
 )
-from app.infra.db.mentor_dashboard import mentor_window_stats
+from app.infra.db.mentor_dashboard import mentor_monthly_stats, mentor_window_stats
 from app.infra.db.mentor_public_store import (
     get_existing_mentor_id,
     get_public_mentor,
@@ -376,3 +380,26 @@ async def met_mentors_page(
 
 
 MetMentorsDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(met_mentors_page)]
+
+
+async def own_mentor_monthly_stats(
+    user: CurrentUserDep,
+    session: SessionDep,
+    months: Annotated[
+        int,
+        Query(
+            ge=MIN_MONTHS,
+            le=MAX_MONTHS,
+            description=(
+                f"How many UTC calendar months, {MIN_MONTHS}-{MAX_MONTHS}, ending with this one."
+            ),
+        ),
+    ] = DEFAULT_MONTHS,
+) -> dict[str, Any]:
+    """The caller's figures per month (decision 247). Scoped to the caller in
+    the statement; a non-mentor reads zeros, as for `own_mentor_stats`."""
+    windows = month_windows(dt.datetime.now(dt.UTC), months)
+    return {"months": months, "series": await mentor_monthly_stats(session, user["id"], windows)}
+
+
+OwnMentorMonthlyStatsDep = Annotated[dict[str, Any], Depends(own_mentor_monthly_stats)]

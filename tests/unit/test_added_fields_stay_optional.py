@@ -33,6 +33,15 @@ ADDED = {
         "review_count",
         "average_rating",
     ),
+    # New with the monthly chart (decision 247), on the same terms.
+    "MentorMonthlyStatsRead": ("months",),
+    "MentorMonthRead": (
+        "completed_sessions",
+        "missed_by_mentor",
+        "cancelled_by_mentor",
+        "cancelled_by_mentee",
+        "cancelled_by_other",
+    ),
     # New with `/me/mentors` (decision 248), as decision 246's models: the id,
     # the order and the state are required, everything else optional.
     "MetMentorRead": (
