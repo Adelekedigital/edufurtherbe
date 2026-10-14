@@ -19,14 +19,13 @@ fetched and then refused, which is what lets the route answer `404` without a
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, literal, select, tuple_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ValidationError
+from app.infra.db import keyset
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.review_authors import author_columns, with_author
@@ -76,24 +75,6 @@ def _yours(author: UUID) -> Any:
     author's to read back, edit or find again.
     """
     return and_(Review.reviewed_by == author, Review.deleted_at.is_(None))
-
-
-def _after(cursor: tuple[str, UUID]) -> Any:
-    """The keyset position, as a comparison on ``(created_at, id)``.
-
-    The same shape `session_store._after` uses, and for the same reason: the sort
-    key is a timestamp rendered as text, so it is parsed back, and a token that
-    survives base64 but holds something that is not a timestamp is a **client**
-    error. Raising here rather than letting `fromisoformat` escape turns a 500
-    into the 422 the envelope documents.
-    """
-    raw, after_id = cursor
-    try:
-        after = dt.datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
-    # Descending, so the page moves *backwards* through time.
-    return tuple_(Review.created_at, Review.id) < tuple_(literal(after), literal(after_id))
 
 
 async def list_mentor_reviews(
@@ -167,7 +148,7 @@ async def list_mentor_reviews(
         .outerjoin(SessionType, SessionType.id == Session.session_type_id)
         .where(
             published(mentor),
-            *([_after(after)] if after is not None else []),
+            *([keyset.after(Review.created_at, Review.id, after)] if after is not None else []),
             *([Session.session_type_id == session_type] if session_type is not None else []),
         )
         .order_by(Review.created_at.desc(), Review.id.desc())
@@ -204,7 +185,7 @@ async def list_authored_reviews(
         .where(
             _yours(author),
             *([Review.reviewed_for == mentor] if mentor is not None else []),
-            *([_after(after)] if after is not None else []),
+            *([keyset.after(Review.created_at, Review.id, after)] if after is not None else []),
         )
         .order_by(Review.created_at.desc(), Review.id.desc())
         .limit(limit + 1)

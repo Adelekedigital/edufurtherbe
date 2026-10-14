@@ -14,31 +14,21 @@ list and the average without either read learning that moderation happened.
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, literal, select, tuple_, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import ConflictError, NotFoundError
 from app.domain.enums import ReviewReportOutcome
+from app.infra.db import keyset
 from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
 from app.infra.db.review_authors import author_columns, with_author
 from app.infra.db.review_stats import review_value
 
 __all__ = ["decide_report", "list_reviews_for_moderation"]
-
-
-def _after(cursor: tuple[str, UUID]) -> Any:
-    """Keyset on ``(created_at, id)``, the shape every list here uses."""
-    raw, after_id = cursor
-    try:
-        after = dt.datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
-    return tuple_(Review.created_at, Review.id) < tuple_(literal(after), literal(after_id))
 
 
 async def list_reviews_for_moderation(
@@ -87,7 +77,7 @@ async def list_reviews_for_moderation(
         .outerjoin(report, report.c.review_id == Review.id)
         .where(
             *([report.c.id.is_not(None)] if reported_only else []),
-            *([_after(after)] if after is not None else []),
+            *([keyset.after(Review.created_at, Review.id, after)] if after is not None else []),
         )
         .order_by(Review.created_at.desc(), Review.id.desc())
         .limit(limit + 1)

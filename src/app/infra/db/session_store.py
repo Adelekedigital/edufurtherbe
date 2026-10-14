@@ -40,12 +40,12 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, case, func, literal, or_, select, true, tuple_
+from sqlalchemy import Select, and_, case, func, literal, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.errors import ValidationError
 from app.domain.enums import SessionRole
+from app.infra.db import keyset
 from app.infra.db.holds import active_hold
 from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant, SessionType
 from app.infra.db.models.suggestions import SessionSuggestion
@@ -266,27 +266,6 @@ def _on_side(viewer_id: UUID, side: SessionRole) -> Any:
     return _SIDES[side] == viewer_id
 
 
-def _after(cursor: tuple[str, UUID], *, ascending: bool) -> Any:
-    """The keyset position, as a comparison on ``(starts_at, id)``.
-
-    The cursor's sort key is a timestamp rendered as text, so it has to be
-    parsed back. A token that survives base64 decoding but holds something that
-    is not a timestamp is still a **client** error, and raising here rather than
-    letting ``fromisoformat`` escape turns a 500 into the 422 the envelope
-    already documents.
-    """
-    raw, after_id = cursor
-    try:
-        after = dt.datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise ValidationError("cursor is not a cursor this endpoint issued") from exc
-    position = tuple_(Session.starts_at, Session.id)
-    bound = tuple_(literal(after), literal(after_id))
-    # The page moves the way the list is ordered: forwards through time for
-    # `asc`, backwards for the newest-first default.
-    return position > bound if ascending else position < bound
-
-
 async def list_sessions(
     session: AsyncSession,
     user_id: UUID,
@@ -344,7 +323,9 @@ async def list_sessions(
     if statuses:
         statement = statement.where(Session.status.in_(list(statuses)))
     if cursor is not None:
-        statement = statement.where(_after(cursor, ascending=ascending))
+        statement = statement.where(
+            keyset.after(Session.starts_at, Session.id, cursor, ascending=ascending)
+        )
 
     # One more than asked for: if it comes back there is a next page. Cheaper
     # and more honest than a second COUNT, which can disagree with the page it

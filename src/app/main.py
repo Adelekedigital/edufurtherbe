@@ -28,6 +28,7 @@ from app.api.routes import (
     me_interest,
     me_mentee_stats,
     me_mentor_stats,
+    me_mentors,
     me_onboarding,
     me_referrals,
     me_reviews,
@@ -306,6 +307,14 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "my-mentors",
+        "description": (
+            "The mentors a mentee has met: each one they have had a completed "
+            "session with, and whether they can book them again. Only ever "
+            "about the caller."
+        ),
+    },
+    {
         "name": "users",
         "description": (
             "A user's own record and attributes — and, for a platform admin, "
@@ -474,6 +483,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_intake.router)
     application.include_router(me_interest.router)
     application.include_router(me_mentor_stats.router)
+    application.include_router(me_mentors.router)
     application.include_router(me_mentee_stats.router)
     application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)

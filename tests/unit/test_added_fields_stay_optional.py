@@ -52,6 +52,18 @@ ADDED = {
         "cancelled_by_mentee",
         "cancelled_by_other",
     ),
+    # New with `/me/mentors` (decision 248), as decision 246's models: the id,
+    # the order and the state are required, everything else optional.
+    "MetMentorRead": (
+        "slug",
+        "first_name",
+        "last_name",
+        "avatar_url",
+        "avatar_focus",
+        "degree",
+        "institution",
+        "session_count",
+    ),
 }
 
 

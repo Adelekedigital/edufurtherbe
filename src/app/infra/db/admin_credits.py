@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ValidationError
 from app.domain.credits import CreditLadder, expiry_for
 from app.domain.enums import CreditReason, CreditSource
+from app.infra.db import keyset
 from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTransaction
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
@@ -246,11 +247,7 @@ async def list_admin_grants(
         # string and asyncpg binds `timestamptz` from a `datetime` only — passing
         # the string through raises `DataError` on page *two*, which is the shape
         # of paging bug `mentor_reviews_page` records having shipped once.
-        try:
-            params["after_at"] = dt.datetime.fromisoformat(after[0])
-        except ValueError as exc:
-            raise ValidationError("cursor is not a cursor this endpoint issued") from exc
-        params["after_id"] = after[1]
+        params["after_at"], params["after_id"] = keyset.position(after)
 
     statement = LISTED_GRANTS
     if clauses:

@@ -15,9 +15,11 @@ from app.api.schemas.common import (
     StorableText,
     clamp_limit,
     decode_browse_cursor,
+    decode_cursor,
     decode_goal_cursor,
     decode_offset_cursor,
     encode_browse_cursor,
+    encode_cursor,
     is_goal_cursor,
     next_goal_cursor,
     next_offset_cursor,
@@ -52,6 +54,7 @@ from app.infra.db.mentor_search_store import (
     search_mentors,
     similar_mentors,
 )
+from app.infra.db.met_mentors import list_met_mentors
 from app.infra.db.offerings import has_live_goals, live_offering_slugs, offerings_for
 from app.infra.db.profile_store import (
     list_awards,
@@ -351,6 +354,34 @@ async def own_mentor_stats(
 
 
 OwnMentorStatsDep = Annotated[dict[str, Any], Depends(own_mentor_stats)]
+
+
+async def met_mentors_page(
+    user: CurrentUserDep,
+    session: SessionDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """One page of the mentors the caller has met (decision 248). The caller is
+    the only subject, so there is nothing to authorize; somebody who has met
+    nobody, or is not a mentee, reads an empty page.
+
+    The token is minted beside the decode, as `own_reviews_page` does.
+    """
+    rows, has_more = await list_met_mentors(
+        session,
+        user["id"],
+        now=dt.datetime.now(dt.UTC),
+        limit=clamp_limit(limit),
+        cursor=decode_cursor(cursor),
+    )
+    if not (has_more and rows):
+        return rows, None
+    last = rows[-1]
+    return rows, encode_cursor(last["last_session_at"].isoformat(), last["id"])
+
+
+MetMentorsDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(met_mentors_page)]
 
 
 async def own_mentor_monthly_stats(
