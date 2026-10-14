@@ -76,20 +76,23 @@ not happened; either in the denominator reports absence that never occurred.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import Integer, Numeric, and_, case, cast, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.domain.enums import AttendanceStatus, SessionStatus
+from app.domain.enums import ActorType, AttendanceStatus, SessionStatus
 from app.domain.mentor_stats import Window
 from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant
-from app.infra.db.predicates import during
+from app.infra.db.predicates import Bounds, during
 
 __all__ = [
     "ATTENDED",
+    "BY_MENTEE",
+    "BY_MENTOR",
+    "BY_OTHER",
     "EXPECTED",
     "MENTEE",
     "MENTOR",
@@ -99,12 +102,16 @@ __all__ = [
     "attendance_sessions",
     "cancellations",
     "delivered",
+    "held",
+    "held_count",
     "mentee_completed_sessions",
     "mentee_missed",
     "mentee_window_figures",
     "mentor_stats",
     "mentor_window_figures",
+    "missed",
     "missed_by",
+    "missed_count",
     "received",
 ]
 
@@ -122,6 +129,12 @@ EXPECTED = ATTENDED + MISSED
 #: Sessions that have happened, or should have. Not `cancelled` — nobody was
 #: expected — and not `confirmed`, which has not happened yet.
 TERMINAL = (SessionStatus.COMPLETED, SessionStatus.NO_SHOW)
+
+#: Who made a cancellation, as `cancellations()` reads it off the event: the
+#: mentor, the mentee, or anybody else (the system, an admin, nobody recorded).
+BY_MENTOR = "mentor"
+BY_MENTEE = "mentee"
+BY_OTHER = "other"
 
 
 def delivered(mentor: Any) -> Any:
@@ -282,10 +295,16 @@ def _attendance_of(user: Any, side: Any, window: Window | None, column: Any) -> 
     )
 
 
-def cancellations(mentor: Any, window: Window) -> Any:
+def cancellations(mentor: Any, window: Bounds | None) -> Any:
     """The mentor's cancelled sessions whose cancellation happened inside
-    ``window``, one row each, with `by_mentor` true when the mentor cancelled
-    it (false, or null, when anybody else or nobody named did).
+    ``window`` (ever, for ``None``), one row each, with when (`cancelled_at`)
+    and by whom (`canceller`: `BY_MENTOR`, `BY_MENTEE` or `BY_OTHER`).
+
+    **Who is the event's actor, acting as a user** (decision 247): `actor_id`
+    names the mentor or the mentee and `actor_type` is `user`. An admin acting
+    through the console is a different fact from the same person acting as
+    themselves (`ActorType`), so it is `BY_OTHER`, as are the system and a
+    cancellation that names nobody.
 
     **Placed by when the cancellation happened**, the `cancelled` event's
     `created_at`, not by `starts_at`: cancelling a session a month out is this
@@ -307,7 +326,11 @@ def cancellations(mentor: Any, window: Window) -> Any:
     cancelled sessions only.
     """
     event = (
-        select(SessionEvent.actor_id, SessionEvent.created_at.label("cancelled_at"))
+        select(
+            SessionEvent.actor_id,
+            SessionEvent.actor_type,
+            SessionEvent.created_at.label("cancelled_at"),
+        )
         .where(
             SessionEvent.session_id == Session.id,
             SessionEvent.to_status == SessionStatus.CANCELLED,
@@ -316,8 +339,14 @@ def cancellations(mentor: Any, window: Window) -> Any:
         .limit(1)
         .lateral("cancellation")
     )
+    as_user = event.c.actor_type == ActorType.USER
+    canceller = case(
+        (and_(as_user, event.c.actor_id == Session.mentor_id), BY_MENTOR),
+        (and_(as_user, event.c.actor_id == Session.mentee_id), BY_MENTEE),
+        else_=BY_OTHER,
+    )
     return (
-        select((event.c.actor_id == Session.mentor_id).label("by_mentor"))
+        select(canceller.label("canceller"), event.c.cancelled_at)
         .select_from(Session)
         .join(event, true())
         .where(
@@ -354,23 +383,41 @@ def missed_by(party: Any) -> Any:
     return and_(Session.status.in_(TERMINAL), absent)
 
 
-def _missed_in(side: Any, window: Window) -> Any:
-    """A session the party on ``side`` (`Session.mentor_id` or `.mentee_id`)
-    missed, starting inside ``window``: one predicate for both dashboards."""
-    return and_(during(Session.starts_at, window), missed_by(side))
+#: Which side of a session a figure is about: the mentor's (delivered) or the
+#: mentee's (received). A dual-role user's two sides never pool.
+Side = Literal["mentor", "mentee"]
 
 
-def _missed_count(side: Any, user: Any, window: Window) -> Any:
-    """How many sessions on ``side`` ``user`` missed inside ``window``."""
-    return (
-        select(func.count())
-        .select_from(Session)
-        .where(side == user, _missed_in(side, window))
-        .scalar_subquery()
-    )
+def _side(side: Side) -> Any:
+    return Session.mentor_id if side == "mentor" else Session.mentee_id
 
 
-def _held(counterpart: Any, among: Any = None) -> tuple[Any, Any, Any]:
+def held(user: Any, window: Bounds | None, side: Side = "mentor") -> Any:
+    """The predicate for a session ``user`` delivered (or, on the mentee side,
+    received) that starts inside ``window``: the dashboards' *held*, and the
+    rows the profile's four figures are over."""
+    scope = delivered(user) if side == "mentor" else received(user)
+    return and_(scope, during(Session.starts_at, window))
+
+
+def held_count(mentor: Any, window: Bounds) -> Any:
+    """How many sessions `held()` matches, as a scalar subquery."""
+    return select(func.count()).select_from(Session).where(held(mentor, window)).scalar_subquery()
+
+
+def missed(user: Any, window: Bounds | None, side: Side = "mentor") -> Any:
+    """The predicate for a settled session on ``side``, starting inside
+    ``window``, that ``user`` missed (`missed_by()` on their participant row)."""
+    column = _side(side)
+    return and_(column == user, during(Session.starts_at, window), missed_by(column))
+
+
+def missed_count(mentor: Any, window: Bounds) -> Any:
+    """How many sessions `missed()` matches, as a scalar subquery."""
+    return select(func.count()).select_from(Session).where(missed(mentor, window)).scalar_subquery()
+
+
+def _held_figures(counterpart: Any, among: Any = None) -> tuple[Any, Any, Any]:
     """Count, scheduled minutes and distinct ``counterpart`` of the sessions a
     statement reads, or of those matching ``among`` (a `FILTER`, so several
     windows share one scan): one definition for both sides, labelled by each
@@ -394,13 +441,13 @@ def _delivered_figures(mentor: Any, window: Window | None) -> Any:
     One statement for the all-time profile and every dashboard window, so the
     two can only differ in which sessions they read.
     """
-    sessions, minutes, mentees = _held(Session.mentee_id)
+    sessions, minutes, mentees = _held_figures(Session.mentee_id)
     return select(
         sessions.label("completed_sessions"),
         minutes.label("mentoring_minutes"),
         mentees.label("mentees_mentored"),
         attendance_rate(mentor, MENTOR, window).label("attendance_rate"),
-    ).where(delivered(mentor), during(Session.starts_at, window))
+    ).where(held(mentor, window))
 
 
 def mentee_window_figures(mentee: Any, window: Window | None) -> tuple[Any, Any, Any]:
@@ -408,13 +455,13 @@ def mentee_window_figures(mentee: Any, window: Window | None) -> tuple[Any, Any,
     mentee received, their minutes and distinct mentors, starting inside
     ``window`` (all time for ``None``), as aggregates over a scan of
     ``Session`` rows; each is filtered, so one scan serves every window."""
-    return _held(Session.mentor_id, and_(received(mentee), during(Session.starts_at, window)))
+    return _held_figures(Session.mentor_id, held(mentee, window, "mentee"))
 
 
 def mentee_missed(mentee: Any, window: Window) -> Any:
     """How many sessions the mentee missed starting inside ``window``, as an
     aggregate over the same scan: `missed_by_mentor` from the other side."""
-    return func.count().filter(Session.mentee_id == mentee, _missed_in(Session.mentee_id, window))
+    return func.count().filter(missed(mentee, window, "mentee"))
 
 
 def mentor_window_figures(mentor: Any, window: Window) -> Any:
@@ -422,12 +469,13 @@ def mentor_window_figures(mentor: Any, window: Window) -> Any:
     profile's four plus how many sessions the mentor missed (by `starts_at`)
     and how many they cancelled (by when they cancelled)."""
     figures = _delivered_figures(mentor, window).subquery("figures")
-    missed = _missed_count(Session.mentor_id, mentor, window)
     cancelled = cancellations(mentor, window)
-    by_mentor = select(func.count()).select_from(cancelled).where(cancelled.c.by_mentor)
+    by_mentor = (
+        select(func.count()).select_from(cancelled).where(cancelled.c.canceller == BY_MENTOR)
+    )
     return select(
         *figures.c,
-        missed.label("missed_by_mentor"),
+        missed_count(mentor, window).label("missed_by_mentor"),
         by_mentor.scalar_subquery().label("cancelled_by_mentor"),
     ).select_from(figures)
 

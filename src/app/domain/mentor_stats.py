@@ -18,11 +18,17 @@ from __future__ import annotations
 import datetime as dt
 from typing import NamedTuple
 
+from app.domain.credits import end_of_month
+
 __all__ = [
+    "DEFAULT_MONTHS",
     "DEFAULT_WINDOW_DAYS",
+    "MAX_MONTHS",
     "MAX_WINDOW_DAYS",
+    "MIN_MONTHS",
     "MIN_WINDOW_DAYS",
     "Window",
+    "month_windows",
     "trend_windows",
     "window_ending",
 ]
@@ -36,12 +42,24 @@ MIN_WINDOW_DAYS = 7
 #: reaches back two years, which is still a bounded read.
 MAX_WINDOW_DAYS = 365
 
+#: The monthly chart (decision 247): a year by default, two at most, so "this
+#: month against the same month last year" is askable.
+DEFAULT_MONTHS = 12
+MIN_MONTHS = 1
+MAX_MONTHS = 24
+
 
 class Window(NamedTuple):
     """`[since, until)`: `since` is inside, `until` is not."""
 
     since: dt.datetime
     until: dt.datetime
+
+    @property
+    def month(self) -> str:
+        """`YYYY-MM` of the UTC month `since` falls in: a monthly series' label
+        (decision 247), the one place it is spelled."""
+        return self.since.astimezone(dt.UTC).strftime("%Y-%m")
 
 
 def window_ending(now: dt.datetime, days: int) -> Window:
@@ -60,3 +78,25 @@ def trend_windows(now: dt.datetime, days: int) -> tuple[Window, Window]:
     """The window ending at `now`, and the equal one before it."""
     current = window_ending(now, days)
     return current, window_ending(current.since, days)
+
+
+def month_windows(now: dt.datetime, months: int) -> list[Window]:
+    """The last ``months`` UTC calendar months, oldest first, ending with the
+    month ``now`` is in (decision 247).
+
+    **UTC, the platform's month** (`credits.end_of_month`, whose rule closes
+    each month here): the windowed figures beside it are UTC too (decision
+    246), so a month and a window never disagree about where a session falls.
+    The current month runs to its end, not to `now`; nothing settled or
+    cancelled can be placed in the part still ahead.
+    """
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    if months < 1:
+        raise ValueError("a series needs at least one month")
+    since = now.astimezone(dt.UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    windows = [Window(since=since, until=end_of_month(since))]
+    for _ in range(months - 1):
+        until = windows[0].since
+        windows.insert(0, Window(since=(until - dt.timedelta(days=1)).replace(day=1), until=until))
+    return windows

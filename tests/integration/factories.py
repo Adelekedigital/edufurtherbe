@@ -520,3 +520,68 @@ async def mentee_of(engine: AsyncEngine, session_id: UUID) -> UUID:
             text("SELECT mentee_id FROM sessions WHERE id = :s"), {"s": session_id}
         )
         return UUID(str(mentee.scalar_one()))
+
+
+async def ended_by(
+    engine: AsyncEngine,
+    session_id: UUID,
+    actor: UUID | None,
+    to: str,
+    *,
+    at: dt.datetime | None = None,
+    kind: str | None = None,
+) -> None:
+    """The event a transition writes: who moved the session to ``to``, and when
+    (now unless ``at`` says otherwise). ``kind`` is the `actor_type`, `user`
+    for a named actor and `system` for none unless given."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO session_events (session_id, from_status, to_status, actor_id, "
+                "actor_type, created_at) "
+                "VALUES (:s, 'confirmed', :to, :a, :t, COALESCE(CAST(:at AS timestamptz), now()))"
+            ),
+            {
+                "s": session_id,
+                "to": to,
+                "a": actor,
+                "t": kind or ("user" if actor else "system"),
+                "at": at,
+            },
+        )
+
+
+async def cancelled(
+    engine: AsyncEngine,
+    mentor: UUID,
+    by: str,
+    *,
+    days_ago: int = 3,
+    cancelled_days_ago: int | None = None,
+    starts_at: dt.datetime | None = None,
+    at: dt.datetime | None = None,
+) -> UUID:
+    """A session starting ``days_ago`` (negative is ahead) or at ``starts_at``,
+    cancelled ``cancelled_days_ago`` (default: the same day it was for) or at
+    ``at``, by `mentor`, `mentee`, nobody named (`system`), or the mentor's own
+    id acting as an admin (`admin`)."""
+    session_id = await add_session(
+        engine,
+        mentor,
+        status="cancelled",
+        attendance="pending",
+        days_ago=days_ago,
+        starts_at=starts_at,
+    )
+    actor = {
+        "mentor": mentor,
+        "mentee": await mentee_of(engine, session_id),
+        "system": None,
+        "admin": mentor,
+    }[by]
+    if at is None:
+        ago = days_ago if cancelled_days_ago is None else cancelled_days_ago
+        at = dt.datetime.now(dt.UTC) - dt.timedelta(days=ago)
+    kind = "admin" if by == "admin" else None
+    await ended_by(engine, session_id, actor, "cancelled", at=at, kind=kind)
+    return session_id

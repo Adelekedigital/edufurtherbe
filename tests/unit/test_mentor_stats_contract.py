@@ -44,3 +44,21 @@ def test_both_blocks_are_required(dashboard: type, block: str) -> None:
     spec = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"]  # type: ignore[call-arg]
 
     assert block in spec[dashboard.__name__].get("required", [])
+
+
+@pytest.mark.parametrize(
+    ("schema", "field"),
+    [
+        ("MentorMonthRead", "month"),
+        ("MentorMonthRead", "since"),
+        ("MentorMonthRead", "until"),
+        ("MentorMonthlyStatsRead", "series"),
+    ],
+)
+def test_a_months_place_is_required_and_never_null(schema: str, field: str) -> None:
+    """Decision 247: a month without its edges cannot be charted, and a series
+    that may be null makes every client write the same fallback."""
+    spec = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"]  # type: ignore[call-arg]
+
+    assert field in spec[schema].get("required", [])
+    assert "anyOf" not in spec[schema]["properties"][field]
