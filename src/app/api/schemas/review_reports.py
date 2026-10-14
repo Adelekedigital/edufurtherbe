@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.api.schemas.reviews import ReviewTopicRead
 from app.domain.enums import ReviewReportOutcome, ReviewReportReason
 
 
@@ -80,6 +81,12 @@ class OwnReviewRead(BaseModel):
     #: The reviewer has deleted their account: the review stays, every
     #: `author_*` field is null — exactly as on the public list.
     author_deleted: bool = False
+    #: The offering the reviewed session was booked as, exactly as the public
+    #: list names it. **Null when nothing records one**: a migrated review has
+    #: no session, and a session's `session_type_id` is nullable.
+    #: Kept for a deleted reviewer, unlike `session_id`: the offering's name
+    #: does not lead to them.
+    session_type: ReviewTopicRead | None = None
     #: The caller's own report, if they filed one. Null is "not reported",
     #: which is a different state from reported-and-dismissed.
     report: ReviewReportRead | None = None
@@ -115,6 +122,7 @@ class OwnReviewRead(BaseModel):
             author_last_initial=row.get("author_last_initial"),
             author_institution=row.get("author_institution"),
             author_deleted=bool(row.get("author_deleted")),
+            session_type=ReviewTopicRead.from_row(row),
             report=report,
         )
 

@@ -29,6 +29,7 @@ from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
 from app.infra.db.review_authors import author_columns, author_session_id, with_author
 from app.infra.db.review_stats import review_value
+from app.infra.db.review_topics import topic_columns, with_topic
 
 __all__ = ["list_reviews_about"]
 
@@ -51,6 +52,9 @@ async def list_reviews_about(
     same attribution the public page uses. The subject does not get a fuller
     name than a stranger does: knowing who reviewed you is the product's choice
     already, and widening it here would be a second answer to one question.
+
+    Each row names the offering it was about through `review_topics`, the join
+    the public list uses, so the two lists cannot disagree on it (decision 251).
     """
     mine = ReviewReport.__table__.alias("mine")
 
@@ -58,24 +62,27 @@ async def list_reviews_about(
         # The same author join as the public list: a reviewer who deletes their
         # account stops being named, here as well as there, and their review
         # stays in both.
-        with_author(
-            select(
-                Review.id,
-                Review.created_at,
-                Review.public_review,
-                author_session_id(),
-                Review.reviewed_for,
-                review_value().label("session_value"),
-                # The subject sees that a review went, which the public list cannot
-                # show and which they would otherwise learn only by its absence.
-                (Review.deleted_at.is_not(None)).label("withdrawn"),
-                *author_columns(),
-                mine.c.id.label("report_id"),
-                mine.c.reason.label("report_reason"),
-                mine.c.created_at.label("report_created_at"),
-                mine.c.resolved_at.label("report_resolved_at"),
-                mine.c.outcome.label("report_outcome"),
-            ).select_from(Review)
+        with_topic(
+            with_author(
+                select(
+                    Review.id,
+                    Review.created_at,
+                    Review.public_review,
+                    author_session_id(),
+                    Review.reviewed_for,
+                    review_value().label("session_value"),
+                    # The subject sees that a review went, which the public list cannot
+                    # show and which they would otherwise learn only by its absence.
+                    (Review.deleted_at.is_not(None)).label("withdrawn"),
+                    *topic_columns(),
+                    *author_columns(),
+                    mine.c.id.label("report_id"),
+                    mine.c.reason.label("report_reason"),
+                    mine.c.created_at.label("report_created_at"),
+                    mine.c.resolved_at.label("report_resolved_at"),
+                    mine.c.outcome.label("report_outcome"),
+                ).select_from(Review)
+            )
         )
         .outerjoin(
             mine,
