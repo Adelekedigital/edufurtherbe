@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import NamedTuple
 
-from app.domain.mentor_stats import Window, trend_windows
+from app.domain.mentor_stats import Window, trend_windows, window_ending
 
 __all__ = ["MISSED_DAYS", "TREND_DAYS", "DashboardWindows", "dashboard_windows"]
 
@@ -32,7 +32,8 @@ class DashboardWindows(NamedTuple):
 
 def dashboard_windows(now: dt.datetime) -> DashboardWindows:
     """The trend's two windows ending at ``now``, and the missed window ending
-    there too. Refuses a naive ``now``, as `trend_windows` does."""
+    there too. Refuses a naive ``now``, as `window_ending` does."""
     current, previous = trend_windows(now, TREND_DAYS)
-    missed, _ = trend_windows(now, MISSED_DAYS)
-    return DashboardWindows(current=current, previous=previous, missed=missed)
+    return DashboardWindows(
+        current=current, previous=previous, missed=window_ending(now, MISSED_DAYS)
+    )

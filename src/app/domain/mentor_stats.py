@@ -24,6 +24,7 @@ __all__ = [
     "MIN_WINDOW_DAYS",
     "Window",
     "trend_windows",
+    "window_ending",
 ]
 
 #: The dashboard's default: a quarter, long enough that a mentor with a session
@@ -43,8 +44,8 @@ class Window(NamedTuple):
     until: dt.datetime
 
 
-def trend_windows(now: dt.datetime, days: int) -> tuple[Window, Window]:
-    """The window ending at `now`, and the equal one before it.
+def window_ending(now: dt.datetime, days: int) -> Window:
+    """The ``days`` before `now`: `[now - days, now)`.
 
     Raises `ValueError` on a naive `now`: a window compared against
     `timestamptz` columns must name its zone, and guessing one is how a figure
@@ -52,6 +53,10 @@ def trend_windows(now: dt.datetime, days: int) -> tuple[Window, Window]:
     """
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    length = dt.timedelta(days=days)
-    current = Window(since=now - length, until=now)
-    return current, Window(since=current.since - length, until=current.since)
+    return Window(since=now - dt.timedelta(days=days), until=now)
+
+
+def trend_windows(now: dt.datetime, days: int) -> tuple[Window, Window]:
+    """The window ending at `now`, and the equal one before it."""
+    current = window_ending(now, days)
+    return current, window_ending(current.since, days)

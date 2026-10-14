@@ -1,13 +1,13 @@
-"""A mentee's own dashboard home figures (`/me/dashboard`, decision 249)."""
+"""A mentee's own dashboard home figures (`/me/mentee-stats`, decision 249)."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import PRIVATE_NO_STORE, OwnDashboardDep
-from app.api.schemas.mentee_dashboard import MenteeDashboardRead
+from app.api.deps import PRIVATE_NO_STORE, OwnMenteeStatsDep
+from app.api.schemas.mentee_stats import MenteeStatsRead
 
-router = APIRouter(prefix="/api/v1/me/dashboard", tags=["dashboard"])
+router = APIRouter(prefix="/api/v1/me/mentee-stats", tags=["mentee-stats"])
 
 RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -18,13 +18,14 @@ RESPONSES: dict[int | str, dict[str, str]] = {
 
 @router.get(
     "",
-    response_model=MenteeDashboardRead,
+    response_model=MenteeStatsRead,
     summary="Your figures as a mentee",
     description=(
         "What your dashboard home shows: sessions held, mentors met and minutes "
-        "of guidance all time, sessions you missed in the last 90 days, and "
-        "sessions and minutes for the last 30 days (`current`) beside the 30 "
-        "before (`previous`). Raw numbers: compute the trend from the two.\n\n"
+        "of guidance all time, sessions you missed in the last "
+        "`missed_window_days` days, and sessions and minutes for the last "
+        "`window_days` days (`current`) beside the equal window before "
+        "(`previous`). Raw numbers: compute the trend from the two.\n\n"
         "Windows are UTC and half-open: `since` is inside, `until` is not. A "
         "session belongs to the window its `starts_at` falls in. Everything is "
         "read at one instant.\n\n"
@@ -34,6 +35,6 @@ RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=RESPONSES,
 )
-async def read_own_dashboard(figures: OwnDashboardDep, response: Response) -> MenteeDashboardRead:
+async def read_own_mentee_stats(figures: OwnMenteeStatsDep, response: Response) -> MenteeStatsRead:
     response.headers["Cache-Control"] = PRIVATE_NO_STORE
-    return MenteeDashboardRead.of(figures)
+    return MenteeStatsRead.of(figures)

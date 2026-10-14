@@ -6,7 +6,7 @@ import datetime as dt
 
 import pytest
 
-from app.domain.mentee_dashboard import dashboard_windows
+from app.domain.mentee_stats import dashboard_windows
 from app.domain.mentor_stats import Window
 
 NOW = dt.datetime(2026, 3, 1, 9, 30, tzinfo=dt.UTC)

@@ -1,4 +1,4 @@
-"""`GET /me/dashboard`: a mentee's own home figures (decision 249).
+"""`GET /me/mentee-stats`: a mentee's own home figures (decision 249).
 
 **Two mentees and a dual-role caller wherever a scope is under test**, for the
 reason `test_api_me_mentor_stats` gives: with one mentee in the database "this
@@ -24,19 +24,20 @@ from tests.integration.factories import (
     token_for,
 )
 
-from app.domain.mentee_dashboard import dashboard_windows
+from app.api.deps import PRIVATE_NO_STORE
+from app.domain.mentee_stats import dashboard_windows
 from app.infra.db.mentee_dashboard import mentee_dashboard
 from conftest import bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
-URL = "/api/v1/me/dashboard"
+URL = "/api/v1/me/mentee-stats"
 
 ZEROS = {
     "sessions_held": 0,
     "mentors_met": 0,
     "minutes_of_guidance": 0,
-    "missed_sessions_90d": 0,
+    "missed_sessions": 0,
 }
 EMPTY_BLOCK = {"completed_sessions": 0, "minutes": 0}
 
@@ -92,9 +93,10 @@ async def test_each_figure_is_counted(
         "sessions_held": 3,
         "mentors_met": 2,
         "minutes_of_guidance": 135,
-        "missed_sessions_90d": 1,
+        "missed_sessions": 1,
     }
     assert body["window_days"] == 30
+    assert body["missed_window_days"] == 90
     assert block(body, "current") == {"completed_sessions": 1, "minutes": 30}
     assert block(body, "previous") == {"completed_sessions": 1, "minutes": 45}
 
@@ -168,7 +170,7 @@ async def test_missed_counts_the_mentees_own_settled_no_shows(
 
     body = await dashboard(api_client, await token_for(db_engine, mentee))
 
-    assert totals(body)["missed_sessions_90d"] == 2
+    assert totals(body)["missed_sessions"] == 2
 
 
 async def test_missed_reaches_back_90_days_only(
@@ -195,7 +197,7 @@ async def test_missed_reaches_back_90_days_only(
 
     body = await dashboard(api_client, await token_for(db_engine, mentee))
 
-    assert totals(body)["missed_sessions_90d"] == 1
+    assert totals(body)["missed_sessions"] == 1
 
 
 async def test_only_the_callers_sessions_as_a_mentee_count(
@@ -236,7 +238,7 @@ async def test_only_the_callers_sessions_as_a_mentee_count(
         "sessions_held": 1,
         "mentors_met": 1,
         "minutes_of_guidance": 30,
-        "missed_sessions_90d": 0,
+        "missed_sessions": 0,
     }
     assert block(body, "current") == {"completed_sessions": 1, "minutes": 30}
 
@@ -326,7 +328,7 @@ async def test_since_is_inside_every_window(db_engine: AsyncEngine) -> None:
     assert row["current"]["completed_sessions"] == 1
     assert row["current"]["minutes"] == 40
     assert row["previous"]["minutes"] == 20
-    assert row["missed_sessions_90d"] == 1
+    assert row["missed_sessions"] == 1
 
 
 async def test_until_is_outside_every_window(db_engine: AsyncEngine) -> None:
@@ -348,7 +350,7 @@ async def test_until_is_outside_every_window(db_engine: AsyncEngine) -> None:
 
     assert row["current"] == {**EMPTY_BLOCK, **WINDOWS.current._asdict()}
     assert row["previous"] == {**EMPTY_BLOCK, **WINDOWS.previous._asdict()}
-    assert row["missed_sessions_90d"] == 0
+    assert row["missed_sessions"] == 0
     assert row["sessions_held"] == 2
 
 
@@ -390,4 +392,4 @@ async def test_nobody_else_caches_it(api_client: httpx.AsyncClient, db_engine: A
 
     response = await api_client.get(URL, headers=bearer(await token_for(db_engine, mentor)))
 
-    assert response.headers["Cache-Control"] == "private, no-store"
+    assert response.headers["Cache-Control"] == PRIVATE_NO_STORE

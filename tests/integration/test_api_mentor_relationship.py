@@ -18,6 +18,7 @@ from sqlalchemy import text
 from tests.integration import test_api_reviews
 from tests.integration.test_api_reviews import World
 
+from app.api.deps import PRIVATE_NO_STORE
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -175,7 +176,7 @@ async def test_it_needs_a_token(world: World) -> None:
 async def test_it_is_never_cached_for_somebody_else(world: World) -> None:
     response = await world.client.get(url(world.mentor), headers=world.headers)
 
-    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["cache-control"] == PRIVATE_NO_STORE
 
 
 async def test_a_malformed_mentor_id_is_a_422(world: World) -> None:

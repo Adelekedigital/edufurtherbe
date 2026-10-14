@@ -26,6 +26,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.mentee_stats import dashboard_windows
 from app.domain.mentor_stats import (
     DEFAULT_WINDOW_DAYS,
     MAX_WINDOW_DAYS,
@@ -35,6 +36,7 @@ from app.domain.mentor_stats import (
 from app.infra.db.featured_store import (
     current_featured,
 )
+from app.infra.db.mentee_dashboard import mentee_dashboard
 from app.infra.db.mentor_dashboard import mentor_window_stats
 from app.infra.db.mentor_public_store import (
     get_existing_mentor_id,
@@ -316,7 +318,7 @@ SimilarMentorsDep = Annotated[list[dict[str, Any]], Depends(similar_to_mentor)]
 
 
 # --------------------------------------------------------------------------
-# A mentor's own dashboard figures (decision 246)
+# Your own dashboard figures: as a mentor (decision 246), as a mentee (249)
 # --------------------------------------------------------------------------
 
 
@@ -345,3 +347,12 @@ async def own_mentor_stats(
 
 
 OwnMentorStatsDep = Annotated[dict[str, Any], Depends(own_mentor_stats)]
+
+
+async def own_mentee_stats(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
+    """The caller's figures as a mentee (decision 249). Scoped to the caller in
+    every statement; anyone with no sessions received reads zeros."""
+    return await mentee_dashboard(session, user["id"], dashboard_windows(dt.datetime.now(dt.UTC)))
+
+
+OwnMenteeStatsDep = Annotated[dict[str, Any], Depends(own_mentee_stats)]

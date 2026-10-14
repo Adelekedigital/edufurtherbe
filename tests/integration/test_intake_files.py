@@ -25,6 +25,7 @@ from tests.integration.test_booking_answers import (  # noqa: F401 - enforcing_c
     enforcing_client,
 )
 
+from app.api.deps import PRIVATE_NO_STORE
 from app.core.config import Settings
 from app.domain.enums import IntakeFileType
 from app.infra.db.engine import create_session_factory
@@ -373,7 +374,7 @@ async def test_the_three_readers_download_it_as_an_attachment(
             "attachment; filename=\"CV_final.pdf\"; filename*=UTF-8''CV%3Bfinal.pdf"
         )
         assert response.headers["x-content-type-options"] == "nosniff"
-        assert response.headers["cache-control"] == "private, no-store"
+        assert response.headers["cache-control"] == PRIVATE_NO_STORE
 
 
 async def test_anyone_else_gets_404(

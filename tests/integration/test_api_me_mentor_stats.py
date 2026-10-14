@@ -24,6 +24,7 @@ from tests.integration.factories import (
     token_for,
 )
 
+from app.api.deps import PRIVATE_NO_STORE
 from app.domain.mentor_stats import Window, trend_windows
 from app.domain.reviews import OVERALL_STANDS_ALONE_FROM
 from app.infra.db.mentor_dashboard import mentor_window_stats
@@ -487,4 +488,4 @@ async def test_nobody_else_caches_it(api_client: httpx.AsyncClient, db_engine: A
 
     response = await api_client.get(URL, headers=bearer(await token_for(db_engine, mentor)))
 
-    assert response.headers["Cache-Control"] == "private, no-store"
+    assert response.headers["Cache-Control"] == PRIVATE_NO_STORE

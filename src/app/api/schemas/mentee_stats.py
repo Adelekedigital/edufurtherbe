@@ -12,10 +12,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.api.schemas.mentor_stats import WindowBoundsRead
-from app.domain.mentee_dashboard import MISSED_DAYS, TREND_DAYS
+from app.domain.mentee_stats import MISSED_DAYS, TREND_DAYS
 
 
-class MenteeDashboardWindowRead(WindowBoundsRead):
+class MenteeStatsWindowRead(WindowBoundsRead):
     """One month's held sessions, placed by their `starts_at`."""
 
     completed_sessions: int = Field(
@@ -24,7 +24,7 @@ class MenteeDashboardWindowRead(WindowBoundsRead):
     minutes: int = Field(default=0, description="Scheduled minutes of those sessions.")
 
     @classmethod
-    def of(cls, row: dict[str, Any]) -> MenteeDashboardWindowRead:
+    def of(cls, row: dict[str, Any]) -> MenteeStatsWindowRead:
         return cls(
             since=row["since"],
             until=row["until"],
@@ -33,7 +33,7 @@ class MenteeDashboardWindowRead(WindowBoundsRead):
         )
 
 
-class MenteeDashboardRead(BaseModel):
+class MenteeStatsRead(BaseModel):
     """Your figures as a mentee, all time, plus this month against last."""
 
     sessions_held: int = Field(
@@ -53,28 +53,32 @@ class MenteeDashboardRead(BaseModel):
             "like `mentoring_minutes` on `/me/mentor-stats`; divide for hours."
         ),
     )
-    missed_sessions_90d: int = Field(
+    missed_sessions: int = Field(
         default=0,
         description=(
-            f"Settled sessions starting in the last {MISSED_DAYS} days that you "
+            "Settled sessions starting in the last `missed_window_days` days that you "
             "were expected at and did not attend. A cancelled session is not "
             "missed, and neither is one only your mentor missed."
         ),
     )
+    missed_window_days: int = Field(
+        default=MISSED_DAYS, description="How many days back `missed_sessions` counts."
+    )
     window_days: int = Field(default=TREND_DAYS, description="Each trend window's length.")
-    current: MenteeDashboardWindowRead = Field(description="The window ending now.")
-    previous: MenteeDashboardWindowRead = Field(
+    current: MenteeStatsWindowRead = Field(description="The window ending now.")
+    previous: MenteeStatsWindowRead = Field(
         description="The equal window immediately before `current`."
     )
 
     @classmethod
-    def of(cls, row: dict[str, Any]) -> MenteeDashboardRead:
+    def of(cls, row: dict[str, Any]) -> MenteeStatsRead:
         return cls(
             sessions_held=int(row["sessions_held"]),
             mentors_met=int(row["mentors_met"]),
             minutes_of_guidance=int(row["minutes_of_guidance"]),
-            missed_sessions_90d=int(row["missed_sessions_90d"]),
+            missed_sessions=int(row["missed_sessions"]),
+            missed_window_days=MISSED_DAYS,
             window_days=TREND_DAYS,
-            current=MenteeDashboardWindowRead.of(row["current"]),
-            previous=MenteeDashboardWindowRead.of(row["previous"]),
+            current=MenteeStatsWindowRead.of(row["current"]),
+            previous=MenteeStatsWindowRead.of(row["previous"]),
         )

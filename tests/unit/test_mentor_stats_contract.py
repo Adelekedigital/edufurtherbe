@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.api.schemas.mentee_dashboard import MenteeDashboardRead, MenteeDashboardWindowRead
+from app.api.schemas.mentee_stats import MenteeStatsRead, MenteeStatsWindowRead
 from app.api.schemas.mentor_stats import MentorStatsRead, MentorStatsWindowRead
 from app.core.config import Settings
 from app.main import create_app
@@ -17,7 +17,7 @@ from app.main import create_app
 #: Each dashboard, with its window model.
 DASHBOARDS = [
     (MentorStatsRead, MentorStatsWindowRead),
-    (MenteeDashboardRead, MenteeDashboardWindowRead),
+    (MenteeStatsRead, MenteeStatsWindowRead),
 ]
 
 
