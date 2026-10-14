@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import make_public_mentor
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -33,15 +33,13 @@ async def a_reviewed_mentor(engine: AsyncEngine, tag: str) -> dict[str, Any]:
     mentor = await make_public_mentor(engine, tag)
     admin_auth = uuid4()
     async with engine.begin() as conn:
-        admin = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                    "VALUES (:e, :a, 'mentor', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"admin-{tag}@example.test", "a": admin_auth},
-            )
-        ).scalar_one()
+        admin = await add_user(
+            conn,
+            f"admin-{tag}@example.test",
+            auth_id=admin_auth,
+            primary_role="mentor",
+            timezone="Africa/Lagos",
+        )
         await conn.execute(
             text("INSERT INTO admin_users (user_id, admin_role) VALUES (:u, 'super_admin')"),
             {"u": admin},
@@ -214,12 +212,12 @@ async def test_filtering_is_still_an_admin_surface(
     setup = await a_reviewed_mentor(db_engine, "hf-scope")
     outsider = uuid4()
     async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                "VALUES (:e, :a, 'mentee', 'Africa/Lagos')"
-            ),
-            {"e": f"outsider-{outsider}@example.test", "a": outsider},
+        await add_user(
+            conn,
+            f"outsider-{outsider}@example.test",
+            auth_id=outsider,
+            primary_role="mentee",
+            timezone="Africa/Lagos",
         )
 
     response = await api_client.get(

@@ -26,7 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.infra.db.slot_store import list_slots
-from conftest import PLATFORM_WINDOW
+from conftest import PLATFORM_WINDOW, add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -61,15 +61,14 @@ async def make_mentor(
     reason the endpoint might refuse, so a refusal test flips exactly one.
     """
     async with engine.begin() as conn:
-        mentor = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentor', :z) RETURNING id"
-                ),
-                {"e": f"mentor-{tag}@example.test", "a": uuid4(), "z": LAGOS},
-            )
-        ).scalar_one()
+        mentor = await add_user(
+            conn,
+            f"mentor-{tag}@example.test",
+            auth_id=uuid4(),
+            first_name="Ada",
+            primary_role="mentor",
+            timezone=LAGOS,
+        )
         await conn.execute(
             text(
                 "INSERT INTO mentor_profiles (user_id, headline, approval_status, listing_status) "
@@ -131,15 +130,14 @@ async def make_mentor(
 
 async def make_mentee(engine: AsyncEngine, tag: str) -> UUID:
     async with engine.begin() as conn:
-        return (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Bo', 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"mentee-{tag}@example.test", "a": uuid4()},
-            )
-        ).scalar_one()
+        return await add_user(
+            conn,
+            f"mentee-{tag}@example.test",
+            auth_id=uuid4(),
+            first_name="Bo",
+            primary_role="mentee",
+            timezone="UTC",
+        )
 
 
 async def book(
@@ -622,15 +620,14 @@ async def test_the_default_start_is_the_mentors_today_not_utcs(
     four.
     """
     async with db_engine.begin() as conn:
-        mentor = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentor', 'America/New_York') RETURNING id"
-                ),
-                {"e": "mentor-nyc@example.test", "a": uuid4()},
-            )
-        ).scalar_one()
+        mentor = await add_user(
+            conn,
+            "mentor-nyc@example.test",
+            auth_id=uuid4(),
+            first_name="Ada",
+            primary_role="mentor",
+            timezone="America/New_York",
+        )
         await conn.execute(
             text(
                 "INSERT INTO mentor_profiles (user_id, headline, approval_status, listing_status) "
@@ -690,15 +687,14 @@ async def test_the_default_start_resolves_in_the_mentors_zone_at_a_fixed_clock(
     mentor's evening is still going. The default must start on the 19th.
     """
     async with db_engine.begin() as conn:
-        mentor = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentor', 'America/New_York') RETURNING id"
-                ),
-                {"e": "mentor-clock@example.test", "a": uuid4()},
-            )
-        ).scalar_one()
+        mentor = await add_user(
+            conn,
+            "mentor-clock@example.test",
+            auth_id=uuid4(),
+            first_name="Ada",
+            primary_role="mentor",
+            timezone="America/New_York",
+        )
         await conn.execute(
             text(
                 "INSERT INTO mentor_profiles (user_id, headline, approval_status, listing_status) "

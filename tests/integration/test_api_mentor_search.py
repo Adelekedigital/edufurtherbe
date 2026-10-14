@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import base64
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -31,6 +31,7 @@ from tests.integration.factories import (
 
 from app.api.schemas import common
 from app.api.schemas.common import MAX_SEARCH_OFFSET
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -384,15 +385,14 @@ async def test_paging_follows_when_a_mentor_became_one_after_someone_else(
     """
     async with db_engine.begin() as conn:
         users = [
-            (
-                await conn.execute(
-                    text(
-                        "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                        "VALUES (:e, gen_random_uuid(), 'Ada', 'mentor', 'UTC') RETURNING id"
-                    ),
-                    {"e": f"late-{n}@example.test"},
-                )
-            ).scalar_one()
+            await add_user(
+                conn,
+                f"late-{n}@example.test",
+                auth_id=uuid4(),
+                first_name="Ada",
+                primary_role="mentor",
+                timezone="UTC",
+            )
             for n in range(3)
         ]
         # The profiles are created in the **opposite** order, so `users.id` and

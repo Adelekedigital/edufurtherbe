@@ -37,6 +37,7 @@ from app.domain.transform.availability import (
 )
 from app.infra.etl.availability import AvailabilityLoader
 from app.infra.etl.reconcile import reconcile_availability
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -79,15 +80,7 @@ def exception_row(anchor: str = "ce-1:2025-01-13", day: int = 13) -> Availabilit
 @pytest_asyncio.fixture
 async def mentor(db_engine: AsyncEngine) -> AsyncIterator[tuple[AsyncConnection, dict[str, UUID]]]:
     async with db_engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES ('rec@example.test', 'mentor', :tz) RETURNING id"
-                ),
-                {"tz": LAGOS},
-            )
-        ).scalar_one()
+        user_id = await add_user(conn, "rec@example.test", primary_role="mentor", timezone=LAGOS)
         await conn.execute(
             text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'M')"),
             {"u": user_id},

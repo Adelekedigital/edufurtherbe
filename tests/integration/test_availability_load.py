@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from app.domain.enums import AvailabilityExceptionType
 from app.domain.transform.availability import AvailabilityExceptionRow, AvailabilityRuleRow
 from app.infra.etl.availability import AvailabilityLoader
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -74,15 +75,7 @@ def exception_row(**overrides: object) -> AvailabilityExceptionRow:
 async def mentor(db_engine: AsyncEngine) -> AsyncIterator[tuple[AsyncConnection, dict[str, UUID]]]:
     """One approved mentor, and the bubble-id to user-id map the loader takes."""
     async with db_engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES ('mentor@example.test', 'mentor', :tz) RETURNING id"
-                ),
-                {"tz": LAGOS},
-            )
-        ).scalar_one()
+        user_id = await add_user(conn, "mentor@example.test", primary_role="mentor", timezone=LAGOS)
         await conn.execute(
             text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'Test mentor')"),
             {"u": user_id},

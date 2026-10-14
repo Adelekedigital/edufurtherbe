@@ -35,7 +35,7 @@ from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.session_writer import book_session
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import SupabaseStorage
-from conftest import PLATFORM_WINDOW, api_token, bearer, build_api_app, client_for
+from conftest import PLATFORM_WINDOW, add_user, api_token, bearer, build_api_app, client_for
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -390,15 +390,14 @@ async def test_a_new_mentor_profile_over_the_max_is_refused(
     """POST has no stored row to resend, so it keeps the plain check."""
     auth = uuid4()
     async with db_engine.begin() as conn:
-        user = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"new-mentor-{auth}@example.test", "a": auth},
-            )
-        ).scalar_one()
+        user = await add_user(
+            conn,
+            f"new-mentor-{auth}@example.test",
+            auth_id=auth,
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="UTC",
+        )
 
     async with fortnight_client(db_engine, api_storage) as client:
         response = await client.post(

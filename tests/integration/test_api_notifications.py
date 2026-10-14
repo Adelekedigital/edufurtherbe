@@ -27,7 +27,7 @@ from tests.integration.factories import (
 from app.domain.notifications import Channel, Notification
 from app.infra.db.outbox import MAX_ATTEMPTS, drain
 from app.infra.db.session_writer import expire_requests
-from conftest import A_REASON, api_token, bearer, fund
+from conftest import A_REASON, add_user, api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -60,15 +60,14 @@ async def a_booking(
     mentor_token = await token_for(engine, mentor)
     mentee_auth = uuid4()
     async with engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Mo', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"mentee-{tag}@example.test", "a": mentee_auth},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{tag}@example.test",
+            auth_id=mentee_auth,
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         # Booking spends a credit from PR 6 onward, so a test mentee has to
         # be able to pay for the sessions the test makes.
         await fund(conn, mentee)

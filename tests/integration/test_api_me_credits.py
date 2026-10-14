@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -30,15 +30,13 @@ LONG_PAST = datetime(2020, 1, 1, tzinfo=UTC)
 async def seed_mentee(engine: AsyncEngine, auth_id: UUID, *, with_goal: bool = True) -> UUID:
     """A mentee, with a goal unless told otherwise."""
     async with engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                    "VALUES (:e, :a, 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"{auth_id}@example.com", "a": auth_id},
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            conn,
+            f"{auth_id}@example.com",
+            auth_id=auth_id,
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         if with_goal:
             await conn.execute(
                 text("INSERT INTO mentee_goals (user_id) VALUES (:u)"), {"u": user_id}

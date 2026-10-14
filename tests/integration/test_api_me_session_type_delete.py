@@ -28,7 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session_type, make_public_mentor, token_for
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -52,15 +52,13 @@ async def book(
     distinction is what half this file tests.
     """
     async with engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:e, 'Mentee', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"mentee-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{uuid4()}@example.test",
+            first_name="Mentee",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         await conn.execute(
             text(
                 "INSERT INTO sessions "

@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session_type, make_public_mentor
 from tests.integration.test_session_type_vocabularies import offering_id
 
+from conftest import add_user
+
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 
@@ -72,15 +74,14 @@ async def test_a_user_who_is_not_a_mentor_is_a_404(
     async with db_engine.begin() as conn:
         from uuid import uuid4
 
-        user = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES ('mentee-only@example.test', :a, 'Bo', 'mentee', 'UTC') RETURNING id"
-                ),
-                {"a": uuid4()},
-            )
-        ).scalar_one()
+        user = await add_user(
+            conn,
+            "mentee-only@example.test",
+            auth_id=uuid4(),
+            first_name="Bo",
+            primary_role="mentee",
+            timezone="UTC",
+        )
 
     assert (await api_client.get(url(user))).status_code == 404
 

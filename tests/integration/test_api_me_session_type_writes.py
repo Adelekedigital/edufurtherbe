@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_session_type, make_public_mentor, token_for
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -43,12 +43,13 @@ async def as_mentee(engine: AsyncEngine, tag: str) -> UUID:
     answer for."""
     auth_id = uuid4()
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                "VALUES (:e, :a, 'Mo', 'mentee', 'UTC')"
-            ),
-            {"e": f"mentee-{tag}-{uuid4()}@example.test", "a": auth_id},
+        await add_user(
+            conn,
+            f"mentee-{tag}-{uuid4()}@example.test",
+            auth_id=auth_id,
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="UTC",
         )
     return auth_id
 

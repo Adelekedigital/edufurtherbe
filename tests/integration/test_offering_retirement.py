@@ -50,21 +50,21 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from conftest import add_user
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 
 async def make_mentor_with_offering(engine: AsyncEngine, tag: str) -> tuple[UUID, UUID]:
     """A mentor and one session type — the state the guard used to protect."""
     async with engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:e, 'Ada', 'mentor', 'UTC') RETURNING id"
-                ),
-                {"e": f"retire-{tag}-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            conn,
+            f"retire-{tag}-{uuid4()}@example.test",
+            first_name="Ada",
+            primary_role="mentor",
+            timezone="UTC",
+        )
         await conn.execute(
             text(
                 "INSERT INTO mentor_profiles (user_id, approval_status, listing_status) "

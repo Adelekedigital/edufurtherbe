@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import make_bookable_mentor, token_for
 from tests.integration.test_api_mentors import give_offering
 
-from conftest import PLATFORM_WINDOW, api_token, bearer
+from conftest import PLATFORM_WINDOW, add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -39,15 +39,13 @@ async def a_mentee(
     """A signed-in mentee, with each slug in `goals` as a goal need."""
     auth_id = uuid4()
     async with engine.begin() as conn:
-        user = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                    "VALUES (:e, :a, 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"mentee-{tag}@example.com", "a": auth_id},
-            )
-        ).scalar_one()
+        user = await add_user(
+            conn,
+            f"mentee-{tag}@example.com",
+            auth_id=auth_id,
+            primary_role="mentee",
+            timezone="UTC",
+        )
         if goals:
             await conn.execute(text("INSERT INTO mentee_goals (user_id) VALUES (:u)"), {"u": user})
             for slug in goals:

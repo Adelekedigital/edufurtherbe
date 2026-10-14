@@ -28,6 +28,7 @@ from app.domain.credits import credit_ladder
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
 from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.engine import create_session_factory
+from conftest import add_user
 
 #: Built from explicit settings, so this suite is about the code rather than
 #: about the environment the machine happens to hold.
@@ -54,21 +55,12 @@ SPENT_AT = dt.datetime(2026, 8, 15, 9, 0, tzinfo=dt.UTC)
 async def a_user(engine: AsyncEngine, *, deleted: bool = False) -> UUID:
     tag = uuid4()
     async with engine.begin() as conn:
-        return UUID(
-            str(
-                (
-                    await conn.execute(
-                        text(
-                            "INSERT INTO users (email, primary_role, timezone, deleted_at) "
-                            "VALUES (:e, 'mentee', 'Africa/Lagos', :d) RETURNING id"
-                        ),
-                        {
-                            "e": f"{tag}@example.com",
-                            "d": dt.datetime(2026, 1, 1, tzinfo=dt.UTC) if deleted else None,
-                        },
-                    )
-                ).scalar_one()
-            )
+        return await add_user(
+            conn,
+            f"{tag}@example.com",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+            deleted_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC) if deleted else None,
         )
 
 

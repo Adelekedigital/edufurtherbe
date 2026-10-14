@@ -25,6 +25,7 @@ from app.domain.credits import credit_ladder
 from app.domain.transform.credits import ACTIVE_WITHIN, plan_opening_balances
 from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_seen
 from app.infra.etl.reconcile import reconcile_credits
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -50,35 +51,29 @@ async def a_migrated_user(
     fixture makes a failure here ambiguous between the two.
     """
     async with engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, legacy_bubble_id, primary_role, timezone, "
-                    "last_active_at, created_at) "
-                    "VALUES (:e, :a, 'mentee', 'Africa/Lagos', :la, :ca) RETURNING id"
-                ),
-                {
-                    "e": f"{anchor}@example.com",
-                    "a": anchor,
-                    # True: active inside the window. False: long dormant.
-                    # None: never active at all — the signup-only case.
-                    "la": None
-                    if active is None
-                    else (
-                        (CUTOVER - dt.timedelta(days=30))
-                        if active
-                        else (CUTOVER - ACTIVE_WITHIN - dt.timedelta(days=30))
-                    ),
-                    # **Written explicitly, and the dormant case is why.**
-                    # `created_at` defaults to `now()`, which is inside every
-                    # window — so a fixture that leaves it alone makes each
-                    # user look like a fresh signup and the second half of the
-                    # disjunction rescues everybody. A migrated user registered
-                    # in Bubble years ago; only the newcomer is recent.
-                    "ca": ANCIENT if active is not None else CUTOVER - dt.timedelta(days=21),
-                },
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            conn,
+            f"{anchor}@example.com",
+            legacy_bubble_id=anchor,
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+            # True: active inside the window. False: long dormant.
+            # None: never active at all — the signup-only case.
+            last_active_at=None
+            if active is None
+            else (
+                (CUTOVER - dt.timedelta(days=30))
+                if active
+                else (CUTOVER - ACTIVE_WITHIN - dt.timedelta(days=30))
+            ),
+            # **Written explicitly, and the dormant case is why.**
+            # `created_at` defaults to `now()`, which is inside every
+            # window — so a fixture that leaves it alone makes each
+            # user look like a fresh signup and the second half of the
+            # disjunction rescues everybody. A migrated user registered
+            # in Bubble years ago; only the newcomer is recent.
+            created_at=ANCIENT if active is not None else CUTOVER - dt.timedelta(days=21),
+        )
         await conn.execute(
             text(
                 "INSERT INTO user_onboarding (user_id, last_step, completed_at) "
@@ -451,14 +446,9 @@ async def test_a_starter_granted_outside_this_phase_is_not_a_surplus(
     healthy cutover."""
     await a_migrated_user(db_engine, "migrated")
     async with db_engine.begin() as conn:
-        newcomer = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES ('new@example.com', 'mentee', 'Africa/Lagos') RETURNING id"
-                )
-            )
-        ).scalar_one()
+        newcomer = await add_user(
+            conn, "new@example.com", primary_role="mentee", timezone="Africa/Lagos"
+        )
         await conn.execute(
             text(
                 "INSERT INTO credit_lots "
