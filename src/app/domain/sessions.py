@@ -33,6 +33,8 @@ from app.domain.enums import ApplicationStage, SessionReasonCode, SessionRole, S
 
 __all__ = [
     "CANCELLATION_CUTOFF",
+    "EXPIRY_GRACE",
+    "EXPIRY_KIND",
     "MAX_SESSION_TYPE_OFFERINGS",
     "RESPONSE_WINDOW",
     "TRANSITIONS",
@@ -85,6 +87,17 @@ LIVE_SESSION_STATUSES = (SessionStatus.PENDING_MENTOR_APPROVAL, SessionStatus.CO
 #: are built**; this note said they were not, and went on saying it after the
 #: outbox and the scheduled callback both shipped.
 RESPONSE_WINDOW = dt.timedelta(hours=6)
+
+#: **What expires a request at its deadline** (owner, 2026-10-13): booking
+#: schedules this callback kind for each request it makes, so an unanswered one
+#: is expired within seconds of its deadline instead of at the next hourly
+#: sweep, which stays as the backstop. Prefixed `x` beside the reminders' `t`,
+#: `s`, `c`, `r` and `h`, so no reminder rule can be mistaken for it.
+EXPIRY_KIND = "x0"
+
+#: How long after the deadline the expiry fires. A delivery a moment early would
+#: find the request not yet lapsed and do nothing, so it lands just after.
+EXPIRY_GRACE = dt.timedelta(seconds=30)
 
 
 def respond_by(starts_at: dt.datetime, *, requires_confirmation: bool) -> dt.datetime | None:

@@ -23,6 +23,7 @@ from app.domain.notifications import (
     REMINDER_OFFSETS,
     SESSION_REMINDER_KINDS,
 )
+from app.domain.sessions import EXPIRY_KIND
 from app.domain.suggestions import SUGGESTION_REMINDER_KIND
 from app.infra.clients.daily_presence import sighting_from, verify_daily_signature
 from app.infra.clients.notifications import live_notifier
@@ -39,7 +40,9 @@ from app.infra.clients.scheduler import (
 from app.infra.db.outbox import drain
 from app.infra.db.session_writer import (
     add_meet_link,
+    expire_requests,
     observe_presence,
+    on_ended,
     remind_before_session,
     remind_if_still_waiting,
     remind_suggestion,
@@ -84,7 +87,7 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     session_id = payload.get("session_id")
     kind = payload.get("kind")
     known = kind in REMINDER_OFFSETS or kind in SESSION_REMINDER_KINDS
-    if not session_id or not (known or kind == SUGGESTION_REMINDER_KIND):
+    if not session_id or not (known or kind in (SUGGESTION_REMINDER_KIND, EXPIRY_KIND)):
         raise ValidationError("not a reminder callback")
 
     # **Two kinds, one callback.** They differ in what they require: a response
@@ -97,6 +100,20 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     # it there.
     if kind in SESSION_REMINDER_KINDS:
         queued = await remind_before_session(session, UUID(str(session_id)), str(kind))
+    elif kind == EXPIRY_KIND:
+        # **The request's deadline** (owner, 2026-10-13): expired now, through
+        # the sweep's own code, if it is still unanswered and past it. Without
+        # a calendar here: the status commits first and the event is released
+        # after (below), so Google never cancels an invite for a request a
+        # failed commit leaves pending.
+        queued = (
+            await expire_requests(
+                session,
+                now=dt.datetime.now(dt.UTC),
+                session_ids=[UUID(str(session_id))],
+            )
+            > 0
+        )
     elif kind == SUGGESTION_REMINDER_KIND:
         # A suggested time's hold is about to lapse (#339): nudged only while
         # the offer is still unbooked and still held.
@@ -107,7 +124,10 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     # the row stays pending and the hourly sweep delivers it instead.
     await session.commit()
     notifier = getattr(request.app.state, "notifier", None) or live_notifier(settings)
-    if queued and notifier is not None:
+    # An expiry's emails are not drained here: `SendWhatWasQueued` sends exactly
+    # the rows this request queued once the response has gone, and a drain by
+    # session would also send that session's other pending rows.
+    if queued and notifier is not None and kind != EXPIRY_KIND:
         # **The callback is the moment, so it sends** (Codex on #397). The
         # outbox is otherwise drained only by the hourly settlement, which put a
         # five-minute reminder half an hour into the session. Only the rows this
@@ -120,6 +140,11 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
             entity_id=UUID(str(session_id)),
             kind=str(kind),
         )
+        await session.commit()
+    if queued and kind == EXPIRY_KIND:
+        # The expired request's calendar event, after its status committed. A
+        # refusal keeps the id for the hourly `retry_releases` (#423).
+        await on_ended(session, UUID(str(session_id)), calendar=_calendar(request))
         await session.commit()
     if queued and kind == LAST_REMINDER_KIND:
         # **The Meet arrives with the last reminder** (#384), after the email
