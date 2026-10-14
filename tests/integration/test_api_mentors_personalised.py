@@ -20,7 +20,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_bookable_mentor
+from tests.integration.factories import make_bookable_mentor, token_for
 from tests.integration.test_api_mentors import give_offering
 
 from conftest import PLATFORM_WINDOW, api_token, bearer
@@ -181,15 +181,13 @@ async def test_a_signed_in_mentor_never_sees_themself(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await a_mentor(db_engine, "self", INTERVIEW)
+    token = await token_for(db_engine, mentor)
     async with db_engine.begin() as conn:
-        auth_id = (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": mentor})
-        ).scalar_one()
         await conn.execute(
             text("UPDATE users SET email = 'self-mentor@example.com' WHERE id = :u"),
             {"u": mentor},
         )
-    headers = bearer(api_token(auth_id))
+    headers = bearer(token)
 
     anonymous = (await api_client.get(URL)).json()
     signed_in = (await api_client.get(URL, headers=headers)).json()

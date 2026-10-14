@@ -15,7 +15,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_bookable_mentor
+from tests.integration.factories import make_bookable_mentor, token_for
 from tests.integration.test_api_writes import make_user, url
 
 from app.domain.enums import CoverArt, CoverColor
@@ -122,16 +122,15 @@ async def test_the_public_profile_and_me_carry_the_cover(
             ),
             {"u": mentor},
         )
-        auth_id = (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": mentor})
-        ).scalar_one()
         await conn.execute(
             text("UPDATE users SET email = 'cover-public@example.com' WHERE id = :u"),
             {"u": mentor},
         )
 
+    token = await token_for(db_engine, mentor)
+
     public = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
-    me = (await api_client.get("/api/v1/me", headers=bearer(api_token(auth_id)))).json()
+    me = (await api_client.get("/api/v1/me", headers=bearer(token))).json()
 
     assert (public["cover_color"], public["cover_art"]) == ("mist", "single")
     assert (me["profile"]["cover_color"], me["profile"]["cover_art"]) == ("mist", "single")

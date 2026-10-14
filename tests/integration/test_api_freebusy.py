@@ -24,6 +24,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import token_for
 from tests.integration.test_api_slots import at, make_mentee, make_mentor
 from tests.off_the_loop import guarded
 
@@ -293,14 +294,10 @@ async def test_the_mentor_can_see_why_it_stopped(
     mentor, session_type = await make_mentor(db_engine, "fb-visible")
     await connect_calendar(db_engine, mentor)
     wire(api_client, FakeGoogle(raises=CalendarAccessRevokedError("the grant was revoked")))
-    auth_id = uuid4()
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentor}
-        )
+    token = await token_for(db_engine, mentor)
 
     await read_slots(api_client, mentor, session_type)
-    response = await api_client.get("/api/v1/me/calendar", headers=bearer(api_token(auth_id)))
+    response = await api_client.get("/api/v1/me/calendar", headers=bearer(token))
 
     assert response.status_code == 200
     body = response.json()
@@ -328,10 +325,8 @@ async def book_at(
 async def a_mentee_for(engine: AsyncEngine, tag: str) -> UUID:
     mentee = await make_mentee(engine, tag)
     auth_id = uuid4()
+    await token_for(engine, mentee, auth_id=auth_id)
     async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentee}
-        )
         # Booking spends a credit from PR 6 onward.
         await fund(conn, mentee)
     return auth_id

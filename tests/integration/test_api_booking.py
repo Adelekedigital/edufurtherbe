@@ -27,6 +27,7 @@ from tests.integration.factories import (
     add_availability,
     add_session_type,
     make_public_mentor,
+    token_for,
     until_blocked,
 )
 
@@ -347,14 +348,10 @@ async def test_a_mentor_cannot_book_their_own_offering(
     """
     mentor, session_type = await a_bookable_offering(db_engine, "book-self")
     slot = await first_slot(api_client, mentor, session_type)
-    auth_id = uuid4()
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentor}
-        )
+    token = await token_for(db_engine, mentor)
 
     refused = await api_client.post(
-        URL, json=body(session_type, slot), headers=bearer(api_token(auth_id)) | key()
+        URL, json=body(session_type, slot), headers=bearer(token) | key()
     )
 
     assert refused.status_code == 422, refused.text

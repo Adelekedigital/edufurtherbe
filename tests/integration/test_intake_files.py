@@ -19,6 +19,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import token_for
 from tests.integration.test_api_booking import a_bookable_offering, a_mentee, body, first_slot, key
 from tests.integration.test_booking_answers import (  # noqa: F401 - enforcing_client is a fixture
     add_question,
@@ -34,7 +35,6 @@ from conftest import (
     PDF_BYTES,
     PROBLEM_JSON,
     FakeStorage,
-    api_token,
     bearer,
     build_api_app,
     client_for,
@@ -94,12 +94,7 @@ async def file_row(engine: AsyncEngine, file_id: str) -> dict[str, Any] | None:
 
 async def signed_in(engine: AsyncEngine, user: UUID) -> dict[str, str]:
     """Headers for an existing user, giving them an identity if they had none."""
-    auth_id = uuid4()
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": user}
-        )
-    return bearer(api_token(auth_id))
+    return bearer(await token_for(engine, user))
 
 
 async def an_admin(engine: AsyncEngine, tag: str) -> dict[str, str]:

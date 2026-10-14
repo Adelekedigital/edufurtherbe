@@ -18,7 +18,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_bookable_mentor, make_public_mentor
+from tests.integration.factories import make_bookable_mentor, make_public_mentor, token_for
 
 from conftest import api_token, bearer
 
@@ -30,11 +30,7 @@ def url(handle: object, tail: str = "") -> str:
 
 
 async def auth_of(engine: AsyncEngine, user: UUID) -> dict[str, str]:
-    async with engine.begin() as conn:
-        auth_id = (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": user})
-        ).scalar_one()
-    return bearer(api_token(auth_id))
+    return bearer(await token_for(engine, user))
 
 
 async def a_stranger(engine: AsyncEngine, tag: str) -> dict[str, str]:

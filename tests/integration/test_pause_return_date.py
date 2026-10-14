@@ -17,6 +17,7 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import Integer, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from tests.integration.factories import token_for
 from tests.integration.test_mentor_status_log import ADMIN, add_mentor, make_user
 
 from app.core.config import Settings
@@ -54,11 +55,7 @@ async def a_mentor(engine: AsyncEngine, tag: str, zone: str = ZONE) -> tuple[UUI
 
 
 async def headers_of(engine: AsyncEngine, user_id: UUID) -> dict[str, str]:
-    async with engine.connect() as conn:
-        auth_id = (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": user_id})
-        ).scalar_one()
-    return bearer(api_token(auth_id))
+    return bearer(await token_for(engine, user_id))
 
 
 def local_today() -> dt.date:

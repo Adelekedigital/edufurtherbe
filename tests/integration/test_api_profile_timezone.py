@@ -14,7 +14,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_bookable_mentor
+from tests.integration.factories import make_bookable_mentor, token_for
 from tests.integration.test_api_writes import make_user, url
 
 from conftest import api_token, bearer
@@ -127,11 +127,11 @@ async def test_a_mentor_changing_zone_marks_their_next_free_time_stale(
     """Their hours are wall-clock in their zone, so the stored next free time
     is wrong the moment the zone changes: the change log records it (#175)."""
     mentor = await make_bookable_mentor(db_engine, "tz-mentor")
-    auth_id = uuid4()
+    token = await token_for(db_engine, mentor)
     async with db_engine.begin() as conn:
         await conn.execute(
-            text("UPDATE users SET auth_id = :a, email = 'tz-mentor@example.com' WHERE id = :u"),
-            {"a": auth_id, "u": mentor},
+            text("UPDATE users SET email = 'tz-mentor@example.com' WHERE id = :u"),
+            {"u": mentor},
         )
         await conn.execute(
             text("DELETE FROM mentor_availability_changes WHERE mentor_user_id = :u"),
@@ -141,7 +141,7 @@ async def test_a_mentor_changing_zone_marks_their_next_free_time_stale(
     await api_client.patch(
         url(mentor, "profile"),
         json={"timezone": "Pacific/Auckland"},
-        headers=bearer(api_token(auth_id)),
+        headers=bearer(token),
     )
 
     async with db_engine.connect() as conn:

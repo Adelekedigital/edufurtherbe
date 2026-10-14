@@ -16,19 +16,19 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_public_mentor
+from tests.integration.factories import make_public_mentor, token_for
 
 from app.core.config import Settings
 from app.infra.clients.meetings import VenueUnavailableError
 from app.infra.clients.secrets import sealed_value, unseal
-from conftest import PROBLEM_JSON, api_token, bearer
+from conftest import PROBLEM_JSON, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -106,12 +106,7 @@ def wire(
 
 async def a_mentor(engine: AsyncEngine, tag: str) -> tuple[UUID, str]:
     mentor = await make_public_mentor(engine, tag)
-    auth_id = uuid4()
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentor}
-        )
-    return mentor, api_token(auth_id)
+    return mentor, await token_for(engine, mentor)
 
 
 async def rows_for(engine: AsyncEngine, mentor: UUID) -> list[dict[str, Any]]:

@@ -24,6 +24,7 @@ from tests.integration.factories import (
     add_completed_sessions,
     make_bookable_mentor,
     make_public_mentor,
+    token_for,
 )
 from tests.integration.test_api_booking import a_mentee
 from tests.integration.test_api_mentor_search import give_offering
@@ -171,11 +172,7 @@ async def test_a_mentor_with_no_offerings_has_no_similar_mentors(
 
 
 async def auth_of(engine: AsyncEngine, user: UUID) -> dict[str, str]:
-    async with engine.begin() as conn:
-        auth_id = (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": user})
-        ).scalar_one()
-    return bearer(api_token(auth_id))
+    return bearer(await token_for(engine, user))
 
 
 @pytest.mark.parametrize(

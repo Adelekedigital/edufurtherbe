@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import text
 from tests.integration import test_api_reviews
+from tests.integration.factories import token_for
 from tests.integration.test_api_reviews import World
 
 from app.api.deps import PRIVATE_NO_STORE
@@ -191,12 +192,9 @@ async def test_the_mentor_asking_about_themself_sees_their_mentee_side_only(
     """Scoped to the caller *as mentee*: a mentor's own delivered sessions are
     not sessions they received from themself."""
     await world.completed(world.offering_a)
-    async with world.engine.begin() as conn:
-        auth_id = (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": world.mentor})
-        ).scalar_one()
+    token = await token_for(world.engine, world.mentor)
 
-    response = await world.client.get(url(world.mentor), headers=bearer(api_token(auth_id)))
+    response = await world.client.get(url(world.mentor), headers=bearer(token))
 
     assert response.json()["completed_sessions_with_mentor"] == 0
 
