@@ -19,11 +19,10 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import TIMESTAMP, Integer, and_, column, func, literal, select, union_all, values
+from sqlalchemy import TIMESTAMP, Integer, column, func, literal, select, union_all, values
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.mentor_stats import Window
-from app.infra.db.models.sessions import Session
 from app.infra.db.predicates import during
 from app.infra.db.review_stats import window_summary
 from app.infra.db.session_stats import (
@@ -31,9 +30,9 @@ from app.infra.db.session_stats import (
     BY_MENTOR,
     BY_OTHER,
     cancellations,
-    held,
+    held_count,
     mentor_window_figures,
-    missed,
+    missed_count,
 )
 
 __all__ = ["mentor_monthly_stats", "mentor_window_stats"]
@@ -91,20 +90,19 @@ async def mentor_monthly_stats(
 
 
 def _monthly(mentor: UUID, months: Sequence[Window]) -> Any:
-    """The months as a `VALUES` list, with one grouped pass over the mentor's
-    sessions and one over their cancellations, joined by position.
+    """The months as a `VALUES` list, each row's counts beside it.
 
     **`VALUES`, not `generate_series`**: the months come from
     `domain.mentor_stats.month_windows`, the one rule for a month's edges;
     stepping a `timestamptz` by `interval '1 month'` in SQL would be a second,
     and one that follows the connection's `TimeZone` rather than UTC.
 
-    **Two passes, not one join**: a session and a cancellation land in
-    different months (a cancellation is placed when it was made), so joining
-    both to a month in one `GROUP BY` would multiply one by the other. Each
-    pass reads its rows once and buckets them with `predicates.during`; the
-    figures are `FILTER`s by the window's own predicates (`held()`,
-    `missed()`, `canceller`).
+    **Held and missed are per-month scalar subqueries**, each an index scan
+    (`ix_sessions_mentor_completed` with `ix_sessions_starts_at`). A single
+    grouped join of the mentor's sessions to the months was measured slower
+    and, from a generic estimate over the month columns, tipped into JIT
+    (decision 247). Cancellations are read once (one `LATERAL` per cancelled
+    session) and joined to the month they were made in by `during()`.
     """
     bounds = (
         values(
@@ -114,47 +112,23 @@ def _monthly(mentor: UUID, months: Sequence[Window]) -> Any:
             name="months",
         )
         .data([(position, w.since, w.until) for position, w in enumerate(months)])
-        .cte("months")
+        .alias("months")
     )
     month = bounds.c
-    sessions = (
-        select(
-            month.position,
-            func.count().filter(held(mentor, month)).label("completed_sessions"),
-            func.count().filter(missed(mentor, month)).label("missed_by_mentor"),
-        )
-        .select_from(
-            bounds.outerjoin(
-                Session, and_(Session.mentor_id == mentor, during(Session.starts_at, month))
-            )
-        )
-        .group_by(month.position)
-        .subquery("held")
-    )
     cancelled = cancellations(mentor, None)
 
     def by(canceller: str) -> Any:
         return func.count().filter(cancelled.c.canceller == canceller)
 
-    cancels = (
+    return (
         select(
-            month.position,
+            held_count(mentor, month).label("completed_sessions"),
+            missed_count(mentor, month).label("missed_by_mentor"),
             by(BY_MENTOR).label("cancelled_by_mentor"),
             by(BY_MENTEE).label("cancelled_by_mentee"),
             by(BY_OTHER).label("cancelled_by_other"),
         )
         .select_from(bounds.outerjoin(cancelled, during(cancelled.c.cancelled_at, month)))
-        .group_by(month.position)
-        .subquery("cancels")
-    )
-    return (
-        select(
-            sessions.c.completed_sessions,
-            sessions.c.missed_by_mentor,
-            cancels.c.cancelled_by_mentor,
-            cancels.c.cancelled_by_mentee,
-            cancels.c.cancelled_by_other,
-        )
-        .join_from(sessions, cancels, cancels.c.position == sessions.c.position)
-        .order_by(sessions.c.position)
+        .group_by(month.position, month.since, month.until)
+        .order_by(month.position)
     )

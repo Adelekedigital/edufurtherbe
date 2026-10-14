@@ -103,6 +103,7 @@ __all__ = [
     "cancellations",
     "delivered",
     "held",
+    "held_count",
     "mentee_completed_sessions",
     "mentor_stats",
     "mentor_window_figures",
@@ -385,6 +386,11 @@ def held(mentor: Any, window: Bounds | None) -> Any:
     ``window``: the dashboard's *held*, and the rows the profile's four
     figures are over."""
     return and_(delivered(mentor), during(Session.starts_at, window))
+
+
+def held_count(mentor: Any, window: Bounds) -> Any:
+    """How many sessions `held()` matches, as a scalar subquery."""
+    return select(func.count()).select_from(Session).where(held(mentor, window)).scalar_subquery()
 
 
 def missed(mentor: Any, window: Bounds | None) -> Any:
