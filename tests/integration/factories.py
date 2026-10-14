@@ -496,16 +496,20 @@ async def add_session(
         return session_id
 
 
-async def token_for(engine: AsyncEngine, user: UUID) -> str:
-    """A bearer token authenticating as ``user``.
+async def token_for(engine: AsyncEngine, user: UUID, *, auth_id: UUID | None = None) -> str:
+    """A bearer token authenticating as the existing ``user``.
 
     `users.auth_id` is what `get_current_user` matches the token's subject
     against. `make_public_mentor` generates one and does not hand it back, and
     `add_user` leaves it null — the state every migrated user starts in and one
     no token can match. So this writes a known value rather than reading either
-    back, and one helper covers both. Shared once a third suite needed it.
+    back, and one helper covers both (#448).
+
+    Pass ``auth_id`` when the caller keeps the identity to mint more tokens
+    with `api_token`. Each call replaces the user's identity, so a token from
+    an earlier call for the same user stops matching.
     """
-    auth_id = uuid4()
+    auth_id = uuid4() if auth_id is None else auth_id
     async with engine.begin() as conn:
         await conn.execute(
             text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": user}

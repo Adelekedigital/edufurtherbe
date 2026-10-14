@@ -21,6 +21,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import token_for
 from tests.integration.test_api_booking import a_bookable_offering, a_mentee
 
 from conftest import A_REASON
@@ -98,14 +99,9 @@ async def a_request(
 
 
 async def mentor_token(engine: AsyncEngine, mentor: UUID) -> dict[str, str]:
-    from conftest import api_token, bearer
+    from conftest import bearer
 
-    auth_id = uuid4()
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentor}
-        )
-    return bearer(api_token(auth_id))
+    return bearer(await token_for(engine, mentor))
 
 
 # --------------------------------------------------------------------------

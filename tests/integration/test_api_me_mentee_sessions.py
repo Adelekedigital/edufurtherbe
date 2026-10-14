@@ -15,9 +15,9 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_session, make_bookable_mentor, mentee_of
+from tests.integration.factories import add_session, make_bookable_mentor, mentee_of, token_for
 
-from conftest import api_token, bearer
+from conftest import bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -32,12 +32,13 @@ async def sign_in(engine: AsyncEngine, user: UUID) -> dict[str, str]:
     reads, where nobody signs in.
     """
     auth_id = uuid4()
+    token = await token_for(engine, user, auth_id=auth_id)
     async with engine.begin() as conn:
         await conn.execute(
-            text("UPDATE users SET auth_id = :a, email = :e WHERE id = :u"),
-            {"a": auth_id, "e": f"{auth_id}@example.com", "u": user},
+            text("UPDATE users SET email = :e WHERE id = :u"),
+            {"e": f"{auth_id}@example.com", "u": user},
         )
-    return bearer(api_token(auth_id))
+    return bearer(token)
 
 
 async def count(client: httpx.AsyncClient, headers: dict[str, str]) -> object:

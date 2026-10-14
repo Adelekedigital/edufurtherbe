@@ -19,7 +19,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_education, make_bookable_mentor
+from tests.integration.factories import add_education, make_bookable_mentor, token_for
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -177,21 +177,13 @@ async def test_the_owner_facing_endpoint_keeps_its_fields(
     The two share one query and differ only in projection, which is the whole
     design — and the failure mode of that design is tightening the shared half.
     """
-    from uuid import uuid4
+    from conftest import bearer
 
-    from conftest import api_token, bearer
-
-    auth_id = uuid4()
     mentor = await make_bookable_mentor(db_engine, "sections-owner")
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentor}
-        )
+    token = await token_for(db_engine, mentor)
     await add_award(db_engine, mentor)
 
-    owner = await api_client.get(
-        f"/api/v1/users/{mentor}/awards", headers=bearer(api_token(auth_id))
-    )
+    owner = await api_client.get(f"/api/v1/users/{mentor}/awards", headers=bearer(token))
 
     assert owner.status_code == 200, owner.text
     assert owner.json()["data"][0]["evidence_url"] is not None

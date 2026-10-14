@@ -27,7 +27,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import add_session_type, make_public_mentor
+from tests.integration.factories import add_session_type, make_public_mentor, token_for
 
 from conftest import api_token, bearer
 
@@ -42,10 +42,7 @@ async def as_mentor(engine: AsyncEngine, tag: str, **kwargs: object) -> tuple[UU
     """
     mentor = await make_public_mentor(engine, tag, **kwargs)  # type: ignore[arg-type]
     auth_id = uuid4()
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": auth_id, "u": mentor}
-        )
+    await token_for(engine, mentor, auth_id=auth_id)
     return mentor, auth_id
 
 

@@ -23,7 +23,7 @@ import pytest
 from PIL import Image
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import make_bookable_mentor
+from tests.integration.factories import make_bookable_mentor, token_for
 from tests.integration.test_api_admin import make_user as make_user_with_role
 
 from app.api.limits import MAX_BODY_BYTES
@@ -898,13 +898,6 @@ async def test_a_cleanup_that_fails_after_the_commit_is_still_a_204(
 # --------------------------------------------------------------------------
 
 
-async def auth_of(engine: AsyncEngine, user_id: UUID) -> UUID:
-    async with engine.connect() as conn:
-        return (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :u"), {"u": user_id})
-        ).scalar_one()
-
-
 async def test_removing_the_photo_clears_it_its_focus_and_the_object(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
 ) -> None:
@@ -1048,7 +1041,7 @@ async def test_the_public_profile_reads_no_photo_after_removal(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_bookable_mentor(db_engine, "unavatar-read")
-    headers = bearer(api_token(await auth_of(db_engine, mentor)))
+    headers = bearer(await token_for(db_engine, mentor))
     await api_client.post(url(mentor, "avatar"), files=upload(FACE), headers=headers)
     before = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
     assert before["avatar_url"] is not None and before["avatar_focus"] is not None

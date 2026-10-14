@@ -32,7 +32,12 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from tests.integration.factories import add_session_type, make_public_mentor, until_blocked
+from tests.integration.factories import (
+    add_session_type,
+    make_public_mentor,
+    token_for,
+    until_blocked,
+)
 
 from app.api.schemas.common import MAX_PAGE_SIZE
 from app.core.config import Settings
@@ -506,13 +511,10 @@ async def test_the_mentor_it_is_about_cannot_read_it(world: World) -> None:
     review = (
         await world.review(await world.completed(world.offering_a), private_review=feedback)
     ).json()
-    async with world.engine.connect() as conn:
-        mentor_auth = (
-            await conn.execute(text("SELECT auth_id FROM users WHERE id = :m"), {"m": world.mentor})
-        ).scalar_one()
+    mentor_token = await token_for(world.engine, world.mentor)
 
     as_mentor = await world.client.get(
-        f"/api/v1/reviews/{review['id']}", headers=bearer(api_token(mentor_auth))
+        f"/api/v1/reviews/{review['id']}", headers=bearer(mentor_token)
     )
     as_author = await world.client.get(f"/api/v1/reviews/{review['id']}", headers=world.headers)
 

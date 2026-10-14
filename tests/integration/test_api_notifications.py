@@ -17,7 +17,12 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from tests.integration.factories import add_availability, add_session_type, make_public_mentor
+from tests.integration.factories import (
+    add_availability,
+    add_session_type,
+    make_public_mentor,
+    token_for,
+)
 
 from app.domain.notifications import Channel, Notification
 from app.infra.db.outbox import MAX_ATTEMPTS, drain
@@ -52,11 +57,9 @@ async def a_booking(
     session_type = await add_session_type(engine, mentor, duration=60, notice=0)
     for day in range(7):
         await add_availability(engine, mentor, day_of_week=day, start="00:00", end="23:00")
-    mentor_auth, mentee_auth = uuid4(), uuid4()
+    mentor_token = await token_for(engine, mentor)
+    mentee_auth = uuid4()
     async with engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE users SET auth_id = :a WHERE id = :u"), {"a": mentor_auth, "u": mentor}
-        )
         mentee = (
             await conn.execute(
                 text(
@@ -94,7 +97,7 @@ async def a_booking(
         "id": created.json()["id"],
         "mentor": mentor,
         "mentee": mentee,
-        "mentor_headers": bearer(api_token(mentor_auth)),
+        "mentor_headers": bearer(mentor_token),
         "mentee_headers": bearer(api_token(mentee_auth)),
     }
 
