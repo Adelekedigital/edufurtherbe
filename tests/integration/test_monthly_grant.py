@@ -20,6 +20,7 @@ from app.core.config import Settings
 from app.domain.credits import credit_ladder
 from app.infra.db.credit_grants import grant_monthly_credits
 from app.infra.db.engine import create_session_factory
+from conftest import add_user
 
 #: Built from explicit settings, so this suite is about the code rather than
 #: about the environment the machine happens to hold.
@@ -42,19 +43,13 @@ async def a_user(
 ) -> UUID:
     tag = uuid4()
     async with engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone, deleted_at) "
-                    "VALUES (:e, :r, 'Africa/Lagos', :d) RETURNING id"
-                ),
-                {
-                    "e": f"{tag}@example.com",
-                    "r": role,
-                    "d": dt.datetime(2026, 1, 1, tzinfo=dt.UTC) if deleted else None,
-                },
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            conn,
+            f"{tag}@example.com",
+            primary_role=role,
+            timezone="Africa/Lagos",
+            deleted_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC) if deleted else None,
+        )
         if goal:
             await conn.execute(
                 text("INSERT INTO mentee_goals (user_id) VALUES (:u)"), {"u": user_id}

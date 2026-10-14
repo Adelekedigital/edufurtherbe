@@ -402,20 +402,16 @@ async def db_engine(migrated_database: str) -> AsyncIterator[AsyncEngine]:
 
 
 # --------------------------------------------------------------------------
-# One way to make a user, for every schema test that needs one
+# One way to make a user, for every test that needs one
 #
-# Lives here rather than in a test module because a second suite now needs it,
-# which is the extract-on-the-second-occurrence case non-negotiable #8 names.
-# The hazard is specific rather than aesthetic: a private copy that supplied its
-# own `id` would keep passing after somebody removed the `uuid_generate_v7()`
-# default, and nothing would say so. One definition, one behaviour.
+# Lives here rather than in a test module because every tier needs it, which is
+# the extract-on-the-second-occurrence case non-negotiable #8 names. Until #454
+# some sixty suites wrote their own `INSERT INTO users`; a new required column
+# or a changed default had to be found in each by hand. The hazard is specific
+# rather than aesthetic: a private copy that supplied its own `id` would keep
+# passing after somebody removed the `uuid_generate_v7()` default, and nothing
+# would say so. One definition, one behaviour.
 # --------------------------------------------------------------------------
-
-INSERT_USER = """
-INSERT INTO users (email, slug, deleted_at)
-VALUES (:email, :slug, :deleted_at)
-RETURNING id
-"""
 
 
 async def add_user(
@@ -424,6 +420,14 @@ async def add_user(
     *,
     slug: str | None = None,
     deleted_at: datetime | None = None,
+    auth_id: uuid.UUID | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    primary_role: str | None = None,
+    timezone: str | None = None,
+    legacy_bubble_id: str | None = None,
+    last_active_at: datetime | None = None,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
     """Insert a user and return the id the database generated.
 
@@ -432,12 +436,30 @@ async def add_user(
     what production does and a standing check that the default is still there —
     a test that passed its own id would keep passing after somebody removed it.
 
-    ``auth_id`` is left null, which is the state every migrated user starts in.
+    A column left as ``None`` is not named, so it takes the schema's default
+    (`mentee`, `UTC`, `now()`, or null). ``auth_id`` left null is the state
+    every migrated user starts in; `factories.token_for` gives them one.
     """
-    created = await conn.execute(
-        text(INSERT_USER),
-        {"email": email, "slug": slug, "deleted_at": deleted_at},
+    columns = {
+        "email": email,
+        "slug": slug,
+        "deleted_at": deleted_at,
+        "auth_id": auth_id,
+        "first_name": first_name,
+        "last_name": last_name,
+        "primary_role": primary_role,
+        "timezone": timezone,
+        "legacy_bubble_id": legacy_bubble_id,
+        "last_active_at": last_active_at,
+        "created_at": created_at,
+    }
+    named = {column: value for column, value in columns.items() if value is not None}
+    # The names come from the signature above, never from a caller's string.
+    statement = (
+        f"INSERT INTO users ({', '.join(named)}) "  # noqa: S608
+        f"VALUES ({', '.join(':' + column for column in named)}) RETURNING id"
     )
+    created = await conn.execute(text(statement), named)
     return uuid.UUID(str(created.scalar_one()))
 
 

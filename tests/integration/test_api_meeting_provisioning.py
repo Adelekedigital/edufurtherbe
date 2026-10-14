@@ -25,7 +25,7 @@ from tests.integration.factories import (
 from tests.integration.meeting_fakes import FakeCalendar, FakeDoor, FakeRooms
 
 from app.domain.messages import MessageContext, build_variables
-from conftest import A_REASON, api_token, bearer, fund_by_auth
+from conftest import A_REASON, add_user, api_token, bearer, fund_by_auth
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -43,12 +43,13 @@ async def a_mentor_on(
     mentor_token = await token_for(engine, mentor)
     mentee_auth = uuid4()
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                "VALUES (:e, :a, 'Mo', 'mentee', 'Africa/Lagos')"
-            ),
-            {"e": f"mentee-{tag}@example.test", "a": mentee_auth},
+        await add_user(
+            conn,
+            f"mentee-{tag}@example.test",
+            auth_id=mentee_auth,
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
         )
         # Booking spends a credit from PR 6 onward; this mentee has to be
         # able to pay for the sessions the test makes.

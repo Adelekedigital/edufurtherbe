@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -36,15 +36,14 @@ async def make_user(
     revoked: bool = False,
 ) -> UUID:
     async with engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": email, "a": auth_id},
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            conn,
+            email,
+            auth_id=auth_id,
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="UTC",
+        )
         if role:
             await conn.execute(
                 text(
@@ -63,15 +62,9 @@ async def add_institution(
 ) -> UUID:
     async with engine.begin() as conn:
         if creator is None:
-            creator = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO users (email, primary_role, timezone) "
-                        "VALUES (:e, 'mentee', 'UTC') RETURNING id"
-                    ),
-                    {"e": f"creator-{uuid4()}@example.com"},
-                )
-            ).scalar_one()
+            creator = await add_user(
+                conn, f"creator-{uuid4()}@example.com", primary_role="mentee", timezone="UTC"
+            )
         return (
             await conn.execute(
                 text(

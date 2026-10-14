@@ -30,7 +30,7 @@ from app.api.deps import PRIVATE_NO_STORE
 from app.domain.mentor_stats import Window, trend_windows
 from app.domain.reviews import OVERALL_STANDS_ALONE_FROM
 from app.infra.db.mentor_dashboard import mentor_window_stats
-from conftest import bearer
+from conftest import add_user, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -70,15 +70,9 @@ async def review(
     withdrawn: bool = False,
 ) -> None:
     async with engine.begin() as conn:
-        author = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES (:e, 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"author-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        author = await add_user(
+            conn, f"author-{uuid4()}@example.test", primary_role="mentee", timezone="UTC"
+        )
         await conn.execute(
             text(
                 "INSERT INTO reviews (reviewed_by, reviewed_for, communication_rating, "
@@ -205,15 +199,9 @@ async def test_a_non_mentor_reads_zeros_not_an_error(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     async with db_engine.begin() as conn:
-        user = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES (:e, 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"plain-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        user = await add_user(
+            conn, f"plain-{uuid4()}@example.test", primary_role="mentee", timezone="UTC"
+        )
 
     body = await stats(api_client, await token_for(db_engine, user), "")
 

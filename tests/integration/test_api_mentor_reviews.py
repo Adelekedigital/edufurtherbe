@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_availability, add_session_type, make_public_mentor
 
 from app.infra.db.review_stats import published
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -74,15 +75,14 @@ class Profile:
         """
         tag = uuid4().hex[:10]
         async with self.engine.begin() as conn:
-            author = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO users (email, first_name, last_name, primary_role, timezone) "
-                        "VALUES (:e, :f, :l, 'mentee', 'Africa/Lagos') RETURNING id"
-                    ),
-                    {"e": f"r-{tag}@example.test", "f": author_name[0], "l": author_name[1]},
-                )
-            ).scalar_one()
+            author = await add_user(
+                conn,
+                f"r-{tag}@example.test",
+                first_name=author_name[0],
+                last_name=author_name[1],
+                primary_role="mentee",
+                timezone="Africa/Lagos",
+            )
             if institution is not None:
                 await conn.execute(
                     text(

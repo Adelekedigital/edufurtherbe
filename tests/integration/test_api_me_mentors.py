@@ -28,7 +28,7 @@ from tests.integration.factories import (
 )
 
 from app.api.deps import PRIVATE_NO_STORE
-from conftest import bearer
+from conftest import add_user, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -376,14 +376,13 @@ async def test_a_mentor_with_no_mentor_profile_is_listed_as_unavailable(
     """Not deleted, so not dropped: a migrated mentor may have no profile row,
     and the sessions still happened. Nobody can book them."""
     async with db_engine.begin() as conn:
-        bare = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES ('bare-mentor@example.test', 'Bare', 'mentor', 'UTC') RETURNING id"
-                )
-            )
-        ).scalar_one()
+        bare = await add_user(
+            conn,
+            "bare-mentor@example.test",
+            first_name="Bare",
+            primary_role="mentor",
+            timezone="UTC",
+        )
     mentee = await met(db_engine, bare)
 
     assert await bookability(api_client, await token_for(db_engine, mentee)) == {

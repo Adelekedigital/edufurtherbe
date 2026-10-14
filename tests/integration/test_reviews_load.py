@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.domain.transform.reviews import plan_reviews
 from app.infra.etl.reconcile import reconcile_reviews
 from app.infra.etl.reviews import ReviewLoader
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -65,15 +66,13 @@ async def users(db_engine: AsyncEngine) -> dict[str, UUID]:
     resolved: dict[str, UUID] = {}
     async with db_engine.begin() as conn:
         for anchor, role in ((AUTHOR, "mentee"), (SUBJECT, "mentor")):
-            user_id = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO users (email, primary_role, timezone, legacy_bubble_id) "
-                        "VALUES (:e, :r, 'Africa/Lagos', :a) RETURNING id"
-                    ),
-                    {"e": f"{role}-{tag}@example.test", "r": role, "a": anchor},
-                )
-            ).scalar_one()
+            user_id = await add_user(
+                conn,
+                f"{role}-{tag}@example.test",
+                primary_role=role,
+                timezone="Africa/Lagos",
+                legacy_bubble_id=anchor,
+            )
             resolved[anchor] = UUID(str(user_id))
     return resolved
 

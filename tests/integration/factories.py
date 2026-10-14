@@ -6,11 +6,10 @@ bare name `from conftest import ...`, which resolves to whichever `conftest`
 reaches `sys.path` first. A nested one shadows `tests/conftest.py` and breaks
 every one of them at collection. A module of helpers is a module.
 
-**Here rather than copied into each file.** `make_user` is currently defined in
-seven integration modules, each drifted toward whatever its own tests needed —
-recorded in `failure-modes.md` as debt this project should stop adding to. A
-public mentor is now needed by two suites, so it goes in one place before there
-is a second copy rather than after there are nine.
+**Here rather than copied into each file.** A public mentor is needed by
+several suites, so it lives in one place. The user row itself is
+`conftest.add_user`, which every suite now goes through (#454) rather than
+writing its own `INSERT INTO users`.
 
 The scope is deliberately narrow: a mentor who may be seen publicly, and one
 thing they offer. Availability windows stay with the slots tests, because only
@@ -26,7 +25,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import api_token
+from conftest import add_user, api_token
 
 LAGOS = "Africa/Lagos"
 
@@ -48,16 +47,16 @@ async def make_public_mentor(
     that, so a test can give one mentor several or none.
     """
     async with engine.begin() as conn:
-        mentor = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users "
-                    "(email, auth_id, first_name, last_name, slug, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'Lovelace', :s, 'mentor', :z) RETURNING id"
-                ),
-                {"e": f"mentor-{tag}@example.test", "a": uuid4(), "s": slug, "z": timezone},
-            )
-        ).scalar_one()
+        mentor = await add_user(
+            conn,
+            f"mentor-{tag}@example.test",
+            auth_id=uuid4(),
+            first_name="Ada",
+            last_name="Lovelace",
+            slug=slug,
+            primary_role="mentor",
+            timezone=timezone,
+        )
         await conn.execute(
             text(
                 "INSERT INTO mentor_profiles "
@@ -309,15 +308,13 @@ async def add_completed_sessions(
     a constraint not applying breaks the day the constraint widens.
     """
     async with engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:e, 'Mentee', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"mentee-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            f"mentee-{uuid4()}@example.test",
+            first_name="Mentee",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         session_type = (
             await conn.execute(
                 text("SELECT id FROM session_types WHERE mentor_user_id = :m LIMIT 1"),
@@ -443,15 +440,13 @@ async def add_session(
     """
     async with engine.begin() as conn:
         if mentee is None:
-            mentee = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO users (email, first_name, primary_role, timezone) "
-                        "VALUES (:e, 'Mentee', 'mentee', 'UTC') RETURNING id"
-                    ),
-                    {"e": f"mentee-{uuid4()}@example.test"},
-                )
-            ).scalar_one()
+            mentee = await add_user(
+                conn,
+                f"mentee-{uuid4()}@example.test",
+                first_name="Mentee",
+                primary_role="mentee",
+                timezone="UTC",
+            )
         session_type = (
             await conn.execute(
                 text("SELECT id FROM session_types WHERE mentor_user_id = :m LIMIT 1"),

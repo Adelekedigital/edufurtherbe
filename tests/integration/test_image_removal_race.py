@@ -25,7 +25,7 @@ from app.infra.db.asset_store import (
     store_image,
 )
 from app.infra.storage.supabase import SupabaseStorage
-from conftest import FakeStorage, image_bytes, storage_for
+from conftest import FakeStorage, add_user, image_bytes, storage_for
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -34,15 +34,14 @@ KINDS = [AssetKind.AVATAR, AssetKind.BANNER]
 
 async def make_user(engine: AsyncEngine) -> UUID:
     async with engine.begin() as conn:
-        return (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": f"race-{uuid4().hex[:8]}@example.com", "a": uuid4()},
-            )
-        ).scalar_one()
+        return await add_user(
+            conn,
+            f"race-{uuid4().hex[:8]}@example.com",
+            auth_id=uuid4(),
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
 
 
 async def stored_url(engine: AsyncEngine, user_id: UUID, kind: AssetKind) -> str | None:

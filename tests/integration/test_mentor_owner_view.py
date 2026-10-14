@@ -20,7 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import make_bookable_mentor, make_public_mentor, token_for
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -36,12 +36,12 @@ async def auth_of(engine: AsyncEngine, user: UUID) -> dict[str, str]:
 async def a_stranger(engine: AsyncEngine, tag: str) -> dict[str, str]:
     auth_id = uuid4()
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                "VALUES (:e, :a, 'mentee', 'UTC')"
-            ),
-            {"e": f"stranger-{tag}@example.test", "a": auth_id},
+        await add_user(
+            conn,
+            f"stranger-{tag}@example.test",
+            auth_id=auth_id,
+            primary_role="mentee",
+            timezone="UTC",
         )
     return bearer(api_token(auth_id))
 

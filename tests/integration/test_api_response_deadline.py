@@ -30,7 +30,7 @@ from tests.integration.factories import (
 )
 
 from app.infra.db.session_writer import expire_requests
-from conftest import api_token, bearer, fund_by_auth
+from conftest import add_user, api_token, bearer, fund_by_auth
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -46,12 +46,13 @@ async def a_request(
     mentor_token = await token_for(engine, mentor)
     mentee_auth = uuid4()
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                "VALUES (:e, :a, 'Mo', 'mentee', 'Africa/Lagos')"
-            ),
-            {"e": f"mentee-{tag}@example.test", "a": mentee_auth},
+        await add_user(
+            conn,
+            f"mentee-{tag}@example.test",
+            auth_id=mentee_auth,
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
         )
         # Booking spends a credit from PR 6 onward; this mentee has to be
         # able to pay for the sessions the test makes.
@@ -328,12 +329,12 @@ async def test_the_freed_slot_can_be_booked_by_somebody_else(
     await sweep(db_engine)
     other = uuid4()
     async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, primary_role, timezone) "
-                "VALUES (:e, :a, 'mentee', 'Africa/Lagos')"
-            ),
-            {"e": f"rebook-{other}@example.test", "a": other},
+        await add_user(
+            conn,
+            f"rebook-{other}@example.test",
+            auth_id=other,
+            primary_role="mentee",
+            timezone="Africa/Lagos",
         )
         # The second mentee books too, so they need credits of their own.
         await fund_by_auth(conn, other)

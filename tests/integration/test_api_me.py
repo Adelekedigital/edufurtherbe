@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import PROBLEM_JSON, api_token, bearer
+from conftest import PROBLEM_JSON, add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -33,15 +33,14 @@ async def seed_user(
     email: str = "someone@example.com",
 ) -> None:
     async with engine.begin() as conn:
-        row = await conn.execute(
-            text(
-                "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                "VALUES (:e, :a, 'Ada', 'mentor', 'Africa/Lagos') "
-                "RETURNING id"
-            ),
-            {"a": auth_id, "e": email},
+        user_id = await add_user(
+            conn,
+            email,
+            auth_id=auth_id,
+            first_name="Ada",
+            primary_role="mentor",
+            timezone="Africa/Lagos",
         )
-        user_id = row.scalar_one()
         await conn.execute(
             text("INSERT INTO user_profiles (user_id, about_me) VALUES (:u, 'Hello')"),
             {"u": user_id},

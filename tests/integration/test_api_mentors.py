@@ -22,6 +22,8 @@ from tests.integration.factories import (
     make_public_mentor,
 )
 
+from conftest import add_user
+
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 
@@ -179,15 +181,14 @@ async def test_a_user_who_is_not_a_mentor_is_a_404(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     async with db_engine.begin() as conn:
-        mentee = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES ('plain@example.test', :a, 'Bo', 'mentee', 'UTC') RETURNING id"
-                ),
-                {"a": uuid4()},
-            )
-        ).scalar_one()
+        mentee = await add_user(
+            conn,
+            "plain@example.test",
+            auth_id=uuid4(),
+            first_name="Bo",
+            primary_role="mentee",
+            timezone="UTC",
+        )
 
     assert (await api_client.get(url(mentee))).status_code == 404
 

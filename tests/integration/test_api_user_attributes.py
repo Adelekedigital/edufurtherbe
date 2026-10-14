@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -32,15 +32,14 @@ async def make_user(
     engine: AsyncEngine, auth_id: UUID, email: str, *, admin: bool = False, revoked: bool = False
 ) -> UUID:
     async with engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentee', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": email, "a": auth_id},
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            conn,
+            email,
+            auth_id=auth_id,
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+        )
         if admin:
             # Two whole statements rather than one interpolated: `now()` is SQL
             # and cannot be a bind value, and building it by f-string is what

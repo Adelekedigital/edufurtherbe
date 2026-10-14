@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import event, text
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import (
     add_session,
@@ -27,7 +27,7 @@ from tests.integration.factories import (
 from app.api.deps import PRIVATE_NO_STORE
 from app.domain.mentee_stats import dashboard_windows
 from app.infra.db.mentee_dashboard import mentee_dashboard
-from conftest import bearer
+from conftest import add_user, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -253,15 +253,9 @@ async def test_a_new_user_reads_zeros_not_an_error(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     async with db_engine.begin() as conn:
-        user = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, primary_role, timezone) "
-                    "VALUES (:e, 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"mdash-new-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        user = await add_user(
+            conn, f"mdash-new-{uuid4()}@example.test", primary_role="mentee", timezone="UTC"
+        )
 
     assert_zeros(await dashboard(api_client, await token_for(db_engine, user)))
 

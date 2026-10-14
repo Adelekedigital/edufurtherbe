@@ -26,7 +26,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import api_token, bearer
+from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -48,15 +48,14 @@ async def make_mentor(
     engine: AsyncEngine, auth_id: UUID, email: str, *, admin: bool = False
 ) -> UUID:
     async with engine.begin() as conn:
-        user_id = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentor', 'Africa/Lagos') RETURNING id"
-                ),
-                {"e": email, "a": auth_id},
-            )
-        ).scalar_one()
+        user_id = await add_user(
+            conn,
+            email,
+            auth_id=auth_id,
+            first_name="Ada",
+            primary_role="mentor",
+            timezone="Africa/Lagos",
+        )
         await conn.execute(
             text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'M')"),
             {"u": user_id},

@@ -22,6 +22,7 @@ from tests.conftest import SECRET, bearer
 
 from app.core.config import Settings
 from app.infra.auth.supabase import SupabaseTokenVerifier
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -44,15 +45,14 @@ def settings_for(dsn: str, **overrides: object) -> Settings:
 
 async def seed(engine: AsyncEngine, email: str, *, auth_id: UUID | None) -> UUID:
     async with engine.begin() as connection:
-        return (
-            await connection.execute(
-                text(
-                    "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
-                    "VALUES (:e, :a, 'Ada', 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": email, "a": auth_id},
-            )
-        ).scalar_one()
+        return await add_user(
+            connection,
+            email,
+            auth_id=auth_id,
+            first_name="Ada",
+            primary_role="mentee",
+            timezone="UTC",
+        )
 
 
 def dsn_of(engine: AsyncEngine) -> str:

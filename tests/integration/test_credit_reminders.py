@@ -25,6 +25,7 @@ from app.domain.messages import build_variables
 from app.infra.db.credit_reminders import remind_about_expiring_credits
 from app.infra.db.engine import create_session_factory
 from app.infra.db.outbox import drain
+from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -37,21 +38,12 @@ BOUNDARY = dt.datetime(2026, 10, 1, tzinfo=dt.UTC)
 async def a_user(engine: AsyncEngine, *, deleted: bool = False) -> UUID:
     tag = uuid4()
     async with engine.begin() as conn:
-        return UUID(
-            str(
-                (
-                    await conn.execute(
-                        text(
-                            "INSERT INTO users (email, primary_role, timezone, deleted_at) "
-                            "VALUES (:e, 'mentee', 'Africa/Lagos', :d) RETURNING id"
-                        ),
-                        {
-                            "e": f"{tag}@example.com",
-                            "d": dt.datetime(2026, 1, 1, tzinfo=dt.UTC) if deleted else None,
-                        },
-                    )
-                ).scalar_one()
-            )
+        return await add_user(
+            conn,
+            f"{tag}@example.com",
+            primary_role="mentee",
+            timezone="Africa/Lagos",
+            deleted_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC) if deleted else None,
         )
 
 

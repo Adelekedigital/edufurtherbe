@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import make_bookable_mentor
 from tests.integration.test_api_me_mentee_sessions import sign_in
 
-from conftest import A_REASON
+from conftest import A_REASON, add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -29,15 +29,13 @@ PENDING, CONFIRMED = "pending_mentor_approval", "confirmed"
 
 async def a_user(engine: AsyncEngine, *, goal: bool = False) -> UUID:
     async with engine.begin() as conn:
-        user = (
-            await conn.execute(
-                text(
-                    "INSERT INTO users (email, first_name, primary_role, timezone) "
-                    "VALUES (:e, 'Mo', 'mentee', 'UTC') RETURNING id"
-                ),
-                {"e": f"user-{uuid4()}@example.test"},
-            )
-        ).scalar_one()
+        user = await add_user(
+            conn,
+            f"user-{uuid4()}@example.test",
+            first_name="Mo",
+            primary_role="mentee",
+            timezone="UTC",
+        )
         if goal:
             await conn.execute(text("INSERT INTO mentee_goals (user_id) VALUES (:u)"), {"u": user})
     return user

@@ -26,6 +26,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from conftest import add_user
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 LAGOS = "Africa/Lagos"
@@ -59,15 +61,7 @@ async def make_mentor(conn: AsyncConnection, email: str) -> str:
     A function rather than a second fixture, because the cross-mentor exclusion
     test needs two of them and a fixture cannot be asked for twice.
     """
-    user_id = (
-        await conn.execute(
-            text(
-                "INSERT INTO users (email, primary_role, timezone) "
-                "VALUES (:email, 'mentor', :tz) RETURNING id"
-            ),
-            {"email": email, "tz": LAGOS},
-        )
-    ).scalar_one()
+    user_id = await add_user(conn, email, primary_role="mentor", timezone=LAGOS)
     await conn.execute(
         text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'Test mentor')"),
         {"u": user_id},
