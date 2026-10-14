@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.errors import ValidationError
+from app.domain.enums import SessionRole
 from app.infra.db.holds import active_hold
 from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant, SessionType
 from app.infra.db.models.suggestions import SessionSuggestion
@@ -248,6 +249,23 @@ def is_a_party(viewer_id: UUID) -> Any:
     return or_(Session.mentor_id == viewer_id, Session.mentee_id == viewer_id)
 
 
+#: The sides a session list can be narrowed to, and the column that says so.
+#: Exhaustive on purpose: `SessionRole` has `observer` too, which no session
+#: column holds, so it is not a side a list can ask for.
+_SIDES = {SessionRole.MENTOR: Session.mentor_id, SessionRole.MENTEE: Session.mentee_id}
+
+
+def _on_side(viewer_id: UUID, side: SessionRole) -> Any:
+    """Sessions where the viewer is on ``side``: mentoring or being mentored.
+
+    A narrower form of :func:`is_a_party`, used **instead of** it when a side is
+    asked for, so the read stays scoped to the viewer in the query and the
+    planner sees one column rather than an `OR`. Any role but the two is a
+    `KeyError`, never a silent fall-through.
+    """
+    return _SIDES[side] == viewer_id
+
+
 def _after(cursor: tuple[str, UUID], *, ascending: bool) -> Any:
     """The keyset position, as a comparison on ``(starts_at, id)``.
 
@@ -279,6 +297,7 @@ async def list_sessions(
     starts_before: dt.datetime | None = None,
     statuses: Sequence[str] = (),
     ascending: bool = False,
+    side: SessionRole | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Every session one user is a party to, newest first unless ``ascending``.
 
@@ -289,7 +308,11 @@ async def list_sessions(
     the filter; a range over every status walks ``ix_sessions_starts_at``,
     which is the unfiltered list's own plan.
 
-    **Either party, in one list.** A user may be a mentor and a mentee — dual
+    **Optionally narrowed to one side** (``side``): the sessions they mentor or
+    the ones they booked, as a filter in the paged statement so ``limit``
+    counts only matching rows.
+
+    **Either party, in one list** otherwise. A user may be a mentor and a mentee — dual
     roles are free by design, since authorization is profile existence rather
     than a role column — and "my sessions" means the sessions I am in. The row
     carries both ``mentor_id`` and ``mentee_id``, so a client can tell which
@@ -311,7 +334,7 @@ async def list_sessions(
     keys = (Session.starts_at, Session.id)
     statement = (
         _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS))
-        .where(is_a_party(user_id))
+        .where(_on_side(user_id, side) if side is not None else is_a_party(user_id))
         .order_by(*(k.asc() if ascending else k.desc() for k in keys))
     )
     if starts_from is not None:

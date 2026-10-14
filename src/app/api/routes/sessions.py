@@ -105,7 +105,8 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
         "description": (
             "The `cursor` was not one this endpoint issued or was issued for the "
             "other `order`, `to` is not after `from`, `order` is not `asc` or "
-            "`desc`, or a `status` is not a session status."
+            "`desc`, a `status` is not a session status, or `as` is not `mentor` "
+            "or `mentee`."
         )
     },
 }
@@ -117,7 +118,9 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
     summary="List a user's sessions",
     description=(
         "Every session this user is a party to — as mentor, as mentee, or "
-        "both — newest first by default.\n\n"
+        "both — newest first by default. **`as=mentor`** or **`as=mentee`** "
+        "narrows it to one side, in the paged query, so a mentor's next session "
+        "is one call.\n\n"
         "**`order=asc`** lists soonest first instead, for an Upcoming view: "
         "pair it with `status=confirmed&from=<today>` and the next session leads "
         "page one. The order applies before the page is cut, and a `cursor` "
