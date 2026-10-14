@@ -6,9 +6,8 @@ Date: 2026-08-06
 
 Accepted — hosting-provider portion superseded by ADR 0028. External/manual
 migrations, no startup migrations, and the host-independent entrypoint remain.
-Decision 1's `fastapi run` is not how the app starts any more: Railway runs
-`uvicorn`, and `fastapi-cli` left the dependencies in #19. `[tool.fastapi]`
-stays in `pyproject.toml` for a possible return to FastAPI Cloud.
+Decision 1's `fastapi run` and `[tool.fastapi]` were removed in #19, since Railway
+runs `uvicorn`; restore them from history if the deploy target ever becomes FastAPI Cloud.
 
 ## Context
 

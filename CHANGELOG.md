@@ -27,17 +27,20 @@ released. A tag with no matching section here fails the release job.
   workflow; production remains disabled until explicit go-live reconciliation.
   Railway is the current host, while GitHub Actions retains CI, migrations,
   security, reconciliation, and exceptional recovery (ADR 0028).
-- **`fastapi[standard]` is now bare `fastapi`, and the image ships 14 fewer
+- **`fastapi[standard]` is now bare `fastapi`, and the image ships 17 fewer
   packages (#19).** Gone from the runtime set: `fastapi-cli`,
   `fastapi-cloud-cli`, `typer`, `jinja2`, `rich`, `rich-toolkit`, `pygments`,
   `markdown-it-py`, `mdurl`, `shellingham`, `rignore`, `fastar`,
   `detect-installer` and `pydantic-extra-types`. Nothing imported them, and
-  Railway starts the app with `uvicorn`, not `fastapi run`. What the app did
-  use through the extra is now declared directly: `httpx` (every outbound
-  client), `starlette`, `python-multipart` (the upload forms) and
-  `email-validator` (`EmailStr`). `sentry-sdk` stays, declared since ADR 0030.
-  `tests/unit/test_runtime_dependencies.py` fails when `src/` imports a package
-  `[project] dependencies` does not declare.
+  Railway starts the app with `uvicorn`, not `fastapi run`, so `[tool.fastapi]`
+  is gone too. `alembic` (with `mako` and `markupsafe`) moved to the dev group:
+  migrations run from the Migrate workflow and dev machines, never inside the
+  app. What the app did use through the extra is now declared directly:
+  `httpx` (every outbound client), `starlette`, `python-multipart` (the upload
+  forms) and `email-validator` (`EmailStr`). `sentry-sdk` stays, declared since
+  ADR 0030. `tests/unit/test_runtime_dependencies.py` fails when `src/` imports
+  a package `[project] dependencies` does not declare, or when a package the
+  app needs without importing it, or its required extra, goes missing.
 
 ### Fixed
 
