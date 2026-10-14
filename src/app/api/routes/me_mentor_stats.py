@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import OwnMentorStatsDep
+from app.api.deps import PRIVATE_NO_STORE, OwnMentorStatsDep
 from app.api.schemas.mentor_stats import MentorStatsRead, MentorStatsWindowRead
 
 router = APIRouter(prefix="/api/v1/me/mentor-stats", tags=["mentor-stats"])
@@ -37,7 +37,7 @@ RESPONSES: dict[int | str, dict[str, str]] = {
     responses=RESPONSES,
 )
 async def read_own_mentor_stats(stats: OwnMentorStatsDep, response: Response) -> MentorStatsRead:
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
     return MentorStatsRead(
         window_days=stats["window_days"],
         current=MentorStatsWindowRead.of(stats["current"]),

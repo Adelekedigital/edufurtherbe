@@ -19,13 +19,19 @@ from pydantic import BaseModel, Field
 from app.domain.mentor_stats import DEFAULT_WINDOW_DAYS
 
 
-class MentorStatsWindowRead(BaseModel):
+class WindowBoundsRead(BaseModel):
+    """A dashboard window's edges, `[since, until)` in UTC: one definition for
+    every dashboard (decisions 246, 249), so they cannot disagree about an edge."""
+
+    since: dt.datetime = Field(description="Start of the window, UTC, **inclusive**.")
+    until: dt.datetime = Field(description="End of the window, UTC, **exclusive**.")
+
+
+class MentorStatsWindowRead(WindowBoundsRead):
     """One window's figures. Held and missed sessions belong to the window their
     `starts_at` falls in; a cancellation to the one it was made in; a review to
     the one it was written in."""
 
-    since: dt.datetime = Field(description="Start of the window, UTC, **inclusive**.")
-    until: dt.datetime = Field(description="End of the window, UTC, **exclusive**.")
     completed_sessions: int = Field(
         default=0,
         description=(

@@ -43,6 +43,7 @@ from app.core.errors import (
 from app.domain.attendance import door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
+from app.domain.mentee_dashboard import dashboard_windows
 from app.domain.refunds import RefundPolicy, refund_policy
 from app.domain.sessions import TRANSITIONS
 from app.infra.clients.meetings import (
@@ -54,6 +55,7 @@ from app.infra.clients.meetings import (
 )
 from app.infra.clients.scheduler import SchedulerPort, scheduler_for
 from app.infra.db.idempotency import Replayed, record_response
+from app.infra.db.mentee_dashboard import mentee_dashboard
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -633,3 +635,12 @@ SessionDoorDep = Annotated[str | None, Depends(session_door)]
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
 SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events)]
+
+
+async def own_dashboard(user: CurrentUserDep, session: SessionDep) -> dict[str, Any]:
+    """The caller's figures as a mentee (decision 249). Scoped to the caller in
+    every statement; anyone with no sessions received reads zeros."""
+    return await mentee_dashboard(session, user["id"], dashboard_windows(dt.datetime.now(dt.UTC)))
+
+
+OwnDashboardDep = Annotated[dict[str, Any], Depends(own_dashboard)]

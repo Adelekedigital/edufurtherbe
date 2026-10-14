@@ -41,6 +41,7 @@ from app.api.deps.calendar import (
     UpdatedConferencingDep,
 )
 from app.api.deps.core import (
+    PRIVATE_NO_STORE,
     BookingWindowDep,
     CurrentUserDep,
     SettingsDep,
@@ -133,6 +134,7 @@ from app.api.deps.sessions import (
     DeclinedSessionDep,
     JoinedSessionDep,
     JoinLeadDep,
+    OwnDashboardDep,
     RefundPolicyDep,
     SessionDetailDep,
     SessionDoorDep,
@@ -146,6 +148,7 @@ from app.api.deps.sessions import (
 
 __all__ = [
     "MAX_FILE_MB",
+    "PRIVATE_NO_STORE",
     "AcceptedSessionDep",
     "AdminCreditGrantDep",
     "AdminGrantHistoryDep",
@@ -208,6 +211,7 @@ __all__ = [
     "OwnAttributesDep",
     "OwnCalendarDep",
     "OwnConferencingDep",
+    "OwnDashboardDep",
     "OwnInterestsDep",
     "OwnMentorStatsDep",
     "OwnOnboardingDep",

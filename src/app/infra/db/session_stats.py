@@ -100,6 +100,8 @@ __all__ = [
     "cancellations",
     "delivered",
     "mentee_completed_sessions",
+    "mentee_missed",
+    "mentee_window_figures",
     "mentor_stats",
     "mentor_window_figures",
     "missed_by",
@@ -352,20 +354,61 @@ def missed_by(party: Any) -> Any:
     return and_(Session.status.in_(TERMINAL), absent)
 
 
+def _missed_count(side: Any, user: Any, window: Window) -> Any:
+    """How many sessions on ``side`` (`Session.mentor_id` or `.mentee_id`)
+    ``user`` missed, starting inside ``window``: `missed_by()` scoped to them,
+    for either dashboard."""
+    return (
+        select(func.count())
+        .select_from(Session)
+        .where(side == user, during(Session.starts_at, window), missed_by(side))
+        .scalar_subquery()
+    )
+
+
+def _held(counterpart: Any) -> tuple[Any, Any, Any]:
+    """Count, scheduled minutes and distinct ``counterpart`` of the sessions a
+    statement reads: one definition for both sides, labelled by each caller."""
+    return (
+        func.count(),
+        # `SUM` over no rows is `NULL`; zero is the real answer, and a nullable
+        # count makes every client write the same fallback.
+        func.coalesce(func.sum(Session.duration_minutes), 0),
+        func.count(func.distinct(counterpart)),
+    )
+
+
 def _delivered_figures(mentor: Any, window: Window | None) -> Any:
     """The profile's four figures over sessions starting inside ``window``.
 
     One statement for the all-time profile and every dashboard window, so the
     two can only differ in which sessions they read.
     """
+    sessions, minutes, mentees = _held(Session.mentee_id)
     return select(
-        func.count().label("completed_sessions"),
-        # `SUM` over no rows is `NULL`; zero is the real answer, and a nullable
-        # count makes every client write the same fallback.
-        func.coalesce(func.sum(Session.duration_minutes), 0).label("mentoring_minutes"),
-        func.count(func.distinct(Session.mentee_id)).label("mentees_mentored"),
+        sessions.label("completed_sessions"),
+        minutes.label("mentoring_minutes"),
+        mentees.label("mentees_mentored"),
         attendance_rate(mentor, MENTOR, window).label("attendance_rate"),
     ).where(delivered(mentor), during(Session.starts_at, window))
+
+
+def mentee_window_figures(mentee: Any, window: Window | None) -> Any:
+    """`_delivered_figures` from the other side (decision 249): sessions the
+    mentee received, their minutes and distinct mentors, starting inside
+    ``window`` (all time for ``None``)."""
+    sessions, minutes, mentors = _held(Session.mentor_id)
+    return select(
+        sessions.label("completed_sessions"),
+        minutes.label("minutes"),
+        mentors.label("mentors_met"),
+    ).where(received(mentee), during(Session.starts_at, window))
+
+
+def mentee_missed(mentee: Any, window: Window) -> Any:
+    """Sessions the mentee missed starting inside ``window``: the mentor
+    dashboard's `missed_by_mentor` from the other side."""
+    return _missed_count(Session.mentee_id, mentee, window)
 
 
 def mentor_window_figures(mentor: Any, window: Window) -> Any:
@@ -373,16 +416,7 @@ def mentor_window_figures(mentor: Any, window: Window) -> Any:
     profile's four plus how many sessions the mentor missed (by `starts_at`)
     and how many they cancelled (by when they cancelled)."""
     figures = _delivered_figures(mentor, window).subquery("figures")
-    missed = (
-        select(func.count())
-        .select_from(Session)
-        .where(
-            Session.mentor_id == mentor,
-            during(Session.starts_at, window),
-            missed_by(Session.mentor_id),
-        )
-        .scalar_subquery()
-    )
+    missed = _missed_count(Session.mentor_id, mentor, window)
     cancelled = cancellations(mentor, window)
     by_mentor = select(func.count()).select_from(cancelled).where(cancelled.c.by_mentor)
     return select(
