@@ -506,19 +506,29 @@ async def test_editable_until_is_null_once_the_window_has_shut(world: World) -> 
 
 async def test_the_mentor_it_is_about_cannot_read_it(world: World) -> None:
     """Scoped in the query: the subject gets `404`, and the platform feedback
-    with it — while the author, asking for the same id, gets it back."""
+    with it — while the author, asking for the same id, gets it back.
+
+    **The token is shown to be the mentor's first** (#455). First sign-in
+    (#178) turns an unknown token into a new user, who also gets `404`, so a
+    `404` alone cannot tell "the mentor was refused" from "nobody was".
+    """
     feedback = "The join button hid"
     review = (
         await world.review(await world.completed(world.offering_a), private_review=feedback)
     ).json()
     mentor_token = await token_for(world.engine, world.mentor)
+    me = await world.client.get("/api/v1/me", headers=bearer(mentor_token))
+    assert me.status_code == 200
+    assert me.json()["id"] == str(world.mentor)
 
     as_mentor = await world.client.get(
         f"/api/v1/reviews/{review['id']}", headers=bearer(mentor_token)
     )
+    absent = await world.client.get(f"/api/v1/reviews/{uuid4()}", headers=bearer(mentor_token))
     as_author = await world.client.get(f"/api/v1/reviews/{review['id']}", headers=world.headers)
 
     assert as_mentor.status_code == 404
+    assert as_mentor.json() == absent.json(), "not yours must read exactly as absent"
     assert feedback not in as_mentor.text
     assert as_author.status_code == 200
     assert as_author.json()["private_review"] == feedback

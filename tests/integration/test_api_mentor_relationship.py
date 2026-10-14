@@ -190,9 +190,16 @@ async def test_the_mentor_asking_about_themself_sees_their_mentee_side_only(
     world: World,
 ) -> None:
     """Scoped to the caller *as mentee*: a mentor's own delivered sessions are
-    not sessions they received from themself."""
+    not sessions they received from themself.
+
+    The token is shown to be the mentor's first (#455): a stranger asking
+    about this mentor also gets `0`, so the zero alone proves nothing.
+    """
     await world.completed(world.offering_a)
     token = await token_for(world.engine, world.mentor)
+    me = await world.client.get("/api/v1/me", headers=bearer(token))
+    assert me.status_code == 200
+    assert me.json()["id"] == str(world.mentor)
 
     response = await world.client.get(url(world.mentor), headers=bearer(token))
 
