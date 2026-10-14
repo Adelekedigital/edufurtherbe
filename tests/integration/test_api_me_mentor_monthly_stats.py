@@ -255,7 +255,7 @@ async def test_a_non_mentor_reads_zeros_not_an_error(
     assert [figures(m) for m in response.json()["series"]] == [ZEROS, ZEROS]
 
 
-@pytest.mark.parametrize(("months", "code"), [(0, 422), (1, 200), (24, 200), (25, 422)])
+@pytest.mark.parametrize(("months", "code"), [(0, 422), (1, 200), (60, 200), (61, 422)])
 async def test_months_is_bounded(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, months: int, code: int
 ) -> None:

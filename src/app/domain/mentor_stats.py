@@ -42,11 +42,12 @@ MIN_WINDOW_DAYS = 7
 #: reaches back two years, which is still a bounded read.
 MAX_WINDOW_DAYS = 365
 
-#: The monthly chart (decision 247): a year by default, two at most, so "this
-#: month against the same month last year" is askable.
+#: The monthly chart (decision 247): a year by default; five years at most, so a
+#: mentor's whole history fits (the platform's first session is September 2024).
+#: Longer than that wants coarser bars, not more of them (#458).
 DEFAULT_MONTHS = 12
 MIN_MONTHS = 1
-MAX_MONTHS = 24
+MAX_MONTHS = 60
 
 
 class Window(NamedTuple):
