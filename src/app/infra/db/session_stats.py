@@ -76,7 +76,7 @@ not happened; either in the denominator reports absence that never occurred.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import Integer, Numeric, and_, case, cast, func, select, true
@@ -105,6 +105,8 @@ __all__ = [
     "held",
     "held_count",
     "mentee_completed_sessions",
+    "mentee_missed",
+    "mentee_window_figures",
     "mentor_stats",
     "mentor_window_figures",
     "missed",
@@ -381,11 +383,21 @@ def missed_by(party: Any) -> Any:
     return and_(Session.status.in_(TERMINAL), absent)
 
 
-def held(mentor: Any, window: Bounds | None) -> Any:
-    """The predicate for a session this mentor delivered that starts inside
-    ``window``: the dashboard's *held*, and the rows the profile's four
-    figures are over."""
-    return and_(delivered(mentor), during(Session.starts_at, window))
+#: Which side of a session a figure is about: the mentor's (delivered) or the
+#: mentee's (received). A dual-role user's two sides never pool.
+Side = Literal["mentor", "mentee"]
+
+
+def _side(side: Side) -> Any:
+    return Session.mentor_id if side == "mentor" else Session.mentee_id
+
+
+def held(user: Any, window: Bounds | None, side: Side = "mentor") -> Any:
+    """The predicate for a session ``user`` delivered (or, on the mentee side,
+    received) that starts inside ``window``: the dashboards' *held*, and the
+    rows the profile's four figures are over."""
+    scope = delivered(user) if side == "mentor" else received(user)
+    return and_(scope, during(Session.starts_at, window))
 
 
 def held_count(mentor: Any, window: Bounds) -> Any:
@@ -393,19 +405,34 @@ def held_count(mentor: Any, window: Bounds) -> Any:
     return select(func.count()).select_from(Session).where(held(mentor, window)).scalar_subquery()
 
 
-def missed(mentor: Any, window: Bounds | None) -> Any:
-    """The predicate for a settled session of this mentor's, starting inside
-    ``window``, that they missed (`missed_by()`)."""
-    return and_(
-        Session.mentor_id == mentor,
-        during(Session.starts_at, window),
-        missed_by(Session.mentor_id),
-    )
+def missed(user: Any, window: Bounds | None, side: Side = "mentor") -> Any:
+    """The predicate for a settled session on ``side``, starting inside
+    ``window``, that ``user`` missed (`missed_by()` on their participant row)."""
+    column = _side(side)
+    return and_(column == user, during(Session.starts_at, window), missed_by(column))
 
 
 def missed_count(mentor: Any, window: Bounds) -> Any:
     """How many sessions `missed()` matches, as a scalar subquery."""
     return select(func.count()).select_from(Session).where(missed(mentor, window)).scalar_subquery()
+
+
+def _held_figures(counterpart: Any, among: Any = None) -> tuple[Any, Any, Any]:
+    """Count, scheduled minutes and distinct ``counterpart`` of the sessions a
+    statement reads, or of those matching ``among`` (a `FILTER`, so several
+    windows share one scan): one definition for both sides, labelled by each
+    caller."""
+
+    def of(aggregate: Any) -> Any:
+        return aggregate if among is None else aggregate.filter(among)
+
+    return (
+        of(func.count()),
+        # `SUM` over no rows is `NULL`; zero is the real answer, and a nullable
+        # count makes every client write the same fallback.
+        func.coalesce(of(func.sum(Session.duration_minutes)), 0),
+        of(func.count(func.distinct(counterpart))),
+    )
 
 
 def _delivered_figures(mentor: Any, window: Window | None) -> Any:
@@ -414,14 +441,27 @@ def _delivered_figures(mentor: Any, window: Window | None) -> Any:
     One statement for the all-time profile and every dashboard window, so the
     two can only differ in which sessions they read.
     """
+    sessions, minutes, mentees = _held_figures(Session.mentee_id)
     return select(
-        func.count().label("completed_sessions"),
-        # `SUM` over no rows is `NULL`; zero is the real answer, and a nullable
-        # count makes every client write the same fallback.
-        func.coalesce(func.sum(Session.duration_minutes), 0).label("mentoring_minutes"),
-        func.count(func.distinct(Session.mentee_id)).label("mentees_mentored"),
+        sessions.label("completed_sessions"),
+        minutes.label("mentoring_minutes"),
+        mentees.label("mentees_mentored"),
         attendance_rate(mentor, MENTOR, window).label("attendance_rate"),
     ).where(held(mentor, window))
+
+
+def mentee_window_figures(mentee: Any, window: Window | None) -> tuple[Any, Any, Any]:
+    """`_delivered_figures` from the other side (decision 249): sessions the
+    mentee received, their minutes and distinct mentors, starting inside
+    ``window`` (all time for ``None``), as aggregates over a scan of
+    ``Session`` rows; each is filtered, so one scan serves every window."""
+    return _held_figures(Session.mentor_id, held(mentee, window, "mentee"))
+
+
+def mentee_missed(mentee: Any, window: Window) -> Any:
+    """How many sessions the mentee missed starting inside ``window``, as an
+    aggregate over the same scan: `missed_by_mentor` from the other side."""
+    return func.count().filter(missed(mentee, window, "mentee"))
 
 
 def mentor_window_figures(mentor: Any, window: Window) -> Any:

@@ -26,6 +26,7 @@ from app.api.routes import (
     me_conferencing,
     me_intake,
     me_interest,
+    me_mentee_stats,
     me_mentor_stats,
     me_onboarding,
     me_referrals,
@@ -289,6 +290,14 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "mentee-stats",
+        "description": (
+            "A mentee's own home figures: sessions, mentors and minutes all "
+            "time, recent misses, and this month beside last. Derived per "
+            "request by the rules `/me/mentor-stats` uses, from the other side."
+        ),
+    },
+    {
         "name": "mentor-stats",
         "description": (
             "A mentor's own dashboard figures over a window, beside the equal "
@@ -465,6 +474,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_intake.router)
     application.include_router(me_interest.router)
     application.include_router(me_mentor_stats.router)
+    application.include_router(me_mentee_stats.router)
     application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)
     application.include_router(me_referrals.router)

@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
+    PRIVATE_NO_STORE,
     AuthoredReviewDep,
     AuthoredReviewsDep,
     EditedReviewDep,
@@ -144,7 +145,7 @@ async def list_reviewable_sessions(
 async def read_mentor_relationship(
     relationship: MentorRelationshipDep, response: Response
 ) -> MentorRelationshipRead:
-    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
     return MentorRelationshipRead.model_validate(relationship)
 
 

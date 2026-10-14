@@ -50,6 +50,10 @@ logger = logging.getLogger(__name__)
 #: after this is a call that has failed and not yet said so.
 UPLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
+#: `Cache-Control` for a response only its caller may hold: their own figures,
+#: a private file. One value, so tightening it reaches every such route.
+PRIVATE_NO_STORE = "private, no-store"
+
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 # `auto_error=False` so a missing header reaches our handler rather than

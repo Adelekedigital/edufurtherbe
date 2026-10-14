@@ -12,7 +12,13 @@ from fastapi import Depends, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
-from app.api.deps.core import UPLOAD_TIMEOUT, CurrentUserDep, SessionDep, _configured
+from app.api.deps.core import (
+    PRIVATE_NO_STORE,
+    UPLOAD_TIMEOUT,
+    CurrentUserDep,
+    SessionDep,
+    _configured,
+)
 from app.core.config import Settings, get_settings
 from app.core.errors import (
     ConfigurationError,
@@ -131,7 +137,7 @@ async def intake_file_download(
             # Never rendered inline and never re-guessed: a PDF is a document a
             # browser would otherwise open in this API's origin.
             "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, no-store",
+            "Cache-Control": PRIVATE_NO_STORE,
         },
         background=BackgroundTask(upstream.close),
     )

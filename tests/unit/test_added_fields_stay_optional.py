@@ -33,6 +33,16 @@ ADDED = {
         "review_count",
         "average_rating",
     ),
+    # New with the mentee dashboard (decision 249), the same shape.
+    "MenteeStatsRead": (
+        "sessions_held",
+        "mentors_met",
+        "minutes_of_guidance",
+        "missed_sessions",
+        "missed_window_days",
+        "window_days",
+    ),
+    "MenteeStatsWindowRead": ("completed_sessions", "minutes"),
     # New with the monthly chart (decision 247), on the same terms.
     "MentorMonthlyStatsRead": ("months",),
     "MentorMonthRead": (

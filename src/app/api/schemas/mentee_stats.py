@@ -1,0 +1,84 @@
+"""A mentee's own dashboard home figures (decision 249).
+
+Shaped like `/me/mentor-stats` (decision 246): every figure optional and
+registered in `test_added_fields_stay_optional`; the window bounds and the two
+blocks required and never null, since no default instant is true.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from app.api.schemas.mentor_stats import WindowBoundsRead
+from app.domain.mentee_stats import MISSED_DAYS, TREND_DAYS
+
+
+class MenteeStatsWindowRead(WindowBoundsRead):
+    """One month's held sessions, placed by their `starts_at`."""
+
+    completed_sessions: int = Field(
+        default=0, description="Sessions you received that are `completed`, starting in the window."
+    )
+    minutes: int = Field(default=0, description="Scheduled minutes of those sessions.")
+
+    @classmethod
+    def of(cls, row: dict[str, Any]) -> MenteeStatsWindowRead:
+        return cls(
+            since=row["since"],
+            until=row["until"],
+            completed_sessions=int(row["completed_sessions"]),
+            minutes=int(row["minutes"]),
+        )
+
+
+class MenteeStatsRead(BaseModel):
+    """Your figures as a mentee, all time, plus this month against last."""
+
+    sessions_held: int = Field(
+        default=0,
+        description=(
+            "Sessions you received that are `completed`, all time: the same count "
+            "as `mentee_completed_sessions` on `/me`."
+        ),
+    )
+    mentors_met: int = Field(
+        default=0, description="Distinct mentors you have at least one completed session with."
+    )
+    minutes_of_guidance: int = Field(
+        default=0,
+        description=(
+            "Scheduled minutes of those completed sessions, all time. Minutes, "
+            "like `mentoring_minutes` on `/me/mentor-stats`; divide for hours."
+        ),
+    )
+    missed_sessions: int = Field(
+        default=0,
+        description=(
+            "Settled sessions starting in the last `missed_window_days` days that you "
+            "were expected at and did not attend. A cancelled session is not "
+            "missed, and neither is one only your mentor missed."
+        ),
+    )
+    missed_window_days: int = Field(
+        default=MISSED_DAYS, description="How many days back `missed_sessions` counts."
+    )
+    window_days: int = Field(default=TREND_DAYS, description="Each trend window's length.")
+    current: MenteeStatsWindowRead = Field(description="The window ending now.")
+    previous: MenteeStatsWindowRead = Field(
+        description="The equal window immediately before `current`."
+    )
+
+    @classmethod
+    def of(cls, row: dict[str, Any]) -> MenteeStatsRead:
+        return cls(
+            sessions_held=int(row["sessions_held"]),
+            mentors_met=int(row["mentors_met"]),
+            minutes_of_guidance=int(row["minutes_of_guidance"]),
+            missed_sessions=int(row["missed_sessions"]),
+            missed_window_days=MISSED_DAYS,
+            window_days=TREND_DAYS,
+            current=MenteeStatsWindowRead.of(row["current"]),
+            previous=MenteeStatsWindowRead.of(row["previous"]),
+        )
