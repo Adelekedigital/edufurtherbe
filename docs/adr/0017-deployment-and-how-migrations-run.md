@@ -6,6 +6,8 @@ Date: 2026-08-06
 
 Accepted — hosting-provider portion superseded by ADR 0028. External/manual
 migrations, no startup migrations, and the host-independent entrypoint remain.
+Decision 1's `fastapi run` and `[tool.fastapi]` were removed in #19, since Railway
+runs `uvicorn`; restore them from history if the deploy target ever becomes FastAPI Cloud.
 
 ## Context
 

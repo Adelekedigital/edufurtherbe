@@ -8,18 +8,33 @@ readme = "README.md"
 # consumed on many interpreters, so there is nothing to gain by making one.
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi[standard]>=0.115.0",
+    # Bare, not `[standard]` (#19): that extra added the `fastapi` CLI, the
+    # FastAPI Cloud CLI and their tooling, none of which the running app imports.
+    # Railway starts it with `uvicorn`, never `fastapi run`. What the app does
+    # use is declared below with its reason, each floor the version locked when
+    # it was declared; tests/unit/test_runtime_dependencies.py fails on an
+    # import from `src/` that no line here declares, and pins the few needed
+    # without one (`NEEDED_WITHOUT_AN_IMPORT`).
+    "fastapi>=0.141.1",
+    # Imported directly by the middleware and request-id code, not only via FastAPI.
+    "starlette>=1.3.1",
+    # The server Railway's start command runs.
     "uvicorn[standard]>=0.32.0",
+    # Every outbound client in infra/.
+    "httpx>=0.28.1",
+    # FastAPI needs it to parse `UploadFile` forms (intake files, profile photos).
+    "python-multipart>=0.0.32",
+    # Pydantic needs it for `EmailStr` (a referral's invitee address).
+    "email-validator>=2.3.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "structlog>=24.4.0",
-    # Error reporting (ADR 0030). Declared rather than left to arrive through
-    # fastapi-cloud-cli, so dropping that (#19) cannot remove it unseen.
+    # Error reporting (ADR 0030), started in infra/observability.py.
     "sentry-sdk>=2.66.0",
     # Persistence. The `asyncio` extra pulls greenlet, which SQLAlchemy's async
     # layer requires rather than merely benefits from.
     "sqlalchemy[asyncio]>=2.0.36",
-    "alembic>=1.14",
+    # The driver the database URL selects; never imported by name.
     # 0.31 is the first release with a cp314 wheel. A lower floor resolves and
     # then tries to build from source on a machine with no C compiler, which is
     # every Windows dev box here.
@@ -86,7 +101,9 @@ dev = [
     # application never needs this at import or request time â€” shipping it would
     # be dead weight in the image and another entry in the weekly pip-audit.
     "pycountry>=24.6.1",
-    "httpx>=0.27.0",
+    # Dev-only: migrations run from the Migrate workflow and dev machines, never
+    # inside the running app, and Railway has no pre-deploy command (#19).
+    "alembic>=1.14",
     "pip-audit>=2.7.0",
     "pre-commit>=4.6.1",
     "pytest-xdist>=3.8.0",
@@ -105,21 +122,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/app"]
-
-# The deployed entrypoint, stated rather than discovered.
-#
-# `fastapi run` otherwise looks for six fixed paths relative to the working
-# directory â€” main.py, app.py, api.py, app/main.py, app/app.py, app/api.py â€” and
-# `src/app/main.py` is none of them. This key is read by
-# `fastapi_cli.config.FastAPIConfig` from `[tool.fastapi]` in the pyproject.toml
-# **of the current directory**, so the run has to start at the repository root.
-# That is the default; leave FastAPI Cloud's Application Directory unset.
-#
-# `app.main:app`, not `src.app.main:app`: `src` is not a package and has no
-# `__init__.py`. The wheel installs `src/app` as the top-level `app`, which is
-# the same import string the README and Makefile already use.
-[tool.fastapi]
-entrypoint = "app.main:app"
 
 [tool.ruff]
 # 100, not the default 88, so scripts/check_layers.py stays byte-identical to the
@@ -284,10 +286,8 @@ domain = [
     # OpenCV, for face detection. Its one home is `infra/images/faces.py` (#180);
     # the focal-point rule in `domain/avatar_focus.py` is pure and takes boxes.
     "cv2",
-    # Arrived as a transitive of `fastapi[standard]` -> fastapi-cloud-cli, not by a
-    # decision to adopt error reporting. Listed so it cannot be imported by accident
-    # simply because it happens to be installed. See the note under `core` below for
-    # what this entry does and does not protect.
+    # Error reporting is started in `infra/observability.py` only (ADR 0030). See
+    # the note under `core` below for what this entry does and does not protect.
     "sentry_sdk",
 ]
 
