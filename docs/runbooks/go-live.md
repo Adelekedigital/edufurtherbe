@@ -16,9 +16,10 @@ package, not this page.
 | Supabase production project | Supabase dashboard | Not in the repo (ADR 0005) |
 | GitHub `production` environment | Repo settings → Environments | Exists, deployment branches limited to `main` (GitHub API, 2026-10-12) |
 
-1. Create the Railway service from this repo. Start command: the entrypoint is
-   `uvicorn app.main:app --app-dir src` (ADR 0017, Decision 1). **Owner to confirm:**
-   the exact host/port flags Railway needs.
+1. Create the Railway service from this repo. Start command, the same as the
+   `development` service runs (read from its settings, 2026-10-14, #452):
+   `uvicorn src.app.main:app --host 0.0.0.0 --port 8080`. Railpack installs with
+   `uv sync --locked --no-dev`, so nothing in the dev group reaches the image.
 2. Point the Railway deploy healthcheck at **`/ready`**, not `/health`.
    `/ready` runs `SELECT 1` with a 2-second timeout and answers `503` when the
    database does not, so a release that cannot reach its database gets no
