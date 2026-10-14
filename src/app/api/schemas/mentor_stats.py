@@ -59,6 +59,14 @@ class MentorStatsWindowRead(WindowBoundsRead):
             "attend: the attendance rate's denominator less its numerator."
         ),
     )
+    missed_by_mentee: int = Field(
+        default=0,
+        description=(
+            "Settled sessions in the window your mentee was expected at and did "
+            "not attend, read from the mentee's own attendance; a session you "
+            "both missed counts here and in `missed_by_mentor`."
+        ),
+    )
     cancelled_by_mentor: int = Field(
         default=0,
         description=(
@@ -93,6 +101,7 @@ class MentorStatsWindowRead(WindowBoundsRead):
             mentees_mentored=int(row["mentees_mentored"]),
             attendance_rate=None if rate is None else int(rate),
             missed_by_mentor=int(row["missed_by_mentor"]),
+            missed_by_mentee=int(row["missed_by_mentee"]),
             cancelled_by_mentor=int(row["cancelled_by_mentor"]),
             review_count=int(row["review_count"]),
             average_rating=None if value is None else float(value),

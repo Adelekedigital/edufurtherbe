@@ -42,6 +42,7 @@ ZEROS = {
     "mentees_mentored": 0,
     "attendance_rate": None,
     "missed_by_mentor": 0,
+    "missed_by_mentee": 0,
     "cancelled_by_mentor": 0,
     "review_count": 0,
     "average_rating": None,
@@ -120,6 +121,7 @@ async def test_each_figure_is_counted_in_the_current_window(
         "mentees_mentored": 2,
         "attendance_rate": 75,
         "missed_by_mentor": 1,
+        "missed_by_mentee": 0,
         "cancelled_by_mentor": 1,
         "review_count": 2,
         "average_rating": 2.5,
@@ -149,6 +151,7 @@ async def test_the_previous_window_holds_the_period_before(
         "mentees_mentored": 1,
         "attendance_rate": 100,
         "missed_by_mentor": 0,
+        "missed_by_mentee": 0,
         "cancelled_by_mentor": 1,
         "review_count": 1,
         "average_rating": 4.0,
@@ -314,6 +317,89 @@ async def test_missed_counts_settled_sessions_the_mentor_did_not_attend(
     assert body["current"]["attendance_rate"] == 50
 
 
+@pytest.mark.parametrize(
+    ("mentor_attendance", "mentee_attendance", "by_mentee", "by_mentor"),
+    [
+        pytest.param("attended", "no_show", 1, 0, id="only-the-mentee"),
+        pytest.param("no_show", "no_show", 1, 1, id="both-count-in-both"),
+        pytest.param("no_show", "attended", 0, 1, id="only-the-mentor"),
+    ],
+)
+async def test_missed_by_mentee_reads_the_mentees_own_attendance(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    mentor_attendance: str,
+    mentee_attendance: str,
+    by_mentee: int,
+    by_mentor: int,
+) -> None:
+    """Decision 252: each party is judged on their own participant row, so a
+    session both missed counts once in each figure."""
+    mentor = await make_bookable_mentor(db_engine, "dash-mentee-missed")
+    await add_session(
+        db_engine,
+        mentor,
+        status="no_show",
+        attendance=mentor_attendance,
+        mentee_attendance=mentee_attendance,
+        days_ago=2,
+    )
+
+    current = (await stats(api_client, await token_for(db_engine, mentor)))["current"]
+
+    assert (current["missed_by_mentee"], current["missed_by_mentor"]) == (by_mentee, by_mentor)
+
+
+async def test_missed_by_mentee_counts_settled_sessions_only(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The `missed()` rule from the mentee's side: a `completed` session the
+    mentee is recorded absent from counts; a cancelled one, a confirmed one and
+    a `pending` mentee do not."""
+    mentor = await make_bookable_mentor(db_engine, "dash-mentee-settled")
+    await add_session(db_engine, mentor, status="completed", mentee_attendance="no_show")
+    await add_session(db_engine, mentor, status="cancelled", mentee_attendance="no_show")
+    await add_session(db_engine, mentor, status="confirmed", mentee_attendance="no_show")
+    await add_session(db_engine, mentor, status="no_show", mentee_attendance="pending")
+
+    current = (await stats(api_client, await token_for(db_engine, mentor)))["current"]
+
+    assert current["missed_by_mentee"] == 1
+
+
+async def test_missed_by_mentee_belongs_to_the_window_the_session_started_in(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """45 days ago is `previous` for a 30-day window; 90 days ago is neither."""
+    mentor = await make_bookable_mentor(db_engine, "dash-mentee-windows")
+    for days_ago in (2, 3, 45, 90):
+        await add_session(
+            db_engine, mentor, status="no_show", mentee_attendance="no_show", days_ago=days_ago
+        )
+
+    body = await stats(api_client, await token_for(db_engine, mentor))
+
+    assert (body["current"]["missed_by_mentee"], body["previous"]["missed_by_mentee"]) == (2, 1)
+
+
+async def test_missed_by_mentee_is_only_the_callers_mentees(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Another mentor's absent mentee is not the caller's, and nor is the caller
+    themselves missing a session they booked as somebody's mentee."""
+    mentor = await make_bookable_mentor(db_engine, "dash-mentee-mine")
+    other = await make_bookable_mentor(db_engine, "dash-mentee-theirs")
+    await add_session(db_engine, mentor, status="no_show", mentee_attendance="no_show")
+    await add_session(db_engine, other, status="no_show", mentee_attendance="no_show")
+    await add_session(
+        db_engine, other, status="no_show", mentee=mentor, mentee_attendance="no_show"
+    )
+
+    body = await stats(api_client, await token_for(db_engine, mentor))
+
+    assert body["current"]["missed_by_mentee"] == 1
+
+
 async def test_withdrawn_reviews_do_not_count(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -365,7 +451,12 @@ async def test_since_is_inside_the_window(db_engine: AsyncEngine) -> None:
     mentor = await make_bookable_mentor(db_engine, "dash-since")
     await add_session(db_engine, mentor, minutes=40, starts_at=WINDOW.since)
     await add_session(
-        db_engine, mentor, status="no_show", attendance="no_show", starts_at=WINDOW.since
+        db_engine,
+        mentor,
+        status="no_show",
+        attendance="no_show",
+        mentee_attendance="no_show",
+        starts_at=WINDOW.since,
     )
     # Cancelled on the edge, for a session after the window: the event places it.
     cancel = await add_session(
@@ -378,6 +469,7 @@ async def test_since_is_inside_the_window(db_engine: AsyncEngine) -> None:
 
     assert (row["completed_sessions"], row["mentoring_minutes"]) == (1, 40)
     assert (row["missed_by_mentor"], row["attendance_rate"]) == (1, 50)
+    assert row["missed_by_mentee"] == 1
     assert (row["cancelled_by_mentor"], row["review_count"]) == (1, 1)
 
 
@@ -385,7 +477,12 @@ async def test_until_is_outside_the_window(db_engine: AsyncEngine) -> None:
     mentor = await make_bookable_mentor(db_engine, "dash-until")
     await add_session(db_engine, mentor, minutes=40, starts_at=WINDOW.until)
     await add_session(
-        db_engine, mentor, status="no_show", attendance="no_show", starts_at=WINDOW.until
+        db_engine,
+        mentor,
+        status="no_show",
+        attendance="no_show",
+        mentee_attendance="no_show",
+        starts_at=WINDOW.until,
     )
     # Cancelled on the edge, for a session inside the window: the event places it.
     cancel = await add_session(

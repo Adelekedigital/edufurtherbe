@@ -406,16 +406,28 @@ def held_count(mentor: Any, window: Bounds) -> Any:
     return select(func.count()).select_from(Session).where(held(mentor, window)).scalar_subquery()
 
 
-def missed(user: Any, window: Bounds | None, side: Side = "mentor") -> Any:
-    """The predicate for a settled session on ``side``, starting inside
-    ``window``, that ``user`` missed (`missed_by()` on their participant row)."""
-    column = _side(side)
-    return and_(column == user, during(Session.starts_at, window), missed_by(column))
+def missed(
+    user: Any, window: Bounds | None, side: Side = "mentor", absent: Side | None = None
+) -> Any:
+    """The predicate for a settled session ``user`` is on as ``side``, starting
+    inside ``window``, that the ``absent`` party missed (`missed_by()` on that
+    party's participant row): ``user`` themselves by default, or the other
+    party, as the mentor dashboard's `missed_by_mentee` reads it (decision 252).
+    Each party is judged on their own row, so a session both missed matches
+    whichever party is ``absent``."""
+    party = _side(absent or side)
+    return and_(_side(side) == user, during(Session.starts_at, window), missed_by(party))
 
 
-def missed_count(mentor: Any, window: Bounds) -> Any:
-    """How many sessions `missed()` matches, as a scalar subquery."""
-    return select(func.count()).select_from(Session).where(missed(mentor, window)).scalar_subquery()
+def missed_count(mentor: Any, window: Bounds, absent: Side = "mentor") -> Any:
+    """How many of the mentor's sessions `missed()` matches, as a scalar
+    subquery: the mentor's own misses, or (``absent="mentee"``) their mentees'."""
+    return (
+        select(func.count())
+        .select_from(Session)
+        .where(missed(mentor, window, absent=absent))
+        .scalar_subquery()
+    )
 
 
 def current_streak(mentor: Any) -> Any:
@@ -503,8 +515,9 @@ def mentee_missed(mentee: Any, window: Window) -> Any:
 
 def mentor_window_figures(mentor: Any, window: Window) -> Any:
     """Every session figure of one dashboard window, as a one-row select: the
-    profile's four plus how many sessions the mentor missed (by `starts_at`)
-    and how many they cancelled (by when they cancelled)."""
+    profile's four plus how many sessions the mentor missed and their mentees
+    missed (by `starts_at`) and how many the mentor cancelled (by when they
+    cancelled)."""
     figures = _delivered_figures(mentor, window).subquery("figures")
     cancelled = cancellations(mentor, window)
     by_mentor = (
@@ -513,6 +526,7 @@ def mentor_window_figures(mentor: Any, window: Window) -> Any:
     return select(
         *figures.c,
         missed_count(mentor, window).label("missed_by_mentor"),
+        missed_count(mentor, window, absent="mentee").label("missed_by_mentee"),
         by_mentor.scalar_subquery().label("cancelled_by_mentor"),
     ).select_from(figures)
 
