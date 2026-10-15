@@ -275,9 +275,8 @@ class InviteLinkRetiredCode(Base):
     by its owner or by someone else after the hold, and each retirement is a row.
 
     **Append-only**, so `created_at` alone from the timestamp pair (`APPEND_ONLY`
-    in `tests/unit/test_models.py`). `retired_at` is the domain moment the hold
-    is measured from, as `referral_unlocks.unlocked_at` is beside its
-    `created_at`.
+    in `tests/unit/test_models.py`), and it is the moment of retirement the hold
+    is measured from. A separate `retired_at` would only ever equal it.
     """
 
     __tablename__ = "invite_link_retired_codes"
@@ -293,15 +292,12 @@ class InviteLinkRetiredCode(Base):
 
     code: Mapped[str] = mapped_column(Text, nullable=False)
 
-    retired_at: Mapped[datetime.datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
-    )
-
+    #: When the code was retired.
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
 
     __table_args__ = (
         # The hold check: has this code been retired recently, and by whom.
-        Index("ix_invite_link_retired_codes_code_retired", "code", text("retired_at DESC")),
+        Index("ix_invite_link_retired_codes_code_retired", "code", text("created_at DESC")),
     )

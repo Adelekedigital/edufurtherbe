@@ -21,9 +21,10 @@ The foreign key **restricts**, as every referral table's does (ADR 0013).
 
 **A link's code can change** (the owner picks a handle), and only the current
 code is claimable. The old one goes to `invite_link_retired_codes`, which the
-30-day hold is read from: `code` is not unique there, because a handle can be
-retired more than once, and `(code, retired_at DESC)` serves the hold check.
-Append-only, so `created_at` and no `updated_at` or trigger.
+hold (a domain constant) is read from: `code` is not unique there, because a
+handle can be retired more than once, and `(code, created_at DESC)` serves the
+hold check. Append-only, so `created_at` alone, which is the moment of
+retirement, and no `updated_at` or trigger.
 
 Expand only, and merged alone (project-conventions, *Migration ordering*):
 nothing reads or writes either table until the next PR, so this lands inert.
@@ -84,12 +85,6 @@ def upgrade() -> None:
         sa.Column("invite_link_id", sa.Uuid(), nullable=False),
         sa.Column("code", sa.Text(), nullable=False),
         sa.Column(
-            "retired_at",
-            sa.TIMESTAMP(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.Column(
             "created_at",
             sa.TIMESTAMP(timezone=True),
             server_default=sa.text("now()"),
@@ -106,7 +101,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_invite_link_retired_codes_code_retired",
         RETIRED,
-        ["code", sa.text("retired_at DESC")],
+        ["code", sa.text("created_at DESC")],
     )
 
 
@@ -119,5 +114,6 @@ def downgrade() -> None:
     keep their `referrals` rows, which never reference either table, so no
     referral, qualification or unlock is lost.
     """
+    op.execute("SET lock_timeout = '3s'")
     op.drop_table(RETIRED)
     op.drop_table(TABLE)

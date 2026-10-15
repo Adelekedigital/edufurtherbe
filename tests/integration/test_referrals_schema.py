@@ -384,12 +384,11 @@ async def test_a_retired_code_is_recorded_with_its_moment(invites: Invites) -> N
 
     row = (
         await invites.conn.execute(
-            text("SELECT retired_at, created_at FROM invite_link_retired_codes WHERE id = :i"),
+            text("SELECT created_at FROM invite_link_retired_codes WHERE id = :i"),
             {"i": retired},
         )
     ).one()
     assert uuid.UUID(retired).version == 7
-    assert row.retired_at is not None
     assert row.created_at is not None
 
 
@@ -411,7 +410,7 @@ async def test_a_retired_code_must_belong_to_a_real_link(invites: Invites) -> No
 
 
 async def test_a_link_with_retired_codes_cannot_be_hard_deleted(invites: Invites) -> None:
-    """Restrict: the retired codes are what the 30-day hold is read from."""
+    """Restrict: the retired codes are what the hold is read from."""
     link = await _link(invites.conn, invites.referrer, "current")
     await _retire(invites.conn, link, "old-handle")
 
@@ -428,7 +427,7 @@ async def test_the_hold_check_has_its_index(invites: Invites) -> None:
         )
     )
     assert definition is not None
-    assert "(code, retired_at DESC)" in definition
+    assert "(code, created_at DESC)" in definition
 
 
 async def test_retired_codes_are_append_only(invites: Invites) -> None:

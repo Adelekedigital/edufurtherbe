@@ -182,7 +182,7 @@ EXPECTED_TABLES = [
     "referral_unlocks",
     # One permanent personal invite link per user (owner, 2026-10-15).
     "invite_links",
-    # A personal link's retired codes, held 30 days (owner, 2026-10-15).
+    # A personal link's retired codes, held for `RETIRED_CODE_HOLD` (owner, 2026-10-15).
     "invite_link_retired_codes",
 ]
 
