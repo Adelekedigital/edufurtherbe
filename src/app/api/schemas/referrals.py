@@ -7,7 +7,13 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.api.schemas.common import StoredEmail
 from app.domain.emails import normalise_email
-from app.domain.referrals import MAX_CODE_LENGTH, handle_problem, normalise_handle
+from app.domain.referrals import (
+    HANDLE_MAX_LENGTH,
+    HANDLE_MIN_LENGTH,
+    MAX_CODE_LENGTH,
+    handle_problem,
+    normalise_handle,
+)
 
 
 class ReferralWrite(BaseModel):
@@ -96,8 +102,9 @@ class InviteLinkRead(BaseModel):
 class InviteLinkWrite(BaseModel):
     """Picking a handle for your personal link (decision 255).
 
-    Lowercased, then judged by the domain's one rule: 3 to 30 characters of
-    a-z, 0-9 and single inner hyphens, and not a reserved word.
+    Lowercased, then judged by the domain's one rule (`handle_problem`):
+    letters a-z, digits and single inner hyphens, within the domain's length
+    bounds, and not a reserved word.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -111,8 +118,8 @@ class InviteLinkWrite(BaseModel):
         problem = handle_problem(handle)
         if problem == "malformed":
             raise ValueError(
-                "a handle is 3 to 30 characters: lowercase letters, digits and "
-                "single hyphens, not at either end"
+                f"a handle is {HANDLE_MIN_LENGTH} to {HANDLE_MAX_LENGTH} characters: "
+                "lowercase letters, digits and single hyphens, not at either end"
             )
         if problem == "reserved":
             raise ValueError("that handle is reserved")

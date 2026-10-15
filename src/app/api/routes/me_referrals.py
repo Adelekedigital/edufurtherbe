@@ -21,6 +21,7 @@ from app.api.deps import (
     PickedInviteHandleDep,
 )
 from app.api.schemas.referrals import InviteLinkRead, ReferralClaimRead, ReferralRead
+from app.domain.referrals import HANDLE_MAX_LENGTH, HANDLE_MIN_LENGTH, RETIRED_CODE_HOLD
 
 router = APIRouter(prefix="/api/v1/me", tags=["referrals"])
 
@@ -115,11 +116,14 @@ async def claim_own_referral(referral: ClaimedReferralDep) -> ReferralClaimRead:
     return ReferralClaimRead.model_validate(referral)
 
 
-LINK_PATH = "/api/v1/me/invite-link"
+#: The personal link's path under this router, and the `Location` a create
+#: names: one string, so the two cannot drift.
+LINK = "/invite-link"
+HOLD_DAYS = RETIRED_CODE_HOLD.days
 
 
 @router.post(
-    "/invite-link",
+    LINK,
     response_model=InviteLinkRead,
     status_code=status.HTTP_201_CREATED,
     summary="Your personal invite link",
@@ -144,27 +148,28 @@ LINK_PATH = "/api/v1/me/invite-link"
 async def own_invite_link(link: OwnInviteLinkDep, response: Response) -> InviteLinkRead:
     code, created = link
     if created:
-        response.headers["Location"] = LINK_PATH
+        response.headers["Location"] = router.prefix + LINK
     else:
         response.status_code = status.HTTP_200_OK
     return InviteLinkRead(code=code)
 
 
 @router.put(
-    "/invite-link",
+    LINK,
     response_model=InviteLinkRead,
     summary="Pick a handle for your invite link",
     description=(
         "Sets your link's code to a handle of your choice, creating the link if "
-        "you have none. The handle is lowercased, then must be 3 to 30 "
-        "characters of letters, digits and single hyphens, not at either end, "
-        "and not a reserved word (`422` otherwise).\n\n"
+        f"you have none. The handle is lowercased, then must be {HANDLE_MIN_LENGTH} "
+        f"to {HANDLE_MAX_LENGTH} characters of letters, digits and single hyphens, "
+        "not at either end, and not a reserved word (`422` otherwise). A handle "
+        "resolves whatever case it is typed in.\n\n"
         "**Your previous code stops working at once**: a link using it now "
-        "lands on the page for an unknown invite. It is held for 30 days, in "
-        "which nobody else may pick it but you may take it back; after that "
+        f"lands on the page for an unknown invite. It is held for {HOLD_DAYS} days, "
+        "in which nobody else may pick it but you may take it back; after that "
         "anyone may. Picking the handle you already have changes nothing.\n\n"
         "`409` when the handle is somebody's current code, a single-use "
-        "invite's code, or somebody else's previous code inside its 30 days."
+        f"invite's code, or somebody else's previous code inside its {HOLD_DAYS} days."
     ),
     responses={
         **UNAUTHORISED,

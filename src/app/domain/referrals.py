@@ -36,6 +36,7 @@ __all__ = [
     "HANDLE_MAX_LENGTH",
     "HANDLE_MIN_LENGTH",
     "MAX_CODE_LENGTH",
+    "NO_INVITE",
     "RESERVED_HANDLES",
     "RETIRED_CODE_HOLD",
     "handle_problem",
@@ -88,6 +89,9 @@ def may_qualify(*, has_invitee: bool, already_qualified: bool) -> bool:
     """
     return has_invitee and not already_qualified
 
+
+#: The one not-found sentence for a code, from claim and the landing lookup alike.
+NO_INVITE = "no invite carries that code"
 
 #: The longest code anybody may present, whether to claim or to look up.
 #: Generated codes are 22 characters and handles at most 30; the ceiling is

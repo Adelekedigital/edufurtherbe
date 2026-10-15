@@ -560,6 +560,77 @@ async def test_a_link_claim_racing_a_single_use_claim_never_errors(
     )
 
 
+async def test_the_loser_of_a_race_for_one_single_use_code_is_refused(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**Deterministic**, at the writer: two people claim one invite at once.
+    The loser's update matches no row; it must be told the invite is taken,
+    not handed the winner's referral with a 200."""
+    referrer, winner, loser = await users(db_engine, 3, complete=False)
+    code = (await invite(api_client, referrer)).json()["code"]
+    winner_id = await user_id_of(db_engine, winner)
+    loser_id = await user_id_of(db_engine, loser)
+    ladder = credit_ladder(Settings(_env_file=None))  # type: ignore[call-arg]
+    maker = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with maker() as one, maker() as two:
+        await claim_referral(one, winner_id, code, ladder=ladder)
+        racer = asyncio.create_task(claim_referral(two, loser_id, code, ladder=ladder))
+        await asyncio.sleep(0.3)
+        await one.commit()
+
+        with pytest.raises(ConflictError):
+            await racer
+
+
+async def test_a_deleted_referrer_s_single_use_code_cannot_be_claimed(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """Claim and the landing lookup agree: a deleted inviter is not found."""
+    referrer, arrival = await users(db_engine, 2, complete=False)
+    code = (await invite(api_client, referrer)).json()["code"]
+    await execute(db_engine, "UPDATE users SET deleted_at = now() WHERE auth_id = :a", a=referrer)
+
+    assert (await claim(api_client, arrival, code)).status_code == 404
+
+
+async def test_a_handle_resolves_whatever_its_case_and_a_random_code_does_not(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """A handle is lowercase by rule, so `Ada-Smith` typed or auto-capitalised
+    still finds `ada-smith`. A random code is mixed-case and stays exact."""
+    owner, arrival, other = await users(db_engine, 3, complete=False)
+    await _named(db_engine, owner, "Ada", None)
+    random_code = await link_code(api_client, other)
+    await pick(api_client, owner, "ada-smith")
+
+    assert (await lookup(api_client, "Ada-Smith")).json()["inviter"]["first_name"] == "Ada"
+    assert (await claim(api_client, arrival, "ADA-SMITH")).status_code == 200
+    swapped = random_code.swapcase()
+    if swapped != random_code:
+        assert (await lookup(api_client, swapped)).status_code == 404
+
+
+async def test_an_exact_code_wins_over_a_handle_spelled_the_same_in_lowercase(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """A mixed-case code and a handle equal to its lowercase are two links;
+    each resolves to its own owner."""
+    mixed, lower = await users(db_engine, 2)
+    await _named(db_engine, mixed, "Mixed", None)
+    await _named(db_engine, lower, "Lower", None)
+    await link_code(api_client, mixed)
+    await execute(
+        db_engine,
+        "UPDATE invite_links SET code = 'Shared-Name' WHERE user_id = :u",
+        u=await user_id_of(db_engine, mixed),
+    )
+    await pick(api_client, lower, "shared-name")
+
+    assert (await lookup(api_client, "Shared-Name")).json()["inviter"]["first_name"] == "Mixed"
+    assert (await lookup(api_client, "shared-name")).json()["inviter"]["first_name"] == "Lower"
+
+
 async def test_two_single_use_claims_racing_never_error(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:

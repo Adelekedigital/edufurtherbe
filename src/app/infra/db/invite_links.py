@@ -31,7 +31,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
-from app.domain.referrals import RETIRED_CODE_HOLD, make_code
+from app.domain.referrals import RETIRED_CODE_HOLD, make_code, normalise_handle
 from app.infra.db.models.referrals import InviteLink, InviteLinkRetiredCode, Referral
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.predicates import LIVE
@@ -75,6 +75,11 @@ async def resolve_code(session: AsyncSession, code: str) -> ResolvedCode | None:
 
     A retired code is in neither place, so it resolves exactly as a code that
     never existed did. A miss always runs both statements.
+
+    **A link code matches exactly or as a handle.** Handles are stored
+    lowercase by rule, so `Ada-Smith` (typed, or capitalised by a phone) finds
+    `ada-smith`; random codes are mixed-case and an exact match is preferred,
+    so one is never mistaken for another.
     """
     referral = (
         await session.execute(
@@ -99,7 +104,9 @@ async def resolve_code(session: AsyncSession, code: str) -> ResolvedCode | None:
             select(InviteLink.user_id, *_owner_columns())
             .join(User, User.id == InviteLink.user_id)
             .outerjoin(UserProfile, UserProfile.user_id == User.id)
-            .where(InviteLink.code == code)
+            .where(InviteLink.code.in_({code, normalise_handle(code)}))
+            .order_by((InviteLink.code == code).desc())
+            .limit(1)
         )
     ).one_or_none()
     if link is None:
@@ -132,11 +139,15 @@ async def inviter_of(session: AsyncSession, code: str) -> ResolvedCode | None:
 async def ensure_invite_link(session: AsyncSession, user_id: UUID) -> tuple[str, bool]:
     """The caller's link code, creating the link first if needed.
 
-    Returns ``(code, created)``. **The insert arbitrates**: two first requests
-    both insert, `UNIQUE (user_id)` lets one through, and ``DO NOTHING`` hands
-    the other no row, so it reads the winner's. Under READ COMMITTED that read
-    is a new statement and sees the committed row.
+    Returns ``(code, created)``. Read first, since the link usually exists.
+    On a miss **the insert arbitrates**: two first requests both insert,
+    `UNIQUE (user_id)` lets one through, and ``DO NOTHING`` hands the other no
+    row, so it reads the winner's. Under READ COMMITTED that read is a new
+    statement and sees the committed row.
     """
+    existing = await session.scalar(select(InviteLink.code).where(InviteLink.user_id == user_id))
+    if existing is not None:
+        return existing, False
     created = (
         await session.execute(
             pg_insert(InviteLink)
@@ -148,10 +159,10 @@ async def ensure_invite_link(session: AsyncSession, user_id: UUID) -> tuple[str,
     if created is not None:
         return created, True
     # The conflict that skipped the insert is this row, so it is there to read.
-    existing = (
+    winner = (
         await session.execute(select(InviteLink.code).where(InviteLink.user_id == user_id))
     ).scalar_one()
-    return existing, False
+    return winner, False
 
 
 async def _lock_codes(session: AsyncSession, *codes: str) -> None:

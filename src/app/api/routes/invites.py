@@ -18,6 +18,7 @@ from app.api.deps import InviterDep
 from app.api.deps.core import PRIVATE_NO_STORE
 from app.api.errors import problem
 from app.api.schemas.referrals import InviteLookupRead, InviterRead
+from app.domain.referrals import NO_INVITE
 
 router = APIRouter(prefix="/api/v1/invites", tags=["referrals"])
 
@@ -56,7 +57,7 @@ async def look_up_invite(
         missing = problem(
             status_code=status.HTTP_404_NOT_FOUND,
             title="NotFoundError",
-            detail="no invite carries that code",
+            detail=NO_INVITE,
         )
         missing.headers["Cache-Control"] = PRIVATE_NO_STORE
         return missing

@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, NotFoundError
 from app.domain.credits import CreditLadder
 from app.domain.enums import CreditSource
-from app.domain.referrals import make_code, may_qualify
+from app.domain.referrals import NO_INVITE, make_code, may_qualify
 from app.infra.db.credit_writer import grant
 from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
@@ -47,7 +47,6 @@ from app.infra.db.models.user import UserOnboarding
 
 __all__ = ["claim_referral", "create_referral", "qualify_invitee"]
 
-NO_INVITE = "no invite carries that code"
 OWN_INVITE = "you cannot claim your own invite"
 ALREADY_CLAIMED = "you have already claimed an invite"
 
@@ -115,7 +114,8 @@ async def claim_referral(
     """
     referral = await resolve_code(session, code)
 
-    if referral is None:
+    # A deleted referrer or link owner is not found, as on the landing lookup.
+    if referral is None or not referral.owner_live:
         raise NotFoundError(NO_INVITE)
     if referral.referral_id is None:
         return await _claim_through_link(session, invitee_id, referral, ladder=ladder)
@@ -156,9 +156,16 @@ async def claim_referral(
         await _qualify_if_finished(session, invitee_id, ladder=ladder)
         return claimed
 
-    return (
-        await session.execute(select(*CLAIMED).where(Referral.id == referral.referral_id))
+    # Nothing matched: somebody claimed it between the read and the update.
+    # Still yours only if that somebody was you, retrying.
+    current = (
+        await session.execute(
+            select(Referral.invitee_user_id, *CLAIMED).where(Referral.id == referral.referral_id)
+        )
     ).one()
+    if current.invitee_user_id != invitee_id:
+        raise ConflictError("that invite has already been claimed")
+    return current
 
 
 async def _claim_through_link(
@@ -177,8 +184,6 @@ async def _claim_through_link(
     loser's ``DO NOTHING`` reads the winner's row, which is the idempotent
     answer when it names the same owner and the 409 when it does not.
     """
-    if not link.owner_live:
-        raise NotFoundError(NO_INVITE)
     if link.owner_id == invitee_id:
         raise ConflictError(OWN_INVITE)
 
