@@ -410,6 +410,7 @@ async def test_missed_by_mentee_is_only_the_callers_mentees(
         pytest.param("no_show", "no_show", 0, id="both-missed"),
         pytest.param("no_show", "pending", 0, id="mentee-unknown"),
         pytest.param("no_show", None, 0, id="no-mentee-row"),
+        pytest.param("no_show", "left_early", 0, id="mentee-left-early"),
         pytest.param("attended", "attended", 0, id="both-came"),
         pytest.param("attended", "no_show", 0, id="only-the-mentee-missed"),
     ],
