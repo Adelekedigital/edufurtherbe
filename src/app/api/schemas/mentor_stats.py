@@ -67,6 +67,15 @@ class MentorStatsWindowRead(WindowBoundsRead):
             "both missed counts here and in `missed_by_mentor`."
         ),
     )
+    mentees_left_waiting: int = Field(
+        default=0,
+        description=(
+            "Settled sessions in the window you did not attend while your mentee "
+            "is recorded as attending: the part of `missed_by_mentor` where "
+            "somebody was left waiting. A session you both missed, or one whose "
+            "mentee attendance is unknown, is not counted."
+        ),
+    )
     cancelled_by_mentor: int = Field(
         default=0,
         description=(
@@ -102,6 +111,7 @@ class MentorStatsWindowRead(WindowBoundsRead):
             attendance_rate=None if rate is None else int(rate),
             missed_by_mentor=int(row["missed_by_mentor"]),
             missed_by_mentee=int(row["missed_by_mentee"]),
+            mentees_left_waiting=int(row["mentees_left_waiting"]),
             cancelled_by_mentor=int(row["cancelled_by_mentor"]),
             review_count=int(row["review_count"]),
             average_rating=None if value is None else float(value),

@@ -30,6 +30,7 @@ ADDED = {
         "attendance_rate",
         "missed_by_mentor",
         "missed_by_mentee",
+        "mentees_left_waiting",
         "cancelled_by_mentor",
         "review_count",
         "average_rating",

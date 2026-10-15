@@ -105,6 +105,8 @@ __all__ = [
     "delivered",
     "held",
     "held_count",
+    "left_waiting",
+    "left_waiting_count",
     "mentee_completed_sessions",
     "mentee_missed",
     "mentee_window_figures",
@@ -116,7 +118,7 @@ __all__ = [
     "received",
 ]
 
-#: The mentor turned up.
+#: The party turned up.
 ATTENDED = (AttendanceStatus.ATTENDED,)
 
 #: The party was expected and did not come: the half of the rate's
@@ -371,17 +373,21 @@ def missed_by(party: Any) -> Any:
 
     `party` is a column of the enclosing `sessions` (`Session.mentor_id`).
     """
-    absent = (
+    return and_(Session.status.in_(TERMINAL), _recorded(party, MISSED))
+
+
+def _recorded(party: Any, statuses: tuple[AttendanceStatus, ...]) -> Any:
+    """``party``'s own participant row on the enclosing session is in ``statuses``."""
+    return (
         select(SessionParticipant.id)
         .where(
             SessionParticipant.session_id == Session.id,
             SessionParticipant.user_id == party,
-            SessionParticipant.attendance_status.in_(MISSED),
+            SessionParticipant.attendance_status.in_(statuses),
         )
         .correlate(Session)
         .exists()
     )
-    return and_(Session.status.in_(TERMINAL), absent)
 
 
 #: Which side of a session a figure is about: the mentor's (delivered) or the
@@ -426,6 +432,24 @@ def missed_count(mentor: Any, window: Bounds, absent: Side = "mentor") -> Any:
         select(func.count())
         .select_from(Session)
         .where(missed(mentor, window, absent=absent))
+        .scalar_subquery()
+    )
+
+
+def left_waiting(mentor: Any, window: Bounds | None) -> Any:
+    """The predicate for a session the mentor `missed()` while their mentee's own
+    row says they attended: the mentee was left waiting (decision 253). A
+    session both missed, or a mentee whose attendance is `pending` or
+    unrecorded, left nobody known to be waiting."""
+    return and_(missed(mentor, window), _recorded(Session.mentee_id, ATTENDED))
+
+
+def left_waiting_count(mentor: Any, window: Bounds) -> Any:
+    """How many sessions `left_waiting()` matches, as a scalar subquery."""
+    return (
+        select(func.count())
+        .select_from(Session)
+        .where(left_waiting(mentor, window))
         .scalar_subquery()
     )
 
@@ -515,9 +539,9 @@ def mentee_missed(mentee: Any, window: Window) -> Any:
 
 def mentor_window_figures(mentor: Any, window: Window) -> Any:
     """Every session figure of one dashboard window, as a one-row select: the
-    profile's four plus how many sessions the mentor missed and their mentees
-    missed (by `starts_at`) and how many the mentor cancelled (by when they
-    cancelled)."""
+    profile's four plus how many sessions the mentor missed, their mentees
+    missed, and the mentor missed with the mentee waiting (by `starts_at`), and
+    how many the mentor cancelled (by when they cancelled)."""
     figures = _delivered_figures(mentor, window).subquery("figures")
     cancelled = cancellations(mentor, window)
     by_mentor = (
@@ -527,6 +551,7 @@ def mentor_window_figures(mentor: Any, window: Window) -> Any:
         *figures.c,
         missed_count(mentor, window).label("missed_by_mentor"),
         missed_count(mentor, window, absent="mentee").label("missed_by_mentee"),
+        left_waiting_count(mentor, window).label("mentees_left_waiting"),
         by_mentor.scalar_subquery().label("cancelled_by_mentor"),
     ).select_from(figures)
 
