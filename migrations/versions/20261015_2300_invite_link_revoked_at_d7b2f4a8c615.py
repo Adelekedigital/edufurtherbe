@@ -6,8 +6,9 @@ the owner's: it is still the current code on their row, so `UNIQUE (code)` keeps
 anyone else from picking it, and reactivating makes the same code work again.
 
 **Nullable, no default, no backfill: null means active**, which is every
-existing row. A timestamp rather than a boolean, for when it was switched off,
-the shape `referrals` was always going to use for a revocation.
+existing row. A CHECK keeps a revocation after the link's creation. A
+timestamp rather than a boolean, for when it was switched off, the shape
+`referrals` was always going to use for a revocation.
 
 Expand only, and merged alone (project-conventions, *Migration ordering*):
 nothing reads the column until the next PR. Adding a nullable column with no
@@ -30,14 +31,30 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
     op.add_column("invite_links", sa.Column("revoked_at", sa.TIMESTAMP(timezone=True)))
+    op.create_check_constraint(
+        op.f("ck_invite_links_revoked_after_created"),
+        "invite_links",
+        "revoked_at IS NULL OR revoked_at >= created_at",
+    )
 
 
 def downgrade() -> None:
-    """Drop the column.
+    """Drop the column, **refusing while any link is revoked**.
 
-    What it held is lost: which links are revoked. Every link becomes active
-    again, so a revoked code resolves after a downgrade. Nothing reads the
-    column until the code that writes it ships.
+    Dropping it would switch every revoked link back on: a code its owner
+    turned off, perhaps because it leaked, would attribute arrivals again with
+    nobody choosing that. So a downgrade over revoked links stops and says so;
+    reactivating or deleting them first is a decision for a person.
     """
     op.execute("SET lock_timeout = '3s'")
+    revoked = (
+        op.get_bind()
+        .execute(sa.text("SELECT count(*) FROM invite_links WHERE revoked_at IS NOT NULL"))
+        .scalar_one()
+    )
+    if revoked:
+        raise RuntimeError(
+            f"{revoked} invite link(s) are revoked; dropping revoked_at would reactivate them"
+        )
+    op.drop_constraint(op.f("ck_invite_links_revoked_after_created"), "invite_links")
     op.drop_column("invite_links", "revoked_at")
