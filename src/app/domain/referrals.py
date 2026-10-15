@@ -28,17 +28,22 @@ from __future__ import annotations
 
 import re
 import secrets
+import string
+import unicodedata
 from datetime import timedelta
 from typing import Literal
 
 __all__ = [
     "CODE_LENGTH",
+    "DEFAULT_CODE_SUFFIXES",
+    "DEFAULT_SUFFIX_LENGTH",
     "HANDLE_MAX_LENGTH",
     "HANDLE_MIN_LENGTH",
     "MAX_CODE_LENGTH",
     "NO_INVITE",
     "RESERVED_HANDLES",
     "RETIRED_CODE_HOLD",
+    "default_code",
     "handle_problem",
     "is_plausible_code",
     "make_code",
@@ -189,3 +194,48 @@ def handle_problem(handle: str) -> Literal["malformed", "reserved"] | None:
     if handle in RESERVED_HANDLES:
         return "reserved"
     return None
+
+
+# --------------------------------------------------------------------------
+# A new link's default code (owner, 2026-10-15)
+# --------------------------------------------------------------------------
+
+#: Characters of the random suffix; a retry after clashes asks for more.
+DEFAULT_SUFFIX_LENGTH = 4
+
+#: The suffix length of each attempt at a free default code: five fresh
+#: four-character suffixes, then five of five characters (owner, 2026-10-15).
+DEFAULT_CODE_SUFFIXES = (DEFAULT_SUFFIX_LENGTH,) * 5 + (DEFAULT_SUFFIX_LENGTH + 1,) * 5
+
+#: The name part when a first name leaves nothing in the handle alphabet:
+#: absent, empty, or written in a script that does not fold to a-z.
+DEFAULT_NAME = "friend"
+
+_SUFFIX_ALPHABET = string.ascii_lowercase + string.digits
+_NOT_HANDLE = re.compile(r"[^a-z0-9]+")
+
+
+def _name_part(first_name: str | None, room: int) -> str:
+    """``first_name`` folded into the handle alphabet, at most ``room`` long.
+
+    NFKD then dropping the combining marks takes `Zoë` to `zoe`; every other
+    run of characters outside a-z0-9 becomes one hyphen. Trimmed after the cut
+    too, so a cut landing on a hyphen cannot leave a double one before the
+    suffix.
+    """
+    folded = unicodedata.normalize("NFKD", first_name or "")
+    ascii_only = folded.encode("ascii", "ignore").decode("ascii").lower()
+    name = _NOT_HANDLE.sub("-", ascii_only).strip("-")[:room].strip("-")
+    return name or DEFAULT_NAME
+
+
+def default_code(first_name: str | None, *, suffix_length: int = DEFAULT_SUFFIX_LENGTH) -> str:
+    """A new personal link's code: ``{first-name}-{suffix}``, e.g. ``damilola-7k2x``.
+
+    Always a handle by :func:`handle_problem`, so a default code and a picked
+    one are one format with one validator. Never a reserved word: those carry
+    no hyphen. The suffix comes from ``secrets``; whether the result is free is
+    the store's question, which retries with a fresh or longer suffix.
+    """
+    suffix = "".join(secrets.choice(_SUFFIX_ALPHABET) for _ in range(suffix_length))
+    return f"{_name_part(first_name, HANDLE_MAX_LENGTH - 1 - suffix_length)}-{suffix}"

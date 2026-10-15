@@ -90,13 +90,25 @@ class ReferralClaimRead(BaseModel):
 
 
 class InviteLinkRead(BaseModel):
-    """Your personal invite link's current code (decision 254).
+    """Your personal invite link (decision 254): its current code, and whether
+    it works.
 
-    The code only: the client composes the URL (`/invite/{code}`), so the
-    backend publishes no host that differs per environment.
+    The client composes the URL (`/invite/{code}`), so the backend publishes no
+    host that differs per environment.
     """
 
     code: str
+    #: False while you have revoked the link: its code resolves for nobody,
+    #: and stays yours.
+    active: bool
+
+
+class InviteLinkActiveWrite(BaseModel):
+    """Switching your personal link off (`false`) or on again (`true`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool
 
 
 class InviteLinkWrite(BaseModel):
@@ -138,6 +150,10 @@ class InviterRead(BaseModel):
 
 
 class InviteLookupRead(BaseModel):
-    """What the `/invite/{code}` landing page may say about a working code."""
+    """What the `/invite/{code}` landing page may say about a code.
 
-    inviter: InviterRead
+    ``inviter`` is ``null`` for every code that cannot be joined through, so the
+    page renders without a name rather than an error.
+    """
+
+    inviter: InviterRead | None

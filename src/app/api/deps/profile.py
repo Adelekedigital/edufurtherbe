@@ -38,7 +38,12 @@ from app.api.schemas.profile import (
     UserLanguagesWrite,
     UserProfileWrite,
 )
-from app.api.schemas.referrals import InviteLinkWrite, ReferralClaim, ReferralWrite
+from app.api.schemas.referrals import (
+    InviteLinkActiveWrite,
+    InviteLinkWrite,
+    ReferralClaim,
+    ReferralWrite,
+)
 from app.core.errors import (
     ConfigurationError,
     ConflictError,
@@ -52,7 +57,13 @@ from app.infra.db.asset_store import clear_image, release_image, store_image, st
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
-from app.infra.db.invite_links import ensure_invite_link, inviter_of, pick_handle
+from app.infra.db.invite_links import (
+    LinkState,
+    ensure_invite_link,
+    inviter_of,
+    pick_handle,
+    set_link_active,
+)
 from app.infra.db.onboarding_store import get_onboarding
 from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
 from app.infra.db.pending_requests import booking_counts
@@ -246,25 +257,36 @@ async def claimed_referral(
 ClaimedReferralDep = Annotated[Any, Depends(claimed_referral)]
 
 
-async def own_invite_link(user: CurrentUserDep, session: SessionDep) -> tuple[str, bool]:
-    """The caller's personal link code, created on first ask: ``(code, created)``."""
+async def own_invite_link(user: CurrentUserDep, session: SessionDep) -> tuple[LinkState, bool]:
+    """The caller's personal link, created on first ask: ``(state, created)``."""
     link = await ensure_invite_link(session, user["id"])
     await session.commit()
     return link
 
 
-OwnInviteLinkDep = Annotated[tuple[str, bool], Depends(own_invite_link)]
+OwnInviteLinkDep = Annotated[tuple[LinkState, bool], Depends(own_invite_link)]
 
 
 async def picked_invite_handle(
     payload: InviteLinkWrite, user: CurrentUserDep, session: SessionDep
-) -> str:
-    code = await pick_handle(session, user["id"], payload.code)
+) -> LinkState:
+    link = await pick_handle(session, user["id"], payload.code)
     await session.commit()
-    return code
+    return link
 
 
-PickedInviteHandleDep = Annotated[str, Depends(picked_invite_handle)]
+PickedInviteHandleDep = Annotated[LinkState, Depends(picked_invite_handle)]
+
+
+async def toggled_invite_link(
+    payload: InviteLinkActiveWrite, user: CurrentUserDep, session: SessionDep
+) -> LinkState:
+    link = await set_link_active(session, user["id"], active=payload.active)
+    await session.commit()
+    return link
+
+
+ToggledInviteLinkDep = Annotated[LinkState, Depends(toggled_invite_link)]
 
 
 async def invite_inviter(code: str, session: SessionDep) -> Any:

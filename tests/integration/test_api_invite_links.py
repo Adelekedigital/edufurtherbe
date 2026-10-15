@@ -11,6 +11,7 @@ handle somebody just dropped, and two requests racing for one row.
 """
 
 import asyncio
+import re
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -32,6 +33,7 @@ from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.domain.credits import credit_ladder
 from app.domain.referrals import MAX_CODE_LENGTH, RETIRED_CODE_HOLD
+from app.infra.db import invite_links
 from app.infra.db.invite_links import pick_handle
 from app.infra.db.referral_writer import claim_referral
 from conftest import api_token, bearer
@@ -41,6 +43,8 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 LINK = "/api/v1/me/invite-link"
 LOOKUP = "/api/v1/invites/{code}"
 NO_STORE = "private, no-store"
+#: The landing lookup's one answer for every code nobody can join through.
+NOBODY = {"inviter": None}
 
 
 async def create_link(client: httpx.AsyncClient, auth_id: UUID) -> httpx.Response:
@@ -113,11 +117,12 @@ async def test_the_first_request_creates_the_link_and_the_second_returns_it(
 
     assert first.status_code == 201
     assert first.headers["Location"] == LINK
-    assert len(first.json()["code"]) >= 22
+    assert re.fullmatch(r"friend-[a-z0-9]{4}", first.json()["code"])
     assert second.status_code == 200
     assert "Location" not in second.headers
     assert second.json() == first.json()
-    assert set(first.json()) == {"code"}
+    assert set(first.json()) == {"code", "active"}
+    assert first.json()["active"] is True
 
 
 async def test_concurrent_first_requests_agree_on_one_code(
@@ -169,8 +174,8 @@ async def test_a_handle_is_picked_lowercased_and_creates_the_link(
     response = await pick(api_client, owner, "Ada-Lovelace")
 
     assert response.status_code == 200
-    assert response.json() == {"code": "ada-lovelace"}
-    assert (await create_link(api_client, owner)).json() == {"code": "ada-lovelace"}
+    assert response.json() == {"code": "ada-lovelace", "active": True}
+    assert (await create_link(api_client, owner)).json() == {"code": "ada-lovelace", "active": True}
 
 
 async def test_picking_the_handle_you_have_is_idempotent(
@@ -184,7 +189,7 @@ async def test_picking_the_handle_you_have_is_idempotent(
     again = await pick(api_client, owner, "same-handle")
 
     assert again.status_code == 200
-    assert again.json() == {"code": "same-handle"}
+    assert again.json() == {"code": "same-handle", "active": True}
     assert (
         await scalar(
             db_engine,
@@ -224,7 +229,7 @@ async def test_a_handle_another_user_holds_is_refused(
     response = await pick(api_client, second, "taken-one")
 
     assert response.status_code == 409
-    assert (await create_link(api_client, first)).json() == {"code": "taken-one"}
+    assert (await create_link(api_client, first)).json() == {"code": "taken-one", "active": True}
 
 
 async def test_a_handle_equal_to_a_single_use_code_is_refused(
@@ -263,7 +268,7 @@ async def test_the_owner_may_take_their_retired_handle_back(
     response = await pick(api_client, owner, "mine-first")
 
     assert response.status_code == 200
-    assert response.json() == {"code": "mine-first"}
+    assert response.json() == {"code": "mine-first", "active": True}
 
 
 async def _age_retirement(engine: AsyncEngine, code: str, age: Any) -> None:
@@ -287,7 +292,7 @@ async def test_after_the_hold_anyone_may_pick_it(
     response = await pick(api_client, stranger, "expired-hold")
 
     assert response.status_code == 200
-    assert response.json() == {"code": "expired-hold"}
+    assert response.json() == {"code": "expired-hold", "active": True}
 
 
 async def test_the_hold_still_applies_just_inside_it(
@@ -360,9 +365,8 @@ async def test_a_pick_cannot_slip_past_a_retirement_in_flight(
 ) -> None:
     """The owner is moving off a handle while a stranger picks it.
 
-    Without a lock on the code, the stranger's hold check runs before the
-    retirement commits, finds nothing, then waits on the unique index until the
-    owner's row lets go of the code, and takes it inside the hold.
+    Before the rename commits the code is still the owner's; after, it is held.
+    The stranger's check sees one or the other and is refused either way.
     """
     owner, stranger = await users(db_engine, 2)
     await pick(api_client, owner, "leaving-now")
@@ -594,21 +598,21 @@ async def test_a_deleted_referrer_s_single_use_code_cannot_be_claimed(
     assert (await claim(api_client, arrival, code)).status_code == 404
 
 
-async def test_a_handle_resolves_whatever_its_case_and_a_random_code_does_not(
+async def test_a_handle_resolves_whatever_its_case_and_a_single_use_code_does_not(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """A handle is lowercase by rule, so `Ada-Smith` typed or auto-capitalised
-    still finds `ada-smith`. A random code is mixed-case and stays exact."""
+    """A link code is lowercase by rule, so `Ada-Smith` typed or auto-capitalised
+    still finds `ada-smith`. A single-use code is mixed-case and stays exact."""
     owner, arrival, other = await users(db_engine, 3, complete=False)
     await _named(db_engine, owner, "Ada", None)
-    random_code = await link_code(api_client, other)
+    single_use = (await invite(api_client, other)).json()["code"]
     await pick(api_client, owner, "ada-smith")
 
     assert (await lookup(api_client, "Ada-Smith")).json()["inviter"]["first_name"] == "Ada"
     assert (await claim(api_client, arrival, "ADA-SMITH")).status_code == 200
-    swapped = random_code.swapcase()
-    if swapped != random_code:
-        assert (await lookup(api_client, swapped)).status_code == 404
+    swapped = single_use.swapcase()
+    if swapped != single_use:
+        assert (await lookup(api_client, swapped)).json() == NOBODY
 
 
 async def test_an_exact_code_wins_over_a_handle_spelled_the_same_in_lowercase(
@@ -755,7 +759,7 @@ async def test_an_unclaimed_single_use_code_resolves_and_a_claimed_one_does_not(
 
     await claim(api_client, arrival, code)
 
-    assert (await lookup(api_client, code)).status_code == 404
+    assert (await lookup(api_client, code)).json() == NOBODY
 
 
 async def test_a_retired_code_looks_exactly_like_one_that_never_existed(
@@ -766,37 +770,39 @@ async def test_a_retired_code_looks_exactly_like_one_that_never_existed(
     await pick(api_client, owner, "renamed-one")
 
     retired = await lookup(api_client, random_code)
-    unknown = await lookup(api_client, "A" * len(random_code))
+    unknown = await lookup(api_client, "never-was-a-code")
 
-    assert retired.status_code == unknown.status_code == 404
-    assert retired.json() == unknown.json()
+    assert retired.status_code == unknown.status_code == 200
+    assert retired.content == unknown.content
+    assert retired.json() == NOBODY
     assert retired.headers["Cache-Control"] == unknown.headers["Cache-Control"] == NO_STORE
     assert retired.headers["Content-Type"] == unknown.headers["Content-Type"]
 
 
-async def test_a_deleted_inviter_is_not_found(
+async def test_a_deleted_inviter_is_nobody(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     (owner,) = await users(db_engine, 1)
     code = await link_code(api_client, owner)
     await execute(db_engine, "UPDATE users SET deleted_at = now() WHERE auth_id = :a", a=owner)
 
-    assert (await lookup(api_client, code)).status_code == 404
+    assert (await lookup(api_client, code)).json() == NOBODY
 
 
 @pytest.mark.parametrize(
     "code", ["x" * (MAX_CODE_LENGTH + 1), "a.b", "a%20b", "a%2Fb", "has/slash", "é"]
 )
-async def test_a_malformed_code_is_the_same_not_found(
+async def test_a_malformed_code_is_the_same_nobody(
     api_client: httpx.AsyncClient, code: str
 ) -> None:
-    """Never a 422: the landing page has one not-found shape."""
+    """Never a 422 or a 404: the landing page has one answer for a bad link."""
     unknown = await lookup(api_client, "never-was")
 
     response = await lookup(api_client, code)
 
-    assert response.status_code == 404
-    assert response.json() == unknown.json()
+    assert response.status_code == 200
+    assert response.content == unknown.content
+    assert response.json() == NOBODY
     assert response.headers["Cache-Control"] == NO_STORE
 
 
@@ -814,3 +820,219 @@ async def test_the_lookup_ignores_any_token(
 
     assert anonymous.status_code == signed_in.status_code == garbage.status_code == 200
     assert anonymous.json() == signed_in.json() == garbage.json()
+
+
+# --------------------------------------------------------------------------
+# The default code: {first-name}-{suffix}
+# --------------------------------------------------------------------------
+
+
+async def test_a_new_link_is_named_after_its_owner(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    (owner,) = await users(db_engine, 1)
+    await _named(db_engine, owner, "Damilola", None)
+
+    code = await link_code(api_client, owner)
+
+    assert re.fullmatch(r"damilola-[a-z0-9]{4}", code)
+    assert (await lookup(api_client, code)).json()["inviter"]["first_name"] == "Damilola"
+
+
+def _scripted(monkeypatch: pytest.MonkeyPatch, codes: list[str]) -> list[int]:
+    """Make `default_code` answer ``codes`` in turn; returns the suffix lengths
+    it was asked for."""
+    asked: list[int] = []
+    queue = iter(codes)
+
+    def scripted(_first_name: str | None, *, suffix_length: int = 4) -> str:
+        asked.append(suffix_length)
+        return next(queue)
+
+    monkeypatch.setattr(invite_links, "default_code", scripted)
+    return asked
+
+
+async def test_a_default_code_clashing_with_anything_taken_is_redrawn(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another link's code, a held retired code and a single-use code are each
+    passed over; the first free one is used."""
+    holder, retirer, referrer, owner = await users(db_engine, 4)
+    await pick(api_client, holder, "clash-aaaa")
+    await pick(api_client, retirer, "clash-bbbb")
+    await pick(api_client, retirer, "moved-away")
+    await execute(
+        db_engine,
+        "INSERT INTO referrals (referrer_id, code) VALUES (:r, 'clash-cccc')",
+        r=await user_id_of(db_engine, referrer),
+    )
+    asked = _scripted(monkeypatch, ["clash-aaaa", "clash-bbbb", "clash-cccc", "free-dddd"])
+
+    response = await create_link(api_client, owner)
+
+    assert response.status_code == 201
+    assert response.json()["code"] == "free-dddd"
+    assert asked == [4, 4, 4, 4]
+
+
+async def test_after_five_clashes_the_suffix_grows(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    holder, owner = await users(db_engine, 2)
+    await pick(api_client, holder, "busy-aaaa")
+    asked = _scripted(monkeypatch, ["busy-aaaa"] * 5 + ["busy-aaaaa"])
+
+    response = await create_link(api_client, owner)
+
+    assert response.json()["code"] == "busy-aaaaa"
+    assert asked == [4, 4, 4, 4, 4, 5]
+
+
+async def test_running_out_of_default_codes_is_a_conflict_not_an_error(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    holder, owner = await users(db_engine, 2)
+    await pick(api_client, holder, "busy-aaaa")
+    _scripted(monkeypatch, ["busy-aaaa"] * 20)
+
+    assert (await create_link(api_client, owner)).status_code == 409
+
+
+# --------------------------------------------------------------------------
+# Revoking and reactivating
+# --------------------------------------------------------------------------
+
+
+async def toggle(client: httpx.AsyncClient, auth_id: UUID, active: bool) -> httpx.Response:
+    return await client.patch(LINK, json={"active": active}, headers=bearer(api_token(auth_id)))
+
+
+async def test_a_revoked_link_cannot_be_claimed_or_looked_up(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    owner, arrival = await users(db_engine, 2, complete=False)
+    await _named(db_engine, owner, "Ada", None)
+    code = await link_code(api_client, owner)
+
+    revoked = await toggle(api_client, owner, False)
+
+    assert revoked.status_code == 200
+    assert revoked.json() == {"code": code, "active": False}
+    assert (await claim(api_client, arrival, code)).status_code == 404
+    looked_up = await lookup(api_client, code)
+    assert looked_up.content == (await lookup(api_client, "never-was-a-code")).content
+    assert looked_up.json() == NOBODY
+
+
+async def test_reactivating_makes_the_same_code_work_again(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    owner, arrival = await users(db_engine, 2, complete=False)
+    await _named(db_engine, owner, "Ada", None)
+    code = await link_code(api_client, owner)
+    await toggle(api_client, owner, False)
+
+    again = await toggle(api_client, owner, True)
+
+    assert again.json() == {"code": code, "active": True}
+    assert (await lookup(api_client, code)).json()["inviter"]["first_name"] == "Ada"
+    assert (await claim(api_client, arrival, code)).status_code == 200
+
+
+async def test_revoking_and_reactivating_are_idempotent(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """A second revoke keeps when the link was first revoked."""
+    (owner,) = await users(db_engine, 1)
+    code = await link_code(api_client, owner)
+    owner_id = await user_id_of(db_engine, owner)
+    when = "SELECT revoked_at FROM invite_links WHERE user_id = :u"
+
+    await toggle(api_client, owner, False)
+    first = await scalar(db_engine, when, u=owner_id)
+    second = await toggle(api_client, owner, False)
+
+    assert second.json() == {"code": code, "active": False}
+    assert await scalar(db_engine, when, u=owner_id) == first
+    assert (await toggle(api_client, owner, True)).json() == {"code": code, "active": True}
+    assert (await toggle(api_client, owner, True)).json() == {"code": code, "active": True}
+
+
+async def test_the_owner_still_reads_a_revoked_link(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    (owner,) = await users(db_engine, 1)
+    code = await link_code(api_client, owner)
+    await toggle(api_client, owner, False)
+
+    response = await create_link(api_client, owner)
+
+    assert response.status_code == 200
+    assert response.json() == {"code": code, "active": False}
+
+
+async def test_renaming_a_revoked_link_keeps_it_revoked(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    owner, arrival = await users(db_engine, 2, complete=False)
+    await link_code(api_client, owner)
+    await toggle(api_client, owner, False)
+
+    renamed = await pick(api_client, owner, "quiet-rename")
+
+    assert renamed.json() == {"code": "quiet-rename", "active": False}
+    assert (await claim(api_client, arrival, "quiet-rename")).status_code == 404
+    assert (await lookup(api_client, "quiet-rename")).json() == NOBODY
+
+
+async def test_a_revoked_code_stays_its_owner_s(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    owner, stranger = await users(db_engine, 2)
+    await pick(api_client, owner, "switched-off")
+    await toggle(api_client, owner, False)
+
+    assert (await pick(api_client, stranger, "switched-off")).status_code == 409
+
+
+async def test_an_arrival_before_the_revoke_still_qualifies_and_pays(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    owner, arrival = await users(db_engine, 2)
+    code = await link_code(api_client, owner)
+    await claim(api_client, arrival, code)
+    await toggle(api_client, owner, False)
+
+    await complete(api_client, arrival)
+
+    owner_id = await user_id_of(db_engine, owner)
+    assert await unlocks_of(db_engine, owner_id) == 1
+    assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
+
+
+async def test_patch_creates_the_link_when_there_is_none(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    (owner,) = await users(db_engine, 1)
+
+    response = await toggle(api_client, owner, False)
+
+    assert response.status_code == 200
+    assert re.fullmatch(r"friend-[a-z0-9]{4}", response.json()["code"])
+    assert response.json()["active"] is False
+
+
+@pytest.mark.parametrize("body", [{}, {"active": "maybe"}, {"active": True, "extra": 1}])
+async def test_patch_refuses_a_malformed_body(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, body: dict[str, Any]
+) -> None:
+    (owner,) = await users(db_engine, 1)
+
+    response = await api_client.patch(LINK, json=body, headers=bearer(api_token(owner)))
+
+    assert response.status_code == 422
+
+
+async def test_patch_needs_a_token(api_client: httpx.AsyncClient) -> None:
+    assert (await api_client.patch(LINK, json={"active": False})).status_code == 401

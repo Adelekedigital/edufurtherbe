@@ -236,9 +236,9 @@ class InviteLink(Base, TimestampMixin):
     backfilled. `UNIQUE (user_id)` is what makes two concurrent first requests
     agree on one code.
 
-    The code starts as one from the same generator as a referral's
-    (`domain.referrals.make_code`), and stays that until its owner picks a
-    handle of their own. **Only the current code of an active link is
+    The code starts as ``{first-name}-{suffix}`` (`domain.referrals.default_code`),
+    which is a handle by the same rule a picked one follows, and stays that
+    until its owner picks a handle of their own. **Only the current code of an active link is
     claimable**: a code the link used to carry is recorded in
     `invite_link_retired_codes` and held there, and a revoked link
     (`revoked_at` set) resolves for nobody while its code stays its own.

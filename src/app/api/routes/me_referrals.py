@@ -19,9 +19,15 @@ from app.api.deps import (
     OwnInviteLinkDep,
     OwnReferralsDep,
     PickedInviteHandleDep,
+    ToggledInviteLinkDep,
 )
 from app.api.schemas.referrals import InviteLinkRead, ReferralClaimRead, ReferralRead
-from app.domain.referrals import HANDLE_MAX_LENGTH, HANDLE_MIN_LENGTH, RETIRED_CODE_HOLD
+from app.domain.referrals import (
+    DEFAULT_SUFFIX_LENGTH,
+    HANDLE_MAX_LENGTH,
+    HANDLE_MIN_LENGTH,
+    RETIRED_CODE_HOLD,
+)
 
 router = APIRouter(prefix="/api/v1/me", tags=["referrals"])
 
@@ -128,14 +134,17 @@ HOLD_DAYS = RETIRED_CODE_HOLD.days
     status_code=status.HTTP_201_CREATED,
     summary="Your personal invite link",
     description=(
-        "Returns your one permanent invite code, creating it on the first call "
-        "(`201` with `Location`); every later call returns the same code with "
-        "`200`. Two first calls at once agree on one code.\n\n"
+        "Returns your one permanent invite link, creating it on the first call "
+        "(`201` with `Location`); every later call returns it with `200`, "
+        "revoked or not (`active`). Two first calls at once agree on one code.\n\n"
+        "A new link's code is your first name and a few random characters, "
+        f"such as `damilola-{'7k2x'[:DEFAULT_SUFFIX_LENGTH]}` (`friend-…` when the name has no "
+        "letters a-z to use).\n\n"
         "Anyone may sign up through it, and each arrival becomes its own invite "
         "with the same reward rules as any other: your two credits arrive once, "
         "when the first person you invited finishes their profile.\n\n"
-        "The code is random until you pick a handle (`PUT`). The client builds "
-        "the link itself, as `/invite/{code}`."
+        "You may pick a handle instead (`PUT`) and revoke or reactivate the "
+        "link (`PATCH`). The client builds the link itself, as `/invite/{code}`."
     ),
     responses={
         **UNAUTHORISED,
@@ -146,12 +155,12 @@ HOLD_DAYS = RETIRED_CODE_HOLD.days
     },
 )
 async def own_invite_link(link: OwnInviteLinkDep, response: Response) -> InviteLinkRead:
-    code, created = link
+    state, created = link
     if created:
         response.headers["Location"] = router.prefix + LINK
     else:
         response.status_code = status.HTTP_200_OK
-    return InviteLinkRead(code=code)
+    return InviteLinkRead(code=state.code, active=state.active)
 
 
 @router.put(
@@ -167,7 +176,8 @@ async def own_invite_link(link: OwnInviteLinkDep, response: Response) -> InviteL
         "**Your previous code stops working at once**: a link using it now "
         f"lands on the page for an unknown invite. It is held for {HOLD_DAYS} days, "
         "in which nobody else may pick it but you may take it back; after that "
-        "anyone may. Picking the handle you already have changes nothing.\n\n"
+        "anyone may. Picking the handle you already have changes nothing. "
+        "**Renaming a revoked link keeps it revoked.**\n\n"
         "`409` when the handle is somebody's current code, a single-use "
         f"invite's code, or somebody else's previous code inside its {HOLD_DAYS} days."
     ),
@@ -176,5 +186,26 @@ async def own_invite_link(link: OwnInviteLinkDep, response: Response) -> InviteL
         status.HTTP_409_CONFLICT: {"description": "That handle is taken."},
     },
 )
-async def pick_invite_handle(code: PickedInviteHandleDep) -> InviteLinkRead:
-    return InviteLinkRead(code=code)
+async def pick_invite_handle(link: PickedInviteHandleDep) -> InviteLinkRead:
+    return InviteLinkRead(code=link.code, active=link.active)
+
+
+@router.patch(
+    LINK,
+    response_model=InviteLinkRead,
+    summary="Revoke or reactivate your invite link",
+    description=(
+        '`{"active": false}` revokes your link and `{"active": true}` '
+        "reactivates it; both are idempotent and return the link. Creates the "
+        "link first if you have none.\n\n"
+        "**While revoked**, its code is answered as unknown everywhere: claiming "
+        "it is `404` and the invite landing names nobody. It stays yours: "
+        "nobody else may pick it, you still read it here, and you may rename it "
+        "(it stays revoked). Reactivating makes the same code work again.\n\n"
+        "People who already arrived through the link are unaffected, including "
+        "the credits their finishing earns you."
+    ),
+    responses=UNAUTHORISED,
+)
+async def toggle_invite_link(link: ToggledInviteLinkDep) -> InviteLinkRead:
+    return InviteLinkRead(code=link.code, active=link.active)
