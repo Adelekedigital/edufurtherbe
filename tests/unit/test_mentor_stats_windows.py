@@ -7,7 +7,14 @@ from itertools import pairwise
 
 import pytest
 
-from app.domain.mentor_stats import Window, month_windows, trend_windows, window_ending
+from app.domain.mentor_stats import (
+    YEAR_REACH,
+    Window,
+    month_windows,
+    trend_windows,
+    window_ending,
+    year_windows,
+)
 
 NOW = dt.datetime(2026, 3, 1, 9, 30, tzinfo=dt.UTC)
 
@@ -92,3 +99,39 @@ def test_fewer_than_one_month_is_refused(months: int) -> None:
 def test_each_month_carries_its_utc_label() -> None:
     """The `YYYY-MM` the API publishes is the domain's, read off `since` in UTC."""
     assert [w.month for w in month_windows(NOW, 3)] == ["2026-01", "2026-02", "2026-03"]
+
+
+def test_a_year_is_its_utc_calendar_year_and_the_one_before() -> None:
+    """Decision 254: `previous` is the calendar year before, not the same
+    length before, so a leap year is still compared with a whole year."""
+    current, previous = year_windows(NOW, 2025)
+
+    assert current == Window(since=utc(2025, 1), until=utc(2026, 1))
+    assert previous == Window(since=utc(2024, 1), until=utc(2025, 1))
+
+
+def test_the_current_year_runs_to_its_end() -> None:
+    assert year_windows(NOW, 2026)[0] == Window(since=utc(2026, 1), until=utc(2027, 1))
+
+
+def test_a_year_reaches_as_far_back_as_the_monthly_chart() -> None:
+    assert YEAR_REACH == 5
+    assert year_windows(NOW, 2026 - YEAR_REACH)[0].since == utc(2021, 1)
+
+
+@pytest.mark.parametrize("year", [2026 - YEAR_REACH - 1, 2027])
+def test_a_year_outside_the_reach_is_refused(year: int) -> None:
+    with pytest.raises(ValueError, match="year"):
+        year_windows(NOW, year)
+
+
+def test_the_year_is_read_in_utc() -> None:
+    """New Year's Eve evening in Lagos' west is already next year in UTC."""
+    eve = dt.datetime(2026, 12, 31, 23, 30, tzinfo=dt.timezone(dt.timedelta(hours=-5)))
+
+    assert year_windows(eve, 2027)[0].since == utc(2027, 1)
+
+
+def test_a_naive_now_is_refused_for_a_year() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        year_windows(NOW.replace(tzinfo=None), 2026)

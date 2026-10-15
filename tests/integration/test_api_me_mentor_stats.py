@@ -658,6 +658,63 @@ async def test_window_days_is_bounded(
     assert response.status_code == code, response.text
 
 
+async def test_a_year_reads_that_calendar_year_and_the_one_before(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Decision 254: `?year=` windows are UTC calendar years, so the card
+    matches the chart's Year view."""
+    year = dt.datetime.now(dt.UTC).year - 1
+    mentor = await make_bookable_mentor(db_engine, "dash-year")
+    jan = dt.datetime(year, 1, 1, tzinfo=dt.UTC)
+    await add_session(db_engine, mentor, minutes=40, starts_at=jan)
+    await add_session(db_engine, mentor, minutes=20, starts_at=jan - dt.timedelta(seconds=1))
+    await add_session(
+        db_engine, mentor, minutes=10, starts_at=dt.datetime(year + 1, 1, 1, tzinfo=dt.UTC)
+    )
+
+    body = await stats(api_client, await token_for(db_engine, mentor), f"?year={year}")
+
+    def bounds(block: dict[str, Any]) -> tuple[dt.datetime, dt.datetime]:
+        return (
+            dt.datetime.fromisoformat(block["since"]),
+            dt.datetime.fromisoformat(block["until"]),
+        )
+
+    assert bounds(body["current"]) == (jan, dt.datetime(year + 1, 1, 1, tzinfo=dt.UTC))
+    assert bounds(body["previous"]) == (dt.datetime(year - 1, 1, 1, tzinfo=dt.UTC), jan)
+    assert (body["current"]["mentoring_minutes"], body["previous"]["mentoring_minutes"]) == (40, 20)
+    expected_days = (dt.date(year + 1, 1, 1) - dt.date(year, 1, 1)).days
+    assert body["window_days"] == expected_days
+
+
+@pytest.mark.parametrize(("back", "code"), [(-1, 422), (0, 200), (5, 200), (6, 422)])
+async def test_a_year_is_bounded(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, back: int, code: int
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, f"dash-year-{back}")
+    year = dt.datetime.now(dt.UTC).year - back
+
+    response = await api_client.get(
+        f"{URL}?year={year}", headers=bearer(await token_for(db_engine, mentor))
+    )
+
+    assert response.status_code == code, response.text
+
+
+async def test_a_year_and_window_days_together_are_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "dash-year-both")
+    year = dt.datetime.now(dt.UTC).year
+
+    response = await api_client.get(
+        f"{URL}?year={year}&window_days=30",
+        headers=bearer(await token_for(db_engine, mentor)),
+    )
+
+    assert response.status_code == 422, response.text
+
+
 async def test_it_needs_a_token(api_client: httpx.AsyncClient) -> None:
     assert (await api_client.get(URL)).status_code == 401
 

@@ -27,10 +27,12 @@ __all__ = [
     "MAX_WINDOW_DAYS",
     "MIN_MONTHS",
     "MIN_WINDOW_DAYS",
+    "YEAR_REACH",
     "Window",
     "month_windows",
     "trend_windows",
     "window_ending",
+    "year_windows",
 ]
 
 #: The dashboard's default: a quarter, long enough that a mentor with a session
@@ -48,6 +50,11 @@ MAX_WINDOW_DAYS = 365
 DEFAULT_MONTHS = 12
 MIN_MONTHS = 1
 MAX_MONTHS = 60
+
+#: How many calendar years before the current one `year_windows` reaches: the
+#: monthly chart's reach, so the card can follow the chart into any year it
+#: shows (decision 257).
+YEAR_REACH = MAX_MONTHS // 12
 
 
 class Window(NamedTuple):
@@ -79,6 +86,30 @@ def trend_windows(now: dt.datetime, days: int) -> tuple[Window, Window]:
     """The window ending at `now`, and the equal one before it."""
     current = window_ending(now, days)
     return current, window_ending(current.since, days)
+
+
+def year_windows(now: dt.datetime, year: int) -> tuple[Window, Window]:
+    """UTC calendar ``year`` and the calendar year before it (decision 257).
+
+    The previous window is the year before, not the same length before, so a
+    leap year is compared with a whole year. The current year runs to its end,
+    as `month_windows` runs the current month to its end. Raises `ValueError`
+    on a naive `now`, or a ``year`` after `now`'s or more than `YEAR_REACH`
+    before it.
+    """
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    latest = now.astimezone(dt.UTC).year
+    if not latest - YEAR_REACH <= year <= latest:
+        raise ValueError(f"year must be between {latest - YEAR_REACH} and {latest}")
+
+    def new_year(of: int) -> dt.datetime:
+        return dt.datetime(of, 1, 1, tzinfo=dt.UTC)
+
+    return (
+        Window(since=new_year(year), until=new_year(year + 1)),
+        Window(since=new_year(year - 1), until=new_year(year)),
+    )
 
 
 def month_windows(now: dt.datetime, months: int) -> list[Window]:
