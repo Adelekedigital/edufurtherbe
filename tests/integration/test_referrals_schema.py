@@ -325,6 +325,46 @@ async def test_a_user_may_have_a_personal_link(invites: Invites) -> None:
     assert await _link(invites.conn, invites.referrer, "link-1")
 
 
+async def test_a_new_link_is_active(invites: Invites) -> None:
+    """Null `revoked_at` is active, and it is the default: no backfill needed."""
+    link = await _link(invites.conn, invites.referrer, "link-1")
+
+    assert (
+        await invites.conn.scalar(
+            text("SELECT revoked_at FROM invite_links WHERE id = :l"), {"l": link}
+        )
+    ) is None
+
+
+REVOKE = "UPDATE invite_links SET revoked_at = {at} WHERE id = :l RETURNING revoked_at"
+
+
+async def test_a_link_may_be_revoked_and_reactivated(invites: Invites) -> None:
+    link = await _link(invites.conn, invites.referrer, "link-1")
+
+    assert await invites.conn.scalar(text(REVOKE.format(at="now()")), {"l": link})
+    assert (await invites.conn.scalar(text(REVOKE.format(at="NULL")), {"l": link})) is None
+
+
+async def test_a_link_cannot_be_revoked_before_it_existed(invites: Invites) -> None:
+    link = await _link(invites.conn, invites.referrer, "link-1")
+
+    with pytest.raises(IntegrityError, match="revoked_after_created"):
+        await invites.conn.execute(
+            text(REVOKE.format(at="created_at - interval '1 second'")), {"l": link}
+        )
+
+
+async def test_a_revoked_link_keeps_its_code_from_everyone_else(invites: Invites) -> None:
+    """Revoking switches the link off; it does not give the code up."""
+    other = await make_user(invites.conn, "other-linker@example.test")
+    link = await _link(invites.conn, invites.referrer, "kept-code")
+    await invites.conn.execute(text(REVOKE.format(at="now()")), {"l": link})
+
+    with pytest.raises(IntegrityError, match="code"):
+        await _link(invites.conn, other, "kept-code")
+
+
 async def test_a_user_has_at_most_one_personal_link(invites: Invites) -> None:
     """One permanent link per user: a second is a duplicate, not a second link."""
     await _link(invites.conn, invites.referrer, "link-1")

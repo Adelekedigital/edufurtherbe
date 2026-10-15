@@ -2,7 +2,7 @@
 
     referrals         somebody was invited, and how far they got
     referral_unlocks  this user has unlocked the recurring grant
-    invite_links      this user's one permanent personal link
+    invite_links      this user's one permanent personal link, which they may revoke
     invite_link_retired_codes  a code that link used to carry, and when it stopped
 
 **The gate is the point, not the invite.** A qualifying invite grants two
@@ -25,8 +25,9 @@ and the first is the stronger:
 2. Of the five values, `expired` and `rejected` have no producer. Settled
    decision #21: a vocabulary is not a wish list.
 
-Revocation, if it ever ships, is a nullable `revoked_at` — additive, and a state
-the timestamps genuinely cannot derive.
+Revoking a single-use referral, if it ever ships, is a nullable `revoked_at` —
+additive, and a state the timestamps genuinely cannot derive. A personal link
+already has exactly that column (`InviteLink.revoked_at`).
 
 **`qualified_at` is deliberately separate from `signed_up_at`.** Inviting
 somebody who signs up and vanishes must not unlock credits; without that
@@ -237,8 +238,10 @@ class InviteLink(Base, TimestampMixin):
 
     The code starts as one from the same generator as a referral's
     (`domain.referrals.make_code`), and stays that until its owner picks a
-    handle of their own. **Only the current code is claimable**; a code the link
-    used to carry is recorded in `invite_link_retired_codes` and held there.
+    handle of their own. **Only the current code of an active link is
+    claimable**: a code the link used to carry is recorded in
+    `invite_link_retired_codes` and held there, and a revoked link
+    (`revoked_at` set) resolves for nobody while its code stays its own.
     """
 
     __tablename__ = "invite_links"
@@ -256,9 +259,21 @@ class InviteLink(Base, TimestampMixin):
     #: What the personal link carries. Unique, so a code names one owner.
     code: Mapped[str] = mapped_column(Text, nullable=False)
 
+    #: Null is active. Set when the owner revokes the link: its code then
+    #: resolves for nobody, yet stays theirs, so nobody else can pick it and
+    #: reactivating (clearing this) makes the same code work again. Referrals
+    #: already made through it are untouched. A timestamp rather than a
+    #: boolean, as `referrals` would carry a revocation (owner, 2026-10-15).
+    revoked_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
     __table_args__ = (
         UniqueConstraint("user_id", name="uq_invite_links_user_id"),
         UniqueConstraint("code", name="uq_invite_links_code"),
+        # A link is revoked after it exists, never before.
+        CheckConstraint(
+            "revoked_at IS NULL OR revoked_at >= created_at",
+            name="revoked_after_created",
+        ),
     )
 
 
