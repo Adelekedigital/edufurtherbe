@@ -2,6 +2,8 @@
 
     referrals         somebody was invited, and how far they got
     referral_unlocks  this user has unlocked the recurring grant
+    invite_links      this user's one permanent personal link
+    invite_link_retired_codes  a code that link used to carry, and when it stopped
 
 **The gate is the point, not the invite.** A qualifying invite grants two
 credits once — but what it really does is open `monthly_free`, which arrives
@@ -214,4 +216,88 @@ class ReferralUnlock(Base, TimestampMixin):
             name="fk_referral_unlocks_unlock_belongs_to_referrer",
             ondelete="RESTRICT",
         ),
+    )
+
+
+class InviteLink(Base, TimestampMixin):
+    """A user's one permanent personal invite link (owner, 2026-10-15).
+
+    **Anyone may sign up through it, and each arrival becomes its own
+    referral.** A `referrals` row is one invite with one invitee, which is why
+    its code is single-use; a link shared in a group chat must attribute many
+    arrivals. So the link is not a referral: it is the reusable code, and each
+    claim through it writes a fresh `referrals` row for the link's owner, with
+    a code of its own. Every rule a referral carries — one invite per arrival,
+    no self-referral, qualification by onboarding, the once-only unlock — then
+    applies unchanged, because nothing about a referral row changes.
+
+    **One per user, created lazily** when the user first asks for it; nobody is
+    backfilled. `UNIQUE (user_id)` is what makes two concurrent first requests
+    agree on one code.
+
+    The code starts as one from the same generator as a referral's
+    (`domain.referrals.make_code`), and stays that until its owner picks a
+    handle of their own. **Only the current code is claimable**; a code the link
+    used to carry is recorded in `invite_link_retired_codes` and held there.
+    """
+
+    __tablename__ = "invite_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+
+    #: Restrict, as every referral table does: arrivals are attributed through
+    #: this link, and deleting its owner would orphan the record of why.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    #: What the personal link carries. Unique, so a code names one owner.
+    code: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_invite_links_user_id"),
+        UniqueConstraint("code", name="uq_invite_links_code"),
+    )
+
+
+class InviteLinkRetiredCode(Base):
+    """A code a personal link used to carry, and when it stopped (owner, 2026-10-15).
+
+    Changing a link's code retires the old one: it stops resolving at once, and
+    it is **held** for a while so a stranger cannot pick a handle somebody just
+    dropped and collect the arrivals still following the old link. The owner may
+    take their own retired handle back. The hold's length is a domain constant;
+    this table only records the moment.
+
+    **`code` is not unique.** A handle can be picked, dropped and picked again,
+    by its owner or by someone else after the hold, and each retirement is a row.
+
+    **Append-only**, so `created_at` alone from the timestamp pair (`APPEND_ONLY`
+    in `tests/unit/test_models.py`), and it is the moment of retirement the hold
+    is measured from. A separate `retired_at` would only ever equal it.
+    """
+
+    __tablename__ = "invite_link_retired_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+
+    #: Restrict: the hold is read from these rows, and the link is permanent.
+    invite_link_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("invite_links.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    code: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: When the code was retired.
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        # The hold check: has this code been retired recently, and by whom.
+        Index("ix_invite_link_retired_codes_code_retired", "code", text("created_at DESC")),
     )
