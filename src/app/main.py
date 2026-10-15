@@ -22,6 +22,7 @@ from app.api.routes import (
     health,
     intake_files,
     internal_jobs,
+    invites,
     me_calendar,
     me_conferencing,
     me_intake,
@@ -488,6 +489,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)
     application.include_router(me_referrals.router)
+    application.include_router(invites.router)
     application.include_router(me_reviews.router)
     application.include_router(callbacks.router)
     application.include_router(internal_jobs.router)

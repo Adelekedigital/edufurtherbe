@@ -26,9 +26,24 @@ verification link is not. Amended in ADR 0027.
 
 from __future__ import annotations
 
+import re
 import secrets
+from datetime import timedelta
+from typing import Literal
 
-__all__ = ["CODE_LENGTH", "make_code", "may_qualify"]
+__all__ = [
+    "CODE_LENGTH",
+    "HANDLE_MAX_LENGTH",
+    "HANDLE_MIN_LENGTH",
+    "MAX_CODE_LENGTH",
+    "RESERVED_HANDLES",
+    "RETIRED_CODE_HOLD",
+    "handle_problem",
+    "is_plausible_code",
+    "make_code",
+    "may_qualify",
+    "normalise_handle",
+]
 
 #: Bytes of entropy, not characters — ``token_urlsafe`` base64-encodes, so the
 #: string is longer than this. Sixteen bytes is 128 bits, which is the point at
@@ -72,3 +87,101 @@ def may_qualify(*, has_invitee: bool, already_qualified: bool) -> bool:
     caller transposes the arguments and every test still passes.
     """
     return has_invitee and not already_qualified
+
+
+#: The longest code anybody may present, whether to claim or to look up.
+#: Generated codes are 22 characters and handles at most 30; the ceiling is
+#: generous rather than exact, so raising the entropy breaks no client.
+MAX_CODE_LENGTH = 128
+
+#: Every code is drawn from the URL-safe alphabet: ``token_urlsafe`` output and
+#: handles alike. Anything else cannot be a code, so the public lookup answers it
+#: without asking the database.
+_PLAUSIBLE_CODE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def is_plausible_code(code: str) -> bool:
+    """Whether ``code`` could be a code at all: 1 to ``MAX_CODE_LENGTH`` URL-safe
+    characters. Not whether one exists."""
+    return len(code) <= MAX_CODE_LENGTH and _PLAUSIBLE_CODE.fullmatch(code) is not None
+
+
+# --------------------------------------------------------------------------
+# Picked handles (owner, 2026-10-15)
+# --------------------------------------------------------------------------
+
+HANDLE_MIN_LENGTH = 3
+HANDLE_MAX_LENGTH = 30
+
+#: Lowercase letters and digits in runs joined by single hyphens: no leading,
+#: trailing or doubled hyphen. The length is checked apart, so the message and
+#: the pattern each say one thing.
+_HANDLE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+#: Words a handle may not be: the app's own routes and words, and the values a
+#: client bug renders as text. The link is ``/invite/{code}``, so a handle that
+#: reads as an official page or a broken one is refused.
+RESERVED_HANDLES = frozenset(
+    {
+        "about",
+        "account",
+        "admin",
+        "administrator",
+        "api",
+        "app",
+        "auth",
+        "contact",
+        "dashboard",
+        "edufurther",
+        "help",
+        "home",
+        "invite",
+        "invites",
+        "login",
+        "logout",
+        "me",
+        "mentor",
+        "mentors",
+        "nan",
+        "null",
+        "official",
+        "privacy",
+        "referral",
+        "referrals",
+        "root",
+        "security",
+        "settings",
+        "signin",
+        "signup",
+        "staff",
+        "support",
+        "system",
+        "team",
+        "terms",
+        "test",
+        "undefined",
+    }
+)
+
+#: How long a retired code stays out of everyone else's reach. Its owner may
+#: take it back at any time; after this, anyone may pick it.
+RETIRED_CODE_HOLD = timedelta(days=30)
+
+
+def normalise_handle(raw: str) -> str:
+    """Lowercase, before judging: a handle is case-insensitive by being stored
+    in one case, so ``Ada`` and ``ada`` can never be two handles."""
+    return raw.lower()
+
+
+def handle_problem(handle: str) -> Literal["malformed", "reserved"] | None:
+    """Why ``handle`` may not be picked, or ``None`` when it may.
+
+    Expects the normalised form. Taken and held handles are the store's to
+    judge, because only the database knows them.
+    """
+    if not (HANDLE_MIN_LENGTH <= len(handle) <= HANDLE_MAX_LENGTH and _HANDLE.fullmatch(handle)):
+        return "malformed"
+    if handle in RESERVED_HANDLES:
+        return "reserved"
+    return None

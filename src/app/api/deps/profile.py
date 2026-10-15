@@ -38,7 +38,7 @@ from app.api.schemas.profile import (
     UserLanguagesWrite,
     UserProfileWrite,
 )
-from app.api.schemas.referrals import ReferralClaim, ReferralWrite
+from app.api.schemas.referrals import InviteLinkWrite, ReferralClaim, ReferralWrite
 from app.core.errors import (
     ConfigurationError,
     ConflictError,
@@ -47,10 +47,12 @@ from app.core.errors import (
 )
 from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
+from app.domain.referrals import is_plausible_code
 from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
 from app.infra.db.education_writer import create_education, delete_education, update_education
+from app.infra.db.invite_links import ensure_invite_link, inviter_of, pick_handle
 from app.infra.db.onboarding_store import get_onboarding
 from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
 from app.infra.db.pending_requests import booking_counts
@@ -242,6 +244,41 @@ async def claimed_referral(
 
 
 ClaimedReferralDep = Annotated[Any, Depends(claimed_referral)]
+
+
+async def own_invite_link(user: CurrentUserDep, session: SessionDep) -> tuple[str, bool]:
+    """The caller's personal link code, created on first ask: ``(code, created)``."""
+    link = await ensure_invite_link(session, user["id"])
+    await session.commit()
+    return link
+
+
+OwnInviteLinkDep = Annotated[tuple[str, bool], Depends(own_invite_link)]
+
+
+async def picked_invite_handle(
+    payload: InviteLinkWrite, user: CurrentUserDep, session: SessionDep
+) -> str:
+    code = await pick_handle(session, user["id"], payload.code)
+    await session.commit()
+    return code
+
+
+PickedInviteHandleDep = Annotated[str, Depends(picked_invite_handle)]
+
+
+async def invite_inviter(code: str, session: SessionDep) -> Any:
+    """Who the landing page may name for ``code``, or ``None`` (decision 256).
+
+    **No token, and none is read**: the page renders before sign-in. A code no
+    code could be is answered without the database, as the same ``None``.
+    """
+    if not is_plausible_code(code):
+        return None
+    return await inviter_of(session, code)
+
+
+InviterDep = Annotated[Any, Depends(invite_inviter)]
 
 
 async def own_onboarding(user: CurrentUserDep, session: SessionDep) -> Any:

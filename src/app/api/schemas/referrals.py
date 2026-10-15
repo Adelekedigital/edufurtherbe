@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.api.schemas.common import StoredEmail
 from app.domain.emails import normalise_email
+from app.domain.referrals import MAX_CODE_LENGTH, handle_problem, normalise_handle
 
 
 class ReferralWrite(BaseModel):
@@ -38,7 +39,7 @@ class ReferralClaim(BaseModel):
     #: the comment said so before the constraint did, which code review caught.
     #: Generated codes are 22 characters; the ceiling is generous rather than
     #: exact, because raising the entropy must not break existing clients.
-    code: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=MAX_CODE_LENGTH)
 
 
 class ReferralRead(BaseModel):
@@ -80,3 +81,56 @@ class ReferralClaimRead(BaseModel):
     code: str
     invited_at: datetime
     signed_up_at: datetime | None = None
+
+
+class InviteLinkRead(BaseModel):
+    """Your personal invite link's current code (decision 254).
+
+    The code only: the client composes the URL (`/invite/{code}`), so the
+    backend publishes no host that differs per environment.
+    """
+
+    code: str
+
+
+class InviteLinkWrite(BaseModel):
+    """Picking a handle for your personal link (decision 255).
+
+    Lowercased, then judged by the domain's one rule: 3 to 30 characters of
+    a-z, 0-9 and single inner hyphens, and not a reserved word.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=MAX_CODE_LENGTH)
+
+    @field_validator("code")
+    @classmethod
+    def judge(cls, value: str) -> str:
+        handle = normalise_handle(value)
+        problem = handle_problem(handle)
+        if problem == "malformed":
+            raise ValueError(
+                "a handle is 3 to 30 characters: lowercase letters, digits and "
+                "single hyphens, not at either end"
+            )
+        if problem == "reserved":
+            raise ValueError("that handle is reserved")
+        return handle
+
+
+class InviterRead(BaseModel):
+    """Who sent the invite, as much as a signed-out page may show (decision 256).
+
+    First name and photo only, by owner decision: no last name, id, email or
+    handle.
+    """
+
+    first_name: str | None = None
+    avatar_url: str | None = None
+
+
+class InviteLookupRead(BaseModel):
+    """What the `/invite/{code}` landing page may say about a working code."""
+
+    inviter: InviterRead
