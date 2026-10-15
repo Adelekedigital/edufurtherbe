@@ -122,7 +122,13 @@ class MentorStatsRead(BaseModel):
     """Your figures over a window and over the equal window before it, so a
     client computes the trend. Both blocks are read in one statement."""
 
-    window_days: int = Field(default=DEFAULT_WINDOW_DAYS, description="The window's length.")
+    window_days: int = Field(
+        default=DEFAULT_WINDOW_DAYS,
+        description=(
+            "The current window's length in days: the `window_days` asked for, "
+            "or with `year` that year's length, 365 or 366."
+        ),
+    )
     current_streak: int | None = Field(
         default=None,
         description=(
