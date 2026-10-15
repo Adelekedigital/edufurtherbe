@@ -310,7 +310,134 @@ async def test_an_unlocked_user_cannot_be_hard_deleted(invites: Invites) -> None
 
 
 # --------------------------------------------------------------------------
-# The trigger — both tables are mutable, so both carry one
+# invite_links — one permanent personal link per user (owner, 2026-10-15)
+# --------------------------------------------------------------------------
+
+INSERT_LINK = "INSERT INTO invite_links (user_id, code) VALUES (:user, :code) RETURNING id"
+
+
+async def _link(conn: AsyncConnection, user: str, code: str) -> str:
+    result = await conn.execute(text(INSERT_LINK), {"user": user, "code": code})
+    return str(result.scalar_one())
+
+
+async def test_a_user_may_have_a_personal_link(invites: Invites) -> None:
+    assert await _link(invites.conn, invites.referrer, "link-1")
+
+
+async def test_a_user_has_at_most_one_personal_link(invites: Invites) -> None:
+    """One permanent link per user: a second is a duplicate, not a second link."""
+    await _link(invites.conn, invites.referrer, "link-1")
+
+    with pytest.raises(IntegrityError, match="user_id"):
+        await _link(invites.conn, invites.referrer, "link-2")
+
+
+async def test_two_users_each_have_their_own_link(invites: Invites) -> None:
+    """The accepting half: unique per user, not one link for the table."""
+    other = await make_user(invites.conn, "other-linker@example.test")
+    await _link(invites.conn, invites.referrer, "link-1")
+
+    assert await _link(invites.conn, other, "link-2")
+
+
+async def test_a_link_code_names_one_link(invites: Invites) -> None:
+    """The code is what an arrival is attributed by, so it must name one owner."""
+    other = await make_user(invites.conn, "other-linker@example.test")
+    await _link(invites.conn, invites.referrer, "shared")
+
+    with pytest.raises(IntegrityError, match="code"):
+        await _link(invites.conn, other, "shared")
+
+
+async def test_a_link_ids_itself(invites: Invites) -> None:
+    """Non-negotiable 10: the id is the database's, never the caller's."""
+    link = await _link(invites.conn, invites.referrer, "link-1")
+
+    assert uuid.UUID(link).version == 7
+
+
+async def test_a_user_with_a_link_cannot_be_hard_deleted(invites: Invites) -> None:
+    """Restrict, like every referral table: arrivals are attributed through it."""
+    holder = await make_user(invites.conn, "linked@example.test")
+    await _link(invites.conn, holder, "link-1")
+
+    with pytest.raises(IntegrityError, match="invite_links"):
+        await invites.conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": holder})
+
+
+INSERT_RETIRED = """
+INSERT INTO invite_link_retired_codes (invite_link_id, code)
+VALUES (:link, :code)
+RETURNING id
+"""
+
+
+async def _retire(conn: AsyncConnection, link: str, code: str) -> str:
+    result = await conn.execute(text(INSERT_RETIRED), {"link": link, "code": code})
+    return str(result.scalar_one())
+
+
+async def test_a_retired_code_is_recorded_with_its_moment(invites: Invites) -> None:
+    link = await _link(invites.conn, invites.referrer, "current")
+    retired = await _retire(invites.conn, link, "old-handle")
+
+    row = (
+        await invites.conn.execute(
+            text("SELECT retired_at, created_at FROM invite_link_retired_codes WHERE id = :i"),
+            {"i": retired},
+        )
+    ).one()
+    assert uuid.UUID(retired).version == 7
+    assert row.retired_at is not None
+    assert row.created_at is not None
+
+
+async def test_a_code_may_be_retired_more_than_once(invites: Invites) -> None:
+    """A handle can be picked, dropped, picked again and dropped again, by one
+    owner or by another after the hold — so `code` is not unique here."""
+    other = await make_user(invites.conn, "other-linker@example.test")
+    mine = await _link(invites.conn, invites.referrer, "mine-now")
+    theirs = await _link(invites.conn, other, "theirs-now")
+    await _retire(invites.conn, mine, "popular")
+    await _retire(invites.conn, mine, "popular")
+
+    assert await _retire(invites.conn, theirs, "popular")
+
+
+async def test_a_retired_code_must_belong_to_a_real_link(invites: Invites) -> None:
+    with pytest.raises(IntegrityError, match="invite_link_id"):
+        await _retire(invites.conn, str(uuid.uuid4()), "orphan")
+
+
+async def test_a_link_with_retired_codes_cannot_be_hard_deleted(invites: Invites) -> None:
+    """Restrict: the retired codes are what the 30-day hold is read from."""
+    link = await _link(invites.conn, invites.referrer, "current")
+    await _retire(invites.conn, link, "old-handle")
+
+    with pytest.raises(IntegrityError, match="invite_link_retired_codes"):
+        await invites.conn.execute(text("DELETE FROM invite_links WHERE id = :l"), {"l": link})
+
+
+async def test_the_hold_check_has_its_index(invites: Invites) -> None:
+    """`alembic check` cannot compare a `DESC` index, so its shape is asserted."""
+    definition = await invites.conn.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE indexname = 'ix_invite_link_retired_codes_code_retired'"
+        )
+    )
+    assert definition is not None
+    assert "(code, retired_at DESC)" in definition
+
+
+async def test_retired_codes_are_append_only(invites: Invites) -> None:
+    """No `updated_at` and no trigger: a retirement is never edited."""
+    assert await _triggers_on(invites.conn, "invite_link_retired_codes") == []
+
+
+# --------------------------------------------------------------------------
+# The trigger — every referral table is mutable, so each carries one
 # --------------------------------------------------------------------------
 
 
@@ -327,8 +454,9 @@ async def _triggers_on(conn: AsyncConnection, table: str) -> list[str]:
     return [row[0] for row in result]
 
 
-async def test_both_referral_tables_maintain_updated_at(invites: Invites) -> None:
+async def test_every_referral_table_maintains_updated_at(invites: Invites) -> None:
     """Neither is append-only — a referral's timestamps are filled in as the
     invitee progresses, and that is an update rather than a new row."""
     assert await _triggers_on(invites.conn, "referrals") == ["trg_set_updated_at"]
     assert await _triggers_on(invites.conn, "referral_unlocks") == ["trg_set_updated_at"]
+    assert await _triggers_on(invites.conn, "invite_links") == ["trg_set_updated_at"]

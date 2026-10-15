@@ -180,6 +180,10 @@ EXPECTED_TABLES = [
     # M5b PR 2 — the invite and the once-only gate it opens.
     "referrals",
     "referral_unlocks",
+    # One permanent personal invite link per user (owner, 2026-10-15).
+    "invite_links",
+    # A personal link's retired codes, held 30 days (owner, 2026-10-15).
+    "invite_link_retired_codes",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

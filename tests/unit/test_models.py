@@ -52,6 +52,9 @@ EXPECTED_MODELS = {
     "ServiceOffering",
     "Referral",
     "ReferralUnlock",
+    # One permanent personal invite link per user (owner, 2026-10-15).
+    "InviteLink",
+    "InviteLinkRetiredCode",
     "Review",
     "ReviewReport",
     "ScholarshipProgram",
@@ -143,6 +146,8 @@ APPEND_ONLY = frozenset(
         "AdminCreditGrant",
         "MentorAvailabilityChange",
         "FeaturedMentor",
+        # A retired code is a fact about a moment; it is never edited.
+        "InviteLinkRetiredCode",
     }
 )
 

@@ -451,6 +451,9 @@ def test_the_natural_keys_survive_as_unique_constraints(migrated_database: str) 
         # one unlock per user, ever — survives as this unique constraint, and
         # naming it here is what stops the demotion being silently undone.
         ("referral_unlocks", "(user_id)"),
+        # One personal invite link per user, and a code names one link.
+        ("invite_links", "(user_id)"),
+        ("invite_links", "(code)"),
         ("session_type_booking_configs", "(session_type_id)"),
     }
 
