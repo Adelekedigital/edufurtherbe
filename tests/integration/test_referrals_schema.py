@@ -325,6 +325,25 @@ async def test_a_user_may_have_a_personal_link(invites: Invites) -> None:
     assert await _link(invites.conn, invites.referrer, "link-1")
 
 
+async def test_a_new_link_is_active(invites: Invites) -> None:
+    """Null `revoked_at` is active, and it is the default: no backfill needed."""
+    link = await _link(invites.conn, invites.referrer, "link-1")
+
+    assert (
+        await invites.conn.scalar(
+            text("SELECT revoked_at FROM invite_links WHERE id = :l"), {"l": link}
+        )
+    ) is None
+
+
+async def test_a_link_may_be_revoked_and_reactivated(invites: Invites) -> None:
+    link = await _link(invites.conn, invites.referrer, "link-1")
+    revoke = text("UPDATE invite_links SET revoked_at = :at WHERE id = :l RETURNING revoked_at")
+
+    assert (await invites.conn.scalar(revoke, {"at": INVITED, "l": link})) == INVITED
+    assert (await invites.conn.scalar(revoke, {"at": None, "l": link})) is None
+
+
 async def test_a_user_has_at_most_one_personal_link(invites: Invites) -> None:
     """One permanent link per user: a second is a duplicate, not a second link."""
     await _link(invites.conn, invites.referrer, "link-1")

@@ -256,6 +256,13 @@ class InviteLink(Base, TimestampMixin):
     #: What the personal link carries. Unique, so a code names one owner.
     code: Mapped[str] = mapped_column(Text, nullable=False)
 
+    #: Null is active. Set when the owner revokes the link: its code then
+    #: resolves for nobody, yet stays theirs, so nobody else can pick it and
+    #: reactivating (clearing this) makes the same code work again. Referrals
+    #: already made through it are untouched. A timestamp rather than a
+    #: boolean, as `referrals` would carry a revocation (owner, 2026-10-15).
+    revoked_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
     __table_args__ = (
         UniqueConstraint("user_id", name="uq_invite_links_user_id"),
         UniqueConstraint("code", name="uq_invite_links_code"),
