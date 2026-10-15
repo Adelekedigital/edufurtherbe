@@ -52,9 +52,10 @@ MIN_MONTHS = 1
 MAX_MONTHS = 60
 
 #: How many calendar years before the current one `year_windows` reaches: the
-#: monthly chart's reach, so the card can follow the chart into any year it
-#: shows (decision 257).
-YEAR_REACH = MAX_MONTHS // 12
+#: years the monthly chart shows whole (decision 257). Its `MAX_MONTHS` reach
+#: back from the current month always covers the four previous calendar years
+#: in full and the fifth only in part, so the fifth is not offered.
+YEAR_REACH = MAX_MONTHS // 12 - 1
 
 
 class Window(NamedTuple):

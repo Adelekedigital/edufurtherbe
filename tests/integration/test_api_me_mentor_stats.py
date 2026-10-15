@@ -661,7 +661,7 @@ async def test_window_days_is_bounded(
 async def test_a_year_reads_that_calendar_year_and_the_one_before(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Decision 254: `?year=` windows are UTC calendar years, so the card
+    """Decision 257: `?year=` windows are UTC calendar years, so the card
     matches the chart's Year view."""
     year = dt.datetime.now(dt.UTC).year - 1
     mentor = await make_bookable_mentor(db_engine, "dash-year")
@@ -687,12 +687,21 @@ async def test_a_year_reads_that_calendar_year_and_the_one_before(
     assert body["window_days"] == expected_days
 
 
-@pytest.mark.parametrize(("back", "code"), [(-1, 422), (0, 200), (5, 200), (6, 422)])
+def this_year() -> int:
+    """The UTC year, skipping in the last minute of one: the server reads its
+    own clock, and a request that crosses midnight would move the bounds."""
+    now = dt.datetime.now(dt.UTC)
+    if now + dt.timedelta(minutes=1) >= dt.datetime(now.year + 1, 1, 1, tzinfo=dt.UTC):
+        pytest.skip("too close to a UTC new year to pin the bounds")
+    return now.year
+
+
+@pytest.mark.parametrize(("back", "code"), [(-1, 422), (0, 200), (4, 200), (5, 422)])
 async def test_a_year_is_bounded(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, back: int, code: int
 ) -> None:
     mentor = await make_bookable_mentor(db_engine, f"dash-year-{back}")
-    year = dt.datetime.now(dt.UTC).year - back
+    year = this_year() - back
 
     response = await api_client.get(
         f"{URL}?year={year}", headers=bearer(await token_for(db_engine, mentor))
@@ -705,7 +714,7 @@ async def test_a_year_and_window_days_together_are_refused(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_bookable_mentor(db_engine, "dash-year-both")
-    year = dt.datetime.now(dt.UTC).year
+    year = this_year()
 
     response = await api_client.get(
         f"{URL}?year={year}&window_days=30",

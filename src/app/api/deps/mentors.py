@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Annotated, Any
 
-from fastapi import Depends, Query, Request
+from fastapi import Depends, Query
 from pydantic import StringConstraints
 
 from app.api.deps.core import BookingWindowDep, CurrentUserDep, OptionalViewerDep, SessionDep
@@ -333,26 +333,27 @@ SimilarMentorsDep = Annotated[list[dict[str, Any]], Depends(similar_to_mentor)]
 async def own_mentor_stats(
     user: CurrentUserDep,
     session: SessionDep,
-    request: Request,
     window_days: Annotated[
-        int,
+        int | None,
         Query(
             ge=MIN_WINDOW_DAYS,
             le=MAX_WINDOW_DAYS,
             description=(
-                f"Window length in days, {MIN_WINDOW_DAYS}-{MAX_WINDOW_DAYS}. "
+                f"Window length in days, {MIN_WINDOW_DAYS}-{MAX_WINDOW_DAYS}, "
+                f"{DEFAULT_WINDOW_DAYS} when neither it nor `year` is given. "
                 "`current` ends now; `previous` is the same length before it."
             ),
         ),
-    ] = DEFAULT_WINDOW_DAYS,
+    ] = None,
     year: Annotated[
         int | None,
         Query(
             description=(
                 "A UTC calendar year instead of `window_days` (decision 257): "
-                "`current` is that year, `previous` the year before. From five "
-                "years before the current one to the current one; not combined "
-                "with `window_days`."
+                "`current` is that year, to its end; `previous` the year before. "
+                "From four years before the current one to the current one, the "
+                "years the monthly chart shows whole; not combined with "
+                "`window_days`."
             ),
         ),
     ] = None,
@@ -363,8 +364,8 @@ async def own_mentor_stats(
     statement and is the same on both rows."""
     now = dt.datetime.now(dt.UTC)
     if year is None:
-        windows = trend_windows(now, window_days)
-    elif "window_days" in request.query_params:
+        windows = trend_windows(now, window_days or DEFAULT_WINDOW_DAYS)
+    elif window_days is not None:
         raise ValidationError("give `year` or `window_days`, not both")
     else:
         try:

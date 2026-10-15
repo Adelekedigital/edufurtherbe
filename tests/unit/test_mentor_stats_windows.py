@@ -102,7 +102,7 @@ def test_each_month_carries_its_utc_label() -> None:
 
 
 def test_a_year_is_its_utc_calendar_year_and_the_one_before() -> None:
-    """Decision 254: `previous` is the calendar year before, not the same
+    """Decision 257: `previous` is the calendar year before, not the same
     length before, so a leap year is still compared with a whole year."""
     current, previous = year_windows(NOW, 2025)
 
@@ -115,8 +115,8 @@ def test_the_current_year_runs_to_its_end() -> None:
 
 
 def test_a_year_reaches_as_far_back_as_the_monthly_chart() -> None:
-    assert YEAR_REACH == 5
-    assert year_windows(NOW, 2026 - YEAR_REACH)[0].since == utc(2021, 1)
+    assert YEAR_REACH == 4
+    assert year_windows(NOW, 2026 - YEAR_REACH)[0].since == utc(2022, 1)
 
 
 @pytest.mark.parametrize("year", [2026 - YEAR_REACH - 1, 2027])
@@ -126,7 +126,7 @@ def test_a_year_outside_the_reach_is_refused(year: int) -> None:
 
 
 def test_the_year_is_read_in_utc() -> None:
-    """New Year's Eve evening in Lagos' west is already next year in UTC."""
+    """New Year's Eve evening in New York (UTC-5) is already next year in UTC."""
     eve = dt.datetime(2026, 12, 31, 23, 30, tzinfo=dt.timezone(dt.timedelta(hours=-5)))
 
     assert year_windows(eve, 2027)[0].since == utc(2027, 1)
