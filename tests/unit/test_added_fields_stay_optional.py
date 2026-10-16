@@ -68,6 +68,9 @@ ADDED = {
     ),
     # The mentor dashboard's review quote (decision 251).
     "OwnReviewRead": ("session_type",),
+    # The invite landing (decision 256): `inviter` is required, its two
+    # fields optional.
+    "InviterRead": ("first_name", "avatar_url"),
 }
 
 

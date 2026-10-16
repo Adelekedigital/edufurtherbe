@@ -9,6 +9,7 @@ origins allows nothing, which looks identical to no layer at all until the day
 somebody adds an origin and cannot work out why it is ignored.
 """
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
@@ -179,3 +180,23 @@ def test_a_rate_limits_retry_after_is_readable_cross_origin() -> None:
 
     exposed = response.headers.get("access-control-expose-headers", "").lower()
     assert "retry-after" in exposed
+
+
+def _served_methods() -> list[str]:
+    """Read from the published spec: the methods a client is told it may use."""
+    spec = create_app(Settings(_env_file=None, environment="ci")).openapi()  # type: ignore[call-arg]
+    return sorted({method.upper() for path in spec["paths"].values() for method in path})
+
+
+@pytest.mark.parametrize("method", _served_methods())
+def test_every_method_a_route_serves_passes_a_preflight(method: str) -> None:
+    """A method missing from `allow_methods` is unreachable from the frontend's
+    origin: the browser drops the request at the preflight. `PUT` was (#invite
+    links): every `PUT` route answered nobody cross-origin."""
+    response = client(ALLOWED).options(
+        "/api/v1/me",
+        headers={"Origin": ALLOWED, "Access-Control-Request-Method": method},
+    )
+
+    assert response.status_code == 200, method
+    assert method in response.headers.get("access-control-allow-methods", "")

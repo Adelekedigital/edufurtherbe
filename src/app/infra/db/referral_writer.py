@@ -33,17 +33,27 @@ from uuid import UUID
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
 from app.domain.credits import CreditLadder
 from app.domain.enums import CreditSource
-from app.domain.referrals import make_code, may_qualify
+from app.domain.referrals import NO_INVITE, make_code, may_qualify
 from app.infra.db.credit_writer import grant
+from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
 from app.infra.db.models.user import UserOnboarding
 
 __all__ = ["claim_referral", "create_referral", "qualify_invitee"]
+
+OWN_INVITE = "you cannot claim your own invite"
+ALREADY_CLAIMED = "you have already claimed an invite"
+CLAIMED_BY_ANOTHER = "that invite has already been claimed"
+
+#: What a claim returns: the claimant's view of the referral, never the
+#: referrer's (`ReferralClaimRead`).
+CLAIMED = (Referral.id, Referral.code, Referral.invited_at, Referral.signed_up_at)
 
 
 async def create_referral(
@@ -90,6 +100,10 @@ async def claim_referral(
 ) -> Any:
     """Attach the caller to the invite that named this code. Does not commit.
 
+    The code is either a single-use referral code or a personal link's current
+    code; :func:`resolve_code` decides which, in one documented order, for this
+    and the public landing lookup alike.
+
     Idempotent: claiming a code you already hold returns it unchanged rather
     than refusing, because the front end holds the code across signup and a
     retried request must not read as an error.
@@ -99,20 +113,17 @@ async def claim_referral(
     instead of a 500. The cheapest possible farm is one address referring
     itself, and the gate it opens is recurring.
     """
-    referral = (
-        await session.execute(
-            select(Referral.id, Referral.referrer_id, Referral.invitee_user_id).where(
-                Referral.code == code
-            )
-        )
-    ).one_or_none()
+    referral = await resolve_code(session, code)
 
-    if referral is None:
-        raise NotFoundError("no invite carries that code")
-    if referral.referrer_id == invitee_id:
-        raise ConflictError("you cannot claim your own invite")
+    # A deleted referrer or link owner is not found, as on the landing lookup.
+    if referral is None or not referral.owner_live:
+        raise NotFoundError(NO_INVITE)
+    if referral.referral_id is None:
+        return await _claim_through_link(session, invitee_id, referral, ladder=ladder)
+    if referral.owner_id == invitee_id:
+        raise ConflictError(OWN_INVITE)
     if referral.invitee_user_id is not None and referral.invitee_user_id != invitee_id:
-        raise ConflictError("that invite has already been claimed")
+        raise ConflictError(CLAIMED_BY_ANOTHER)
 
     # **One invite per arrival.** `uq_referrals_invitee` is the guarantee; this
     # is what makes it a 409 the caller can act on rather than a 500 they
@@ -122,46 +133,120 @@ async def claim_referral(
     if referral.invitee_user_id is None and await session.scalar(
         select(Referral.id).where(Referral.invitee_user_id == invitee_id)
     ):
-        raise ConflictError("you have already claimed an invite")
+        raise ConflictError(ALREADY_CLAIMED)
 
-    claimed = (
+    # The check above reads before it writes, so a second claim by the same
+    # person racing this one passes it too, and the unique index refuses the
+    # loser's update. Inside a savepoint that refusal is the same 409, not a 500.
+    try:
+        async with session.begin_nested():
+            claimed = (
+                await session.execute(
+                    update(Referral)
+                    .where(Referral.id == referral.referral_id, Referral.invitee_user_id.is_(None))
+                    .values(invitee_user_id=invitee_id, signed_up_at=func.now())
+                    .returning(*CLAIMED)
+                )
+            ).one_or_none()
+    except IntegrityError as error:
+        if "uq_referrals_invitee" not in str(error.orig):
+            raise
+        raise ConflictError(ALREADY_CLAIMED) from None
+
+    if claimed is not None:
+        await _qualify_if_finished(session, invitee_id, ladder=ladder)
+        return claimed
+
+    # Nothing matched: somebody claimed it between the read and the update.
+    # Still yours only if that somebody was you, retrying.
+    current = (
         await session.execute(
-            update(Referral)
-            .where(Referral.id == referral.id, Referral.invitee_user_id.is_(None))
-            .values(invitee_user_id=invitee_id, signed_up_at=func.now())
-            .returning(Referral.id, Referral.code, Referral.invited_at, Referral.signed_up_at)
+            select(Referral.invitee_user_id, *CLAIMED).where(Referral.id == referral.referral_id)
+        )
+    ).one()
+    if current.invitee_user_id != invitee_id:
+        raise ConflictError(CLAIMED_BY_ANOTHER)
+    return current
+
+
+async def _claim_through_link(
+    session: AsyncSession, invitee_id: UUID, link: ResolvedCode, *, ladder: CreditLadder
+) -> Any:
+    """Make this arrival its own referral of the link's owner (decision 254).
+
+    A personal link is reusable, so a claim through it never touches another
+    arrival's row: it writes a new `referrals` row for the owner, with a fresh
+    single-use code of its own, and every referral rule then applies to it
+    unchanged — one invite per arrival, no self-referral, qualification at
+    onboarding, and the once-only unlock.
+
+    **The insert arbitrates, against `uq_referrals_invitee`.** Two claims by the
+    same arrival racing each other both find nothing held and both insert; the
+    loser's ``DO NOTHING`` reads the winner's row, which is the idempotent
+    answer when it names the same owner and the 409 when it does not.
+    """
+    if link.owner_id == invitee_id:
+        raise ConflictError(OWN_INVITE)
+
+    held = await _held_by(session, invitee_id)
+    if held is None:
+        created = (
+            await session.execute(
+                pg_insert(Referral)
+                .values(
+                    referrer_id=link.owner_id,
+                    code=make_code(),
+                    invitee_user_id=invitee_id,
+                    signed_up_at=func.now(),
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["invitee_user_id"],
+                    index_where=Referral.invitee_user_id.is_not(None),
+                )
+                .returning(*CLAIMED)
+            )
+        ).one_or_none()
+        if created is not None:
+            await _qualify_if_finished(session, invitee_id, ladder=ladder)
+            return created
+        held = await _held_by(session, invitee_id)
+
+    if held is None or held.referrer_id != link.owner_id:
+        raise ConflictError(ALREADY_CLAIMED)
+    return held
+
+
+async def _held_by(session: AsyncSession, invitee_id: UUID) -> Any:
+    """The referral this person already arrived through, if any."""
+    return (
+        await session.execute(
+            select(Referral.referrer_id, *CLAIMED).where(Referral.invitee_user_id == invitee_id)
         )
     ).one_or_none()
 
-    if claimed is not None:
-        # **Qualify now if they have already finished.**
-        #
-        # Qualification normally fires from `complete_onboarding`, which assumes
-        # the claim came first. It often will not: the natural first run is to
-        # sign in, complete the profile the app puts in front of you, and paste
-        # the invite code afterwards. In that order the claim set `signed_up_at`
-        # and nothing ever revisited the row — `qualified_at` stayed null
-        # forever and the referrer was never paid, with no second completion
-        # coming to fix it. Found by code review.
-        #
-        # Same transaction as the claim, for the same reason completion holds
-        # its own: the two halves commit together or neither does.
-        if await session.scalar(
-            select(UserOnboarding.completed_at).where(
-                UserOnboarding.user_id == invitee_id,
-                UserOnboarding.completed_at.is_not(None),
-            )
-        ):
-            await qualify_invitee(session, invitee_id, ladder=ladder)
-        return claimed
 
-    return (
-        await session.execute(
-            select(Referral.id, Referral.code, Referral.invited_at, Referral.signed_up_at).where(
-                Referral.id == referral.id
-            )
+async def _qualify_if_finished(
+    session: AsyncSession, invitee_id: UUID, *, ladder: CreditLadder
+) -> None:
+    """**Qualify now if they have already finished.**
+
+    Qualification normally fires from `complete_onboarding`, which assumes the
+    claim came first. It often will not: the natural first run is to sign in,
+    complete the profile the app puts in front of you, and paste the invite code
+    afterwards. In that order the claim set `signed_up_at` and nothing ever
+    revisited the row — `qualified_at` stayed null forever and the referrer was
+    never paid, with no second completion coming to fix it. Found by code review.
+
+    Same transaction as the claim, for the same reason completion holds its own:
+    the two halves commit together or neither does.
+    """
+    if await session.scalar(
+        select(UserOnboarding.completed_at).where(
+            UserOnboarding.user_id == invitee_id,
+            UserOnboarding.completed_at.is_not(None),
         )
-    ).one()
+    ):
+        await qualify_invitee(session, invitee_id, ladder=ladder)
 
 
 async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: CreditLadder) -> bool:
