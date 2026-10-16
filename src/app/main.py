@@ -456,7 +456,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             CORSMiddleware,
             allow_origins=resolved.cors_origins,
             allow_credentials=True,
-            allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+            # Every method a route serves; `test_cors` reads them from the spec.
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             # `Accept`, `Accept-Language`, `Content-Language` and `Content-Type`
             # are always allowed by the middleware; `Authorization` is not, and
             # is the one this API cannot work without. `Idempotency-Key` is

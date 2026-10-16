@@ -615,26 +615,6 @@ async def test_a_handle_resolves_whatever_its_case_and_a_single_use_code_does_no
         assert (await lookup(api_client, swapped)).json() == NOBODY
 
 
-async def test_an_exact_code_wins_over_a_handle_spelled_the_same_in_lowercase(
-    db_engine: AsyncEngine, api_client: httpx.AsyncClient
-) -> None:
-    """A mixed-case code and a handle equal to its lowercase are two links;
-    each resolves to its own owner."""
-    mixed, lower = await users(db_engine, 2)
-    await _named(db_engine, mixed, "Mixed", None)
-    await _named(db_engine, lower, "Lower", None)
-    await link_code(api_client, mixed)
-    await execute(
-        db_engine,
-        "UPDATE invite_links SET code = 'Shared-Name' WHERE user_id = :u",
-        u=await user_id_of(db_engine, mixed),
-    )
-    await pick(api_client, lower, "shared-name")
-
-    assert (await lookup(api_client, "Shared-Name")).json()["inviter"]["first_name"] == "Mixed"
-    assert (await lookup(api_client, "shared-name")).json()["inviter"]["first_name"] == "Lower"
-
-
 async def test_two_single_use_claims_racing_never_error(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -1036,3 +1016,65 @@ async def test_patch_refuses_a_malformed_body(
 
 async def test_patch_needs_a_token(api_client: httpx.AsyncClient) -> None:
     assert (await api_client.patch(LINK, json={"active": False})).status_code == 401
+
+
+async def test_a_pick_racing_a_new_link_s_default_code_is_refused_not_an_error(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**Deterministic**, at the writer: a new link's default code is inserted
+    but not committed when somebody picks the same string. Locked, the pick
+    waits and is refused; unlocked, its update hits the unique index — a 500."""
+    newcomer, picker = await users(db_engine, 2)
+    await link_code(api_client, picker)
+    newcomer_id = await user_id_of(db_engine, newcomer)
+    picker_id = await user_id_of(db_engine, picker)
+    _scripted(monkeypatch, ["drawn-aaaa"])
+    maker = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with maker() as one, maker() as two:
+        await invite_links.ensure_invite_link(one, newcomer_id)
+        racer = asyncio.create_task(pick_handle(two, picker_id, "drawn-aaaa"))
+        await asyncio.sleep(0.3)
+        await one.commit()
+
+        with pytest.raises(ConflictError):
+            await racer
+
+
+async def test_a_first_pick_creates_the_link_with_the_handle_and_retires_nothing(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """No default code is drawn and thrown away: it would be held for a month
+    though nobody ever saw it."""
+    (owner,) = await users(db_engine, 1)
+
+    response = await pick(api_client, owner, "straight-in")
+
+    assert response.json() == {"code": "straight-in", "active": True}
+    assert await scalar(db_engine, "SELECT count(*) FROM invite_link_retired_codes") == 0
+
+
+async def test_a_first_pick_of_a_taken_handle_creates_nothing(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    holder, owner = await users(db_engine, 2)
+    await pick(api_client, holder, "already-mine")
+
+    assert (await pick(api_client, owner, "already-mine")).status_code == 409
+    owner_id = await user_id_of(db_engine, owner)
+    assert (
+        await scalar(db_engine, "SELECT count(*) FROM invite_links WHERE user_id = :u", u=owner_id)
+        == 0
+    )
+
+
+async def test_a_code_outside_the_url_safe_alphabet_never_resolves_on_claim(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """Claim and lookup share one plausibility rule: the Kelvin sign lowercases
+    to `k`, and must not reach `kda-...` through the handle match."""
+    owner, arrival = await users(db_engine, 2, complete=False)
+    await pick(api_client, owner, "kda-handle")
+
+    assert (await claim(api_client, arrival, "\u212ada-handle")).status_code == 404
+    assert (await claim(api_client, arrival, "KDA-HANDLE")).status_code == 200

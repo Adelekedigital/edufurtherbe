@@ -95,7 +95,8 @@ def may_qualify(*, has_invitee: bool, already_qualified: bool) -> bool:
     return has_invitee and not already_qualified
 
 
-#: The one not-found sentence for a code, from claim and the landing lookup alike.
+#: The claim's not-found sentence for a code. (The landing lookup answers
+#: `{"inviter": null}` instead, never an error.)
 NO_INVITE = "no invite carries that code"
 
 #: The longest code anybody may present, whether to claim or to look up.

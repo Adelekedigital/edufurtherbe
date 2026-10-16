@@ -45,6 +45,7 @@ from app.domain.referrals import (
     DEFAULT_CODE_SUFFIXES,
     RETIRED_CODE_HOLD,
     default_code,
+    is_plausible_code,
     normalise_handle,
 )
 from app.infra.db.models.referrals import InviteLink, InviteLinkRetiredCode, Referral
@@ -65,6 +66,8 @@ __all__ = [
 #: ``'INVT'`` as four ASCII bytes. Its own namespace in the one global keyspace
 #: `pg_advisory_xact_lock` shares with the credit, slot, limit and image locks.
 INVITE_CODE_LOCK_NAMESPACE = 0x494E5654
+
+HANDLE_TAKEN = "that handle is taken"
 
 
 @dataclass(frozen=True)
@@ -100,12 +103,16 @@ async def resolve_code(session: AsyncSession, code: str) -> ResolvedCode | None:
 
     A retired code is in neither place, and a revoked link's code is filtered
     here, so both resolve exactly as a code that never existed did. A miss
-    always runs both statements.
+    always runs both statements. A code no code could be (``is_plausible_code``)
+    resolves to nothing without the database, for claim and lookup alike.
 
-    **A link code matches exactly or as a handle.** Handles (default codes
-    included) are stored lowercase by rule, so `Ada-Smith` (typed, or
-    capitalised by a phone) finds `ada-smith`; an exact match is preferred.
+    **A link code matches as a handle.** Every link code (default or picked) is
+    a lowercase handle, so `Ada-Smith` (typed, or capitalised by a phone) finds
+    `ada-smith`. The plausibility check comes first because ``lower()`` folds
+    some non-ASCII letters into ASCII ones: the Kelvin sign would become `k`.
     """
+    if not is_plausible_code(code):
+        return None
     referral = (
         await session.execute(
             select(Referral.id, Referral.referrer_id, Referral.invitee_user_id, *_owner_columns())
@@ -130,12 +137,10 @@ async def resolve_code(session: AsyncSession, code: str) -> ResolvedCode | None:
             .join(User, User.id == InviteLink.user_id)
             .outerjoin(UserProfile, UserProfile.user_id == User.id)
             .where(
-                InviteLink.code.in_({code, normalise_handle(code)}),
+                InviteLink.code == normalise_handle(code),
                 # Revoked: resolves for nobody until its owner reactivates it.
                 InviteLink.revoked_at.is_(None),
             )
-            .order_by((InviteLink.code == code).desc())
-            .limit(1)
         )
     ).one_or_none()
     if link is None:
@@ -166,11 +171,13 @@ async def inviter_of(session: AsyncSession, code: str) -> ResolvedCode | None:
 
 
 async def _lock_code(session: AsyncSession, code: str) -> None:
-    """Serialise every pick of ``code``, until the transaction ends.
+    """Serialise every write that takes ``code``, until the transaction ends.
 
-    Two picks of one free handle both pass :func:`_code_taken`, and the second
-    ``UPDATE`` would then fail on `uq_invite_links_code`: a 500. Locked, the
-    second runs its check after the first commits and is refused with a 409.
+    Two writers taking one free code both pass :func:`_code_taken`, and the
+    second would then fail on `uq_invite_links_code`. For a pick (an
+    ``UPDATE``) that is a 500; locked, the second runs its check after the first
+    commits and is refused with a 409. A default code takes the same lock, so a
+    pick of a string a new link has just drawn waits for it too.
     """
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:ns, hashtext(:key))"),
@@ -217,9 +224,8 @@ async def ensure_invite_link(session: AsyncSession, user_id: UUID) -> tuple[Link
 
     Read first, since the link usually exists. On a miss, try default codes
     (``{first-name}-{suffix}``) in the order ``DEFAULT_CODE_SUFFIXES`` gives,
-    each checked by :func:`_code_taken`, and **let the insert arbitrate**:
-    ``DO NOTHING`` on either unique constraint hands back no row, so no lock is
-    needed here.
+    each locked and checked by :func:`_code_taken`, and **let the insert
+    arbitrate**: ``DO NOTHING`` on either unique constraint hands back no row.
     Then either a concurrent first request created this user's link (read and
     return it, so both agree) or the code was taken in the meantime (try the
     next). Running out answers ``409``, never ``500``; at five characters of
@@ -232,6 +238,7 @@ async def ensure_invite_link(session: AsyncSession, user_id: UUID) -> tuple[Link
     first_name = await session.scalar(select(User.first_name).where(User.id == user_id))
     for suffix_length in DEFAULT_CODE_SUFFIXES:
         code = default_code(first_name, suffix_length=suffix_length)
+        await _lock_code(session, code)
         if await _code_taken(session, code, link_id=None):
             continue
         created = (
@@ -262,7 +269,23 @@ async def pick_handle(session: AsyncSession, user_id: UUID, handle: str) -> Link
     handle a 409 rather than a unique violation. A stranger picking a handle its
     owner is moving off is refused by :func:`_code_taken` with or without it.
     """
-    await ensure_invite_link(session, user_id)
+    await _lock_code(session, handle)
+    if await _own_link(session, user_id) is None:
+        # **No link yet: create it with the handle.** Drawing a default code
+        # only to retire it would hold, for a month, a code nobody ever saw.
+        if await _code_taken(session, handle, link_id=None):
+            raise ConflictError(HANDLE_TAKEN)
+        created = (
+            await session.execute(
+                pg_insert(InviteLink)
+                .values(user_id=user_id, code=handle)
+                .on_conflict_do_nothing(index_elements=["user_id"])
+                .returning(InviteLink.code)
+            )
+        ).scalar_one_or_none()
+        if created is not None:
+            return LinkState(code=created, active=True)
+        # A concurrent first request created the link meanwhile: rename it.
     link = (
         await session.execute(
             select(InviteLink.id, InviteLink.code, InviteLink.revoked_at)
@@ -274,9 +297,8 @@ async def pick_handle(session: AsyncSession, user_id: UUID, handle: str) -> Link
     if link.code == handle:
         return state
 
-    await _lock_code(session, handle)
     if await _code_taken(session, handle, link_id=link.id):
-        raise ConflictError("that handle is taken")
+        raise ConflictError(HANDLE_TAKEN)
 
     await session.execute(update(InviteLink).where(InviteLink.id == link.id).values(code=handle))
     await session.execute(

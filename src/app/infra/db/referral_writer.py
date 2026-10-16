@@ -49,6 +49,7 @@ __all__ = ["claim_referral", "create_referral", "qualify_invitee"]
 
 OWN_INVITE = "you cannot claim your own invite"
 ALREADY_CLAIMED = "you have already claimed an invite"
+CLAIMED_BY_ANOTHER = "that invite has already been claimed"
 
 #: What a claim returns: the claimant's view of the referral, never the
 #: referrer's (`ReferralClaimRead`).
@@ -122,7 +123,7 @@ async def claim_referral(
     if referral.owner_id == invitee_id:
         raise ConflictError(OWN_INVITE)
     if referral.invitee_user_id is not None and referral.invitee_user_id != invitee_id:
-        raise ConflictError("that invite has already been claimed")
+        raise ConflictError(CLAIMED_BY_ANOTHER)
 
     # **One invite per arrival.** `uq_referrals_invitee` is the guarantee; this
     # is what makes it a 409 the caller can act on rather than a 500 they
@@ -164,7 +165,7 @@ async def claim_referral(
         )
     ).one()
     if current.invitee_user_id != invitee_id:
-        raise ConflictError("that invite has already been claimed")
+        raise ConflictError(CLAIMED_BY_ANOTHER)
     return current
 
 

@@ -52,7 +52,6 @@ from app.core.errors import (
 )
 from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
-from app.domain.referrals import is_plausible_code
 from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
@@ -292,11 +291,8 @@ ToggledInviteLinkDep = Annotated[LinkState, Depends(toggled_invite_link)]
 async def invite_inviter(code: str, session: SessionDep) -> Any:
     """Who the landing page may name for ``code``, or ``None`` (decision 256).
 
-    **No token, and none is read**: the page renders before sign-in. A code no
-    code could be is answered without the database, as the same ``None``.
+    **No token, and none is read**: the page renders before sign-in.
     """
-    if not is_plausible_code(code):
-        return None
     return await inviter_of(session, code)
 
 
