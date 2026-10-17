@@ -45,6 +45,9 @@ def downgrade() -> None:
     a downgrade over values stops and says so.
     """
     op.execute("SET lock_timeout = '3s'")
+    # Locked before counting, so a goal written between the count and the drop
+    # cannot be deleted without the refusal seeing it.
+    op.execute("LOCK TABLE mentee_goals IN SHARE ROW EXCLUSIVE MODE")
     held = (
         op.get_bind()
         .execute(sa.text("SELECT count(*) FROM mentee_goals WHERE field_of_study IS NOT NULL"))

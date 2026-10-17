@@ -29,11 +29,17 @@ def test_a_goal_holds_a_field_of_study_of_one_to_a_hundred_characters(
     execute(disposable_database, _GOAL.format(email="cs@example.test", field="'Computer Science'"))
     execute(disposable_database, _GOAL.format(email="long@example.test", field="repeat('y', 100)"))
 
-    for value in ("''", "repeat('y', 101)"):
-        with pytest.raises(asyncpg.CheckViolationError):
-            execute(disposable_database, _GOAL.format(email=f"bad{len(value)}@x.test", field=value))
-
     assert scalar(disposable_database, "SELECT count(field_of_study) FROM mentee_goals") == 2
+
+
+@pytest.mark.parametrize("value", ["''", "repeat('y', 101)"], ids=["blank", "too-long"])
+def test_a_blank_or_overlong_field_of_study_is_refused(
+    disposable_database: str, make_alembic_config: ConfigFactory, value: str
+) -> None:
+    command.upgrade(make_alembic_config(disposable_database), "e4710b359d1b")
+
+    with pytest.raises(asyncpg.CheckViolationError):
+        execute(disposable_database, _GOAL.format(email="bad@example.test", field=value))
 
 
 def test_the_field_of_study_downgrade_refuses_while_a_goal_holds_one(
