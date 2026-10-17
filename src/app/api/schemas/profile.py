@@ -428,14 +428,7 @@ class GoalWrite(Normalised):
     def _visible_field(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        composed = unicodedata.normalize("NFC", value)
-        if hidden_characters(composed):
-            raise ValueError("a field of study cannot contain control or invisible characters")
-        if len(composed) > FIELD_OF_STUDY_MAX_LENGTH:
-            raise ValueError(
-                f"a field of study can be at most {FIELD_OF_STUDY_MAX_LENGTH} characters"
-            )
-        return composed
+        return _composed_visible(value, "a field of study", FIELD_OF_STUDY_MAX_LENGTH)
 
 
 class AwardWrite(Normalised):
@@ -518,9 +511,22 @@ class MentorProfileWrite(Normalised):
 MAX_NAME_LENGTH = 100
 
 
-def _refuse_hidden(value: str) -> None:
+def _refuse_hidden(value: str, what: str = "a name") -> None:
     if hidden_characters(value):
-        raise ValueError("a name cannot contain control or invisible characters")
+        raise ValueError(f"{what} cannot contain control or invisible characters")
+
+
+def _composed_visible(value: str, what: str, max_length: int) -> str:
+    """Typed text as a person would read it: composed (NFC), no hidden
+    characters, at least one letter, and at most `max_length` after composing.
+    One rule for names and a field of study; `what` names it in the message."""
+    composed = unicodedata.normalize("NFC", value)
+    _refuse_hidden(composed, what)
+    if not has_letter(composed):
+        raise ValueError(f"{what} needs at least one letter")
+    if len(composed) > max_length:
+        raise ValueError(f"{what} can be at most {max_length} characters")
+    return composed
 
 
 def _a_visible_name(value: str) -> str:
@@ -535,13 +541,7 @@ def _a_visible_name(value: str) -> str:
     can lengthen a name and the bound is on what is stored. A name must hold a
     letter, in any script — `---` is not one.
     """
-    composed = unicodedata.normalize("NFC", value)
-    _refuse_hidden(composed)
-    if not has_letter(composed):
-        raise ValueError("a name needs at least one letter")
-    if len(composed) > MAX_NAME_LENGTH:
-        raise ValueError(f"a name can be at most {MAX_NAME_LENGTH} characters")
-    return composed
+    return _composed_visible(value, "a name", MAX_NAME_LENGTH)
 
 
 class UserProfileWrite(Normalised):

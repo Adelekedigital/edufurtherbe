@@ -47,7 +47,7 @@ async def test_a_field_of_study_is_saved_and_read_back(
     goal = (await api_client.get(url(user_id, "goal"), headers=headers)).json()
     me = (await api_client.get("/api/v1/me", headers=headers)).json()
 
-    assert response.status_code in (200, 201)
+    assert response.status_code == 200
     assert await stored(db_engine, user_id) == "Computer Science"
     assert goal["field_of_study"] == "Computer Science"
     assert me["goal"]["field_of_study"] == "Computer Science"
@@ -75,16 +75,16 @@ async def test_null_or_blank_clears_it(
         url(user_id, "goal"), json={"field_of_study": value}, headers=headers
     )
 
-    assert response.status_code in (200, 201)
+    assert response.status_code == 200
     assert await stored(db_engine, user_id) is None
 
 
 @pytest.mark.parametrize(
     "value",
-    ["y" * 101, "Computer\nScience", "Law\u202e", "Law\u2028Studies"],
-    ids=["too-long", "newline", "rtl-override", "line-separator"],
+    ["y" * 101, "Computer\nScience", "Law\u202e", "Law\u2028Studies", "---", "\u0301"],
+    ids=["too-long", "newline", "rtl-override", "line-separator", "no-letter", "lone-mark"],
 )
-async def test_an_overlong_or_invisible_field_is_refused(
+async def test_an_overlong_invisible_or_letterless_field_is_refused(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, value: str
 ) -> None:
     user_id, headers = await a_mentee(db_engine, "bad")
@@ -109,7 +109,7 @@ async def test_a_field_at_the_limit_is_kept_composed(
         url(user_id, "goal"), json={"field_of_study": "e\u0301" * 100}, headers=headers
     )
 
-    assert response.status_code in (200, 201)
+    assert response.status_code == 200
     assert await stored(db_engine, user_id) == "\u00e9" * 100
 
 
