@@ -17,6 +17,7 @@ from app.api.deps.core import (
     OwnerDep,
     SessionDep,
     TargetUserDep,
+    _configured,
     get_storage,
     refuse_window_out_of_range,
     window_out_of_range,
@@ -53,6 +54,7 @@ from app.core.errors import (
 )
 from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
+from app.domain.referrals import claim_window
 from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
@@ -245,8 +247,22 @@ async def created_referral(
 CreatedReferralDep = Annotated[Any, Depends(created_referral)]
 
 
+def _claim_window(request: Request) -> dt.timedelta:
+    """How old an account may be and still claim an invite, on this app's
+    settings (`INVITE_CLAIM_WINDOW_HOURS`, decision 264)."""
+    return claim_window(_configured(request))
+
+
+#: The configured invite-claim window.
+ClaimWindowDep = Annotated[dt.timedelta, Depends(_claim_window)]
+
+
 async def claimed_referral(
-    payload: ReferralClaim, user: CurrentUserDep, session: SessionDep, ladder: LadderDep
+    payload: ReferralClaim,
+    user: CurrentUserDep,
+    session: SessionDep,
+    ladder: LadderDep,
+    window: ClaimWindowDep,
 ) -> Any:
     """Attach the caller to an invite.
 
@@ -255,7 +271,7 @@ async def claimed_referral(
     already has qualifies the invite in the same transaction, which can pay the
     referrer. That is why only a new account may claim (decision 264).
     """
-    referral = await claim_referral(session, user["id"], payload.code, ladder=ladder)
+    referral = await claim_referral(session, user["id"], payload.code, ladder=ladder, window=window)
     await session.commit()
     return referral
 

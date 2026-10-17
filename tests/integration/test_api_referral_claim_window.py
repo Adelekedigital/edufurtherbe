@@ -1,7 +1,10 @@
 """Only a new account may claim an invite (owner, 2026-10-17; decision 264).
 
-New is ``users.created_at`` within ``CLAIM_WINDOW`` of the database's ``now()``.
-Ages are set in SQL against the same clock, so no test compares two clocks.
+New is ``users.created_at`` within the deployment's ``INVITE_CLAIM_WINDOW_HOURS``
+of the database's ``now()``. Every test here runs the app on a window of
+``WINDOW_HOURS``, not the default, so a claim path that ignored the setting
+fails. Ages are set in SQL against the same clock, so no test compares two
+clocks.
 The refusal is a claim that would attach the caller now; an invite the caller
 already holds is still returned, and the other refusals keep their answers.
 """
@@ -25,14 +28,17 @@ from tests.integration.test_api_referrals import invite
 from app.core.config import Settings
 from app.core.errors import InviteForNewAccountsError
 from app.domain.credits import credit_ladder
-from app.domain.referrals import CLAIM_WINDOW
+from app.domain.referrals import claim_window
 from app.infra.db.referral_writer import claim_referral
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 NEW_ACCOUNTS = "/problems/invite-for-new-accounts"
-JUST_OVER = CLAIM_WINDOW + timedelta(minutes=1)
-JUST_UNDER = CLAIM_WINDOW - timedelta(minutes=1)
+#: Shorter than the 168-hour default, as a dev deployment would set it.
+WINDOW_HOURS = 24
+WINDOW = timedelta(hours=WINDOW_HOURS)
+JUST_OVER = WINDOW + timedelta(minutes=1)
+JUST_UNDER = WINDOW - timedelta(minutes=1)
 MONTH = timedelta(days=30)
 #: A migrated account: its Bubble creation date (decision 29).
 YEARS = timedelta(days=3 * 365)
@@ -40,6 +46,15 @@ YEARS = timedelta(days=3 * 365)
 AGE = text("UPDATE users SET created_at = now() - :age WHERE id = :u").bindparams(
     bindparam("age", type_=Interval)
 )
+
+
+@pytest.fixture(autouse=True)
+def short_window(api_client: httpx.AsyncClient) -> None:
+    """Run this app on ``INVITE_CLAIM_WINDOW_HOURS = WINDOW_HOURS``."""
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.settings = app.state.settings.model_copy(
+        update={"invite_claim_window_hours": WINDOW_HOURS}
+    )
 
 
 async def age(engine: AsyncEngine, auth_id: UUID, interval: timedelta) -> None:
@@ -271,17 +286,21 @@ async def test_exactly_the_window_is_still_new_and_a_microsecond_more_is_not(
 ) -> None:
     """``now()`` is fixed for a transaction, so ageing the account and claiming
     in one compares against the same instant (decision 264: exactly
-    ``CLAIM_WINDOW`` old is new)."""
+    the window old is new)."""
     referrer, invitee = await users(db_engine, 2)
     code = await single_use_code(api_client, referrer)
     invitee_id = await user_id_of(db_engine, invitee)
-    ladder = credit_ladder(Settings(_env_file=None))  # type: ignore[call-arg]
+    settings = Settings(_env_file=None, invite_claim_window_hours=WINDOW_HOURS)  # type: ignore[call-arg]
+    ladder, window = credit_ladder(settings), claim_window(settings)
+    assert window == WINDOW
 
     async with async_sessionmaker(db_engine)() as session:
-        await session.execute(AGE, {"age": CLAIM_WINDOW + over, "u": invitee_id})
+        await session.execute(AGE, {"age": WINDOW + over, "u": invitee_id})
         if allowed:
-            assert (await claim_referral(session, invitee_id, code, ladder=ladder)).code == code
+            assert (
+                await claim_referral(session, invitee_id, code, ladder=ladder, window=window)
+            ).code == code
         else:
             with pytest.raises(InviteForNewAccountsError):
-                await claim_referral(session, invitee_id, code, ladder=ladder)
+                await claim_referral(session, invitee_id, code, ladder=ladder, window=window)
         await session.rollback()

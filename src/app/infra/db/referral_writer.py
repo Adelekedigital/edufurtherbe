@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, InviteForNewAccountsError, NotFoundError
 from app.domain.credits import CreditLadder
 from app.domain.enums import CreditSource
-from app.domain.referrals import CLAIM_WINDOW, NO_INVITE, make_code, may_qualify
+from app.domain.referrals import NO_INVITE, make_code, may_qualify
 from app.infra.db.credit_writer import grant
 from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
@@ -98,7 +98,12 @@ async def create_referral(
 
 
 async def claim_referral(
-    session: AsyncSession, invitee_id: UUID, code: str, *, ladder: CreditLadder
+    session: AsyncSession,
+    invitee_id: UUID,
+    code: str,
+    *,
+    ladder: CreditLadder,
+    window: dt.timedelta,
 ) -> Any:
     """Attach the caller to the invite that named this code. Does not commit.
 
@@ -126,7 +131,9 @@ async def claim_referral(
     if referral is None or not referral.owner_live:
         raise NotFoundError(NO_INVITE)
     if referral.referral_id is None:
-        return await _claim_through_link(session, invitee_id, referral, ladder=ladder)
+        return await _claim_through_link(
+            session, invitee_id, referral, ladder=ladder, window=window
+        )
     if referral.owner_id == invitee_id:
         raise ConflictError(OWN_INVITE)
     if referral.invitee_user_id is not None and referral.invitee_user_id != invitee_id:
@@ -144,7 +151,7 @@ async def claim_referral(
     # permanently.
     if await session.scalar(select(Referral.id).where(Referral.invitee_user_id == invitee_id)):
         raise ConflictError(ALREADY_CLAIMED)
-    await _refuse_an_old_account(session, invitee_id)
+    await _refuse_an_old_account(session, invitee_id, window)
 
     # The check above reads before it writes, so a second claim by the same
     # person racing this one passes it too, and the unique index refuses the
@@ -181,7 +188,12 @@ async def claim_referral(
 
 
 async def _claim_through_link(
-    session: AsyncSession, invitee_id: UUID, link: ResolvedCode, *, ladder: CreditLadder
+    session: AsyncSession,
+    invitee_id: UUID,
+    link: ResolvedCode,
+    *,
+    ladder: CreditLadder,
+    window: dt.timedelta,
 ) -> Any:
     """Make this arrival its own referral of the link's owner (decision 254).
 
@@ -201,7 +213,7 @@ async def _claim_through_link(
 
     held = await _held_by(session, invitee_id)
     if held is None:
-        await _refuse_an_old_account(session, invitee_id)
+        await _refuse_an_old_account(session, invitee_id, window)
         created = (
             await session.execute(
                 pg_insert(Referral)
@@ -228,16 +240,18 @@ async def _claim_through_link(
     return held
 
 
-async def _refuse_an_old_account(session: AsyncSession, invitee_id: UUID) -> None:
-    """Refuse a caller whose account is older than ``CLAIM_WINDOW`` (decision 264).
+async def _refuse_an_old_account(
+    session: AsyncSession, invitee_id: UUID, window: dt.timedelta
+) -> None:
+    """Refuse a caller whose account is older than ``window`` (decision 264).
 
     Compared with the database's ``now()`` in the claim's transaction, never
     the process clock, so the boundary is one clock's. At exactly
-    ``CLAIM_WINDOW`` the account is still new. A missing row reads as old, so
+    ``window`` the account is still new. A missing row reads as old, so
     the check fails closed.
     """
     is_new = await session.scalar(
-        select(User.created_at >= func.now() - CLAIM_WINDOW).where(User.id == invitee_id)
+        select(User.created_at >= func.now() - window).where(User.id == invitee_id)
     )
     if not is_new:
         raise InviteForNewAccountsError(NOT_NEW)

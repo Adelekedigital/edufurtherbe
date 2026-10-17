@@ -297,6 +297,16 @@ class Settings(BaseSettings):
         default=12, gt=0, le=8760, validation_alias=env_key("mentee_cancel_refund_hours")
     )
 
+    #: How many hours after an account is created it may still claim an invite
+    #: (decision 264; owner, 2026-10-17). Read through
+    #: `domain.referrals.claim_window`, the one reader. A setting so a dev
+    #: deployment can shorten it to test the rule. **A whole, positive number of
+    #: hours, or the boot fails**: zero would refuse every claim, silently. At
+    #: most a year, as for the refund window.
+    invite_claim_window_hours: int = Field(
+        default=168, gt=0, le=8760, validation_alias=env_key("invite_claim_window_hours")
+    )
+
     # ``NoDecode`` is load-bearing, not decoration. Without it pydantic-settings
     # JSON-decodes a complex type *inside the settings source*, before any
     # validator runs, and a bare origin typed into a cloud console fails as

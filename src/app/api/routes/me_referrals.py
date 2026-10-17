@@ -22,8 +22,8 @@ from app.api.deps import (
     ToggledInviteLinkDep,
 )
 from app.api.schemas.referrals import InviteLinkRead, ReferralClaimRead, ReferralRead
+from app.core.config import Settings
 from app.domain.referrals import (
-    CLAIM_WINDOW,
     DEFAULT_SUFFIX_LENGTH,
     HANDLE_MAX_LENGTH,
     HANDLE_MIN_LENGTH,
@@ -32,7 +32,14 @@ from app.domain.referrals import (
 
 router = APIRouter(prefix="/api/v1/me", tags=["referrals"])
 
-CLAIM_WINDOW_DAYS = CLAIM_WINDOW.days
+#: The deployment default, read from the setting's own declaration so the
+#: published text cannot drift from it.
+CLAIM_WINDOW_DEFAULT_HOURS: int = Settings.model_fields["invite_claim_window_hours"].default
+#: The window, said once for the description and the 409 alike.
+CLAIM_WINDOW_TEXT = (
+    "the deployment's claim window, `INVITE_CLAIM_WINDOW_HOURS` hours "
+    f"(default {CLAIM_WINDOW_DEFAULT_HOURS} = {CLAIM_WINDOW_DEFAULT_HOURS / 24:g} days)"
+)
 
 UNAUTHORISED: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -101,8 +108,8 @@ async def list_own_referrals(referrals: OwnReferralsDep) -> list[ReferralRead]:
         "`409`, and after an invite from the same person returns that invite.\n\n"
         "**Called by the invitee, after they sign in.** The front end holds "
         "the code from the invite link across sign-up and presents it here.\n\n"
-        "**Only a new account may claim**: one created at most "
-        f"{CLAIM_WINDOW_DAYS} days ago. An older account, including every "
+        f"**Only a new account may claim**: one created within {CLAIM_WINDOW_TEXT}. "
+        "An older account, including every "
         "account migrated from the previous platform, is refused with `409` "
         "and type `/problems/invite-for-new-accounts`, and nothing is "
         "attached.\n\n"
@@ -121,7 +128,7 @@ async def list_own_referrals(referrals: OwnReferralsDep) -> list[ReferralRead]:
                 "The invite or link is your own, somebody else has claimed the "
                 "invite, or you already arrived through somebody else's; or, "
                 "with type `/problems/invite-for-new-accounts`, your account "
-                f"is more than {CLAIM_WINDOW_DAYS} days old."
+                f"is older than {CLAIM_WINDOW_TEXT}."
             )
         },
     },
