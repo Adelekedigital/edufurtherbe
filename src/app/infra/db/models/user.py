@@ -45,6 +45,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import AuthProvider, CoverArt, CoverColor, LanguageProficiency, PrimaryRole
+from app.domain.profile_text import PROMPT_VERSION_MAX_LENGTH, PROMPT_VERSION_PATTERN
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -241,6 +242,12 @@ class UserProfile(TimestampMixin, Base):
     avatar_focus_source: Mapped[str | None] = mapped_column(Text)
 
     about_me: Mapped[str | None] = mapped_column(Text)
+    #: Where the bio came from (decision 266): set when the owner saves text the
+    #: writing assistant drafted or improved, cleared when they say it is their
+    #: own. The server stamps the time; the version is the router's prompt name
+    #: (`bio_draft-v1`). Both or neither.
+    about_me_drafted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    about_me_prompt_version: Mapped[str | None] = mapped_column(Text)
 
     # Free text, not an enum. The dev extract holds "Male", "Female" and "I'd
     # rather not say"; a closed type here would make every future addition to how
@@ -289,6 +296,23 @@ class UserProfile(TimestampMixin, Base):
         CheckConstraint(
             "avatar_focus_x IS NULL OR avatar_focus_source IS NOT NULL",
             name="avatar_focus_has_a_source",
+        ),
+        CheckConstraint(
+            "(about_me_drafted_at IS NULL) = (about_me_prompt_version IS NULL)",
+            name="about_me_provenance_both_or_neither",
+        ),
+        # Provenance describes stored text, so there is none without a bio.
+        CheckConstraint(
+            "about_me_drafted_at IS NULL OR about_me IS NOT NULL",
+            name="about_me_provenance_has_a_bio",
+        ),
+        # The shape only; which tasks are known is the application's to say,
+        # since the router adds tasks without a migration here.
+        CheckConstraint(
+            "about_me_prompt_version IS NULL OR ("
+            f"about_me_prompt_version ~ '{PROMPT_VERSION_PATTERN}' "
+            f"AND char_length(about_me_prompt_version) <= {PROMPT_VERSION_MAX_LENGTH})",
+            name="about_me_prompt_version_shape",
         ),
         Index("ix_user_profiles_origin_country", "origin_country_id"),
         Index("ix_user_profiles_current_country", "current_country_id"),

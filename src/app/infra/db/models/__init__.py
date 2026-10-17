@@ -71,6 +71,7 @@ from app.infra.db.models.user import (
     UserOnboarding,
     UserProfile,
 )
+from app.infra.db.models.writing_assist import WritingAssistRequest
 
 __all__ = [
     "AdminCreditGrant",
@@ -129,4 +130,5 @@ __all__ = [
     "UserLegalConsent",
     "UserOnboarding",
     "UserProfile",
+    "WritingAssistRequest",
 ]

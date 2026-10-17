@@ -66,6 +66,7 @@ from app.domain.enums import (
     SessionTypeIcon,
     UnlistedReason,
     VerificationStatus,
+    WritingAssistField,
 )
 
 # **`PG_ENUM_TYPES` and `pg_enum` are gone, and their absence is the point.**
@@ -201,6 +202,9 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     SessionTypeIcon: frozenset({"ck_session_types_icon_is_known"}),
     # How an award was funded, as the holder says (#191). Nullable: not said.
     AwardFunding: frozenset({"ck_user_awards_funding_is_known"}),
+    # Which text a writing-assist request was about; the daily limit counts per
+    # field (decision 266).
+    WritingAssistField: frozenset({"ck_writing_assist_requests_field_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.
