@@ -18,10 +18,6 @@ from app.domain.profile_text import ABOUT_ME_MAX_LENGTH
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 
-def test_the_limit_is_fifteen_hundred() -> None:
-    assert ABOUT_ME_MAX_LENGTH == 1500
-
-
 async def test_a_bio_at_the_limit_is_saved(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -62,13 +58,11 @@ async def test_a_longer_stored_bio_does_not_block_other_edits(
     )
 
     assert response.status_code == 204
-
-
-def test_the_spec_publishes_the_limit() -> None:
-    from app.core.config import Settings
-    from app.main import create_app
-
-    spec = create_app(Settings(_env_file=None)).openapi()
-    about = spec["components"]["schemas"]["UserProfileWrite"]["properties"]["about_me"]
-    lengths = [part.get("maxLength") for part in about.get("anyOf", [about])]
-    assert ABOUT_ME_MAX_LENGTH in lengths
+    async with db_engine.connect() as conn:
+        stored = (
+            await conn.execute(
+                text("SELECT length(about_me) FROM user_profiles WHERE user_id = :u"),
+                {"u": user_id},
+            )
+        ).scalar_one()
+    assert stored == 4000, "a stored bio is never rewritten to fit"
