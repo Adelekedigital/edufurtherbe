@@ -25,6 +25,13 @@ class CountryRef(BaseModel):
     code: str
     display_name: str
 
+    @classmethod
+    def maybe(cls, code: object, display_name: object) -> CountryRef | None:
+        """Both columns or none — an outer join gives nulls together."""
+        if code is None or display_name is None:
+            return None
+        return cls(code=str(code), display_name=str(display_name))
+
 
 class InstitutionRead(BaseModel):
     """A university, as search returns it and as an education entry embeds it.
@@ -51,17 +58,11 @@ class InstitutionRead(BaseModel):
         once, so three tiers of search and the education read cannot each invent
         their own shape.
         """
-        code = row.get("country_code")
-        name = row.get("country_name")
         return cls(
             id=row["id"],  # type: ignore[arg-type]
             name=row["name"],  # type: ignore[arg-type]
             web_page=row.get("web_page"),  # type: ignore[arg-type]
-            country=(
-                CountryRef(code=str(code), display_name=str(name))
-                if code is not None and name is not None
-                else None
-            ),
+            country=CountryRef.maybe(row.get("country_code"), row.get("country_name")),
         )
 
 

@@ -71,6 +71,8 @@ ADDED = {
     # The invite landing (decision 256): `inviter` is required, its two
     # fields optional.
     "InviterRead": ("first_name", "avatar_url"),
+    # Where the owner is from, on their own `/me` (Mentee Onboarding v5, #6).
+    "UserProfileRead": ("origin_country",),
 }
 
 

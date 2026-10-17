@@ -5,7 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep, RefundPolicyDep
-from app.api.schemas.common import AvatarFocusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import BookingCountsRead, CreditsRead, UserProfileRead, UserRead
 
@@ -84,6 +83,10 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "waiting on a mentor, and `upcoming`. **Badge only the action counts** "
         "(`awaiting_your_response`, `awaiting_mentor`); `upcoming` is information "
         "and would almost always be lit.\n\n"
+        "`profile.origin_country` is where you are from, `{code, display_name}` "
+        "like every other country in this API, or null when unset. A mentee's "
+        "origin is returned here and nowhere else; a mentor's also shows on "
+        "their public profile and card, as before.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -95,14 +98,7 @@ async def read_me(
     window: BookingWindowDep,
     refunds: RefundPolicyDep,
 ) -> UserRead:
-    profile = (
-        UserProfileRead(
-            **user,
-            avatar_focus=AvatarFocusRead.of(user["avatar_focus_x"], user["avatar_focus_y"]),
-        )
-        if user["has_profile"]
-        else None
-    )
+    profile = UserProfileRead.from_row(user) if user["has_profile"] else None
     mentor_profile = attributes["mentor_profile"]
     goal = attributes["goal"]
     return UserRead(
