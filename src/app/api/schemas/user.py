@@ -253,8 +253,9 @@ class UserRead(NormalisedEmail):
     onboarding: OnboardingStatusRead | None = Field(
         default=None,
         description=(
-            "Whether the caller finished onboarding, and which mentee answers are "
-            "still owed. Decides home or onboarding after sign-in (decision 261)."
+            "Whether the caller finished onboarding (`complete`, which decides "
+            "home or onboarding after sign-in), and which mentee answers are "
+            "still owed (`missing`, always empty for a mentor). Decision 261."
         ),
     )
     mentee_cancel_refund_hours: int = Field(

@@ -71,7 +71,9 @@ class OnboardingStatusRead(BaseModel):
         description=(
             "The mentee answers still owed, in step order: `help` (at least one "
             "help area), `origin`, `degree` (a degree goal) and `field` (a field of "
-            "study). Empty when all are given. Open the first one's step."
+            "study). Empty when all are given, and always empty for a mentor, whose "
+            "bar has no mentee answers. Route on `complete`; when sending a mentee "
+            "to finish, open the first missing step."
         )
     )
 

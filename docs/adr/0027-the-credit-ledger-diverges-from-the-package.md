@@ -186,6 +186,10 @@ the API at all, so the starter credit had nothing to fire it.
 than a flag, because `PATCH {"completed": false}` is a transition that does not
 exist and a route which appears to allow it is one somebody eventually calls.
 
+> Tightened 2026-10-17 by settled decision 261: a mentee now finishes with four
+> answers (a live help area, an origin country, a degree goal and a field of
+> study). The text below is the original reasoning.
+
 **The bar is row existence, and that is deliberately temporary.** The starter is
 granted for finishing a profile rather than for signing up — signing up is free,
 finishing one is work — and that asymmetry is the whole anti-farming property.

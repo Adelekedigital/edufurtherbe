@@ -25,15 +25,17 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import exists, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import OnboardingIncompleteError
 from app.domain.credits import CreditLadder
+from app.domain.enums import CreditSource
 from app.domain.notifications import Notification
 from app.domain.onboarding import may_complete_onboarding, missing_requirements
 from app.infra.db.credit_writer import grant_starter
+from app.infra.db.models.credits import CreditLot
 from app.infra.db.models.user import UserOnboarding
 from app.infra.db.onboarding_store import onboarding_evidence
 from app.infra.db.outbox import enqueue
@@ -58,6 +60,23 @@ class OnboardingResult:
     granted: bool
 
 
+async def _finished_and_paid(session: AsyncSession, user_id: UUID) -> Any | None:
+    """The caller's onboarding row when it is finished and they hold the
+    starter lot, else `None`. Both halves name the caller."""
+    return (
+        await session.execute(
+            select(UserOnboarding.completed_at, UserOnboarding.last_step).where(
+                UserOnboarding.user_id == user_id,
+                UserOnboarding.completed_at.is_not(None),
+                exists().where(
+                    CreditLot.user_id == user_id,
+                    CreditLot.source == CreditSource.PROFILE_COMPLETED,
+                ),
+            )
+        )
+    ).one_or_none()
+
+
 async def complete_onboarding(
     session: AsyncSession, user_id: UUID, *, ladder: CreditLadder
 ) -> OnboardingResult:
@@ -66,7 +85,18 @@ async def complete_onboarding(
     Raises :class:`OnboardingIncompleteError` when the profile does not meet the
     bar — a refusal the caller must answer by sending the user back to finish,
     never by retrying, which is why it carries its own problem type.
+
+    **A user already finished and paid is answered `200` without the check**,
+    as the route publishes: the bar can tighten after someone finished (every
+    migrated mentee lacks a field of study, decision 261) and a retry must not
+    refuse an account that is done. Only a user holding the starter skips it,
+    so a finished account with no credit still earns it by the current rule.
     """
+    settled = await _finished_and_paid(session, user_id)
+    if settled is not None:
+        return OnboardingResult(
+            completed_at=settled.completed_at, last_step=settled.last_step, granted=False
+        )
     evidence = await onboarding_evidence(session, user_id)
     if not may_complete_onboarding(evidence):
         raise OnboardingIncompleteError(

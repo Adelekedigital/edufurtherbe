@@ -187,3 +187,82 @@ async def test_a_saved_step_is_not_complete(
     )
 
     assert await onboarding_on_me(api_client, auth_id) == {"complete": False, "missing": []}
+
+
+async def test_a_retry_stays_200_after_an_answer_is_cleared(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**Idempotent, as published.** A finished mentee who later clears an
+    answer is still finished: a retry answers `200` with the original date and
+    grants nothing, rather than a `409` for an account that is done."""
+    auth_id = uuid4()
+    user_id = await seed(db_engine, auth_id)
+    headers = bearer(api_token(auth_id))
+    first = await api_client.post(PATH, headers=headers)
+    await run(db_engine, UNDO["field"], user_id)
+
+    again = await api_client.post(PATH, headers=headers)
+
+    assert again.status_code == 200
+    assert again.json()["completed_at"] == first.json()["completed_at"]
+    assert await balance_of(db_engine, user_id) == 1
+
+
+async def test_a_migrated_user_holding_the_starter_retries_to_200(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The ETL writes `completed_at` and the starter lot, and no migrated goal
+    has a field of study, so the current bar must not refuse their retry."""
+    auth_id = uuid4()
+    user_id = await seed(db_engine, auth_id, answers=False)
+    await run(
+        db_engine,
+        "INSERT INTO user_onboarding (user_id, completed_at) VALUES (:u, now())",
+        user_id,
+    )
+    await run(
+        db_engine,
+        "INSERT INTO credit_lots (user_id, source, quantity_granted, quantity_remaining) "
+        "VALUES (:u, 'profile_completed', 1, 1)",
+        user_id,
+    )
+
+    response = await api_client.post(PATH, headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 200
+    assert await balance_of(db_engine, user_id) == 1
+
+
+async def test_a_finished_user_without_the_starter_still_meets_the_bar(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The anti-farming half: only a user already paid skips the check. One the
+    ETL marked finished with no credit earns it by the current rule."""
+    auth_id = uuid4()
+    user_id = await seed(db_engine, auth_id, answers=False)
+    await run(
+        db_engine,
+        "INSERT INTO user_onboarding (user_id, completed_at) VALUES (:u, now())",
+        user_id,
+    )
+
+    response = await api_client.post(PATH, headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 409
+    assert await balance_of(db_engine, user_id) == 0
+
+
+async def test_a_mentor_owes_no_mentee_answers(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """`missing` is what completion would still ask; a mentor's bar has no
+    mentee answers, so a mentor is never sent to the mentee steps."""
+    auth_id = uuid4()
+    await seed(db_engine, auth_id, goal=False, mentor=True, answers=False)
+
+    before = await onboarding_on_me(api_client, auth_id)
+    await api_client.post(PATH, headers=bearer(api_token(auth_id)))
+    after = await onboarding_on_me(api_client, auth_id)
+
+    assert before == {"complete": False, "missing": []}
+    assert after == {"complete": True, "missing": []}

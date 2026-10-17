@@ -79,7 +79,13 @@ class ProfileEvidence:
 
 
 def missing_requirements(evidence: ProfileEvidence) -> tuple[OnboardingRequirement, ...]:
-    """The mentee requirements not yet met, in `OnboardingRequirement` order."""
+    """The mentee requirements not yet met, in `OnboardingRequirement` order.
+
+    Empty for a mentor: their bar has no mentee answers, so they are never
+    sent to a mentee step.
+    """
+    if evidence.has_mentor_profile:
+        return ()
     met = {
         OnboardingRequirement.HELP: evidence.has_live_need,
         OnboardingRequirement.ORIGIN: evidence.has_origin,

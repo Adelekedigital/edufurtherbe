@@ -104,3 +104,8 @@ class TestMissingRequirements:
             "degree",
             "field",
         ]
+
+
+def test_a_mentor_owes_no_mentee_answers() -> None:
+    mentor = evidence(has_mentee_goal=False, has_mentor_profile=True, **bare_mentee_facts())
+    assert missing_requirements(mentor) == ()
