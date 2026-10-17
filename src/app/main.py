@@ -264,8 +264,9 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "name": "catalog",
         "description": (
             "Public reference data, readable without a token: the mirrored "
-            "university catalogue (ADR 0020) and the lookup lists a profile form "
-            "is built from. Unauthenticated because school selection happens "
+            "university catalogue (ADR 0020), the lookup lists a profile form "
+            "is built from, and the field-of-study suggestions onboarding "
+            "offers. Unauthenticated because school selection happens "
             "during signup, before an account exists.\n\n"
             "**Reading is public; adding is not.** A school the catalogue does "
             "not hold is created on the authenticated education write, in the "

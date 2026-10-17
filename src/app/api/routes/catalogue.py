@@ -7,6 +7,10 @@ wins. That is a routing bug waiting for the next endpoint, and the segment costs
 one word. `institutions` keeps its own path because it is a real resource that
 education entries reference by id, not a reference list.
 
+`/catalog/fields-of-study` is a constant, not a lookup table (decision 262), so
+it is its own route, declared **before** `/catalog/{catalogue}`: Starlette tries
+routes in order, and the generic one answers any name it does not hold with 404.
+
 **Unauthenticated, deliberately.** These serve public reference data — a list of
 the world's universities, ISO countries, ISO languages, and the platform's own
 closed vocabularies. There is nothing here to protect, and requiring a token
@@ -32,13 +36,23 @@ part of that rule that actually matters.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
 from app.api.deps import InstitutionResultsDep, LookupPageDep
-from app.api.schemas.catalogue import InstitutionRead, LookupRead
+from app.api.schemas.catalogue import FieldOfStudySuggestionRead, InstitutionRead, LookupRead
 from app.api.schemas.common import Page, encode_cursor
+from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH, FIELD_OF_STUDY_SUGGESTIONS
 
 router = APIRouter(prefix="/api/v1", tags=["catalog"])
+
+#: One list for every caller, changed only by a deploy, so shared caches may hold
+#: it. An hour: a stale suggestion after a deploy restricts nothing.
+SUGGESTIONS_CACHE = "public, max-age=3600"
+
+#: Built once: the suggestions are a constant (decision 262).
+SUGGESTIONS_PAGE = Page(
+    data=[FieldOfStudySuggestionRead(name=name) for name in FIELD_OF_STUDY_SUGGESTIONS]
+)
 
 CURSOR_RESPONSES: dict[int | str, dict[str, str]] = {
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
@@ -77,6 +91,39 @@ async def search(rows: InstitutionResultsDep) -> Page[InstitutionRead]:
 
 
 @router.get(
+    "/catalog/fields-of-study",
+    response_model=Page[FieldOfStudySuggestionRead],
+    summary="List field-of-study suggestions",
+    description=(
+        'The suggestions onboarding offers under "What do you want to study?", '
+        "returned whole in the order the product intends — not alphabetically. "
+        "`next_cursor` is always `null`.\n\n"
+        "**Suggestions only: this list never restricts what is saved.** The "
+        "mentee's answer is free text on the goal's `field_of_study` (`PUT "
+        "/users/{id}/goal`), so a typed answer is stored as typed, up to "
+        f"{FIELD_OF_STUDY_MAX_LENGTH} characters. Every suggestion is one that "
+        "write accepts unchanged.\n\n"
+        "A name and no id, because nothing references a suggestion: save the "
+        "`name` itself."
+    ),
+    responses={
+        status.HTTP_200_OK: {
+            "description": "The suggestions, in order.",
+            "headers": {
+                "Cache-Control": {
+                    "description": f"`{SUGGESTIONS_CACHE}`: the same for everyone.",
+                    "schema": {"type": "string"},
+                }
+            },
+        }
+    },
+)
+async def fields_of_study(response: Response) -> Page[FieldOfStudySuggestionRead]:
+    response.headers["Cache-Control"] = SUGGESTIONS_CACHE
+    return SUGGESTIONS_PAGE
+
+
+@router.get(
     "/catalog/{catalogue}",
     response_model=Page[LookupRead],
     summary="List a lookup catalogue",
@@ -91,7 +138,9 @@ async def search(rows: InstitutionResultsDep) -> Page[InstitutionRead]:
         "Nigerian Pidgin are present at all), so it is the one list that really "
         "pages. Use `q` to narrow it rather than fetching every page.\n\n"
         "`scholarship-programs` excludes entries awaiting review, for the same "
-        "reason institution search does."
+        "reason institution search does.\n\n"
+        "Field-of-study suggestions are not a lookup: they are "
+        "`/catalog/fields-of-study`, with their own shape."
     ),
     responses=CURSOR_RESPONSES,
 )
