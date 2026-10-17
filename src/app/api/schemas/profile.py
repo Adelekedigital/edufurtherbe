@@ -14,7 +14,14 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from app.api.schemas.availability import validated_zone
 from app.api.schemas.catalogue import CountryRef, InstitutionRead
@@ -37,6 +44,7 @@ from app.domain.availability import (
     BookingWindow,
 )
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
+from app.domain.names import split_full_name
 from app.domain.text import has_letter, hidden_characters
 
 
@@ -479,6 +487,11 @@ class MentorProfileWrite(Normalised):
 MAX_NAME_LENGTH = 100
 
 
+def _refuse_hidden(value: str) -> None:
+    if hidden_characters(value):
+        raise ValueError("a name cannot contain control or invisible characters")
+
+
 def _a_visible_name(value: str) -> str:
     """A name as a person would read it: composed, with no hidden characters.
 
@@ -492,8 +505,7 @@ def _a_visible_name(value: str) -> str:
     letter, in any script — `---` is not one.
     """
     composed = unicodedata.normalize("NFC", value)
-    if hidden_characters(composed):
-        raise ValueError("a name cannot contain control or invisible characters")
+    _refuse_hidden(composed)
     if not has_letter(composed):
         raise ValueError("a name needs at least one letter")
     if len(composed) > MAX_NAME_LENGTH:
@@ -538,6 +550,21 @@ class UserProfileWrite(Normalised):
         default=None,
         max_length=MAX_NAME_LENGTH,
         description="Your last name. Cannot be cleared.",
+    )
+    #: Both names as one string (decision 258), declared after them so the
+    #: validator can see whether either was sent too. Not a column: the model
+    #: validator writes its parts to the two names, and the writer skips it.
+    full_name: str = Field(  # type: ignore[assignment]
+        default=None,
+        max_length=2 * MAX_NAME_LENGTH + 1,
+        description=(
+            "Your first and last name as one string, split on the first word: "
+            '"Damilola Ade Ogunleye" saves first name `Damilola` and last name '
+            "`Ade Ogunleye`. Each part follows the `first_name` rule. A single "
+            "word, invisible characters, or sending it with `first_name` or "
+            "`last_name` is a `422` at `/full_name`."
+        ),
+        examples=["Damilola Ade Ogunleye"],
     )
     about_me: str | None = Field(default=None, max_length=5000)
     gender: str | None = Field(default=None, max_length=50)
@@ -587,6 +614,30 @@ class UserProfileWrite(Normalised):
     )
 
     _names = field_validator("first_name", "last_name")(_a_visible_name)
+
+    @field_validator("full_name")
+    @classmethod
+    def _full_name(cls, value: str, info: ValidationInfo) -> str:
+        """Checked whole before it is split, so a line break is refused rather
+        than read as the space between two names."""
+        _refuse_hidden(value)
+        # A name sent and valid is in `info.data`; one not sent is its `None`
+        # default, and one sent and invalid is absent and already a `422`.
+        if info.data.get("first_name") is not None or info.data.get("last_name") is not None:
+            raise ValueError("send `full_name` or `first_name` and `last_name`, not both")
+        parts = split_full_name(value)
+        if parts is None:
+            raise ValueError("enter a first and a last name, separated by a space")
+        return " ".join(_a_visible_name(part) for part in parts)
+
+    @model_validator(mode="after")
+    def _full_name_to_parts(self) -> UserProfileWrite:
+        # The field validator returned the first name, one space, then the
+        # rest, so the first space is the split. Assigning marks both names as
+        # set, so `exclude_unset` sends them on.
+        if "full_name" in self.model_fields_set:
+            self.first_name, _, self.last_name = self.full_name.partition(" ")
+        return self
 
     @field_validator("timezone")
     @classmethod
