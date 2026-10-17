@@ -158,6 +158,9 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # the question an endpoint needs answered. `array_agg` over no rows is `NULL`,
 # which is what `is_admin` is derived from: one subquery answering both, rather
 # than an `EXISTS` beside an aggregate that could disagree.
+#
+# `oc` is the caller's own origin country, for `/me` only: one primary-key join
+# off the caller's own profile row, so it adds no query and widens no scope.
 CURRENT_USER = text("""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at,
@@ -165,11 +168,13 @@ CURRENT_USER = text("""
            p.avatar_focus_x, p.avatar_focus_y,
            p.social_linkedin, p.social_twitter, p.social_youtube,
            p.cover_color, p.cover_art,
+           oc.code AS origin_country_code, oc.display_name AS origin_country_name,
            (p.user_id IS NOT NULL) AS has_profile,
            COALESCE(a.roles, ARRAY[]::text[]) AS admin_roles,
            (a.roles IS NOT NULL) AS is_admin
     FROM users u
     LEFT JOIN user_profiles p ON p.user_id = u.id
+    LEFT JOIN countries oc ON oc.id = p.origin_country_id
     LEFT JOIN LATERAL (
         SELECT array_agg(g.admin_role::text) AS roles
         FROM admin_users g

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.api.schemas.catalogue import CountryRef
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, StoredEmail, XRead, YouTubeRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.domain.emails import normalise_email
@@ -52,6 +54,28 @@ class UserProfileRead(BaseModel):
     social_linkedin: LinkedInRead = None
     social_twitter: XRead = None
     social_youtube: YouTubeRead = None
+    #: `UserProfileRead` is served on `/me` and nowhere else, so a mentee's
+    #: origin never reaches another person (PRD). A mentor's origin is public
+    #: anyway, as a name on their profile and card.
+    origin_country: CountryRef | None = Field(
+        default=None,
+        description=(
+            "Where you are from, as `origin_country_id` saved it on "
+            "`PATCH /users/{id}/profile`, or null when unset. Map `code` to "
+            "the `/catalog/countries` id to prefill a picker."
+        ),
+    )
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> UserProfileRead:
+        """Build from the `/me` row, nesting what its joins return flat."""
+        return cls(
+            **row,
+            avatar_focus=AvatarFocusRead.of(row["avatar_focus_x"], row["avatar_focus_y"]),
+            origin_country=CountryRef.maybe(
+                row.get("origin_country_code"), row.get("origin_country_name")
+            ),
+        )
 
 
 class MonthlyCreditsRead(BaseModel):
