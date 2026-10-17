@@ -23,6 +23,7 @@ from app.api.deps import (
 )
 from app.api.schemas.referrals import InviteLinkRead, ReferralClaimRead, ReferralRead
 from app.domain.referrals import (
+    CLAIM_WINDOW,
     DEFAULT_SUFFIX_LENGTH,
     HANDLE_MAX_LENGTH,
     HANDLE_MIN_LENGTH,
@@ -30,6 +31,8 @@ from app.domain.referrals import (
 )
 
 router = APIRouter(prefix="/api/v1/me", tags=["referrals"])
+
+CLAIM_WINDOW_DAYS = CLAIM_WINDOW.days
 
 UNAUTHORISED: dict[int | str, dict[str, str]] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -96,14 +99,19 @@ async def list_own_referrals(referrals: OwnReferralsDep) -> list[ReferralRead]:
         "response's `code` is that new invite's, not the link's. One invite per "
         "arrival still holds: claiming a link after another person's invite is "
         "`409`, and after an invite from the same person returns that invite.\n\n"
-        "**Called by the invitee, after they sign in.** This service never sees "
-        "a signup — accounts are created by the provisioning CLI and the "
-        "migration — so the front end holds the code from the invite link "
-        "across sign-up and presents it here.\n\n"
+        "**Called by the invitee, after they sign in.** The front end holds "
+        "the code from the invite link across sign-up and presents it here.\n\n"
+        "**Only a new account may claim**: one created at most "
+        f"{CLAIM_WINDOW_DAYS} days ago. An older account, including every "
+        "account migrated from the previous platform, is refused with `409` "
+        "and type `/problems/invite-for-new-accounts`, and nothing is "
+        "attached.\n\n"
         "Idempotent: claiming a code you already hold returns it unchanged, "
-        "because a retried request must not read as an error. Refused with "
-        "`409` for your own invite or one somebody else has already claimed, "
-        "and `404` when no invite carries the code."
+        "however old the account is now, because a retried request must not "
+        "read as an error. Refused with `409` for your own invite or one "
+        "somebody else has already claimed, and `404` when no invite carries "
+        "the code. Those answers come before the age check, so an old account "
+        "gets them unchanged."
     ),
     responses={
         **UNAUTHORISED,
@@ -111,7 +119,9 @@ async def list_own_referrals(referrals: OwnReferralsDep) -> list[ReferralRead]:
         status.HTTP_409_CONFLICT: {
             "description": (
                 "The invite or link is your own, somebody else has claimed the "
-                "invite, or you already arrived through somebody else's."
+                "invite, or you already arrived through somebody else's; or, "
+                "with type `/problems/invite-for-new-accounts`, your account "
+                f"is more than {CLAIM_WINDOW_DAYS} days old."
             )
         },
     },

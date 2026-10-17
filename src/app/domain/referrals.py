@@ -34,6 +34,7 @@ from datetime import timedelta
 from typing import Literal
 
 __all__ = [
+    "CLAIM_WINDOW",
     "CODE_LENGTH",
     "DEFAULT_CODE_SUFFIXES",
     "DEFAULT_SUFFIX_LENGTH",
@@ -176,6 +177,12 @@ RESERVED_HANDLES = frozenset(
 #: How long a retired code stays out of everyone else's reach. Its owner may
 #: take it back at any time; after this, anyone may pick it.
 RETIRED_CODE_HOLD = timedelta(days=30)
+
+#: How long after an account is created it may still claim an invite (owner,
+#: 2026-10-17; decision 264). Measured against ``users.created_at`` on the
+#: database's clock. A migrated account carries its Bubble creation date
+#: (decision 29), so it is old and never claims.
+CLAIM_WINDOW = timedelta(days=7)
 
 
 def normalise_handle(raw: str) -> str:

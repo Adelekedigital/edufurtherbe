@@ -45,6 +45,15 @@ class AccountExistsError(ConflictError):
     """
 
 
+class InviteForNewAccountsError(ConflictError):
+    """The caller's account is too old to claim an invite (decision 264).
+
+    Carries a problem type: the client says "invites are for new accounts"
+    rather than a generic conflict, and nothing the caller does with the code
+    changes the answer.
+    """
+
+
 class InsufficientCreditError(ConflictError):
     """The caller has no spendable credit left.
 

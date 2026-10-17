@@ -250,10 +250,10 @@ async def claimed_referral(
 ) -> Any:
     """Attach the caller to an invite.
 
-    **The claim does not qualify it.** Qualification happens when the invitee
-    finishes onboarding, which is a different transaction and deliberately so:
-    claiming is the invitee saying who invited them, and finishing is the work
-    that earns the referrer anything.
+    **Finishing onboarding is what earns the referrer anything.** A claim by
+    somebody who has not finished only attaches them; a claim by somebody who
+    already has qualifies the invite in the same transaction, which can pay the
+    referrer. That is why only a new account may claim (decision 264).
     """
     referral = await claim_referral(session, user["id"], payload.code, ladder=ladder)
     await session.commit()

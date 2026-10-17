@@ -11,6 +11,7 @@ from datetime import timedelta
 import pytest
 
 from app.domain.referrals import (
+    CLAIM_WINDOW,
     CODE_LENGTH,
     DEFAULT_SUFFIX_LENGTH,
     HANDLE_MAX_LENGTH,
@@ -208,3 +209,10 @@ class TestDefaultCode:
 
     def test_the_suffix_varies(self) -> None:
         assert len({default_code("Ada") for _ in range(20)}) > 1
+
+
+def test_the_claim_window_is_whole_days() -> None:
+    """The claim route publishes ``CLAIM_WINDOW.days`` (decision 264); a
+    part-day window would be understated in the contract."""
+    assert timedelta(days=CLAIM_WINDOW.days) == CLAIM_WINDOW
+    assert timedelta(days=7) == CLAIM_WINDOW
