@@ -33,6 +33,8 @@ import unicodedata
 from datetime import timedelta
 from typing import Literal
 
+from app.core.config import Settings
+
 __all__ = [
     "CODE_LENGTH",
     "DEFAULT_CODE_SUFFIXES",
@@ -43,6 +45,7 @@ __all__ = [
     "NO_INVITE",
     "RESERVED_HANDLES",
     "RETIRED_CODE_HOLD",
+    "claim_window",
     "default_code",
     "handle_problem",
     "is_plausible_code",
@@ -176,6 +179,18 @@ RESERVED_HANDLES = frozenset(
 #: How long a retired code stays out of everyone else's reach. Its owner may
 #: take it back at any time; after this, anyone may pick it.
 RETIRED_CODE_HOLD = timedelta(days=30)
+
+
+def claim_window(settings: Settings) -> timedelta:
+    """How long after an account is created it may still claim an invite: the
+    one reader of `INVITE_CLAIM_WINDOW_HOURS` (decision 264).
+
+    Measured against ``users.created_at`` on the database's clock. A migrated
+    account carries its Bubble creation date (decision 29), so it is old and
+    never claims. No constant to fall back on: the claim takes the window as a
+    required argument, so a caller that forgets it fails to type-check.
+    """
+    return timedelta(hours=settings.invite_claim_window_hours)
 
 
 def normalise_handle(raw: str) -> str:

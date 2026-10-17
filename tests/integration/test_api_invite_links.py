@@ -32,7 +32,7 @@ from tests.integration.test_api_referrals import (
 from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.domain.credits import credit_ladder
-from app.domain.referrals import MAX_CODE_LENGTH, RETIRED_CODE_HOLD
+from app.domain.referrals import MAX_CODE_LENGTH, RETIRED_CODE_HOLD, claim_window
 from app.infra.db import invite_links
 from app.infra.db.invite_links import pick_handle
 from app.infra.db.referral_writer import claim_referral
@@ -45,6 +45,8 @@ LOOKUP = "/api/v1/invites/{code}"
 NO_STORE = "private, no-store"
 #: The landing lookup's one answer for every code nobody can join through.
 NOBODY = {"inviter": None}
+#: The default claim window, for the writer-level tests (decision 264).
+WINDOW = claim_window(Settings(_env_file=None, invite_claim_window_hours=168))  # type: ignore[call-arg]
 
 
 async def create_link(client: httpx.AsyncClient, auth_id: UUID) -> httpx.Response:
@@ -533,8 +535,10 @@ async def test_a_link_claim_racing_its_own_retry_returns_one_referral(
     maker = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with maker() as one, maker() as two:
-        first = await claim_referral(one, arrival_id, code, ladder=ladder)
-        racer = asyncio.create_task(claim_referral(two, arrival_id, code, ladder=ladder))
+        first = await claim_referral(one, arrival_id, code, ladder=ladder, window=WINDOW)
+        racer = asyncio.create_task(
+            claim_referral(two, arrival_id, code, ladder=ladder, window=WINDOW)
+        )
         await asyncio.sleep(0.3)
         await one.commit()
         second = await racer
@@ -578,8 +582,10 @@ async def test_the_loser_of_a_race_for_one_single_use_code_is_refused(
     maker = async_sessionmaker(db_engine, expire_on_commit=False)
 
     async with maker() as one, maker() as two:
-        await claim_referral(one, winner_id, code, ladder=ladder)
-        racer = asyncio.create_task(claim_referral(two, loser_id, code, ladder=ladder))
+        await claim_referral(one, winner_id, code, ladder=ladder, window=WINDOW)
+        racer = asyncio.create_task(
+            claim_referral(two, loser_id, code, ladder=ladder, window=WINDOW)
+        )
         await asyncio.sleep(0.3)
         await one.commit()
 

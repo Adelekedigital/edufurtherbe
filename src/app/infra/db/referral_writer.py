@@ -14,10 +14,11 @@ is recorded and a retry is a no-op.
 
 ``signed_up_at`` IS SET AT CLAIM TIME, NOT AT SIGNUP
 ====================================================
-**This service cannot observe a signup.** ``users`` rows are created by
-``provisioning_store`` (the CLI) and by the ETL; there is no registration
-endpoint here to notice an arrival. So the invitee claims their code once
-authenticated, and that is the moment recorded.
+**A signup carries no invite code.** ``users`` rows are created at first
+sign-in (decision 178), by ``provisioning_store`` (the CLI) and by the ETL, and
+none of them knows which invite brought the person. So the invitee claims their
+code once authenticated, and that is the moment recorded. The account's own
+``created_at`` is what decides whether it may still claim (decision 264).
 
 The column name is the package's. It is kept because a later Supabase webhook
 would fill exactly this column with exactly this meaning — but the gap between
@@ -36,20 +37,21 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, InviteForNewAccountsError, NotFoundError
 from app.domain.credits import CreditLadder
 from app.domain.enums import CreditSource
 from app.domain.referrals import NO_INVITE, make_code, may_qualify
 from app.infra.db.credit_writer import grant
 from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
-from app.infra.db.models.user import UserOnboarding
+from app.infra.db.models.user import User, UserOnboarding
 
 __all__ = ["claim_referral", "create_referral", "qualify_invitee"]
 
 OWN_INVITE = "you cannot claim your own invite"
 ALREADY_CLAIMED = "you have already claimed an invite"
 CLAIMED_BY_ANOTHER = "that invite has already been claimed"
+NOT_NEW = "invites are for new accounts"
 
 #: What a claim returns: the claimant's view of the referral, never the
 #: referrer's (`ReferralClaimRead`).
@@ -96,7 +98,12 @@ async def create_referral(
 
 
 async def claim_referral(
-    session: AsyncSession, invitee_id: UUID, code: str, *, ladder: CreditLadder
+    session: AsyncSession,
+    invitee_id: UUID,
+    code: str,
+    *,
+    ladder: CreditLadder,
+    window: dt.timedelta,
 ) -> Any:
     """Attach the caller to the invite that named this code. Does not commit.
 
@@ -112,6 +119,11 @@ async def claim_referral(
     ``no_self_referral`` CHECK is the guarantee; this is what makes it a 409
     instead of a 500. The cheapest possible farm is one address referring
     itself, and the gate it opens is recurring.
+
+    **Only a new account attaches** (decision 264). The age check is the last
+    one before a write, so every other answer is unchanged for an old account:
+    an unknown code is still `404`, the `409`s still say what they said, and an
+    invite the caller already holds is still returned.
     """
     referral = await resolve_code(session, code)
 
@@ -119,21 +131,27 @@ async def claim_referral(
     if referral is None or not referral.owner_live:
         raise NotFoundError(NO_INVITE)
     if referral.referral_id is None:
-        return await _claim_through_link(session, invitee_id, referral, ladder=ladder)
+        return await _claim_through_link(
+            session, invitee_id, referral, ladder=ladder, window=window
+        )
     if referral.owner_id == invitee_id:
         raise ConflictError(OWN_INVITE)
     if referral.invitee_user_id is not None and referral.invitee_user_id != invitee_id:
         raise ConflictError(CLAIMED_BY_ANOTHER)
+    if referral.invitee_user_id == invitee_id:
+        # A retry: returned before the age check, so it never reads as an error.
+        return (
+            await session.execute(select(*CLAIMED).where(Referral.id == referral.referral_id))
+        ).one()
 
     # **One invite per arrival.** `uq_referrals_invitee` is the guarantee; this
     # is what makes it a 409 the caller can act on rather than a 500 they
     # cannot. Claiming a *second, different* code is refused — which matters
     # because until this existed, doing so locked the user out of onboarding
     # permanently.
-    if referral.invitee_user_id is None and await session.scalar(
-        select(Referral.id).where(Referral.invitee_user_id == invitee_id)
-    ):
+    if await session.scalar(select(Referral.id).where(Referral.invitee_user_id == invitee_id)):
         raise ConflictError(ALREADY_CLAIMED)
+    await _refuse_an_old_account(session, invitee_id, window)
 
     # The check above reads before it writes, so a second claim by the same
     # person racing this one passes it too, and the unique index refuses the
@@ -170,7 +188,12 @@ async def claim_referral(
 
 
 async def _claim_through_link(
-    session: AsyncSession, invitee_id: UUID, link: ResolvedCode, *, ladder: CreditLadder
+    session: AsyncSession,
+    invitee_id: UUID,
+    link: ResolvedCode,
+    *,
+    ladder: CreditLadder,
+    window: dt.timedelta,
 ) -> Any:
     """Make this arrival its own referral of the link's owner (decision 254).
 
@@ -190,6 +213,7 @@ async def _claim_through_link(
 
     held = await _held_by(session, invitee_id)
     if held is None:
+        await _refuse_an_old_account(session, invitee_id, window)
         created = (
             await session.execute(
                 pg_insert(Referral)
@@ -214,6 +238,23 @@ async def _claim_through_link(
     if held is None or held.referrer_id != link.owner_id:
         raise ConflictError(ALREADY_CLAIMED)
     return held
+
+
+async def _refuse_an_old_account(
+    session: AsyncSession, invitee_id: UUID, window: dt.timedelta
+) -> None:
+    """Refuse a caller whose account is older than ``window`` (decision 264).
+
+    Compared with the database's ``now()`` in the claim's transaction, never
+    the process clock, so the boundary is one clock's. At exactly
+    ``window`` the account is still new. A missing row reads as old, so
+    the check fails closed.
+    """
+    is_new = await session.scalar(
+        select(User.created_at >= func.now() - window).where(User.id == invitee_id)
+    )
+    if not is_new:
+        raise InviteForNewAccountsError(NOT_NEW)
 
 
 async def _held_by(session: AsyncSession, invitee_id: UUID) -> Any:

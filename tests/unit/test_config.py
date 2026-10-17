@@ -461,3 +461,31 @@ def test_a_refund_window_that_is_not_a_positive_whole_hour_refuses_to_boot(
 
     with pytest.raises(PydanticValidationError, match="MENTEE_CANCEL_REFUND_HOURS"):
         Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_the_invite_claim_window_defaults_to_seven_days(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset, only an account at most 168 hours old may claim (decision 264)."""
+    monkeypatch.delenv("INVITE_CLAIM_WINDOW_HOURS", raising=False)
+
+    assert Settings(_env_file=None).invite_claim_window_hours == 168  # type: ignore[call-arg]
+
+
+def test_the_invite_claim_window_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INVITE_CLAIM_WINDOW_HOURS", "2")
+
+    assert Settings(_env_file=None).invite_claim_window_hours == 2  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "seven", "1.5", "8761"])
+def test_an_invite_claim_window_that_is_not_a_positive_whole_hour_refuses_to_boot(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Zero would refuse every claim and a typo nothing, both silently."""
+    monkeypatch.setenv("INVITE_CLAIM_WINDOW_HOURS", value)
+
+    with pytest.raises(PydanticValidationError, match="INVITE_CLAIM_WINDOW_HOURS"):
+        Settings(_env_file=None)  # type: ignore[call-arg]

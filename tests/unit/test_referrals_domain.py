@@ -10,6 +10,7 @@ from datetime import timedelta
 
 import pytest
 
+from app.core.config import Settings
 from app.domain.referrals import (
     CODE_LENGTH,
     DEFAULT_SUFFIX_LENGTH,
@@ -18,6 +19,7 @@ from app.domain.referrals import (
     MAX_CODE_LENGTH,
     RESERVED_HANDLES,
     RETIRED_CODE_HOLD,
+    claim_window,
     default_code,
     handle_problem,
     is_plausible_code,
@@ -208,3 +210,12 @@ class TestDefaultCode:
 
     def test_the_suffix_varies(self) -> None:
         assert len({default_code("Ada") for _ in range(20)}) > 1
+
+
+def test_the_claim_window_is_the_deployment_s_hours(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``claim_window`` is the one reader of `INVITE_CLAIM_WINDOW_HOURS`
+    (decision 264): seven days unset, the setting when set."""
+    monkeypatch.delenv("INVITE_CLAIM_WINDOW_HOURS", raising=False)
+    assert claim_window(Settings(_env_file=None)) == timedelta(days=7)  # type: ignore[call-arg]
+    short = Settings(_env_file=None, invite_claim_window_hours=2)  # type: ignore[call-arg]
+    assert claim_window(short) == timedelta(hours=2)

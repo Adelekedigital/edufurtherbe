@@ -35,6 +35,7 @@ from app.core.errors import (
     ConfigurationError,
     ConflictError,
     InsufficientCreditError,
+    InviteForNewAccountsError,
     JoinWindowClosedError,
     NotFoundError,
     OnboardingIncompleteError,
@@ -87,6 +88,7 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
 # without a request.
 TYPE_BY_ERROR: dict[type[AppError], str] = {
     AccountExistsError: "/problems/account-exists",
+    InviteForNewAccountsError: "/problems/invite-for-new-accounts",
     InsufficientCreditError: "/problems/insufficient-credit",
     OnboardingIncompleteError: "/problems/onboarding-incomplete",
     AlreadyReviewedError: "/problems/review-already-exists",
