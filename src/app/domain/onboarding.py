@@ -34,8 +34,16 @@ which opens a *recurring* grant and is why that gate is the stricter of the two.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal, get_args
 
-__all__ = ["ProfileEvidence", "may_complete_onboarding"]
+__all__ = ["STEPS", "OnboardingStep", "ProfileEvidence", "may_complete_onboarding"]
+
+#: The onboarding steps a client may record as ``last_step`` (decision 260), in
+#: flow order. The **only** list: mentor steps join it, never a second one. The
+#: request schema types its field with it, so the check and the published enum
+#: are one declaration.
+OnboardingStep = Literal["help", "plans"]
+STEPS: tuple[str, ...] = get_args(OnboardingStep)
 
 
 @dataclass(frozen=True, slots=True)

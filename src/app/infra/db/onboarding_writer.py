@@ -1,4 +1,4 @@
-"""Marking onboarding finished, and paying the credit that goes with it.
+"""Marking onboarding finished and paying its credit, and saving the last step.
 
 **This is the producer `profile_completed` did not have.** Before it,
 `user_onboarding.completed_at` was written by exactly one thing — the ETL — so
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import exists, func, select
@@ -38,7 +39,7 @@ from app.infra.db.models.user import UserOnboarding, UserProfile
 from app.infra.db.outbox import enqueue
 from app.infra.db.referral_writer import qualify_invitee
 
-__all__ = ["OnboardingResult", "complete_onboarding"]
+__all__ = ["OnboardingResult", "complete_onboarding", "record_last_step"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,3 +138,24 @@ async def complete_onboarding(
     await qualify_invitee(session, user_id, ladder=ladder)
 
     return OnboardingResult(completed_at=row.completed_at, last_step=row.last_step, granted=granted)
+
+
+async def record_last_step(session: AsyncSession, user_id: UUID, step: str) -> Any:
+    """Save where the caller got to, creating their row if needed. Does not commit.
+
+    One statement, so two first saves racing both land on the unique
+    ``user_id`` rather than one failing. **Only `last_step` is in the update**:
+    `completed_at` is the completion endpoint's, and a step saved after
+    finishing must neither clear nor move it. The step is checked against
+    `STEPS` at the boundary (decision 260). The race is pinned by
+    `test_two_first_saves_racing_both_land`.
+    """
+    statement = pg_insert(UserOnboarding).values(user_id=user_id, last_step=step)
+    return (
+        await session.execute(
+            statement.on_conflict_do_update(
+                index_elements=["user_id"],
+                set_={"last_step": statement.excluded.last_step},
+            ).returning(UserOnboarding.completed_at, UserOnboarding.last_step)
+        )
+    ).one()

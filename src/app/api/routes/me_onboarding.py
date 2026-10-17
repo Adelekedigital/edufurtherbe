@@ -1,4 +1,4 @@
-"""``POST /api/v1/me/onboarding/completion`` — finishing onboarding.
+"""``/api/v1/me/onboarding`` — where the caller got to, and finishing.
 
 **Its own module, and a fourth router on ``/api/v1/me``.** `users.py` is the
 signed-in user's record; this is a transition in their lifecycle that pays a
@@ -13,8 +13,9 @@ route that appears to allow it is a route somebody eventually calls.
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import CompletedOnboardingDep, OwnOnboardingDep
+from app.api.deps import CompletedOnboardingDep, OwnOnboardingDep, RecordedOnboardingStepDep
 from app.api.schemas.onboarding import OnboardingRead
+from app.domain.onboarding import STEPS
 
 router = APIRouter(prefix="/api/v1/me", tags=["onboarding"])
 
@@ -97,4 +98,33 @@ async def complete_onboarding(
     },
 )
 async def read_own_onboarding(onboarding: OwnOnboardingDep) -> OnboardingRead:
+    return OnboardingRead.model_validate(onboarding)
+
+
+@router.put(
+    "/onboarding",
+    response_model=OnboardingRead,
+    summary="Save the caller's onboarding step",
+    description=(
+        "Records where the caller got to, so a refresh resumes at the right "
+        'step. The body is `{"last_step": ...}`, one of '
+        + ", ".join(f"`{step}`" for step in STEPS)
+        + ". The record is created if the caller has none, and `200` returns it.\n\n"
+        "**The value sent is stored as sent**: moving back a step records the "
+        "earlier one. **`completed_at` is never set or cleared here**; finishing "
+        "is `POST /api/v1/me/onboarding/completion`, and a step saved after "
+        "finishing leaves the finish date unchanged.\n\n"
+        "`422` with `errors[].pointer` `/last_step` for an unknown, null or "
+        "missing step; any other field is a `422` too."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The bearer token is absent, malformed, expired or wrongly signed."
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": ("`last_step` is not a known step, or the body carries another field.")
+        },
+    },
+)
+async def save_onboarding_step(onboarding: RecordedOnboardingStepDep) -> OnboardingRead:
     return OnboardingRead.model_validate(onboarding)
