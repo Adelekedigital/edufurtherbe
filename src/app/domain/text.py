@@ -3,7 +3,9 @@
 **Unicode category C is never visible**: controls (Cc — a newline, a NUL),
 formats (Cf — a zero-width space, the right-to-left override that makes
 a name render with its letters reversed), private use (Co), surrogates (Cs)
-and unassigned code points (Cn). One predicate, because the question "is this
+and unassigned code points (Cn). **Nor are the two Unicode line breaks**, the
+line and paragraph separators (Zl, Zp), which break a line as `\n` does but
+are not category C. One predicate, because the question "is this
 character something a reader can see and a system can safely carry" has one
 answer: an uploaded filename strips them, a name refuses them, and both ask
 here.
@@ -20,11 +22,14 @@ __all__ = ["has_letter", "hidden_characters", "is_invisible", "visible_only"]
 #: keyboard), and Sinhala needs a ZWJ to form conjuncts.
 JOINERS = frozenset({chr(0x200C), chr(0x200D)})
 
+#: U+2028 and U+2029, the only members of these two categories.
+LINE_BREAKS = frozenset({"Zl", "Zp"})
+
 
 def is_invisible(character: str) -> bool:
-    """Whether `character` is a control, format, private-use, surrogate or
-    unassigned code point — anything in Unicode category C."""
-    return unicodedata.category(character).startswith("C")
+    """Whether `character` is in Unicode category C or is a line break."""
+    category = unicodedata.category(character)
+    return category.startswith("C") or category in LINE_BREAKS
 
 
 def visible_only(text: str) -> str:

@@ -540,7 +540,7 @@ class UserProfileWrite(Normalised):
     #:
     #: The `None` default is never validated or written — the writer takes
     #: `exclude_unset` — and it is what lets the spec say "a string, optional"
-    #: rather than "nullable", which is the contract. Hence the three ignores.
+    #: rather than "nullable", which is the contract. Hence these ignores.
     first_name: str = Field(  # type: ignore[assignment]
         default=None,
         max_length=MAX_NAME_LENGTH,
@@ -553,10 +553,14 @@ class UserProfileWrite(Normalised):
     )
     #: Both names as one string (decision 258), declared after them so the
     #: validator can see whether either was sent too. Not a column: the model
-    #: validator writes its parts to the two names, and the writer skips it.
+    #: validator writes its parts to the two names, and `exclude` keeps it out
+    #: of the writer's payload. The length bound only caps the request; the
+    #: rule is each part's, after composing, since spaces and decomposed
+    #: accents lengthen what is sent and not what is stored.
     full_name: str = Field(  # type: ignore[assignment]
         default=None,
-        max_length=2 * MAX_NAME_LENGTH + 1,
+        max_length=10 * MAX_NAME_LENGTH,
+        exclude=True,
         description=(
             "Your first and last name as one string, split on the first word: "
             '"Damilola Ade Ogunleye" saves first name `Damilola` and last name '
@@ -625,18 +629,14 @@ class UserProfileWrite(Normalised):
         # default, and one sent and invalid is absent and already a `422`.
         if info.data.get("first_name") is not None or info.data.get("last_name") is not None:
             raise ValueError("send `full_name` or `first_name` and `last_name`, not both")
-        parts = split_full_name(value)
-        if parts is None:
-            raise ValueError("enter a first and a last name, separated by a space")
-        return " ".join(_a_visible_name(part) for part in parts)
+        return " ".join(_a_visible_name(part) for part in split_full_name(value))
 
     @model_validator(mode="after")
     def _full_name_to_parts(self) -> UserProfileWrite:
-        # The field validator returned the first name, one space, then the
-        # rest, so the first space is the split. Assigning marks both names as
-        # set, so `exclude_unset` sends them on.
+        # Split again by the same rule, which gives back the validated parts.
+        # Assigning marks both names as set, so `exclude_unset` sends them on.
         if "full_name" in self.model_fields_set:
-            self.first_name, _, self.last_name = self.full_name.partition(" ")
+            self.first_name, self.last_name = split_full_name(self.full_name)
         return self
 
     @field_validator("timezone")

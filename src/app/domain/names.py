@@ -14,13 +14,13 @@ from __future__ import annotations
 __all__ = ["split_full_name"]
 
 
-def split_full_name(value: str) -> tuple[str, str] | None:
-    """The first word and the rest, or `None` for fewer than two words.
+def split_full_name(value: str) -> tuple[str, str]:
+    """The first word and the rest; `ValueError` for fewer than two words.
 
     Words are split on any run of whitespace, so the stored last name has
     single spaces between its words.
     """
     words = value.split()
     if len(words) < 2:
-        return None
+        raise ValueError("enter a first and a last name, separated by a space")
     return words[0], " ".join(words[1:])

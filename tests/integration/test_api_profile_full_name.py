@@ -71,6 +71,7 @@ async def test_a_blank_or_single_word_full_name_is_refused(
     [
         "Grace\nHopper",
         "Grace\tHopper",
+        "Grace\u2028Hopper",
         "Grace\u202eHopper x",
         "Grace \u200b",
         "Grace ---",
@@ -79,6 +80,7 @@ async def test_a_blank_or_single_word_full_name_is_refused(
     ids=[
         "newline",
         "tab",
+        "line-separator",
         "rtl-override",
         "zero-width-part",
         "letterless-last",
@@ -130,6 +132,22 @@ async def test_a_full_name_with_a_part_is_refused(
     assert response.status_code == 422
     assert "/full_name" in pointers(response)
     assert await names_of(db_engine, user_id) == ("Ada", None)
+
+
+async def test_the_limit_is_on_the_parts_not_the_raw_string(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Extra spaces and decomposed accents lengthen what is sent, not what is
+    stored: two names at the limit still fit."""
+    user_id, headers = await a_user(db_engine, "raw")
+    at_limit = "e\u0301" * MAX_NAME_LENGTH
+
+    response = await api_client.patch(
+        url(user_id, "profile"), json={"full_name": f"{at_limit}   {at_limit}"}, headers=headers
+    )
+
+    assert response.status_code == 204
+    assert await names_of(db_engine, user_id) == ("\u00e9" * MAX_NAME_LENGTH,) * 2
 
 
 async def test_each_part_keeps_the_name_limit(
