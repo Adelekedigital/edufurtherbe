@@ -232,7 +232,10 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "the whole of the anti-farming property. Completion is therefore "
             "refused with `409` and the problem type "
             "`/problems/onboarding-incomplete` until the caller has a profile "
-            "and a role-appropriate profile beside it.\n\n"
+            "and a finished role beside it: a mentor profile, or a mentee goal "
+            "with every answer given (a help area, an origin country, a degree "
+            "goal and a field of study). The problem's `missing` member names "
+            "what is owed, as `GET /api/v1/me` → `onboarding` does.\n\n"
             "The credit itself is one, it never expires, and it appears under "
             "`credits` on `GET /api/v1/me`."
         ),

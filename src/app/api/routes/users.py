@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep, RefundPolicyDep
+from app.api.schemas.onboarding import OnboardingStatusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import BookingCountsRead, CreditsRead, UserProfileRead, UserRead
 
@@ -116,6 +117,7 @@ async def read_me(
         # mentee half is everyone's: the card and `as_mentee`.
         credits=CreditsRead.model_validate(attributes["credits"]),
         mentee_completed_sessions=attributes["mentee_completed_sessions"],
+        onboarding=OnboardingStatusRead.of(*attributes["onboarding"]),
         booking_counts=BookingCountsRead.of(
             attributes["booking_counts"],
             mentor=mentor_profile is not None,

@@ -68,7 +68,18 @@ class OnboardingIncompleteError(ConflictError):
     Carries a problem type, because the client's response differs from every
     other refusal on this route — send the user back to the profile form, never
     retry. That is the bar settled decision #110 set for earning one.
+
+    `missing` names the mentee requirements still owed, in step order, sent as
+    the `missing` extension member (decision 261). Plain strings, because
+    `core` imports nothing: the caller passes the domain's codes.
     """
+
+    def __init__(self, message: str = "", *, missing: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.missing = missing
+
+    def problem_members(self) -> dict[str, object]:
+        return {"missing": list(self.missing)}
 
 
 class AlreadyReviewedError(ConflictError):

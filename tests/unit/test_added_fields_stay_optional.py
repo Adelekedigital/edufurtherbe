@@ -17,7 +17,7 @@ from app.main import create_app
 ADDED = {
     "PartyRead": ("in_room_at", "degree", "institution"),
     "SessionRead": ("mentee_attendance_sessions", "refund_until"),
-    "UserRead": ("mentee_cancel_refund_hours",),
+    "UserRead": ("mentee_cancel_refund_hours", "onboarding"),
     "GoalRead": ("field_of_study",),
     "SessionTypeRead": ("requires_booking_confirmation",),
     "SessionAnswerRead": ("answered", "required"),

@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import add_user, api_token, bearer
+from conftest import add_user, api_token, bearer, give_mentee_answers
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -28,6 +28,7 @@ async def seed(
     profile: bool = True,
     goal: bool = True,
     mentor: bool = False,
+    answers: bool = True,
 ) -> UUID:
     async with engine.begin() as conn:
         user_id = await add_user(
@@ -46,6 +47,8 @@ async def seed(
             await conn.execute(
                 text("INSERT INTO mentee_goals (user_id) VALUES (:u)"), {"u": user_id}
             )
+        if profile and goal and answers:
+            await give_mentee_answers(conn, user_id)
         if mentor:
             await conn.execute(
                 text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'Mentor')"),

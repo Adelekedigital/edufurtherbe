@@ -414,6 +414,36 @@ async def db_engine(migrated_database: str) -> AsyncIterator[AsyncEngine]:
 # --------------------------------------------------------------------------
 
 
+async def give_mentee_answers(conn: AsyncConnection, user_id: uuid.UUID) -> None:
+    """Every answer a mentee owes to finish onboarding (decision 261): a live
+    help area, an origin country, a degree goal and a field of study.
+
+    Expects the profile and goal rows to exist. The one fixture for "a mentee
+    who finished the questions", so a new requirement is added in one place.
+    """
+    await conn.execute(
+        text(
+            "UPDATE user_profiles SET origin_country_id = "
+            "(SELECT id FROM countries ORDER BY code LIMIT 1) WHERE user_id = :u"
+        ),
+        {"u": user_id},
+    )
+    await conn.execute(
+        text(
+            "UPDATE mentee_goals SET field_of_study = 'Computer Science', degree_goal_id = "
+            "(SELECT id FROM degree_levels ORDER BY slug LIMIT 1) WHERE user_id = :u"
+        ),
+        {"u": user_id},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO mentee_goal_needs (user_id, service_offering_id) "
+            "SELECT :u, id FROM service_offerings WHERE is_active ORDER BY slug LIMIT 1"
+        ),
+        {"u": user_id},
+    )
+
+
 async def add_user(
     conn: AsyncConnection,
     email: str,
