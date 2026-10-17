@@ -397,10 +397,21 @@ class MenteeGoal(TimestampMixin, Base):
         Uuid, ForeignKey("degree_levels.id", ondelete="RESTRICT")
     )
     degree_goal_raw: Mapped[str | None] = mapped_column(Text)
+    #: What the mentee wants to study, as they picked or typed it (decision
+    #: 259). Text rather than a reference: the package's `user_tags` is
+    #: deferred, and a typed answer is kept as typed.
+    field_of_study: Mapped[str | None] = mapped_column(Text)
     target_start_term: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
 
     legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "field_of_study IS NULL OR char_length(field_of_study) BETWEEN 1 AND 100",
+            name="field_of_study_length",
+        ),
+    )
 
 
 class MenteeGoalCountry(TimestampMixin, Base):
