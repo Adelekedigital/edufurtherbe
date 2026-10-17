@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_writes import make_user, url
 
-from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
+from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH, FIELD_OF_STUDY_SUGGESTIONS
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -144,3 +144,19 @@ async def test_the_database_bound_is_the_api_bound(db_engine: AsyncEngine) -> No
         ).scalar_one()
 
     assert f"<= {FIELD_OF_STUDY_MAX_LENGTH})" in definition
+
+
+async def test_every_suggestion_saves_through_the_goal_write(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Each `/catalog/fields-of-study` suggestion (decision 262), saved as picked:
+    the boundary and the column's `CHECK` both accept it, stored unchanged."""
+    user_id, headers = await a_mentee(db_engine, "suggested")
+
+    for name in FIELD_OF_STUDY_SUGGESTIONS:
+        response = await api_client.put(
+            url(user_id, "goal"), json={"field_of_study": name}, headers=headers
+        )
+
+        assert response.status_code == 200, name
+        assert await stored(db_engine, user_id) == name

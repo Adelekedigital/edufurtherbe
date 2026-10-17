@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.domain.goals import FIELD_OF_STUDY_SUGGESTIONS
 from conftest import add_user
 
 pytestmark = pytest.mark.db
@@ -467,6 +468,21 @@ async def test_the_catalogue_route_does_not_shadow_me(
     cannot. Without a token `/me` is 401 — a 404 would mean the catch-all ate it.
     """
     assert (await api_client.get("/api/v1/me")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_the_suggestions_route_and_a_lookup_both_answer(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """`/catalog/fields-of-study` sits beside `/catalog/{catalogue}` (decision
+    262): each must still reach its own handler, against a real database."""
+    suggestions = await api_client.get(f"{CATALOG}/fields-of-study")
+    levels = await api_client.get(f"{CATALOG}/degree-levels")
+
+    assert suggestions.status_code == 200
+    assert suggestions.json()["data"][0] == {"name": FIELD_OF_STUDY_SUGGESTIONS[0]}
+    assert levels.status_code == 200
+    assert {"id", "display_name", "code"} <= set(levels.json()["data"][0])
 
 
 @pytest.mark.asyncio

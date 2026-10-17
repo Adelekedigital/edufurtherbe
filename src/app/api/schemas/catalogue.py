@@ -115,3 +115,14 @@ class LookupRead(BaseModel):
             # signature would remove the checking from all of them.
             short_forms=list(cast("Sequence[str]", row.get("short_forms") or ())),
         )
+
+
+class FieldOfStudySuggestionRead(BaseModel):
+    """One suggestion for "What do you want to study?".
+
+    A name and nothing else: the list is a constant, not rows, so there is no id
+    to hand out and nothing a goal could reference. The mentee's answer is saved
+    as text (decision 259), whether it came from here or was typed.
+    """
+
+    name: str
