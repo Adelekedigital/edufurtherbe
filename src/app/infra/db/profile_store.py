@@ -122,6 +122,7 @@ async def get_goal(session: AsyncSession, user_id: UUID) -> dict[str, Any] | Non
             select(
                 MenteeGoal.id,
                 MenteeGoal.degree_goal_raw,
+                MenteeGoal.field_of_study,
                 MenteeGoal.target_start_term,
                 MenteeGoal.notes,
                 DegreeLevel.id.label("degree_goal_ref_id"),

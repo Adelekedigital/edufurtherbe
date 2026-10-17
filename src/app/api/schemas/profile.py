@@ -44,6 +44,7 @@ from app.domain.availability import (
     BookingWindow,
 )
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
+from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
 from app.domain.names import split_full_name
 from app.domain.text import has_letter, hidden_characters
 
@@ -152,6 +153,9 @@ class GoalRead(BaseModel):
     id: UUID
     degree_goal: LookupRef | None = None
     degree_goal_raw: str | None = None
+    field_of_study: str | None = Field(
+        default=None, description="What the mentee wants to study, as they picked or typed it."
+    )
     target_start_term: str | None = None
     notes: str | None = None
     countries: list[GoalCountryRead] = []
@@ -167,6 +171,7 @@ class GoalRead(BaseModel):
                 row.get("degree_goal_name"),
             ),
             degree_goal_raw=row.get("degree_goal_raw"),
+            field_of_study=row.get("field_of_study"),
             target_start_term=row.get("target_start_term"),
             notes=row.get("notes"),
             countries=[
@@ -401,10 +406,29 @@ class GoalWrite(Normalised):
 
     degree_goal_id: UUID | None = None
     degree_goal_raw: str | None = Field(default=None, max_length=100)
+    #: Decision 259. `null` or a blank clears it; omitted leaves it. Composed
+    #: and measured after composing, like a name; the raw bound only caps the
+    #: request.
+    field_of_study: str | None = Field(
+        default=None,
+        max_length=4 * FIELD_OF_STUDY_MAX_LENGTH,
+        description=(
+            "What you want to study: a suggestion or your own words, at most "
+            f"{FIELD_OF_STUDY_MAX_LENGTH} characters. `null` clears it."
+        ),
+        examples=["Computer Science"],
+    )
     target_start_term: str | None = Field(default=None, max_length=50)
     notes: str | None = Field(default=None, max_length=2000)
     country_ids: list[UUID] | None = None
     need_ids: list[UUID] | None = None
+
+    @field_validator("field_of_study")
+    @classmethod
+    def _visible_field(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _composed_visible(value, "a field of study", FIELD_OF_STUDY_MAX_LENGTH)
 
 
 class AwardWrite(Normalised):
@@ -487,9 +511,22 @@ class MentorProfileWrite(Normalised):
 MAX_NAME_LENGTH = 100
 
 
-def _refuse_hidden(value: str) -> None:
+def _refuse_hidden(value: str, what: str = "a name") -> None:
     if hidden_characters(value):
-        raise ValueError("a name cannot contain control or invisible characters")
+        raise ValueError(f"{what} cannot contain control or invisible characters")
+
+
+def _composed_visible(value: str, what: str, max_length: int) -> str:
+    """Typed text as a person would read it: composed (NFC), no hidden
+    characters, at least one letter, and at most `max_length` after composing.
+    One rule for names and a field of study; `what` names it in the message."""
+    composed = unicodedata.normalize("NFC", value)
+    _refuse_hidden(composed, what)
+    if not has_letter(composed):
+        raise ValueError(f"{what} needs at least one letter")
+    if len(composed) > max_length:
+        raise ValueError(f"{what} can be at most {max_length} characters")
+    return composed
 
 
 def _a_visible_name(value: str) -> str:
@@ -504,13 +541,7 @@ def _a_visible_name(value: str) -> str:
     can lengthen a name and the bound is on what is stored. A name must hold a
     letter, in any script — `---` is not one.
     """
-    composed = unicodedata.normalize("NFC", value)
-    _refuse_hidden(composed)
-    if not has_letter(composed):
-        raise ValueError("a name needs at least one letter")
-    if len(composed) > MAX_NAME_LENGTH:
-        raise ValueError(f"a name can be at most {MAX_NAME_LENGTH} characters")
-    return composed
+    return _composed_visible(value, "a name", MAX_NAME_LENGTH)
 
 
 class UserProfileWrite(Normalised):

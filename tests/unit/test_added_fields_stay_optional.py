@@ -18,6 +18,7 @@ ADDED = {
     "PartyRead": ("in_room_at", "degree", "institution"),
     "SessionRead": ("mentee_attendance_sessions", "refund_until"),
     "UserRead": ("mentee_cancel_refund_hours",),
+    "GoalRead": ("field_of_study",),
     "SessionTypeRead": ("requires_booking_confirmation",),
     "SessionAnswerRead": ("answered", "required"),
     # New with the mentor dashboard (decision 246): every figure optional from
