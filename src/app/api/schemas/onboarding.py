@@ -1,10 +1,17 @@
-"""What onboarding returns, and the step a client records."""
+"""What onboarding returns, the step a client records, and where the caller stands."""
+
+from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.onboarding import OnboardingStep
+from app.domain.onboarding import (
+    OnboardingRequirement,
+    OnboardingStep,
+    ProfileEvidence,
+    missing_requirements,
+)
 
 
 class OnboardingRead(BaseModel):
@@ -47,3 +54,27 @@ class OnboardingStepWrite(BaseModel):
     #: Exactly one of `domain.onboarding.STEPS`, case-sensitive. Typed with the
     #: domain's `Literal`, so the check and the published enum cannot disagree.
     last_step: OnboardingStep
+
+
+class OnboardingStatusRead(BaseModel):
+    """Where the caller stands on onboarding, for `GET /me` (decision 261).
+
+    `complete` is whether they finished (`completed_at` is set). `missing` is
+    what the mentee rule still lacks, in step order, by the same rule the
+    completion endpoint refuses on. The two are separate facts: a user who
+    finished under an earlier rule stays complete while `missing` names what
+    the current one would ask.
+    """
+
+    complete: bool = Field(description="Whether onboarding is finished.")
+    missing: list[OnboardingRequirement] = Field(
+        description=(
+            "The mentee answers still owed, in step order: `help` (at least one "
+            "help area), `origin`, `degree` (a degree goal) and `field` (a field of "
+            "study). Empty when all are given. Open the first one's step."
+        )
+    )
+
+    @classmethod
+    def of(cls, evidence: ProfileEvidence, completed: bool) -> OnboardingStatusRead:
+        return cls(complete=completed, missing=list(missing_requirements(evidence)))

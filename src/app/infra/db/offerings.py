@@ -35,6 +35,7 @@ from app.infra.db.models.mentoring import (
 __all__ = [
     "goal_overlap_count",
     "has_live_goals",
+    "live_goal_exists",
     "live_offering_slugs",
     "offerings_for",
     "offerings_for_session_types",
@@ -136,10 +137,18 @@ def goal_overlap_count(mentor_user_id: Any, mentee: UUID) -> Any:
     )
 
 
+def live_goal_exists(mentee: UUID) -> Any:
+    """`EXISTS` a live goal need for this mentee, for a statement to embed.
+
+    The one definition: browse's goal ranking and onboarding completion's help
+    requirement both ask it (decision 261)."""
+    return exists().where(*_live_goals(mentee))
+
+
 async def has_live_goals(session: AsyncSession, mentee: UUID) -> bool:
     """Whether this mentee has any live goal — what turns browse into the goal
     ranking. An empty goal row, or one naming only retired offerings, is no goal."""
-    statement = select(exists().where(*_live_goals(mentee)))
+    statement = select(live_goal_exists(mentee))
     return bool((await session.execute(statement)).scalar_one())
 
 

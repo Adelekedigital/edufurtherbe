@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import add_user, api_token, bearer
+from conftest import add_user, api_token, bearer, give_mentee_answers
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -42,6 +42,7 @@ async def seed(engine: AsyncEngine, auth_id: UUID, *, complete: bool = True) -> 
             await conn.execute(
                 text("INSERT INTO mentee_goals (user_id) VALUES (:u)"), {"u": user_id}
             )
+            await give_mentee_answers(conn, user_id)
         return UUID(str(user_id))
 
 

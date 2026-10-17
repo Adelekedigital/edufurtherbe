@@ -64,7 +64,7 @@ from app.infra.db.invite_links import (
     pick_handle,
     set_link_active,
 )
-from app.infra.db.onboarding_store import get_onboarding
+from app.infra.db.onboarding_store import get_onboarding, onboarding_state
 from app.infra.db.onboarding_writer import (
     OnboardingResult,
     complete_onboarding,
@@ -206,6 +206,8 @@ async def own_attributes(
         # Everyone's: anyone signed in may book and spend.
         "credits": await get_credit_summary(session, user_id, ladder=ladder),
         "mentee_completed_sessions": await mentee_completed_sessions(session, user_id),
+        # Completion's own facts, so `/me` and the `409` cannot disagree.
+        "onboarding": await onboarding_state(session, user_id),
     }
 
 

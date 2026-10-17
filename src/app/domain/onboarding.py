@@ -13,37 +13,51 @@ asymmetry is the whole anti-farming property, and it is the one the package's D9
 was reaching for without having: D9 gated a flat ladder behind a referral, which
 costs an attacker one throwaway address.
 
-THE BAR IS ROW EXISTENCE, AND THAT IS DELIBERATELY TEMPORARY
-============================================================
-``user_profiles`` and ``mentee_goals`` have **no required columns** — everything
-but ``user_id`` is nullable — so "complete" cannot mean "filled in" today
-without this module inventing a field policy the rest of the codebase does not
-have. It means: a profile row, and a role-appropriate profile beside it.
+THE MENTEE BAR IS FOUR ANSWERS
+==============================
+A mentee finishes with at least one live help area, an origin country, a degree
+goal and a field of study (Mentee Onboarding v5 B3, decision 261) — the answers
+matching ranks on, so the credit pays for a profile a mentor can be matched to.
+Before that the bar was row existence, which two nearly empty rows met. A
+mentor's bar is unchanged: a profile and a mentor profile (PRD H7).
 
-This is the same shape settled decision 20 takes for a qualifying invite, and it
-is recorded the same way: weak on purpose, and **tightening it is a predicate
-change here rather than a migration**. When the onboarding flow gains a defined
-set of required steps, this is the one function that learns about them.
-
-The accepted risk is named rather than waved at: a determined attacker can post
-two nearly-empty rows and collect one non-expiring credit. One credit, once, per
-account that also has to pass email verification — against a referral unlock,
-which opens a *recurring* grant and is why that gate is the stricter of the two.
+`missing_requirements` names what is still owed, in the order the flow asks
+for it, so the refusal and `/me` tell the client which step to open.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, get_args
 
-__all__ = ["STEPS", "OnboardingStep", "ProfileEvidence", "may_complete_onboarding"]
-
+__all__ = [
+    "STEPS",
+    "OnboardingRequirement",
+    "OnboardingStep",
+    "ProfileEvidence",
+    "may_complete_onboarding",
+    "missing_requirements",
+]
 #: The onboarding steps a client may record as ``last_step`` (decision 260), in
 #: flow order. The **only** list: mentor steps join it, never a second one. The
 #: request schema types its field with it, so the check and the published enum
 #: are one declaration.
 OnboardingStep = Literal["help", "plans"]
 STEPS: tuple[str, ...] = get_args(OnboardingStep)
+
+
+class OnboardingRequirement(StrEnum):
+    """What a mentee must answer to finish onboarding, in the flow's order.
+
+    The values are published: the `409` and `/me` name them, and the client
+    opens the first one's step.
+    """
+
+    HELP = "help"
+    ORIGIN = "origin"
+    DEGREE = "degree"
+    FIELD = "field"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,20 +71,36 @@ class ProfileEvidence:
     has_profile: bool
     has_mentee_goal: bool
     has_mentor_profile: bool
+    #: A goal need whose offering the platform still offers.
+    has_live_need: bool
+    has_origin: bool
+    has_degree_goal: bool
+    has_field_of_study: bool
+
+
+def missing_requirements(evidence: ProfileEvidence) -> tuple[OnboardingRequirement, ...]:
+    """The mentee requirements not yet met, in `OnboardingRequirement` order."""
+    met = {
+        OnboardingRequirement.HELP: evidence.has_live_need,
+        OnboardingRequirement.ORIGIN: evidence.has_origin,
+        OnboardingRequirement.DEGREE: evidence.has_degree_goal,
+        OnboardingRequirement.FIELD: evidence.has_field_of_study,
+    }
+    return tuple(requirement for requirement in OnboardingRequirement if not met[requirement])
 
 
 def may_complete_onboarding(evidence: ProfileEvidence) -> bool:
     """Whether this user has done enough to finish onboarding.
 
-    **Both halves, not either.** A profile row *and* a role-appropriate profile:
-    the profile is what a mentor reads before accepting, and the goal or mentor
-    profile is what makes the account usable at all. A predicate written with
-    ``or`` where it meant ``and`` still passes every positive case, which is why
-    the incomplete combinations are enumerated in the tests rather than sampled.
+    **A profile, and a finished role.** The profile is what a mentor reads
+    before accepting; the role is a mentor profile, or a mentee goal with every
+    requirement met. A predicate written with ``or`` where it meant ``and``
+    still passes every positive case, which is why each missing requirement is
+    enumerated in the tests rather than sampled.
 
     **Role-appropriate rather than mentee-only.** A mentor finishes onboarding
-    too, and gating on a mentee goal alone would hand the starter only to the
-    half of the platform that spends it — reasonable-sounding until a dual-role
-    user is refused for having done the mentor half first.
+    too, and gating on the mentee answers would refuse the half of the platform
+    that does not book — and a dual-role user who did the mentor half first.
     """
-    return evidence.has_profile and (evidence.has_mentee_goal or evidence.has_mentor_profile)
+    mentee_done = evidence.has_mentee_goal and not missing_requirements(evidence)
+    return evidence.has_profile and (mentee_done or evidence.has_mentor_profile)

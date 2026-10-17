@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.schemas.catalogue import CountryRef
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, StoredEmail, XRead, YouTubeRead
+from app.api.schemas.onboarding import OnboardingStatusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.domain.emails import normalise_email
 from app.domain.enums import CoverArt, CoverColor, CreditState, PrimaryRole
@@ -249,6 +250,13 @@ class UserRead(NormalisedEmail):
     #: dashboard headings. `as_mentee` is always present; only `as_mentor` needs
     #: a mentor profile (decision 228).
     booking_counts: BookingCountsRead = Field(default_factory=lambda: BookingCountsRead())
+    onboarding: OnboardingStatusRead | None = Field(
+        default=None,
+        description=(
+            "Whether the caller finished onboarding, and which mentee answers are "
+            "still owed. Decides home or onboarding after sign-in (decision 261)."
+        ),
+    )
     mentee_cancel_refund_hours: int = Field(
         default=12,
         description=(

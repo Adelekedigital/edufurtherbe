@@ -33,7 +33,8 @@ COMPLETION_RESPONSES: dict[int | str, dict[str, str]] = {
         "description": (
             "The profile does not yet meet the bar. Carries the problem type "
             "`/problems/onboarding-incomplete`, which means send the user back "
-            "to the profile form — retrying the same request cannot succeed."
+            "to the profile form — retrying the same request cannot succeed. "
+            "`missing` lists the mentee answers still owed, in step order."
         )
     },
 }
@@ -54,9 +55,14 @@ COMPLETION_RESPONSES: dict[int | str, dict[str, str]] = {
         "succeed.\n\n"
         "Refused with `409` and the problem type "
         "`/problems/onboarding-incomplete` unless the caller has a profile and "
-        "a role-appropriate profile beside it — a mentee goal or a mentor "
-        "profile. The starter is granted for finishing a profile rather than "
-        "for signing up, because signing up is free and finishing one is work.\n\n"
+        "a finished role beside it: a mentor profile, or a mentee goal with "
+        "every answer given (at least one help area that is still offered, an "
+        "origin country, a degree goal and a field of study). The problem's "
+        "`missing` member names the mentee answers still owed, in step order "
+        "(`help`, `origin`, `degree`, `field`), and `/me` → `onboarding` "
+        "reports the same list. The starter is granted for finishing a profile "
+        "rather than for signing up, because signing up is free and finishing "
+        "one is work.\n\n"
         "The credit appears on `GET /api/v1/me` under `credits`."
     ),
     responses=COMPLETION_RESPONSES,

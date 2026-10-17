@@ -25,17 +25,17 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import OnboardingIncompleteError
 from app.domain.credits import CreditLadder
 from app.domain.notifications import Notification
-from app.domain.onboarding import ProfileEvidence, may_complete_onboarding
+from app.domain.onboarding import may_complete_onboarding, missing_requirements
 from app.infra.db.credit_writer import grant_starter
-from app.infra.db.models.mentoring import MenteeGoal, MentorProfile
-from app.infra.db.models.user import UserOnboarding, UserProfile
+from app.infra.db.models.user import UserOnboarding
+from app.infra.db.onboarding_store import onboarding_evidence
 from app.infra.db.outbox import enqueue
 from app.infra.db.referral_writer import qualify_invitee
 
@@ -58,30 +58,6 @@ class OnboardingResult:
     granted: bool
 
 
-async def _evidence(session: AsyncSession, user_id: UUID) -> ProfileEvidence:
-    """Three existence checks in one round trip.
-
-    ``EXISTS`` rather than fetching the rows: nothing here needs a column, and
-    selecting one would invite somebody to start reading it and quietly widen
-    the predicate the domain rule owns.
-    """
-    row = (
-        await session.execute(
-            select(
-                exists().where(UserProfile.user_id == user_id).label("profile"),
-                exists().where(MenteeGoal.user_id == user_id).label("goal"),
-                exists().where(MentorProfile.user_id == user_id).label("mentor"),
-            )
-        )
-    ).one()
-
-    return ProfileEvidence(
-        has_profile=bool(row.profile),
-        has_mentee_goal=bool(row.goal),
-        has_mentor_profile=bool(row.mentor),
-    )
-
-
 async def complete_onboarding(
     session: AsyncSession, user_id: UUID, *, ladder: CreditLadder
 ) -> OnboardingResult:
@@ -91,8 +67,12 @@ async def complete_onboarding(
     bar — a refusal the caller must answer by sending the user back to finish,
     never by retrying, which is why it carries its own problem type.
     """
-    if not may_complete_onboarding(await _evidence(session, user_id)):
-        raise OnboardingIncompleteError("Finish your profile before completing onboarding.")
+    evidence = await onboarding_evidence(session, user_id)
+    if not may_complete_onboarding(evidence):
+        raise OnboardingIncompleteError(
+            "Finish your profile before completing onboarding.",
+            missing=missing_requirements(evidence),
+        )
 
     # **Keeps the first timestamp.** `COALESCE` on the existing value rather
     # than `EXCLUDED`, so re-finishing does not move the date somebody actually
