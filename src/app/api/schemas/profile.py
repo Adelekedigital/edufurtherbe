@@ -46,6 +46,7 @@ from app.domain.availability import (
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
 from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
 from app.domain.names import split_full_name
+from app.domain.profile_text import ABOUT_ME_MAX_LENGTH
 from app.domain.text import has_letter, hidden_characters
 
 
@@ -601,7 +602,11 @@ class UserProfileWrite(Normalised):
         ),
         examples=["Damilola Ade Ogunleye"],
     )
-    about_me: str | None = Field(default=None, max_length=5000)
+    about_me: str | None = Field(
+        default=None,
+        max_length=ABOUT_ME_MAX_LENGTH,
+        description=f"Your bio, at most {ABOUT_ME_MAX_LENGTH} characters. `null` clears it.",
+    )
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None
     #: A mentor's own crop (#214): overrides the detected face and survives the
