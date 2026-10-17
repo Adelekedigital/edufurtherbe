@@ -34,6 +34,7 @@ from app.domain.enums import (
     MentorStatusType,
     OptionSource,
 )
+from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -408,7 +409,8 @@ class MenteeGoal(TimestampMixin, Base):
 
     __table_args__ = (
         CheckConstraint(
-            "field_of_study IS NULL OR char_length(field_of_study) BETWEEN 1 AND 100",
+            "field_of_study IS NULL OR char_length(field_of_study) "
+            f"BETWEEN 1 AND {FIELD_OF_STUDY_MAX_LENGTH}",
             name="field_of_study_length",
         ),
     )

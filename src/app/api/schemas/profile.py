@@ -44,6 +44,7 @@ from app.domain.availability import (
     BookingWindow,
 )
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
+from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
 from app.domain.names import split_full_name
 from app.domain.text import has_letter, hidden_characters
 
@@ -152,6 +153,9 @@ class GoalRead(BaseModel):
     id: UUID
     degree_goal: LookupRef | None = None
     degree_goal_raw: str | None = None
+    field_of_study: str | None = Field(
+        default=None, description="What the mentee wants to study, as they picked or typed it."
+    )
     target_start_term: str | None = None
     notes: str | None = None
     countries: list[GoalCountryRead] = []
@@ -167,6 +171,7 @@ class GoalRead(BaseModel):
                 row.get("degree_goal_name"),
             ),
             degree_goal_raw=row.get("degree_goal_raw"),
+            field_of_study=row.get("field_of_study"),
             target_start_term=row.get("target_start_term"),
             notes=row.get("notes"),
             countries=[
@@ -401,10 +406,36 @@ class GoalWrite(Normalised):
 
     degree_goal_id: UUID | None = None
     degree_goal_raw: str | None = Field(default=None, max_length=100)
+    #: Decision 259. `null` or a blank clears it; omitted leaves it. Composed
+    #: and measured after composing, like a name; the raw bound only caps the
+    #: request.
+    field_of_study: str | None = Field(
+        default=None,
+        max_length=4 * FIELD_OF_STUDY_MAX_LENGTH,
+        description=(
+            "What you want to study: a suggestion or your own words, at most "
+            f"{FIELD_OF_STUDY_MAX_LENGTH} characters. `null` clears it."
+        ),
+        examples=["Computer Science"],
+    )
     target_start_term: str | None = Field(default=None, max_length=50)
     notes: str | None = Field(default=None, max_length=2000)
     country_ids: list[UUID] | None = None
     need_ids: list[UUID] | None = None
+
+    @field_validator("field_of_study")
+    @classmethod
+    def _visible_field(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        composed = unicodedata.normalize("NFC", value)
+        if hidden_characters(composed):
+            raise ValueError("a field of study cannot contain control or invisible characters")
+        if len(composed) > FIELD_OF_STUDY_MAX_LENGTH:
+            raise ValueError(
+                f"a field of study can be at most {FIELD_OF_STUDY_MAX_LENGTH} characters"
+            )
+        return composed
 
 
 class AwardWrite(Normalised):

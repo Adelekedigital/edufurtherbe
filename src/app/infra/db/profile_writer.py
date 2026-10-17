@@ -49,7 +49,13 @@ from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.user import User, UserLanguage, UserProfile
 from app.infra.db.outbox import enqueue
 
-GOAL_COLUMNS = ("degree_goal_id", "degree_goal_raw", "target_start_term", "notes")
+GOAL_COLUMNS = (
+    "degree_goal_id",
+    "degree_goal_raw",
+    "field_of_study",
+    "target_start_term",
+    "notes",
+)
 AWARD_COLUMNS = (
     "title",
     "institution",
