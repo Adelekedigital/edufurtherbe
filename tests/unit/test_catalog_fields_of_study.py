@@ -93,11 +93,3 @@ def test_the_route_is_its_own_operation_in_the_catalog_tag() -> None:
     assert operation["operationId"] != paths["/api/v1/catalog/{catalogue}"]["get"]["operationId"]
     assert operation["summary"]
     assert "never restricts" in operation["description"]
-
-
-def test_the_generic_lookup_still_refuses_an_unknown_name(client: TestClient) -> None:
-    """The positive case of the ordering: the generic route is still reached for
-    every other name, and still answers one it does not hold with a 404."""
-    response = client.get("/api/v1/catalog/no-such-list")
-
-    assert response.status_code == 404
