@@ -28,6 +28,7 @@ from app.api.schemas.common import (
     clamp_limit,
     decode_cursor,
 )
+from app.api.schemas.onboarding import OnboardingStepWrite
 from app.api.schemas.profile import (
     AwardPatch,
     AwardWrite,
@@ -64,7 +65,11 @@ from app.infra.db.invite_links import (
     set_link_active,
 )
 from app.infra.db.onboarding_store import get_onboarding
-from app.infra.db.onboarding_writer import OnboardingResult, complete_onboarding
+from app.infra.db.onboarding_writer import (
+    OnboardingResult,
+    complete_onboarding,
+    record_last_step,
+)
 from app.infra.db.pending_requests import booking_counts
 from app.infra.db.profile_store import (
     get_goal,
@@ -312,6 +317,22 @@ async def own_onboarding(user: CurrentUserDep, session: SessionDep) -> Any:
 
 
 OwnOnboardingDep = Annotated[Any, Depends(own_onboarding)]
+
+
+async def recorded_onboarding_step(
+    payload: OnboardingStepWrite, user: CurrentUserDep, session: SessionDep
+) -> Any:
+    """Save the caller's ``last_step`` and commit (decision 260).
+
+    No authorization argument: `CurrentUserDep` *is* the caller, and the write
+    names their id and no other.
+    """
+    row = await record_last_step(session, user["id"], payload.last_step)
+    await session.commit()
+    return row
+
+
+RecordedOnboardingStepDep = Annotated[Any, Depends(recorded_onboarding_step)]
 
 
 async def completed_onboarding(
