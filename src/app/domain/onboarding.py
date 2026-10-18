@@ -38,6 +38,7 @@ __all__ = [
     "ProfileEvidence",
     "finishes_as_mentee",
     "may_complete_onboarding",
+    "missing_codes",
     "missing_requirements",
     "published_step",
 ]
@@ -98,6 +99,12 @@ def missing_requirements(evidence: ProfileEvidence) -> tuple[OnboardingRequireme
         OnboardingRequirement.FIELD: evidence.has_field_of_study,
     }
     return tuple(requirement for requirement in OnboardingRequirement if not met[requirement])
+
+
+def missing_codes(evidence: ProfileEvidence) -> tuple[str, ...]:
+    """`missing_requirements` as the published codes, the one form both
+    refusals carrying `missing` send."""
+    return tuple(item.value for item in missing_requirements(evidence))
 
 
 def may_complete_onboarding(evidence: ProfileEvidence) -> bool:

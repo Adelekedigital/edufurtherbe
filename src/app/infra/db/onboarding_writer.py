@@ -36,7 +36,7 @@ from app.domain.notifications import Notification
 from app.domain.onboarding import (
     finishes_as_mentee,
     may_complete_onboarding,
-    missing_requirements,
+    missing_codes,
 )
 from app.infra.db.credit_writer import grant_starter
 from app.infra.db.models.credits import CreditLot
@@ -108,7 +108,7 @@ async def complete_onboarding(
     if not may_complete_onboarding(evidence):
         raise OnboardingIncompleteError(
             "Finish your profile before completing onboarding.",
-            missing=missing_requirements(evidence),
+            missing=missing_codes(evidence),
         )
 
     # **Keeps the first timestamp.** `COALESCE` on the existing value rather

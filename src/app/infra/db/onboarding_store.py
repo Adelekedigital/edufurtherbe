@@ -13,12 +13,18 @@ from uuid import UUID
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.onboarding import ProfileEvidence
+from app.core.errors import BookingNeedsOnboardingError
+from app.domain.onboarding import ProfileEvidence, missing_codes
 from app.infra.db.models.mentoring import MenteeGoal, MentorProfile
 from app.infra.db.models.user import UserOnboarding, UserProfile
 from app.infra.db.offerings import live_goal_exists
 
-__all__ = ["get_onboarding", "onboarding_evidence", "onboarding_state"]
+__all__ = [
+    "get_onboarding",
+    "onboarding_evidence",
+    "onboarding_state",
+    "require_finished_onboarding",
+]
 
 
 async def get_onboarding(session: AsyncSession, user_id: UUID) -> Any | None:
@@ -91,3 +97,22 @@ async def onboarding_state(
         has_field_of_study=bool(row.field),
     )
     return evidence, bool(row.completed), row.last_step
+
+
+async def require_finished_onboarding(session: AsyncSession, user_id: UUID) -> None:
+    """Refuse a caller who has not finished onboarding, naming what is owed.
+
+    **Keyed on ``completed_at``**, not on ``missing`` (owner, 2026-10-18): a
+    migrated mentee carries Bubble's completion date and counts as finished
+    even where today's bar names answers they never gave (decision 261).
+    """
+    finished = exists().where(
+        UserOnboarding.user_id == user_id, UserOnboarding.completed_at.is_not(None)
+    )
+    if (await session.execute(select(finished))).scalar():
+        return
+    # Only a refusal pays for the full evidence, which names what is owed.
+    evidence, _, _ = await onboarding_state(session, user_id)
+    raise BookingNeedsOnboardingError(
+        "Finish setting up your account before booking.", missing=missing_codes(evidence)
+    )

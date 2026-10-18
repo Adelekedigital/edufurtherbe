@@ -989,8 +989,26 @@ def live_probe_server() -> Iterator[LiveServer]:
 TEST_CREDITS = 20
 
 
-async def fund(conn: Any, user_id: Any, quantity: int = TEST_CREDITS) -> None:
-    """Give a mentee credits so their bookings can be paid for.
+async def finish_onboarding(conn: Any, user_id: Any) -> None:
+    """Mark a user's onboarding finished, which booking requires (the booking
+    gate, owner 2026-10-18). Idempotent; keeps an existing `completed_at`."""
+    await conn.execute(
+        text(
+            "INSERT INTO user_onboarding (user_id, completed_at) VALUES (:u, now()) "
+            "ON CONFLICT (user_id) DO UPDATE SET completed_at = "
+            "COALESCE(user_onboarding.completed_at, EXCLUDED.completed_at)"
+        ),
+        {"u": user_id},
+    )
+
+
+async def fund(
+    conn: Any, user_id: Any, quantity: int = TEST_CREDITS, *, onboard: bool = True
+) -> None:
+    """Give a mentee credits so their bookings can be paid for, **and finish
+    their onboarding**: together they are what booking requires, and a test
+    that funds a mentee is a test that books. `onboard=False` for a test about
+    the onboarding gate itself.
 
     **Explicit at every call site rather than an autouse fixture.** Funding
     every user automatically would make `test_booking_without_credits_is_refused`
@@ -1029,6 +1047,8 @@ async def fund(conn: Any, user_id: Any, quantity: int = TEST_CREDITS) -> None:
         ),
         {"u": user_id, "lot": lot_id, "q": quantity},
     )
+    if onboard:
+        await finish_onboarding(conn, user_id)
 
 
 async def fund_by_auth(conn: Any, auth_id: Any, quantity: int = TEST_CREDITS) -> None:
@@ -1047,6 +1067,10 @@ async def fund_by_auth(conn: Any, auth_id: Any, quantity: int = TEST_CREDITS) ->
         ),
         {"a": auth_id, "q": quantity},
     )
+    user_id = (
+        await conn.execute(text("SELECT id FROM users WHERE auth_id = :a"), {"a": auth_id})
+    ).scalar_one()
+    await finish_onboarding(conn, user_id)
 
 
 @pytest.fixture
