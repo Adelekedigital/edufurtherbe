@@ -40,6 +40,11 @@ ACCEPTED = [
     (LI, "josé-silva-1a2b3c", JOSE_LINK),
     (LI, "https://www.linkedin.com/in/%E7%8E%8B%E5%B0%8F%E6%98%8E", WANG_LINK),
     (LI, "王小明", WANG_LINK),
+    # look-alikes land on the slug LinkedIn serves, not a link of their own
+    (LI, "ａｄａ-lovelace", "https://www.linkedin.com/in/ada-lovelace"),  # noqa: RUF001 - the fullwidth look-alike is the case
+    (LI, "ada-①②", "https://www.linkedin.com/in/ada-12"),
+    # the longest slug, of the longest characters, still fits the bound
+    (LI, "𠀀" * 100, "https://www.linkedin.com/in/" + "%F0%A0%80%80" * 100),
     (LI, "राहुल-शर्मा", RAHUL_LINK),
     (
         LI,
@@ -94,6 +99,9 @@ REFUSED = [
     (LI, "https://www.linkedin.com/in/%E2%80%8Bada"),
     (LI, "ada-😀"),
     (LI, "a⃝bc"),
+    (LI, "́ab"),
+    # a numeral that NFKC leaves as it is, so no digit LinkedIn would serve
+    (LI, "ada-ↀ"),
     (LI, "王小"),
     (LI, "é" * 101),
     (X, "https://x.com/"),
@@ -157,3 +165,11 @@ def test_a_link_on_one_network_is_not_a_link_on_another() -> None:
 def test_the_canonical_form_is_a_fixed_point(network: SocialNetwork, expected: str) -> None:
     """A stored value is read back through the same rule — it must survive it."""
     assert canonical_social(network, expected) == expected
+
+
+def test_the_bound_holds_the_longest_canonical_link() -> None:
+    """A link stored on write is read back through the same rule, so the bound
+    must fit the longest canonical form, or a saved link publishes as absent."""
+    longest = "https://www.linkedin.com/company/" + "%F0%A0%80%80" * 100
+    assert len(longest) <= MAX_LENGTH
+    assert canonical_social(LI, longest) == longest

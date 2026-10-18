@@ -21,9 +21,9 @@ Handle rules, as each network documents them:
   hyphens; `_` is also accepted, as company pages use it. **Letters are any
   script's** (owner, 2026-10-18): LinkedIn percent-encodes an accented or
   non-Latin vanity handle (`jos%C3%A9-silva`), and some links carry it decoded
-  (`josé-silva`). Either is decoded once as strict UTF-8, NFC-normalised, and
-  must then be letters (`L*`), numbers (`N*`), combining marks (`Mn`, `Mc`),
-  `-` or `_`, 3-100 characters; it is stored the way LinkedIn writes it,
+  (`josé-silva`). Either is decoded once as strict UTF-8, NFKC-normalised, and
+  must then be letters (`L*`), decimal digits (`Nd`), combining marks (`Mn`,
+  `Mc`, never first), `-` or `_`, 3-100 characters; it is stored the way LinkedIn writes it,
   percent-encoded with uppercase hex. A `%` left after decoding is double
   encoding and is refused.
 - **YouTube**: a handle is 3-30 of `A-Z a-z 0-9 _ - .`; a channel id is `UC`
@@ -45,8 +45,10 @@ from urllib.parse import quote, unquote, urlsplit
 __all__ = ["MAX_LENGTH", "SocialNetwork", "canonical_social"]
 
 #: The longest input considered. The column is `text`; this is the boundary's
-#: bound, and a longer value is not a profile link on any of the three.
-MAX_LENGTH = 500
+#: bound. It must hold the longest canonical link, which is a 100-character
+#: LinkedIn slug of 4-byte characters percent-encoded (about 1,233), or a link
+#: written and stored would read back as absent.
+MAX_LENGTH = 2048
 
 
 class SocialNetwork(StrEnum):
@@ -85,8 +87,10 @@ _X_RESERVED = frozenset(
 
 _SCHEME = re.compile(r"https?://", re.IGNORECASE | re.ASCII)
 
-#: A LinkedIn slug's characters, by Unicode category, beside `-` and `_`.
-_SLUG_CATEGORIES = ("L", "N", "Mn", "Mc")
+#: A LinkedIn slug's characters, by Unicode category, beside `-` and `_`:
+#: letters, decimal digits, and combining marks after a base character.
+_SLUG_CATEGORIES = ("L", "Nd", "Mn", "Mc")
+_MARKS = ("Mn", "Mc")
 _SLUG_LENGTH = range(3, 101)
 
 
@@ -94,14 +98,16 @@ def _linkedin_slug(raw: str) -> str | None:
     """`raw` as LinkedIn writes a slug in a URL, or `None` if it is not one.
 
     Decoded once as strict UTF-8 (a bad sequence refuses), so a `%` still there
-    afterwards is double encoding. Re-encoded with only `A-Z a-z 0-9 - _`
-    unescaped, so nothing from the input is echoed beyond a checked slug.
+    afterwards is double encoding. **NFKC**, so a decomposed `é` and a
+    fullwidth Latin letter land on the slug LinkedIn actually serves rather than on a
+    look-alike. Re-encoded with only `A-Z a-z 0-9 - _` unescaped, so nothing
+    from the input is echoed beyond a checked slug.
     """
     try:
-        text = unicodedata.normalize("NFC", unquote(raw, errors="strict"))
+        text = unicodedata.normalize("NFKC", unquote(raw, errors="strict"))
     except UnicodeDecodeError:
         return None
-    if len(text) not in _SLUG_LENGTH:
+    if len(text) not in _SLUG_LENGTH or unicodedata.category(text[0]) in _MARKS:
         return None
     for char in text:
         if char not in "-_" and not unicodedata.category(char).startswith(_SLUG_CATEGORIES):
