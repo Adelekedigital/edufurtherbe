@@ -18,9 +18,14 @@ Handle rules, as each network documents them:
 - **X**: 1-15 of `A-Z a-z 0-9 _`. New handles need 4, but short legacy ones
   exist and still resolve.
 - **LinkedIn**: the custom public URL is 3-100 characters of letters, digits and
-  hyphens; `_` is also accepted, as company pages use it. A slug with non-ASCII
-  characters is refused (it arrives percent-encoded) — rare, and the cost of
-  refusing is a link not shown, never a wrong one.
+  hyphens; `_` is also accepted, as company pages use it. **Letters are any
+  script's** (owner, 2026-10-18): LinkedIn percent-encodes an accented or
+  non-Latin vanity handle (`jos%C3%A9-silva`), and some links carry it decoded
+  (`josé-silva`). Either is decoded once as strict UTF-8, NFC-normalised, and
+  must then be letters (`L*`), numbers (`N*`), combining marks (`Mn`, `Mc`),
+  `-` or `_`, 3-100 characters; it is stored the way LinkedIn writes it,
+  percent-encoded with uppercase hex. A `%` left after decoding is double
+  encoding and is refused.
 - **YouTube**: a handle is 3-30 of `A-Z a-z 0-9 _ - .`; a channel id is `UC`
   plus 22 of `A-Z a-z 0-9 _ -`. Legacy `/c/` and `/user/` addresses are refused:
   neither maps reliably onto a handle.
@@ -33,8 +38,9 @@ The link is to the profile, and tracking parameters are not part of it.
 from __future__ import annotations
 
 import re
+import unicodedata
 from enum import StrEnum
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 __all__ = ["MAX_LENGTH", "SocialNetwork", "canonical_social"]
 
@@ -50,7 +56,6 @@ class SocialNetwork(StrEnum):
 
 
 _X_HANDLE = re.compile(r"[A-Za-z0-9_]{1,15}", re.ASCII)
-_LINKEDIN_SLUG = re.compile(r"[A-Za-z0-9_-]{3,100}", re.ASCII)
 _YOUTUBE_HANDLE = re.compile(r"[A-Za-z0-9_.-]{3,30}", re.ASCII)
 _YOUTUBE_CHANNEL = re.compile(r"UC[A-Za-z0-9_-]{22}", re.ASCII)
 #: LinkedIn's country subdomains (`ng.linkedin.com`) are two letters.
@@ -80,6 +85,29 @@ _X_RESERVED = frozenset(
 
 _SCHEME = re.compile(r"https?://", re.IGNORECASE | re.ASCII)
 
+#: A LinkedIn slug's characters, by Unicode category, beside `-` and `_`.
+_SLUG_CATEGORIES = ("L", "N", "Mn", "Mc")
+_SLUG_LENGTH = range(3, 101)
+
+
+def _linkedin_slug(raw: str) -> str | None:
+    """`raw` as LinkedIn writes a slug in a URL, or `None` if it is not one.
+
+    Decoded once as strict UTF-8 (a bad sequence refuses), so a `%` still there
+    afterwards is double encoding. Re-encoded with only `A-Z a-z 0-9 - _`
+    unescaped, so nothing from the input is echoed beyond a checked slug.
+    """
+    try:
+        text = unicodedata.normalize("NFC", unquote(raw, errors="strict"))
+    except UnicodeDecodeError:
+        return None
+    if len(text) not in _SLUG_LENGTH:
+        return None
+    for char in text:
+        if char not in "-_" and not unicodedata.category(char).startswith(_SLUG_CATEGORIES):
+            return None
+    return quote(text, safe="-_")
+
 
 def canonical_social(network: SocialNetwork, value: str | None) -> str | None:
     """The canonical `https://` link for `value` on `network`, or `None`.
@@ -108,7 +136,8 @@ def _from_handle(network: SocialNetwork, handle: str) -> str | None:
             return f"https://x.com/{handle}"
         return None
     if network is SocialNetwork.LINKEDIN:
-        return f"https://www.linkedin.com/in/{handle}" if _LINKEDIN_SLUG.fullmatch(handle) else None
+        slug = _linkedin_slug(handle)
+        return f"https://www.linkedin.com/in/{slug}" if slug else None
     if _YOUTUBE_HANDLE.fullmatch(handle):
         return f"https://www.youtube.com/@{handle}"
     return None
@@ -133,11 +162,9 @@ def _from_url(network: SocialNetwork, text: str) -> str | None:
     if network is SocialNetwork.LINKEDIN:
         if not _LINKEDIN_HOST.fullmatch(host) or len(segments) < 2:
             return None
-        kind, slug = segments[0].lower(), segments[1]
-        if kind == "in" and _LINKEDIN_SLUG.fullmatch(slug):
-            return f"https://www.linkedin.com/in/{slug}"
-        if kind == "company" and _LINKEDIN_SLUG.fullmatch(slug):
-            return f"https://www.linkedin.com/company/{slug}"
+        kind, slug = segments[0].lower(), _linkedin_slug(segments[1])
+        if slug and kind in ("in", "company"):
+            return f"https://www.linkedin.com/{kind}/{slug}"
         return None
 
     if host not in _HOSTS[network] or not segments:

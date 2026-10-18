@@ -8,6 +8,12 @@ from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
 
 LI, X, YT = SocialNetwork.LINKEDIN, SocialNetwork.X, SocialNetwork.YOUTUBE
 CHANNEL = "UC" + "a1B2_c3-D4e5F6g7H8i9J0"
+JOSE_LINK = "https://www.linkedin.com/in/jos%C3%A9-silva-1a2b3c"
+WANG_LINK = "https://www.linkedin.com/in/%E7%8E%8B%E5%B0%8F%E6%98%8E"
+RAHUL_LINK = (
+    "https://www.linkedin.com/in/"
+    "%E0%A4%B0%E0%A4%BE%E0%A4%B9%E0%A5%81%E0%A4%B2-%E0%A4%B6%E0%A4%B0%E0%A5%8D%E0%A4%AE%E0%A4%BE"
+)
 
 ACCEPTED = [
     # LinkedIn: handle, every host spelling, company pages, trailing noise dropped
@@ -25,6 +31,21 @@ ACCEPTED = [
         "https://www.linkedin.com/company/edu_further",
     ),
     (LI, "  ada-lovelace  ", "https://www.linkedin.com/in/ada-lovelace"),
+    # LinkedIn: accented and non-Latin names, percent-encoded or typed decoded,
+    # all stored as LinkedIn writes them: NFC, UTF-8, uppercase hex
+    (LI, JOSE_LINK, JOSE_LINK),
+    (LI, "https://www.linkedin.com/in/jos%c3%a9-silva-1a2b3c", JOSE_LINK),
+    (LI, "linkedin.com/in/josé-silva-1a2b3c", JOSE_LINK),
+    (LI, "josé-silva-1a2b3c", JOSE_LINK),
+    (LI, "josé-silva-1a2b3c", JOSE_LINK),
+    (LI, "https://www.linkedin.com/in/%E7%8E%8B%E5%B0%8F%E6%98%8E", WANG_LINK),
+    (LI, "王小明", WANG_LINK),
+    (LI, "राहुल-शर्मा", RAHUL_LINK),
+    (
+        LI,
+        "https://www.linkedin.com/company/caf%C3%A9-edu",
+        "https://www.linkedin.com/company/caf%C3%A9-edu",
+    ),
     # X: both domains, mobile, a tweet link resolves to its author
     (X, "ada", "https://x.com/ada"),
     (X, "@Ada_99", "https://x.com/Ada_99"),
@@ -65,7 +86,16 @@ REFUSED = [
     (LI, "https://www.linkedin.com/feed/update/123"),
     (LI, "https://www.linkedin.com/pub/ada/1/2/3"),
     (LI, "https://www.linkedin.com/in/%2e%2e"),
-    (LI, "https://www.linkedin.com/in/jos%C3%A9"),
+    # a slug that is not letters, numbers, marks, `-` or `_` once decoded
+    (LI, "https://www.linkedin.com/in/%C3"),
+    (LI, "https://www.linkedin.com/in/%2541da"),
+    (LI, "https://www.linkedin.com/in/jos%C3%A9%20silva"),
+    (LI, "https://www.linkedin.com/in/ada%2Fevil"),
+    (LI, "https://www.linkedin.com/in/%E2%80%8Bada"),
+    (LI, "ada-😀"),
+    (LI, "a⃝bc"),
+    (LI, "王小"),
+    (LI, "é" * 101),
     (X, "https://x.com/"),
     (X, "https://x.com/home"),
     (X, "https://twitter.com/i/lists/1"),
