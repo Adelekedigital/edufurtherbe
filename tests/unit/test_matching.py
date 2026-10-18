@@ -19,8 +19,9 @@ from app.domain.matching import (
     rank,
     reasons,
     score,
+    select_matches,
 )
-from app.domain.search import FUZZY_FLOOR, fold
+from app.domain.search import fold
 
 HELP_A, HELP_B = uuid4(), uuid4()
 NIGERIA, GHANA = Ref(uuid4(), "Nigeria"), Ref(uuid4(), "Ghana")
@@ -90,10 +91,10 @@ def test_a_closer_field_ranks_higher_once_both_match() -> None:
     assert rank(MENTEE, [fair, close]) == [close, fair]
 
 
-def test_a_field_below_the_floor_scores_nothing() -> None:
-    assert field_score(FUZZY_FLOOR - 0.01) == 0
-    assert field_score(FUZZY_FLOOR) == FUZZY_FLOOR
+def test_a_field_scores_what_the_store_matched_and_nothing_otherwise() -> None:
     assert field_score(None) == 0
+    assert field_score(0.45) == 0.45
+    assert field_score(1.0) == 1.0
 
 
 def test_any_open_slot_counts_the_same() -> None:
@@ -165,7 +166,7 @@ def test_every_reason_in_ranking_order() -> None:
 def test_no_reason_for_a_signal_that_did_not_match() -> None:
     unmatched = mentor(
         offering_ids=(uuid4(),),
-        field_similarity=FUZZY_FLOOR - 0.1,
+        field_similarity=None,
         field_text="History",
         origin=GHANA,
         has_open_slot=True,
@@ -183,7 +184,7 @@ def test_exact_needs_every_answered_primary_signal() -> None:
     )
 
     assert is_exact(MENTEE, all_three)
-    for missing in ({"offering_ids": ()}, {"field_similarity": 0.1}, {"origin": GHANA}):
+    for missing in ({"offering_ids": ()}, {"field_similarity": None}, {"origin": GHANA}):
         assert not is_exact(MENTEE, replace(all_three, **missing))  # type: ignore[arg-type]
 
 
@@ -211,3 +212,34 @@ def test_the_best_scoring_field_text_wins_and_unscored_texts_are_skipped() -> No
     assert best_field(scored) == (0.9, "Computer Science")
     assert best_field([("Physics", None)]) is None
     assert best_field([]) is None
+
+
+def test_fold_keeps_every_word_of_a_long_programme() -> None:
+    long_name = "Bachelor of Science (Honours) in Electrical and Electronic Engineering"
+
+    assert fold(long_name).split()[-1] == "engineering"
+
+
+def test_without_for_mentor_the_top_limit_and_no_verdict() -> None:
+    best, second, third = (
+        mentor(offering_ids=(HELP_A, HELP_B)),
+        mentor(offering_ids=(HELP_A,)),
+        mentor(),
+    )
+
+    assert select_matches(MENTEE, [third, second, best], 2) == ([best, second], None)
+
+
+def test_for_mentor_bookable_returns_only_them() -> None:
+    best, target = mentor(offering_ids=(HELP_A,)), mentor()
+
+    assert select_matches(MENTEE, [best, target], 2, frozenset({target.profile_id})) == (
+        [target],
+        True,
+    )
+
+
+def test_for_mentor_not_a_candidate_returns_the_usual_list() -> None:
+    best, other = mentor(offering_ids=(HELP_A,)), mentor()
+
+    assert select_matches(MENTEE, [other, best], 2, frozenset({uuid4()})) == ([best, other], False)

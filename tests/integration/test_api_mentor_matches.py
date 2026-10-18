@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import (
     add_education,
@@ -18,6 +18,7 @@ from tests.integration.factories import (
 from tests.integration.test_api_mentors import give_offering, set_study_country
 
 from app.infra.db.mentor_match_store import mentee_answers
+from app.infra.db.offerings import goal_overlap_count
 from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -426,3 +427,84 @@ async def test_the_mentees_goal_offerings_are_their_live_ones_only(db_engine: As
         ).scalar_one()
 
     assert answers["goal_offering_ids"] == [live]
+
+
+@pytest.mark.parametrize(
+    ("wanted", "studied"),
+    [("Mechanical Engineering", "Civil Engineering"), ("Computer Science", "Political Science")],
+)
+async def test_one_shared_generic_word_is_no_field_match(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, wanted: str, studied: str
+) -> None:
+    """Every long word must clear the floor on its own, as Explore's near tier
+    requires; the whole phrase scored at once clears it on "engineering" alone."""
+    mentor = await make_bookable_mentor(db_engine, f"generic-{studied[:5].lower()}")
+    await add_education(db_engine, mentor, course=studied)
+    _, headers = await a_mentee(db_engine, f"generic-{wanted[:5].lower()}", field=wanted)
+
+    body = (await matches(api_client, headers)).json()
+
+    assert body["matches"][0]["reasons"] == []
+
+
+async def test_a_field_named_late_in_a_long_programme_still_matches(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The mentor's text is compared whole, not cut to a search query's 8 words."""
+    long_name = "Bachelor of Science (Honours) in Electrical and Electronic Engineering"
+    mentor = await make_bookable_mentor(db_engine, "late-word")
+    await add_education(db_engine, mentor, course=None, program=long_name)
+    _, headers = await a_mentee(db_engine, "late-word", field="Electronic Engineering")
+
+    body = (await matches(api_client, headers)).json()
+
+    assert body["matches"][0]["reasons"] == [{"code": "field", "field": long_name}]
+
+
+async def test_a_short_field_matches_as_a_whole_word(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Under four letters there is no near spelling (`MIN_FUZZY_CHARS`), so
+    Explore's prefix tier is what matches "Law"; it scores 1, above any near one."""
+    lawyer = await make_bookable_mentor(db_engine, "short-law")
+    await add_education(db_engine, lawyer, course="Law")
+    other = await make_bookable_mentor(db_engine, "short-other")
+    await add_education(db_engine, other, course="History")
+    _, headers = await a_mentee(db_engine, "short-law", field="Law")
+
+    body = (await matches(api_client, headers)).json()
+
+    assert ids(body)[0] == str(lawyer)
+    assert body["matches"][0]["reasons"] == [{"code": "field", "field": "Law"}]
+    assert body["matches"][1]["reasons"] == []
+
+
+async def test_the_help_overlap_agrees_with_explores_goal_ranking(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Matching counts shared offerings in Python; Explore's goal ranking counts
+    them in SQL (`goal_overlap_count`). One rule, pinned so the two cannot drift."""
+    two = await make_bookable_mentor(db_engine, "pin-two")
+    await give_offering(db_engine, two, INTERVIEW)
+    await give_offering(db_engine, two, TESTS)
+    one = await make_bookable_mentor(db_engine, "pin-one")
+    await give_offering(db_engine, one, TESTS)
+    # An offering the mentee did not ask for counts for neither.
+    await give_offering(db_engine, one, "document-preparation")
+    none = await make_bookable_mentor(db_engine, "pin-none")
+    await give_offering(db_engine, none, "document-preparation")
+    caller, headers = await a_mentee(db_engine, "pin", goals=(INTERVIEW, TESTS))
+
+    body = (await matches(api_client, headers, "?limit=10")).json()
+
+    shared = {
+        m["mentor"]["id"]: sum(len(r.get("offering_ids", [])) for r in m["reasons"])
+        for m in body["matches"]
+    }
+    async with AsyncSession(db_engine) as session:
+        for mentor in (two, one, none):
+            counted = (
+                await session.execute(select(goal_overlap_count(mentor, caller)))
+            ).scalar_one()
+            assert shared[str(mentor)] == counted
+    assert [shared[str(m)] for m in (two, one, none)] == [2, 1, 0]

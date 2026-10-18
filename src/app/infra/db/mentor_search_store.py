@@ -34,7 +34,7 @@ last week is a new mentor, and this list is of mentors.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import reduce
 from typing import Any
 from uuid import UUID
@@ -90,7 +90,10 @@ __all__ = [
     "completed_sessions",
     "count_mentors",
     "daily_shuffle",
+    "field_document",
     "mentor_card",
+    "near_tier",
+    "prefix_query",
     "search_mentors",
     "similar_mentors",
 ]
@@ -307,22 +310,47 @@ def _tiers(term: str) -> list[tuple[Any, Any]]:
     tiers = [(document.op("@@")(_matches(term)), func.ts_rank_cd(document, _matches(term)))]
     if has_operators(term):
         return tiers
-    groups = search_groups(term)
-    if groups:
-        query = reduce(lambda a, b: a.op("||")(b), (_prefix(group) for group in groups))
+    query = prefix_query(term)
+    if query is not None:
         tiers.append((document.op("@@")(query), func.ts_rank_cd(document, query)))
-    near = [n for n in (_near(group, document) for group in groups) if n is not None]
-    if near:
-        tiers.append(
-            (
-                or_(*(condition for condition, _ in near)),
-                func.greatest(*(case((condition, score), else_=0) for condition, score in near)),
-            )
-        )
+    near = near_tier(term, _fuzzy_text(), document)
+    if near is not None:
+        tiers.append(near)
     return tiers
 
 
-def _near(group: list[str], document: Any) -> tuple[Any, Any] | None:
+def prefix_query(term: str) -> Any | None:
+    """`term` as Explore's prefix tier reads it: each `or` group's words as
+    prefixes, ANDed, and the groups ORed. None when it has no words."""
+    groups = search_groups(term)
+    if not groups:
+        return None
+    return reduce(lambda a, b: a.op("||")(b), (_prefix(group) for group in groups))
+
+
+def near_tier(term: str, text: Any, document: Any) -> tuple[Any, Any] | None:
+    """`term` as a near spelling of `text`: `(condition, score)`, or None.
+
+    Any `or` group may match (`search_groups`); the score is the best group's.
+    `document` is the full-text vector the short words must appear in as a
+    prefix. Explore passes the card's fields; mentor matching (decision 265)
+    passes one field-of-study text, so both read one rule and one floor.
+    """
+    near = [n for n in (_near(group, text, document) for group in search_groups(term)) if n]
+    if not near:
+        return None
+    return (
+        or_(*(condition for condition, _ in near)),
+        func.greatest(*(case((condition, score), else_=0) for condition, score in near)),
+    )
+
+
+def field_document(text: Any) -> Any:
+    """`text` under both configurations, as the card's document holds it."""
+    return func.to_tsvector(SIMPLE, text).op("||")(func.to_tsvector(ENGLISH, text))
+
+
+def _near(group: list[str], text: Any, document: Any) -> tuple[Any, Any] | None:
     """One `or` group as a near spelling, or None when it has no long word.
 
     Per word, like the other tiers: every long word must clear the floor (a
@@ -333,7 +361,6 @@ def _near(group: list[str], document: Any) -> tuple[Any, Any] | None:
     long, short = fuzzy_terms(group)
     if not long:
         return None
-    text = _fuzzy_text()
     stops = [_stop_word(word) for word in long]
     # A stop word ("with") is no requirement and does not lower the score, but
     # a group of nothing else must not match everybody.
@@ -423,8 +450,17 @@ def _who(offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
     )
 
 
-def _card(scope: Select[Any], window: BookingWindow) -> Select[Any]:
-    """`scope`'s mentors with the columns a search result renders."""
+def _card(
+    scope: Select[Any],
+    window: BookingWindow,
+    more: Callable[[Any], list[Any]] | None = None,
+) -> Select[Any]:
+    """`scope`'s mentors with the columns a search result renders.
+
+    `more(qualification)` adds a caller's own columns beside the card's, read
+    off the same joins and the same qualification lateral; only mentor
+    matching passes it, so every other card query selects the card alone.
+    """
     qualification = top_qualification(MentorProfile.user_id)
     # **Scalar subqueries, not a lateral.** They run per output row, after the
     # page limit, which is the property `_document()` records for the
@@ -447,13 +483,6 @@ def _card(scope: Select[Any], window: BookingWindow) -> Select[Any]:
             qualification.c.degree,
             qualification.c.study_course,
             qualification.c.institution,
-            # Ids and the level's rank, for mentor matching (decision 265); the
-            # card's own model reads none of them.
-            qualification.c.degree_level_id,
-            qualification.c.degree_level_label,
-            qualification.c.degree_level_rank,
-            MentorProfile.primary_study_country_id,
-            UserProfile.origin_country_id,
             completed_sessions().label("completed_sessions"),
             review_count.scalar_subquery().label("review_count"),
             session_value.scalar_subquery().label("session_value"),
@@ -467,6 +496,7 @@ def _card(scope: Select[Any], window: BookingWindow) -> Select[Any]:
             MentorProfile.created_at.label("joined_at"),
             # Per row, after the page limit, like the review subqueries above.
             top_award(MentorProfile.user_id).label("top_award"),
+            *(more(qualification) if more is not None else []),
         )
         # Outer: a mentor the job has not reached yet has no row, and reads as
         # `refreshing` rather than disappearing.
@@ -582,7 +612,18 @@ def bookable_cards(viewer: UUID, window: BookingWindow) -> Select[Any]:
     does, narrowed by `taking_bookings()`: matching suggests only mentors who
     can be booked (decision 265). No order and no limit; the caller ranks.
     """
-    return _card(_scope(None, (), viewer), window).where(taking_bookings())
+    return _card(_scope(None, (), viewer), window, _matching_facts).where(taking_bookings())
+
+
+def _matching_facts(qualification: Any) -> list[Any]:
+    """The ids and the level's rank matching ranks on; the card reads none."""
+    return [
+        qualification.c.degree_level_id,
+        qualification.c.degree_level_label,
+        qualification.c.degree_level_rank,
+        MentorProfile.primary_study_country_id,
+        UserProfile.origin_country_id,
+    ]
 
 
 def _ranked(

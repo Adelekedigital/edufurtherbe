@@ -5,10 +5,12 @@ fine at the 44 to 500 mentors this platform has. The order is the owner's
 (2026-10-17), most important first, and each key beats every key below it:
 
 1. **Help areas**: how many of the mentee's live goal needs the mentor offers.
-2. **Field of study**: the best `strict_word_similarity` (Explore's near-tier
-   metric) of the mentee's field against the mentor's courses and programmes,
-   counted only from `FUZZY_FLOOR` up. So matched beats unmatched, then closer
-   beats less close.
+2. **Field of study**: the mentee's field against each of the mentor's courses
+   and programmes by Explore's own search tiers (the store applies them, in
+   SQL): every word as a prefix scores 1, else a near spelling scores its
+   weakest word's `strict_word_similarity`, each long word clearing
+   `FUZZY_FLOOR` on its own. The best text counts. So matched beats unmatched,
+   then closer beats less close.
 3. **Origin**: both from the same country.
 4. **A free slot**: the mentor's next free time is `open`. Any open slot
    counts the same; sooner is not better.
@@ -26,8 +28,6 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
-from app.domain.search import FUZZY_FLOOR
-
 __all__ = [
     "DEGREE_ABOVE",
     "DEGREE_EXACT",
@@ -41,6 +41,7 @@ __all__ = [
     "rank",
     "reasons",
     "score",
+    "select_matches",
 ]
 
 #: The degree key's scores: the mentor holds the mentee's goal level, or a
@@ -83,7 +84,8 @@ class Mentor:
     shuffle: str
     #: The offering ids they give, in the platform's order.
     offering_ids: tuple[UUID, ...] = ()
-    #: Their best field similarity to the mentee's, and the text that scored it.
+    #: Their best field score against the mentee's, and the text that scored
+    #: it; `None` when no text matched (the store decides, as Explore does).
     field_similarity: float | None = None
     field_text: str | None = None
     origin: Ref | None = None
@@ -118,10 +120,12 @@ def best_field(scored: Iterable[tuple[str, float | None]]) -> tuple[float, str] 
 
 
 def field_score(similarity: float | None) -> float:
-    """The field key: the similarity when it clears `FUZZY_FLOOR`, else 0."""
-    if similarity is None or similarity < FUZZY_FLOOR:
-        return 0.0
-    return similarity
+    """The field key: the matched text's score, or 0 when nothing matched.
+
+    No floor here: the store compares in SQL, exactly as Explore's tier does,
+    so a `real` score at the floor is not re-read as a Python float below it.
+    """
+    return 0.0 if similarity is None else similarity
 
 
 def _field(mentee: Mentee, mentor: Mentor) -> float:
@@ -219,3 +223,24 @@ def is_exact(mentee: Mentee, top: Mentor | None) -> bool:
     ]
     answered = [met for has_answer, met in asked if has_answer]
     return bool(answered) and all(answered)
+
+
+def select_matches(
+    mentee: Mentee,
+    mentors: Sequence[Mentor],
+    limit: int,
+    targets: frozenset[UUID] | None = None,
+) -> tuple[list[Mentor], bool | None]:
+    """The matches to show, and whether a requested mentor could be booked.
+
+    With no `targets` (no `for_mentor`): the top `limit`, and `None`. With
+    them: the requested mentor alone and `True` when they are a candidate,
+    else the usual top `limit` and `False`. Only the requested one is ranked
+    then, which orders it exactly as the full ranking would.
+    """
+    if targets is None:
+        return rank(mentee, mentors)[:limit], None
+    wanted = [m for m in mentors if m.profile_id in targets]
+    if wanted:
+        return rank(mentee, wanted)[:1], True
+    return rank(mentee, mentors)[:limit], False
