@@ -59,10 +59,11 @@ def told(notification: Notification, actor: UUID | None = None) -> tuple[UUID, .
 # --------------------------------------------------------------------------
 
 
-def test_an_auto_confirming_booking_tells_only_the_mentor() -> None:
-    """**The mentee is looking at a confirmation screen.** Telling them too is
-    the legacy behaviour, and it tells somebody something they already know."""
-    assert told(Notification.SESSION_BOOKED) == (MENTOR,)
+def test_an_auto_confirming_booking_tells_both() -> None:
+    """**The exception to "who did not act"** (owner, 2026-10-18): the mentee
+    gets the confirmation in their inbox, with the session link, as well as on
+    screen."""
+    assert set(told(Notification.SESSION_BOOKED)) == {MENTOR, MENTEE}
 
 
 def test_an_acceptance_tells_only_the_mentee() -> None:

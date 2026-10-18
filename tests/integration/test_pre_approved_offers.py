@@ -74,8 +74,8 @@ async def test_booking_a_declines_offer_confirms_at_once(
     assert booked.status_code == 201, booked.text
     assert booked.json()["status"] == "confirmed"
     assert booked.json()["respond_by"] is None
-    # The mentor learns of a booking, not of a request waiting on them.
-    assert await told(db_engine, booked.json()["id"]) == ["session_booked"]
+    # A booking, not a request waiting on the mentor; both parties are told.
+    assert await told(db_engine, booked.json()["id"]) == ["session_booked"] * 2
     assert (await suggestion_of(api_client, booking))["status"] == "booked"
 
 
