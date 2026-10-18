@@ -86,8 +86,10 @@ from app.infra.db.session_stats import delivered
 
 __all__ = [
     "SIMILAR_LIMIT",
+    "bookable_cards",
     "completed_sessions",
     "count_mentors",
+    "daily_shuffle",
     "mentor_card",
     "search_mentors",
     "similar_mentors",
@@ -445,6 +447,13 @@ def _card(scope: Select[Any], window: BookingWindow) -> Select[Any]:
             qualification.c.degree,
             qualification.c.study_course,
             qualification.c.institution,
+            # Ids and the level's rank, for mentor matching (decision 265); the
+            # card's own model reads none of them.
+            qualification.c.degree_level_id,
+            qualification.c.degree_level_label,
+            qualification.c.degree_level_rank,
+            MentorProfile.primary_study_country_id,
+            UserProfile.origin_country_id,
             completed_sessions().label("completed_sessions"),
             review_count.scalar_subquery().label("review_count"),
             session_value.scalar_subquery().label("session_value"),
@@ -547,13 +556,33 @@ def _matched(
     a hash collision cannot make the order non-deterministic.
     """
     overlap = goal_overlap_count(MentorProfile.user_id, viewer)
-    shuffle = func.md5(literal(f"{viewer}:{day.isoformat()}:").concat(cast(MentorProfile.id, Text)))
     return (
         _card(_scope(None, offerings, viewer), window)
-        .order_by(_bookable_first(), overlap.desc(), shuffle, MentorProfile.id.desc())
+        .order_by(
+            _bookable_first(), overlap.desc(), daily_shuffle(viewer, day), MentorProfile.id.desc()
+        )
         .offset(offset)
         .limit(limit + 1)
     )
+
+
+def daily_shuffle(viewer: UUID, day: dt.date) -> Any:
+    """`md5(viewer : day : mentor)`: the tie order fixed per viewer per UTC day.
+
+    Explore's goal ranking and mentor matching (decision 265) both break ties
+    with it, so one mentee sees tied mentors in one order on both screens.
+    """
+    return func.md5(literal(f"{viewer}:{day.isoformat()}:").concat(cast(MentorProfile.id, Text)))
+
+
+def bookable_cards(viewer: UUID, window: BookingWindow) -> Select[Any]:
+    """Every mentor `viewer` could book now, as Explore cards, never the viewer.
+
+    Explore's own `_card(_scope(...))`, so a match renders exactly as the list
+    does, narrowed by `taking_bookings()`: matching suggests only mentors who
+    can be booked (decision 265). No order and no limit; the caller ranks.
+    """
+    return _card(_scope(None, (), viewer), window).where(taking_bookings())
 
 
 def _ranked(

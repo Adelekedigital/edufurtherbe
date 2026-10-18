@@ -48,14 +48,17 @@ from app.infra.db.public_visibility import (
     taking_bookings,
 )
 
-__all__ = ["get_existing_mentor_id", "get_public_mentor", "get_public_mentor_id"]
+__all__ = ["by_handle", "get_existing_mentor_id", "get_public_mentor", "get_public_mentor_id"]
 
 _STUDY_COUNTRY = Country.__table__.alias("study_country")
 _ORIGIN_COUNTRY = Country.__table__.alias("origin_country")
 
 
-def _by_handle(handle: str) -> Any:
+def by_handle(handle: str) -> Any:
     """Match the path segment against an id or a slug, whichever it is.
+
+    Public since mentor matching resolves `for_mentor` with it (decision 265),
+    so the guest path and `/mentors/{handle}` read one handle the same way.
 
     **Parsed rather than `OR`-ed.** ``id = :h OR slug = :h`` would ask the planner
     to combine a primary key with a partial unique index for a value that can only
@@ -140,7 +143,7 @@ def _public_profile(handle: str, viewer: UUID | None, window: BookingWindow) -> 
         .outerjoin(UserProfile, UserProfile.user_id == User.id)
         .outerjoin(_STUDY_COUNTRY, _STUDY_COUNTRY.c.id == MentorProfile.primary_study_country_id)
         .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
-        .where(_by_handle(handle), *mentor_is_visible_to(viewer))
+        .where(by_handle(handle), *mentor_is_visible_to(viewer))
     )
 
 
@@ -165,7 +168,7 @@ async def get_existing_mentor_id(session: AsyncSession, handle: str) -> UUID | N
     **Not a visibility check, and not for rendering.** It answers "whose
     expertise should suggestions be based on" for a mentor nobody may see — the
     similar-mentors page a visitor lands on in place of a hidden profile. The
-    same `_by_handle`, and `mentor_exists()` rather than a restatement of it, so
+    same `by_handle`, and `mentor_exists()` rather than a restatement of it, so
     a deleted profile or account is nobody here too.
     """
     return (
@@ -173,7 +176,7 @@ async def get_existing_mentor_id(session: AsyncSession, handle: str) -> UUID | N
             select(User.id)
             .select_from(MentorProfile)
             .join(User, User.id == MentorProfile.user_id)
-            .where(_by_handle(handle), *mentor_exists())
+            .where(by_handle(handle), *mentor_exists())
         )
     ).scalar_one_or_none()
 
@@ -187,7 +190,7 @@ async def get_public_mentor_id(
     reviews list is the first. Loading the whole profile to learn one id would
     read six joins to throw five of them away.
 
-    **The same `_by_handle` and the same `mentor_is_visible_to()`**, so a
+    **The same `by_handle` and the same `mentor_is_visible_to()`**, so a
     mentor who is paused, unapproved or unbookable is absent here exactly as they
     are absent from their profile. A second visibility clause is the shape this
     module's own docstring warns about — *"the second lookup path is where a visibility clause goes
@@ -199,6 +202,6 @@ async def get_public_mentor_id(
             select(User.id)
             .select_from(MentorProfile)
             .join(User, User.id == MentorProfile.user_id)
-            .where(_by_handle(handle), *mentor_is_visible_to(viewer))
+            .where(by_handle(handle), *mentor_is_visible_to(viewer))
         )
     ).scalar_one_or_none()

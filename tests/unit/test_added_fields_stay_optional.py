@@ -74,6 +74,12 @@ ADDED = {
     "InviterRead": ("first_name", "avatar_url"),
     # Where the owner is from, on their own `/me` (Mentee Onboarding v5, #6).
     "UserProfileRead": ("origin_country",),
+    # New with mentor matching (decision 265): the card, the reasons list, the
+    # list and the verdict are required; every other field optional from the start.
+    "MentorMatchRead": ("level", "study_country"),
+    "MentorMatchesRead": ("for_mentor_bookable",),
+    "MatchBasisRead": ("degree", "field", "country", "origin"),
+    "DegreeBasisRead": ("id", "label", "raw"),
 }
 
 

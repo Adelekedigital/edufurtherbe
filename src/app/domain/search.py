@@ -109,3 +109,15 @@ def fuzzy_terms(terms: list[str]) -> tuple[list[str], list[str]]:
     and so must be present as a prefix instead."""
     near = [term for term in terms if len(term) >= MIN_FUZZY_CHARS]
     return near, [term for term in terms if len(term) < MIN_FUZZY_CHARS]
+
+
+def fold(text: str) -> str:
+    """`text` as `search_terms` reads it, accents removed, words joined by a space.
+
+    For comparing two free-text answers rather than searching: "Économie" and
+    "economie" fold alike, so mentor matching's trigram comparison (decision
+    265) is case- and accent-insensitive. Decomposed first so an accent becomes
+    a separate mark that can be dropped; an empty result means nothing to match.
+    """
+    bare = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    return " ".join(search_terms(bare))
