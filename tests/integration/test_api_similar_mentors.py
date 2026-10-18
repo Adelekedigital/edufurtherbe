@@ -68,7 +68,7 @@ async def test_mentors_sharing_an_offering_are_similar(
     body = response.json()
     assert ids(body) == [str(alike)]
     card = body["data"][0]
-    assert card["shared_offering"] == {"slug": TEST_PREP, "display_name": "Test Preparation"}
+    assert card["shared_offering"] == {"slug": TEST_PREP, "display_name": "Test preparation"}
     # A full discovery card, not a stub.
     assert {"first_name", "offerings", "next_available_state", "review_count"} <= set(card)
     assert body["next_cursor"] is None

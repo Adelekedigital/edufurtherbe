@@ -200,6 +200,13 @@ class MentorProfile(TimestampMixin, Base):
     #: pause to the first stage still ahead; stepped by the claim; cleared by
     #: any listing.
     return_reminder_stage: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    #: When the mentor submitted their application, or null while they are
+    #: still filling it in. Only a submitted application reaches the admin
+    #: queue (Mentor Onboarding PRD, B1).
+    submitted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: When an approved mentor first saw the approved screen, so it shows once
+    #: per account on any device.
+    approved_seen_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     # `primary_session_type_id` is gone, and with it
     # `trg_refuse_retiring_a_primary_offering`. D88 gave it two jobs: the

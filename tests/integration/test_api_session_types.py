@@ -324,7 +324,7 @@ async def test_the_response_carries_nothing_it_should_not(
     assert offering["service_offerings"][0] == {
         "id": await offering_id(db_engine, "document-preparation"),
         "code": "document-preparation",
-        "display_name": "Document Preparation",
+        "display_name": "Document preparation",
     }
     assert offering["application_stage"] == "other"
     # A single-stage type written before the set reads as a set of one (#215).
