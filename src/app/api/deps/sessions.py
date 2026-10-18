@@ -376,8 +376,15 @@ def _reminder_callback_url(request: Request) -> str | None:
     with a message about signatures rather than about configuration, which is
     the hardest kind of misconfiguration to diagnose.
     """
+    return callback_url(request, REMINDER_CALLBACK_PATH)
+
+
+def callback_url(request: Request, path: str) -> str | None:
+    """``path`` on this service's configured public origin, or ``None`` when
+    there is none. The one builder of a QStash destination: the scheduler
+    publishes to it and the verifier expects it as the token's `sub`."""
     base = _configured(request).public_base_url
-    return f"{base.rstrip('/')}{REMINDER_CALLBACK_PATH}" if base else None
+    return f"{base.rstrip('/')}{path}" if base else None
 
 
 def transitions(action: str) -> Callable[..., Awaitable[None]]:
