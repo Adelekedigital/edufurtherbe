@@ -832,3 +832,11 @@ class WritingAssistField(StrEnum):
 
     MENTEE_BIO = "mentee_bio"
     MENTOR_ABOUT = "mentor_about"
+
+
+class WritingAssistMode(StrEnum):
+    """What the writing assistant is asked to do (decision 267): write a bio
+    from the caller's saved profile facts, or rewrite text the caller sends."""
+
+    DRAFT = "draft"
+    IMPROVE = "improve"

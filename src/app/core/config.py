@@ -745,6 +745,31 @@ class Settings(BaseSettings):
         default=10, ge=1, le=1000, validation_alias=env_key("intake_uploads_per_hour")
     )
 
+    #: The writing assistant (Onboarding v5 B7, decision 267): drafting or
+    #: improving a bio through the EduFurther AI Router. **Off by default**, and
+    #: off answers `503` without calling or counting anything. On needs the
+    #: router's base URL and this service's private key (`production_gaps`).
+    writing_assist_enabled: bool = Field(
+        default=False, validation_alias=env_key("writing_assist_enabled")
+    )
+    #: Calls one user may make per field in any 24 hours; the next is a `429`.
+    writing_assist_daily_limit: int = Field(
+        default=10, ge=1, le=1000, validation_alias=env_key("writing_assist_daily_limit")
+    )
+    #: The router's base URL, without the `/api/v1/...` path.
+    ai_router_url: str | None = Field(default=None, validation_alias=env_key("ai_router_url"))
+    #: The RS256 private key this service signs each router call with, as PEM.
+    #: Only its public half is registered in the router's `SERVICE_CALLERS`.
+    #: Escaped `\n` sequences are read as line breaks, the form a one-line
+    #: variable takes.
+    ai_router_private_key: SecretStr | None = Field(
+        default=None, validation_alias=env_key("ai_router_private_key")
+    )
+    #: The key's id, sent as the token's `kid`; bumped on every rotation.
+    ai_router_key_id: str = Field(
+        default="edufurther-platform-2026", validation_alias=env_key("ai_router_key_id")
+    )
+
     #: How many Google free/busy calls one worker process makes in any minute,
     #: for every caller together (decision 242). The public `/slots` read can
     #: call Google per request; past this, a read answers from declared hours as
@@ -759,6 +784,8 @@ class Settings(BaseSettings):
         "sentry_dsn",
         "log_format",
         "railway_git_commit_sha",
+        "ai_router_url",
+        "ai_router_private_key",
         mode="before",
     )
     @classmethod
@@ -769,6 +796,14 @@ class Settings(BaseSettings):
         read as `0` days would delete every file on the next sweep.
         """
         return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("ai_router_private_key", mode="after")
+    @classmethod
+    def a_multiline_pem(cls, value: SecretStr | None) -> SecretStr | None:
+        """Escaped line breaks as real ones: a one-line variable holds a PEM so."""
+        if value is None:
+            return None
+        return SecretStr(value.get_secret_value().replace(r"\n", "\n"))
 
     @model_validator(mode="after")
     def default_window_within_max(self) -> Settings:
@@ -896,6 +931,15 @@ PRODUCTION_REQUIRED = (
 )
 
 
+#: What production needs once `WRITING_ASSIST_ENABLED` is on (decision 267).
+WRITING_ASSIST_REQUIRED = ("ai_router_url", "ai_router_private_key")
+
+
+def _is_set(value: object) -> bool:
+    raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+    return raw is not None and bool(str(raw).strip())
+
+
 def production_gaps(settings: Settings) -> list[str]:
     """Every reason ``settings`` is unfit for production, empty when it is fit.
 
@@ -903,18 +947,22 @@ def production_gaps(settings: Settings) -> list[str]:
     every script build the same object and need only a DSN, so a model
     validator would stop ``alembic upgrade`` in production too.
     """
-    gaps = []
-    for name in PRODUCTION_REQUIRED:
-        value = getattr(settings, name)
-        raw = value.get_secret_value() if isinstance(value, SecretStr) else value
-        if raw is None or not str(raw).strip():
-            gaps.append(f"{env_key(name)} is not set")
+    gaps = [
+        f"{env_key(name)} is not set"
+        for name in PRODUCTION_REQUIRED
+        if not _is_set(getattr(settings, name))
+    ]
     if not (settings.supabase_jwks_url or settings.supabase_jwt_secret):
         gaps.append("neither SUPABASE_JWKS_URL nor SUPABASE_JWT_SECRET is set")
     if not settings.cors_origins:
         gaps.append("CORS_ORIGINS is empty")
     if settings.debug:
         gaps.append(f"{env_key('debug')} is on")
+    # Required only while the writing assistant is on: off, nothing calls it.
+    if settings.writing_assist_enabled:
+        for name in WRITING_ASSIST_REQUIRED:
+            if not _is_set(getattr(settings, name)):
+                gaps.append(f"{env_key(name)} is not set")
     return gaps
 
 

@@ -136,3 +136,24 @@ def test_settings_themselves_never_refuse_production() -> None:
     settings = Settings(_env_file=None, environment="production")
 
     assert settings.environment == "production"
+
+
+def test_the_writing_assistant_needs_nothing_while_it_is_off() -> None:
+    """Off by default (decision 267): production starts without router settings."""
+    assert production_gaps(complete(writing_assist_enabled=False)) == []
+
+
+def test_switched_on_it_names_the_router_settings_it_lacks() -> None:
+    gaps = production_gaps(complete(writing_assist_enabled=True))
+
+    assert gaps == ["AI_ROUTER_URL is not set", "AI_ROUTER_PRIVATE_KEY is not set"]
+
+
+def test_switched_on_and_configured_it_has_no_gaps() -> None:
+    configured = complete(
+        writing_assist_enabled=True,
+        ai_router_url="https://router.example.test",
+        ai_router_private_key=SecretStr("set"),
+    )
+
+    assert production_gaps(configured) == []
