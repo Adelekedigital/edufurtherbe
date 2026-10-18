@@ -14,6 +14,7 @@ import pytest
 from app.domain.onboarding import (
     OnboardingRequirement,
     ProfileEvidence,
+    finishes_as_mentee,
     may_complete_onboarding,
     missing_requirements,
 )
@@ -109,3 +110,17 @@ class TestMissingRequirements:
 def test_a_mentor_owes_no_mentee_answers() -> None:
     mentor = evidence(has_mentee_goal=False, has_mentor_profile=True, **bare_mentee_facts())
     assert missing_requirements(mentor) == ()
+
+
+class TestFinishesAsMentee:
+    """Who gets the background bio draft at completion (decision 269)."""
+
+    def test_a_mentee_with_a_goal_and_no_mentor_profile_does(self) -> None:
+        assert finishes_as_mentee(evidence()) is True
+
+    def test_a_mentor_does_not_even_with_a_goal(self) -> None:
+        # Their bio is a mentor's public "about", which a mentee draft must not fill.
+        assert finishes_as_mentee(evidence(has_mentor_profile=True)) is False
+
+    def test_nobody_without_a_goal_does(self) -> None:
+        assert finishes_as_mentee(evidence(has_mentee_goal=False)) is False

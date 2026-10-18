@@ -33,11 +33,15 @@ from app.core.errors import OnboardingIncompleteError
 from app.domain.credits import CreditLadder
 from app.domain.enums import CreditSource
 from app.domain.notifications import Notification
-from app.domain.onboarding import may_complete_onboarding, missing_requirements
+from app.domain.onboarding import (
+    finishes_as_mentee,
+    may_complete_onboarding,
+    missing_requirements,
+)
 from app.infra.db.credit_writer import grant_starter
 from app.infra.db.models.credits import CreditLot
 from app.infra.db.models.user import UserOnboarding
-from app.infra.db.onboarding_store import onboarding_evidence
+from app.infra.db.onboarding_store import onboarding_state
 from app.infra.db.outbox import enqueue
 from app.infra.db.referral_writer import qualify_invitee
 
@@ -58,6 +62,9 @@ class OnboardingResult:
     #: False, which is how the route distinguishes 201 from 200 without
     #: counting rows.
     granted: bool
+    #: True only on a mentee's first completion that granted the starter
+    #: (`completed_at` was unset): the one that queues the bio draft (decision 269).
+    drafts_bio: bool = False
 
 
 async def _finished_and_paid(session: AsyncSession, user_id: UUID) -> Any | None:
@@ -97,7 +104,7 @@ async def complete_onboarding(
         return OnboardingResult(
             completed_at=settled.completed_at, last_step=settled.last_step, granted=False
         )
-    evidence = await onboarding_evidence(session, user_id)
+    evidence, finished_before, _ = await onboarding_state(session, user_id)
     if not may_complete_onboarding(evidence):
         raise OnboardingIncompleteError(
             "Finish your profile before completing onboarding.",
@@ -147,7 +154,12 @@ async def complete_onboarding(
     # missing with nothing that would ever revisit it.
     await qualify_invitee(session, user_id, ladder=ladder)
 
-    return OnboardingResult(completed_at=row.completed_at, last_step=row.last_step, granted=granted)
+    return OnboardingResult(
+        completed_at=row.completed_at,
+        last_step=row.last_step,
+        granted=granted,
+        drafts_bio=granted and not finished_before and finishes_as_mentee(evidence),
+    )
 
 
 async def record_last_step(session: AsyncSession, user_id: UUID, step: str) -> Any:

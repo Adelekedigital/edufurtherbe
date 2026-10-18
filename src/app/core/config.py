@@ -756,6 +756,13 @@ class Settings(BaseSettings):
     writing_assist_daily_limit: int = Field(
         default=10, ge=1, le=1000, validation_alias=env_key("writing_assist_daily_limit")
     )
+    #: The silent mentee bio draft (Onboarding v5 B6, decision 269): a mentee's
+    #: first completion queues one QStash callback that drafts `about_me` from
+    #: their answers while it is still empty. **Off by default**; it also needs
+    #: the writing assistant on and configured, and queues nothing otherwise.
+    mentee_bio_draft_enabled: bool = Field(
+        default=False, validation_alias=env_key("mentee_bio_draft_enabled")
+    )
     #: The router's base URL, without the `/api/v1/...` path.
     ai_router_url: str | None = Field(default=None, validation_alias=env_key("ai_router_url"))
     #: The RS256 private key this service signs each router call with, as PEM.

@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import Depends, File, Path, Query, Request, UploadFile
 from sqlalchemy import text
 
+from app.api.deps.bio_draft import queue_bio_draft
 from app.api.deps.core import (
     BookingWindowDep,
     CurrentUserDep,
@@ -355,7 +356,7 @@ RecordedOnboardingStepDep = Annotated[Any, Depends(recorded_onboarding_step)]
 
 
 async def completed_onboarding(
-    user: CurrentUserDep, session: SessionDep, ladder: LadderDep
+    user: CurrentUserDep, session: SessionDep, ladder: LadderDep, request: Request
 ) -> OnboardingResult:
     """Mark the caller's onboarding finished and pay the starter credit.
 
@@ -367,9 +368,14 @@ async def completed_onboarding(
 
     No authorization argument: `CurrentUserDep` *is* the caller, so there is no
     target to check.
+
+    A mentee's first completion then queues the background bio draft, after
+    the commit (decision 269); a failed publish does not fail this.
     """
     result = await complete_onboarding(session, user["id"], ladder=ladder)
     await session.commit()
+    if result.drafts_bio:
+        await queue_bio_draft(request, user["id"])
     return result
 
 

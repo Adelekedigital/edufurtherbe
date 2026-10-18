@@ -26,14 +26,12 @@ from app.core.errors import NotFoundError, ValidationError, WritingAssistUnavail
 from app.domain.enums import WritingAssistField, WritingAssistMode
 from app.domain.writing_assist import (
     MAX_LENGTH,
-    TASKS,
     WritingAssistant,
+    answer_from,
     call_for,
     daily_limit,
-    is_known_prompt_version,
+    fits,
     source_for,
-    source_size,
-    usable_text,
 )
 from app.infra.clients.ai_router import writing_assistant_for
 from app.infra.db.writing_assist_store import draft_facts, has_required_profile, record_call
@@ -90,7 +88,7 @@ async def assisted_text(
     # The largest `attempt` a call can carry is unbounded, so the size is
     # checked with room for any: a ten-digit number.
     sized = source_for(body.field, body.mode, attempt=10**9, facts=facts, text=text)
-    if source_size(sized) > TASKS[body.mode].max_source_bytes:
+    if not fits(sized, body.mode):
         if body.mode is WritingAssistMode.IMPROVE:
             raise _text_problem("that text is too long for the writing assistant")
         # A draft sends no text, so nothing at `/text` could fix it.
@@ -101,12 +99,10 @@ async def assisted_text(
 
     source = source_for(body.field, body.mode, attempt=attempt, facts=facts, text=text)
     call = call_for(user_id, body.field, body.mode, source, str(row_id))
-    result = await asyncio.to_thread(assistant.run, call)
-    suggestion = usable_text(result.text, body.field) if result is not None else None
-    # A version the provenance could not store is no answer either.
-    if result is None or suggestion is None or not is_known_prompt_version(result.prompt_version):
+    answer = answer_from(await asyncio.to_thread(assistant.run, call), body.field)
+    if answer is None:
         raise WritingAssistUnavailableError(UNAVAILABLE)
-    return WritingAssistRead(text=suggestion, prompt_version=result.prompt_version)
+    return WritingAssistRead(text=answer.text, prompt_version=answer.prompt_version)
 
 
 AssistedTextDep = Annotated[WritingAssistRead, Depends(assisted_text)]

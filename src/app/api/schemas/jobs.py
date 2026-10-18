@@ -15,6 +15,17 @@ class ReminderQueuedRead(BaseModel):
     )
 
 
+class BioDraftRead(BaseModel):
+    """A bio draft callback was handled."""
+
+    drafted: bool = Field(
+        description=(
+            "True when a draft was saved as the bio. False when none was owed, "
+            "none came back, or the person wrote their own first; still a success."
+        )
+    )
+
+
 class PresenceRecordedRead(BaseModel):
     """A Daily webhook delivery was handled."""
 

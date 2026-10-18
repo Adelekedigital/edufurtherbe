@@ -8,12 +8,20 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.config import Settings
 from app.domain.enums import WritingAssistField, WritingAssistMode
 from app.domain.profile_text import ABOUT_ME_MAX_LENGTH
 from app.domain.writing_assist import (
+    BACKGROUND_ATTEMPT,
     DAILY_WINDOW,
     FACT_MAX_LENGTH,
+    TASKS,
+    AssistResult,
+    answer_from,
+    background_relation_id,
+    bio_draft_enabled,
     call_for,
+    fits,
     is_known_prompt_version,
     provenance_problem,
     source_for,
@@ -222,3 +230,59 @@ def test_a_malformed_provenance_is_refused_where_it_is_wrong(
 
     assert problem is not None
     assert problem[0] == pointer
+
+
+# --------------------------------------------------------------------------
+# The background mentee draft (decision 269) and the rules both paths share
+# --------------------------------------------------------------------------
+
+
+def test_the_background_draft_never_shares_a_key_with_a_press() -> None:
+    """A press counts from 1, so attempt 0 is the background draft's alone."""
+    user = uuid4()
+    facts = {"origin": "Nigeria"}
+    background = source_for(MENTEE, DRAFT, attempt=BACKGROUND_ATTEMPT, facts=facts)
+    first_press = source_for(MENTEE, DRAFT, attempt=1, facts=facts)
+    assert BACKGROUND_ATTEMPT == 0
+    assert (
+        call_for(user, MENTEE, DRAFT, background, "r").idempotency_key
+        != call_for(user, MENTEE, DRAFT, first_press, "r").idempotency_key
+    )
+
+
+def test_the_background_relation_is_stable_per_user_and_names_nobody() -> None:
+    user = uuid4()
+    relation = background_relation_id(user)
+    assert relation == background_relation_id(user)
+    assert relation != background_relation_id(uuid4())
+    assert str(user) not in relation
+
+
+def test_a_body_fits_up_to_the_tasks_cap_and_not_past_it() -> None:
+    cap = TASKS[DRAFT].max_source_bytes
+    empty = source_size({"text": ""})
+    assert fits({"text": "a" * (cap - empty)}, DRAFT) is True
+    assert fits({"text": "a" * (cap - empty + 1)}, DRAFT) is False
+
+
+def test_an_answer_is_its_trimmed_text_and_version() -> None:
+    answer = answer_from(AssistResult(text="  Hi.  ", prompt_version="bio_draft-v1"), MENTEE)
+    assert answer == AssistResult(text="Hi.", prompt_version="bio_draft-v1")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        None,
+        AssistResult(text="   ", prompt_version="bio_draft-v1"),
+        AssistResult(text="Hi.", prompt_version="summary-v1"),
+    ],
+)
+def test_no_text_or_an_unknown_version_is_no_answer(result: AssistResult | None) -> None:
+    assert answer_from(result, MENTEE) is None
+
+
+def test_the_background_draft_is_off_by_default() -> None:
+    assert bio_draft_enabled(Settings(_env_file=None)) is False  # type: ignore[call-arg]
+    on = Settings(_env_file=None, mentee_bio_draft_enabled=True)  # type: ignore[call-arg]
+    assert bio_draft_enabled(on) is True

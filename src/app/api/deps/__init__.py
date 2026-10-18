@@ -32,6 +32,7 @@ from app.api.deps.availability import (
     SlotsDep,
     UpdatedAvailabilityRuleDep,
 )
+from app.api.deps.bio_draft import BIO_DRAFT_CALLBACK_PATH, BioDraftCallbackDep
 from app.api.deps.calendar import (
     CalendarConnectedDep,
     CalendarConsentDep,
@@ -156,6 +157,7 @@ from app.api.deps.sessions import (
 from app.api.deps.writing_assist import AssistedTextDep
 
 __all__ = [
+    "BIO_DRAFT_CALLBACK_PATH",
     "MAX_FILE_MB",
     "PRIVATE_NO_STORE",
     "AcceptedSessionDep",
@@ -168,6 +170,7 @@ __all__ = [
     "AvailabilityExceptionsDep",
     "AvailabilityRulesDep",
     "AwardsDep",
+    "BioDraftCallbackDep",
     "BookedSessionDep",
     "BookingWindowDep",
     "CalendarConnectedDep",

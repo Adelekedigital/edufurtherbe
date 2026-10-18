@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic import ValidationError as PydanticValidationError
 
 from app.api.deps.core import SessionDep, _configured, logger
-from app.api.deps.sessions import _calendar, _reminder_callback_url
+from app.api.deps.sessions import _calendar, _reminder_callback_url, callback_url
 from app.api.schemas.jobs import RuntimeJobRead
 from app.core.errors import (
     AuthenticationError,
@@ -51,6 +51,36 @@ from app.infra.jobs.manifest import RUNTIME_JOB_NAMES, schedule_id
 from app.infra.jobs.runner import RuntimeJobs
 
 
+async def verified_qstash_body(request: Request, url: str | None) -> bytes:
+    """The raw body, once QStash is proved to have signed it for ``url``.
+
+    The one verification every QStash callback runs (decision 139): the issuer,
+    the destination and the body hash. **Unconfigured refuses everything**, a
+    missing signing key or destination alike: an endpoint that waved requests
+    through would be quietly open, where one that rejects them is visibly broken.
+    Raises :class:`AuthenticationError`, answered `401`.
+    """
+    settings = _configured(request)
+    keys = tuple(
+        key.get_secret_value()
+        for key in (settings.qstash_current_signing_key, settings.qstash_next_signing_key)
+        if key is not None
+    )
+    if not keys or not url:
+        raise AuthenticationError("callback verification is not configured")
+    body = await request.body()
+    try:
+        verify_callback(
+            token=request.headers.get("Upstash-Signature", ""),
+            body=body,
+            url=url,
+            signing_keys=keys,
+        )
+    except UntrustedCallbackError as exc:
+        raise AuthenticationError(str(exc)) from exc
+    return body
+
+
 async def reminder_callback(request: Request, session: SessionDep) -> bool:
     """Verify the caller is QStash, then fire the reminder if it is still owed.
 
@@ -64,24 +94,7 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     nobody to refuse.
     """
     settings = _configured(request)
-    keys = tuple(
-        key.get_secret_value()
-        for key in (settings.qstash_current_signing_key, settings.qstash_next_signing_key)
-        if key is not None
-    )
-    url = _reminder_callback_url(request)
-    token = request.headers.get("Upstash-Signature", "")
-    if not keys or not url:
-        # **Refused rather than waved through.** An unconfigured verifier on a
-        # public endpoint that queues messages is worse than one that rejects
-        # everything: the second is visibly broken, the first is quietly open.
-        raise AuthenticationError("callback verification is not configured")
-
-    body = await request.body()
-    try:
-        verify_callback(token=token, body=body, url=url, signing_keys=keys)
-    except UntrustedCallbackError as exc:
-        raise AuthenticationError(str(exc)) from exc
+    body = await verified_qstash_body(request, _reminder_callback_url(request))
 
     payload = json.loads(body or b"{}")
     session_id = payload.get("session_id")
@@ -217,26 +230,9 @@ class RuntimeJobRequest(BaseModel):
 async def runtime_job_delivery(job_name: str, request: Request) -> RuntimeJobRead:
     """Verify raw QStash bytes, then parse and call the shared job runner."""
     settings = _configured(request)
-    keys = tuple(
-        key.get_secret_value()
-        for key in (settings.qstash_current_signing_key, settings.qstash_next_signing_key)
-        if key is not None
+    body = await verified_qstash_body(
+        request, callback_url(request, f"/api/v1/internal/jobs/{job_name}")
     )
-    if not keys or not settings.public_base_url:
-        raise AuthenticationError("runtime callback verification is not configured")
-
-    path = f"/api/v1/internal/jobs/{job_name}"
-    destination = f"{settings.public_base_url.rstrip('/')}{path}"
-    body = await request.body()
-    try:
-        verify_callback(
-            token=request.headers.get("Upstash-Signature", ""),
-            body=body,
-            url=destination,
-            signing_keys=keys,
-        )
-    except UntrustedCallbackError as exc:
-        raise AuthenticationError(str(exc)) from exc
 
     if job_name not in RUNTIME_JOB_NAMES:
         raise ValidationError("unknown runtime job")

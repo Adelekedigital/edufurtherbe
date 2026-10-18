@@ -22,8 +22,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, status
 
-from app.api.deps import DailyPresenceDep, ReminderCallbackDep
-from app.api.schemas.jobs import PresenceRecordedRead, ReminderQueuedRead
+from app.api.deps import (
+    BIO_DRAFT_CALLBACK_PATH,
+    BioDraftCallbackDep,
+    DailyPresenceDep,
+    ReminderCallbackDep,
+)
+from app.api.schemas.jobs import BioDraftRead, PresenceRecordedRead, ReminderQueuedRead
 
 router = APIRouter(prefix="/api/v1/callbacks", tags=["callbacks"])
 
@@ -111,3 +116,26 @@ DAILY_RESPONSES: dict[int | str, dict[str, str]] = {
 )
 async def record_daily_presence(recorded: DailyPresenceDep) -> PresenceRecordedRead:
     return PresenceRecordedRead(recorded=recorded)
+
+
+@router.post(
+    BIO_DRAFT_CALLBACK_PATH.removeprefix(router.prefix),
+    response_model=BioDraftRead,
+    summary="Draft a new mentee's bio",
+    description=(
+        "**Called by QStash, never by a person** (decision 269), queued once "
+        "when a mentee first completes onboarding. Authenticated by "
+        "`Upstash-Signature`, verified against this endpoint and a hash of "
+        'this exact body; the body is `{"user_id"}`.\n\n'
+        "It re-reads the person first and drafts only while their bio is empty, "
+        "no draft was ever recorded, and they are still a mentee with a goal. "
+        "The draft is written from their onboarding answers alone, and saved "
+        "only if the bio is still empty at that moment, so text the person "
+        "typed meanwhile wins. Safe to deliver twice.\n\n"
+        "**Every handled outcome is `200`**, `drafted: false` included, so "
+        "QStash stops: retrying would not change any of them."
+    ),
+    responses=CALLBACK_RESPONSES,
+)
+async def draft_mentee_bio(drafted: BioDraftCallbackDep) -> BioDraftRead:
+    return BioDraftRead(drafted=drafted)

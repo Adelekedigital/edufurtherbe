@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from app.core.config import Settings
 from app.domain.enums import WritingAssistField, WritingAssistMode
@@ -36,6 +36,7 @@ from app.domain.profile_text import (
 from app.domain.text import JOINERS, visible_only
 
 __all__ = [
+    "BACKGROUND_ATTEMPT",
     "DAILY_WINDOW",
     "FEATURE_ID",
     "OUTPUT_TEXT_KEY",
@@ -45,8 +46,12 @@ __all__ = [
     "AssistResult",
     "Task",
     "WritingAssistant",
+    "answer_from",
+    "background_relation_id",
+    "bio_draft_enabled",
     "call_for",
     "daily_limit",
+    "fits",
     "is_known_prompt_version",
     "provenance_problem",
     "source_for",
@@ -106,6 +111,25 @@ _KEEP = frozenset({"\n"}) | JOINERS
 FACT_MAX_LENGTH = 200
 
 
+#: The `attempt` the background mentee draft sends (B6, decision 269). A press
+#: counts from 1, so the two never share a body or a key, and every delivery of
+#: the one background draft sends the same key, which the router replays.
+BACKGROUND_ATTEMPT = 0
+#: Names the background draft's `taskrelation_id`, which a row id names for a
+#: press: a stable reference per user that is not their id.
+_BACKGROUND_RELATIONS = UUID("5b6d1f0e-8c2a-5e4b-9f3d-6a7c0b1e2d3f")
+
+
+def bio_draft_enabled(settings: Settings) -> bool:
+    """Whether a finished mentee's bio is drafted in the background; the one reader."""
+    return settings.mentee_bio_draft_enabled
+
+
+def background_relation_id(user_id: UUID) -> str:
+    """The background draft's `taskrelation_id`: the same for every delivery."""
+    return str(uuid5(_BACKGROUND_RELATIONS, str(user_id)))
+
+
 def daily_limit(settings: Settings) -> int:
     """Calls one user may make per field in `DAILY_WINDOW`; the one reader."""
     return settings.writing_assist_daily_limit
@@ -122,6 +146,11 @@ def source_size(source_data: dict[str, Any]) -> int:
     """The bytes the router counts: `json.dumps` with its default ASCII escapes,
     so a non-ASCII character costs its six- or twelve-byte escape."""
     return len(json.dumps(source_data).encode())
+
+
+def fits(source_data: dict[str, Any], mode: WritingAssistMode) -> bool:
+    """Whether the body is within the router's cap for the mode's task."""
+    return source_size(source_data) <= TASKS[mode].max_source_bytes
 
 
 @dataclass(frozen=True)
@@ -224,6 +253,17 @@ def usable_text(raw: object, field: WritingAssistField) -> str | None:
     if not text or len(text) > MAX_LENGTH[field]:
         return None
     return text
+
+
+def answer_from(result: AssistResult | None, field: WritingAssistField) -> AssistResult | None:
+    """What the router returned as it may be shown or saved, or `None`: usable
+    text (`usable_text`) and a version a bio's provenance can record."""
+    if result is None:
+        return None
+    text = usable_text(result.text, field)
+    if text is None or not is_known_prompt_version(result.prompt_version):
+        return None
+    return AssistResult(text=text, prompt_version=result.prompt_version)
 
 
 def window_retry_after(freeing_call_at: datetime, now: datetime) -> int:

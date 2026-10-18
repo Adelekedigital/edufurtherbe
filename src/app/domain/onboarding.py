@@ -36,6 +36,7 @@ __all__ = [
     "OnboardingRequirement",
     "OnboardingStep",
     "ProfileEvidence",
+    "finishes_as_mentee",
     "may_complete_onboarding",
     "missing_requirements",
     "published_step",
@@ -111,6 +112,15 @@ def may_complete_onboarding(evidence: ProfileEvidence) -> bool:
     """
     mentee_done = evidence.has_mentee_goal and not missing_requirements(evidence)
     return evidence.has_profile and (mentee_done or evidence.has_mentor_profile)
+
+
+def finishes_as_mentee(evidence: ProfileEvidence) -> bool:
+    """Whether a completion is a mentee's, for the background bio draft
+    (decision 269): a goal and no mentor profile. A mentor's bio is their public
+    "about", which a mentee-voiced draft must never fill, so a user with both
+    roles gets none.
+    """
+    return evidence.has_mentee_goal and not evidence.has_mentor_profile
 
 
 def published_step(value: str | None) -> OnboardingStep | None:
