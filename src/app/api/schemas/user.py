@@ -43,6 +43,13 @@ class UserProfileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     about_me: str | None = None
+    about_me_drafted_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When you saved `about_me` as a writing-assist suggestion, or null when "
+            "it is your own. Shown only to you."
+        ),
+    )
     gender: str | None = None
     avatar_url: str | None = None
     #: Where to centre `avatar_url`; `null` means the client's default crop.

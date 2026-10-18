@@ -471,6 +471,14 @@ class MentorPublicRead(BaseModel):
         exclude_if=lambda value: value is None,
         description="Owner only, like `approval_status`. `unlisted` means hidden from search.",
     )
+    about_me_drafted_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "**Owner only**, like `approval_status`, and absent too when the bio is "
+            "your own: when you saved `about_me` as a writing-assist suggestion."
+        ),
+    )
     setup_needed: list[Literal["session_type", "weekly_hours"]] | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -574,7 +582,7 @@ def _next_available(row: dict[str, Any]) -> dict[str, Any]:
 
 #: Published to the mentor reading their own profile, and absent — not null —
 #: for everybody else, so their presence alone means "this is you".
-OWNER_ONLY = ("approval_status", "listing_status")
+OWNER_ONLY = ("approval_status", "listing_status", "about_me_drafted_at")
 
 
 def _owner_fields(

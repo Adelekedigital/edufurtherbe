@@ -46,7 +46,7 @@ from app.domain.availability import (
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
 from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
 from app.domain.names import split_full_name
-from app.domain.profile_text import ABOUT_ME_MAX_LENGTH
+from app.domain.profile_text import ABOUT_ME_MAX_LENGTH, PROMPT_VERSION_MAX_LENGTH
 from app.domain.text import has_letter, hidden_characters
 
 
@@ -606,6 +606,29 @@ class UserProfileWrite(Normalised):
         default=None,
         max_length=ABOUT_ME_MAX_LENGTH,
         description=f"Your bio, at most {ABOUT_ME_MAX_LENGTH} characters. `null` clears it.",
+    )
+    #: Where the bio came from (decision 267). **No `null`** (a `422`): say
+    #: `false`. The server stamps the time; a client never sends one. The
+    #: writer turns both into columns; the rules are `provenance_problem`'s.
+    about_me_drafted: bool = Field(  # type: ignore[assignment]
+        default=None,
+        description=(
+            "`true` when the `about_me` sent with it is a writing-assist suggestion "
+            "(as returned, or edited): send `about_me` and `about_me_prompt_version` "
+            "too, and the server records when. `false` says the bio is your own and "
+            "clears the record. Omitted, the record stays while `about_me` is "
+            "unchanged and is cleared when it changes."
+        ),
+    )
+    about_me_prompt_version: str = Field(  # type: ignore[assignment]
+        default=None,
+        max_length=PROMPT_VERSION_MAX_LENGTH,
+        description=(
+            "The `prompt_version` `POST /me/writing-assist` returned, e.g. "
+            "`bio_draft-v1`. Only with `about_me_drafted: true`; anything else, or "
+            "a version that is not a bio prompt's, is a `422` at this field."
+        ),
+        examples=["bio_draft-v1"],
     )
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None

@@ -35,6 +35,7 @@ from app.api.routes import (
     me_referrals,
     me_reviews,
     me_session_types,
+    me_writing_assist,
     mentors,
     reviews,
     session_types,
@@ -279,6 +280,15 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "writing-assist",
+        "description": (
+            "Suggest a bio, drafted from your saved profile or improved from text "
+            "you send, through the EduFurther AI Router. **Nothing is saved**: "
+            "keep a suggestion by saving it as `about_me` with "
+            "`about_me_drafted: true`. Off unless this deployment turns it on."
+        ),
+    },
+    {
         "name": "interest",
         "description": (
             "Asking to be told when something ships, and reading back what you "
@@ -510,6 +520,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_referrals.router)
     application.include_router(invites.router)
     application.include_router(me_reviews.router)
+    application.include_router(me_writing_assist.router)
     application.include_router(callbacks.router)
     application.include_router(internal_jobs.router)
     application.include_router(sessions.router)

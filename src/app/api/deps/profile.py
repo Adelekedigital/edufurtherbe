@@ -55,6 +55,7 @@ from app.core.errors import (
 from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
 from app.domain.referrals import claim_window
+from app.domain.writing_assist import provenance_problem
 from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
@@ -475,7 +476,11 @@ async def updated_mentor_profile(
 async def upserted_profile(
     payload: UserProfileWrite, user_id: OwnerDep, session: SessionDep
 ) -> None:
-    await upsert_profile(session, user_id, payload.model_dump(exclude_unset=True))
+    sent = payload.model_dump(exclude_unset=True)
+    # Where the bio came from (decision 267): checked whole, before anything is written.
+    if (problem := provenance_problem(sent)) is not None:
+        raise ValidationError(problem[1], field_errors=(problem,))
+    await upsert_profile(session, user_id, sent)
     await session.commit()
 
 

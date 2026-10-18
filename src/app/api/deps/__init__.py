@@ -153,6 +153,7 @@ from app.api.deps.sessions import (
     _rooms,
     _scheduler,
 )
+from app.api.deps.writing_assist import AssistedTextDep
 
 __all__ = [
     "MAX_FILE_MB",
@@ -161,6 +162,7 @@ __all__ = [
     "AdminCreditGrantDep",
     "AdminGrantHistoryDep",
     "ApprovedInstitutionDep",
+    "AssistedTextDep",
     "AuthoredReviewDep",
     "AuthoredReviewsDep",
     "AvailabilityExceptionsDep",

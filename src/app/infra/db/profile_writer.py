@@ -30,7 +30,7 @@ from __future__ import annotations
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, delete, func, insert, select, update
+from sqlalchemy import CursorResult, case, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
@@ -367,16 +367,48 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     existing = await session.execute(
         select(UserProfile.user_id).where(UserProfile.user_id == user_id)
     )
-    if existing.first() is None:
-        # A request that only set a `users` column is not starting a profile:
-        # creating an empty row would flip `/me`'s `profile` from null.
-        if values or not user_values:
+    found = existing.first() is not None
+    values.update(_provenance(payload, stored=found))
+    if not found:
+        # A request that only set a `users` column, or only said a bio that
+        # does not exist is their own, is not starting a profile: creating an
+        # empty row would flip `/me`'s `profile` from null.
+        if values or not (user_values or "about_me_drafted" in payload):
             await session.execute(insert(UserProfile).values(user_id=user_id, **values))
         return
     if values:
         await session.execute(
             update(UserProfile).where(UserProfile.user_id == user_id).values(**values)
         )
+
+
+def _provenance(payload: dict[str, Any], *, stored: bool) -> dict[str, Any]:
+    """The bio's provenance columns this write sets (decision 267).
+
+    `about_me_drafted: true` stamps the database's `now()` and the version;
+    `false` clears both. Omitted, **provenance follows the text**: it stays if
+    `about_me` is unchanged and clears if it changes, so a form resending the
+    same bio keeps the record and a rewritten one loses it. A new row (`stored`
+    false) has no record to keep. The rules on what
+    may be sent are `provenance_problem`'s, checked before this runs.
+    """
+    drafted = payload.get("about_me_drafted")
+    if drafted is True:
+        return {
+            "about_me_drafted_at": func.now(),
+            "about_me_prompt_version": payload["about_me_prompt_version"],
+        }
+    if drafted is False:
+        # Nothing to clear on a profile not yet written; a row made only for
+        # this would flip `/me`'s `profile` from null.
+        return {"about_me_drafted_at": None, "about_me_prompt_version": None} if stored else {}
+    if "about_me" not in payload or not stored:
+        return {}
+    same = UserProfile.about_me.is_not_distinct_from(payload["about_me"])
+    return {
+        "about_me_drafted_at": case((same, UserProfile.about_me_drafted_at), else_=None),
+        "about_me_prompt_version": case((same, UserProfile.about_me_prompt_version), else_=None),
+    }
 
 
 async def _choose_avatar_focus(

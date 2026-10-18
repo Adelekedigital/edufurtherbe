@@ -32,6 +32,7 @@ ADAPTER_SEAMS = frozenset(
         "notifier",
         "scheduler",
         "storage",
+        "writing_assistant",
     }
 )
 
