@@ -91,7 +91,7 @@ Tracked as backend issue #348, deferred until the owner decides on Emailit.
 | `credits_granted` | Starter, invite or support credits granted | the user | `fName`, `bookLink` | Credit: New users update |
 | `credits_renewed` | The monthly credits arrived | the user | `fName`, `bookLink` | Credit renewal |
 | `credits_expiring` | Unused credits are about to expire | the user | `fName`, `bookLink`, `creditCount` | Unused credit |
-| `mentor_application_received` | A mentor applied | **admins** who decide it, never the applicant | `recipientName`, `mentorName` (the applicant) | **none** |
+| `mentor_application_received` | A mentor submitted a complete application (`POST /me/mentor-application/submit`), once; saving a mentor profile sends nothing | **admins** who decide it, never the applicant | `recipientName`, `mentorName` (the applicant) | **none** |
 | `mentor_approved` | An application was approved | the applicant | `recipientName` | **none** |
 | `mentor_declined` | An application was declined | the applicant | `recipientName` | **none** |
 | `mentor_return_reminder` | A self-paused mentor's return approaching (dated), or a check-in (undated). One template words both. | the mentor | `recipientName`, `daysUntilReturn`, `returnOn`, `daysPaused`, `calendarUrl` | Return reminder |

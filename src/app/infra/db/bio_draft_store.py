@@ -21,15 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.writing_assist import AssistResult
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.predicates import LIVE
+from app.infra.db.predicates import LIVE, blank
 
 __all__ = ["bio_unwritten", "save_bio_draft"]
 
 
 def _unwritten() -> Any:
-    return (func.coalesce(func.btrim(UserProfile.about_me), "") == "") & (
-        UserProfile.about_me_drafted_at.is_(None)
-    )
+    return blank(UserProfile.about_me) & (UserProfile.about_me_drafted_at.is_(None))
 
 
 async def bio_unwritten(session: AsyncSession, user_id: UUID) -> bool:

@@ -10,7 +10,7 @@ into two shapes.
 from __future__ import annotations
 
 import unicodedata
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -317,9 +317,32 @@ class MentorProfileRead(BaseModel):
     default_booking_window_days: int = Field(
         description="What an offering uses when neither it nor you set a window."
     )
+    # Mentor Onboarding (B2). The owner's own view: an admin reading this
+    # profile gets null in all four; the decision log is where they read notes.
+    submitted_at: datetime | None = Field(
+        default=None,
+        description="When you submitted your application; null until you do. Owner only.",
+    )
+    approved_seen_at: datetime | None = Field(
+        default=None,
+        description="When you first saw the approved screen; null until then. Owner only.",
+    )
+    review_note: str | None = Field(
+        default=None,
+        description=(
+            "The reviewer's note on the latest decline, **only while declined**; "
+            "null otherwise, or when the reviewer left none. Owner only."
+        ),
+    )
+    reviewed_at: datetime | None = Field(
+        default=None,
+        description="When that decline was made, only while declined. Owner only.",
+    )
 
     @classmethod
-    def from_row(cls, row: dict[str, Any], window: BookingWindow) -> MentorProfileRead:
+    def from_row(
+        cls, row: dict[str, Any], window: BookingWindow, *, owner: bool
+    ) -> MentorProfileRead:
         country = None
         if row.get("primary_study_country_code") is not None:
             country = CountryRef(
@@ -347,6 +370,10 @@ class MentorProfileRead(BaseModel):
             return_on=row.get("return_on"),
             max_booking_window_days=window.max_days,
             default_booking_window_days=window.default_days,
+            submitted_at=row.get("submitted_at") if owner else None,
+            approved_seen_at=row.get("approved_seen_at") if owner else None,
+            review_note=row.get("review_note") if owner else None,
+            reviewed_at=row.get("reviewed_at") if owner else None,
         )
 
 

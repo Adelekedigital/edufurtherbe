@@ -93,7 +93,7 @@ async def record(
     the test for this inserts an event directly rather than calling this
     function — otherwise a broken trigger and a working caller look identical.
     """
-    if not await _lock(session, user_id):
+    if not await lock_mentor(session, user_id):
         return False
 
     await session.execute(
@@ -115,7 +115,7 @@ async def record(
     return True
 
 
-async def _lock(session: AsyncSession, user_id: UUID) -> bool:
+async def lock_mentor(session: AsyncSession, user_id: UUID) -> bool:
     """Lock this mentor's live profile row for the transition. ``False`` if none.
 
     **Every transition takes it first**, so two on one mentor run one after the
@@ -164,7 +164,7 @@ async def decide(
     # Locked before the approval is read, so an account deleted meanwhile is
     # absent here rather than a decision that reports success and records
     # nothing (`record` would then refuse both events).
-    if not await _lock(session, user_id):
+    if not await lock_mentor(session, user_id):
         return False
     before = await _approval_before(session, user_id)
     if before is None:
@@ -298,7 +298,7 @@ async def pause(
     date" calls this again, and a second `unlisted` event would record a
     transition that never happened.
     """
-    if not await _lock(session, user_id):
+    if not await lock_mentor(session, user_id):
         return "absent"
     if await unlisted_by_someone_else(session, user_id):
         return "refused"

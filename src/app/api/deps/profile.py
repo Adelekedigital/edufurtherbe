@@ -68,6 +68,7 @@ from app.infra.db.invite_links import (
     pick_handle,
     set_link_active,
 )
+from app.infra.db.mentor_application_store import SubmittedApplication, submit_application
 from app.infra.db.onboarding_store import get_onboarding, onboarding_state
 from app.infra.db.onboarding_writer import (
     OnboardingResult,
@@ -172,9 +173,12 @@ async def target_awards(user_id: TargetUserDep, session: SessionDep) -> list[dic
 
 
 async def target_mentor_profile(
-    user_id: TargetUserDep, session: SessionDep
+    user_id: TargetUserDep, user: CurrentUserDep, session: SessionDep
 ) -> dict[str, Any] | None:
-    return await get_mentor_profile(session, user_id)
+    """The profile, with `owner`: whether the caller is reading their own, which
+    decides the owner-only fields an admin reading it does not get."""
+    row = await get_mentor_profile(session, user_id)
+    return None if row is None else row | {"owner": user_id == user["id"]}
 
 
 EducationDep = Annotated[list[dict[str, Any]], Depends(target_education)]
@@ -353,6 +357,17 @@ async def recorded_onboarding_step(
 
 
 RecordedOnboardingStepDep = Annotated[Any, Depends(recorded_onboarding_step)]
+
+
+async def submitted_application(user: CurrentUserDep, session: SessionDep) -> SubmittedApplication:
+    """Submit the caller's mentor application; the commit is here, so the
+    submission and the admins' alert are one transaction."""
+    result = await submit_application(session, user["id"])
+    await session.commit()
+    return result
+
+
+SubmittedApplicationDep = Annotated[SubmittedApplication, Depends(submitted_application)]
 
 
 async def completed_onboarding(

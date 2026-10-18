@@ -109,7 +109,7 @@ async def read_me(
         goal=(GoalRead.from_row(goal) if goal is not None else None),
         awards=[AwardRead.from_row(row) for row in attributes["awards"]],
         mentor_profile=(
-            MentorProfileRead.from_row(mentor_profile, window)
+            MentorProfileRead.from_row(mentor_profile, window, owner=True)
             if mentor_profile is not None
             else None
         ),

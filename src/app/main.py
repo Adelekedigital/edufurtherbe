@@ -28,6 +28,7 @@ from app.api.routes import (
     me_intake,
     me_interest,
     me_mentee_stats,
+    me_mentor_application,
     me_mentor_matches,
     me_mentor_stats,
     me_mentors,
@@ -241,6 +242,16 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "what is owed, as `GET /api/v1/me` → `onboarding` does.\n\n"
             "The credit itself is one, it never expires, and it appears under "
             "`credits` on `GET /api/v1/me`."
+        ),
+    },
+    {
+        "name": "mentor-application",
+        "description": (
+            "Applying to mentor. **Saving a mentor profile is not applying**: "
+            "admins are told only when the mentor submits a complete "
+            "application, once. What a complete application holds is listed by "
+            "the `missing` member of `/problems/mentor-application-incomplete`, "
+            "in step order."
         ),
     },
     {
@@ -517,6 +528,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_mentee_stats.router)
     application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)
+    application.include_router(me_mentor_application.router)
     application.include_router(me_referrals.router)
     application.include_router(invites.router)
     application.include_router(me_reviews.router)

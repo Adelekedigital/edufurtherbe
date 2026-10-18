@@ -97,3 +97,10 @@ class OnboardingStatusRead(BaseModel):
             missing=list(missing_requirements(evidence)),
             last_step=published_step(last_step),
         )
+
+
+class MentorApplicationRead(BaseModel):
+    """A submitted mentor application: when, and where it stands."""
+
+    submitted_at: datetime
+    approval_status: str = Field(description="`pending` until an admin decides.")

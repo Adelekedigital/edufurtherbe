@@ -1,4 +1,7 @@
-"""Telling the admins that somebody applied to be a mentor.
+"""Telling the admins that somebody submitted a mentor application.
+
+**On submit, not on creating the profile** (Mentor Onboarding B2): `apply_as`
+creates the profile, fills the application and submits it.
 
 **The first message here whose recipients are a set.** Every other one resolves
 a person from a row — the mentor on this session, the applicant on this profile.
@@ -18,12 +21,14 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.application_factories import complete_application
 
 from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 APPLY = "/api/v1/users/{user_id}/mentor-profile"
+SUBMIT = "/api/v1/me/mentor-application/submit"
 
 
 async def a_user(engine: AsyncEngine, tag: str, *, role: str = "mentee") -> tuple[UUID, UUID]:
@@ -72,12 +77,17 @@ async def alerted(engine: AsyncEngine, applicant: UUID) -> set[UUID]:
         }
 
 
-async def apply_as(client: httpx.AsyncClient, user_id: UUID, auth_id: UUID) -> httpx.Response:
-    return await client.post(
+async def apply_as(
+    client: httpx.AsyncClient, engine: AsyncEngine, user_id: UUID, auth_id: UUID
+) -> httpx.Response:
+    created = await client.post(
         APPLY.format(user_id=user_id),
         headers=bearer(api_token(auth_id)),
         json={"headline": "I help with applications"},
     )
+    assert created.status_code == 201, created.text
+    await complete_application(engine, user_id)
+    return await client.post(SUBMIT, headers=bearer(api_token(auth_id)))
 
 
 # --------------------------------------------------------------------------
@@ -94,9 +104,9 @@ async def test_the_admins_who_can_act_are_told(
     await grant(db_engine, superuser, "super_admin")
     applicant, auth_id = await a_user(db_engine, "alert-applicant")
 
-    response = await apply_as(api_client, applicant, auth_id)
+    response = await apply_as(api_client, db_engine, applicant, auth_id)
 
-    assert response.status_code == 201, response.text
+    assert response.status_code == 200, response.text
     assert await alerted(db_engine, applicant) == {approver, superuser}
 
 
@@ -112,7 +122,7 @@ async def test_an_admin_who_may_only_look_is_not_told(
     await grant(db_engine, watcher, "limited_access")
     applicant, auth_id = await a_user(db_engine, "alert-limited")
 
-    await apply_as(api_client, applicant, auth_id)
+    await apply_as(api_client, db_engine, applicant, auth_id)
 
     assert await alerted(db_engine, applicant) == set()
 
@@ -126,7 +136,7 @@ async def test_a_revoked_admin_is_not_told(
     await grant(db_engine, former, "mentor_approval", revoked=True)
     applicant, auth_id = await a_user(db_engine, "alert-revoked")
 
-    await apply_as(api_client, applicant, auth_id)
+    await apply_as(api_client, db_engine, applicant, auth_id)
 
     assert await alerted(db_engine, applicant) == set()
 
@@ -143,7 +153,7 @@ async def test_an_applicant_who_is_also_an_admin_is_not_told_about_themselves(
     applicant, auth_id = await a_user(db_engine, "alert-self")
     await grant(db_engine, applicant, "super_admin")
 
-    await apply_as(api_client, applicant, auth_id)
+    await apply_as(api_client, db_engine, applicant, auth_id)
 
     assert applicant not in await alerted(db_engine, applicant)
 
@@ -156,7 +166,7 @@ async def test_one_row_per_admin(api_client: httpx.AsyncClient, db_engine: Async
         await grant(db_engine, admin, "mentor_approval")
     applicant, auth_id = await a_user(db_engine, "alert-many-applicant")
 
-    await apply_as(api_client, applicant, auth_id)
+    await apply_as(api_client, db_engine, applicant, auth_id)
 
     async with db_engine.begin() as conn:
         rows = (
@@ -183,9 +193,9 @@ async def test_an_application_succeeds_with_no_admins_configured(
     yet still accepts applications; they simply wait to be found."""
     applicant, auth_id = await a_user(db_engine, "alert-none")
 
-    response = await apply_as(api_client, applicant, auth_id)
+    response = await apply_as(api_client, db_engine, applicant, auth_id)
 
-    assert response.status_code == 201, response.text
+    assert response.status_code == 200, response.text
     assert await alerted(db_engine, applicant) == set()
 
 
@@ -198,7 +208,7 @@ async def test_the_alert_and_the_profile_are_one_transaction(
     await grant(db_engine, approver, "mentor_approval")
     applicant, auth_id = await a_user(db_engine, "alert-atomic")
 
-    await apply_as(api_client, applicant, auth_id)
+    await apply_as(api_client, db_engine, applicant, auth_id)
 
     async with db_engine.begin() as conn:
         profiles = (
@@ -225,7 +235,7 @@ async def test_it_is_about_the_application_not_a_session(
     await grant(db_engine, approver, "mentor_approval")
     applicant, auth_id = await a_user(db_engine, "alert-entity")
 
-    await apply_as(api_client, applicant, auth_id)
+    await apply_as(api_client, db_engine, applicant, auth_id)
 
     async with db_engine.begin() as conn:
         row: Any = (

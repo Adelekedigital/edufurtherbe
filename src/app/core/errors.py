@@ -91,6 +91,27 @@ class OnboardingIncompleteError(ConflictError):
         return {"missing": list(self.missing)}
 
 
+class MentorApplicationIncompleteError(ConflictError):
+    """A mentor application cannot be submitted while it is missing something.
+
+    Its own problem type for the same reason as onboarding's: the client sends
+    the mentor back to the step that is missing, never retries. `missing`
+    carries the domain's `MentorApplicationItem` codes, in step order.
+    """
+
+    def __init__(self, message: str = "", *, missing: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.missing = missing
+
+    def problem_members(self) -> dict[str, object]:
+        return {"missing": list(self.missing)}
+
+
+class MentorApplicationDecidedError(ConflictError):
+    """The application was already approved or declined, so there is nothing to
+    submit. A type of its own: the client shows the outcome, not the form."""
+
+
 class AlreadyReviewedError(ConflictError):
     """This session already carries a review by this author.
 
