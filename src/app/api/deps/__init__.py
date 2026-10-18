@@ -60,6 +60,7 @@ from app.api.deps.interest import (
     WithdrawnInterestDep,
 )
 from app.api.deps.jobs import DailyPresenceDep, ReminderCallbackDep, RuntimeJobDep
+from app.api.deps.matches import MentorMatchesDep
 from app.api.deps.mentors import (
     FeaturedMentorDep,
     MentorPageDep,
@@ -210,6 +211,7 @@ __all__ = [
     "ListedMentorDep",
     "LookupPageDep",
     "MentorHistoryDep",
+    "MentorMatchesDep",
     "MentorPageDep",
     "MentorProfileDep",
     "MentorRelationshipDep",

@@ -36,6 +36,7 @@ __all__ = [
     "goal_overlap_count",
     "has_live_goals",
     "live_goal_exists",
+    "live_goal_offering_ids",
     "live_offering_slugs",
     "offerings_for",
     "offerings_for_session_types",
@@ -143,6 +144,21 @@ def live_goal_exists(mentee: UUID) -> Any:
     The one definition: browse's goal ranking and onboarding completion's help
     requirement both ask it (decision 261)."""
     return exists().where(*_live_goals(mentee))
+
+
+def live_goal_offering_ids(mentee: UUID) -> Any:
+    """The offering ids of this mentee's live goals, as an `ARRAY` subquery.
+
+    What mentor matching counts a mentor's overlap against (decision 265): the
+    same `_live_goals` the goal ranking reads, so the two cannot disagree about
+    which goals count.
+    """
+    return (
+        select(func.array_agg(MenteeGoalNeed.service_offering_id))
+        .select_from(MenteeGoalNeed, ServiceOffering)
+        .where(*_live_goals(mentee))
+        .scalar_subquery()
+    )
 
 
 async def has_live_goals(session: AsyncSession, mentee: UUID) -> bool:

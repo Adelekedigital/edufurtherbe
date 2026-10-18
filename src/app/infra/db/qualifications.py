@@ -59,6 +59,11 @@ def top_qualification(user: Any, name: str = "top_qualification") -> Any:
             # ADR 0008 point 5: the registry is allowed to be incomplete, so what
             # the user typed is always kept and the link is opportunistic.
             func.coalesce(Institution.name, EducationEntry.school_name_raw).label("institution"),
+            # The entry's level itself, for mentor matching (decision 265): the
+            # highest level first is exactly "the mentor's highest degree".
+            _DEGREE_LEVEL.c.id.label("degree_level_id"),
+            _DEGREE_LEVEL.c.display_name.label("degree_level_label"),
+            _DEGREE_LEVEL.c.sort_order.label("degree_level_rank"),
         )
         .select_from(EducationEntry)
         .outerjoin(Institution, Institution.id == EducationEntry.institution_id)

@@ -69,16 +69,17 @@ def _in_word(char: str) -> bool:
     return unicodedata.category(char)[0] in "LNM"
 
 
-def search_terms(q: str) -> list[str]:
+def search_terms(q: str, max_terms: int | None = MAX_SEARCH_TERMS) -> list[str]:
     """The query's words, NFC-composed, lowercased, and stripped to letters,
     digits and the marks inside them. A possessive "'s" goes with its word,
-    or the stray "s" would be required as a word of its own."""
+    or the stray "s" would be required as a word of its own. At most
+    `max_terms` words, or every word with `None`."""
     text = _POSSESSIVE.sub("", unicodedata.normalize("NFC", q.lower()))
     words = "".join(c if _in_word(c) else " " for c in text).split()
     # A word of marks alone yields no lexeme, and `:*` with no operand is a
     # `to_tsquery` syntax error.
     words = [w for w in words if any(unicodedata.category(c)[0] in "LN" for c in w)]
-    return [w[:MAX_TERM_LENGTH] for w in words][:MAX_SEARCH_TERMS]
+    return [w[:MAX_TERM_LENGTH] for w in words][:max_terms]
 
 
 def search_groups(q: str) -> list[list[str]]:
@@ -109,3 +110,17 @@ def fuzzy_terms(terms: list[str]) -> tuple[list[str], list[str]]:
     and so must be present as a prefix instead."""
     near = [term for term in terms if len(term) >= MIN_FUZZY_CHARS]
     return near, [term for term in terms if len(term) < MIN_FUZZY_CHARS]
+
+
+def fold(text: str) -> str:
+    """`text` as `search_terms` reads it, accents removed, words joined by a space.
+
+    For comparing two free-text answers rather than searching: "Économie" and
+    "economie" fold alike, so mentor matching's trigram comparison (decision
+    265) is case- and accent-insensitive. Decomposed first so an accent becomes
+    a separate mark that can be dropped; an empty result means nothing to match.
+    **Every word is kept**: a mentor's programme name may name the subject as
+    its ninth word, and the query cap (`MAX_SEARCH_TERMS`) is a search's bound.
+    """
+    bare = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    return " ".join(search_terms(bare, max_terms=None))
