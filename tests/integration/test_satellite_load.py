@@ -138,6 +138,33 @@ async def test_a_second_load_changes_nothing(db_engine: AsyncEngine) -> None:
     assert counts.one() == (1, first, 1), "a re-run duplicated rows"
 
 
+_PROVENANCE = "SELECT about_me_drafted_at IS NOT NULL, about_me_prompt_version FROM user_profiles"
+
+
+@pytest.mark.asyncio
+async def test_a_reload_that_replaces_the_bio_clears_its_provenance(db_engine: AsyncEngine) -> None:
+    """A bio's provenance describes the text it was stamped on (decision 266).
+    A re-run that keeps the text keeps it; one that writes other text clears it,
+    or Bubble's words would read as drafted by the assistant."""
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [user()], [profile()])
+        await conn.execute(
+            text(
+                "UPDATE user_profiles SET about_me_drafted_at = now(), "
+                "about_me_prompt_version = 'bio_draft-v1'"
+            )
+        )
+
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [user()], [profile()])
+        kept = (await conn.execute(text(_PROVENANCE))).one()
+        await load_everything(conn, [user()], [profile(**{"About me": "Other words"})])
+        cleared = (await conn.execute(text(_PROVENANCE))).one()
+
+    assert tuple(kept) == (True, "bio_draft-v1")
+    assert tuple(cleared) == (False, None)
+
+
 # --------------------------------------------------------------------------
 # resolution: report, never substitute
 # --------------------------------------------------------------------------

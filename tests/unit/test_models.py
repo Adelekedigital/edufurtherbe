@@ -122,6 +122,8 @@ EXPECTED_MODELS = {
     # thing in the product (#365). Platform infrastructure by the same test —
     # the row names a feature by an open slug and belongs to no feature.
     "FeatureInterest",
+    # One call the writing assistant made, for its daily limit (decision 266).
+    "WritingAssistRequest",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
@@ -148,6 +150,8 @@ APPEND_ONLY = frozenset(
         "FeaturedMentor",
         # A retired code is a fact about a moment; it is never edited.
         "InviteLinkRetiredCode",
+        # A call the writing assistant made is a fact about a moment.
+        "WritingAssistRequest",
     }
 )
 

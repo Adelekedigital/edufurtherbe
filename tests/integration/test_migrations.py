@@ -184,6 +184,8 @@ EXPECTED_TABLES = [
     "invite_links",
     # A personal link's retired codes, held for `RETIRED_CODE_HOLD` (owner, 2026-10-15).
     "invite_link_retired_codes",
+    # One call the writing assistant made, for its daily limit (decision 266).
+    "writing_assist_requests",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

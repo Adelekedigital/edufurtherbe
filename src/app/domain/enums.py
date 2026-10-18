@@ -819,3 +819,16 @@ class SessionTypeIcon(StrEnum):
     QUIZ = "quiz"
     BADGE = "badge"
     LIGHTBULB = "lightbulb"
+
+
+class WritingAssistField(StrEnum):
+    """The text a writing-assist request is about (Onboarding v5 B7, decision 266).
+
+    **Both are `user_profiles.about_me`**, read from two sides: a mentee's bio
+    and a mentor's. They are separate values because the daily limit is counted
+    per field, and because each field has its own router task role and its own
+    required profile. *Why I mentor* is not here: that field does not exist yet.
+    """
+
+    MENTEE_BIO = "mentee_bio"
+    MENTOR_ABOUT = "mentor_about"

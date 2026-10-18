@@ -39,6 +39,11 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     avatar_url                = EXCLUDED.avatar_url,
     banner_url                = EXCLUDED.banner_url,
     about_me                  = EXCLUDED.about_me,
+    -- Provenance describes the stored text (decision 266): other text clears it.
+    about_me_drafted_at       = CASE WHEN user_profiles.about_me IS NOT DISTINCT FROM
+                                EXCLUDED.about_me THEN user_profiles.about_me_drafted_at END,
+    about_me_prompt_version   = CASE WHEN user_profiles.about_me IS NOT DISTINCT FROM
+                                EXCLUDED.about_me THEN user_profiles.about_me_prompt_version END,
     gender                    = EXCLUDED.gender,
     origin_country_id         = EXCLUDED.origin_country_id,
     social_linkedin           = EXCLUDED.social_linkedin,
