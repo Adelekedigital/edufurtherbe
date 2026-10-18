@@ -11,6 +11,7 @@ from app.domain.onboarding import (
     OnboardingStep,
     ProfileEvidence,
     missing_requirements,
+    published_step,
 )
 
 
@@ -77,6 +78,22 @@ class OnboardingStatusRead(BaseModel):
         )
     )
 
+    #: Decision 268. Optional in the spec, like every added field.
+    last_step: OnboardingStep | None = Field(
+        default=None,
+        description=(
+            "The step the caller last saved (`PUT /me/onboarding`), or `null` when "
+            "they never saved one in this flow. A step carried from the old platform "
+            "reads as `null`, which tells a migrated mentee from one who came back."
+        ),
+    )
+
     @classmethod
-    def of(cls, evidence: ProfileEvidence, completed: bool) -> OnboardingStatusRead:
-        return cls(complete=completed, missing=list(missing_requirements(evidence)))
+    def of(
+        cls, evidence: ProfileEvidence, completed: bool, last_step: str | None
+    ) -> OnboardingStatusRead:
+        return cls(
+            complete=completed,
+            missing=list(missing_requirements(evidence)),
+            last_step=published_step(last_step),
+        )
