@@ -257,7 +257,7 @@ async def test_classifying_an_offering_shows_the_taxonomy_on_both_reads(
     expected = {
         "id": await offering_id(db_engine, "interview-preparation"),
         "code": "interview-preparation",
-        "display_name": "Interview Preparation",
+        "display_name": "Interview preparation",
     }
     assert owner[0]["service_offerings"] == [expected]
     assert public[0]["service_offerings"] == [expected]
