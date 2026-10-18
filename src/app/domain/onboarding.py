@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, get_args
+from typing import Literal, TypeGuard, get_args
 
 __all__ = [
     "STEPS",
@@ -120,8 +120,9 @@ def published_step(value: str | None) -> OnboardingStep | None:
     `"6"`) is not this flow's step, so it reads as never having started here,
     which is how a migrated mentee is told from one who came back mid-way.
     """
-    if value == "help":
-        return "help"
-    if value == "plans":
-        return "plans"
-    return None
+    return value if _is_step(value) else None
+
+
+def _is_step(value: str | None) -> TypeGuard[OnboardingStep]:
+    """`value` is one of `STEPS`: the list itself, never restated."""
+    return value in STEPS

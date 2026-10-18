@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_onboarding_completion import seed
 
+from app.domain.onboarding import STEPS
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -32,7 +33,7 @@ async def test_never_started_is_null(db_engine: AsyncEngine, api_client: httpx.A
     assert await last_step_on_me(api_client, auth_id) is None
 
 
-@pytest.mark.parametrize("step", ["help", "plans"])
+@pytest.mark.parametrize("step", STEPS)
 async def test_a_saved_step_is_read_back(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient, step: str
 ) -> None:
