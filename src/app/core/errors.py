@@ -195,3 +195,15 @@ class AuthenticationError(AppError):
     One error for every cause. A caller learning *which* check failed learns
     which half of their guess was right.
     """
+
+
+class WritingAssistUnavailableError(AppError):
+    """The writing assistant has no answer to give right now (decision 267).
+
+    Off, unconfigured, the router unreachable or out of time, or an answer the
+    router itself would not stand behind: the client's response is the same
+    for every one ("couldn't write that now, try again or write your own"), so
+    one class and one problem type. A `503`, not `UpstreamError`'s `502`: the
+    feature being switched off is this service's own state (decision 142's
+    reopen case), and the client is meant to try again later.
+    """

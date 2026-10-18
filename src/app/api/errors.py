@@ -42,6 +42,7 @@ from app.core.errors import (
     RateLimitedError,
     ReviewIntervalError,
     UpstreamError,
+    WritingAssistUnavailableError,
 )
 from app.core.errors import ValidationError as DomainValidationError
 
@@ -63,6 +64,8 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     # service is unavailable and invite a retry against a request that will fail
     # the same way.
     UpstreamError: status.HTTP_502_BAD_GATEWAY,
+    # 503: the assistant may be switched off here, which is ours (decision 267).
+    WritingAssistUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 
 # The `type` slot, used for the first time here.
@@ -98,6 +101,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     BookingLimitReachedError: "/problems/booking-limit-reached",
     JoinWindowClosedError: "/problems/join-window-closed",
     RateLimitedError: "/problems/rate-limited",
+    WritingAssistUnavailableError: "/problems/writing-assist-unavailable",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx

@@ -32,9 +32,12 @@ def is_invisible(character: str) -> bool:
     return category.startswith("C") or category in LINE_BREAKS
 
 
-def visible_only(text: str) -> str:
-    """`text` with every invisible character removed."""
-    return "".join(character for character in text if not is_invisible(character))
+def visible_only(text: str, keep: frozenset[str] = frozenset()) -> str:
+    """`text` with every invisible character removed, except those in `keep`
+    (a bio keeps its line breaks)."""
+    return "".join(
+        character for character in text if character in keep or not is_invisible(character)
+    )
 
 
 def _joins(before: str, after: str) -> bool:

@@ -67,6 +67,7 @@ from app.domain.enums import (
     UnlistedReason,
     VerificationStatus,
     WritingAssistField,
+    WritingAssistMode,
 )
 
 # **`PG_ENUM_TYPES` and `pg_enum` are gone, and their absence is the point.**
@@ -233,6 +234,8 @@ UNCONSTRAINED_ENUMS: dict[type[StrEnum], str] = {
     # already answers — it would also go stale the moment a lot expired,
     # since expiry is a date passing rather than anything writing a row.
     CreditState: "credit_state is banded from a balance at read time; no column holds it",
+    # What a writing-assist request asks for; nothing stores it (decision 267).
+    WritingAssistMode: "writing-assist mode is request-only; no column holds it",
 }
 
 

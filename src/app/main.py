@@ -47,6 +47,7 @@ from app.api.routes.sessions import REPLAYED_HEADER
 from app.core.config import Settings, get_settings, production_gaps
 from app.core.errors import ConfigurationError
 from app.domain.rate_limits import SlidingWindow
+from app.infra.clients.ai_router import load_signing_key
 from app.infra.clients.notifications import live_notifier
 from app.infra.db.outbox import collect_queued, deliver, stop_collecting
 from app.infra.observability import configure_logging, configure_sentry
@@ -408,6 +409,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # while sending nothing; every gap is named at once, not one per deploy.
     if resolved.environment == "production" and (gaps := production_gaps(resolved)):
         raise ConfigurationError("Not fit for production: " + "; ".join(gaps) + ".")
+    # The writing assistant's key is parsed at boot while it is on (decision 267).
+    if resolved.writing_assist_enabled and resolved.ai_router_private_key is not None:
+        load_signing_key(resolved.ai_router_private_key.get_secret_value())
     # Before anything logs, so the first line is already structured (ADR 0030).
     configure_logging(resolved)
     configure_sentry(resolved)
