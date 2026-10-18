@@ -248,6 +248,7 @@ exempt = [
     "api/deps/reviews.py",
     "api/deps/session_types.py",
     "api/deps/sessions.py",
+    "api/deps/writing_assist.py",
 ]
 
 [tool.check-layers.allowed]

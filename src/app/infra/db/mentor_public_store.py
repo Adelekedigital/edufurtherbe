@@ -123,6 +123,8 @@ def _public_profile(handle: str, viewer: UUID | None, window: BookingWindow) -> 
             _ORIGIN_COUNTRY.c.id.label("origin_country_id"),
             MentorProfile.approval_status,
             MentorProfile.listing_status,
+            # Owner only, like the two above (decision 267).
+            UserProfile.about_me_drafted_at,
             # Only the owner can reach a row that is not published, and only the
             # owner's row says `true` here — the schema reads it to decide
             # whether the two statuses above are published at all.
