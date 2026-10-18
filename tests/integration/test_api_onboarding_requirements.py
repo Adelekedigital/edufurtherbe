@@ -34,7 +34,9 @@ async def run(engine: AsyncEngine, sql: str, user_id: UUID) -> None:
 
 
 async def onboarding_on_me(client: httpx.AsyncClient, auth_id: UUID) -> object:
-    return (await client.get("/api/v1/me", headers=bearer(api_token(auth_id)))).json()["onboarding"]
+    """The two facts these tests are about; `last_step` has its own file."""
+    me = (await client.get("/api/v1/me", headers=bearer(api_token(auth_id)))).json()
+    return {key: me["onboarding"][key] for key in ("complete", "missing")}
 
 
 @pytest.mark.parametrize("code", list(UNDO))

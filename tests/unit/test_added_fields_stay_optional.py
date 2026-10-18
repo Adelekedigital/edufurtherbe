@@ -19,6 +19,7 @@ ADDED = {
     "SessionRead": ("mentee_attendance_sessions", "refund_until"),
     "UserRead": ("mentee_cancel_refund_hours", "onboarding"),
     "GoalRead": ("field_of_study",),
+    "OnboardingStatusRead": ("last_step",),
     "SessionTypeRead": ("requires_booking_confirmation",),
     "SessionAnswerRead": ("answered", "required"),
     # New with the mentor dashboard (decision 246): every figure optional from

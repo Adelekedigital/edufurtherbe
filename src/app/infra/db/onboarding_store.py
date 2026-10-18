@@ -39,11 +39,13 @@ async def get_onboarding(session: AsyncSession, user_id: UUID) -> Any | None:
 
 async def onboarding_evidence(session: AsyncSession, user_id: UUID) -> ProfileEvidence:
     """Every fact the completion rule reads, in one round trip."""
-    evidence, _ = await onboarding_state(session, user_id)
+    evidence, _, _ = await onboarding_state(session, user_id)
     return evidence
 
 
-async def onboarding_state(session: AsyncSession, user_id: UUID) -> tuple[ProfileEvidence, bool]:
+async def onboarding_state(
+    session: AsyncSession, user_id: UUID
+) -> tuple[ProfileEvidence, bool, str | None]:
     """The completion rule's facts and whether onboarding is finished, in one
     round trip.
 
@@ -58,6 +60,10 @@ async def onboarding_state(session: AsyncSession, user_id: UUID) -> tuple[Profil
                 exists()
                 .where(UserOnboarding.user_id == user_id, UserOnboarding.completed_at.is_not(None))
                 .label("completed"),
+                select(UserOnboarding.last_step)
+                .where(UserOnboarding.user_id == user_id)
+                .scalar_subquery()
+                .label("last_step"),
                 exists().where(UserProfile.user_id == user_id).label("profile"),
                 exists().where(MenteeGoal.user_id == user_id).label("goal"),
                 exists().where(MentorProfile.user_id == user_id).label("mentor"),
@@ -84,4 +90,4 @@ async def onboarding_state(session: AsyncSession, user_id: UUID) -> tuple[Profil
         has_degree_goal=bool(row.degree),
         has_field_of_study=bool(row.field),
     )
-    return evidence, bool(row.completed)
+    return evidence, bool(row.completed), row.last_step

@@ -38,6 +38,7 @@ __all__ = [
     "ProfileEvidence",
     "may_complete_onboarding",
     "missing_requirements",
+    "published_step",
 ]
 #: The onboarding steps a client may record as ``last_step`` (decision 260), in
 #: flow order. The **only** list: mentor steps join it, never a second one. The
@@ -110,3 +111,17 @@ def may_complete_onboarding(evidence: ProfileEvidence) -> bool:
     """
     mentee_done = evidence.has_mentee_goal and not missing_requirements(evidence)
     return evidence.has_profile and (mentee_done or evidence.has_mentor_profile)
+
+
+def published_step(value: str | None) -> OnboardingStep | None:
+    """A stored `last_step` as the flow names it, or `None`.
+
+    Only `STEPS` are published: a value the ETL carried from Bubble (such as
+    `"6"`) is not this flow's step, so it reads as never having started here,
+    which is how a migrated mentee is told from one who came back mid-way.
+    """
+    if value == "help":
+        return "help"
+    if value == "plans":
+        return "plans"
+    return None
