@@ -111,7 +111,7 @@ async def test_a_deleted_applicant_is_your_mentor_to_the_admins(
     approver, _ = await a_user(db_engine, "gone-applicant-admin")
     await grant(db_engine, approver, "mentor_approval")
     applicant, auth_id = await a_user(db_engine, "gone-applicant")
-    assert (await apply_as(api_client, applicant, auth_id)).status_code == 201
+    assert (await apply_as(api_client, db_engine, applicant, auth_id)).status_code == 200
     await delete_account(db_engine, applicant)
     recorder = Recorder()
 
@@ -131,7 +131,7 @@ async def test_a_live_applicant_is_named_to_the_admins(
     approver, _ = await a_user(db_engine, "live-applicant-admin")
     await grant(db_engine, approver, "mentor_approval")
     applicant, auth_id = await a_user(db_engine, "live-applicant")
-    assert (await apply_as(api_client, applicant, auth_id)).status_code == 201
+    assert (await apply_as(api_client, db_engine, applicant, auth_id)).status_code == 200
     recorder = Recorder()
 
     await sweep(db_engine, recorder)

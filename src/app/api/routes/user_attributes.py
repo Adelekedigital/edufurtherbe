@@ -144,7 +144,7 @@ async def awards(rows: AwardsDep) -> Page[AwardRead]:
 async def mentor_profile(row: MentorProfileDep, window: BookingWindowDep) -> MentorProfileRead:
     if row is None:
         raise NotFoundError("this user has no mentor profile")
-    return MentorProfileRead.from_row(row, window)
+    return MentorProfileRead.from_row(row, window, owner=row["owner"])
 
 
 # --------------------------------------------------------------------------
@@ -325,8 +325,10 @@ async def remove_award(removed: DeletedAwardDep) -> None:
         "`POST /admin/mentors/{user_id}/decision`, and **you are told either "
         "way** — approval also lists you, so you are live in search the moment "
         "it happens.\n\n"
-        "Nothing tells an admin an application is waiting yet, so it is found "
-        "by looking rather than by being alerted."
+        "**Creating the profile is not applying, and nobody is told.** It saves "
+        "the first step of onboarding; admins are alerted when the mentor "
+        "submits a complete application at "
+        "`POST /api/v1/me/mentor-application/submit`."
     ),
     responses=WRITE_RESPONSES | CONFLICT_RESPONSE,
 )

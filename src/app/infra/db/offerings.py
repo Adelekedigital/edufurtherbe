@@ -33,6 +33,7 @@ from app.infra.db.models.mentoring import (
 )
 
 __all__ = [
+    "claims_a_live_help_area",
     "goal_overlap_count",
     "has_live_goals",
     "live_goal_exists",
@@ -69,6 +70,21 @@ def _gives(mentor_user_id: Any, slugs: Sequence[str]) -> list[Any]:
         ServiceOffering.id == MentorServiceOffering.service_offering_id,
         ServiceOffering.slug.in_(slugs),
     ]
+
+
+def claims_a_live_help_area(mentor_user_id: Any) -> Any:
+    """`EXISTS`: this mentor claims at least one service offering (a help area)
+    the platform still offers. **Not a session type**: that is
+    `public_visibility.has_live_offering`.
+
+    What a mentor application needs as its help areas; a retired offering is
+    hidden from every card (`_live`), so it counts for nothing here either.
+    """
+    return exists().where(
+        MentorServiceOffering.mentor_user_id == mentor_user_id,
+        ServiceOffering.id == MentorServiceOffering.service_offering_id,
+        _live(),
+    )
 
 
 def offers_any(mentor_user_id: Any, slugs: Sequence[str]) -> Any:

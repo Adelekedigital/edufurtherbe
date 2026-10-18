@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from sqlalchemy import and_, true
+from sqlalchemy import and_, func, true
 
 from app.infra.db.models.user import User
 
@@ -34,6 +34,12 @@ def live(user: Any) -> Any:
 #: statement that omits it is missing a *name* — something a reader and a test
 #: can both see — rather than missing a substring nobody notices.
 LIVE = live(User)
+
+
+def blank(column: Any) -> Any:
+    """Null, empty or only whitespace: the one definition of an unwritten text
+    field (the bio draft and the mentor application both read it)."""
+    return func.coalesce(func.btrim(column), "") == ""
 
 
 class Bounds(Protocol):
