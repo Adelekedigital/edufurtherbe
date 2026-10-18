@@ -140,7 +140,11 @@ async def merge(moved: MergedInstitutionDep) -> InstitutionMergedRead:
     "/mentors/pending",
     response_model=Page[PendingMentorRead],
     summary="Mentor applications awaiting a decision",
-    description="Oldest first — a queue rather than a stack.",
+    description=(
+        "Submitted applications only, oldest `submitted_at` first — a queue "
+        "rather than a stack. A mentor profile saved partway through onboarding "
+        "is not an application until the mentor submits it."
+    ),
     responses=ADMIN_RESPONSES,
 )
 async def mentor_queue(rows: PendingMentorsDep) -> Page[PendingMentorRead]:

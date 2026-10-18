@@ -407,7 +407,9 @@ def test_a_reason_written_without_a_code_has_no_title() -> None:
     assert built == {"reasonTitle": "", "reasonMessage": "I'm travelling"}
 
 
-@pytest.mark.parametrize("name", ["sessionUrl", "dashboardUrl", "exploreUrl", "calendarUrl"])
+@pytest.mark.parametrize(
+    "name", ["sessionUrl", "dashboardUrl", "exploreUrl", "calendarUrl", "applicationUrl"]
+)
 def test_a_link_with_no_app_origin_is_refused(name: str) -> None:
     """Codex on #340: with `APP_BASE_URL` unset a link went out as `/explore`,
     which no mail client can open. A message that cannot link should not go."""
@@ -421,3 +423,18 @@ def test_other_reads_as_other() -> None:
     built = build_variables(["reasonTitle"], context(extras={"reason_code": "other"}))
 
     assert built["reasonTitle"] == "Other"
+
+
+def test_the_approval_email_links_to_the_mentor_application_page() -> None:
+    """Mentor Onboarding B3: the approved screen shows there, once."""
+    built = build_variables(["applicationUrl"], context(app_base_url="https://app.example.test"))
+
+    assert built == {"applicationUrl": "https://app.example.test/mentor-application"}
+
+
+def test_a_decline_carries_its_note_and_reads_empty_without_one() -> None:
+    """The reviewer's note is optional, so a decline without one still sends."""
+    assert build_variables(["declineReason"], context(extras={"reason": "Add your LinkedIn"})) == {
+        "declineReason": "Add your LinkedIn"
+    }
+    assert build_variables(["declineReason"], context(extras={})) == {"declineReason": ""}

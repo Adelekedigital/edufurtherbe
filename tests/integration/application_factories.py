@@ -65,3 +65,19 @@ async def make_applicant(engine: AsyncEngine, tag: str, *, complete: bool = True
     if complete:
         await complete_application(engine, mentor)
     return mentor
+
+
+async def run_sql(engine: AsyncEngine, sql: str, params: dict[str, object]) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text(sql), params)
+
+
+async def an_admin(engine: AsyncEngine, tag: str) -> UUID:
+    """A live `mentor_approval` admin, who can decide applications and is alerted."""
+    admin = await make_public_mentor(engine, f"admin-{tag}")
+    await run_sql(
+        engine,
+        "INSERT INTO admin_users (user_id, admin_role) VALUES (:u, 'mentor_approval')",
+        {"u": admin},
+    )
+    return admin

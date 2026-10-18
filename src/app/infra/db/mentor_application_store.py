@@ -20,6 +20,7 @@ from sqlalchemy import exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import (
+    ConflictError,
     MentorApplicationDecidedError,
     MentorApplicationIncompleteError,
     NotFoundError,
@@ -37,7 +38,12 @@ from app.infra.db.outbox import enqueue
 from app.infra.db.predicates import blank
 from app.infra.db.public_visibility import has_live_offering, has_weekly_hours
 
-__all__ = ["SubmittedApplication", "application_evidence", "submit_application"]
+__all__ = [
+    "SubmittedApplication",
+    "application_evidence",
+    "mark_approved_seen",
+    "submit_application",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,3 +164,30 @@ async def _alert_reviewers(session: AsyncSession, user_id: UUID) -> None:
             entity_id=user_id,
             recipient_ids=reviewers,
         )
+
+
+async def mark_approved_seen(session: AsyncSession, user_id: UUID) -> datetime:
+    """Record that an approved mentor saw the approved screen. Does not commit.
+
+    **Once**: the first time is kept, so a second call (another device, a
+    refresh) returns it unchanged. Refused with a 409 unless approved, because
+    a pending or declined mentor has no approval to have seen. Under
+    `lock_mentor`, so it cannot interleave with a decision.
+    """
+    if not await lock_mentor(session, user_id):
+        raise NotFoundError("you have no mentor profile")
+    seen = (
+        await session.execute(
+            update(MentorProfile)
+            # `lock_mentor` already found the live row; approval is the check.
+            .where(
+                MentorProfile.user_id == user_id,
+                MentorProfile.approval_status == ApprovalStatus.APPROVED,
+            )
+            .values(approved_seen_at=func.coalesce(MentorProfile.approved_seen_at, func.now()))
+            .returning(MentorProfile.approved_seen_at)
+        )
+    ).scalar_one_or_none()
+    if seen is None:
+        raise ConflictError("your application is not approved")
+    return seen

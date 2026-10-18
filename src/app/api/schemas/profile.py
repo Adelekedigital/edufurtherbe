@@ -43,7 +43,7 @@ from app.domain.availability import (
     SESSION_DURATION_MINUTES,
     BookingWindow,
 )
-from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency
+from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency, PrimaryRole
 from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
 from app.domain.names import split_full_name
 from app.domain.profile_text import ABOUT_ME_MAX_LENGTH, PROMPT_VERSION_MAX_LENGTH
@@ -701,6 +701,17 @@ class UserProfileWrite(Normalised):
             "your own zone. Not an offset: an offset goes stale twice a year."
         ),
         examples=["Africa/Lagos"],
+    )
+
+    #: Which dashboard you land on (decision 17: a hint, never an authorization
+    #: claim). "Continue as a mentee" sets `mentee` (Mentor Onboarding B3).
+    #: An explicit `null` is a `422`, as for `timezone`; omitted leaves it.
+    primary_role: PrimaryRole = Field(  # type: ignore[assignment]
+        default=None,
+        description=(
+            "Which dashboard you land on: `mentee` or `mentor`. A hint only; it "
+            "grants nothing, and a mentor application is kept whichever you pick."
+        ),
     )
 
     _names = field_validator("first_name", "last_name")(_a_visible_name)

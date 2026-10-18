@@ -10,7 +10,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.application_factories import make_applicant
+from tests.integration.application_factories import an_admin, make_applicant, run_sql
 from tests.integration.factories import make_public_mentor, token_for
 
 from conftest import bearer
@@ -37,21 +37,6 @@ async def alerts(engine: AsyncEngine, mentor: UUID) -> int:
                 )
             ).scalar_one()
         )
-
-
-async def an_admin(engine: AsyncEngine, tag: str) -> UUID:
-    admin = await make_public_mentor(engine, f"admin-{tag}")
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("INSERT INTO admin_users (user_id, admin_role) VALUES (:u, 'mentor_approval')"),
-            {"u": admin},
-        )
-    return admin
-
-
-async def run(engine: AsyncEngine, sql: str, mentor: UUID) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(text(sql), {"u": mentor})
 
 
 # --------------------------------------------------------------------------
@@ -98,7 +83,7 @@ async def test_each_missing_item_is_a_409_naming_it_and_nothing_is_sent(
 ) -> None:
     await an_admin(db_engine, f"gap-{item}")
     mentor = await make_applicant(db_engine, f"gap-{item}")
-    await run(db_engine, gap, mentor)
+    await run_sql(db_engine, gap, {"u": mentor})
 
     response = await submit(api_client, db_engine, mentor)
 
@@ -128,7 +113,7 @@ async def test_a_retired_or_deleted_item_counts_for_nothing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, item: str, gap: str
 ) -> None:
     mentor = await make_applicant(db_engine, f"stale-{item}-{abs(hash(gap))}")
-    await run(db_engine, gap, mentor)
+    await run_sql(db_engine, gap, {"u": mentor})
 
     response = await submit(api_client, db_engine, mentor)
 
@@ -140,7 +125,9 @@ async def test_an_empty_application_names_every_item(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_applicant(db_engine, "submit-empty", complete=False)
-    await run(db_engine, "UPDATE mentor_profiles SET headline = NULL WHERE user_id = :u", mentor)
+    await run_sql(
+        db_engine, "UPDATE mentor_profiles SET headline = NULL WHERE user_id = :u", {"u": mentor}
+    )
 
     response = await submit(api_client, db_engine, mentor)
 
@@ -170,7 +157,9 @@ async def test_someone_with_no_mentor_profile_gets_a_404(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     mentor = await make_applicant(db_engine, "submit-gone")
-    await run(db_engine, "UPDATE mentor_profiles SET deleted_at = now() WHERE user_id = :u", mentor)
+    await run_sql(
+        db_engine, "UPDATE mentor_profiles SET deleted_at = now() WHERE user_id = :u", {"u": mentor}
+    )
 
     response = await submit(api_client, db_engine, mentor)
 
@@ -207,7 +196,7 @@ async def test_creating_a_mentor_profile_tells_nobody(
 ) -> None:
     await an_admin(db_engine, "create")
     applicant = await make_public_mentor(db_engine, "create-applicant")
-    await run(db_engine, "DELETE FROM mentor_profiles WHERE user_id = :u", applicant)
+    await run_sql(db_engine, "DELETE FROM mentor_profiles WHERE user_id = :u", {"u": applicant})
 
     response = await api_client.post(
         f"/api/v1/users/{applicant}/mentor-profile",

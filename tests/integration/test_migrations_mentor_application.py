@@ -145,3 +145,48 @@ def test_the_help_areas_are_renamed_to_sentence_case_and_back(
     assert _names(disposable_database) == SENTENCE_CASE
     # The re-upgrade backfills again, which is what makes the downgrade safe.
     assert _stamps(disposable_database) == {"ok@example.test": [True, True]}
+
+
+_ALERTED = (
+    "INSERT INTO outbox_events (event_type, entity_type, entity_id, payload) "
+    "SELECT 'mentor_application_received', 'mentor_profile', u.id, '{{}}'::jsonb "
+    "FROM users u WHERE u.email = '{email}'"
+)
+#: A profile created at `{at}`, around #492's merge (`2026-10-18T20:11:48Z`).
+_MENTOR_AT = (
+    "WITH u AS (INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
+    "VALUES ('{email}', gen_random_uuid(), 'Probe', 'mentor', 'UTC') RETURNING id) "
+    "INSERT INTO mentor_profiles (user_id, approval_status, created_at, updated_at) "
+    "SELECT id, '{status}', timestamptz '{at}', timestamptz '2025-06-07 08:09:10+00' FROM u"
+)
+
+
+def test_an_application_made_before_b2_or_that_alerted_admins_counts_as_submitted(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`c7d4a2e9f1b6`: until #492 merged, creating a profile was applying, alert
+    or not (none went out when nobody could decide it). After it, only an alert
+    from the old code still deploying proves one; a draft is left unsubmitted."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, REVISION)
+    before, after = "2026-10-18 20:00:00+00", "2026-10-18 20:30:00+00"
+    rows = {
+        "quiet-before@example.test": ("pending", before, False),
+        "decided-before@example.test": ("approved", before, False),
+        "alerted-after@example.test": ("pending", after, True),
+        "draft-after@example.test": ("pending", after, False),
+    }
+    for email, (status, at, alerted) in rows.items():
+        execute(disposable_database, _MENTOR_AT.format(email=email, status=status, at=at))
+        if alerted:
+            execute(disposable_database, _ALERTED.format(email=email))
+
+    command.upgrade(config, "c7d4a2e9f1b6")
+
+    assert _stamps(disposable_database) == {
+        "quiet-before@example.test": [True, None],
+        "decided-before@example.test": [True, None],
+        "alerted-after@example.test": [True, None],
+        "draft-after@example.test": [None, None],
+    }
+    assert scalar(disposable_database, _PROFILES_UPDATED) == 4

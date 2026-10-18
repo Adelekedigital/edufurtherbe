@@ -50,6 +50,8 @@ class PendingMentorRead(BaseModel):
     headline: str | None = None
     years_of_experience: int | None = None
     created_at: datetime
+    #: When the application was submitted; the queue is ordered by it.
+    submitted_at: datetime | None = None
 
 
 class MergeRequest(Normalised):

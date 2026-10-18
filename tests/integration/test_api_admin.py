@@ -90,7 +90,11 @@ async def add_education(engine: AsyncEngine, user_id: UUID, institution_id: UUID
 async def add_mentor(engine: AsyncEngine, user_id: UUID, headline: str = "I help") -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, :h)"),
+            text(
+                # Submitted: only a submitted application is in the queue (B3).
+                "INSERT INTO mentor_profiles (user_id, headline, submitted_at) "
+                "VALUES (:u, :h, now())"
+            ),
             {"u": user_id, "h": headline},
         )
 

@@ -7,8 +7,8 @@ admins, and the two must not be one call (Mentor Onboarding PRD, B2).
 
 from fastapi import APIRouter, status
 
-from app.api.deps import SubmittedApplicationDep
-from app.api.schemas.onboarding import MentorApplicationRead
+from app.api.deps import SeenApprovalDep, SubmittedApplicationDep
+from app.api.schemas.onboarding import ApprovalSeenRead, MentorApplicationRead
 from app.domain.mentor_application import MentorApplicationItem
 
 router = APIRouter(prefix="/api/v1/me/mentor-application", tags=["mentor-application"])
@@ -54,3 +54,24 @@ async def submit_mentor_application(submitted: SubmittedApplicationDep) -> Mento
     return MentorApplicationRead(
         submitted_at=submitted.submitted_at, approval_status=submitted.approval_status
     )
+
+
+@router.post(
+    "/approved-seen",
+    response_model=ApprovalSeenRead,
+    summary="Record that I saw my approval",
+    description=(
+        "Called when the approved screen renders, so it shows **once per "
+        "account**, on any device. Idempotent: the first time is kept and every "
+        "later call returns it. `409` unless the application is approved; `404` "
+        "with no mentor profile. `GET /api/v1/me` → `mentor_profile` → "
+        "`approved_seen_at` reads it back."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: SUBMIT_RESPONSES[status.HTTP_401_UNAUTHORIZED],
+        status.HTTP_404_NOT_FOUND: SUBMIT_RESPONSES[status.HTTP_404_NOT_FOUND],
+        status.HTTP_409_CONFLICT: {"description": "The application is not approved."},
+    },
+)
+async def approved_seen(seen: SeenApprovalDep) -> ApprovalSeenRead:
+    return ApprovalSeenRead(approved_seen_at=seen)
