@@ -67,7 +67,19 @@ class InsufficientCreditError(ConflictError):
     """
 
 
-class OnboardingIncompleteError(ConflictError):
+class MissingItemsError(ConflictError):
+    """A refusal that names what the caller still owes, as the `missing`
+    extension member: plain strings, because `core` imports nothing."""
+
+    def __init__(self, message: str = "", *, missing: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.missing = missing
+
+    def problem_members(self) -> dict[str, object]:
+        return {"missing": list(self.missing)}
+
+
+class OnboardingIncompleteError(MissingItemsError):
     """The profile does not yet meet the bar for finishing onboarding.
 
     A conflict rather than a validation failure: nothing about the *request* is
@@ -83,15 +95,8 @@ class OnboardingIncompleteError(ConflictError):
     `core` imports nothing: the caller passes the domain's codes.
     """
 
-    def __init__(self, message: str = "", *, missing: tuple[str, ...] = ()) -> None:
-        super().__init__(message)
-        self.missing = missing
 
-    def problem_members(self) -> dict[str, object]:
-        return {"missing": list(self.missing)}
-
-
-class MentorApplicationIncompleteError(ConflictError):
+class MentorApplicationIncompleteError(MissingItemsError):
     """A mentor application cannot be submitted while it is missing something.
 
     Its own problem type for the same reason as onboarding's: the client sends
@@ -99,17 +104,20 @@ class MentorApplicationIncompleteError(ConflictError):
     carries the domain's `MentorApplicationItem` codes, in step order.
     """
 
-    def __init__(self, message: str = "", *, missing: tuple[str, ...] = ()) -> None:
-        super().__init__(message)
-        self.missing = missing
-
-    def problem_members(self) -> dict[str, object]:
-        return {"missing": list(self.missing)}
-
 
 class MentorApplicationDecidedError(ConflictError):
     """The application was already approved or declined, so there is nothing to
     submit. A type of its own: the client shows the outcome, not the form."""
+
+
+class BookingNeedsOnboardingError(MissingItemsError):
+    """Booking is for someone who has finished onboarding (owner, 2026-10-18).
+
+    Its own problem type: the client shows the finish-setup step, then brings
+    the mentee back to confirm. `missing` names the mentee answers still owed,
+    as on `/problems/onboarding-incomplete`; it can be empty when every answer
+    is given and only the completion call is left.
+    """
 
 
 class AlreadyReviewedError(ConflictError):

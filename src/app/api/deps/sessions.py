@@ -54,6 +54,7 @@ from app.infra.clients.meetings import (
 )
 from app.infra.clients.scheduler import SchedulerPort, scheduler_for
 from app.infra.db.idempotency import Replayed, record_response
+from app.infra.db.onboarding_store import require_finished_onboarding
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -303,6 +304,10 @@ async def booked_session(
     the insert's own values would mean composing the party join by hand at the
     one moment there is no row to read it from.
     """
+    # **Before the key is claimed**, so a refusal stores nothing and the same
+    # key books once onboarding is finished. Booking only: reading, cancelling
+    # and joining a session never pass here.
+    await require_finished_onboarding(session, user["id"])
     reservation = await claim_idempotency_key(
         session,
         key=idempotency_key,

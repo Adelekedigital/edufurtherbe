@@ -31,7 +31,7 @@ from tests.integration.factories import (
     until_blocked,
 )
 
-from conftest import PLATFORM_WINDOW, add_user, api_token, bearer, fund
+from conftest import PLATFORM_WINDOW, add_user, api_token, bearer, finish_onboarding, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -346,6 +346,9 @@ async def test_a_mentor_cannot_book_their_own_offering(
     somebody.
     """
     mentor, session_type = await a_bookable_offering(db_engine, "book-self")
+    # Onboarded, so the self-booking rule is what refuses, not the gate.
+    async with db_engine.begin() as conn:
+        await finish_onboarding(conn, mentor)
     slot = await first_slot(api_client, mentor, session_type)
     token = await token_for(db_engine, mentor)
 
