@@ -42,10 +42,13 @@ __all__ = [
     "published_step",
 ]
 #: The onboarding steps a client may record as ``last_step`` (decision 260), in
-#: flow order. The **only** list: mentor steps join it, never a second one. The
+#: flow order: the mentee's two, then the mentor's four (Mentor Onboarding B3).
+#: The **only** list: mentor steps join it, never a second one. The
 #: request schema types its field with it, so the check and the published enum
 #: are one declaration.
-OnboardingStep = Literal["help", "plans"]
+OnboardingStep = Literal[
+    "help", "plans", "mentor_help", "mentor_education", "mentor_about", "mentor_hours"
+]
 STEPS: tuple[str, ...] = get_args(OnboardingStep)
 
 

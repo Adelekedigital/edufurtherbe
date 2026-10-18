@@ -7,8 +7,15 @@ from app.domain.onboarding import STEPS
 from app.main import create_app
 
 
-def test_the_mentee_steps_in_order() -> None:
-    assert STEPS == ("help", "plans")
+def test_the_onboarding_steps_in_order() -> None:
+    assert STEPS == (
+        "help",
+        "plans",
+        "mentor_help",
+        "mentor_education",
+        "mentor_about",
+        "mentor_hours",
+    )
 
 
 def test_the_published_enum_is_the_one_list() -> None:

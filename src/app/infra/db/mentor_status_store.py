@@ -184,6 +184,15 @@ async def decide(
         created_by=admin_id,
         reason=None if approved else UnlistedReason.NEVER_APPROVED.value,
     )
+    if not approved:
+        # A decline ends the approval that was seen, so a later approval shows
+        # its screen again (Mentor Onboarding B3). Not a projected column: the
+        # trigger owns only the two statuses (#73).
+        await session.execute(
+            update(MentorProfile)
+            .where(MentorProfile.user_id == user_id)
+            .values(approved_seen_at=None)
+        )
 
     # **After the decision, and only when it is news.** After, because a message
     # about a write that failed is worse than silence — they are one transaction,

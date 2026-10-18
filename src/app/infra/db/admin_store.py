@@ -179,13 +179,16 @@ async def merge_institution(session: AsyncSession, *, losing_id: UUID, winning_i
 
 
 async def pending_mentors(session: AsyncSession, *, limit: int) -> list[dict[str, Any]]:
-    """Applications awaiting a decision, oldest first — a queue, not a stack."""
+    """Submitted applications awaiting a decision, oldest submission first — a
+    queue, not a stack. A profile saved partway through onboarding is not an
+    application and is not listed (Mentor Onboarding B3)."""
     statement = (
         select(
             MentorProfile.user_id,
             MentorProfile.headline,
             MentorProfile.years_of_experience,
             MentorProfile.created_at,
+            MentorProfile.submitted_at,
             User.first_name,
             User.last_name,
             User.email,
@@ -193,10 +196,11 @@ async def pending_mentors(session: AsyncSession, *, limit: int) -> list[dict[str
         .join(User, User.id == MentorProfile.user_id)
         .where(
             MentorProfile.approval_status == ApprovalStatus.PENDING,
+            MentorProfile.submitted_at.is_not(None),
             MentorProfile.deleted_at.is_(None),
             LIVE,
         )
-        .order_by(MentorProfile.created_at)
+        .order_by(MentorProfile.submitted_at, MentorProfile.user_id)
         .limit(limit)
     )
     return [dict(row) for row in (await session.execute(statement)).mappings()]

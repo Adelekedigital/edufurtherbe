@@ -80,7 +80,7 @@ MENTOR_COLUMNS = (
     "primary_study_program",
 )
 #: Columns of the profile write that live on `users`, not `user_profiles`.
-USER_COLUMNS = ("timezone", "first_name", "last_name")
+USER_COLUMNS = ("timezone", "first_name", "last_name", "primary_role")
 
 PROFILE_COLUMNS = (
     "about_me",
@@ -339,7 +339,7 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     # refusal raised before anything is written leaves nothing to roll back.
     if "avatar_focus" in payload:
         await _choose_avatar_focus(session, user_id, payload["avatar_focus"])
-    # **`timezone` and the name live on `users`**, so they are written there,
+    # **`timezone`, the name and `primary_role` live on `users`**, so they are written there,
     # scoped to the owner's id, in this same transaction (booking request item 7).
     user_values = {key: value for key, value in payload.items() if key in USER_COLUMNS}
     if user_values:

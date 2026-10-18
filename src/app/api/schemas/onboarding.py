@@ -104,3 +104,9 @@ class MentorApplicationRead(BaseModel):
 
     submitted_at: datetime
     approval_status: str = Field(description="`pending` until an admin decides.")
+
+
+class ApprovalSeenRead(BaseModel):
+    """When the mentor first saw the approved screen."""
+
+    approved_seen_at: datetime

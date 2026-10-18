@@ -76,7 +76,7 @@ Tracked as backend issue #348, deferred until the owner decides on Emailit.
 |---|---|---|---|---|
 | `session_requested` | A mentee requests a session that needs approval | mentor | core + `hours` (hours left to answer) | Session Request |
 | `mentor_response_reminder` | Nudge before the request lapses | mentor | core + `hours` | Session Request Reminder |
-| `session_booked` | A booking on an offering that confirms itself | both parties | core | Session Confirmation |
+| `session_booked` | A booking on an offering that confirms itself | the mentor (the mentee booked it, so only the mentor is told; decision 132) | core | Session Confirmation |
 | `request_accepted` | The mentor accepts a request | mentee | core | Session Confirmation (shared) |
 | `request_declined` | The mentor declines | mentee | core + `reasonTitle`, `reasonMessage` | Declined Request |
 | `request_withdrawn` | The mentee withdraws a request | mentor | core + `reasonTitle`, `reasonMessage` | Withdrawn Request |
@@ -92,8 +92,8 @@ Tracked as backend issue #348, deferred until the owner decides on Emailit.
 | `credits_renewed` | The monthly credits arrived | the user | `fName`, `bookLink` | Credit renewal |
 | `credits_expiring` | Unused credits are about to expire | the user | `fName`, `bookLink`, `creditCount` | Unused credit |
 | `mentor_application_received` | A mentor submitted a complete application (`POST /me/mentor-application/submit`), once; saving a mentor profile sends nothing | **admins** who decide it, never the applicant | `recipientName`, `mentorName` (the applicant) | **none** |
-| `mentor_approved` | An application was approved | the applicant | `recipientName` | **none** |
-| `mentor_declined` | An application was declined | the applicant | `recipientName` | **none** |
+| `mentor_approved` | An application was approved | the applicant | `recipientName`, `applicationUrl` (the app's `/mentor-application`, where the approved screen shows once) | **none** |
+| `mentor_declined` | An application was declined | the applicant | `recipientName`, `declineReason` (the reviewer's note; empty when none was left), `applicationUrl` | **none** |
 | `mentor_return_reminder` | A self-paused mentor's return approaching (dated), or a check-in (undated). One template words both. | the mentor | `recipientName`, `daysUntilReturn`, `returnOn`, `daysPaused`, `calendarUrl` | Return reminder |
 | `calendar_disconnected` | The mentor's Google Calendar link broke | the mentor | `recipientName`, `calendarUrl` | **none** |
 

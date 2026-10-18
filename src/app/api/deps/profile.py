@@ -68,7 +68,11 @@ from app.infra.db.invite_links import (
     pick_handle,
     set_link_active,
 )
-from app.infra.db.mentor_application_store import SubmittedApplication, submit_application
+from app.infra.db.mentor_application_store import (
+    SubmittedApplication,
+    mark_approved_seen,
+    submit_application,
+)
 from app.infra.db.onboarding_store import get_onboarding, onboarding_state
 from app.infra.db.onboarding_writer import (
     OnboardingResult,
@@ -368,6 +372,16 @@ async def submitted_application(user: CurrentUserDep, session: SessionDep) -> Su
 
 
 SubmittedApplicationDep = Annotated[SubmittedApplication, Depends(submitted_application)]
+
+
+async def seen_approval(user: CurrentUserDep, session: SessionDep) -> dt.datetime:
+    """Record that the caller saw their approval; the commit is here."""
+    seen = await mark_approved_seen(session, user["id"])
+    await session.commit()
+    return seen
+
+
+SeenApprovalDep = Annotated[dt.datetime, Depends(seen_approval)]
 
 
 async def completed_onboarding(

@@ -136,6 +136,8 @@ SESSION_PATH = "/sessions/{session_id}"
 DASHBOARD_PATH = "/dashboard"
 CALENDAR_PATH = "/calendar"
 EXPLORE_PATH = "/explore"
+#: Where an applicant follows their mentor application (Mentor Onboarding B3).
+MENTOR_APPLICATION_PATH = "/mentor-application"
 
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
@@ -257,6 +259,9 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     ),
     "creditCount": lambda c: _needs(c.extras.get("credit_count"), "creditCount"),
     "calendarUrl": lambda c: _app_link(c, CALENDAR_PATH, "calendarUrl"),
+    "applicationUrl": lambda c: _app_link(c, MENTOR_APPLICATION_PATH, "applicationUrl"),
+    # A decline's note, which is optional: empty when the reviewer left none.
+    "declineReason": lambda c: c.extras.get("reason", ""),
     # The return reminder is one template for a dated pause and an undated one,
     # so the side that does not apply is deliberately empty, not refused.
     "returnOn": lambda c: (
