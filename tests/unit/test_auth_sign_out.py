@@ -58,3 +58,20 @@ def test_no_admin_client_without_supabase_configured() -> None:
         supabase_service_role_key=SecretStr(KEY),
     )
     assert isinstance(auth_admin_for(configured), SupabaseAdminClient)
+
+
+def test_an_unreachable_supabase_is_an_admin_error_without_the_token() -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    unreachable = SupabaseAdminClient(
+        base_url="https://project.supabase.co",
+        service_role_key=KEY,
+        client=httpx.Client(transport=httpx.MockTransport(refuse)),
+        sleep=lambda _: None,
+    )
+    with pytest.raises(AdminApiError) as raised:
+        unreachable.sign_out_everywhere(TOKEN)
+
+    assert "ConnectError" in str(raised.value)
+    assert TOKEN not in str(raised.value)

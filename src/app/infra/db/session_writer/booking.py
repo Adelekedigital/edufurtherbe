@@ -315,16 +315,18 @@ async def book_session(
     # the hold is found here — or waits behind this booking and then finds the
     # hour taken (`holds.lock_mentor_slots`).
     await lock_mentor_slots(session, mentor_id)
-    # **Both parties still there, re-read under a share lock.** `_offering` read
-    # the mentor as live before any lock, so an account deletion committing in
-    # between would land a session on a deleted account. `DELETE /me` locks the
-    # account row for update, so the two run one after the other: either the
-    # deletion finds this session and ends it, or this finds the account gone.
+    # **Both parties still there, re-read under a key-share lock.** `_offering`
+    # read the mentor as live before any lock, so an account deletion committing
+    # in between would land a session on a deleted account. `DELETE /me` locks
+    # the account row `FOR UPDATE`, which `KEY SHARE` waits on, so the two run
+    # one after the other: either the deletion finds this session and ends it,
+    # or this finds the account gone. `KEY SHARE`, not `SHARE`, so an ordinary
+    # profile update to either row is not held behind the booking.
     parties = await session.execute(
         select(User.id)
         .where(User.id.in_((mentor_id, mentee_id)), LIVE)
         .order_by(User.id)
-        .with_for_update(read=True)
+        .with_for_update(read=True, key_share=True)
     )
     if len(parties.all()) != 2:
         raise NotFoundError("no such bookable session type")

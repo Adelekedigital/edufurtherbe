@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.accounts import RESTORE_WINDOW, UNLISTED_ON_DELETION
 from app.domain.enums import MentorStatusType
 from app.domain.refunds import RefundPolicy
-from app.infra.clients.meetings import CalendarPort
 from app.infra.db.credit_expiry import expire_user_credits
 from app.infra.db.mentor_status_store import record
 from app.infra.db.models.suggestions import SessionSuggestion
@@ -32,12 +31,13 @@ async def delete_account(
     *,
     now: dt.datetime,
     refunds: RefundPolicy,
-    calendar: CalendarPort,
-) -> bool:
-    """Soft-delete this account and everything open on it. ``False`` when it is
-    already gone. Does not commit.
+) -> list[UUID] | None:
+    """Soft-delete this account and everything open on it. Returns the ended
+    sessions whose calendar events the caller releases after committing, or
+    ``None`` when the account is already gone (a second request racing the
+    first). Does not commit.
 
-    **The account row is locked first.** A booking takes a share lock on both
+    **The account row is locked first.** A booking takes a key-share lock on both
     parties' rows (`booking.py`), so a booking and a deletion run one after the
     other: either the session exists before the deletion reads its sessions, or
     the booking finds the account gone.
@@ -46,9 +46,9 @@ async def delete_account(
         select(User.id).where(User.id == user_id, LIVE).with_for_update()
     )
     if locked.first() is None:
-        return False
+        return None
 
-    await end_for_deleted_account(session, user_id, now=now, refunds=refunds, calendar=calendar)
+    ended = await end_for_deleted_account(session, user_id, now=now, refunds=refunds)
     # After the sessions: a request the person withdrew refunds a fresh lot,
     # which goes with the rest.
     await expire_user_credits(session, user_id)
@@ -72,4 +72,4 @@ async def delete_account(
         .where(User.id == user_id)
         .values(deleted_at=now, deletion_purge_at=now + RESTORE_WINDOW)
     )
-    return True
+    return ended

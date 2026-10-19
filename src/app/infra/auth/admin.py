@@ -242,16 +242,22 @@ class SupabaseAdminClient:
 
         Access tokens already issued stay valid until they expire, which
         Supabase documents; this API refuses them anyway, because they reach no
-        live account. Raises :class:`AdminApiError` with the status only: the
-        request carried the user's token.
+        live account. Raises :class:`AdminApiError`, for a refusal or an
+        unreachable Supabase alike, naming only the status or the error's type:
+        the request carried the user's token.
         """
-        response = self._send(
-            lambda: self._client.post(
-                f"{self._base_url}{LOGOUT}",
-                params={"scope": "global"},
-                headers={"apikey": self._key, "Authorization": f"Bearer {access_token}"},
+        try:
+            response = self._send(
+                lambda: self._client.post(
+                    f"{self._base_url}{LOGOUT}",
+                    params={"scope": "global"},
+                    headers={"apikey": self._key, "Authorization": f"Bearer {access_token}"},
+                )
             )
-        )
+        except httpx.HTTPError as exc:
+            # A timeout or a refused connection, named by its type only: the
+            # caller logs this, and the request carried the user's token.
+            raise AdminApiError(f"sign out failed: {type(exc).__name__}") from None
         if response.status_code >= httpx.codes.BAD_REQUEST:
             raise AdminApiError(f"sign out failed with {response.status_code}")
 

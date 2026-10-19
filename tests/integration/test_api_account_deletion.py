@@ -17,16 +17,18 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import (
     add_availability,
     add_session_type,
     make_public_mentor,
     token_for,
 )
+from tests.integration.meeting_fakes import FakeCalendar
 from tests.integration.test_api_session_transitions import a_booking, url
 
 from app.infra.auth.admin import AdminApiError
+from app.infra.db.session_writer import expire_requests
 from conftest import add_user, api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -408,6 +410,9 @@ async def test_a_booking_racing_the_mentors_deletion_is_refused(
 
     async with db_engine.connect() as deleting:
         transaction = await deleting.begin()
+        # As `delete_account` does: the row locked `FOR UPDATE` first, which a
+        # booking's `KEY SHARE` waits on (a bare UPDATE's lock would not).
+        await deleting.execute(text("SELECT id FROM users WHERE id = :m FOR UPDATE"), {"m": mentor})
         await deleting.execute(
             text("UPDATE users SET deleted_at = now() WHERE id = :m"), {"m": mentor}
         )
@@ -428,3 +433,101 @@ async def test_a_booking_racing_the_mentors_deletion_is_refused(
         db_engine, "SELECT count(*) AS n FROM sessions WHERE mentor_id = :m", m=mentor
     )
     assert count["n"] == 0
+
+
+# --------------------------------------------------------------------------
+# Racing writers, deadlines and calendars (review of the first draft)
+# --------------------------------------------------------------------------
+
+
+async def test_a_transition_racing_the_deletion_is_refused_not_overwritten(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The mentor accepts while the mentee's deletion holds the session: the
+    accept must read what the deletion wrote and be refused, not confirm a
+    session on a deleted account over the top of it."""
+    pending = await a_booking(db_engine, api_client, "race-accept")
+
+    async with db_engine.connect() as deleting:
+        transaction = await deleting.begin()
+        await deleting.execute(
+            text("SELECT id FROM sessions WHERE id = :s FOR UPDATE"), {"s": pending["id"]}
+        )
+        await deleting.execute(
+            text("UPDATE sessions SET status = 'withdrawn' WHERE id = :s"), {"s": pending["id"]}
+        )
+        accepting = asyncio.create_task(
+            api_client.post(url(pending, "accept"), headers=pending["mentor"])
+        )
+        await asyncio.sleep(1.0)
+        await transaction.commit()
+        response = await accepting
+
+    assert response.status_code == 409, response.text
+    row = await one(db_engine, "SELECT status FROM sessions WHERE id = :s", s=pending["id"])
+    assert row["status"] == "withdrawn"
+
+
+async def test_a_double_click_deletes_once(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    admin = wire(api_client, FakeAuthAdmin())
+    _, headers = await a_mentee(db_engine, "double")
+
+    first, second = await asyncio.gather(
+        delete_me(api_client, headers), delete_me(api_client, headers)
+    )
+
+    assert sorted([first.status_code, second.status_code]) == [204, 404]
+    assert len(admin.signed_out) == 1
+
+
+async def test_a_request_past_its_deadline_is_expired_before_the_credits_go(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Left to the hourly sweep, its refund would land on the deleted account
+    after its credits were expired."""
+    wire(api_client, FakeAuthAdmin())
+    lapsed = await a_booking(db_engine, api_client, "del-lapsed")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET respond_by = now() - interval '1 minute' WHERE id = :s"),
+            {"s": lapsed["id"]},
+        )
+
+    assert (await delete_me(api_client, lapsed["mentee"])).status_code == 204
+
+    event = await event_of(db_engine, lapsed["id"])
+    assert (event["status"], event["reason_code"]) == ("expired", "expired_no_response")
+    async with db_engine.begin() as conn:
+        assert await expire_requests(AsyncSession(bind=conn), now=dt.datetime.now(dt.UTC)) == 0
+    left = await one(
+        db_engine,
+        "SELECT coalesce(sum(quantity_remaining), 0) AS n FROM credit_lots WHERE user_id = :u",
+        u=lapsed["mentee_id"],
+    )
+    assert left["n"] == 0
+
+
+async def test_each_ended_sessions_calendar_event_is_released_after_the_commit(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    calendar = FakeCalendar()
+    api_client._transport.app.state.calendar = calendar  # type: ignore[attr-defined]
+    wire(api_client, FakeAuthAdmin())
+    booked = await a_booking(db_engine, api_client, "del-calendar", confirmed=True)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET external_calendar_event_id = 'evt-1' WHERE id = :s"),
+            {"s": booked["id"]},
+        )
+
+    assert (await delete_me(api_client, booked["mentee"])).status_code == 204
+
+    assert calendar.cancelled == ["evt-1"]
+    row = await one(
+        db_engine,
+        "SELECT external_calendar_event_id AS e FROM sessions WHERE id = :s",
+        s=booked["id"],
+    )
+    assert row["e"] is None

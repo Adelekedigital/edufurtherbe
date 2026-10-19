@@ -237,6 +237,28 @@ def reason_required(action: str, *, offers_another_time: bool) -> bool:
     return bool(TRANSITIONS[action].reasons) and not offers_another_time
 
 
+def role_of(*, mentor_id: object, actor_id: object) -> SessionRole:
+    """Which side of a session the actor is on. The caller has already scoped
+    the session to them, so not the mentor means the mentee."""
+    return SessionRole.MENTOR if mentor_id == actor_id else SessionRole.MENTEE
+
+
+def ending_for(status: SessionStatus, role: SessionRole) -> str:
+    """The action this side takes to end a session in ``status``, read off
+    :data:`TRANSITIONS`: allowed from it, theirs to take, and not `accept`,
+    the one action that starts a session rather than ending it. Account
+    deletion asks this, so it ends a session only the way that side may.
+    Raises :class:`LookupError` for a status nothing ends."""
+    for action, rule in TRANSITIONS.items():
+        if (
+            status in rule.allowed_from
+            and role in rule.by
+            and rule.to is not SessionStatus.CONFIRMED
+        ):
+            return action
+    raise LookupError(f"no action ends a {status} session for the {role}")
+
+
 def too_late_to_cancel(starts_at: dt.datetime, now: dt.datetime) -> bool:
     """Whether the start is inside :data:`CANCELLATION_CUTOFF`.
 
