@@ -120,6 +120,10 @@ class User(TimestampMixin, Base):
 
     last_active_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: When a self-deleted account is purged for good (`DELETE /me`, 30 days
+    #: on). Null on every other row, a migrated soft delete included, so the
+    #: purge job touches only accounts their owner deleted.
+    deletion_purge_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
 
@@ -179,6 +183,13 @@ class User(TimestampMixin, Base):
         CheckConstraint(
             check_is_known("primary_role", PrimaryRole),
             name="primary_role_is_known",
+        ),
+        # A purge date on a live account, or one not after the deletion, would
+        # let the purge job delete an account early.
+        CheckConstraint(
+            "deletion_purge_at IS NULL"
+            " OR (deleted_at IS NOT NULL AND deletion_purge_at > deleted_at)",
+            name="deletion_purge_follows_deleted",
         ),
     )
 

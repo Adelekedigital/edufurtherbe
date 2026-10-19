@@ -547,6 +547,10 @@ class SessionReasonCode(StrEnum):
     #: a null is indistinguishable from a migrated row or a client that sent
     #: nothing. Any explanation goes in `reason_text`, which stays optional.
     OTHER = "other"
+    #: **A party deleted their account** (Mentee Settings PRD, 2026-10-19).
+    #: Written by `DELETE /me` for each session it ends, never sent by a
+    #: client: in no role's reason set, like `EXPIRED_NO_RESPONSE`.
+    ACCOUNT_DELETED = "account_deleted"
 
 
 class ActorType(StrEnum):

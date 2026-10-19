@@ -13,6 +13,7 @@ import datetime as dt
 import pytest
 
 from app.domain.attendance import within_join_window
+from app.domain.enums import SessionReasonCode, SessionRole
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     RESPONSE_WINDOW,
@@ -48,6 +49,18 @@ def test_every_permitted_reason_belongs_to_an_actor_who_may_act() -> None:
     nothing."""
     for name, rule in TRANSITIONS.items():
         assert set(rule.reasons) <= rule.by, f"{name} permits reasons for a role that cannot act"
+
+
+def test_no_party_may_give_a_reason_only_the_system_writes() -> None:
+    """`expired_no_response` and `account_deleted` are written by the expiry
+    sweep and by `DELETE /me`. A party sending one would misfile a cancellation
+    as a lapse or a deletion in reporting."""
+    system_only = {SessionReasonCode.EXPIRED_NO_RESPONSE, SessionReasonCode.ACCOUNT_DELETED}
+    for name, rule in TRANSITIONS.items():
+        for role, codes in rule.reasons.items():
+            assert not codes & system_only, f"{role} may give a system-only reason on {name}"
+    # The positive half: the sets hold codes, so the loop compared something.
+    assert SessionReasonCode.OTHER in TRANSITIONS["cancel"].reasons[SessionRole.MENTEE]
 
 
 def test_the_cutoff_is_one_sided() -> None:
