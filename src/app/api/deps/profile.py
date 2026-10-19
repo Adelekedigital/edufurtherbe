@@ -57,6 +57,10 @@ from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
 from app.domain.referrals import claim_window
 from app.domain.writing_assist import provenance_problem
+from app.infra.db.application_freeze import (
+    refuse_education_while_in_review,
+    refuse_frozen_changes,
+)
 from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
@@ -414,6 +418,7 @@ CompletedOnboardingDep = Annotated[OnboardingResult, Depends(completed_onboardin
 async def created_education(
     payload: EducationWrite, user_id: OwnerDep, session: SessionDep
 ) -> tuple[UUID, bool]:
+    await refuse_education_while_in_review(session, user_id)
     result = await create_education(session, user_id, payload.model_dump())
     await session.commit()
     return result
@@ -425,6 +430,7 @@ async def updated_education(
     # `exclude_unset` is what makes this a PATCH: a field the client did not
     # send is absent, not null. Without it every omitted field would be written
     # as its default and a one-field edit would blank the rest.
+    await refuse_education_while_in_review(session, user_id)
     changed = await update_education(
         session, user_id, entry_id, payload.model_dump(exclude_unset=True)
     )
@@ -433,6 +439,7 @@ async def updated_education(
 
 
 async def deleted_education(entry_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
+    await refuse_education_while_in_review(session, user_id)
     removed = await delete_education(session, user_id, entry_id)
     await session.commit()
     return removed
@@ -503,7 +510,9 @@ async def updated_mentor_profile(
         current = await get_mentor_profile(session, user_id)
         stored = current["booking_window_days"] if current else None
     refuse_window_out_of_range(payload.booking_window_days, window, stored=stored)
-    changed = await update_mentor_profile(session, user_id, payload.model_dump(exclude_unset=True))
+    sent = payload.model_dump(exclude_unset=True)
+    await refuse_frozen_changes(session, user_id, sent)
+    changed = await update_mentor_profile(session, user_id, sent)
     await session.commit()
     return changed
 
@@ -515,6 +524,7 @@ async def upserted_profile(
     # Where the bio came from (decision 267): checked whole, before anything is written.
     if (problem := provenance_problem(sent)) is not None:
         raise ValidationError(problem[1], field_errors=(problem,))
+    await refuse_frozen_changes(session, user_id, sent)
     await upsert_profile(session, user_id, sent)
     await session.commit()
 

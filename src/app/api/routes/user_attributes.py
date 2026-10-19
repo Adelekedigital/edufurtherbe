@@ -176,6 +176,19 @@ PAUSE_CONFLICT: dict[int | str, dict[str, str]] = {
     }
 }
 
+IN_REVIEW_RESPONSE: dict[int | str, dict[str, str]] = {
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "`/problems/mentor-application-in-review`: your mentor application is "
+            "submitted and awaiting a decision, so its reviewed fields are frozen "
+            "(education, LinkedIn, headline, About, help areas, study country and "
+            "programme). `fields` names what this request would have changed. Only "
+            "a change is refused: a frozen field resent unchanged beside other "
+            "edits saves. Approve or decline unlocks."
+        )
+    }
+}
+
 CONFLICT_RESPONSE: dict[int | str, dict[str, str]] = {
     status.HTTP_409_CONFLICT: {"description": "This user already has a mentor profile."}
 }
@@ -196,7 +209,7 @@ CONFLICT_RESPONSE: dict[int | str, dict[str, str]] = {
         "country of study is derived from whichever one is chosen.\n\n"
         "`is_most_recent` clears the flag on the caller's other degrees."
     ),
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def add_education(created: CreatedEducationDep, response: Response) -> EducationCreatedRead:
     entry_id, institution_created = created
@@ -212,7 +225,7 @@ async def add_education(created: CreatedEducationDep, response: Response) -> Edu
     response_model=UpdatedRead,
     summary="Change a degree",
     description="Only the fields sent are changed. Absent is not null.",
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def edit_education(changed: UpdatedEducationDep) -> UpdatedRead:
     if not changed:
@@ -229,7 +242,7 @@ async def edit_education(changed: UpdatedEducationDep) -> UpdatedRead:
         "`school_name_raw` is what makes an unmatched school recoverable, and a "
         "real delete would take it."
     ),
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def remove_education(removed: DeletedEducationDep) -> None:
     if not removed:
@@ -346,7 +359,7 @@ async def apply_as_mentor(profile_id: CreatedMentorProfileDep, response: Respons
         "writable here — a mentor who could approve or relist themselves is not "
         "being reviewed."
     ),
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> UpdatedRead:
     if not changed:
@@ -371,7 +384,7 @@ async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> UpdatedRead:
         "replaces the detected one and needs a photo (`422` at `/avatar_focus` "
         "without one). A new photo replaces it."
     ),
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def edit_profile(_: UpsertedProfileDep) -> None:
     return None

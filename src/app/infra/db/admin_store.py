@@ -42,12 +42,12 @@ from sqlalchemy import CursorResult, and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
-from app.domain.enums import AdminRole, ApprovalStatus, LookupStatus
+from app.domain.enums import AdminRole, LookupStatus
 from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE
+from app.infra.db.predicates import LIVE, application_in_review
 
 
 def _rowcount(result: Any) -> int:
@@ -195,9 +195,7 @@ async def pending_mentors(session: AsyncSession, *, limit: int) -> list[dict[str
         )
         .join(User, User.id == MentorProfile.user_id)
         .where(
-            MentorProfile.approval_status == ApprovalStatus.PENDING,
-            MentorProfile.submitted_at.is_not(None),
-            MentorProfile.deleted_at.is_(None),
+            *application_in_review(),
             LIVE,
         )
         .order_by(MentorProfile.submitted_at, MentorProfile.user_id)

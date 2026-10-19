@@ -11,10 +11,19 @@ reviewer reads. About is optional.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
-__all__ = ["ApplicationEvidence", "MentorApplicationItem", "missing_items"]
+__all__ = [
+    "EDUCATION",
+    "FROZEN_FIELDS",
+    "ApplicationEvidence",
+    "MentorApplicationItem",
+    "frozen_changes",
+    "missing_items",
+]
 
 
 class MentorApplicationItem(StrEnum):
@@ -70,3 +79,50 @@ _HELD = {
 def missing_items(evidence: ApplicationEvidence) -> tuple[MentorApplicationItem, ...]:
     """Every item the application does not hold yet, in step order; empty when complete."""
     return tuple(item for item in MentorApplicationItem if not getattr(evidence, _HELD[item]))
+
+
+# --------------------------------------------------------------------------
+# What a submitted application freezes (owner, 2026-10-18)
+# --------------------------------------------------------------------------
+
+#: The name an education write is refused under: every education write changes it.
+EDUCATION = "education"
+
+#: Request field -> the field a refusal names. The reviewer judges these, so they
+#: hold still from submit to decision. The study country and programme come
+#: from the education step, so they are education's.
+FROZEN_FIELDS: dict[str, str] = {
+    "social_linkedin": "social_linkedin",
+    "about_me": "about_me",
+    "about_me_drafted": "about_me",
+    "about_me_prompt_version": "about_me",
+    "headline": "headline",
+    "offering_ids": "offering_ids",
+    "primary_study_country_id": "primary_study_country_id",
+    "primary_study_program": "primary_study_program",
+}
+
+
+def _same(field: str, sent: Any, stored: Mapping[str, Any]) -> bool:
+    if field == "offering_ids":
+        # `null` writes nothing, and the order is not the reviewer's concern.
+        return sent is None or set(sent) == set(stored["offering_ids"])
+    if field == "about_me_drafted":
+        # `true` stamps a new draft time whatever is stored, so it always
+        # changes the provenance; `false` changes it only when one is stored.
+        return not sent and stored["about_me_drafted_at"] is None
+    return bool(sent == stored[field])
+
+
+def frozen_changes(sent: Mapping[str, Any], stored: Mapping[str, Any]) -> tuple[str, ...]:
+    """The frozen fields `sent` would change, once each, in `FROZEN_FIELDS` order.
+
+    Only a change counts: a form resending a reviewed field unchanged beside
+    another edit saves. `sent` is already in its stored form (a LinkedIn link
+    canonical, text trimmed), and so is `stored`.
+    """
+    named: dict[str, None] = {}
+    for field, name in FROZEN_FIELDS.items():
+        if field in sent and not _same(field, sent[field], stored):
+            named[name] = None
+    return tuple(named)
