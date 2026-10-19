@@ -74,6 +74,7 @@ EXPECTED_MODELS = {
     "MenteeGoal",
     "MenteeGoalCountry",
     "MenteeGoalNeed",
+    "MenteeGoalSchool",
     # M3 availability. `CalendarConnection` is deliberately absent: nothing in
     # M3 reads or writes it, ADR 0012 has not settled the OAuth arrangement its
     # columns encode, and settled decision #21 ships a table with the phase that

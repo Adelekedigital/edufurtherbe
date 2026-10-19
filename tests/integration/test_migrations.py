@@ -112,6 +112,7 @@ EXPECTED_TABLES = [
     "featured_mentors",
     "mentee_goal_countries",
     "mentee_goal_needs",
+    "mentee_goal_schools",
     "mentee_goals",
     "mentor_conferencing_options",
     "mentor_availability_changes",

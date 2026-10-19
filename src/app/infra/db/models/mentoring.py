@@ -34,7 +34,11 @@ from app.domain.enums import (
     MentorStatusType,
     OptionSource,
 )
-from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
+from app.domain.goals import (
+    FIELD_OF_STUDY_MAX_LENGTH,
+    MAX_GOAL_SCHOOLS,
+    SCHOOL_NAME_MAX_LENGTH,
+)
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -447,6 +451,54 @@ class MenteeGoalCountry(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_mentee_goal_countries_pair", "user_id", "country_id", unique=True),
         Index("ix_mentee_goal_countries_country", "country_id"),
+    )
+
+
+class MenteeGoalSchool(TimestampMixin, Base):
+    """A school a mentee is aiming for, in their order (Mentee Settings PRD).
+
+    **Keyed on the goal, not the user**, unlike the country and need
+    satellites: a school is part of what this goal is, and goes with it —
+    `ON DELETE CASCADE`, so clearing the goal clears its schools.
+
+    The education entry's shape (ADR 0008 point 5, decision 59):
+    `school_name_raw` is always kept and `institution_id` may be null, so a
+    school the catalogue does not hold still displays as typed and can be
+    linked later. `position` is the mentee's order; `UNIQUE (goal_id,
+    position)` keeps it total, and bounding `position` to
+    `0..MAX_GOAL_SCHOOLS - 1` makes the cap the database's too: eleven rows
+    would need eleven distinct positions.
+    """
+
+    __tablename__ = "mentee_goal_schools"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("mentee_goals.id", ondelete="CASCADE", name="fk_mentee_goal_schools_goal"),
+        nullable=False,
+    )
+    institution_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "institutions.id", ondelete="RESTRICT", name="fk_mentee_goal_schools_institution"
+        ),
+    )
+    school_name_raw: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("goal_id", "position", name="uq_mentee_goal_schools_goal_position"),
+        CheckConstraint(
+            f"char_length(school_name_raw) BETWEEN 1 AND {SCHOOL_NAME_MAX_LENGTH}",
+            name="school_name_raw_length",
+        ),
+        CheckConstraint(
+            f"position BETWEEN 0 AND {MAX_GOAL_SCHOOLS - 1}", name="position_within_cap"
+        ),
+        Index("ix_mentee_goal_schools_institution", "institution_id"),
     )
 
 
