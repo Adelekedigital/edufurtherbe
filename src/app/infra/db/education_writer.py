@@ -48,10 +48,14 @@ WRITABLE = (
 )
 
 
-async def _resolve_institution(
+async def resolve_institution(
     session: AsyncSession, *, school_name_raw: str, supplied: UUID | None, user_id: UUID
 ) -> tuple[UUID | None, bool]:
     """The institution this entry points at, and whether it had to be created.
+
+    **The one resolution for a typed school**: an education entry and a goal's
+    target school (`profile_writer`) both call it, so a school matches, queues
+    and validates the same way wherever it is typed (non-negotiable 8).
 
     A supplied id is **validated, not trusted**: it must be a row a user could
     have selected, or one this same user created and is still awaiting review.
@@ -72,8 +76,15 @@ async def _resolve_institution(
             return None, False
         return supplied, False
 
-    # No id: match by name, exactly or case-folded, never fuzzily.
-    rows = await session.execute(select(Institution.name, Institution.id))
+    # No id: match by name, exactly or case-folded, never fuzzily. A merged
+    # row's name resolves to the row it was merged into, so no new reference
+    # lands on a retired row (decision 65; a merge never chains).
+    rows = await session.execute(
+        select(
+            Institution.name,
+            func.coalesce(Institution.merged_into_id, Institution.id).label("id"),
+        )
+    )
     matched = match(school_name_raw, index_names((row.name, row.id) for row in rows))
     if matched is not None:
         return matched, False
@@ -121,7 +132,7 @@ async def create_education(
     is what carries that — committing here would make the institution durable
     before the entry it exists for.
     """
-    institution_id, minted = await _resolve_institution(
+    institution_id, minted = await resolve_institution(
         session,
         school_name_raw=payload["school_name_raw"],
         supplied=payload.get("institution_id"),
@@ -162,7 +173,7 @@ async def update_education(
     if "is_most_recent" in payload:
         values["is_most_recent"] = bool(payload["is_most_recent"])
     if "institution_id" in payload:
-        values["institution_id"], _minted = await _resolve_institution(
+        values["institution_id"], _minted = await resolve_institution(
             session,
             school_name_raw=str(payload.get("school_name_raw") or ""),
             supplied=payload["institution_id"],

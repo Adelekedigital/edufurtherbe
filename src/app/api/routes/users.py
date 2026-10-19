@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep, RefundPolicyDep
+from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import BookingCountsRead, CreditsRead, UserProfileRead, UserRead
@@ -88,6 +89,12 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "like every other country in this API, or null when unset. A mentee's "
         "origin is returned here and nowhere else; a mentor's also shows on "
         "their public profile and card, as before.\n\n"
+        "`languages` is the languages you speak, `{id, display_name, code}`, "
+        "alphabetically, as the public mentor profile lists them; `[]` when "
+        "there are none.\n\n"
+        "`profile.current_country` is where you live now, the same shape, or "
+        "null when unset. It is returned here and nowhere else, for mentees and "
+        "mentors alike.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -108,6 +115,7 @@ async def read_me(
         education=[EducationRead.from_row(row) for row in attributes["education"]],
         goal=(GoalRead.from_row(goal) if goal is not None else None),
         awards=[AwardRead.from_row(row) for row in attributes["awards"]],
+        languages=[LanguageRead.from_row(row) for row in attributes["languages"]],
         mentor_profile=(
             MentorProfileRead.from_row(mentor_profile, window, owner=True)
             if mentor_profile is not None

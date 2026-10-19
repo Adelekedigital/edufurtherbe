@@ -98,8 +98,8 @@ async def education(rows: EducationDep) -> Page[EducationRead]:
     response_model=GoalRead,
     summary="A user's study goal",
     description=(
-        "What the mentee is aiming for, with target countries and the kinds of "
-        "help they want.\n\n"
+        "What the mentee is aiming for, with target countries, the kinds of "
+        "help they want and the schools they are aiming for, in their order.\n\n"
         "**Singular: a user has at most one goal.** `mentee_goals.user_id` is "
         "unique, so this returns the goal or 404 rather than a collection that "
         "could only ever hold one item."
@@ -257,7 +257,14 @@ async def remove_education(removed: DeletedEducationDep) -> None:
         "Creates the goal or replaces it — a user has at most one, so this is a "
         "`PUT` rather than a `POST` that would append.\n\n"
         "`country_ids` and `need_ids` are stored against the user. Omit a list "
-        "to leave it alone; send an empty one to clear it."
+        "to leave it alone; send an empty one to clear it.\n\n"
+        "`schools` belongs to the goal: up to ten, in your order, each "
+        "`{institution_id?, school_name_raw}`. Sending it replaces the whole "
+        "list; omitting it (or `null`) leaves it; `[]` clears it. A school is "
+        "resolved as an education entry's is: a supplied `institution_id` must "
+        "be one you could pick, or the school is saved unlinked; a name without "
+        "one is matched against the catalogue, and an unmatched name is saved "
+        "and queued for review."
     ),
     responses=WRITE_RESPONSES,
 )
@@ -271,9 +278,8 @@ async def set_goal(goal_id: UpsertedGoalDep) -> CreatedRead:
     summary="Clear a user's study goal",
     description=(
         "**A real delete** — `mentee_goals` has no soft-delete column, unlike "
-        "education and awards. The user's target countries and needs are left "
-        "alone: clearing a goal is not a statement about where they want to "
-        "study."
+        "education and awards. Its target countries, needs and schools go "
+        "with it: all three reference the goal and cascade."
     ),
     responses=WRITE_RESPONSES,
 )
@@ -382,7 +388,10 @@ async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> UpdatedRead:
         "or `null` is a `422`. Renaming never changes the profile's link.\n\n"
         "**`avatar_focus` is your own crop** of the photo you have now: it "
         "replaces the detected one and needs a photo (`422` at `/avatar_focus` "
-        "without one). A new photo replaces it."
+        "without one). A new photo replaces it.\n\n"
+        "**`origin_country_id` and `current_country_id`** take a "
+        "`/catalog/countries` id; one that names no country is a `422` at that "
+        "field and nothing is saved. `null` clears either."
     ),
     responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )

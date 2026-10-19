@@ -23,6 +23,11 @@ THE GOAL SATELLITES BELONG TO THE USER, NOT THE GOAL
 submitting countries with a goal replaces *the user's* countries, and a user
 with two goals sees the same list on both. Writing them per goal would claim a
 relationship the tables do not carry.
+
+**Schools are the exception, and belong to the goal.** ``mentee_goal_schools``
+keys on ``goal_id``, so they are replaced per goal and go when it does. Each is
+resolved by ``education_writer.resolve_institution``, the education entry's own
+path, so a typed school matches and queues the same way wherever it is typed.
 """
 
 from __future__ import annotations
@@ -36,13 +41,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ValidationError
 from app.domain.enums import LanguageProficiency
 from app.infra.db.avatar_focus_store import chosen_focus_columns
+from app.infra.db.education_writer import resolve_institution
 from app.infra.db.models.mentoring import (
     MenteeGoal,
     MenteeGoalCountry,
     MenteeGoalNeed,
+    MenteeGoalSchool,
     MentorProfile,
     MentorServiceOffering,
 )
+from app.infra.db.models.reference import Country
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.user import User, UserLanguage, UserProfile
 
@@ -86,6 +94,7 @@ PROFILE_COLUMNS = (
     "about_me",
     "gender",
     "origin_country_id",
+    "current_country_id",
     "cover_color",
     "cover_art",
     "social_linkedin",
@@ -152,7 +161,76 @@ async def upsert_goal(session: AsyncSession, user_id: UUID, payload: dict[str, A
             )
 
     await _write_goal_satellites(session, user_id, payload)
+    await _write_goal_schools(session, user_id, goal_id, payload)
     return goal_id
+
+
+async def _write_goal_schools(
+    session: AsyncSession, user_id: UUID, goal_id: UUID, payload: dict[str, Any]
+) -> None:
+    """Replace the goal's schools, in the order sent, when the key was sent.
+
+    Absent or `null` leaves them, as the satellites above; `[]` clears them.
+    **The goal row is locked first**, scoped to its owner, so two replacements
+    of one goal run one after the other rather than meeting on
+    `uq_mentee_goal_schools_goal_position`. Delete-then-insert because the
+    request carries the whole list and each school is a new row.
+
+    **A link already on this goal is kept as sent.** The server chose it, and
+    it may be one the caller could not pick by id (another user's pending row
+    their name matched), so a client sending back what `GET` returned — a
+    reorder — must not lose it. Any other id goes through `resolve_institution`.
+    """
+    if payload.get("schools") is None:
+        return
+    await session.execute(
+        select(MenteeGoal.id)
+        .where(MenteeGoal.id == goal_id, MenteeGoal.user_id == user_id)
+        .with_for_update()
+    )
+    linked = set(
+        (
+            await session.execute(
+                select(MenteeGoalSchool.institution_id)
+                .join(MenteeGoal, MenteeGoal.id == MenteeGoalSchool.goal_id)
+                .where(
+                    MenteeGoal.id == goal_id,
+                    MenteeGoal.user_id == user_id,
+                    MenteeGoalSchool.institution_id.is_not(None),
+                )
+            )
+        ).scalars()
+    )
+    await session.execute(
+        delete(MenteeGoalSchool).where(
+            MenteeGoalSchool.goal_id == goal_id,
+            MenteeGoalSchool.goal_id.in_(
+                select(MenteeGoal.id).where(MenteeGoal.user_id == user_id)
+            ),
+        )
+    )
+    rows = []
+    for position, school in enumerate(payload["schools"]):
+        supplied = school.get("institution_id")
+        if supplied is not None and supplied in linked:
+            institution_id = supplied
+        else:
+            institution_id, _created = await resolve_institution(
+                session,
+                school_name_raw=school["school_name_raw"],
+                supplied=supplied,
+                user_id=user_id,
+            )
+        rows.append(
+            {
+                "goal_id": goal_id,
+                "institution_id": institution_id,
+                "school_name_raw": school["school_name_raw"],
+                "position": position,
+            }
+        )
+    if rows:
+        await session.execute(insert(MenteeGoalSchool), rows)
 
 
 async def _write_goal_satellites(
@@ -185,9 +263,9 @@ async def _write_goal_satellites(
 async def delete_goal(session: AsyncSession, user_id: UUID) -> bool:
     """A **real** delete: `mentee_goals` has no `deleted_at`.
 
-    The satellites are left alone deliberately — they belong to the user, and
-    clearing a goal is not a statement about which countries they are aiming
-    for.
+    **Its countries, needs and schools go with it.** All three reference the
+    goal (the countries and needs through `mentee_goals.user_id`) and cascade,
+    which the route description states and a test asserts.
     """
     result = await session.execute(delete(MenteeGoal).where(MenteeGoal.user_id == user_id))
     return _rowcount(result) > 0
@@ -335,8 +413,9 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     content-addressed in Supabase Storage (ADR 0019); accepting a URL here would
     let a profile point at any host and bypass that scheme.
     """
-    # **The chosen crop first**, because it is the one part that can refuse: a
-    # refusal raised before anything is written leaves nothing to roll back.
+    # **The refusals first**, so one raised before anything is written leaves
+    # nothing to roll back: an unknown country, then the chosen crop.
+    await _refuse_unknown_countries(session, payload)
     if "avatar_focus" in payload:
         await _choose_avatar_focus(session, user_id, payload["avatar_focus"])
     # **`timezone`, the name and `primary_role` live on `users`**, so they are written there,
@@ -361,6 +440,31 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
         await session.execute(
             update(UserProfile).where(UserProfile.user_id == user_id).values(**values)
         )
+
+
+#: The profile's country references, each a `countries.id`.
+COUNTRY_FIELDS = ("origin_country_id", "current_country_id")
+
+
+async def _refuse_unknown_countries(session: AsyncSession, payload: dict[str, Any]) -> None:
+    """A `422` at each country field whose id names no country.
+
+    The foreign key would refuse it too, as an `IntegrityError` and a 500; one
+    query asked first turns that into an answer naming the field.
+    """
+    sent = {field: payload[field] for field in COUNTRY_FIELDS if payload.get(field) is not None}
+    if not sent:
+        return
+    known = set(
+        (await session.execute(select(Country.id).where(Country.id.in_(sent.values())))).scalars()
+    )
+    errors = tuple(
+        (f"/{field}", "not a country in /catalog/countries")
+        for field, value in sent.items()
+        if value not in known
+    )
+    if errors:
+        raise ValidationError("unknown country", field_errors=errors)
 
 
 def _provenance(payload: dict[str, Any], *, stored: bool) -> dict[str, Any]:

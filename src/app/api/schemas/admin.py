@@ -21,7 +21,7 @@ class PendingInstitutionRead(BaseModel):
     """An institution awaiting review, and how many people are waiting on it.
 
     ``uses`` is **computed, never stored** — the count of live education entries
-    pointing here. It is what tells the reviewer which action to take: eight
+    and goal schools pointing here. It is what tells the reviewer which action to take: eight
     entries on one spelling is an approval, one entry plus a typo is a merge.
     `usage_count` was a stored column that nothing incremented, so it read zero
     on every row forever and its index sorted a constant.

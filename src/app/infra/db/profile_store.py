@@ -41,6 +41,7 @@ from app.infra.db.models.mentoring import (
     MenteeGoal,
     MenteeGoalCountry,
     MenteeGoalNeed,
+    MenteeGoalSchool,
     MentorProfile,
     MentorStatusEvent,
     ServiceOffering,
@@ -169,7 +170,30 @@ async def get_goal(session: AsyncSession, user_id: UUID) -> dict[str, Any] | Non
     first = next(iter(goals), None)
     if first is None:
         return None
-    return dict(first) | {"countries": shared_countries, "needs": shared_needs}
+    # The goal's own schools, in the mentee's order. Scoped by the owner through
+    # the goal, not by the goal id alone; the institution is followed whatever
+    # its review state (decision 63).
+    schools = (
+        await session.execute(
+            select(
+                MenteeGoalSchool.id,
+                MenteeGoalSchool.institution_id,
+                Institution.name.label("institution_name"),
+                MenteeGoalSchool.school_name_raw,
+                MenteeGoalSchool.position,
+            )
+            .select_from(MenteeGoalSchool)
+            .join(MenteeGoal, MenteeGoal.id == MenteeGoalSchool.goal_id)
+            .outerjoin(Institution, Institution.id == MenteeGoalSchool.institution_id)
+            .where(MenteeGoal.user_id == user_id)
+            .order_by(MenteeGoalSchool.position)
+        )
+    ).mappings()
+    return dict(first) | {
+        "countries": shared_countries,
+        "needs": shared_needs,
+        "schools": [dict(row) for row in schools],
+    }
 
 
 def _live_awards(user_id: Any) -> list[Any]:
