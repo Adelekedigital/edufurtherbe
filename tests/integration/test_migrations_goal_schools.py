@@ -19,7 +19,7 @@ from app.domain.goals import MAX_GOAL_SCHOOLS, SCHOOL_NAME_MAX_LENGTH
 pytestmark = pytest.mark.db
 
 SCHOOLS = "d2f8b6a4c1e7"
-BEFORE = "c7d4a2e9f1b6"
+BEFORE = "e4b9d2a7c1f3"
 
 _GOAL = (
     "WITH u AS (INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
