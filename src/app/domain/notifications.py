@@ -11,8 +11,10 @@ confirmation screen, and after an acceptance the mentor has just clicked the
 button. The rule is written down because a vocabulary somebody maintains by hand
 drifts, and because the exception below is only visibly principled beside it.
 
-**The two confirmations are the same rule applied twice, not two rules.** An
-auto-confirming booking tells the *mentor*; an acceptance tells the *mentee*.
+**The two confirmations are the same rule applied twice, not two rules**, with
+one exception (owner, 2026-10-18): an auto-confirming booking tells **both**,
+so the mentee has the confirmation and its session link in their inbox, not
+only on screen. An acceptance tells the *mentee*.
 They also differ in content — the mentee's carries the join link, the mentor's
 says a booking arrived — which is why they are separate members rather than one
 with a flag.
@@ -251,7 +253,10 @@ class Audience(StrEnum):
 
 #: The rule, as a table. Absent means the message is not about a session.
 AUDIENCE: dict[Notification, Audience] = {
-    Notification.SESSION_BOOKED: Audience.MENTOR,
+    #: **Both, the one exception to "who did not act"** (owner, 2026-10-18):
+    #: the mentee is looking at the confirmation, but wants it in their inbox
+    #: too, with the session link, rather than nothing until the first reminder.
+    Notification.SESSION_BOOKED: Audience.BOTH,
     Notification.SESSION_REQUESTED: Audience.MENTOR,
     Notification.REQUEST_ACCEPTED: Audience.MENTEE,
     Notification.REQUEST_DECLINED: Audience.MENTEE,

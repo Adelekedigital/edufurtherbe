@@ -212,7 +212,7 @@ contract.
 
 | member | Loops template | id | receives it | variables |
 |---|---|---|---|---|
-| `session_booked` | Session Confirmation | `clyamujcw008npblz54cv0oxw` | mentor | `attendee`, `location`, `name`, `sessiondate`, `sessionlink`, `sessiontime`, `topic`, `topicDiscuss` |
+| `session_booked` | Session Confirmation | `clyamujcw008npblz54cv0oxw` | both | `attendee`, `location`, `name`, `sessiondate`, `sessionlink`, `sessiontime`, `topic`, `topicDiscuss` |
 | `session_requested` | Session Request | `cmbxizcr3bcvrvs0idfrh81yo` | mentor | `discuss`, `hours`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
 | `request_accepted` | Session Confirmation (shared) | `clyamujcw008npblz54cv0oxw` | mentee | as `session_booked` |
 | `request_declined` | Declined Request | `cmbxk5mzj1ldovu0iw608gzga` | mentee | `menteeName`, `mentorName`, `reasonMessage`, `reasonTitle`, `sessionDate`, `webUrl` |

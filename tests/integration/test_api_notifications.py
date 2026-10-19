@@ -135,17 +135,17 @@ async def sweep(engine: AsyncEngine, notifier: Any) -> dict[str, int]:
 # --------------------------------------------------------------------------
 
 
-async def test_an_auto_confirming_booking_queues_one_message_for_the_mentor(
+async def test_an_auto_confirming_booking_queues_one_message_for_each_party(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """**One row, and the mentee is not in it.** They are looking at a
-    confirmation screen; the mentor is the one learning something."""
+    """**A row each** (owner, 2026-10-18): the mentor learns of the booking and
+    the mentee gets the confirmation, with the session link, in their inbox."""
     booking = await a_booking(db_engine, api_client, "nf-auto")
 
     rows = await queued(db_engine, booking["id"])
 
-    assert [row["event_type"] for row in rows] == [Notification.SESSION_BOOKED]
-    assert audience(rows) == {booking["mentor"]}
+    assert [row["event_type"] for row in rows] == [Notification.SESSION_BOOKED] * 2
+    assert audience(rows) == {booking["mentor"], booking["mentee"]}
 
 
 async def test_a_request_queues_for_the_mentor_who_has_to_answer_it(
@@ -276,12 +276,11 @@ async def test_draining_sends_and_marks_the_row(
 
     counts = await sweep(db_engine, recorder)
 
-    assert counts["sent"] >= 1
-    (message,) = [m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED]
-    assert message["channel"] is Channel.EMAIL
-    assert "@" in message["to"]
-    (row,) = await queued(db_engine, booking["id"])
-    assert row["status"] == "sent"
+    assert counts["sent"] >= 2
+    messages = [m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED]
+    assert len(messages) == 2
+    assert all(m["channel"] is Channel.EMAIL and "@" in m["to"] for m in messages)
+    assert {row["status"] for row in await queued(db_engine, booking["id"])} == {"sent"}
 
 
 async def test_the_context_carries_the_real_session(
@@ -299,7 +298,7 @@ async def test_the_context_carries_the_real_session(
 
     await sweep(db_engine, recorder)
 
-    (message,) = [m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED]
+    message = next(m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED)
     context = message["context"]
     assert context.session_id == str(booking["id"])
     assert context.starts_at is not None
@@ -347,7 +346,7 @@ async def test_the_idempotency_key_is_the_row_itself(
 ) -> None:
     """So a retry after a timeout replays the provider's answer rather than
     sending a second copy."""
-    booking = await a_booking(db_engine, api_client, "nf-key")
+    booking = await a_booking(db_engine, api_client, "nf-key", confirmation=True)
     recorder = Recorder()
 
     await sweep(db_engine, recorder)
@@ -367,7 +366,8 @@ async def test_a_failed_send_is_retried_rather_than_lost(
     """**Down is not gone.** The row goes back to pending with its attempt
     counted, so the next sweep tries again — which is the difference between an
     outbox and a log of things that did not happen."""
-    booking = await a_booking(db_engine, api_client, "nf-retry")
+    # Waits for the mentor, so one row: the mentor's request.
+    booking = await a_booking(db_engine, api_client, "nf-retry", confirmation=True)
 
     counts = await sweep(db_engine, Refuser())
 
@@ -388,7 +388,8 @@ async def test_retrying_stops_at_the_bound(
     """**An unbounded retry is an outage amplifier**, and the row has to end
     somewhere a human can find it: `failed`, with the provider's last words on
     it, rather than pending forever."""
-    booking = await a_booking(db_engine, api_client, "nf-bound")
+    # Waits for the mentor, so one row: the mentor's request.
+    booking = await a_booking(db_engine, api_client, "nf-bound", confirmation=True)
 
     for _ in range(MAX_ATTEMPTS + 2):
         await sweep(db_engine, Refuser())
@@ -409,7 +410,8 @@ async def test_a_recipient_with_no_address_is_skipped_not_failed(
     WhatsApp is the channel that produces it today, because nobody has a phone
     number.
     """
-    booking = await a_booking(db_engine, api_client, "nf-noaddress")
+    # Waits for the mentor, so one row: the mentor's request.
+    booking = await a_booking(db_engine, api_client, "nf-noaddress", confirmation=True)
     async with db_engine.begin() as conn:
         await conn.execute(
             text("UPDATE outbox_events SET destination = 'whatsapp' WHERE entity_id = :i"),
@@ -431,7 +433,8 @@ async def test_a_drain_with_no_provider_records_rather_than_loses(
     the platform decided not to send it, rather than failing to."""
     from app.infra.clients.notifications import NullNotifier
 
-    booking = await a_booking(db_engine, api_client, "nf-nokey")
+    # Waits for the mentor, so one row: the mentor's request.
+    booking = await a_booking(db_engine, api_client, "nf-nokey", confirmation=True)
 
     counts = await sweep(db_engine, NullNotifier())
 

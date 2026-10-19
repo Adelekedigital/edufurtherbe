@@ -76,7 +76,7 @@ Tracked as backend issue #348, deferred until the owner decides on Emailit.
 |---|---|---|---|---|
 | `session_requested` | A mentee requests a session that needs approval | mentor | core + `hours` (hours left to answer) | Session Request |
 | `mentor_response_reminder` | Nudge before the request lapses | mentor | core + `hours` | Session Request Reminder |
-| `session_booked` | A booking on an offering that confirms itself | the mentor (the mentee booked it, so only the mentor is told; decision 132) | core | Session Confirmation |
+| `session_booked` | A booking on an offering that confirms itself | both parties: the mentor learns of the booking, and the mentee gets the confirmation with its session link (owner, 2026-10-18; decision 132) | core | Session Confirmation |
 | `request_accepted` | The mentor accepts a request | mentee | core | Session Confirmation (shared) |
 | `request_declined` | The mentor declines | mentee | core + `reasonTitle`, `reasonMessage` | Declined Request |
 | `request_withdrawn` | The mentee withdraws a request | mentor | core + `reasonTitle`, `reasonMessage` | Withdrawn Request |

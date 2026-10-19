@@ -40,6 +40,7 @@ async def test_a_deleted_mentee_is_your_mentee_to_the_mentor(
 
     counts = await sweep(db_engine, recorder)
 
+    # The mentor's copy goes; the deleted mentee's own is skipped.
     assert counts["sent"] == 1
     (message,) = [m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED]
     context = message["context"]
@@ -78,7 +79,7 @@ async def test_a_live_counterpart_is_still_named(
 
     await sweep(db_engine, recorder)
 
-    (message,) = [m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED]
+    message = next(m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED)
     context = message["context"]
     assert context.mentee_name == "Mo"
     assert context.mentor_name not in DELETED_PARTY_LABELS.values()
@@ -88,7 +89,8 @@ async def test_a_deleted_recipient_is_sent_nothing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """Their address is read through `LIVE`, so there is nowhere to send it."""
-    booking = await a_booking(db_engine, api_client, "gone-recipient")
+    # Waits for the mentor, so the mentor's request is the only row.
+    booking = await a_booking(db_engine, api_client, "gone-recipient", confirmation=True)
     await delete_account(db_engine, booking["mentor"])
     recorder = Recorder()
 
