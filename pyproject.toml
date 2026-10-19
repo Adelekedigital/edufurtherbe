@@ -235,6 +235,7 @@ package = "app"
 exempt = [
     "main.py",
     "api/deps/__init__.py",
+    "api/deps/account.py",
     "api/deps/admin.py",
     "api/deps/availability.py",
     "api/deps/bio_draft.py",

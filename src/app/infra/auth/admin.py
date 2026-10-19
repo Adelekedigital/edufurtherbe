@@ -32,12 +32,19 @@ from uuid import UUID
 
 import httpx
 
+from app.core.config import Settings
 from app.core.errors import AppError
+from app.infra.http.client import shared
 from app.infra.http.retry import send_with_backoff
 
 # Create, list and fetch all hang off this one path. Named for the resource
 # rather than for one verb, because it is used for three.
 ADMIN_USERS = "/auth/v1/admin/users"
+
+# Revokes every refresh token the user holds, on every device (`scope=global`).
+# Authorised by the **user's own** access token, not the service key: Supabase's
+# admin `signOut(jwt, scope)` is this call. The key only routes it (`apikey`).
+LOGOUT = "/auth/v1/logout"
 
 # Never called. Named so a test can assert the absence rather than trust it.
 INVITE_ENDPOINTS = ("/auth/v1/invite", "/auth/v1/admin/generate_link")
@@ -230,6 +237,30 @@ class SupabaseAdminClient:
             raise AdminApiError(f"fetch failed with {response.status_code}")
         return self._to_user(self._safe_json(response))
 
+    def sign_out_everywhere(self, access_token: str) -> None:
+        """Revoke every session this access token's user holds (`DELETE /me`).
+
+        Access tokens already issued stay valid until they expire, which
+        Supabase documents; this API refuses them anyway, because they reach no
+        live account. Raises :class:`AdminApiError`, for a refusal or an
+        unreachable Supabase alike, naming only the status or the error's type:
+        the request carried the user's token.
+        """
+        try:
+            response = self._send(
+                lambda: self._client.post(
+                    f"{self._base_url}{LOGOUT}",
+                    params={"scope": "global"},
+                    headers={"apikey": self._key, "Authorization": f"Bearer {access_token}"},
+                )
+            )
+        except httpx.HTTPError as exc:
+            # A timeout or a refused connection, named by its type only: the
+            # caller logs this, and the request carried the user's token.
+            raise AdminApiError(f"sign out failed: {type(exc).__name__}") from None
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            raise AdminApiError(f"sign out failed with {response.status_code}")
+
     @staticmethod
     def _safe_json(response: httpx.Response) -> dict[str, object]:
         try:
@@ -248,3 +279,19 @@ class SupabaseAdminClient:
             return AuthUser(id=UUID(str(identifier)), email=str(email))
         except ValueError as exc:
             raise AdminApiError("Admin API returned a non-uuid id") from exc
+
+
+#: For the one call the API itself makes (sign-out on `DELETE /me`).
+SIGN_OUT_TIMEOUT = httpx.Timeout(10.0)
+
+
+def auth_admin_for(settings: Settings) -> SupabaseAdminClient | None:
+    """The Admin API client the request path uses, on the process's shared
+    HTTP client, or ``None`` where Supabase is not configured (a local run)."""
+    if settings.supabase_url is None or settings.supabase_service_role_key is None:
+        return None
+    return SupabaseAdminClient(
+        base_url=str(settings.supabase_url),
+        service_role_key=settings.supabase_service_role_key.get_secret_value(),
+        client=shared(SIGN_OUT_TIMEOUT),
+    )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -293,4 +293,16 @@ class UserRead(NormalisedEmail):
             "explains the rule without a session to hand; a session's own deadline "
             "is its `refund_until`."
         ),
+    )
+
+
+class AccountDeletionWrite(BaseModel):
+    """`DELETE /me`'s body: the word the person typed, exactly.
+
+    **Exactly `DELETE`**, case and spacing included, so the request means what
+    the modal asked. Not `Normalised`, which would trim `"DELETE "` into a yes.
+    """
+
+    confirm: Literal["DELETE"] = Field(
+        description="The person typed `DELETE` to confirm. Anything else is a `422`."
     )

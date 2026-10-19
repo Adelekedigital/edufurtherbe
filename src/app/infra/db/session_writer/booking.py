@@ -85,6 +85,7 @@ from app.infra.db.models.sessions import (
 from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
+from app.infra.db.predicates import LIVE
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 from app.infra.db.slot_store import offered_slot
 
@@ -314,6 +315,21 @@ async def book_session(
     # the hold is found here — or waits behind this booking and then finds the
     # hour taken (`holds.lock_mentor_slots`).
     await lock_mentor_slots(session, mentor_id)
+    # **Both parties still there, re-read under a key-share lock.** `_offering`
+    # read the mentor as live before any lock, so an account deletion committing
+    # in between would land a session on a deleted account. `DELETE /me` locks
+    # the account row `FOR UPDATE`, which `KEY SHARE` waits on, so the two run
+    # one after the other: either the deletion finds this session and ends it,
+    # or this finds the account gone. `KEY SHARE`, not `SHARE`, so an ordinary
+    # profile update to either row is not held behind the booking.
+    parties = await session.execute(
+        select(User.id)
+        .where(User.id.in_((mentor_id, mentee_id)), LIVE)
+        .order_by(User.id)
+        .with_for_update(read=True, key_share=True)
+    )
+    if len(parties.all()) != 2:
+        raise NotFoundError("no such bookable session type")
     # **The time offered to this mentee, if this is it** (#339) — booked at the
     # length it was offered at, as decision #10 snapshots what was agreed, so a
     # mentor editing the offering inside the hold cannot change what it becomes.

@@ -23,6 +23,7 @@ from typing import Any
 #: seam is guarded by adding its name here.
 ADAPTER_SEAMS = frozenset(
     {
+        "auth_admin",
         "calendar",
         "calendar_account_email",
         "calendar_exchange",

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.api.deps import BookingWindowDep, CurrentUserDep, OwnAttributesDep, RefundPolicyDep
+from app.api.deps import (
+    BookingWindowDep,
+    CurrentUserDep,
+    DeletedAccountDep,
+    OwnAttributesDep,
+    RefundPolicyDep,
+)
 from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
@@ -132,3 +138,36 @@ async def read_me(
         ),
         mentee_cancel_refund_hours=int(refunds.mentee_cancel_notice.total_seconds() // 3600),
     )
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete my account",
+    description=(
+        "Deletes the caller's own account, with **30 days to restore it** "
+        'through support. The body is `{"confirm": "DELETE"}`, exactly; '
+        "anything else is a `422` and changes nothing.\n\n"
+        "In one transaction it ends every open session the caller is part of, "
+        "with the reason `account_deleted`: a confirmed session that has not "
+        "started is cancelled, a request they sent is withdrawn and one they "
+        "received is declined. The other person gets the usual email, and a "
+        "mentee gets their credit back when their mentor is the one leaving. "
+        "Open means what `booking_counts` counts on `GET /me`: "
+        "`upcoming` and the requests still awaiting an answer. A session "
+        "already under way is left to settle as attended or missed.\n\n"
+        "Unused credits expire, a mentor profile is unlisted, and the account "
+        "disappears from every other person's view at once. Then the caller is "
+        "signed out of every device. **The token used for this call stops "
+        "working at once**: `GET /me` with it answers `404`, as does a second "
+        "`DELETE /me`."
+    ),
+    responses=ME_RESPONSES
+    | {
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "`confirm` is missing or is not exactly `DELETE`."
+        }
+    },
+)
+async def delete_me(_: DeletedAccountDep) -> None:
+    """Everything happens in the dependency; nothing is returned."""

@@ -69,8 +69,10 @@ lock costs one monthly transaction and buys a ``delta`` that is true.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
+from uuid import UUID
 
-from sqlalchemy import ColumnElement, func, insert, not_, select, update
+from sqlalchemy import ColumnElement, RowMapping, func, insert, not_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import CreditReason
@@ -143,6 +145,32 @@ async def expire_credits(session: AsyncSession, *, now: dt.datetime) -> int:
         .all()
     )
 
+    return await _retire(session, dead)
+
+
+async def expire_user_credits(session: AsyncSession, user_id: UUID) -> int:
+    """Retire every lot this person still holds, now: their account is being
+    deleted, and the privacy policy says unused credits go with it. Recorded as
+    `lot_expired` by the sweep's own write, so the ledger says why the balance
+    fell the same way it does for a date. Returns the count. Does not commit."""
+    dead = (
+        (
+            await session.execute(
+                select(CreditLot.id, CreditLot.user_id, CreditLot.quantity_remaining)
+                .where(CreditLot.user_id == user_id, CreditLot.quantity_remaining > 0)
+                .order_by(CreditLot.id)
+                .with_for_update()
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return await _retire(session, dead)
+
+
+async def _retire(session: AsyncSession, dead: Sequence[RowMapping]) -> int:
+    """Zero these locked lots and record what each lost. **The one write**, for
+    the sweep and for a deleted account alike. Returns the count."""
     if not dead:
         return 0
 

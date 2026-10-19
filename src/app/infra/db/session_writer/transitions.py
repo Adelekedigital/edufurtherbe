@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy import RowMapping, and_, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
@@ -27,8 +27,10 @@ from app.domain.refunds import RefundPolicy, never_agreed_refund, transition_ref
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     TRANSITIONS,
+    ending_for,
     reason_required,
     records_unavailability,
+    role_of,
     too_late_to_cancel,
 )
 from app.infra.clients.meetings import CalendarPort
@@ -40,7 +42,7 @@ from app.infra.db.models.sessions import (
 )
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
-from app.infra.db.pending_requests import lapsed_request
+from app.infra.db.pending_requests import awaiting_mentor, lapsed_request, upcoming_session
 from app.infra.db.session_writer.follow_ups import on_ended
 
 #: What a mentor reads beside this block in their own availability.
@@ -126,6 +128,11 @@ async def transition(
                 )
                 .join(User, User.id == Session.mentor_id)
                 .where(Session.id == session_id)
+                # **Locked**, so a transition and an account deletion ending
+                # the same session run one after the other: the second reads
+                # the status the first wrote and is refused, rather than
+                # overwriting it (DELETE /me review).
+                .with_for_update(of=Session)
                 # **Scoped in the query on the write path**, not checked after
                 # fetching. The roles this action permits are spread into the
                 # `WHERE` rather than compared afterwards, so a mentee reaching
@@ -148,7 +155,7 @@ async def transition(
     if row is None:
         raise NotFoundError("no such session")
 
-    role = SessionRole.MENTOR if row["mentor_id"] == actor_id else SessionRole.MENTEE
+    role = role_of(mentor_id=row["mentor_id"], actor_id=actor_id)
     if SessionStatus(row["status"]) not in rule.allowed_from:
         raise ConflictError(f"a {row['status']} session cannot be {_past(action)}")
     if role is SessionRole.MENTOR and row["lapsed"]:
@@ -180,6 +187,43 @@ async def transition(
             field_errors=(("/reason_code", "Not a reason your side may give."),),
         )
 
+    await _end(
+        session,
+        session_id,
+        row,
+        actor_id=actor_id,
+        role=role,
+        action=action,
+        reason_code=reason_code,
+        reason_text=payload.get("reason_text"),
+        release_slot=bool(payload.get("release_slot", True)),
+        now=now,
+        refunds=refunds,
+        notify=not offers_another_time,
+    )
+
+
+async def _end(
+    session: AsyncSession,
+    session_id: UUID,
+    row: RowMapping,
+    *,
+    actor_id: UUID,
+    role: SessionRole,
+    action: str,
+    reason_code: SessionReasonCode | str | None,
+    reason_text: str | None,
+    release_slot: bool,
+    now: dt.datetime,
+    refunds: RefundPolicy,
+    notify: bool,
+) -> None:
+    """**What every transition does once it is allowed**: the status, the
+    mentor's kept hour, the event, the refund and the message. Shared by the
+    four endpoints, which check first in :func:`transition`, and by account
+    deletion, which ends each open session for a reason no party may give.
+    ``row`` is the session as :func:`transition` reads it. Does not commit."""
+    rule = TRANSITIONS[action]
     await session.execute(update(Session).where(Session.id == session_id).values(status=rule.to))
 
     # **The hour goes back on the grid by default**, because `cancelled` is in
@@ -188,7 +232,7 @@ async def transition(
     # which they can see and remove. Session state is not where unavailability
     # lives; that reading is what kept a cancelled hour hidden and unbookable
     # with nothing able to release it.
-    if records_unavailability(action, role, release_slot=bool(payload.get("release_slot", True))):
+    if records_unavailability(action, role, release_slot=release_slot):
         await block_session_window(
             session,
             row["mentor_id"],
@@ -205,7 +249,7 @@ async def transition(
             actor_id=actor_id,
             actor_type=ActorType.USER,
             reason_code=reason_code,
-            reason_text=payload.get("reason_text"),
+            reason_text=reason_text,
         )
     )
 
@@ -225,7 +269,7 @@ async def transition(
     # **The party who did not act.** `cancel` is the only action either of them
     # may take, which is why `recipients` needs the actor at all — for the other
     # three the answer follows from the action.
-    if offers_another_time:
+    if not notify:
         return
     told = TRANSITION_NOTICE[action]
     await enqueue(
@@ -243,7 +287,7 @@ async def transition(
         # is named only at send time (`domain/messages.py`), so a party who has
         # since deleted their account is not named (#288).
         variables={
-            "reason_text": payload.get("reason_text") or "",
+            "reason_text": reason_text or "",
             "reason_code": str(reason_code or ""),
             "cancel_initiator": str(role),
         },
@@ -366,3 +410,86 @@ async def expire_requests(
         for row in expired:
             await on_ended(session, row["id"], calendar=calendar)
     return len(expired)
+
+
+async def end_for_deleted_account(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: dt.datetime,
+    refunds: RefundPolicy,
+) -> list[UUID]:
+    """End every open session of an account being deleted, and return the ids
+    whose calendar event the caller releases **after it commits**: one Google
+    call per session does not belong inside a transaction holding these locks,
+    and the hourly `retry_releases` backstops a release that never runs.
+
+    **Open is what the deletion modal counts**: a confirmed session that has not
+    started, or a request the mentor can still answer (`pending_requests`). Each
+    ends by the action :func:`ending_for` gives that side, through :func:`_end`
+    with `account_deleted`, so the other party gets the usual message and refund.
+
+    **A request already past its deadline is expired now**, by the sweep's own
+    code, rather than left for the sweep: its refund would otherwise land after
+    the account's credits were expired, a live lot on a deleted account.
+
+    **Not the cancellation cutoff**: it stops a party changing their mind at the
+    last minute, and a deleted account will not turn up, so the other person is
+    better told now. A session already under way is left to the attendance sweep.
+
+    Locked in id order, like every sweep, so two writers cannot deadlock.
+    Does not commit.
+    """
+    mine = or_(Session.mentor_id == user_id, Session.mentee_id == user_id)
+    lapsed = list(
+        (
+            await session.execute(
+                select(Session.id)
+                .where(mine, *lapsed_request(now))
+                .order_by(Session.id)
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if lapsed:
+        await expire_requests(session, now=now, session_ids=lapsed)
+    rows = (
+        (
+            await session.execute(
+                select(
+                    Session.id,
+                    Session.status,
+                    Session.starts_at,
+                    Session.mentor_id,
+                    Session.mentee_id,
+                    Session.duration_minutes,
+                    User.timezone,
+                )
+                .join(User, User.id == Session.mentor_id)
+                .where(mine, or_(and_(*upcoming_session(now)), and_(*awaiting_mentor(now))))
+                .order_by(Session.id)
+                .with_for_update(of=Session)
+            )
+        )
+        .mappings()
+        .all()
+    )
+    for row in rows:
+        role = role_of(mentor_id=row["mentor_id"], actor_id=user_id)
+        await _end(
+            session,
+            row["id"],
+            row,
+            actor_id=user_id,
+            role=role,
+            action=ending_for(SessionStatus(row["status"]), role),
+            reason_code=SessionReasonCode.ACCOUNT_DELETED,
+            reason_text=None,
+            release_slot=True,
+            now=now,
+            refunds=refunds,
+            notify=True,
+        )
+    return [*lapsed, *(row["id"] for row in rows)]

@@ -9,16 +9,19 @@ the table can be wrong that no individual endpoint test would notice.
 from __future__ import annotations
 
 import datetime as dt
+from uuid import uuid4
 
 import pytest
 
 from app.domain.attendance import within_join_window
-from app.domain.enums import SessionReasonCode, SessionRole
+from app.domain.enums import SessionReasonCode, SessionRole, SessionStatus
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
     RESPONSE_WINDOW,
     TRANSITIONS,
+    ending_for,
     respond_by,
+    role_of,
     too_late_to_cancel,
 )
 
@@ -134,3 +137,31 @@ def test_only_an_offering_that_awaits_an_answer_gets_a_deadline() -> None:
 
     assert respond_by(starts_at, requires_confirmation=True) == starts_at - RESPONSE_WINDOW
     assert respond_by(starts_at, requires_confirmation=False) is None
+
+
+@pytest.mark.parametrize(
+    ("status", "role", "action"),
+    [
+        (SessionStatus.CONFIRMED, SessionRole.MENTOR, "cancel"),
+        (SessionStatus.CONFIRMED, SessionRole.MENTEE, "cancel"),
+        (SessionStatus.PENDING_MENTOR_APPROVAL, SessionRole.MENTOR, "decline"),
+        (SessionStatus.PENDING_MENTOR_APPROVAL, SessionRole.MENTEE, "withdraw"),
+    ],
+)
+def test_each_open_session_ends_by_the_action_the_table_gives_that_side(
+    status: SessionStatus, role: SessionRole, action: str
+) -> None:
+    """Read off `TRANSITIONS`, so a deleted account ends a session only the way
+    that side may: never `accept`, which starts one."""
+    assert ending_for(status, role) == action
+
+
+def test_a_status_nothing_ends_has_no_ending() -> None:
+    with pytest.raises(LookupError):
+        ending_for(SessionStatus.CANCELLED, SessionRole.MENTOR)
+
+
+def test_the_role_is_the_side_the_actor_sits_on() -> None:
+    mentor, mentee = uuid4(), uuid4()
+    assert role_of(mentor_id=mentor, actor_id=mentor) is SessionRole.MENTOR
+    assert role_of(mentor_id=mentor, actor_id=mentee) is SessionRole.MENTEE
