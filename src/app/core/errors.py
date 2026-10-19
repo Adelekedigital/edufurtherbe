@@ -105,6 +105,21 @@ class MentorApplicationIncompleteError(MissingItemsError):
     """
 
 
+class MentorApplicationInReviewError(ConflictError):
+    """A submitted application's reviewed fields hold still until the decision.
+
+    `fields` names what the request would have changed (a `MentorApplicationItem`
+    field or `education`), so the client can say which part is locked.
+    """
+
+    def __init__(self, message: str = "", *, fields: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.fields = fields
+
+    def problem_members(self) -> dict[str, object]:
+        return {"fields": list(self.fields)}
+
+
 class MentorApplicationDecidedError(ConflictError):
     """The application was already approved or declined, so there is nothing to
     submit. A type of its own: the client shows the outcome, not the form."""

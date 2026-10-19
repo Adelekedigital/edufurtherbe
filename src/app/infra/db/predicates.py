@@ -18,6 +18,8 @@ from typing import Any, Protocol
 
 from sqlalchemy import and_, func, true
 
+from app.domain.enums import ApprovalStatus
+from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import User
 
 
@@ -34,6 +36,19 @@ def live(user: Any) -> Any:
 #: statement that omits it is missing a *name* — something a reader and a test
 #: can both see — rather than missing a substring nobody notices.
 LIVE = live(User)
+
+
+def application_in_review() -> list[Any]:
+    """A mentor application submitted and awaiting a decision, on a live profile.
+
+    The one definition: the admin queue lists these and the freeze holds their
+    reviewed fields still (decisions 271, 273).
+    """
+    return [
+        MentorProfile.approval_status == ApprovalStatus.PENDING,
+        MentorProfile.submitted_at.is_not(None),
+        MentorProfile.deleted_at.is_(None),
+    ]
 
 
 def blank(column: Any) -> Any:
