@@ -18,7 +18,9 @@ ADDED = {
     "PartyRead": ("in_room_at", "degree", "institution"),
     "SessionRead": ("mentee_attendance_sessions", "refund_until"),
     "UserRead": ("mentee_cancel_refund_hours", "onboarding"),
-    "GoalRead": ("field_of_study",),
+    "GoalRead": ("field_of_study", "schools"),
+    # New with the goal's schools (Mentee Settings PRD): the link is optional.
+    "GoalSchoolRead": ("institution_id", "institution_name"),
     "OnboardingStatusRead": ("last_step",),
     "SessionTypeRead": ("requires_booking_confirmation",),
     "SessionAnswerRead": ("answered", "required"),
@@ -74,7 +76,7 @@ ADDED = {
     # fields optional.
     "InviterRead": ("first_name", "avatar_url"),
     # Where the owner is from, on their own `/me` (Mentee Onboarding v5, #6).
-    "UserProfileRead": ("origin_country", "about_me_drafted_at"),
+    "UserProfileRead": ("origin_country", "about_me_drafted_at", "current_country"),
     # New with mentor matching (decision 265): the card, the reasons list, the
     # list and the verdict are required; every other field optional from the start.
     "MentorMatchRead": ("level", "study_country"),

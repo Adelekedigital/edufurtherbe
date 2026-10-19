@@ -44,7 +44,7 @@ from app.domain.availability import (
     BookingWindow,
 )
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency, PrimaryRole
-from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH
+from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH, MAX_GOAL_SCHOOLS, SCHOOL_NAME_MAX_LENGTH
 from app.domain.names import split_full_name
 from app.domain.profile_text import ABOUT_ME_MAX_LENGTH, PROMPT_VERSION_MAX_LENGTH
 from app.domain.text import has_letter, hidden_characters
@@ -140,13 +140,32 @@ class GoalCountryRead(CountryRef):
     priority: int
 
 
+class GoalSchoolRead(BaseModel):
+    """A school the goal names, in the mentee's order.
+
+    `school_name_raw` is always what was typed; `institution_id` and
+    `institution_name` are the catalogue row it links to, or both null when
+    nothing matched. The link is followed whatever the row's review state
+    (decision 63), so a school the mentee typed shows by its own name.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    institution_id: UUID | None = None
+    institution_name: str | None = None
+    school_name_raw: str
+    #: 0-based, in the order the list was sent.
+    position: int
+
+
 class GoalRead(BaseModel):
     """What a mentee is trying to do.
 
     `countries` and `needs` key on the **user**, not on the goal — the legacy
     shape, kept deliberately — so a user with two goals sees the same lists on
     both. Nesting them per goal would claim a relationship the data does not
-    carry.
+    carry. `schools` is the goal's own and goes with it.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -161,6 +180,9 @@ class GoalRead(BaseModel):
     notes: str | None = None
     countries: list[GoalCountryRead] = []
     needs: list[LookupRef] = []
+    schools: list[GoalSchoolRead] = Field(
+        default=[], description="The schools this goal names, in the mentee's order."
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> GoalRead:
@@ -185,6 +207,7 @@ class GoalRead(BaseModel):
                 LookupRef(id=n["id"], code=n["slug"], display_name=n["display_name"])
                 for n in row.get("needs", [])
             ],
+            schools=[GoalSchoolRead.model_validate(s) for s in row.get("schools", [])],
         )
 
 
@@ -424,12 +447,24 @@ class EducationWrite(Normalised):
         return self
 
 
-class GoalWrite(Normalised):
-    """A study goal, with the countries and needs that go with it.
+class GoalSchoolWrite(Normalised):
+    """A school the goal names: picked from the catalogue, or typed.
 
-    Both lists key on the **user** rather than this goal, so submitting them
-    replaces what the user has — see the route description, because that is not
-    what "editing this goal" implies.
+    The education entry's rule (`EducationWrite`): the name is always kept, and
+    the server resolves the link — a supplied `institution_id` is validated, a
+    name without one is matched, and an unmatched name joins the review queue.
+    """
+
+    institution_id: UUID | None = None
+    school_name_raw: str = Field(min_length=1, max_length=SCHOOL_NAME_MAX_LENGTH)
+
+
+class GoalWrite(Normalised):
+    """A study goal, with the countries, needs and schools that go with it.
+
+    Countries and needs key on the **user** rather than this goal, so submitting
+    them replaces what the user has — see the route description, because that is
+    not what "editing this goal" implies. Schools are the goal's own.
     """
 
     degree_goal_id: UUID | None = None
@@ -450,6 +485,15 @@ class GoalWrite(Normalised):
     notes: str | None = Field(default=None, max_length=2000)
     country_ids: list[UUID] | None = None
     need_ids: list[UUID] | None = None
+    #: Omitted or `null` leaves the list, as `country_ids` does; `[]` clears it.
+    schools: list[GoalSchoolWrite] | None = Field(
+        default=None,
+        max_length=MAX_GOAL_SCHOOLS,
+        description=(
+            f"Up to {MAX_GOAL_SCHOOLS} schools, in your order, replacing the whole list. "
+            "Omit it (or send `null`) to leave the list as it is; `[]` clears it."
+        ),
+    )
 
     @field_validator("field_of_study")
     @classmethod
@@ -583,12 +627,14 @@ class UserProfileWrite(Normalised):
     `email_provider_contact_id` and `legacy_bubble_id` are absent because another
     system owns them.
 
-    **`current_country_id` is absent too, and that one was a defect.** The column
-    was writable here and read by *nothing* — not the owner's own profile, not the
-    admin queue, not the public profile, not the ETL, which never populates it. A
-    field a user can PUT and never GET back is worse than an absent one: it looks
-    like it was recorded. The column itself survives this change and is a
-    candidate for removal alongside the enum conversion.
+    **`current_country_id` is writable because it is now read back.** It was
+    once removed from here: writable and read by nothing, it looked recorded and
+    was not. The Mentee Settings PRD made it a field the owner sees, so `GET /me`
+    returns it as `profile.current_country`, and it is written here again. It is
+    the owner's alone: no public or mentor-facing response carries it.
+
+    A country id that names no country, here or in `origin_country_id`, is a
+    `422` at that field, never the foreign-key 500.
     """
 
     #: **`str`, not `str | None`**, so a name can be changed and never cleared:
@@ -659,6 +705,13 @@ class UserProfileWrite(Normalised):
     )
     gender: str | None = Field(default=None, max_length=50)
     origin_country_id: UUID | None = None
+    current_country_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Where you live now, a `/catalog/countries` id; `null` clears it. Read back "
+            "on `GET /me` as `profile.current_country`, and shown to nobody else."
+        ),
+    )
     #: A mentor's own crop (#214): overrides the detected face and survives the
     #: backfill. Needs a photo — there is nothing to centre without one — and a
     #: new photo replaces it, since a crop of the old picture means nothing on

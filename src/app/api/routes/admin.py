@@ -78,8 +78,8 @@ ADMIN_RESPONSES: dict[int | str, dict[str, str]] = {
     response_model=Page[PendingInstitutionRead],
     summary="Institutions awaiting review",
     description=(
-        "Ordered by **how many education entries point at each one**, then "
-        "oldest first.\n\n"
+        "Ordered by **how many education entries and goal schools point at "
+        "each one** (`uses`), then oldest first.\n\n"
         "That count is the decision: eight entries on one spelling means eight "
         "people typed the same school and it should be approved; one entry that "
         "closely resembles an approved name is a typo and should be merged.\n\n"
@@ -115,15 +115,17 @@ async def approve(changed: ApprovedInstitutionDep) -> InstitutionApprovedRead:
     response_model=InstitutionMergedRead,
     summary="Merge a duplicate institution",
     description=(
-        "Moves every education entry from the duplicate onto the institution in "
-        "`winning_id`, marks the duplicate merged, and records where it went — "
+        "Moves every education entry and goal school from the duplicate onto the "
+        "institution in `winning_id`, marks the duplicate merged, and records "
+        "where it went — "
         "**in one transaction**.\n\n"
         "The entries are repointed rather than resolved at read time, so the "
         "chain collapses here and no later query has to follow it. Merging into "
         "a row that has itself been merged is refused with 409: merge into its "
         "target instead. So is merging something into itself.\n\n"
-        "Recoverable if wrong — `school_name_raw` on each entry still holds what "
-        "the user originally typed."
+        "Recoverable if wrong — `school_name_raw` on each entry and school still "
+        "holds what the user originally typed. `entries_moved` counts education "
+        "entries only."
     ),
     responses=ADMIN_RESPONSES
     | {

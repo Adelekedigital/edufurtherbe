@@ -73,6 +73,13 @@ class UserProfileRead(BaseModel):
             "the `/catalog/countries` id to prefill a picker."
         ),
     )
+    current_country: CountryRef | None = Field(
+        default=None,
+        description=(
+            "Where you live now, as `current_country_id` saved it on "
+            "`PATCH /users/{id}/profile`, or null when unset. Shown only to you."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> UserProfileRead:
@@ -82,6 +89,9 @@ class UserProfileRead(BaseModel):
             avatar_focus=AvatarFocusRead.of(row["avatar_focus_x"], row["avatar_focus_y"]),
             origin_country=CountryRef.maybe(
                 row.get("origin_country_code"), row.get("origin_country_name")
+            ),
+            current_country=CountryRef.maybe(
+                row.get("current_country_code"), row.get("current_country_name")
             ),
         )
 

@@ -38,14 +38,14 @@ from __future__ import annotations
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, and_, func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
 from app.domain.enums import AdminRole, LookupStatus
 from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.education import EducationEntry, Institution
-from app.infra.db.models.mentoring import MentorProfile
+from app.infra.db.models.mentoring import MenteeGoalSchool, MentorProfile
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE, application_in_review
 
@@ -57,11 +57,26 @@ def _rowcount(result: Any) -> int:
 async def pending_institutions(session: AsyncSession, *, limit: int) -> list[dict[str, Any]]:
     """Institutions awaiting review, most-referenced first.
 
-    An outer join, so a row nobody references yet still appears — it is the
-    common case for something typed a minute ago, and a queue that hides new
-    entries until somebody else picks the same school is not a queue.
+    `uses` counts every reference a person made: live education entries and
+    goal schools. Two correlated counts rather than two outer joins, which
+    would multiply each other. A row nobody references yet still appears — it
+    is the common case for something typed a minute ago, and a queue that hides
+    new entries until somebody else picks the same school is not a queue.
     """
-    uses = func.count(EducationEntry.id).label("uses")
+    entries = (
+        select(func.count(EducationEntry.id))
+        .where(
+            EducationEntry.institution_id == Institution.id,
+            EducationEntry.deleted_at.is_(None),
+        )
+        .scalar_subquery()
+    )
+    schools = (
+        select(func.count(MenteeGoalSchool.id))
+        .where(MenteeGoalSchool.institution_id == Institution.id)
+        .scalar_subquery()
+    )
+    uses = (entries + schools).label("uses")
     statement = (
         select(
             Institution.id,
@@ -70,15 +85,7 @@ async def pending_institutions(session: AsyncSession, *, limit: int) -> list[dic
             Institution.created_by,
             uses,
         )
-        .outerjoin(
-            EducationEntry,
-            and_(
-                EducationEntry.institution_id == Institution.id,
-                EducationEntry.deleted_at.is_(None),
-            ),
-        )
         .where(Institution.status == LookupStatus.PENDING_REVIEW)
-        .group_by(Institution.id, Institution.name, Institution.created_at, Institution.created_by)
         .order_by(uses.desc(), Institution.created_at)
         .limit(limit)
     )
@@ -140,9 +147,11 @@ async def approve_institution(session: AsyncSession, institution_id: UUID) -> bo
 
 
 async def merge_institution(session: AsyncSession, *, losing_id: UUID, winning_id: UUID) -> int:
-    """Point the losing row's education entries at the winner, then retire it.
+    """Point the losing row's education entries and goal schools at the winner,
+    then retire it.
 
-    Returns how many entries moved. The caller commits: the repoint and the
+    Returns how many education entries moved; goal schools move too, so no
+    reference is left on a retired row (decision 65). The caller commits: the repoint and the
     retirement are one transaction, or a half-applied merge leaves entries
     pointing at a row marked merged, which every read then has to reason about.
     """
@@ -168,6 +177,11 @@ async def merge_institution(session: AsyncSession, *, losing_id: UUID, winning_i
     moved = await session.execute(
         update(EducationEntry)
         .where(EducationEntry.institution_id == losing_id)
+        .values(institution_id=winning_id)
+    )
+    await session.execute(
+        update(MenteeGoalSchool)
+        .where(MenteeGoalSchool.institution_id == losing_id)
         .values(institution_id=winning_id)
     )
     await session.execute(

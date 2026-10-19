@@ -88,6 +88,9 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "like every other country in this API, or null when unset. A mentee's "
         "origin is returned here and nowhere else; a mentor's also shows on "
         "their public profile and card, as before.\n\n"
+        "`profile.current_country` is where you live now, the same shape, or "
+        "null when unset. It is returned here and nowhere else, for mentees and "
+        "mentors alike.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
