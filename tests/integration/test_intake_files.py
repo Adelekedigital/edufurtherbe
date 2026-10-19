@@ -388,6 +388,25 @@ async def test_anyone_else_gets_404(
     assert (await files_client.get(f"/api/v1/intake-files/{file_id}")).status_code == 401
 
 
+async def test_a_deleted_uploaders_file_is_gone_at_once(
+    files_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Not at the next daily sweep: a deleted account's uploads vanish with it."""
+    file_id, mentor, _ = await a_linked_file(files_client, db_engine, "dl-deleted")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE users SET deleted_at = now() "
+                "WHERE id = (SELECT uploader_id FROM intake_files WHERE id = :f)"
+            ),
+            {"f": file_id},
+        )
+
+    for headers in (await signed_in(db_engine, mentor), await an_admin(db_engine, "dl-deleted")):
+        response = await files_client.get(f"/api/v1/intake-files/{file_id}", headers=headers)
+        assert response.status_code == 404
+
+
 async def test_a_mentor_cannot_read_an_upload_not_yet_booked_with_them(
     files_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

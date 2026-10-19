@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy import RowMapping, and_, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
@@ -40,7 +40,7 @@ from app.infra.db.models.sessions import (
 )
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
-from app.infra.db.pending_requests import lapsed_request
+from app.infra.db.pending_requests import awaiting_mentor, lapsed_request, upcoming_session
 from app.infra.db.session_writer.follow_ups import on_ended
 
 #: What a mentor reads beside this block in their own availability.
@@ -180,6 +180,43 @@ async def transition(
             field_errors=(("/reason_code", "Not a reason your side may give."),),
         )
 
+    await _end(
+        session,
+        session_id,
+        row,
+        actor_id=actor_id,
+        role=role,
+        action=action,
+        reason_code=reason_code,
+        reason_text=payload.get("reason_text"),
+        release_slot=bool(payload.get("release_slot", True)),
+        now=now,
+        refunds=refunds,
+        notify=not offers_another_time,
+    )
+
+
+async def _end(
+    session: AsyncSession,
+    session_id: UUID,
+    row: RowMapping,
+    *,
+    actor_id: UUID,
+    role: SessionRole,
+    action: str,
+    reason_code: SessionReasonCode | str | None,
+    reason_text: str | None,
+    release_slot: bool,
+    now: dt.datetime,
+    refunds: RefundPolicy,
+    notify: bool,
+) -> None:
+    """**What every transition does once it is allowed**: the status, the
+    mentor's kept hour, the event, the refund and the message. Shared by the
+    four endpoints, which check first in :func:`transition`, and by account
+    deletion, which ends each open session for a reason no party may give.
+    ``row`` is the session as :func:`transition` reads it. Does not commit."""
+    rule = TRANSITIONS[action]
     await session.execute(update(Session).where(Session.id == session_id).values(status=rule.to))
 
     # **The hour goes back on the grid by default**, because `cancelled` is in
@@ -188,7 +225,7 @@ async def transition(
     # which they can see and remove. Session state is not where unavailability
     # lives; that reading is what kept a cancelled hour hidden and unbookable
     # with nothing able to release it.
-    if records_unavailability(action, role, release_slot=bool(payload.get("release_slot", True))):
+    if records_unavailability(action, role, release_slot=release_slot):
         await block_session_window(
             session,
             row["mentor_id"],
@@ -205,7 +242,7 @@ async def transition(
             actor_id=actor_id,
             actor_type=ActorType.USER,
             reason_code=reason_code,
-            reason_text=payload.get("reason_text"),
+            reason_text=reason_text,
         )
     )
 
@@ -225,7 +262,7 @@ async def transition(
     # **The party who did not act.** `cancel` is the only action either of them
     # may take, which is why `recipients` needs the actor at all — for the other
     # three the answer follows from the action.
-    if offers_another_time:
+    if not notify:
         return
     told = TRANSITION_NOTICE[action]
     await enqueue(
@@ -243,7 +280,7 @@ async def transition(
         # is named only at send time (`domain/messages.py`), so a party who has
         # since deleted their account is not named (#288).
         variables={
-            "reason_text": payload.get("reason_text") or "",
+            "reason_text": reason_text or "",
             "reason_code": str(reason_code or ""),
             "cancel_initiator": str(role),
         },
@@ -366,3 +403,75 @@ async def expire_requests(
         for row in expired:
             await on_ended(session, row["id"], calendar=calendar)
     return len(expired)
+
+
+async def end_for_deleted_account(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    now: dt.datetime,
+    refunds: RefundPolicy,
+    calendar: CalendarPort,
+) -> int:
+    """End every open session of an account being deleted. Returns the count.
+
+    **Open is what the deletion modal counts**: a confirmed session that has not
+    started, or a request the mentor can still answer (`pending_requests`). A
+    confirmed one is cancelled, a request the person sent is withdrawn and one
+    they received is declined, each through :func:`_end` with
+    `account_deleted`, so the other party gets the usual message and refund.
+
+    **Not the cancellation cutoff**: it stops a party changing their mind at the
+    last minute, and a deleted account will not turn up, so the other person is
+    better told now. A session already under way is left to the attendance
+    sweep, and a request past its deadline to the expiry sweep, which refunds it.
+
+    Locked in id order, like every sweep, so two writers cannot deadlock.
+    Does not commit.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(
+                    Session.id,
+                    Session.status,
+                    Session.starts_at,
+                    Session.mentor_id,
+                    Session.mentee_id,
+                    Session.duration_minutes,
+                    User.timezone,
+                )
+                .join(User, User.id == Session.mentor_id)
+                .where(
+                    or_(Session.mentor_id == user_id, Session.mentee_id == user_id),
+                    or_(and_(*upcoming_session(now)), and_(*awaiting_mentor(now))),
+                )
+                .order_by(Session.id)
+                .with_for_update(of=Session)
+            )
+        )
+        .mappings()
+        .all()
+    )
+    for row in rows:
+        role = SessionRole.MENTOR if row["mentor_id"] == user_id else SessionRole.MENTEE
+        if SessionStatus(row["status"]) is SessionStatus.CONFIRMED:
+            action = "cancel"
+        else:
+            action = "decline" if role is SessionRole.MENTOR else "withdraw"
+        await _end(
+            session,
+            row["id"],
+            row,
+            actor_id=user_id,
+            role=role,
+            action=action,
+            reason_code=SessionReasonCode.ACCOUNT_DELETED,
+            reason_text=None,
+            release_slot=True,
+            now=now,
+            refunds=refunds,
+            notify=True,
+        )
+        await on_ended(session, row["id"], calendar=calendar)
+    return len(rows)

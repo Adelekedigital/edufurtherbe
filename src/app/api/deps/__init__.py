@@ -6,6 +6,7 @@ classes are bound to what routes ask for. Exempt from the layer check.
 
 from __future__ import annotations
 
+from app.api.deps.account import DeletedAccountDep
 from app.api.deps.admin import (
     AdminCreditGrantDep,
     AdminGrantHistoryDep,
@@ -194,6 +195,7 @@ __all__ = [
     "DecidedMentorDep",
     "DecidedReportDep",
     "DeclinedSessionDep",
+    "DeletedAccountDep",
     "DeletedAvailabilityExceptionDep",
     "DeletedAvailabilityRuleDep",
     "DeletedAwardDep",

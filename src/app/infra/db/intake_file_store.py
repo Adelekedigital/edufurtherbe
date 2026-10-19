@@ -235,6 +235,9 @@ async def readable_file(
             )
             .select_from(IntakeFile)
             .outerjoin(Session, Session.id == IntakeFile.session_id)
+            # A deleted uploader's files go with the account at once, not at
+            # the departed-uploader sweep's next run.
+            .join(User, and_(User.id == IntakeFile.uploader_id, LIVE))
             .where(
                 IntakeFile.id == file_id,
                 IntakeFile.deleted_at.is_(None),
