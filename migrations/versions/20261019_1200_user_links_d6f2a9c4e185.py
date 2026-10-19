@@ -20,7 +20,16 @@ on read, frozen below because a migration must not import a live symbol (#105)
 and pinned to the live rule by a test. X lands at position 0 and YouTube at 1.
 A value the rule cannot read already publishes as ``null`` (#182), so skipping
 it hides nothing; it stays in its column, and the count is printed. The old
-columns are kept, unwritten, for one release and then dropped.
+columns are kept for one release and then dropped.
+
+**Until the next PR the columns still have writers** (the profile PATCH and the
+Bubble loader), so a value written to them after this runs is not here. That
+PR closes the gap: its writer clears a platform's column whenever it writes or
+deletes that link, and it ships an idempotent catch-up copy of whatever is still
+in the columns, so a link deleted in the new settings is never brought back.
+
+**Every row is copied, a soft-deleted account's included**, as the columns held
+them; readers of this table must apply ``LIVE`` like every other user read.
 
 Expand only, and merged alone (project-conventions, *Migration ordering*):
 nothing reads or writes the table until the next PR, so this lands inert.
@@ -110,6 +119,12 @@ def canonical(network: str, value: str | None) -> str | None:
 
 #: Each old column, the platform it becomes, and the position it lands at.
 COLUMNS = (("social_twitter", "x", 0), ("social_youtube", "youtube", 1))
+
+#: Clearing one copied column, written out per column rather than composed.
+_CLEAR = {
+    "social_twitter": "UPDATE user_profiles SET social_twitter = NULL WHERE user_id = :user_id",
+    "social_youtube": "UPDATE user_profiles SET social_youtube = NULL WHERE user_id = :user_id",
+}
 
 
 def upgrade() -> None:
@@ -202,11 +217,17 @@ def _backfill() -> None:
 def downgrade() -> None:
     """Put X and YouTube back into their columns, then drop the table.
 
-    **Refuses while a user holds a link the columns cannot carry**: Instagram,
-    Facebook, TikTok or a website would be lost, and that is an operator's call
-    made before downgrading. X and YouTube go back in their canonical form,
-    which is what a read published; a column whose value the backfill could not
-    read was never copied, and keeps it.
+    **Refuses while a link has nowhere to go**: on Instagram, Facebook, TikTok
+    or a website, or belonging to a user with no profile row (a link hangs off
+    ``users``, so it may exist without one). Losing it is an operator's call,
+    made before downgrading.
+
+    **The table is the truth once upgraded**, so every column value the backfill
+    could read is cleared first and then rewritten from the table: a link the
+    user deleted stays deleted, rather than coming back from its old column.
+    X and YouTube go back in their canonical form, which is what a read
+    published. A value the backfill could not read was never copied, and keeps
+    its column.
     """
     op.execute("SET lock_timeout = '3s'")
     bind = op.get_bind()
@@ -218,6 +239,30 @@ def downgrade() -> None:
             f"{others} link(s) on Instagram, Facebook, TikTok or a website have no "
             "column to return to; downgrading would delete them"
         )
+    homeless = bind.execute(
+        sa.text(
+            "SELECT count(*) FROM user_links l WHERE NOT EXISTS "
+            "(SELECT 1 FROM user_profiles p WHERE p.user_id = l.user_id)"
+        )
+    ).scalar_one()
+    if homeless:
+        raise RuntimeError(
+            f"{homeless} X or YouTube link(s) belong to users with no profile row, "
+            "so their column does not exist; downgrading would delete them"
+        )
+    rows = bind.execute(
+        sa.text(
+            "SELECT user_id, social_twitter, social_youtube FROM user_profiles "
+            "WHERE social_twitter IS NOT NULL OR social_youtube IS NOT NULL"
+        )
+    ).mappings()
+    for row in list(rows):
+        for column, platform, _position in COLUMNS:
+            if canonical(platform, row[column]) is not None:
+                bind.execute(
+                    sa.text(_CLEAR[column]),
+                    {"user_id": row["user_id"]},
+                )
     bind.execute(
         sa.text(
             "UPDATE user_profiles p SET social_twitter = l.url FROM user_links l "

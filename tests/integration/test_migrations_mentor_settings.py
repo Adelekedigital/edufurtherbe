@@ -12,6 +12,7 @@ whole point of freezing the rule into the migration.
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -22,7 +23,7 @@ from alembic import command
 from tests.integration.test_migrations import ConfigFactory, execute, scalar
 
 from app.domain.guide_countries import MAX_GUIDE_COUNTRIES
-from app.domain.social_links import SocialNetwork, canonical_social
+from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
 from app.infra.db.models import UserLink
 
 pytestmark = pytest.mark.db
@@ -97,6 +98,7 @@ def _links_of(url: str, email: str) -> list[tuple[str, str, int]]:
     return asyncio.run(_run())
 
 
+@functools.cache
 def _migration() -> ModuleType:
     spec = importlib.util.spec_from_file_location("user_links_migration", _LINKS_FILE)
     assert spec is not None and spec.loader is not None
@@ -238,17 +240,6 @@ def test_a_link_defaults_to_social_and_goes_with_its_user(links_db: str) -> None
     assert scalar(links_db, "SELECT count(*) FROM user_links") == 0
 
 
-def test_the_one_per_platform_index_leaves_websites_out(links_db: str) -> None:
-    """`alembic check` cannot compare a partial index's predicate."""
-    definition = scalar(
-        links_db,
-        "SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_user_links_one_per_platform'",
-    )
-    assert "UNIQUE" in definition
-    assert "(user_id, platform)" in definition
-    assert "WHERE (platform <> 'website'::text)" in definition
-
-
 def test_the_model_declares_the_same_partial_index(links_db: str) -> None:
     """`alembic check` skips predicates, so the model's `WHERE` could drift from
     the migration's with every gate green; this compares the two."""
@@ -262,7 +253,19 @@ def test_the_model_declares_the_same_partial_index(links_db: str) -> None:
         links_db,
         "SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_user_links_one_per_platform'",
     )
+    assert "CREATE UNIQUE INDEX" in definition
+    assert "(user_id, platform)" in definition
     assert f"WHERE ({where}::text)" in definition, definition
+
+
+def test_the_url_bound_is_the_domains(links_db: str) -> None:
+    """The migration writes the bound as a literal; the live rule must fit it."""
+    definition = scalar(
+        links_db,
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE conname = 'ck_user_links_url_shape'",
+    )
+    assert f"<= {MAX_LENGTH}" in definition, definition
 
 
 def test_an_edit_moves_updated_at(links_db: str) -> None:
@@ -283,7 +286,6 @@ def test_the_downgrade_returns_x_and_youtube_to_their_columns(
     _person(disposable_database, "back@example.test", "twitter.com/ada", None)
     command.upgrade(config, LINKS)
     # Written after the upgrade, as the next release's writer does.
-    execute(disposable_database, "UPDATE user_profiles SET social_twitter = NULL")
     _link(disposable_database, "back@example.test", "youtube", "https://www.youtube.com/@dee")
 
     command.downgrade(config, BEFORE)
@@ -294,6 +296,27 @@ def test_the_downgrade_returns_x_and_youtube_to_their_columns(
     )
     assert row == "https://x.com/ada https://www.youtube.com/@dee"
     assert scalar(disposable_database, "SELECT to_regclass('user_links')") is None
+    command.upgrade(config, LINKS)
+
+
+def test_a_link_deleted_after_the_upgrade_stays_deleted(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """Its old column still held the copied value; the table is the truth."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, BEFORE)
+    _person(disposable_database, "gone@example.test", "twitter.com/ada", "not a link")
+    command.upgrade(config, LINKS)
+    execute(disposable_database, "DELETE FROM user_links")
+
+    command.downgrade(config, BEFORE)
+
+    row = scalar(
+        disposable_database,
+        "SELECT coalesce(social_twitter, '<null>') || ' ' || social_youtube FROM user_profiles",
+    )
+    # The deleted X link stays gone; an unreadable value was never copied.
+    assert row == "<null> not a link"
     command.upgrade(config, LINKS)
 
 
@@ -311,6 +334,24 @@ def test_the_downgrade_refuses_while_a_link_has_no_column(
     execute(disposable_database, "DELETE FROM user_links")
     command.downgrade(config, BEFORE)
     assert scalar(disposable_database, "SELECT to_regclass('user_links')") is None
+
+
+def test_the_downgrade_refuses_while_a_link_has_no_profile_to_return_to(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """A user with no profile row may hold a link; its column does not exist."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, LINKS)
+    execute(
+        disposable_database,
+        "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
+        "VALUES ('bare@example.test', gen_random_uuid(), 'Probe', 'mentee', 'UTC')",
+    )
+    _link(disposable_database, "bare@example.test", "x", "https://x.com/ada")
+
+    with pytest.raises(RuntimeError, match="no profile"):
+        command.downgrade(config, BEFORE)
+    assert scalar(disposable_database, "SELECT count(*) FROM user_links") == 1
 
 
 # --- mentor_guide_countries -------------------------------------------------
