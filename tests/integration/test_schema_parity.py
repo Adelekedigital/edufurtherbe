@@ -454,6 +454,9 @@ def test_the_natural_keys_survive_as_unique_constraints(migrated_database: str) 
         # One personal invite link per user, and a code names one link.
         ("invite_links", "(user_id)"),
         ("invite_links", "(code)"),
+        # One country once per mentor, and one country per place in the order.
+        ("mentor_guide_countries", "(mentor_user_id, country_id)"),
+        ("mentor_guide_countries", '(mentor_user_id, "position")'),
         ("session_type_booking_configs", "(session_type_id)"),
     }
 

@@ -844,3 +844,27 @@ class WritingAssistMode(StrEnum):
 
     DRAFT = "draft"
     IMPROVE = "improve"
+
+
+class LinkPlatform(StrEnum):
+    """Where a `user_links` row points (Mentor Settings PRD, decision 275).
+
+    One link per platform, except `website`, of which a user may hold up to
+    three. **LinkedIn is not here**: it stays `user_profiles.social_linkedin`,
+    because the mentor application, its review freeze and onboarding read it.
+    Each platform's link rule is `domain.social_links`.
+    """
+
+    X = "x"
+    YOUTUBE = "youtube"
+    INSTAGRAM = "instagram"
+    FACEBOOK = "facebook"
+    TIKTOK = "tiktok"
+    WEBSITE = "website"
+
+
+class LinkKind(StrEnum):
+    """What a `user_links` row is. Only social links exist; a custom link (a
+    titled URL of the user's own) joins when something writes one (#21)."""
+
+    SOCIAL = "social"

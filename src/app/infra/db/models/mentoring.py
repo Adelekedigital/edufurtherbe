@@ -39,6 +39,7 @@ from app.domain.goals import (
     MAX_GOAL_SCHOOLS,
     SCHOOL_NAME_MAX_LENGTH,
 )
+from app.domain.guide_countries import MAX_GUIDE_COUNTRIES
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -380,6 +381,48 @@ class SessionTypeOffering(TimestampMixin, Base):
             "ix_session_type_offerings_pair", "session_type_id", "service_offering_id", unique=True
         ),
         Index("ix_session_type_offerings_offering", "service_offering_id"),
+    )
+
+
+class MentorGuideCountry(TimestampMixin, Base):
+    """A country the mentor can guide mentees towards, up to eight (decision 276).
+
+    Beside `MentorServiceOffering`: the same subject, *what this mentor helps
+    with*, asked as *where*. `mentor_user_id` references `mentor_profiles` for
+    the same reason that table's does: a row cannot belong to a non-mentor.
+
+    **The eight is structural.** `position` is unique per mentor and must be
+    below `MAX_GUIDE_COUNTRIES`, so there is no ninth place to put a row and no
+    count to race. The writer replaces the whole list in one transaction.
+    Cascades with the mentor profile; restricts on the country.
+    """
+
+    __tablename__ = "mentor_guide_countries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "mentor_profiles.user_id", ondelete="CASCADE", name="fk_mentor_guide_countries_mentor"
+        ),
+        nullable=False,
+    )
+    country_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("countries.id", ondelete="RESTRICT", name="fk_mentor_guide_countries_country"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            f"position >= 0 AND position < {MAX_GUIDE_COUNTRIES}", name="position_in_range"
+        ),
+        Index("ix_mentor_guide_countries_pair", "mentor_user_id", "country_id", unique=True),
+        Index("ix_mentor_guide_countries_position", "mentor_user_id", "position", unique=True),
+        Index("ix_mentor_guide_countries_country", "country_id"),
     )
 
 

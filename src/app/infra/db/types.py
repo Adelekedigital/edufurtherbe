@@ -51,6 +51,8 @@ from app.domain.enums import (
     IntakeStatus,
     LanguageProficiency,
     LegalDocumentType,
+    LinkKind,
+    LinkPlatform,
     ListingStatus,
     LookupStatus,
     MeetingProvider,
@@ -206,6 +208,9 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # Which text a writing-assist request was about; the daily limit counts per
     # field (decision 266).
     WritingAssistField: frozenset({"ck_writing_assist_requests_field_is_known"}),
+    # A user's own links (decision 275): the platform, and the kind of link.
+    LinkPlatform: frozenset({"ck_user_links_platform_is_known"}),
+    LinkKind: frozenset({"ck_user_links_kind_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.
