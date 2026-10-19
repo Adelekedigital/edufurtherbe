@@ -80,6 +80,7 @@ REASON_TITLES: dict[SessionReasonCode, str] = {
     SessionReasonCode.RESCHEDULED: "Rescheduled",
     SessionReasonCode.ADMIN_ACTION: "Changed by EduFurther",
     SessionReasonCode.OTHER: "Other",
+    SessionReasonCode.ACCOUNT_DELETED: "Account deleted",
 }
 
 

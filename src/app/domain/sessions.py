@@ -167,11 +167,12 @@ _MENTEE_REASONS = frozenset(
     }
 )
 
-#: `EXPIRED_NO_RESPONSE`, `RESCHEDULED` and `ADMIN_ACTION` appear in no set here,
-#: deliberately. The first is written by the expiry producer, which is a system
-#: actor and not a person; the second needs a reschedule flow that does not
-#: exist; the third belongs to an admin surface. Each is a value a party could
-#: otherwise assert about themselves.
+#: `EXPIRED_NO_RESPONSE`, `RESCHEDULED`, `ADMIN_ACTION` and `ACCOUNT_DELETED`
+#: appear in no set here, deliberately. The first is written by the expiry
+#: producer, which is a system actor and not a person; the second needs a
+#: reschedule flow that does not exist; the third belongs to an admin surface;
+#: the fourth is written by `DELETE /me` for each session it ends. Each is a
+#: value a party could otherwise assert about themselves.
 
 
 def records_unavailability(action: str, role: SessionRole, *, release_slot: bool) -> bool:
