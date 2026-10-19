@@ -151,3 +151,25 @@ async def test_a_legacy_value_reads_canonical_or_null_on_the_public_profile(
     assert body["social_linkedin"] is None
     assert body["social_twitter"] == "https://x.com/ada"
     assert body["social_youtube"] == "https://www.youtube.com/@ada"
+
+
+async def test_an_accented_linkedin_link_is_stored_as_linkedin_writes_it(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Owner, 2026-10-18: a mentor with an accented name could not save their
+    real LinkedIn link. The decoded form arrives; the encoded one is stored."""
+    auth_id = uuid4()
+    user_id = await make_user(db_engine, auth_id, "social-accent@example.com")
+    headers = bearer(api_token(auth_id))
+
+    response = await api_client.patch(
+        url(user_id, "profile"),
+        json={"social_linkedin": "https://www.linkedin.com/in/josé-silva-1a2b3c"},
+        headers=headers,
+    )
+
+    assert response.status_code == 204, response.text
+    expected = "https://www.linkedin.com/in/jos%C3%A9-silva-1a2b3c"
+    assert (await stored(db_engine, user_id))["social_linkedin"] == expected
+    me = (await api_client.get("/api/v1/me", headers=headers)).json()
+    assert me["profile"]["social_linkedin"] == expected
