@@ -279,3 +279,54 @@ async def test_a_merge_repoints_goal_schools_and_the_queue_counts_them(
     assert after["institution_id"] == str(winner)
     assert after["institution_name"] == "University of Ibadan"
     assert after["school_name_raw"] == "Univ of Ibadn"
+
+
+async def test_saving_back_what_get_returned_keeps_every_link(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A name may match another user's pending row, which this user could not
+    pick by id. Sending back the ids GET returned (a reorder) must not unlink
+    it: an id already on this goal is kept as it is."""
+    first, first_headers = await _owner(db_engine, "first-typist@example.com")
+    await _put(api_client, first, first_headers, {"schools": [{"school_name_raw": "Foo Academy"}]})
+    user, headers = await _owner(db_engine, "second-typist@example.com")
+    await _put(
+        api_client,
+        user,
+        headers,
+        {"schools": [{"school_name_raw": "Bar"}, {"school_name_raw": "Foo Academy"}]},
+    )
+    before = await _schools(api_client, user, headers)
+    assert before[1]["institution_id"] is not None
+
+    reordered = [
+        {"institution_id": s["institution_id"], "school_name_raw": s["school_name_raw"]}
+        for s in reversed(before)
+    ]
+    assert (await _put(api_client, user, headers, {"schools": reordered})).status_code == 200
+
+    after = await _schools(api_client, user, headers)
+    assert [(s["school_name_raw"], s["institution_id"]) for s in after] == [
+        (s["school_name_raw"], s["institution_id"]) for s in reversed(before)
+    ]
+
+
+async def test_a_merged_spelling_links_to_the_school_it_was_merged_into(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Decision 65 keeps references off retired rows; typing a retired
+    spelling resolves to its survivor rather than to the retired row."""
+    winner = await add_institution(db_engine, "University of Benin", status="approved")
+    loser = await add_institution(db_engine, "Univ of Bennin")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE institutions SET status = 'merged', merged_into_id = :w WHERE id = :l"),
+            {"w": winner, "l": loser},
+        )
+    user, headers = await _owner(db_engine, "merged-spelling@example.com")
+
+    await _put(api_client, user, headers, {"schools": [{"school_name_raw": "Univ of Bennin"}]})
+
+    [school] = await _schools(api_client, user, headers)
+    assert school["institution_id"] == str(winner)
+    assert school["school_name_raw"] == "Univ of Bennin"

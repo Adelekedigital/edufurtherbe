@@ -17,7 +17,7 @@ from app.main import create_app
 ADDED = {
     "PartyRead": ("in_room_at", "degree", "institution"),
     "SessionRead": ("mentee_attendance_sessions", "refund_until"),
-    "UserRead": ("mentee_cancel_refund_hours", "onboarding"),
+    "UserRead": ("mentee_cancel_refund_hours", "onboarding", "languages"),
     "GoalRead": ("field_of_study", "schools"),
     # New with the goal's schools (Mentee Settings PRD): the link is optional.
     "GoalSchoolRead": ("institution_id", "institution_name"),

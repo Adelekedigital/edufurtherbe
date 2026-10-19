@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.schemas.catalogue import CountryRef
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, StoredEmail, XRead, YouTubeRead
+from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.domain.emails import normalise_email
@@ -249,6 +250,15 @@ class UserRead(NormalisedEmail):
     #: At most one — `mentee_goals` is 1:1 with the user.
     goal: GoalRead | None = None
     awards: list[AwardRead] = []
+    #: The public profile's own read and item model (`list_languages`,
+    #: `LanguageRead`), so a mentor's two views cannot disagree.
+    languages: list[LanguageRead] = Field(
+        default=[],
+        description=(
+            "The languages you speak, as `PUT /users/{id}/languages` saved them, "
+            "alphabetically by name. Empty when there are none."
+        ),
+    )
     #: Null for the great majority of users, who are not mentors.
     mentor_profile: MentorProfileRead | None = None
 

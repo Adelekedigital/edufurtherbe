@@ -76,8 +76,15 @@ async def resolve_institution(
             return None, False
         return supplied, False
 
-    # No id: match by name, exactly or case-folded, never fuzzily.
-    rows = await session.execute(select(Institution.name, Institution.id))
+    # No id: match by name, exactly or case-folded, never fuzzily. A merged
+    # row's name resolves to the row it was merged into, so no new reference
+    # lands on a retired row (decision 65; a merge never chains).
+    rows = await session.execute(
+        select(
+            Institution.name,
+            func.coalesce(Institution.merged_into_id, Institution.id).label("id"),
+        )
+    )
     matched = match(school_name_raw, index_names((row.name, row.id) for row in rows))
     if matched is not None:
         return matched, False

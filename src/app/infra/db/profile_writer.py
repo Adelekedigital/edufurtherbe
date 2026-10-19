@@ -175,6 +175,11 @@ async def _write_goal_schools(
     of one goal run one after the other rather than meeting on
     `uq_mentee_goal_schools_goal_position`. Delete-then-insert because the
     request carries the whole list and each school is a new row.
+
+    **A link already on this goal is kept as sent.** The server chose it, and
+    it may be one the caller could not pick by id (another user's pending row
+    their name matched), so a client sending back what `GET` returned — a
+    reorder — must not lose it. Any other id goes through `resolve_institution`.
     """
     if payload.get("schools") is None:
         return
@@ -182,6 +187,19 @@ async def _write_goal_schools(
         select(MenteeGoal.id)
         .where(MenteeGoal.id == goal_id, MenteeGoal.user_id == user_id)
         .with_for_update()
+    )
+    linked = set(
+        (
+            await session.execute(
+                select(MenteeGoalSchool.institution_id)
+                .join(MenteeGoal, MenteeGoal.id == MenteeGoalSchool.goal_id)
+                .where(
+                    MenteeGoal.id == goal_id,
+                    MenteeGoal.user_id == user_id,
+                    MenteeGoalSchool.institution_id.is_not(None),
+                )
+            )
+        ).scalars()
     )
     await session.execute(
         delete(MenteeGoalSchool).where(
@@ -193,12 +211,16 @@ async def _write_goal_schools(
     )
     rows = []
     for position, school in enumerate(payload["schools"]):
-        institution_id, _created = await resolve_institution(
-            session,
-            school_name_raw=school["school_name_raw"],
-            supplied=school.get("institution_id"),
-            user_id=user_id,
-        )
+        supplied = school.get("institution_id")
+        if supplied is not None and supplied in linked:
+            institution_id = supplied
+        else:
+            institution_id, _created = await resolve_institution(
+                session,
+                school_name_raw=school["school_name_raw"],
+                supplied=supplied,
+                user_id=user_id,
+            )
         rows.append(
             {
                 "goal_id": goal_id,
@@ -241,9 +263,9 @@ async def _write_goal_satellites(
 async def delete_goal(session: AsyncSession, user_id: UUID) -> bool:
     """A **real** delete: `mentee_goals` has no `deleted_at`.
 
-    The satellites are left alone deliberately — they belong to the user, and
-    clearing a goal is not a statement about which countries they are aiming
-    for.
+    **Its countries, needs and schools go with it.** All three reference the
+    goal (the countries and needs through `mentee_goals.user_id`) and cascade,
+    which the route description states and a test asserts.
     """
     result = await session.execute(delete(MenteeGoal).where(MenteeGoal.user_id == user_id))
     return _rowcount(result) > 0

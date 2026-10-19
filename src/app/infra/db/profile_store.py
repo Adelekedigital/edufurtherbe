@@ -161,6 +161,15 @@ async def get_goal(session: AsyncSession, user_id: UUID) -> dict[str, Any] | Non
         )
     ).mappings()
 
+    # Both satellites hang off `user_id`, not off a goal id — the legacy shape,
+    # kept deliberately (settled decision on the satellite tables). So they are
+    # the same lists for every goal this user has, and attaching them per goal
+    # would claim a per-goal relationship the data does not carry.
+    shared_countries = [dict(row) for row in countries]
+    shared_needs = [dict(row) for row in needs]
+    first = next(iter(goals), None)
+    if first is None:
+        return None
     # The goal's own schools, in the mentee's order. Scoped by the owner through
     # the goal, not by the goal id alone; the institution is followed whatever
     # its review state (decision 63).
@@ -180,16 +189,6 @@ async def get_goal(session: AsyncSession, user_id: UUID) -> dict[str, Any] | Non
             .order_by(MenteeGoalSchool.position)
         )
     ).mappings()
-
-    # Both satellites hang off `user_id`, not off a goal id — the legacy shape,
-    # kept deliberately (settled decision on the satellite tables). So they are
-    # the same lists for every goal this user has, and attaching them per goal
-    # would claim a per-goal relationship the data does not carry.
-    shared_countries = [dict(row) for row in countries]
-    shared_needs = [dict(row) for row in needs]
-    first = next(iter(goals), None)
-    if first is None:
-        return None
     return dict(first) | {
         "countries": shared_countries,
         "needs": shared_needs,

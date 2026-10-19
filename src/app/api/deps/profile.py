@@ -89,6 +89,7 @@ from app.infra.db.profile_store import (
     get_mentor_profile,
     list_awards,
     list_education,
+    list_languages,
 )
 from app.infra.db.profile_writer import (
     create_award,
@@ -215,6 +216,8 @@ async def own_attributes(
         "education": await list_education(session, user_id),
         "goal": goal,
         "awards": await list_awards(session, user_id),
+        # One query, the public profile's own (`list_languages`).
+        "languages": await list_languages(session, user_id),
         "mentor_profile": mentor_profile,
         # One grouped query. Every caller may book, so it always runs; the
         # route gates only the mentor half.
