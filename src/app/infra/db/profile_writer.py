@@ -360,9 +360,16 @@ async def create_mentor_profile(
     )
     await session.execute(update(User).where(User.id == user_id).values(primary_role="mentor"))
     await _write_offerings(session, user_id, payload)
-    if "guide_country_ids" in payload:
-        await replace_guide_countries(session, user_id, payload["guide_country_ids"])
+    await _write_guide_countries(session, user_id, payload)
     return result.scalar_one()
+
+
+async def _write_guide_countries(
+    session: AsyncSession, user_id: UUID, payload: dict[str, Any]
+) -> None:
+    """Absent or `null` leaves the list, as `offering_ids` does; `[]` clears it."""
+    if payload.get("guide_country_ids") is not None:
+        await replace_guide_countries(session, user_id, payload["guide_country_ids"])
 
 
 async def _write_offerings(session: AsyncSession, user_id: UUID, payload: dict[str, Any]) -> None:
@@ -385,22 +392,13 @@ async def update_mentor_profile(
     """`approval_status`, `listing_status` and every audit column are absent from
     `MENTOR_COLUMNS`, so a mentor cannot approve or relist themselves.
 
-    **A guide-country list is written under `lock_mentor`**, the row lock the
-    freeze and every transition take, so two replacements of one list run one
-    after the other rather than meeting on its unique `position`.
+    **Every write takes `lock_mentor` first**, the row lock the freeze and every
+    transition take, so two replacements of one list (help areas or guide
+    countries) run one after the other rather than meeting on its unique
+    constraint as a 500. It is also the existence check: no live mentor, no write.
     """
-    guides = "guide_country_ids" in payload
-    if guides:
-        if not await lock_mentor(session, user_id):
-            return False
-    else:
-        found = await session.execute(
-            select(MentorProfile.id).where(
-                MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
-            )
-        )
-        if found.first() is None:
-            return False
+    if not await lock_mentor(session, user_id):
+        return False
     await _refuse_unknown_mentor_countries(session, payload)
     values = {key: value for key, value in payload.items() if key in MENTOR_COLUMNS}
     if values:
@@ -410,8 +408,7 @@ async def update_mentor_profile(
             .values(**values)
         )
     await _write_offerings(session, user_id, payload)
-    if guides:
-        await replace_guide_countries(session, user_id, payload["guide_country_ids"])
+    await _write_guide_countries(session, user_id, payload)
     return True
 
 

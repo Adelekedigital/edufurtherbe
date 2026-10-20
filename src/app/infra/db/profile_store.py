@@ -335,6 +335,22 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
     }
 
 
+async def stored_booking_window_days(session: AsyncSession, user_id: UUID) -> int | None:
+    """The mentor's own booking window, or `None` (unset, or no live mentor).
+
+    The one column the PATCH's range check needs, so it does not read the
+    whole profile with its lists.
+    """
+    stored: int | None = (
+        await session.execute(
+            select(MentorProfile.booking_window_days).where(
+                MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    return stored
+
+
 async def list_languages(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]]:
     """The languages a user speaks, alphabetically.
 

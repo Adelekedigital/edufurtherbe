@@ -2,9 +2,9 @@
 
 Written as one list on the mentor-profile write and read back, in the mentor's
 order, on the owner's read, `/me` and the public profile. The schema caps the
-list at `MAX_GUIDE_COUNTRIES`; the boundary refuses a ninth, a repeat, an
-explicit `null` and an id that names no country, each a `422` with a pointer,
-before anything is written.
+list at `MAX_GUIDE_COUNTRIES`; the boundary refuses a ninth, a repeat
+and an id that names no country, each a `422` with a pointer, before anything
+is written. An explicit `null` leaves the list, as it does `offering_ids`.
 """
 
 from __future__ import annotations
@@ -186,17 +186,22 @@ async def test_a_repeated_country_is_a_422_at_the_list(
     assert await _stored(db_engine, mentor) == []
 
 
-async def test_an_explicit_null_is_a_422_and_leaves_the_list(
+async def test_an_explicit_null_leaves_the_list_as_offering_ids_does(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
+    """One absent-value rule per body: `null` is omitted, on both lists."""
     mentor, headers = await _mentor(db_engine, "guide-null")
     (a,) = await _countries(db_engine, 1)
     await _patch(api_client, mentor, headers, {"guide_country_ids": [a["id"]]})
 
-    refused = await _patch(api_client, mentor, headers, {"guide_country_ids": None})
+    saved = await _patch(
+        api_client,
+        mentor,
+        headers,
+        {"guide_country_ids": None, "offering_ids": None, "headline": "Null kept them"},
+    )
 
-    assert refused.status_code == 422, refused.text
-    assert _pointers(refused) == ["/guide_country_ids"]
+    assert saved.status_code == 200, saved.text
     assert await _owner_read(api_client, mentor, headers) == [a]
 
 

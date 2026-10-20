@@ -24,7 +24,7 @@ from pydantic import (
 )
 
 from app.api.schemas.availability import validated_zone
-from app.api.schemas.catalogue import CountryRef, GuideCountryRead, InstitutionRead
+from app.api.schemas.catalogue import CountryRef, InstitutionRead
 from app.api.schemas.common import (
     AvatarFocusRead,
     AvatarFocusWrite,
@@ -321,7 +321,7 @@ class MentorProfileRead(BaseModel):
     primary_study_program: str | None = None
     primary_study_country: CountryRef | None = None
     offerings: list[LookupRef] = []
-    guide_countries: list[GuideCountryRead] = Field(
+    guide_countries: list[LookupRef] = Field(
         default_factory=list,
         description=(
             "Countries you can guide mentees towards, in your order; empty when you "
@@ -412,7 +412,7 @@ class MentorProfileRead(BaseModel):
                 LookupRef(id=o["id"], code=o["slug"], display_name=o["display_name"])
                 for o in row.get("offerings", [])
             ],
-            guide_countries=[GuideCountryRead.model_validate(c) for c in row["guide_countries"]],
+            guide_countries=[LookupRef.model_validate(c) for c in row["guide_countries"]],
             paused_by_mentor=bool(row.get("paused_by_mentor")),
             return_on=row.get("return_on"),
             max_booking_window_days=window.max_days,
@@ -608,26 +608,24 @@ class MentorProfileWrite(Normalised):
     )
     primary_study_program: str | None = Field(default=None, max_length=300)
     offering_ids: list[UUID] | None = None
-    #: Decision 276. **`list`, not `list | None`**: `[]` already clears, so an
-    #: explicit `null` would mean nothing and is a `422`, as on the names. The
-    #: `None` default is never written (the writer takes `exclude_unset`).
-    guide_country_ids: list[UUID] = Field(
-        default=None,  # type: ignore[arg-type]
+    #: Decision 276. Absent and `null` alike leave the list, as `offering_ids`
+    #: does, so one body carries one absent-value rule.
+    guide_country_ids: list[UUID] | None = Field(
+        default=None,
         max_length=MAX_GUIDE_COUNTRIES,
         description=(
             f"Up to {MAX_GUIDE_COUNTRIES} `/catalog/countries` ids you can guide mentees "
-            "towards, in your order; the list replaces the saved one. Omitted leaves it, "
-            "`[]` clears it. More than "
-            f"{MAX_GUIDE_COUNTRIES}, a country twice or `null` is a `422` at "
-            "`/guide_country_ids`; an id that names no country is a `422` at "
-            "`/guide_country_ids/{index}`, and nothing is saved."
+            "towards, in your order; the list replaces the saved one. Omitted or `null` "
+            f"leaves it, `[]` clears it. More than {MAX_GUIDE_COUNTRIES} or a country "
+            "twice is a `422` at `/guide_country_ids`; an id that names no country is a "
+            "`422` at `/guide_country_ids/{index}`. Nothing is saved on a `422`."
         ),
     )
 
     @field_validator("guide_country_ids")
     @classmethod
-    def _each_country_once(cls, value: list[UUID]) -> list[UUID]:
-        if len(set(value)) != len(value):
+    def _each_country_once(cls, value: list[UUID] | None) -> list[UUID] | None:
+        if value is not None and len(set(value)) != len(value):
             raise ValueError("a country appears twice")
         return value
 

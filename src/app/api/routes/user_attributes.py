@@ -56,7 +56,6 @@ from app.api.schemas.profile import (
     MentorProfileRead,
 )
 from app.core.errors import NotFoundError
-from app.domain.guide_countries import MAX_GUIDE_COUNTRIES
 
 router = APIRouter(prefix="/api/v1/users/{user_id}", tags=["users"])
 
@@ -194,15 +193,6 @@ IN_REVIEW_RESPONSE: dict[int | str, dict[str, str]] = {
         )
     }
 }
-
-#: The guide-country list (decision 276), on both mentor-profile writes.
-GUIDE_COUNTRIES_NOTE = (
-    "**`guide_country_ids`** replaces the countries you can guide mentees towards, "
-    "in the order sent; omitted leaves them and `[]` clears them. A `422`, with "
-    f"nothing saved, for more than {MAX_GUIDE_COUNTRIES}, a country twice or `null` (at "
-    "`/guide_country_ids`), and for an id that names no `/catalog/countries` row "
-    "(at `/guide_country_ids/{index}`)."
-)
 
 CONFLICT_RESPONSE: dict[int | str, dict[str, str]] = {
     status.HTTP_409_CONFLICT: {"description": "This user already has a mentor profile."}
@@ -362,7 +352,7 @@ async def remove_award(removed: DeletedAwardDep) -> None:
         "**Creating the profile is not applying, and nobody is told.** It saves "
         "the first step of onboarding; admins are alerted when the mentor "
         "submits a complete application at "
-        "`POST /api/v1/me/mentor-application/submit`.\n\n" + GUIDE_COUNTRIES_NOTE
+        "`POST /api/v1/me/mentor-application/submit`."
     ),
     responses=WRITE_RESPONSES | CONFLICT_RESPONSE,
 )
@@ -378,7 +368,7 @@ async def apply_as_mentor(profile_id: CreatedMentorProfileDep, response: Respons
     description=(
         "`approval_status`, `listing_status` and every audit field are not "
         "writable here — a mentor who could approve or relist themselves is not "
-        "being reviewed.\n\n" + GUIDE_COUNTRIES_NOTE
+        "being reviewed."
     ),
     responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )

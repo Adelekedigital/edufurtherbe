@@ -33,14 +33,6 @@ class CountryRef(BaseModel):
         return cls(code=str(code), display_name=str(display_name))
 
 
-class GuideCountryRead(CountryRef):
-    """A country a mentor can guide mentees towards (decision 276), with the
-    `/catalog/countries` id a write takes back. One model for the owner's read
-    and the public profile, so the two publish one shape."""
-
-    id: UUID
-
-
 class InstitutionRead(BaseModel):
     """A university, as search returns it and as an education entry embeds it.
 

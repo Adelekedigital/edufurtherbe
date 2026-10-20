@@ -31,8 +31,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.api.schemas.catalogue import GuideCountryRead
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
+from app.api.schemas.profile import LookupRef
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 from app.domain.enums import ApprovalStatus, AwardFunding, CoverArt, CoverColor, ListingStatus
@@ -391,7 +391,7 @@ class MentorPublicRead(BaseModel):
     offerings: list[ServiceOfferingRead] = Field(
         default_factory=list, description="What kind of help they give."
     )
-    guide_countries: list[GuideCountryRead] = Field(
+    guide_countries: list[LookupRef] = Field(
         default_factory=list,
         description=(
             "Countries they can guide mentees towards, in the mentor's order; empty "
@@ -546,7 +546,7 @@ class MentorPublicRead(BaseModel):
             social_twitter=_text(row["social_twitter"]),
             social_youtube=_text(row["social_youtube"]),
             offerings=[ServiceOfferingRead(**o) for o in offerings],  # type: ignore[arg-type]
-            guide_countries=[GuideCountryRead.model_validate(c) for c in guide_countries],
+            guide_countries=[LookupRef.model_validate(c) for c in guide_countries],
             session_types=[SessionTypeRead.from_row(s) for s in session_types],
             education=[EducationRead.from_row(e) for e in education],
             scholarships=[AwardRead.from_row(a) for a in scholarships],
