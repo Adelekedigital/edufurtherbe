@@ -1,9 +1,8 @@
 """`/me/links`: a user's own links (decision 275).
 
 One per platform except websites (three), every write scoped to the caller,
-the old `social_twitter`/`social_youtube` columns cleared whenever their
-platform's link is written, and every read (`/me/links`, `/me`, the public
-profile) answering from the one table.
+and every read (`/me/links`, `/me`, the public profile) answering from the
+one table.
 """
 
 from __future__ import annotations
@@ -35,29 +34,6 @@ async def add(
     client: httpx.AsyncClient, headers: dict[str, str], platform: str, value: str
 ) -> httpx.Response:
     return await client.post(LINKS, json={"platform": platform, "value": value}, headers=headers)
-
-
-async def columns(engine: AsyncEngine, user_id: UUID) -> tuple[object, object]:
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT social_twitter, social_youtube FROM user_profiles WHERE user_id = :u"),
-                {"u": user_id},
-            )
-        ).first()
-    return (row[0], row[1]) if row else (None, None)
-
-
-async def set_columns(engine: AsyncEngine, user_id: UUID, x: str, yt: str) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO user_profiles (user_id, social_twitter, social_youtube) "
-                "VALUES (:u, :x, :y) ON CONFLICT (user_id) DO UPDATE SET "
-                "social_twitter = excluded.social_twitter, social_youtube = excluded.social_youtube"
-            ),
-            {"u": user_id, "x": x, "y": yt},
-        )
 
 
 # --- Create and read ---------------------------------------------------------
@@ -247,47 +223,6 @@ async def test_an_unknown_id_is_a_404(
     assert response.status_code == 404
 
 
-# --- The old columns ---------------------------------------------------------
-
-
-@pytest.mark.parametrize("action", ["add", "change", "delete"])
-async def test_writing_an_x_link_clears_its_old_column(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, action: str
-) -> None:
-    """So the catch-up copy can never bring a deleted link back (decision 275)."""
-    user_id, headers = await a_user(db_engine, f"clear-{action}")
-    link = None
-    if action != "add":
-        link = (await add(api_client, headers, "x", "ada")).json()
-    await set_columns(db_engine, user_id, "https://x.com/old", "https://www.youtube.com/@keep")
-
-    if action == "add":
-        await add(api_client, headers, "x", "ada")
-    elif action == "change":
-        assert link is not None
-        await api_client.patch(f"{LINKS}/{link['id']}", json={"value": "bo"}, headers=headers)
-    else:
-        assert link is not None
-        await api_client.delete(f"{LINKS}/{link['id']}", headers=headers)
-
-    # Only the platform written is cleared; the other column is left alone.
-    assert await columns(db_engine, user_id) == (None, "https://www.youtube.com/@keep")
-
-
-async def test_a_website_leaves_both_old_columns_alone(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    user_id, headers = await a_user(db_engine, "web-cols")
-    await set_columns(db_engine, user_id, "https://x.com/old", "https://www.youtube.com/@old")
-
-    await add(api_client, headers, "website", "ada.dev")
-
-    assert await columns(db_engine, user_id) == (
-        "https://x.com/old",
-        "https://www.youtube.com/@old",
-    )
-
-
 # --- The removed profile fields (#505) ---------------------------------------
 
 
@@ -316,14 +251,6 @@ async def test_me_reads_the_links(api_client: httpx.AsyncClient, db_engine: Asyn
     await api_client.patch(url(user_id, "profile"), json={"about_me": "Hi."}, headers=headers)
     await add(api_client, headers, "youtube", "@ada")
     await add(api_client, headers, "instagram", "ada.l")
-    # A column value with no row is not a link any more.
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "UPDATE user_profiles SET social_twitter = 'https://x.com/ghost' WHERE user_id = :u"
-            ),
-            {"u": user_id},
-        )
 
     me = (await api_client.get("/api/v1/me", headers=headers)).json()
 

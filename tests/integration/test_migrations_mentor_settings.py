@@ -488,3 +488,71 @@ def test_the_catch_up_is_safe_to_run_twice(
     command.upgrade(config, CATCH_UP)
 
     assert scalar(disposable_database, "SELECT count(*) FROM user_links") == 2
+
+
+# --- The column drop (f4a7c2d9b318, #505) -------------------------------------
+
+DROP = "f4a7c2d9b318"
+
+
+def _columns(url: str) -> str | None:
+    return scalar(
+        url,
+        "SELECT string_agg(column_name, ',' ORDER BY column_name) "
+        "FROM information_schema.columns WHERE table_name = 'user_profiles' "
+        "AND column_name IN ('social_twitter', 'social_youtube')",
+    )
+
+
+def test_the_drop_copies_a_leftover_value_before_the_columns_go(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """A column no link write touched still lands in `user_links`; a link the
+    owner deleted (its column cleared by the writer) does not come back."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, CATCH_UP)
+    _person(disposable_database, "leftover@example.test", "@ada", None)
+    _person(disposable_database, "deleted@example.test", None, None)
+
+    command.upgrade(config, DROP)
+
+    assert _columns(disposable_database) is None
+    assert _links_of(disposable_database, "leftover@example.test") == [
+        ("x", "https://x.com/ada", 0)
+    ]
+    assert _links_of(disposable_database, "deleted@example.test") == []
+
+
+def test_the_drop_downgrade_returns_the_columns_from_the_links(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, DROP)
+    _person_without_links(disposable_database, "back@example.test")
+    _link(disposable_database, "back@example.test", "youtube", "https://www.youtube.com/@ada")
+
+    command.downgrade(config, CATCH_UP)
+
+    assert _columns(disposable_database) == "social_twitter,social_youtube"
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT coalesce(p.social_twitter, '-') || ' ' || p.social_youtube "
+            "FROM user_profiles p JOIN users u ON u.id = p.user_id "
+            "WHERE u.email = 'back@example.test'",
+        )
+        == "- https://www.youtube.com/@ada"
+    )
+    command.upgrade(config, DROP)
+
+
+_PROFILE_ONLY = (
+    "WITH u AS (INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
+    "VALUES ('{email}', gen_random_uuid(), 'Probe', 'mentee', 'UTC') RETURNING id) "
+    "INSERT INTO user_profiles (user_id) SELECT id FROM u"
+)
+
+
+def _person_without_links(url: str, email: str) -> None:
+    """A user with a profile row, written after the columns are gone."""
+    execute(url, _PROFILE_ONLY.format(email=email))

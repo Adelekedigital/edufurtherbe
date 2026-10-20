@@ -1,13 +1,7 @@
 """A user's own links: the reader and the one writer (decision 275).
 
-**Every write goes through here**, so the one-per-platform rule, the
-three-website count and the old-column contract live in one place.
-
-**The old columns.** Until they are dropped, writing or deleting an X or
-YouTube link also clears that platform's `user_profiles` column. That is what
-makes the catch-up copy safe to run and the downgrade correct: a column holding
-a value with no row can only be one written before this release, never a link
-somebody deleted. See `d6f2a9c4e185` and `c1e5a8d3f027`.
+**Every write goes through here**, so the one-per-platform rule and the
+three-website count live in one place.
 
 **Serialised per user** by an advisory lock taken before anything is read, so
 two requests cannot both pass the website count. One-per-platform is the partial
@@ -29,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import LinkPlatformTakenError, ValidationError, WebsiteLimitReachedError
 from app.domain.enums import LinkPlatform
 from app.domain.social_links import (
-    LEGACY_LINK_FIELDS,
     MAX_WEBSITES,
     Link,
     SocialNetwork,
@@ -38,7 +31,7 @@ from app.domain.social_links import (
     owned_link,
     stored_link,
 )
-from app.infra.db.models.user import UserLink, UserProfile
+from app.infra.db.models.user import UserLink
 
 __all__ = [
     "LINK_LOCK_NAMESPACE",
@@ -98,14 +91,6 @@ async def _lock(session: AsyncSession, user_id: UUID) -> None:
     )
 
 
-async def _clear_legacy(session: AsyncSession, user_id: UUID, platform: LinkPlatform) -> None:
-    column = LEGACY_LINK_FIELDS.get(platform)
-    if column is not None:
-        await session.execute(
-            update(UserProfile).where(UserProfile.user_id == user_id).values({column: None})
-        )
-
-
 async def _refuse_if_full(session: AsyncSession, user_id: UUID, platform: LinkPlatform) -> None:
     """The website count. One-per-platform is the unique index's alone: a second
     X link fails the insert, which `add_link` answers as the same `409`."""
@@ -128,7 +113,6 @@ async def add_link(
     await _lock(session, user_id)
     await _refuse_if_full(session, user_id, platform)
     link_id, position = await _insert(session, user_id, platform, url)
-    await _clear_legacy(session, user_id, platform)
     return Link(
         id=link_id,
         platform=platform.value,
@@ -178,19 +162,15 @@ async def change_link(
         .values(url=url)
         .returning(UserLink.position)
     )
-    await _clear_legacy(session, user_id, LinkPlatform(str(platform)))
     return stored_link(link_id, str(platform), url, int(position or 0))
 
 
 async def delete_link(session: AsyncSession, user_id: UUID, link_id: UUID) -> bool:
     """Delete one of the caller's links. `False` when they have no such link."""
     await _lock(session, user_id)
-    platform = await session.scalar(
+    deleted = await session.scalar(
         delete(UserLink)
         .where(UserLink.id == link_id, UserLink.user_id == user_id)
-        .returning(UserLink.platform)
+        .returning(UserLink.id)
     )
-    if platform is None:
-        return False
-    await _clear_legacy(session, user_id, LinkPlatform(str(platform)))
-    return True
+    return deleted is not None
