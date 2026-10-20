@@ -30,6 +30,7 @@ from pydantic import (
 
 from app.core.config import MIN_BOOKING_WINDOW_DAYS
 from app.core.errors import ValidationError
+from app.domain.enums import CoverArt, CoverColor
 from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
 
 #: Anything above this is clamped rather than refused. A client asking for 5,000
@@ -64,6 +65,37 @@ class AvatarFocusRead(BaseModel):
         if x is None or y is None:
             return None
         return cls(x=float(str(x)), y=float(str(y)))
+
+
+class CoverRead(BaseModel):
+    """A person's cover, wherever their avatar is sent: the initials sit on its
+    tone (owner, 2026-10-20), so a card that drew it differently from the
+    profile would show the same person two ways.
+
+    Read off the person's `user_profiles` row, joined on the **live** user, so a
+    deleted party, or one with no profile row, reads the automatic cover.
+    """
+
+    cover_color: CoverColor | None = Field(
+        default=None,
+        description=(
+            "The colour they chose for their cover, one of `CoverColor`'s keys. "
+            "`null` means automatic: hash the person's id over `CoverColor`'s "
+            "values, in their published order. A mentee has no cover picker, so "
+            "theirs is normally automatic."
+        ),
+    )
+    cover_art: CoverArt = Field(
+        default=CoverArt.NONE, description="What is drawn over the cover colour."
+    )
+
+    @staticmethod
+    def cover_of(color: object, art: object) -> dict[str, Any]:
+        """The two fields from their stored columns; a missing row is automatic."""
+        return {
+            "cover_color": CoverColor(str(color)) if color is not None else None,
+            "cover_art": CoverArt(str(art)) if art is not None else CoverArt.NONE,
+        }
 
 
 class AvatarFocusWrite(AvatarFocusRead):

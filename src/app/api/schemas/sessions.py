@@ -28,7 +28,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field
 
-from app.api.schemas.common import AvatarFocusRead, Normalised, SessionTypeRefRead
+from app.api.schemas.common import AvatarFocusRead, CoverRead, Normalised, SessionTypeRefRead
 from app.domain.attendance import DOOR_STATUSES, door_window, join_window
 from app.domain.enums import (
     ActorType,
@@ -41,7 +41,7 @@ from app.domain.intake import MAX_ANSWER_LENGTH, MAX_OPTIONS, MAX_QUESTIONS
 from app.domain.refunds import RefundPolicy
 
 
-class PartyRead(BaseModel):
+class PartyRead(CoverRead):
     """One of the two people in a session, as the other one sees them.
 
     **Every name here is nullable, and that is the data rather than caution.**
@@ -504,6 +504,7 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
         avatar_focus=AvatarFocusRead.of(
             row.get(f"{side}_avatar_focus_x"), row.get(f"{side}_avatar_focus_y")
         ),
+        **CoverRead.cover_of(row.get(f"{side}_cover_color"), row.get(f"{side}_cover_art")),
         timezone=_text(row.get(f"{side}_timezone")),
         degree=_text(row.get(f"{side}_degree")),
         institution=_text(row.get(f"{side}_institution")),

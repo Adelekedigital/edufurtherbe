@@ -119,6 +119,8 @@ async def list_met_mentors(
             UserProfile.avatar_url,
             UserProfile.avatar_focus_x,
             UserProfile.avatar_focus_y,
+            UserProfile.cover_color,
+            UserProfile.cover_art,
             _QUALIFICATION.c.degree,
             _QUALIFICATION.c.institution,
             met.c.session_count,

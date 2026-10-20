@@ -138,6 +138,9 @@ async def test_party_keys_are_exactly_these(
         # The pending card's "BSc Student at FUTA": `top_qualification`.
         "degree",
         "institution",
+        # The cover their initials sit on, as on their profile (owner, 2026-10-20).
+        "cover_color",
+        "cover_art",
     }
 
 

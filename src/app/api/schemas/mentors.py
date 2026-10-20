@@ -31,7 +31,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
+from app.api.schemas.common import (
+    AvatarFocusRead,
+    CoverRead,
+    LinkedInRead,
+    Page,
+    XRead,
+    YouTubeRead,
+)
 from app.api.schemas.links import PublicLinkRead, legacy_social
 from app.api.schemas.profile import LookupRef
 from app.api.schemas.reviews import ReviewSummaryRead
@@ -54,7 +61,7 @@ class ServiceOfferingRead(BaseModel):
     display_name: str
 
 
-class MentorSummaryRead(BaseModel):
+class MentorSummaryRead(CoverRead):
     """One mentor as a search result — a card, not a profile.
 
     **Deliberately smaller than `MentorPublicRead`.** Twenty of these render a
@@ -145,6 +152,7 @@ class MentorSummaryRead(BaseModel):
             headline=_text(row["headline"]),
             avatar_url=_text(row["avatar_url"]),
             avatar_focus=AvatarFocusRead.of(row["avatar_focus_x"], row["avatar_focus_y"]),
+            **CoverRead.cover_of(row["cover_color"], row["cover_art"]),
             primary_study_country=_text(row["primary_study_country"]),
             origin_country=_text(row["origin_country"]),
             degree=_text(row["degree"]),
@@ -545,10 +553,7 @@ class MentorPublicRead(BaseModel):
             avatar_url=_text(row["avatar_url"]),
             avatar_focus=AvatarFocusRead.of(row["avatar_focus_x"], row["avatar_focus_y"]),
             banner_url=_text(row["banner_url"]),
-            cover_color=(
-                CoverColor(str(row["cover_color"])) if row["cover_color"] is not None else None
-            ),
-            cover_art=CoverArt(str(row["cover_art"])),
+            **CoverRead.cover_of(row["cover_color"], row["cover_art"]),
             primary_study_program=_text(row["primary_study_program"]),
             primary_study_country=_text(row["primary_study_country"]),
             origin_country=_text(row["origin_country"]),
