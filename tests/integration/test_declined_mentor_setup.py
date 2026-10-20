@@ -38,7 +38,9 @@ EXCEPTION = {
     "end_date": "2027-03-02",
     "timezone": "Africa/Lagos",
 }
-SOME = str(uuid4())
+#: Fixed, not `uuid4()`: the ids name parametrized tests, and pytest-xdist needs
+#: every worker to collect the same names.
+SOME = "01960000-0000-7000-8000-000000000513"
 
 #: Every write the lock covers. `{me}` is the mentor's id; any other id may be
 #: unknown, because the refusal comes before the lookup.
