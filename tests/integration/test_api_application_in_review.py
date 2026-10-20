@@ -611,3 +611,21 @@ async def test_a_corrected_linkedin_link_is_saved_in_review(
             text("SELECT social_linkedin FROM user_profiles WHERE user_id = :u"), {"u": mentor}
         )
         assert stored.scalar_one() == "https://www.linkedin.com/in/ada-lovelace"
+
+
+async def test_every_link_stays_open_in_review(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`user_links` is not reviewed (decision 273 as amended): add, change and
+    delete all save while the application is in review."""
+    _, auth = await submitted(db_engine, "frz-links")
+
+    added = await api_client.post(
+        "/api/v1/me/links", headers=auth, json={"platform": "instagram", "value": "ada.l"}
+    )
+    changed = await api_client.patch(
+        f"/api/v1/me/links/{added.json()['id']}", headers=auth, json={"value": "ada.lovelace"}
+    )
+    deleted = await api_client.delete(f"/api/v1/me/links/{added.json()['id']}", headers=auth)
+
+    assert (added.status_code, changed.status_code, deleted.status_code) == (201, 200, 204)
