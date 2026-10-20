@@ -116,6 +116,13 @@ class Page[T](BaseModel):
     )
 
 
+def refuse_repeats(values: list[Any] | None, message: str) -> None:
+    """A list of ids that names one twice is refused at the list, before the
+    unique index behind it can answer with a 500. `message` names what repeated."""
+    if values is not None and len(set(values)) != len(values):
+        raise ValueError(message)
+
+
 def encode_cursor(sort_key: str, row_id: UUID) -> str:
     """The keyset position, as one opaque token.
 

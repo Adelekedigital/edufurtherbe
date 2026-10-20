@@ -36,6 +36,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import CursorResult, case, delete, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
@@ -56,6 +57,7 @@ from app.infra.db.models.mentoring import (
 from app.infra.db.models.reference import Country
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.user import User, UserLanguage, UserProfile
+from app.infra.db.offerings import live_offering_ids
 from app.infra.db.user_links import set_platform_link
 
 GOAL_COLUMNS = (
@@ -147,28 +149,63 @@ async def upsert_goal(session: AsyncSession, user_id: UUID, payload: dict[str, A
     It is also why the countries and needs satellites key on ``user_id``: with
     one goal per user, user-keyed and goal-keyed are the same thing, and the
     asymmetry I flagged in review does not exist.
-    """
-    existing = await session.execute(select(MenteeGoal.id).where(MenteeGoal.user_id == user_id))
-    row = existing.first()
-    values = {key: value for key, value in payload.items() if key in GOAL_COLUMNS}
 
-    if row is None:
+    **The refusals come first**, so a `422` leaves nothing to roll back. **Then
+    the goal row is locked**, so two writes of one user's goal run one after the
+    other: without it, two list replacements meet on the satellites' unique pair
+    and two first goals on `user_id`, each as a 500.
+    """
+    await _refuse_unknown_goal_ids(session, payload)
+    values = _sent(payload, GOAL_COLUMNS)
+    # A request that loses the race to create the goal locks the winner's row and
+    # replaces it, as a second `PUT` would.
+    while (goal_id := await _locked_goal(session, user_id)) is None:
         created = await session.execute(
-            insert(MenteeGoal)
-            .values(user_id=user_id, **_sent(payload, GOAL_COLUMNS))
+            pg_insert(MenteeGoal)
+            .values(user_id=user_id, **values)
+            .on_conflict_do_nothing(index_elements=[MenteeGoal.user_id])
             .returning(MenteeGoal.id)
         )
-        goal_id: UUID = created.scalar_one()
-    else:
-        goal_id = row[0]
-        if values:
-            await session.execute(
-                update(MenteeGoal).where(MenteeGoal.user_id == user_id).values(**values)
-            )
+        if (goal_id := created.scalar_one_or_none()) is not None:
+            values = {}
+            break
+    if values:
+        await session.execute(
+            update(MenteeGoal).where(MenteeGoal.user_id == user_id).values(**values)
+        )
 
     await _write_goal_satellites(session, user_id, payload)
     await _write_goal_schools(session, user_id, goal_id, payload)
     return goal_id
+
+
+async def _locked_goal(session: AsyncSession, user_id: UUID) -> UUID | None:
+    found = await session.execute(
+        select(MenteeGoal.id).where(MenteeGoal.user_id == user_id).with_for_update()
+    )
+    return found.scalar_one_or_none()
+
+
+async def _refuse_unknown_goal_ids(session: AsyncSession, payload: dict[str, Any]) -> None:
+    """A `422` at each `/country_ids/{i}` and `/need_ids/{i}` naming no catalogue row.
+
+    Both lists are checked before either answers, so one response names every
+    unknown id. The foreign keys would refuse them too, as a 500.
+    """
+    errors: list[tuple[str, str]] = []
+    for refuse, field in (
+        (_refuse_unknown_country_ids, "country_ids"),
+        (_refuse_unknown_offering_ids, "need_ids"),
+    ):
+        try:
+            await refuse(
+                session,
+                {f"/{field}/{i}": value for i, value in enumerate(payload.get(field) or ())},
+            )
+        except ValidationError as refused:
+            errors.extend(refused.field_errors)
+    if errors:
+        raise ValidationError("unknown goal id", field_errors=tuple(errors))
 
 
 async def _write_goal_schools(
@@ -177,7 +214,7 @@ async def _write_goal_schools(
     """Replace the goal's schools, in the order sent, when the key was sent.
 
     Absent or `null` leaves them, as the satellites above; `[]` clears them.
-    **The goal row is locked first**, scoped to its owner, so two replacements
+    **It runs under `upsert_goal`'s lock on the goal row**, so two replacements
     of one goal run one after the other rather than meeting on
     `uq_mentee_goal_schools_goal_position`. Delete-then-insert because the
     request carries the whole list and each school is a new row.
@@ -189,11 +226,6 @@ async def _write_goal_schools(
     """
     if payload.get("schools") is None:
         return
-    await session.execute(
-        select(MenteeGoal.id)
-        .where(MenteeGoal.id == goal_id, MenteeGoal.user_id == user_id)
-        .with_for_update()
-    )
     linked = set(
         (
             await session.execute(
@@ -508,6 +540,25 @@ async def _refuse_unknown_country_ids(session: AsyncSession, sent: dict[str, UUI
     )
     if errors:
         raise ValidationError("unknown country", field_errors=errors)
+
+
+async def _refuse_unknown_offering_ids(session: AsyncSession, sent: dict[str, UUID]) -> None:
+    """A `422` at each JSON pointer whose id names no live offering.
+
+    The offering twin of `_refuse_unknown_country_ids`. A retired offering is
+    refused as `set_session_type_offerings` refuses it: `/catalog/service-offerings`
+    no longer lists it, so nothing a form offers names it.
+    """
+    if not sent:
+        return
+    live = await live_offering_ids(session, list(sent.values()))
+    errors = tuple(
+        (pointer, "not an offering in /catalog/service-offerings")
+        for pointer, value in sent.items()
+        if value not in live
+    )
+    if errors:
+        raise ValidationError("unknown offering", field_errors=errors)
 
 
 def _provenance(payload: dict[str, Any], *, stored: bool) -> dict[str, Any]:

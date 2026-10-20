@@ -38,6 +38,7 @@ __all__ = [
     "has_live_goals",
     "live_goal_exists",
     "live_goal_offering_ids",
+    "live_offering_ids",
     "live_offering_slugs",
     "offerings_for",
     "offerings_for_session_types",
@@ -194,6 +195,17 @@ async def live_offering_slugs(session: AsyncSession, slugs: Sequence[str]) -> se
     return set(result.scalars())
 
 
+async def live_offering_ids(session: AsyncSession, ids: Sequence[UUID]) -> set[UUID]:
+    """Which of `ids` name an offering the platform still offers. Every write
+    that takes offering ids asks here, so a retired one is refused everywhere."""
+    if not ids:
+        return set()
+    result = await session.execute(
+        select(ServiceOffering.id).where(ServiceOffering.id.in_(ids), _live())
+    )
+    return set(result.scalars())
+
+
 async def offerings_for(
     session: AsyncSession, user_ids: Sequence[UUID]
 ) -> dict[UUID, list[dict[str, Any]]]:
@@ -294,13 +306,7 @@ async def set_session_type_offerings(
     """
     wanted = list(offering_ids)
     if wanted:
-        live = set(
-            (
-                await session.execute(
-                    select(ServiceOffering.id).where(ServiceOffering.id.in_(wanted), _live())
-                )
-            ).scalars()
-        )
+        live = await live_offering_ids(session, wanted)
         unknown = [str(value) for value in wanted if value not in live]
         if unknown:
             raise ValidationError(
