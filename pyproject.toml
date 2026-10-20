@@ -68,7 +68,7 @@ dependencies = [
     # might work. The migration decodes AVIF, which needs a build carrying the
     # codec â€” `features.check_module("avif")` was confirmed true here â€” and a
     # floor guessed from a changelog is a claim nobody checked.
-    "pillow>=12.3",
+    "pillow>=13.0",
     "opencv-python-headless>=5,<6",
     "numpy>=2.5,<3",
     "defusedxml>=0.7.1",
