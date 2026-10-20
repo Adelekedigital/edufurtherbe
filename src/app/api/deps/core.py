@@ -168,7 +168,7 @@ CURRENT_USER = text("""
            u.timezone, u.email_verified_at, u.created_at,
            p.about_me, p.about_me_drafted_at, p.gender, p.avatar_url, p.banner_url,
            p.avatar_focus_x, p.avatar_focus_y,
-           p.social_linkedin, p.social_twitter, p.social_youtube,
+           p.social_linkedin,
            p.cover_color, p.cover_art,
            oc.code AS origin_country_code, oc.display_name AS origin_country_name,
            cc.code AS current_country_code, cc.display_name AS current_country_name,

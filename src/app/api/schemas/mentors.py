@@ -32,11 +32,13 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
+from app.api.schemas.links import PublicLinkRead, legacy_social
 from app.api.schemas.profile import LookupRef
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 from app.domain.enums import ApprovalStatus, AwardFunding, CoverArt, CoverColor, ListingStatus
 from app.domain.profile_strength import COMPLETENESS_ORDER, ProfileFacts, completeness
+from app.domain.social_links import Link
 
 
 class ServiceOfferingRead(BaseModel):
@@ -386,8 +388,17 @@ class MentorPublicRead(BaseModel):
     )
     #: Canonical `https://` links or `null` — render them, never parse them (#182).
     social_linkedin: LinkedInRead = None
+    #: **Deprecated, kept for one release**: their X and YouTube entries in
+    #: `links`. Read `links` instead.
     social_twitter: XRead = None
     social_youtube: YouTubeRead = None
+    links: list[PublicLinkRead] = Field(
+        default_factory=list,
+        description=(
+            "Their links (X, YouTube, Instagram, Facebook, TikTok, websites) in "
+            "their order, each `{platform, url}`. LinkedIn is `social_linkedin`."
+        ),
+    )
     offerings: list[ServiceOfferingRead] = Field(
         default_factory=list, description="What kind of help they give."
     )
@@ -521,6 +532,7 @@ class MentorPublicRead(BaseModel):
         reviews: dict[str, Any],
         *,
         guide_countries: list[dict[str, object]],
+        links: list[Link],
     ) -> MentorPublicRead:
         return cls(
             id=str(row["user_id"]),
@@ -543,8 +555,9 @@ class MentorPublicRead(BaseModel):
             primary_study_country_id=_uuid(row.get("primary_study_country_id")),
             origin_country_id=_uuid(row.get("origin_country_id")),
             social_linkedin=_text(row["social_linkedin"]),
-            social_twitter=_text(row["social_twitter"]),
-            social_youtube=_text(row["social_youtube"]),
+            social_twitter=legacy_social(links)["social_twitter"],
+            social_youtube=legacy_social(links)["social_youtube"],
+            links=[PublicLinkRead.of(link) for link in links],
             offerings=[ServiceOfferingRead(**o) for o in offerings],  # type: ignore[arg-type]
             guide_countries=[LookupRef.model_validate(c) for c in guide_countries],
             session_types=[SessionTypeRead.from_row(s) for s in session_types],

@@ -74,6 +74,7 @@ from app.infra.db.session_stats import mentor_stats
 from app.infra.db.session_type_store import (
     list_session_types,
 )
+from app.infra.db.user_links import links_of
 
 # --------------------------------------------------------------------------
 # The public mentor profile
@@ -123,6 +124,9 @@ async def public_mentor(
         "education": await list_education(session, user_id),
         "scholarships": await list_awards(session, user_id),
         "languages": await list_languages(session, user_id),
+        # The same reader as `/me/links`; `get_public_mentor` already decided
+        # this mentor may be shown (decision 275).
+        "links": await links_of(session, user_id, published=True),
         "stats": await mentor_stats(session, user_id),
         "reviews": await mentor_review_stats(session, user_id),
     }

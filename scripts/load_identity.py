@@ -87,11 +87,13 @@ async def load(plan: IdentityPlan) -> int:
             print(
                 f"\nloaded {users_written} users, {counts.profiles} profiles, "
                 f"{counts.languages} languages, {counts.onboarding} onboarding, "
-                f"{counts.identities} identities, {counts.admin_grants} admin grants"
+                f"{counts.identities} identities, {counts.admin_grants} admin grants, "
+                f"{counts.links} links"
             )
             for label, skipped in (
                 ("countries", counts.countries_skipped),
                 ("languages", counts.languages_skipped),
+                ("X or YouTube links (profile ids)", counts.links_skipped),
             ):
                 if skipped:
                     # By name, not by count: the next action is always to decide

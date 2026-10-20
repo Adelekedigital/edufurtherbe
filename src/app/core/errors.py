@@ -32,6 +32,25 @@ class ConflictError(AppError):
     """The request cannot be applied to the current state of the resource."""
 
 
+class LinkPlatformTakenError(ConflictError):
+    """The caller already has a link on this platform; one each, except
+    websites (decision 275). Edit or delete the one they have."""
+
+
+class WebsiteLimitReachedError(ConflictError):
+    """The caller already lists the most websites allowed (decision 275).
+
+    `limit` says how many, so the client need not repeat the number.
+    """
+
+    def __init__(self, message: str = "", *, limit: int) -> None:
+        super().__init__(message)
+        self.limit = limit
+
+    def problem_members(self) -> dict[str, object]:
+        return {"limit": self.limit}
+
+
 class AccountExistsError(ConflictError):
     """A first sign-in's email already belongs to an account it is not linked to.
 

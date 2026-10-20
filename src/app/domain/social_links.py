@@ -39,10 +39,24 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 from enum import StrEnum
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
+from uuid import UUID
 
-__all__ = ["MAX_LENGTH", "SocialNetwork", "canonical_social"]
+from app.domain.enums import LinkPlatform
+
+__all__ = [
+    "LEGACY_LINK_FIELDS",
+    "MAX_LENGTH",
+    "MAX_WEBSITES",
+    "Link",
+    "SocialNetwork",
+    "canonical_social",
+    "handle_of",
+    "owned_link",
+    "stored_link",
+]
 
 #: The longest input considered. The column is `text`; this is the boundary's
 #: bound. It must hold the longest canonical link, which is a 100-character
@@ -50,16 +64,40 @@ __all__ = ["MAX_LENGTH", "SocialNetwork", "canonical_social"]
 #: written and stored would read back as absent.
 MAX_LENGTH = 2048
 
+#: How many websites one person may list (Mentor Settings PRD, decision 275);
+#: every other platform takes one link.
+MAX_WEBSITES = 3
+
+#: The profile field each platform's link stood in for before `user_links`, in
+#: the order the Bubble import places them (decision 275). The one copy: the
+#: writer clears these columns, the loader and the catch-up read them, and the
+#: deprecated response fields are filled from them.
+LEGACY_LINK_FIELDS: dict[LinkPlatform, str] = {
+    LinkPlatform.X: "social_twitter",
+    LinkPlatform.YOUTUBE: "social_youtube",
+}
+
 
 class SocialNetwork(StrEnum):
     LINKEDIN = "linkedin"
     X = "x"
     YOUTUBE = "youtube"
+    INSTAGRAM = "instagram"
+    FACEBOOK = "facebook"
+    TIKTOK = "tiktok"
+    #: Any site of the user's own: an `http(s)` link on a real host name.
+    WEBSITE = "website"
 
 
 _X_HANDLE = re.compile(r"[A-Za-z0-9_]{1,15}", re.ASCII)
 _YOUTUBE_HANDLE = re.compile(r"[A-Za-z0-9_.-]{3,30}", re.ASCII)
 _YOUTUBE_CHANNEL = re.compile(r"UC[A-Za-z0-9_-]{22}", re.ASCII)
+_INSTAGRAM_HANDLE = re.compile(r"[A-Za-z0-9._]{1,30}", re.ASCII)
+_FACEBOOK_NAME = re.compile(r"[A-Za-z0-9.]{5,50}", re.ASCII)
+_FACEBOOK_ID = re.compile(r"[0-9]{1,20}", re.ASCII)
+_TIKTOK_HANDLE = re.compile(r"[A-Za-z0-9._]{2,24}", re.ASCII)
+#: A host name of DNS labels with at least one dot, after IDNA encoding.
+_WEB_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}", re.ASCII)
 #: LinkedIn's country subdomains (`ng.linkedin.com`) are two letters.
 _LINKEDIN_HOST = re.compile(r"(?:(?:www|m|[a-z]{2})\.)?linkedin\.com", re.ASCII)
 
@@ -75,6 +113,11 @@ _HOSTS = {
         }
     ),
     SocialNetwork.YOUTUBE: frozenset({"youtube.com", "www.youtube.com", "m.youtube.com"}),
+    SocialNetwork.INSTAGRAM: frozenset({"instagram.com", "www.instagram.com", "m.instagram.com"}),
+    SocialNetwork.FACEBOOK: frozenset(
+        {"facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com"}
+    ),
+    SocialNetwork.TIKTOK: frozenset({"tiktok.com", "www.tiktok.com", "m.tiktok.com"}),
 }
 
 #: X paths that fit the handle charset and are not profiles.
@@ -84,6 +127,32 @@ _X_RESERVED = frozenset(
         "notifications", "hashtag", "login", "signup", "tos", "privacy", "compose",
     }
 )  # fmt: skip
+
+#: Instagram and Facebook paths that fit the handle charset and are not profiles.
+_INSTAGRAM_RESERVED = frozenset(
+    {"p", "reel", "reels", "explore", "stories", "accounts", "direct", "tv", "about"}
+)
+_FACEBOOK_RESERVED = frozenset(
+    {"pages", "groups", "events", "watch", "marketplace", "share", "login", "home.php", "people",
+     "profile.php", "permalink.php", "story.php", "photo.php", "gaming", "help", "settings"}
+)  # fmt: skip
+
+#: What each canonical link starts with, so the handle a client shows after its
+#: own prefix is read back out of the stored link (`handle_of`).
+_PREFIXES: dict[SocialNetwork, tuple[str, ...]] = {
+    SocialNetwork.X: ("https://x.com/",),
+    SocialNetwork.YOUTUBE: ("https://www.youtube.com/@", "https://www.youtube.com/"),
+    SocialNetwork.INSTAGRAM: ("https://www.instagram.com/",),
+    SocialNetwork.FACEBOOK: ("https://www.facebook.com/",),
+    SocialNetwork.TIKTOK: ("https://www.tiktok.com/@",),
+    SocialNetwork.WEBSITE: ("https://",),
+    SocialNetwork.LINKEDIN: ("https://www.linkedin.com/in/", "https://www.linkedin.com/"),
+}
+
+#: What a website's path and query may carry unescaped; anything else is
+#: percent-encoded, so nothing typed is echoed raw.
+_PATH_SAFE = "/%:@!$&'()*+,;=-._~"
+_QUERY_SAFE = _PATH_SAFE + "?"
 
 _SCHEME = re.compile(r"https?://", re.IGNORECASE | re.ASCII)
 
@@ -131,9 +200,49 @@ def canonical_social(network: SocialNetwork, value: str | None) -> str | None:
 
     # A scheme or a path means a link; anything else is a handle, and must then
     # match its network's own character set.
+    if network is SocialNetwork.WEBSITE:
+        return _website(text)
     if _SCHEME.match(text) or "/" in text:
         return _from_url(network, text)
     return _from_handle(network, text.removeprefix("@"))
+
+
+def handle_of(network: SocialNetwork, url: str) -> str:
+    """What follows the client's prefix in a canonical link: the handle, or for
+    a website the address without `https://`. Read back out of the stored link,
+    so the two can never disagree."""
+    for prefix in _PREFIXES[network]:
+        if url.startswith(prefix):
+            return url[len(prefix) :]
+    return url
+
+
+def _website(text: str) -> str | None:
+    """`https://` plus a real host name, keeping the path and query.
+
+    Only `http` and `https`, typed or implied; the link is always published as
+    `https`, which is what the client shows. Userinfo and ports are refused as
+    for every other network, and the host must be DNS labels with a dot, so
+    `javascript:`, `localhost` and a bare word all fail. The fragment is dropped.
+    """
+    if not _SCHEME.match(text):
+        # A scheme of any other kind (`javascript:`, `mailto:`) is a colon in
+        # the authority, which ends at the first `/`, `?` or `#`.
+        if ":" in re.split(r"[/?#]", text, maxsplit=1)[0]:
+            return None
+        text = f"https://{text}"
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+        host = (parts.hostname or "").rstrip(".").encode("idna").decode("ascii")
+    except ValueError, UnicodeError:
+        return None
+    if "@" in parts.netloc or port is not None or not _WEB_HOST.fullmatch(host):
+        return None
+    path = quote(parts.path, safe=_PATH_SAFE)
+    query = f"?{quote(parts.query, safe=_QUERY_SAFE)}" if parts.query else ""
+    link = f"https://{host}{path}{query}"
+    return link if len(link) <= MAX_LENGTH else None
 
 
 def _from_handle(network: SocialNetwork, handle: str) -> str | None:
@@ -144,6 +253,26 @@ def _from_handle(network: SocialNetwork, handle: str) -> str | None:
     if network is SocialNetwork.LINKEDIN:
         slug = _linkedin_slug(handle)
         return f"https://www.linkedin.com/in/{slug}" if slug else None
+    if network is SocialNetwork.INSTAGRAM:
+        if (
+            _INSTAGRAM_HANDLE.fullmatch(handle)
+            and handle.lower() not in _INSTAGRAM_RESERVED
+            and not handle.startswith(".")
+            and not handle.endswith(".")
+        ):
+            return f"https://www.instagram.com/{handle}"
+        return None
+    if network is SocialNetwork.FACEBOOK:
+        if handle.startswith("profile.php?"):
+            # The value a client shows for a profile with no username.
+            return _from_url(network, f"https://www.facebook.com/{handle}")
+        if _FACEBOOK_NAME.fullmatch(handle) and handle.lower() not in _FACEBOOK_RESERVED:
+            return f"https://www.facebook.com/{handle}"
+        return None
+    if network is SocialNetwork.TIKTOK:
+        if _TIKTOK_HANDLE.fullmatch(handle) and not handle.endswith("."):
+            return f"https://www.tiktok.com/@{handle}"
+        return None
     if _YOUTUBE_HANDLE.fullmatch(handle):
         return f"https://www.youtube.com/@{handle}"
     return None
@@ -175,11 +304,71 @@ def _from_url(network: SocialNetwork, text: str) -> str | None:
 
     if host not in _HOSTS[network] or not segments:
         return None
-    if network is SocialNetwork.X:
+    if network in (SocialNetwork.X, SocialNetwork.INSTAGRAM):
         return _from_handle(network, segments[0])
+    if network is SocialNetwork.FACEBOOK:
+        # `profile.php?id=…` is how Facebook links a profile with no username.
+        # `/people/<Name>/<id>` is the same profile, by id.
+        if segments[0] == "people":
+            if len(segments) >= 3 and _FACEBOOK_ID.fullmatch(segments[2]):
+                return f"https://www.facebook.com/profile.php?id={segments[2]}"
+            return None
+        if segments[0] == "profile.php":
+            ids = parse_qs(parts.query).get("id", [])
+            if len(ids) == 1 and _FACEBOOK_ID.fullmatch(ids[0]):
+                return f"https://www.facebook.com/profile.php?id={ids[0]}"
+            return None
+        return _from_handle(network, segments[0])
+    if network is SocialNetwork.TIKTOK:
+        first = segments[0]
+        return _from_handle(network, first[1:]) if first.startswith("@") else None
     first = segments[0]
     if first.startswith("@"):
         return _from_handle(network, first[1:])
     if first == "channel" and len(segments) > 1 and _YOUTUBE_CHANNEL.fullmatch(segments[1]):
         return f"https://www.youtube.com/channel/{segments[1]}"
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class Link:
+    """One `user_links` row as every reader publishes it: the canonical `url`,
+    and the `value` a client shows after its own prefix, read back out of it."""
+
+    id: UUID
+    platform: str
+    url: str
+    value: str
+    position: int
+
+
+def stored_link(link_id: UUID, platform: str, url: str, position: int) -> Link | None:
+    """A stored row through the read rule (#182): one it cannot read is absent."""
+    network = SocialNetwork(platform)
+    canonical = canonical_social(network, url)
+    if canonical is None:
+        return None
+    return Link(
+        id=link_id,
+        platform=platform,
+        url=canonical,
+        value=handle_of(network, canonical),
+        position=position,
+    )
+
+
+def owned_link(link_id: UUID, platform: str, url: str, position: int) -> Link:
+    """A stored row as its owner sees it: canonical where the rule reads it, and
+    as stored where it no longer does, so the owner can still see and delete a
+    link that holds a platform's slot. Never published to anyone else (#182);
+    the column's `CHECK` keeps it an `https://` link either way."""
+    link = stored_link(link_id, platform, url, position)
+    if link is not None:
+        return link
+    return Link(
+        id=link_id,
+        platform=platform,
+        url=url,
+        value=handle_of(SocialNetwork(platform), url),
+        position=position,
+    )

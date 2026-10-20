@@ -20,17 +20,16 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.resolve import Resolution
+from app.domain.social_links import LEGACY_LINK_FIELDS, SocialNetwork, canonical_social
 from app.domain.transform import AdminGrantRow, IdentityRow, OnboardingRow, ProfileRow
 
 UPSERT_PROFILE = """
 INSERT INTO user_profiles (
     user_id, legacy_bubble_id, created_at, updated_at, avatar_url, banner_url,
-    about_me, gender, origin_country_id, social_linkedin, social_twitter,
-    social_youtube, email_provider_contact_id
+    about_me, gender, origin_country_id, social_linkedin, email_provider_contact_id
 ) VALUES (
     :user_id, :legacy_bubble_id, :created_at, :updated_at, :avatar_url, :banner_url,
-    :about_me, :gender, :origin_country_id, :social_linkedin, :social_twitter,
-    :social_youtube, :email_provider_contact_id
+    :about_me, :gender, :origin_country_id, :social_linkedin, :email_provider_contact_id
 )
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     user_id                   = EXCLUDED.user_id,
@@ -47,8 +46,6 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     gender                    = EXCLUDED.gender,
     origin_country_id         = EXCLUDED.origin_country_id,
     social_linkedin           = EXCLUDED.social_linkedin,
-    social_twitter            = EXCLUDED.social_twitter,
-    social_youtube            = EXCLUDED.social_youtube,
     email_provider_contact_id = EXCLUDED.email_provider_contact_id
 """
 
@@ -60,6 +57,23 @@ INSERT INTO user_languages (user_id, language_id, is_primary)
 VALUES (:user_id, :language_id, false)
 ON CONFLICT (user_id, language_id) DO NOTHING
 """
+
+# X and YouTube go to `user_links`, not their old columns (decision 275), keyed
+# on the partial one-per-platform index so a re-run updates rather than adds.
+# Only a link the source carries is written; one it lacks is left alone, so a
+# re-run never deletes a link somebody added since.
+UPSERT_LINK = """
+INSERT INTO user_links (user_id, platform, url, position)
+VALUES (:user_id, :platform, :url, :position)
+ON CONFLICT (user_id, platform) WHERE platform <> 'website' DO UPDATE SET
+    url = EXCLUDED.url
+"""
+
+#: Each Bubble field, the platform it becomes, and where it lands in the order.
+_LINK_SOURCES = tuple(
+    (field, SocialNetwork(platform.value), position)
+    for position, (platform, field) in enumerate(LEGACY_LINK_FIELDS.items())
+)
 
 UPSERT_ONBOARDING = """
 INSERT INTO user_onboarding (user_id, last_step, completed_at)
@@ -105,6 +119,10 @@ class SatelliteCounts:
     admin_grants: int = 0
     languages_skipped: tuple[str, ...] = ()
     countries_skipped: tuple[str, ...] = ()
+    links: int = 0
+    #: The profiles (by Bubble id) whose X or YouTube value is not a link the
+    #: rule can read: skipped, and named so somebody can look.
+    links_skipped: tuple[str, ...] = ()
 
 
 async def user_id_map(connection: AsyncConnection) -> dict[str, UUID]:
@@ -142,6 +160,8 @@ class SatelliteLoader:
         language_count = 0
         skipped_languages: set[str] = set()
         skipped_countries: set[str] = set()
+        skipped_links: set[str] = set()
+        link_count = 0
 
         for profile in profiles:
             user_id = users.get(profile.user_bubble_id)
@@ -178,12 +198,29 @@ class SatelliteLoader:
                     "gender": profile.gender,
                     "origin_country_id": country_id,
                     "social_linkedin": profile.social_linkedin,
-                    "social_twitter": profile.social_twitter,
-                    "social_youtube": profile.social_youtube,
                     "email_provider_contact_id": profile.email_provider_contact_id,
                 },
             )
             profile_count += 1
+
+            for field, network, position in _LINK_SOURCES:
+                raw = getattr(profile, field)
+                if raw is None:
+                    continue
+                url = canonical_social(network, raw)
+                if url is None:
+                    skipped_links.add(profile.legacy_bubble_id)
+                    continue
+                await self._connection.execute(
+                    text(UPSERT_LINK),
+                    {
+                        "user_id": user_id,
+                        "platform": network.value,
+                        "url": url,
+                        "position": position,
+                    },
+                )
+                link_count += 1
 
             for name in profile.language_names:
                 if name not in languages:
@@ -235,6 +272,8 @@ class SatelliteLoader:
             admin_grants=admin_count,
             languages_skipped=tuple(sorted(skipped_languages)),
             countries_skipped=tuple(sorted(skipped_countries)),
+            links=link_count,
+            links_skipped=tuple(sorted(skipped_links)),
         )
 
 

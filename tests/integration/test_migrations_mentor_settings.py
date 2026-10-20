@@ -441,3 +441,50 @@ def test_the_guides_downgrade_refuses_while_a_mentor_named_one(
     command.downgrade(config, LINKS)
     assert scalar(disposable_database, "SELECT to_regclass('mentor_guide_countries')") is None
     command.upgrade(config, GUIDES)
+
+
+# --- The catch-up copy (c1e5a8d3f027) ---------------------------------------
+
+CATCH_UP = "c1e5a8d3f027"
+
+
+def test_the_catch_up_copies_what_the_columns_gained_since_the_first_copy(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """A value written after the first copy arrives, and a column edited since
+    replaces its first copy: only the old writer can have left it there. A link
+    the new writer handled had its column cleared, so it is left alone."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, BEFORE)
+    _person(disposable_database, "edited@example.test", "https://x.com/old", None)
+    command.upgrade(config, GUIDES)
+    _person(disposable_database, "late@example.test", "twitter.com/late", "not a link")
+    execute(
+        disposable_database,
+        "UPDATE user_profiles p SET social_twitter = 'https://x.com/new' FROM users u "
+        "WHERE u.id = p.user_id AND u.email = 'edited@example.test'",
+    )
+    _person(disposable_database, "settings@example.test", None, None)
+    _link(disposable_database, "settings@example.test", "x", "https://x.com/kept")
+
+    command.upgrade(config, CATCH_UP)
+
+    assert _links_of(disposable_database, "late@example.test") == [("x", "https://x.com/late", 0)]
+    assert _links_of(disposable_database, "edited@example.test") == [("x", "https://x.com/new", 0)]
+    assert _links_of(disposable_database, "settings@example.test") == [
+        ("x", "https://x.com/kept", 0)
+    ]
+
+
+def test_the_catch_up_is_safe_to_run_twice(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, GUIDES)
+    _person(disposable_database, "twice@example.test", "@ada", "@ada")
+    command.upgrade(config, CATCH_UP)
+    command.downgrade(config, GUIDES)
+
+    command.upgrade(config, CATCH_UP)
+
+    assert scalar(disposable_database, "SELECT count(*) FROM user_links") == 2
