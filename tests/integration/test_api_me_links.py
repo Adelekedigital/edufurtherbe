@@ -288,7 +288,7 @@ async def test_a_website_leaves_both_old_columns_alone(
     )
 
 
-# --- The legacy profile fields -----------------------------------------------
+# --- The removed profile fields (#505) ---------------------------------------
 
 
 async def test_the_old_x_and_youtube_fields_are_gone(

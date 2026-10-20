@@ -472,8 +472,6 @@ def _published_link(network: SocialNetwork) -> Any:
 
 _REFUSAL = {
     SocialNetwork.LINKEDIN: "not a LinkedIn profile: give a handle or a linkedin.com/in/ link",
-    SocialNetwork.X: "not an X profile: give a handle or an x.com link",
-    SocialNetwork.YOUTUBE: "not a YouTube channel: give a @handle or a youtube.com link",
 }
 
 

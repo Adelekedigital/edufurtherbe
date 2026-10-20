@@ -117,9 +117,11 @@ async def test_an_empty_value_still_clears_the_link(
     auth_id = uuid4()
     user_id = await make_user(db_engine, auth_id, "social-clear@example.com")
     headers = bearer(api_token(auth_id))
-    await api_client.patch(
+    stored_first = await api_client.patch(
         url(user_id, "profile"), json={"social_linkedin": "ada-lovelace"}, headers=headers
     )
+    assert stored_first.status_code == 204, stored_first.text
+    assert (await stored(db_engine, user_id))["social_linkedin"] is not None
 
     response = await api_client.patch(
         url(user_id, "profile"), json={"social_linkedin": ""}, headers=headers

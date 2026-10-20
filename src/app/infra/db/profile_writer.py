@@ -104,9 +104,6 @@ PROFILE_COLUMNS = (
     "cover_art",
     "social_linkedin",
 )
-#: The profile write's legacy link fields (decision 275): kept for one release
-#: so a client still sending them works, written through `user_links` rather
-#: than the columns they are named after.
 
 
 def _sent(payload: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
