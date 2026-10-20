@@ -30,8 +30,6 @@ from app.api.schemas.common import (
     AvatarFocusWrite,
     LinkedInWrite,
     Normalised,
-    XWrite,
-    YouTubeWrite,
     publish_window_minimum,
     refuse_repeats,
 )
@@ -890,20 +888,6 @@ class UserProfileWrite(Normalised):
         description=(
             "`ada-lovelace` or a linkedin.com/in/ (or /company/) link, stored as "
             "`https://www.linkedin.com/in/ada-lovelace`. Anything else is a `422`."
-        ),
-    )
-    social_twitter: XWrite = Field(
-        default=None,
-        description=(
-            "`@ada` or an x.com / twitter.com link, stored as `https://x.com/ada`. "
-            "Anything else is a `422`."
-        ),
-    )
-    social_youtube: YouTubeWrite = Field(
-        default=None,
-        description=(
-            "`@ada` or a youtube.com/@ or /channel/ link, stored as "
-            "`https://www.youtube.com/@ada`. Anything else is a `422`."
         ),
     )
 

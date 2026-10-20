@@ -9,9 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.schemas.common import Normalised
 from app.domain.enums import LinkPlatform
-from app.domain.social_links import LEGACY_LINK_FIELDS, MAX_LENGTH, Link
+from app.domain.social_links import MAX_LENGTH, Link
 
-__all__ = ["LinkCreate", "LinkPatch", "LinkRead", "PublicLinkRead", "legacy_social"]
+__all__ = ["LinkCreate", "LinkPatch", "LinkRead", "PublicLinkRead"]
 
 _VALUE = (
     "The handle, as typed after the platform's prefix (`ada` for X, `ada.l` for "
@@ -69,10 +69,3 @@ class PublicLinkRead(BaseModel):
     @classmethod
     def of(cls, link: Link) -> Self:
         return cls(platform=LinkPlatform(link.platform), url=link.url)
-
-
-def legacy_social(links: list[Link]) -> dict[str, str | None]:
-    """`social_twitter` and `social_youtube` for one release, read from the links
-    rather than the columns, so the old fields and `links` never disagree."""
-    found = {LinkPlatform(link.platform): link.url for link in links}
-    return {field: found.get(platform) for platform, field in LEGACY_LINK_FIELDS.items()}

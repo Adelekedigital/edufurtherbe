@@ -9,7 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.schemas.catalogue import CountryRef
-from app.api.schemas.common import AvatarFocusRead, LinkedInRead, StoredEmail, XRead, YouTubeRead
+from app.api.schemas.common import AvatarFocusRead, LinkedInRead, StoredEmail
 from app.api.schemas.links import LinkRead
 from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
@@ -62,10 +62,6 @@ class UserProfileRead(BaseModel):
     cover_art: CoverArt = CoverArt.NONE
     #: Canonical `https://` links or `null` — render them, never parse them (#182).
     social_linkedin: LinkedInRead = None
-    #: **Deprecated, kept for one release**: your X and YouTube entries in
-    #: `links`, so an older client keeps working. Read `links` instead.
-    social_twitter: XRead = None
-    social_youtube: YouTubeRead = None
     #: `UserProfileRead` is served on `/me` and nowhere else, so a mentee's
     #: origin never reaches another person (PRD). A mentor's origin is public
     #: anyway, as a name on their profile and card.

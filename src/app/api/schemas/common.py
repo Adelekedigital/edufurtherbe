@@ -472,8 +472,6 @@ def _published_link(network: SocialNetwork) -> Any:
 
 _REFUSAL = {
     SocialNetwork.LINKEDIN: "not a LinkedIn profile: give a handle or a linkedin.com/in/ link",
-    SocialNetwork.X: "not an X profile: give a handle or an x.com link",
-    SocialNetwork.YOUTUBE: "not a YouTube channel: give a @handle or a youtube.com link",
 }
 
 
@@ -494,19 +492,11 @@ def _written_link(network: SocialNetwork) -> Any:
 LinkedInWrite = Annotated[
     str | None, Field(max_length=MAX_LENGTH), AfterValidator(_written_link(SocialNetwork.LINKEDIN))
 ]
-XWrite = Annotated[
-    str | None, Field(max_length=MAX_LENGTH), AfterValidator(_written_link(SocialNetwork.X))
-]
-YouTubeWrite = Annotated[
-    str | None, Field(max_length=MAX_LENGTH), AfterValidator(_written_link(SocialNetwork.YOUTUBE))
-]
 
 #: A social link as published: **always canonical or `null`**. The same rule
 #: the write applies, run again on the way out, so a legacy value stored before
 #: the rule existed is never published in a shape the client must parse.
 LinkedInRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.LINKEDIN))]
-XRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.X))]
-YouTubeRead = Annotated[str | None, BeforeValidator(_published_link(SocialNetwork.YOUTUBE))]
 
 
 def publish_window_minimum(schema: dict[str, Any]) -> None:

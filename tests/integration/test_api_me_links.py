@@ -288,48 +288,30 @@ async def test_a_website_leaves_both_old_columns_alone(
     )
 
 
-# --- The legacy profile fields -----------------------------------------------
+# --- The removed profile fields (#505) ---------------------------------------
 
 
-async def test_the_profile_patchs_x_field_writes_the_link(
+async def test_the_old_x_and_youtube_fields_are_gone(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    user_id, headers = await a_user(db_engine, "legacy")
-
-    await api_client.patch(
-        url(user_id, "profile"), json={"social_twitter": "@ada"}, headers=headers
-    )
-    added = (await api_client.get(LINKS, headers=headers)).json()["data"]
-    await api_client.patch(url(user_id, "profile"), json={"social_twitter": "bo"}, headers=headers)
-    changed = (await api_client.get(LINKS, headers=headers)).json()["data"]
-    await api_client.patch(url(user_id, "profile"), json={"social_twitter": None}, headers=headers)
-    cleared = (await api_client.get(LINKS, headers=headers)).json()["data"]
-
-    assert [(k["platform"], k["url"]) for k in added] == [("x", "https://x.com/ada")]
-    assert [(k["id"], k["url"]) for k in changed] == [(added[0]["id"], "https://x.com/bo")]
-    assert cleared == []
-
-
-async def test_a_link_only_profile_patch_still_starts_a_profile(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """As before this release, so an older client reading `profile.social_*`
-    sees the link it saved."""
-    user_id, headers = await a_user(db_engine, "no-profile")
+    """#505: links are `links` only. Sent to the profile PATCH, the old fields
+    are ignored like any unknown field; no read carries them."""
+    user_id, headers = await a_user(db_engine, "legacy-gone")
+    await api_client.patch(url(user_id, "profile"), json={"about_me": "Hi."}, headers=headers)
 
     response = await api_client.patch(
-        url(user_id, "profile"), json={"social_youtube": "@ada"}, headers=headers
+        url(user_id, "profile"),
+        json={"social_twitter": "@ada", "social_youtube": "@ada"},
+        headers=headers,
     )
-
-    assert response.status_code == 204
     me = (await api_client.get("/api/v1/me", headers=headers)).json()
-    assert me["profile"]["social_youtube"] == "https://www.youtube.com/@ada"
-    assert [link["platform"] for link in me["links"]] == ["youtube"]
+
+    assert response.status_code == 204, response.text
+    assert me["links"] == []
+    assert not {"social_twitter", "social_youtube"} & me["profile"].keys()
 
 
-async def test_me_and_its_legacy_fields_read_the_links(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
+async def test_me_reads_the_links(api_client: httpx.AsyncClient, db_engine: AsyncEngine) -> None:
     user_id, headers = await a_user(db_engine, "me")
     await api_client.patch(url(user_id, "profile"), json={"about_me": "Hi."}, headers=headers)
     await add(api_client, headers, "youtube", "@ada")
@@ -350,8 +332,6 @@ async def test_me_and_its_legacy_fields_read_the_links(
         ("instagram", "ada.l"),
     ]
     assert me["links"] == (await api_client.get(LINKS, headers=headers)).json()["data"]
-    assert me["profile"]["social_youtube"] == "https://www.youtube.com/@ada"
-    assert me["profile"]["social_twitter"] is None
 
 
 async def test_the_public_profile_shows_platform_and_url_only(
@@ -368,8 +348,7 @@ async def test_the_public_profile_shows_platform_and_url_only(
         {"platform": "x", "url": "https://x.com/ada"},
         {"platform": "website", "url": "https://ada.dev"},
     ]
-    assert body["social_twitter"] == "https://x.com/ada"
-    assert body["social_youtube"] is None
+    assert not {"social_twitter", "social_youtube"} & body.keys()
 
 
 async def test_a_link_the_rule_no_longer_reads_stays_the_owners_to_delete(
@@ -394,6 +373,5 @@ async def test_a_link_the_rule_no_longer_reads_stays_the_owners_to_delete(
 
     assert [(k["platform"], k["url"]) for k in own] == [("x", "https://evil.example/ada")]
     assert public["links"] == []
-    assert public["social_twitter"] is None
     assert deleted.status_code == 204
     assert (await add(api_client, headers, "x", "ada")).status_code == 201
