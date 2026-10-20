@@ -25,8 +25,13 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import MentorApplicationInReviewError
-from app.domain.mentor_application import FROZEN_FIELDS, FrozenRecord, frozen_changes
+from app.core.errors import MentorApplicationDeclinedError, MentorApplicationInReviewError
+from app.domain.mentor_application import (
+    BOOKING_RULE_FIELDS,
+    FROZEN_FIELDS,
+    FrozenRecord,
+    frozen_changes,
+)
 from app.infra.db.mentor_status_store import lock_mentor
 from app.infra.db.models.mentoring import (
     MentorGuideCountry,
@@ -36,7 +41,7 @@ from app.infra.db.models.mentoring import (
 )
 from app.infra.db.models.user import UserProfile
 from app.infra.db.offerings import live_offering
-from app.infra.db.predicates import application_in_review
+from app.infra.db.predicates import application_declined, application_in_review
 from app.infra.db.profile_writer import held_languages, resolved_languages
 
 __all__ = ["language_rows_unless_frozen", "refuse_frozen_changes", "refuse_while_in_review"]
@@ -178,3 +183,29 @@ async def refuse_while_in_review(
     """Refuse every write to `record`: each one changes what is being reviewed."""
     if await _under_review(session, user_id):
         raise _refusal((record.value,))
+
+
+async def refuse_while_declined(
+    session: AsyncSession, user_id: UUID, fields: tuple[str, ...] = ()
+) -> None:
+    """Refuse a write to a declined mentor's booking setup (owner, 2026-10-20).
+
+    No lock: a decision racing the write only moves which side of it the write
+    lands, and either side is harmless.
+    """
+    declined = await session.scalar(
+        select(MentorProfile.id).where(MentorProfile.user_id == user_id, *application_declined())
+    )
+    if declined is not None:
+        raise MentorApplicationDeclinedError(
+            "Your application was declined, so your booking setup can't change.", fields=fields
+        )
+
+
+async def refuse_declined_booking_rules(
+    session: AsyncSession, user_id: UUID, sent: Mapping[str, Any]
+) -> None:
+    """Refuse a mentor-profile write that sends a booking rule while declined.
+    A write sending none is not checked; the rest of the profile stays editable."""
+    if fields := tuple(sorted(BOOKING_RULE_FIELDS & sent.keys())):
+        await refuse_while_declined(session, user_id, fields)

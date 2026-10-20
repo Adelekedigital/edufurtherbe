@@ -20,6 +20,7 @@ from typing import Any
 from app.domain.avatar_focus import PLACES
 
 __all__ = [
+    "BOOKING_RULE_FIELDS",
     "FROZEN_FIELDS",
     "ApplicationEvidence",
     "FrozenRecord",
@@ -102,6 +103,19 @@ class FrozenRecord(StrEnum):
     EDUCATION = "education"
     AWARDS = "awards"
 
+
+#: The mentor-profile fields that set how a mentor is booked. Locked, with
+#: sessions, hours and the calendar, while an application is declined (owner,
+#: 2026-10-20): harmless, but noise on a profile nobody can book.
+BOOKING_RULE_FIELDS = frozenset(
+    {
+        "requires_booking_confirmation",
+        "booking_window_days",
+        "break_after_minutes",
+        "default_duration_minutes",
+        "default_min_notice_minutes",
+    }
+)
 
 #: Request field -> the field a refusal names. The reviewer judges these, so they
 #: hold still from submit to decision (decision 273, amended 2026-10-19). The

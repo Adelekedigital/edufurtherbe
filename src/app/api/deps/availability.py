@@ -25,6 +25,7 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
+from app.infra.db.application_freeze import refuse_while_declined
 from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.availability_writer import (
     create_exception,
@@ -75,6 +76,7 @@ async def target_availability_exceptions(
 async def created_availability_rule(
     payload: AvailabilityRuleWrite, user_id: OwnerDep, session: SessionDep
 ) -> UUID:
+    await refuse_while_declined(session, user_id)
     rule_id = await create_rule(session, user_id, payload.model_dump())
     await session.commit()
     return rule_id
@@ -83,12 +85,14 @@ async def created_availability_rule(
 async def updated_availability_rule(
     rule_id: UUID, payload: AvailabilityRulePatch, user_id: OwnerDep, session: SessionDep
 ) -> bool:
+    await refuse_while_declined(session, user_id)
     changed = await update_rule(session, user_id, rule_id, payload.model_dump(exclude_unset=True))
     await session.commit()
     return changed
 
 
 async def deleted_availability_rule(rule_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
+    await refuse_while_declined(session, user_id)
     removed = await delete_rule(session, user_id, rule_id)
     await session.commit()
     return removed
@@ -97,6 +101,7 @@ async def deleted_availability_rule(rule_id: UUID, user_id: OwnerDep, session: S
 async def created_availability_exception(
     payload: AvailabilityExceptionWrite, user_id: OwnerDep, session: SessionDep
 ) -> UUID:
+    await refuse_while_declined(session, user_id)
     exception_id = await create_exception(session, user_id, payload.model_dump())
     await session.commit()
     return exception_id
@@ -105,6 +110,7 @@ async def created_availability_exception(
 async def deleted_availability_exception(
     exception_id: UUID, user_id: OwnerDep, session: SessionDep
 ) -> bool:
+    await refuse_while_declined(session, user_id)
     removed = await delete_exception(session, user_id, exception_id)
     await session.commit()
     return removed

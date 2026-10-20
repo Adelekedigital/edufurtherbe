@@ -33,6 +33,7 @@ from app.api.deps import (
     DisconnectedCalendarDep,
     OwnCalendarDep,
 )
+from app.api.errors import with_declined
 from app.api.schemas.availability import (
     CalendarConnectedRead,
     CalendarConnectionRead,
@@ -95,7 +96,7 @@ async def read_own_calendar(connection: OwnCalendarDep) -> CalendarConnectionRea
         "Connecting again replaces the existing grant, which is how a mentor "
         "switches Google accounts."
     ),
-    responses=OWNER_RESPONSES | UNCONFIGURED,
+    responses=with_declined(OWNER_RESPONSES | UNCONFIGURED),
 )
 async def start_connecting(url: CalendarConsentDep) -> CalendarConsentRead:
     return CalendarConsentRead(consent_url=url)
@@ -157,7 +158,7 @@ callback_router = APIRouter(prefix="/api/v1/callbacks", tags=["callbacks"])
         "connection that works for an hour and then stops with nothing saying "
         "why."
     ),
-    responses=UNCONFIGURED
+    responses=with_declined(UNCONFIGURED)
     | {
         status.HTTP_401_UNAUTHORIZED: {
             "description": "The `state` is absent, expired, tampered with, or not ours."

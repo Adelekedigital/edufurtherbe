@@ -40,6 +40,7 @@ from app.core.errors import (
     JoinWindowClosedError,
     LinkPlatformTakenError,
     MentorApplicationDecidedError,
+    MentorApplicationDeclinedError,
     MentorApplicationIncompleteError,
     MentorApplicationInReviewError,
     NotFoundError,
@@ -95,6 +96,26 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
 # where transport concerns live — `core/errors.py` names conditions and knows
 # nothing about problem documents, the same split that keeps `domain/` testable
 # without a request.
+#: The `409` a declined mentor's booking-setup write answers (owner, 2026-10-20).
+DECLINED_CONFLICT = (
+    "`/problems/mentor-application-declined`: your mentor application was "
+    "declined, so your booking setup is read-only: session types with their "
+    "windows and questions, hours, calendar connect, conferencing and the "
+    "booking rules. Your profile stays editable. `fields` names the booking "
+    "rules a mentor-profile write sent."
+)
+
+
+def with_declined(
+    responses: dict[int | str, dict[str, str]],
+) -> dict[int | str, dict[str, str]]:
+    """`responses` documenting the declined `409` too, beside any `409` they
+    already describe rather than over it."""
+    held = responses.get(status.HTTP_409_CONFLICT, {}).get("description")
+    text = f"{held}\n\n{DECLINED_CONFLICT}" if held else DECLINED_CONFLICT
+    return responses | {status.HTTP_409_CONFLICT: {"description": text}}
+
+
 TYPE_BY_ERROR: dict[type[AppError], str] = {
     AccountExistsError: "/problems/account-exists",
     InviteForNewAccountsError: "/problems/invite-for-new-accounts",
@@ -104,6 +125,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     MentorApplicationIncompleteError: "/problems/mentor-application-incomplete",
     MentorApplicationDecidedError: "/problems/mentor-application-decided",
     MentorApplicationInReviewError: "/problems/mentor-application-in-review",
+    MentorApplicationDeclinedError: "/problems/mentor-application-declined",
     LinkPlatformTakenError: "/problems/link-platform-taken",
     WebsiteLimitReachedError: "/problems/website-limit-reached",
     AlreadyReviewedError: "/problems/review-already-exists",

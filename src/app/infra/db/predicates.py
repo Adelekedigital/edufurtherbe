@@ -57,6 +57,15 @@ def application_in_review() -> list[Any]:
     ]
 
 
+def application_declined() -> list[Any]:
+    """A mentor application that was declined, on a live profile: its booking
+    setup is locked (owner, 2026-10-20)."""
+    return [
+        MentorProfile.approval_status == ApprovalStatus.DECLINED,
+        MentorProfile.deleted_at.is_(None),
+    ]
+
+
 def blank(column: Any) -> Any:
     """Null, empty or only whitespace: the one definition of an unwritten text
     field (the bio draft and the mentor application both read it)."""

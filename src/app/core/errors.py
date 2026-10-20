@@ -140,6 +140,22 @@ class MentorApplicationInReviewError(ConflictError):
         return {"fields": list(self.fields)}
 
 
+class MentorApplicationDeclinedError(ConflictError):
+    """A declined mentor's booking setup is locked (owner, 2026-10-20).
+
+    Session types, hours, the calendar, conferencing and the booking rules can
+    be read but not changed; the profile stays editable. `fields` names the
+    booking rules a mentor-profile write sent, and is empty elsewhere.
+    """
+
+    def __init__(self, message: str = "", *, fields: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.fields = fields
+
+    def problem_members(self) -> dict[str, object]:
+        return {"fields": list(self.fields)}
+
+
 class MentorApplicationDecidedError(ConflictError):
     """The application was already approved or declined, so there is nothing to
     submit. A type of its own: the client shows the outcome, not the form."""

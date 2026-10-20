@@ -24,6 +24,7 @@ from app.infra.clients.meetings import (
     require_calendar_scope,
 )
 from app.infra.clients.secrets import SealError, seal, sealed_value, unsealed_value
+from app.infra.db.application_freeze import refuse_while_declined
 from app.infra.db.calendar_store import (
     active_connection,
     connect,
@@ -137,7 +138,7 @@ def _token_exchange(request: Request) -> Any:
     return getattr(request.app.state, "calendar_exchange", None) or exchange_code
 
 
-async def calendar_consent_url(request: Request, user: CurrentUserDep) -> str:
+async def calendar_consent_url(request: Request, user: CurrentUserDep, session: SessionDep) -> str:
     """Where to send this mentor to grant free/busy access.
 
     **The `state` carries the mentor and is sealed**, which is the whole CSRF
@@ -147,6 +148,7 @@ async def calendar_consent_url(request: Request, user: CurrentUserDep) -> str:
     TTL makes a captured URL useless by the time anybody finds it.
     """
     client_id, _, redirect_uri, key = _calendar_oauth(request)
+    await refuse_while_declined(session, user["id"])
     state = sealed_value({"user_id": str(user["id"])}, key=key)
     return consent_url(client_id=client_id, redirect_uri=redirect_uri, state=state)
 
@@ -173,6 +175,8 @@ async def calendar_connected(
     except SealError as exc:
         raise AuthenticationError(str(exc)) from exc
     user_id = UUID(str(opened["user_id"]))
+    # Before the code is exchanged: a consent started before a decline stores nothing.
+    await refuse_while_declined(session, user_id)
 
     # Off the event loop (#370), like every outbound call on an async path.
     tokens = await asyncio.to_thread(
@@ -257,6 +261,7 @@ async def updated_conferencing(
     payload: ConferencingWrite, user: CurrentUserDep, session: SessionDep
 ) -> dict[str, Any]:
     """Make the caller's choice their default and return it as saved."""
+    await refuse_while_declined(session, user["id"])
     if not await set_default_option(session, user["id"], payload.provider, payload.custom_url):
         raise NotFoundError("this user has no mentor profile")
     await session.commit()
