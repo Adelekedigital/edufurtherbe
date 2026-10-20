@@ -17,7 +17,7 @@ from app.main import create_app
 ADDED = {
     "PartyRead": ("in_room_at", "degree", "institution"),
     "SessionRead": ("mentee_attendance_sessions", "refund_until"),
-    "UserRead": ("mentee_cancel_refund_hours", "onboarding", "languages"),
+    "UserRead": ("mentee_cancel_refund_hours", "onboarding", "languages", "links"),
     "GoalRead": ("field_of_study", "schools"),
     # New with the goal's schools (Mentee Settings PRD): the link is optional.
     "GoalSchoolRead": ("institution_id", "institution_name"),
@@ -84,7 +84,7 @@ ADDED = {
     "MatchBasisRead": ("degree", "field", "country", "origin"),
     "DegreeBasisRead": ("id", "label", "raw"),
     # Where a mentor's bio came from, in their own view only (decision 267).
-    "MentorPublicRead": ("about_me_drafted_at", "guide_countries"),
+    "MentorPublicRead": ("about_me_drafted_at", "guide_countries", "links"),
     # A mentor application's state, in the owner's view (Mentor Onboarding B2).
     "MentorProfileRead": (
         "submitted_at",

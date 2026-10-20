@@ -441,3 +441,39 @@ def test_the_guides_downgrade_refuses_while_a_mentor_named_one(
     command.downgrade(config, LINKS)
     assert scalar(disposable_database, "SELECT to_regclass('mentor_guide_countries')") is None
     command.upgrade(config, GUIDES)
+
+
+# --- The catch-up copy (c1e5a8d3f027) ---------------------------------------
+
+CATCH_UP = "c1e5a8d3f027"
+
+
+def test_the_catch_up_copies_what_the_columns_gained_and_overwrites_nothing(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """A value written to a column after the first copy, while the columns still
+    had writers, arrives; a link already in the table is kept as it is."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, GUIDES)
+    _person(disposable_database, "late@example.test", "twitter.com/late", "not a link")
+    _person(disposable_database, "kept@example.test", "https://x.com/old", None)
+    _link(disposable_database, "kept@example.test", "x", "https://x.com/edited")
+
+    command.upgrade(config, CATCH_UP)
+
+    assert _links_of(disposable_database, "late@example.test") == [("x", "https://x.com/late", 0)]
+    assert _links_of(disposable_database, "kept@example.test") == [("x", "https://x.com/edited", 0)]
+
+
+def test_the_catch_up_is_safe_to_run_twice(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, GUIDES)
+    _person(disposable_database, "twice@example.test", "@ada", "@ada")
+    command.upgrade(config, CATCH_UP)
+    command.downgrade(config, GUIDES)
+
+    command.upgrade(config, CATCH_UP)
+
+    assert scalar(disposable_database, "SELECT count(*) FROM user_links") == 2

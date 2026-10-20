@@ -39,7 +39,7 @@ from sqlalchemy import CursorResult, case, delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
-from app.domain.enums import LanguageProficiency
+from app.domain.enums import LanguageProficiency, LinkPlatform
 from app.infra.db.avatar_focus_store import chosen_focus_columns
 from app.infra.db.education_writer import resolve_institution
 from app.infra.db.guide_countries import replace_guide_countries
@@ -55,6 +55,7 @@ from app.infra.db.models.mentoring import (
 from app.infra.db.models.reference import Country
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.user import User, UserLanguage, UserProfile
+from app.infra.db.user_links import set_platform_link
 
 GOAL_COLUMNS = (
     "degree_goal_id",
@@ -100,9 +101,11 @@ PROFILE_COLUMNS = (
     "cover_color",
     "cover_art",
     "social_linkedin",
-    "social_twitter",
-    "social_youtube",
 )
+#: The profile write's legacy link fields (decision 275): kept for one release
+#: so a client still sending them works, written through `user_links` rather
+#: than the columns they are named after.
+LINK_FIELDS = {"social_twitter": LinkPlatform.X, "social_youtube": LinkPlatform.YOUTUBE}
 
 
 def _sent(payload: dict[str, Any], columns: tuple[str, ...]) -> dict[str, Any]:
@@ -438,6 +441,11 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     user_values = {key: value for key, value in payload.items() if key in USER_COLUMNS}
     if user_values:
         await session.execute(update(User).where(User.id == user_id).values(**user_values))
+    links_sent = False
+    for key, platform in LINK_FIELDS.items():
+        if key in payload:
+            links_sent = True
+            await set_platform_link(session, user_id, platform, payload[key])
     values = {key: value for key, value in payload.items() if key in PROFILE_COLUMNS}
     existing = await session.execute(
         select(UserProfile.user_id).where(UserProfile.user_id == user_id)
@@ -445,10 +453,10 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     found = existing.first() is not None
     values.update(_provenance(payload, stored=found))
     if not found:
-        # A request that only set a `users` column, or only said a bio that
-        # does not exist is their own, is not starting a profile: creating an
+        # A request that only set a `users` column or a link, or only said a bio
+        # that does not exist is their own, is not starting a profile: creating an
         # empty row would flip `/me`'s `profile` from null.
-        if values or not (user_values or "about_me_drafted" in payload):
+        if values or not (user_values or links_sent or "about_me_drafted" in payload):
             await session.execute(insert(UserProfile).values(user_id=user_id, **values))
         return
     if values:

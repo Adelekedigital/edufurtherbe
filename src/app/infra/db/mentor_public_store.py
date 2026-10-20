@@ -114,8 +114,6 @@ def _public_profile(handle: str, viewer: UUID | None, window: BookingWindow) -> 
             # column's own default, so the response never says `null` art.
             func.coalesce(UserProfile.cover_art, CoverArt.NONE.value).label("cover_art"),
             UserProfile.social_linkedin,
-            UserProfile.social_twitter,
-            UserProfile.social_youtube,
             _STUDY_COUNTRY.c.display_name.label("primary_study_country"),
             _ORIGIN_COUNTRY.c.display_name.label("origin_country"),
             # The ids too: the names are not unique, and the profile writes take ids.

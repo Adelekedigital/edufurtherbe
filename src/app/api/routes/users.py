@@ -12,6 +12,7 @@ from app.api.deps import (
     RefundPolicyDep,
     ResponseWindowHoursDep,
 )
+from app.api.schemas.links import LinkRead, legacy_social
 from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
@@ -114,7 +115,10 @@ async def read_me(
     refunds: RefundPolicyDep,
     response_hours: ResponseWindowHoursDep,
 ) -> UserRead:
-    profile = UserProfileRead.from_row(user) if user["has_profile"] else None
+    links = attributes["links"]
+    profile = (
+        UserProfileRead.from_row({**user, **legacy_social(links)}) if user["has_profile"] else None
+    )
     mentor_profile = attributes["mentor_profile"]
     goal = attributes["goal"]
     return UserRead(
@@ -124,6 +128,7 @@ async def read_me(
         goal=(GoalRead.from_row(goal) if goal is not None else None),
         awards=[AwardRead.from_row(row) for row in attributes["awards"]],
         languages=[LanguageRead.from_row(row) for row in attributes["languages"]],
+        links=[LinkRead.of(link) for link in links],
         mentor_profile=(
             MentorProfileRead.from_row(
                 mentor_profile, window, owner=True, response_window_hours=response_hours

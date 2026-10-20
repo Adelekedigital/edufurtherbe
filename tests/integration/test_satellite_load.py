@@ -393,3 +393,71 @@ async def test_an_unresolved_name_makes_the_run_exit_two(
     resolvable = plan_identity([user()], [profile(**{"list-Language": "Yoruba , English"})])
 
     assert await load_identity.load(resolvable) == 0, "a clean load must still exit 0"
+
+
+# --------------------------------------------------------------------------
+# X and YouTube land in user_links (decision 275)
+# --------------------------------------------------------------------------
+
+_LINKS = "SELECT platform, url, position FROM user_links ORDER BY position"
+
+
+@pytest.mark.asyncio
+async def test_x_and_youtube_load_into_user_links_not_their_columns(
+    db_engine: AsyncEngine,
+) -> None:
+    """A cutover re-run writes the table every reader reads; the old columns,
+    which nothing reads any more, are left untouched."""
+    bubble_profile = profile(**{"Social Twitter": "twitter.com/ada", "Social Youtube": "@ada"})
+    async with db_engine.begin() as conn:
+        counts = await load_everything(conn, [user()], [bubble_profile])
+        links = (await conn.execute(text(_LINKS))).all()
+        old = (
+            await conn.execute(text("SELECT social_twitter, social_youtube FROM user_profiles"))
+        ).one()
+
+    assert [tuple(r) for r in links] == [
+        ("x", "https://x.com/ada", 0),
+        ("youtube", "https://www.youtube.com/@ada", 1),
+    ]
+    assert tuple(old) == (None, None)
+    assert counts.links == 2
+    assert counts.links_skipped == ()
+
+
+@pytest.mark.asyncio
+async def test_a_reload_updates_a_link_and_adds_no_second(db_engine: AsyncEngine) -> None:
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [user()], [profile(**{"Social Twitter": "ada"})])
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [user()], [profile(**{"Social Twitter": "bo"})])
+        links = (await conn.execute(text(_LINKS))).all()
+
+    assert [tuple(r) for r in links] == [("x", "https://x.com/bo", 0)]
+
+
+@pytest.mark.asyncio
+async def test_a_reload_without_a_link_keeps_the_one_already_there(db_engine: AsyncEngine) -> None:
+    """Upsert only: a link added after the first load is never deleted by a re-run."""
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [user()], [profile(**{"Social Youtube": "@ada"})])
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [user()], [profile()])
+        links = (await conn.execute(text(_LINKS))).all()
+
+    assert [r[0] for r in links] == ["youtube"]
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_link_is_reported_by_profile_and_skipped(
+    db_engine: AsyncEngine,
+) -> None:
+    async with db_engine.begin() as conn:
+        counts = await load_everything(
+            conn, [user()], [profile(**{"Social Twitter": "https://evil.example/ada"})]
+        )
+        links = (await conn.execute(text(_LINKS))).all()
+
+    assert links == []
+    assert counts.links_skipped == (PROFILE_ID,)
+    assert counts.profiles == 1, "the profile still loads without its link"

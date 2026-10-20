@@ -1,0 +1,371 @@
+"""`/me/links`: a user's own links (decision 275).
+
+One per platform except websites (three), every write scoped to the caller,
+the old `social_twitter`/`social_youtube` columns cleared whenever their
+platform's link is written, and every read (`/me/links`, `/me`, the public
+profile) answering from the one table.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from uuid import UUID, uuid4
+
+import httpx
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import make_bookable_mentor, token_for
+from tests.integration.test_api_writes import make_user, url
+
+from conftest import api_token, bearer
+
+pytestmark = [pytest.mark.db, pytest.mark.anyio]
+
+LINKS = "/api/v1/me/links"
+
+
+async def a_user(engine: AsyncEngine, tag: str) -> tuple[UUID, dict[str, str]]:
+    auth_id = uuid4()
+    user_id = await make_user(engine, auth_id, f"links-{tag}-{uuid4().hex[:6]}@example.com")
+    return user_id, bearer(api_token(auth_id))
+
+
+async def add(
+    client: httpx.AsyncClient, headers: dict[str, str], platform: str, value: str
+) -> httpx.Response:
+    return await client.post(LINKS, json={"platform": platform, "value": value}, headers=headers)
+
+
+async def columns(engine: AsyncEngine, user_id: UUID) -> tuple[object, object]:
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT social_twitter, social_youtube FROM user_profiles WHERE user_id = :u"),
+                {"u": user_id},
+            )
+        ).first()
+    return (row[0], row[1]) if row else (None, None)
+
+
+async def set_columns(engine: AsyncEngine, user_id: UUID, x: str, yt: str) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_profiles (user_id, social_twitter, social_youtube) "
+                "VALUES (:u, :x, :y) ON CONFLICT (user_id) DO UPDATE SET "
+                "social_twitter = excluded.social_twitter, social_youtube = excluded.social_youtube"
+            ),
+            {"u": user_id, "x": x, "y": yt},
+        )
+
+
+# --- Create and read ---------------------------------------------------------
+
+
+async def test_a_link_is_stored_canonical_and_read_in_order(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, headers = await a_user(db_engine, "order")
+
+    first = await add(api_client, headers, "instagram", "instagram.com/ada.l/")
+    second = await add(api_client, headers, "website", "http://Ada.Dev/blog#top")
+
+    assert first.status_code == 201, first.text
+    body = first.json()
+    assert body == {
+        "id": body["id"],
+        "platform": "instagram",
+        "value": "ada.l",
+        "url": "https://www.instagram.com/ada.l",
+        "position": 0,
+    }
+    assert first.headers["location"] == f"{LINKS}/{body['id']}"
+    assert second.json()["url"] == "https://ada.dev/blog"
+    assert second.json()["position"] == 1
+    listed = (await api_client.get(LINKS, headers=headers)).json()
+    assert [link["platform"] for link in listed["data"]] == ["instagram", "website"]
+    assert listed["next_cursor"] is None
+
+
+async def test_none_is_an_empty_list(api_client: httpx.AsyncClient, db_engine: AsyncEngine) -> None:
+    _, headers = await a_user(db_engine, "empty")
+
+    listed = await api_client.get(LINKS, headers=headers)
+
+    assert listed.status_code == 200
+    assert listed.json()["data"] == []
+
+
+async def test_a_value_that_is_not_on_the_platform_is_a_422_at_value(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, headers = await a_user(db_engine, "bad")
+
+    response = await add(api_client, headers, "tiktok", "https://evil.com/@ada")
+
+    assert response.status_code == 422
+    assert [e["pointer"] for e in response.json()["errors"]] == ["/value"]
+    assert (await api_client.get(LINKS, headers=headers)).json()["data"] == []
+
+
+@pytest.mark.parametrize("body", [{"platform": "linkedin", "value": "ada"}, {"value": "ada"}])
+async def test_linkedin_and_a_missing_platform_are_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, body: dict[str, str]
+) -> None:
+    _, headers = await a_user(db_engine, "noplat")
+
+    response = await api_client.post(LINKS, json=body, headers=headers)
+
+    assert response.status_code == 422
+    assert "/platform" in [e["pointer"] for e in response.json()["errors"]]
+
+
+async def test_a_second_link_on_a_platform_is_a_409(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, headers = await a_user(db_engine, "dup")
+    assert (await add(api_client, headers, "x", "ada")).status_code == 201
+
+    response = await add(api_client, headers, "x", "bo")
+
+    assert response.status_code == 409
+    assert response.json()["type"] == "/problems/link-platform-taken"
+    assert len((await api_client.get(LINKS, headers=headers)).json()["data"]) == 1
+
+
+async def test_three_websites_fit_and_a_fourth_is_a_409(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, headers = await a_user(db_engine, "web")
+    for n in range(3):
+        assert (await add(api_client, headers, "website", f"ada{n}.dev")).status_code == 201
+
+    response = await add(api_client, headers, "website", "ada3.dev")
+
+    assert response.status_code == 409
+    assert response.json()["type"] == "/problems/website-limit-reached"
+    assert response.json()["limit"] == 3
+
+
+async def test_websites_arriving_together_never_exceed_three(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The count is taken under a per-user lock, so parallel adds cannot all pass it."""
+    _, headers = await a_user(db_engine, "race")
+    await add(api_client, headers, "website", "one.dev")
+
+    responses = await asyncio.gather(
+        *(add(api_client, headers, "website", f"site{n}.dev") for n in range(4))
+    )
+
+    assert sorted(r.status_code for r in responses) == [201, 201, 409, 409]
+    assert len((await api_client.get(LINKS, headers=headers)).json()["data"]) == 3
+
+
+async def test_the_same_platform_arriving_twice_together_lands_once(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, headers = await a_user(db_engine, "race-x")
+
+    responses = await asyncio.gather(*(add(api_client, headers, "x", f"ada{n}") for n in range(3)))
+
+    assert sorted(r.status_code for r in responses) == [201, 409, 409]
+
+
+async def test_unauthenticated_is_a_401(api_client: httpx.AsyncClient) -> None:
+    assert (await api_client.get(LINKS)).status_code == 401
+    assert (await api_client.post(LINKS, json={"platform": "x", "value": "a"})).status_code == 401
+
+
+# --- Change and delete -------------------------------------------------------
+
+
+async def test_a_link_changes_its_value_but_not_its_platform(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, headers = await a_user(db_engine, "patch")
+    link = (await add(api_client, headers, "facebook", "ada.lovelace")).json()
+
+    changed = await api_client.patch(
+        f"{LINKS}/{link['id']}", json={"value": "profile.php?id=42"}, headers=headers
+    )
+    moved = await api_client.patch(
+        f"{LINKS}/{link['id']}", json={"value": "ada", "platform": "x"}, headers=headers
+    )
+    refused = await api_client.patch(
+        f"{LINKS}/{link['id']}", json={"value": "https://evil.com/x"}, headers=headers
+    )
+
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["url"] == "https://www.facebook.com/profile.php?id=42"
+    assert changed.json()["position"] == link["position"]
+    assert moved.status_code == 422
+    assert refused.status_code == 422
+    assert [e["pointer"] for e in refused.json()["errors"]] == ["/value"]
+
+
+async def test_somebody_elses_link_is_a_404_and_stays(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, owner = await a_user(db_engine, "owner")
+    _, stranger = await a_user(db_engine, "stranger")
+    link = (await add(api_client, owner, "x", "ada")).json()
+    target = f"{LINKS}/{link['id']}"
+
+    patched = await api_client.patch(target, json={"value": "evil"}, headers=stranger)
+    deleted = await api_client.delete(target, headers=stranger)
+
+    assert (patched.status_code, deleted.status_code) == (404, 404)
+    kept = (await api_client.get(LINKS, headers=owner)).json()["data"]
+    assert [(k["id"], k["url"]) for k in kept] == [(link["id"], "https://x.com/ada")]
+    assert (await api_client.get(LINKS, headers=stranger)).json()["data"] == []
+
+
+async def test_a_deleted_link_is_gone_and_a_second_delete_is_a_404(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, headers = await a_user(db_engine, "delete")
+    keep = (await add(api_client, headers, "x", "ada")).json()
+    drop = (await add(api_client, headers, "tiktok", "@ada_l")).json()
+
+    first = await api_client.delete(f"{LINKS}/{drop['id']}", headers=headers)
+    second = await api_client.delete(f"{LINKS}/{drop['id']}", headers=headers)
+
+    assert (first.status_code, second.status_code) == (204, 404)
+    remaining = (await api_client.get(LINKS, headers=headers)).json()["data"]
+    assert [link["id"] for link in remaining] == [keep["id"]]
+
+
+async def test_an_unknown_id_is_a_404(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, headers = await a_user(db_engine, "unknown")
+
+    response = await api_client.patch(f"{LINKS}/{uuid4()}", json={"value": "a"}, headers=headers)
+
+    assert response.status_code == 404
+
+
+# --- The old columns ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("action", ["add", "change", "delete"])
+async def test_writing_an_x_link_clears_its_old_column(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, action: str
+) -> None:
+    """So the catch-up copy can never bring a deleted link back (decision 275)."""
+    user_id, headers = await a_user(db_engine, f"clear-{action}")
+    link = None
+    if action != "add":
+        link = (await add(api_client, headers, "x", "ada")).json()
+    await set_columns(db_engine, user_id, "https://x.com/old", "https://www.youtube.com/@keep")
+
+    if action == "add":
+        await add(api_client, headers, "x", "ada")
+    elif action == "change":
+        assert link is not None
+        await api_client.patch(f"{LINKS}/{link['id']}", json={"value": "bo"}, headers=headers)
+    else:
+        assert link is not None
+        await api_client.delete(f"{LINKS}/{link['id']}", headers=headers)
+
+    # Only the platform written is cleared; the other column is left alone.
+    assert await columns(db_engine, user_id) == (None, "https://www.youtube.com/@keep")
+
+
+async def test_a_website_leaves_both_old_columns_alone(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    user_id, headers = await a_user(db_engine, "web-cols")
+    await set_columns(db_engine, user_id, "https://x.com/old", "https://www.youtube.com/@old")
+
+    await add(api_client, headers, "website", "ada.dev")
+
+    assert await columns(db_engine, user_id) == (
+        "https://x.com/old",
+        "https://www.youtube.com/@old",
+    )
+
+
+# --- The legacy profile fields -----------------------------------------------
+
+
+async def test_the_profile_patchs_x_field_writes_the_link(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    user_id, headers = await a_user(db_engine, "legacy")
+
+    await api_client.patch(
+        url(user_id, "profile"), json={"social_twitter": "@ada"}, headers=headers
+    )
+    added = (await api_client.get(LINKS, headers=headers)).json()["data"]
+    await api_client.patch(url(user_id, "profile"), json={"social_twitter": "bo"}, headers=headers)
+    changed = (await api_client.get(LINKS, headers=headers)).json()["data"]
+    await api_client.patch(url(user_id, "profile"), json={"social_twitter": None}, headers=headers)
+    cleared = (await api_client.get(LINKS, headers=headers)).json()["data"]
+
+    assert [(k["platform"], k["url"]) for k in added] == [("x", "https://x.com/ada")]
+    assert [(k["id"], k["url"]) for k in changed] == [(added[0]["id"], "https://x.com/bo")]
+    assert cleared == []
+
+
+async def test_a_link_only_profile_patch_starts_no_profile(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A link is the person's, not the profile row's: `/me` still says no profile."""
+    user_id, headers = await a_user(db_engine, "no-profile")
+
+    response = await api_client.patch(
+        url(user_id, "profile"), json={"social_youtube": "@ada"}, headers=headers
+    )
+
+    assert response.status_code == 204
+    me = (await api_client.get("/api/v1/me", headers=headers)).json()
+    assert me["profile"] is None
+    assert [link["platform"] for link in me["links"]] == ["youtube"]
+
+
+async def test_me_and_its_legacy_fields_read_the_links(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    user_id, headers = await a_user(db_engine, "me")
+    await api_client.patch(url(user_id, "profile"), json={"about_me": "Hi."}, headers=headers)
+    await add(api_client, headers, "youtube", "@ada")
+    await add(api_client, headers, "instagram", "ada.l")
+    # A column value with no row is not a link any more.
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE user_profiles SET social_twitter = 'https://x.com/ghost' WHERE user_id = :u"
+            ),
+            {"u": user_id},
+        )
+
+    me = (await api_client.get("/api/v1/me", headers=headers)).json()
+
+    assert [(k["platform"], k["value"]) for k in me["links"]] == [
+        ("youtube", "ada"),
+        ("instagram", "ada.l"),
+    ]
+    assert me["links"] == (await api_client.get(LINKS, headers=headers)).json()["data"]
+    assert me["profile"]["social_youtube"] == "https://www.youtube.com/@ada"
+    assert me["profile"]["social_twitter"] is None
+
+
+async def test_the_public_profile_shows_platform_and_url_only(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "links-public")
+    headers = bearer(await token_for(db_engine, mentor))
+    await add(api_client, headers, "x", "ada")
+    await add(api_client, headers, "website", "ada.dev")
+
+    body = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
+
+    assert body["links"] == [
+        {"platform": "x", "url": "https://x.com/ada"},
+        {"platform": "website", "url": "https://ada.dev"},
+    ]
+    assert body["social_twitter"] == "https://x.com/ada"
+    assert body["social_youtube"] is None

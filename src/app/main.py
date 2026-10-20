@@ -27,6 +27,7 @@ from app.api.routes import (
     me_conferencing,
     me_intake,
     me_interest,
+    me_links,
     me_mentee_stats,
     me_mentor_application,
     me_mentor_matches,
@@ -319,6 +320,14 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "links",
+        "description": (
+            "Your own links: X, YouTube, Instagram, Facebook, TikTok and up to "
+            "three websites, each stored in one canonical `https://` form. "
+            "LinkedIn stays `social_linkedin` on the profile."
+        ),
+    },
+    {
         "name": "mentee-stats",
         "description": (
             "A mentee's own home figures: sessions, mentors and minutes all "
@@ -522,6 +531,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_conferencing.router)
     application.include_router(me_intake.router)
     application.include_router(me_interest.router)
+    application.include_router(me_links.router)
     application.include_router(me_mentor_stats.router)
     application.include_router(me_mentors.router)
     application.include_router(me_mentor_matches.router)

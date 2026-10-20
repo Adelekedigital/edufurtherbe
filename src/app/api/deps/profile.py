@@ -106,6 +106,7 @@ from app.infra.db.profile_writer import (
 from app.infra.db.referral_store import list_referrals
 from app.infra.db.referral_writer import claim_referral, create_referral
 from app.infra.db.session_stats import mentee_completed_sessions
+from app.infra.db.user_links import links_of
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -219,6 +220,8 @@ async def own_attributes(
         "awards": await list_awards(session, user_id),
         # One query, the public profile's own (`list_languages`).
         "languages": await list_languages(session, user_id),
+        # The settings page's own read (`links_of`, decision 275).
+        "links": await links_of(session, user_id),
         "mentor_profile": mentor_profile,
         # One grouped query. Every caller may book, so it always runs; the
         # route gates only the mentor half.

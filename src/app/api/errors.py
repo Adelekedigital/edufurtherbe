@@ -38,6 +38,7 @@ from app.core.errors import (
     InsufficientCreditError,
     InviteForNewAccountsError,
     JoinWindowClosedError,
+    LinkPlatformTakenError,
     MentorApplicationDecidedError,
     MentorApplicationIncompleteError,
     MentorApplicationInReviewError,
@@ -46,6 +47,7 @@ from app.core.errors import (
     RateLimitedError,
     ReviewIntervalError,
     UpstreamError,
+    WebsiteLimitReachedError,
     WritingAssistUnavailableError,
 )
 from app.core.errors import ValidationError as DomainValidationError
@@ -102,6 +104,8 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     MentorApplicationIncompleteError: "/problems/mentor-application-incomplete",
     MentorApplicationDecidedError: "/problems/mentor-application-decided",
     MentorApplicationInReviewError: "/problems/mentor-application-in-review",
+    LinkPlatformTakenError: "/problems/link-platform-taken",
+    WebsiteLimitReachedError: "/problems/website-limit-reached",
     AlreadyReviewedError: "/problems/review-already-exists",
     ReviewIntervalError: "/problems/review-interval-not-elapsed",
     BookingOverlapError: "/problems/booking-overlap",

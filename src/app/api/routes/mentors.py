@@ -173,6 +173,7 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
         mentor["stats"],
         mentor["reviews"],
         guide_countries=mentor["guide_countries"],
+        links=mentor["links"],
     )
 
 
