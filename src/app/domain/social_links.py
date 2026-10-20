@@ -68,10 +68,9 @@ MAX_LENGTH = 2048
 #: every other platform takes one link.
 MAX_WEBSITES = 3
 
-#: The profile field each platform's link stood in for before `user_links`, in
-#: the order the Bubble import places them (decision 275). The one copy: the
-#: writer clears these columns, the loader and the catch-up read them, and the
-#: deprecated response fields are filled from them.
+#: The Bubble profile field each platform's link came from, in the order the
+#: import places them (decision 275). The `user_profiles` columns of these names
+#: are gone (#505); the import reads the fields and writes `user_links`.
 LEGACY_LINK_FIELDS: dict[LinkPlatform, str] = {
     LinkPlatform.X: "social_twitter",
     LinkPlatform.YOUTUBE: "social_youtube",

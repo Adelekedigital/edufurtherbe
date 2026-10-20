@@ -406,21 +406,17 @@ _LINKS = "SELECT platform, url, position FROM user_links ORDER BY position"
 async def test_x_and_youtube_load_into_user_links_not_their_columns(
     db_engine: AsyncEngine,
 ) -> None:
-    """A cutover re-run writes the table every reader reads; the old columns,
-    which nothing reads any more, are left untouched."""
+    """A cutover re-run writes the table every reader reads; the old columns
+    are gone (#505)."""
     bubble_profile = profile(**{"Social Twitter": "twitter.com/ada", "Social Youtube": "@ada"})
     async with db_engine.begin() as conn:
         counts = await load_everything(conn, [user()], [bubble_profile])
         links = (await conn.execute(text(_LINKS))).all()
-        old = (
-            await conn.execute(text("SELECT social_twitter, social_youtube FROM user_profiles"))
-        ).one()
 
     assert [tuple(r) for r in links] == [
         ("x", "https://x.com/ada", 0),
         ("youtube", "https://www.youtube.com/@ada", 1),
     ]
-    assert tuple(old) == (None, None)
     assert counts.links == 2
     assert counts.links_skipped == ()
 

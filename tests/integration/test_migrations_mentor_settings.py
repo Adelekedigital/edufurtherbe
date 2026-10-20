@@ -488,3 +488,70 @@ def test_the_catch_up_is_safe_to_run_twice(
     command.upgrade(config, CATCH_UP)
 
     assert scalar(disposable_database, "SELECT count(*) FROM user_links") == 2
+
+
+# --- The column drop (f4a7c2d9b318, #505) -------------------------------------
+
+DROP = "f4a7c2d9b318"
+
+
+def _columns(url: str) -> str | None:
+    return scalar(
+        url,
+        "SELECT string_agg(column_name, ',' ORDER BY column_name) "
+        "FROM information_schema.columns WHERE table_name = 'user_profiles' "
+        "AND column_name IN ('social_twitter', 'social_youtube')",
+    )
+
+
+def test_the_drop_leaves_the_links_as_they_are(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """Nothing is copied again: a stale column never rolls a newer link back,
+    and a column value whose link was deleted does not bring it back."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, CATCH_UP)
+    _person(disposable_database, "stale@example.test", "https://x.com/old", None)
+    _link(disposable_database, "stale@example.test", "x", "https://x.com/new")
+    _person(disposable_database, "deleted@example.test", "https://x.com/gone", None)
+
+    command.upgrade(config, DROP)
+
+    assert _columns(disposable_database) is None
+    assert _links_of(disposable_database, "stale@example.test") == [("x", "https://x.com/new", 0)]
+    assert _links_of(disposable_database, "deleted@example.test") == []
+
+
+def test_the_drop_downgrade_returns_the_columns_from_the_links(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, DROP)
+    _person_without_links(disposable_database, "back@example.test")
+    _link(disposable_database, "back@example.test", "youtube", "https://www.youtube.com/@ada")
+
+    command.downgrade(config, CATCH_UP)
+
+    assert _columns(disposable_database) == "social_twitter,social_youtube"
+    assert (
+        scalar(
+            disposable_database,
+            "SELECT coalesce(p.social_twitter, '-') || ' ' || p.social_youtube "
+            "FROM user_profiles p JOIN users u ON u.id = p.user_id "
+            "WHERE u.email = 'back@example.test'",
+        )
+        == "- https://www.youtube.com/@ada"
+    )
+    command.upgrade(config, DROP)
+
+
+_PROFILE_ONLY = (
+    "WITH u AS (INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
+    "VALUES ('{email}', gen_random_uuid(), 'Probe', 'mentee', 'UTC') RETURNING id) "
+    "INSERT INTO user_profiles (user_id) SELECT id FROM u"
+)
+
+
+def _person_without_links(url: str, email: str) -> None:
+    """A user with a profile row, written after the columns are gone."""
+    execute(url, _PROFILE_ONLY.format(email=email))

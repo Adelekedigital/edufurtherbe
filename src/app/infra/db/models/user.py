@@ -290,8 +290,6 @@ class UserProfile(TimestampMixin, Base):
     )
 
     social_linkedin: Mapped[str | None] = mapped_column(Text)
-    social_twitter: Mapped[str | None] = mapped_column(Text)
-    social_youtube: Mapped[str | None] = mapped_column(Text)
 
     # Legacy emailitContact_id — an 18-digit numeric string, kept as text because
     # it is an opaque provider identifier and arithmetic on it is never correct.
