@@ -187,6 +187,10 @@ EXPECTED_TABLES = [
     "invite_link_retired_codes",
     # One call the writing assistant made, for its daily limit (decision 266).
     "writing_assist_requests",
+    # A user's own links, one row each (decision 275).
+    "user_links",
+    # The countries a mentor can guide mentees towards (decision 276).
+    "mentor_guide_countries",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

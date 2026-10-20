@@ -37,6 +37,7 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     Text,
     Uuid,
@@ -44,8 +45,17 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.enums import AuthProvider, CoverArt, CoverColor, LanguageProficiency, PrimaryRole
+from app.domain.enums import (
+    AuthProvider,
+    CoverArt,
+    CoverColor,
+    LanguageProficiency,
+    LinkKind,
+    LinkPlatform,
+    PrimaryRole,
+)
 from app.domain.profile_text import PROMPT_VERSION_MAX_LENGTH, PROMPT_VERSION_PATTERN
+from app.domain.social_links import MAX_LENGTH
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -496,4 +506,56 @@ class UserLanguage(TimestampMixin, Base):
             check_is_known("proficiency", LanguageProficiency),
             name="proficiency_is_known",
         ),
+    )
+
+
+class UserLink(TimestampMixin, Base):
+    """A link on a user's profile, one row each (decision 275).
+
+    **Attached to ``users``, not to a profile row**, like ``user_languages``: a
+    link is the person's, and a user with no profile row may still hold one.
+
+    ``url`` is the **canonical** ``https://`` link ``domain.social_links``
+    builds, never what was typed (#182): the handle a client shows after its
+    prefix is read back out of it, so the two can never disagree. One per
+    platform, except ``website``, of which three: the partial unique index
+    holds the first, and the three is counted by the writer under a lock,
+    because a ``CHECK`` sees one row.
+
+    **LinkedIn stays ``user_profiles.social_linkedin``.** Cascades with the
+    user: a link is evidence of nothing.
+    """
+
+    __tablename__ = "user_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[LinkKind] = mapped_column(
+        str_enum(LinkKind), nullable=False, server_default=text("'social'")
+    )
+    platform: Mapped[LinkPlatform] = mapped_column(str_enum(LinkPlatform), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The user's order; reads sort by it, then by `created_at`.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        CheckConstraint(check_is_known("platform", LinkPlatform), name="platform_is_known"),
+        CheckConstraint(check_is_known("kind", LinkKind), name="kind_is_known"),
+        # A backstop for the writer, which stores only what the domain built.
+        CheckConstraint(
+            f"url LIKE 'https://%' AND char_length(url) <= {MAX_LENGTH}", name="url_shape"
+        ),
+        CheckConstraint("position >= 0", name="position_not_negative"),
+        Index(
+            "ix_user_links_one_per_platform",
+            "user_id",
+            "platform",
+            unique=True,
+            postgresql_where=text("platform <> 'website'"),
+        ),
+        Index("ix_user_links_user_order", "user_id", "position", "created_at"),
     )

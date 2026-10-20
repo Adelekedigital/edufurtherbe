@@ -55,6 +55,9 @@ EXPECTED_MODELS = {
     # One permanent personal invite link per user (owner, 2026-10-15).
     "InviteLink",
     "InviteLinkRetiredCode",
+    # A user's own links (decision 275) and a mentor's guide-to countries (276).
+    "UserLink",
+    "MentorGuideCountry",
     "Review",
     "ReviewReport",
     "ScholarshipProgram",
