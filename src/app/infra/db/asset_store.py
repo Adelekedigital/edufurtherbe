@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -204,8 +204,17 @@ async def store_image(
     kind: AssetKind,
     user_id: UUID,
     payload: bytes,
+    *,
+    before_pointing: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[str, str | None]:
     """Validate, re-encode, store, find the face, point the profile at it.
+
+    `before_pointing` runs after the storage write and before the profile
+    points at it, in the caller's transaction: a check that must not hold its
+    lock through a slow upload (the application freeze, decision 273). If it
+    raises, the transaction is rolled back, the object just stored is released
+    (`release_image`: kept if the profile already points at the same bytes,
+    otherwise deleted, never fatal) and the error propagates.
 
     **The one pipeline** for an image entering a profile: the upload endpoint
     and the demo seed both call it, so a demo avatar is processed, stored and
@@ -232,6 +241,17 @@ async def store_image(
     # deleting this same object cannot run between the write and the pointer.
     await lock_image(session, user_id, kind)
     url = await asyncio.to_thread(storage.upload, path, image.payload, image.content_type)
+    if before_pointing is not None:
+        try:
+            await before_pointing()
+        except Exception:
+            await session.rollback()
+            released = await release_image(session, storage, user_id, kind, url)
+            logger.info(
+                "an upload was refused before the profile pointed at it",
+                extra={"user_id": str(user_id), "kind": str(kind), "released": released},
+            )
+            raise
     previous = await replace_url(session, user_id, kind, url, focus=focus, looked=looked)
     return url, previous
 

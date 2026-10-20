@@ -32,7 +32,7 @@ path, so a typed school matches and queues the same way wherever it is typed.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from uuid import UUID
 
 from sqlalchemy import CursorResult, case, delete, func, insert, select, update
@@ -502,6 +502,29 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
 COUNTRY_FIELDS = ("origin_country_id", "current_country_id")
 
 
+async def refuse_invalid_profile(
+    session: AsyncSession, user_id: UUID, payload: dict[str, Any]
+) -> None:
+    """The profile write's own `422`s, without writing: run before the freeze,
+    so a bad value gets its `422` whatever the review state (decision 273).
+
+    The writer asks again, the crop atomically with its write; this only
+    answers first.
+    """
+    await _refuse_unknown_countries(session, payload)
+    if "avatar_focus" in payload:
+        photo = await session.scalar(
+            select(UserProfile.avatar_url).where(UserProfile.user_id == user_id)
+        )
+        if photo is None:
+            _refuse_crop_without_photo()
+
+
+async def refuse_invalid_mentor_profile(session: AsyncSession, payload: dict[str, Any]) -> None:
+    """The mentor-profile write's own `422`s, without writing; as `refuse_invalid_profile`."""
+    await _refuse_unknown_mentor_countries(session, payload)
+
+
 async def _refuse_unknown_countries(session: AsyncSession, payload: dict[str, Any]) -> None:
     """The profile's country fields, each checked at its own pointer."""
     await _refuse_unknown_country_ids(
@@ -607,8 +630,12 @@ async def _choose_avatar_focus(
         .values(**chosen_focus_columns(focus["x"], focus["y"]))
     )
     if not _rowcount(result):
-        message = "upload a photo before choosing where to centre it"
-        raise ValidationError(message, field_errors=(("/avatar_focus", message),))
+        _refuse_crop_without_photo()
+
+
+def _refuse_crop_without_photo() -> NoReturn:
+    message = "upload a photo before choosing where to centre it"
+    raise ValidationError(message, field_errors=(("/avatar_focus", message),))
 
 
 # --------------------------------------------------------------------------
@@ -616,9 +643,7 @@ async def _choose_avatar_focus(
 # --------------------------------------------------------------------------
 
 
-async def replace_languages(
-    session: AsyncSession, user_id: UUID, entries: list[dict[str, Any]]
-) -> None:
+async def write_languages(session: AsyncSession, user_id: UUID, rows: list[dict[str, Any]]) -> None:
     """Replace the user's languages wholesale.
 
     **Delete then insert, in that order and in one transaction.** Two unique
@@ -629,11 +654,14 @@ async def replace_languages(
     on education. Clearing first makes both constraints a backstop rather than
     the thing the user meets.
 
+    `rows` are already resolved (`resolved_languages` over `held_languages`):
+    the freeze reads and compares them first, so they are read and locked
+    once (decision 273).
+
     Replace rather than merge, because the request carries the whole list and a
     merge could not express removal: a user unticking their last language would
     have no way to say so.
     """
-    rows = resolved_languages(entries, await held_languages(session, user_id))
     await session.execute(delete(UserLanguage).where(UserLanguage.user_id == user_id))
     if rows:
         await session.execute(insert(UserLanguage), [{"user_id": user_id, **row} for row in rows])

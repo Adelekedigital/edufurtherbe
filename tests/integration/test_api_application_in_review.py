@@ -214,21 +214,41 @@ async def _country(engine: AsyncEngine, code: str) -> UUID:
         return UUID(str(found.scalar_one()))
 
 
-async def test_a_legacy_stored_link_is_compared_in_its_canonical_form(
+async def test_a_legacy_stored_link_may_be_corrected_but_not_cleared(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """A link the old system stored in another spelling is still the same link."""
+    """Only clearing is refused (decision 273 as amended), whatever the stored
+    link's spelling: a correction of a legacy link saves, and a clear of it does not."""
     mentor, auth = await submitted(db_engine, "frz-legacy")
     await run_sql(
         db_engine,
         "UPDATE user_profiles SET social_linkedin = 'linkedin.com/in/ada/' WHERE user_id = :u",
         {"u": mentor},
     )
+    url = f"/api/v1/users/{mentor}/profile"
+
+    cleared = await api_client.patch(url, headers=auth, json={"social_linkedin": ""})
+    corrected = await api_client.patch(url, headers=auth, json={"social_linkedin": "ada-l"})
+
+    refused(cleared, ["social_linkedin"])
+    assert corrected.status_code == 204, corrected.text
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_a_blank_stored_link_cleared_is_not_a_change(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, blank: str
+) -> None:
+    """A legacy blank is no link, as a write would store it, so clearing it
+    removes nothing the reviewer has."""
+    mentor, auth = await submitted(db_engine, f"frz-blank-{len(blank)}")
+    await run_sql(
+        db_engine,
+        "UPDATE user_profiles SET social_linkedin = :b WHERE user_id = :u",
+        {"u": mentor, "b": blank},
+    )
 
     response = await api_client.patch(
-        f"/api/v1/users/{mentor}/profile",
-        headers=auth,
-        json={"social_linkedin": "https://www.linkedin.com/in/ada"},
+        f"/api/v1/users/{mentor}/profile", headers=auth, json={"social_linkedin": None}
     )
 
     assert response.status_code == 204, response.text
@@ -510,16 +530,41 @@ async def test_each_settings_write_saves_before_submitting_and_after_approval(
 
 
 @pytest.mark.parametrize("kind", ["avatar", "banner"])
-async def test_an_upload_in_review_is_refused_before_anything_reaches_storage(
+async def test_an_upload_in_review_is_refused_and_leaves_nothing_behind(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage, kind: str
 ) -> None:
+    """The bytes are stored before the check (no lock is held through storage),
+    so a refusal deletes what it stored and the profile never points at it."""
     mentor, auth = await submitted(db_engine, f"frz-bytes-{kind}")
 
     response = await api_client.post(users(mentor, kind), headers=auth, files=a_photo())
 
     refused(response, [kind])
-    assert fake_storage.uploads == []
+    assert len(fake_storage.uploads) == 1
+    assert fake_storage.objects == {}
     assert await stored_images(db_engine, mentor) == ("https://cdn.example.test/a.png", None)
+
+
+async def test_a_refused_upload_of_the_photo_already_shown_keeps_it(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
+) -> None:
+    """Objects are content-addressed, so the same file uploaded again is the
+    live photo's own object: the refusal's clean-up must not delete it."""
+    mentor, auth = await submitted(db_engine, "frz-same-photo")
+    await run_sql(db_engine, OPENED["unsubmitted"], {"u": mentor})
+    first = await api_client.post(users(mentor, "avatar"), headers=auth, files=a_photo())
+    assert first.status_code == 200, first.text
+    await run_sql(
+        db_engine,
+        "UPDATE mentor_profiles SET submitted_at = now() WHERE user_id = :u",
+        {"u": mentor},
+    )
+
+    again = await api_client.post(users(mentor, "avatar"), headers=auth, files=a_photo())
+
+    refused(again, ["avatar"])
+    assert list(fake_storage.objects) == [fake_storage.uploads[0]]
+    assert (await stored_images(db_engine, mentor))[0] == first.json()["avatar_url"]
 
 
 async def test_removing_an_image_in_review_keeps_it(
@@ -629,3 +674,40 @@ async def test_every_link_stays_open_in_review(
     deleted = await api_client.delete(f"/api/v1/me/links/{added.json()['id']}", headers=auth)
 
     assert (added.status_code, changed.status_code, deleted.status_code) == (201, 200, 204)
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "pointer"),
+    [
+        (
+            "profile",
+            {"origin_country_id": "00000000-0000-7000-8000-000000000000"},
+            "/origin_country_id",
+        ),
+        (
+            "mentor-profile",
+            {"guide_country_ids": ["00000000-0000-7000-8000-000000000000"]},
+            "/guide_country_ids/0",
+        ),
+        ("profile", {"avatar_focus": {"x": 0.5, "y": 0.5}}, "/avatar_focus"),
+    ],
+    ids=["origin", "guide", "crop-without-photo"],
+)
+async def test_an_invalid_value_is_a_422_in_review_too(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    path: str,
+    body: dict[str, object],
+    pointer: str,
+) -> None:
+    """The writer's own validation runs before the freeze, so the client gets
+    the same answer for a bad value whatever the review state."""
+    mentor, auth = await submitted(db_engine, f"frz-422-{pointer.split('/')[1]}")
+    await run_sql(
+        db_engine, "UPDATE user_profiles SET avatar_url = NULL WHERE user_id = :u", {"u": mentor}
+    )
+
+    response = await api_client.patch(users(mentor, path), headers=auth, json=body)
+
+    assert response.status_code == 422, response.text
+    assert pointer in response.text

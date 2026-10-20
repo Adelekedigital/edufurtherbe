@@ -165,9 +165,10 @@ def frozen_changes(sent: Mapping[str, Any], stored: Mapping[str, Any]) -> tuple[
     """The frozen fields `sent` would change, once each, in `FROZEN_FIELDS` order.
 
     Only a change counts: a form resending a reviewed field unchanged beside
-    another edit saves. `sent` is already in its stored form (a LinkedIn link
-    canonical, text trimmed, languages resolved to the rows a replace writes),
-    and so is `stored`. `FrozenRecord` writes are not compared: each is a change.
+    another edit saves. `sent` is already in its stored form (text trimmed and
+    blank as null, languages resolved to the rows a replace writes), and so is
+    `stored`; LinkedIn is only checked for being cleared. `FrozenRecord` writes
+    are not compared: each is a change.
     """
     named: dict[str, None] = {}
     for field, name in FROZEN_FIELDS.items():

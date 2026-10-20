@@ -58,7 +58,11 @@ from app.domain.images import MAX_UPLOAD_BYTES
 from app.domain.mentor_application import FrozenRecord
 from app.domain.referrals import claim_window
 from app.domain.writing_assist import provenance_problem
-from app.infra.db.application_freeze import refuse_frozen_changes, refuse_while_in_review
+from app.infra.db.application_freeze import (
+    language_rows_unless_frozen,
+    refuse_frozen_changes,
+    refuse_while_in_review,
+)
 from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
@@ -95,11 +99,13 @@ from app.infra.db.profile_writer import (
     create_mentor_profile,
     delete_award,
     delete_goal,
-    replace_languages,
+    refuse_invalid_mentor_profile,
+    refuse_invalid_profile,
     update_award,
     update_mentor_profile,
     upsert_goal,
     upsert_profile,
+    write_languages,
 )
 from app.infra.db.referral_store import list_referrals
 from app.infra.db.referral_writer import claim_referral, create_referral
@@ -518,6 +524,8 @@ async def updated_mentor_profile(
         stored = await stored_booking_window_days(session, user_id)
     refuse_window_out_of_range(payload.booking_window_days, window, stored=stored)
     sent = payload.model_dump(exclude_unset=True)
+    # A bad value is a `422` whatever the review state, so it is asked first.
+    await refuse_invalid_mentor_profile(session, sent)
     await refuse_frozen_changes(session, user_id, sent)
     changed = await update_mentor_profile(session, user_id, sent)
     await session.commit()
@@ -531,6 +539,8 @@ async def upserted_profile(
     # Where the bio came from (decision 267): checked whole, before anything is written.
     if (problem := provenance_problem(sent)) is not None:
         raise ValidationError(problem[1], field_errors=(problem,))
+    # A bad value is a `422` whatever the review state, so it is asked first.
+    await refuse_invalid_profile(session, user_id, sent)
     await refuse_frozen_changes(session, user_id, sent)
     await upsert_profile(session, user_id, sent)
     await session.commit()
@@ -553,8 +563,8 @@ async def replaced_languages(
     payload: UserLanguagesWrite, user_id: OwnerDep, session: SessionDep
 ) -> None:
     entries = [entry.model_dump(exclude_unset=True) for entry in payload.languages]
-    await refuse_frozen_changes(session, user_id, {"languages": entries})
-    await replace_languages(session, user_id, entries)
+    rows = await language_rows_unless_frozen(session, user_id, entries)
+    await write_languages(session, user_id, rows)
     await session.commit()
 
 
@@ -570,8 +580,10 @@ async def _store_image(
 ) -> str:
     """Validate, re-encode, store, point the profile at it, drop the old one.
 
-    **Refused first while an application is in review** (decision 273), under
-    the mentor lock and before any byte reaches storage.
+    **Refused while an application is in review** (decision 273): after the
+    bytes are stored, so the mentor lock is not held through a slow upload,
+    and before the profile points at them. A refused upload's object is
+    released by `store_image`.
 
     **The body was already read before this ran** — FastAPI parses the multipart
     form to resolve `UploadFile`, spooling it to disk first. So the limit that
@@ -579,7 +591,6 @@ async def _store_image(
     the *image*: read one byte past the cap and refuse if it arrives, which needs
     no trust in a header.
     """
-    await refuse_while_in_review(session, user_id, _FROZEN_IMAGE[kind])
     payload = await upload.read(MAX_UPLOAD_BYTES + 1)
     if len(payload) > MAX_UPLOAD_BYTES:
         raise ValidationError("that file is larger than 5 MB")
@@ -591,7 +602,14 @@ async def _store_image(
     # endpoint; the storage client stays synchronous because the asset migration
     # script uses the same class outside any event loop.
     storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
-    url, previous = await store_image(session, storage, kind, user_id, payload)
+    url, previous = await store_image(
+        session,
+        storage,
+        kind,
+        user_id,
+        payload,
+        before_pointing=lambda: refuse_while_in_review(session, user_id, _FROZEN_IMAGE[kind]),
+    )
     await session.commit()
 
     # **After the commit, and never fatal** — `release_image`'s contract.
