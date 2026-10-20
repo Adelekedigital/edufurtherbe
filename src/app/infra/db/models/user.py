@@ -132,7 +132,9 @@ class User(TimestampMixin, Base):
     deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     #: When a self-deleted account is purged for good (`DELETE /me`, 30 days
     #: on). Null on every other row, a migrated soft delete included, so the
-    #: purge job touches only accounts their owner deleted.
+    #: purge job touches only accounts their owner deleted. Restore clears it,
+    #: and so does the purge itself: a purged row is never picked up again or
+    #: restorable (`account_purge`).
     deletion_purge_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)

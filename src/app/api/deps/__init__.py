@@ -21,6 +21,7 @@ from app.api.deps.admin import (
     PausedSelfDep,
     PendingInstitutionsDep,
     PendingMentorsDep,
+    RestoredAccountDep,
     ResumedSelfDep,
 )
 from app.api.deps.availability import (
@@ -255,6 +256,7 @@ __all__ = [
     "ReorderedOwnQuestionsDep",
     "ReplacedLanguagesDep",
     "ReportedReviewDep",
+    "RestoredAccountDep",
     "RestoredOwnSessionTypeDep",
     "ResumedSelfDep",
     "ReviewableSessionsDep",

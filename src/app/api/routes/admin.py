@@ -38,6 +38,7 @@ from app.api.deps import (
     ModerationQueueDep,
     PendingInstitutionsDep,
     PendingMentorsDep,
+    RestoredAccountDep,
 )
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.admin import (
@@ -410,3 +411,25 @@ async def withdraw_featured(removed: FeaturedWeekRemovedDep) -> Response:
 )
 async def featured_weeks_list(rows: FeaturedWeeksDep) -> Page[FeaturedWeekRead]:
     return Page(data=[FeaturedWeekRead(**row) for row in rows])
+
+
+@router.post(
+    "/users/{user_id}/restore",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Restore a deleted account",
+    description=(
+        "Brings back an account its owner deleted with `DELETE /me`, while its "
+        "**30-day window** is open; the owner signs in again as before. "
+        "**Super admin only.**\n\n"
+        "Only the account comes back: sessions the deletion ended stay ended, "
+        "expired credits stay expired, and a mentor stays unlisted until listed "
+        "again. `404` once the window has closed (the account is purged), for an "
+        "account that was never self-deleted, and for a caller without the grant. "
+        "`409` when the account's email or handle now belongs to a live account."
+    ),
+    responses=ADMIN_RESPONSES
+    | {status.HTTP_409_CONFLICT: {"description": "The email or handle is now taken."}},
+)
+async def restore_deleted_account(restored: RestoredAccountDep) -> None:
+    if not restored:
+        raise NotFoundError("no restorable account")

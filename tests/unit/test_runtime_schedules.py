@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "config" / "runtime-schedules.json"
 
 
-def test_the_manifest_declares_the_seven_runtime_jobs_in_utc() -> None:
+def test_the_manifest_declares_the_eight_runtime_jobs_in_utc() -> None:
     manifest = load_manifest(MANIFEST)
 
     assert manifest.timezone == "UTC"
@@ -33,6 +33,7 @@ def test_the_manifest_declares_the_seven_runtime_jobs_in_utc() -> None:
         "sync-institutions",
         "refresh-next-available",
         "sweep-intake-files",
+        "purge-deleted-users",
     }
     assert {job.name: job.cron for job in manifest.jobs} == {
         "settle-sessions": "30 * * * *",
@@ -46,6 +47,9 @@ def test_the_manifest_declares_the_seven_runtime_jobs_in_utc() -> None:
         # Daily, off-peak: retention counts in days and abandoned uploads in a
         # day, so a daily pass is as fine-grained as either needs.
         "sweep-intake-files": "0 3 * * *",
+        # Daily, after the intake sweep: a purge date is a day, so once a day
+        # is as prompt as it needs to be (Mentee Settings PRD).
+        "purge-deleted-users": "30 3 * * *",
     }
 
 

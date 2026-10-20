@@ -103,13 +103,13 @@ never changes QStash.
 1. Set the GitHub `production` variable `QSTASH_SCHEDULE_OVERRIDES` to a JSON
    object keyed by job name. Only `enabled` (boolean) and `cron` (string) are
    accepted; anything else fails the run (`_validated_overrides`,
-   `src/app/infra/jobs/manifest.py`; ADR 0028 Decision 5). To enable all seven:
+   `src/app/infra/jobs/manifest.py`; ADR 0028 Decision 5). To enable all eight:
 
    ```json
-   {"settle-sessions":{"enabled":true},"credit-reminders":{"enabled":true},"monthly-credits":{"enabled":true},"expire-credits":{"enabled":true},"sync-institutions":{"enabled":true},"refresh-next-available":{"enabled":true},"sweep-intake-files":{"enabled":true}}
+   {"settle-sessions":{"enabled":true},"credit-reminders":{"enabled":true},"monthly-credits":{"enabled":true},"expire-credits":{"enabled":true},"sync-institutions":{"enabled":true},"refresh-next-available":{"enabled":true},"sweep-intake-files":{"enabled":true},"purge-deleted-users":{"enabled":true}}
    ```
 
-   **Owner to confirm:** that all seven go live at cutover.
+   **Owner to confirm:** that all eight go live at cutover.
 2. Dispatch **Reconcile QStash runtime schedules** with
    `environment=production`, `apply=false`. Read the printed diff: schedule ids
    are `edufurther-production-<job>` and destinations start with

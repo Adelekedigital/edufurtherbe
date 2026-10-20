@@ -38,6 +38,7 @@ from app.core.errors import (
 )
 from app.domain.enums import MentorStatusType
 from app.domain.featured import week_start as week_of
+from app.infra.db.account_purge import restore_account
 from app.infra.db.admin_credits import grant_credits, list_admin_grants
 from app.infra.db.admin_store import (
     approve_institution,
@@ -354,6 +355,19 @@ async def resumed_self(user_id: OwnerDep, session: SessionDep) -> bool:
     return resumed
 
 
+async def restored_account(user_id: UUID, _: CatalogueAdminDep, session: SessionDep) -> bool:
+    """A super admin restoring a self-deleted account inside its 30 days.
+
+    **Super admin only** (`CatalogueAdminDep` is `require_admin()`, which admits
+    nobody else): bringing back an account its owner deleted is support's act on
+    the owner's request, not curation, and it is rare enough that one role can
+    carry it.
+    """
+    restored = await restore_account(session, user_id, now=dt.datetime.now(dt.UTC))
+    await session.commit()
+    return restored
+
+
 PendingInstitutionsDep = Annotated[list[dict[str, Any]], Depends(pending_institution_rows)]
 ApprovedInstitutionDep = Annotated[bool, Depends(approved_institution)]
 MergedInstitutionDep = Annotated[int, Depends(merged_institution)]
@@ -363,5 +377,6 @@ ListedMentorDep = Annotated[bool, Depends(listed_mentor)]
 MentorHistoryDep = Annotated[list[dict[str, Any]], Depends(mentor_history)]
 PausedSelfDep = Annotated[bool, Depends(paused_self)]
 ResumedSelfDep = Annotated[bool, Depends(resumed_self)]
+RestoredAccountDep = Annotated[bool, Depends(restored_account)]
 
 AdminCreditGrantDep = Annotated[tuple[dict[str, Any], int, bool], Depends(granted_admin_credits)]
