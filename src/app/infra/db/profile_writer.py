@@ -633,7 +633,19 @@ async def replace_languages(
     merge could not express removal: a user unticking their last language would
     have no way to say so.
     """
-    held = {
+    rows = resolved_languages(entries, await held_languages(session, user_id))
+    await session.execute(delete(UserLanguage).where(UserLanguage.user_id == user_id))
+    if rows:
+        await session.execute(insert(UserLanguage), [{"user_id": user_id, **row} for row in rows])
+
+
+async def held_languages(session: AsyncSession, user_id: UUID) -> dict[Any, dict[str, Any]]:
+    """The user's stored languages, locked: language id -> proficiency and primary.
+
+    What `resolved_languages` fills an omitted field from, and what the freeze
+    compares a replace against (decision 273).
+    """
+    return {
         row.language_id: {"proficiency": row.proficiency, "is_primary": row.is_primary}
         for row in await session.execute(
             select(UserLanguage.language_id, UserLanguage.proficiency, UserLanguage.is_primary)
@@ -641,10 +653,6 @@ async def replace_languages(
             .with_for_update()
         )
     }
-    rows = resolved_languages(entries, held)
-    await session.execute(delete(UserLanguage).where(UserLanguage.user_id == user_id))
-    if rows:
-        await session.execute(insert(UserLanguage), [{"user_id": user_id, **row} for row in rows])
 
 
 #: What a language newly added to the list starts with.

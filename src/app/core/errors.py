@@ -127,8 +127,9 @@ class MentorApplicationIncompleteError(MissingItemsError):
 class MentorApplicationInReviewError(ConflictError):
     """A submitted application's reviewed fields hold still until the decision.
 
-    `fields` names what the request would have changed (a `MentorApplicationItem`
-    field or `education`), so the client can say which part is locked.
+    `fields` names what the request would have changed (a `FROZEN_FIELDS` name
+    or a `FrozenRecord`, in `domain.mentor_application`), so the client can say
+    which part is locked.
     """
 
     def __init__(self, message: str = "", *, fields: tuple[str, ...] = ()) -> None:

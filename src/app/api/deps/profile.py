@@ -55,12 +55,10 @@ from app.core.errors import (
 )
 from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
+from app.domain.mentor_application import FrozenRecord
 from app.domain.referrals import claim_window
 from app.domain.writing_assist import provenance_problem
-from app.infra.db.application_freeze import (
-    refuse_education_while_in_review,
-    refuse_frozen_changes,
-)
+from app.infra.db.application_freeze import refuse_frozen_changes, refuse_while_in_review
 from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
 from app.infra.db.credit_store import get_credit_summary
@@ -425,7 +423,7 @@ CompletedOnboardingDep = Annotated[OnboardingResult, Depends(completed_onboardin
 async def created_education(
     payload: EducationWrite, user_id: OwnerDep, session: SessionDep
 ) -> tuple[UUID, bool]:
-    await refuse_education_while_in_review(session, user_id)
+    await refuse_while_in_review(session, user_id, FrozenRecord.EDUCATION)
     result = await create_education(session, user_id, payload.model_dump())
     await session.commit()
     return result
@@ -437,7 +435,7 @@ async def updated_education(
     # `exclude_unset` is what makes this a PATCH: a field the client did not
     # send is absent, not null. Without it every omitted field would be written
     # as its default and a one-field edit would blank the rest.
-    await refuse_education_while_in_review(session, user_id)
+    await refuse_while_in_review(session, user_id, FrozenRecord.EDUCATION)
     changed = await update_education(
         session, user_id, entry_id, payload.model_dump(exclude_unset=True)
     )
@@ -446,7 +444,7 @@ async def updated_education(
 
 
 async def deleted_education(entry_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
-    await refuse_education_while_in_review(session, user_id)
+    await refuse_while_in_review(session, user_id, FrozenRecord.EDUCATION)
     removed = await delete_education(session, user_id, entry_id)
     await session.commit()
     return removed
@@ -466,6 +464,7 @@ async def deleted_goal(user_id: OwnerDep, session: SessionDep) -> bool:
 
 
 async def created_award(payload: AwardWrite, user_id: OwnerDep, session: SessionDep) -> UUID:
+    await refuse_while_in_review(session, user_id, FrozenRecord.AWARDS)
     award_id = await create_award(session, user_id, payload.model_dump())
     await session.commit()
     return award_id
@@ -474,12 +473,14 @@ async def created_award(payload: AwardWrite, user_id: OwnerDep, session: Session
 async def updated_award(
     award_id: UUID, payload: AwardPatch, user_id: OwnerDep, session: SessionDep
 ) -> bool:
+    await refuse_while_in_review(session, user_id, FrozenRecord.AWARDS)
     changed = await update_award(session, user_id, award_id, payload.model_dump(exclude_unset=True))
     await session.commit()
     return changed
 
 
 async def deleted_award(award_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
+    await refuse_while_in_review(session, user_id, FrozenRecord.AWARDS)
     removed = await delete_award(session, user_id, award_id)
     await session.commit()
     return removed
@@ -551,13 +552,17 @@ UpsertedProfileDep = Annotated[None, Depends(upserted_profile)]
 async def replaced_languages(
     payload: UserLanguagesWrite, user_id: OwnerDep, session: SessionDep
 ) -> None:
-    await replace_languages(
-        session, user_id, [entry.model_dump(exclude_unset=True) for entry in payload.languages]
-    )
+    entries = [entry.model_dump(exclude_unset=True) for entry in payload.languages]
+    await refuse_frozen_changes(session, user_id, {"languages": entries})
+    await replace_languages(session, user_id, entries)
     await session.commit()
 
 
 ReplacedLanguagesDep = Annotated[None, Depends(replaced_languages)]
+
+
+#: The reviewed field each image is, while a mentor application is in review.
+_FROZEN_IMAGE = {AssetKind.AVATAR: FrozenRecord.AVATAR, AssetKind.BANNER: FrozenRecord.BANNER}
 
 
 async def _store_image(
@@ -565,12 +570,16 @@ async def _store_image(
 ) -> str:
     """Validate, re-encode, store, point the profile at it, drop the old one.
 
+    **Refused first while an application is in review** (decision 273), under
+    the mentor lock and before any byte reaches storage.
+
     **The body was already read before this ran** — FastAPI parses the multipart
     form to resolve `UploadFile`, spooling it to disk first. So the limit that
     saves the transfer lives in `api/limits.py`, and the one here is the limit on
     the *image*: read one byte past the cap and refuse if it arrives, which needs
     no trust in a header.
     """
+    await refuse_while_in_review(session, user_id, _FROZEN_IMAGE[kind])
     payload = await upload.read(MAX_UPLOAD_BYTES + 1)
     if len(payload) > MAX_UPLOAD_BYTES:
         raise ValidationError("that file is larger than 5 MB")
@@ -624,6 +633,8 @@ async def _removed_image(
     rather than failing a change that is already done. `drop_url` already never
     raises; a missing configuration is the same kind of skip.
     """
+    # Refused even with nothing stored, as every education write is (decision 273).
+    await refuse_while_in_review(session, user_id, _FROZEN_IMAGE[kind])
     previous = await clear_image(session, user_id, kind)
     await session.commit()
     if previous is None:

@@ -185,11 +185,18 @@ IN_REVIEW_RESPONSE: dict[int | str, dict[str, str]] = {
     status.HTTP_409_CONFLICT: {
         "description": (
             "`/problems/mentor-application-in-review`: your mentor application is "
-            "submitted and awaiting a decision, so its reviewed fields are frozen "
-            "(education, LinkedIn, headline, About, help areas, study country and "
-            "programme). `fields` names what this request would have changed. Only "
-            "a change is refused: a frozen field resent unchanged beside other "
-            "edits saves. Approve or decline unlocks."
+            "submitted and awaiting a decision, so what the reviewer judges is "
+            "frozen: the photo (`avatar`: an upload, a removal, or the crop "
+            "`avatar_focus`), the cover (`banner` uploads and removals, "
+            "`cover_color`, `cover_art`), `headline`, About (`about_me`), "
+            "`origin_country_id`, the study country and programme, `languages`, "
+            "help areas (`offering_ids`), `guide_country_ids`, `education` and "
+            "`awards`. `fields` names what this request would have changed. A "
+            "photo, banner, education or award write always counts as a change, "
+            "even a removal with nothing stored. Any other frozen field is refused "
+            "only when it changes: resent unchanged beside other edits, it saves. "
+            "`social_linkedin` may be corrected but not cleared. Approve or "
+            "decline unlocks."
         )
     }
 }
@@ -302,7 +309,7 @@ async def clear_goal(removed: DeletedGoalDep) -> None:
         "Self-reported. `verification_status` is set by the platform, not by the "
         "holder — **nothing verifies an award yet**, so every row is unverified."
     ),
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def add_award(award_id: CreatedAwardDep, response: Response) -> CreatedRead:
     response.headers["Location"] = f"/api/v1/users/me/awards/{award_id}"
@@ -313,7 +320,7 @@ async def add_award(award_id: CreatedAwardDep, response: Response) -> CreatedRea
     "/awards/{award_id}",
     response_model=UpdatedRead,
     summary="Change an award",
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def edit_award(changed: UpdatedAwardDep) -> UpdatedRead:
     if not changed:
@@ -326,7 +333,7 @@ async def edit_award(changed: UpdatedAwardDep) -> UpdatedRead:
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remove an award",
     description="**Soft** — `user_awards` carries `deleted_at`, unlike goals.",
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def remove_award(removed: DeletedAwardDep) -> None:
     if not removed:
@@ -417,7 +424,7 @@ async def edit_profile(_: UpsertedProfileDep) -> None:
         "The same goes for listing one language twice.\n\n"
         "`proficiency` defaults to `fluent` when omitted."
     ),
-    responses=WRITE_RESPONSES,
+    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def set_languages(_: ReplacedLanguagesDep) -> None:
     return None
@@ -503,7 +510,7 @@ UPLOAD_RESPONSES: dict[int | str, dict[str, str]] = {
     response_model=AvatarUploadRead,
     summary="Upload a profile picture",
     description=IMAGE_DESCRIPTION,
-    responses=UPLOAD_RESPONSES,
+    responses=UPLOAD_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def upload_avatar(uploaded: UploadedAvatarDep) -> AvatarUploadRead:
     url, (x, y) = uploaded
@@ -515,7 +522,7 @@ async def upload_avatar(uploaded: UploadedAvatarDep) -> AvatarUploadRead:
     response_model=BannerUploadedRead,
     summary="Upload a profile banner",
     description=IMAGE_DESCRIPTION,
-    responses=UPLOAD_RESPONSES,
+    responses=UPLOAD_RESPONSES | IN_REVIEW_RESPONSE,
 )
 async def upload_banner(url: UploadedBannerDep) -> BannerUploadedRead:
     return BannerUploadedRead(banner_url=url)
@@ -527,8 +534,10 @@ async def upload_banner(url: UploadedBannerDep) -> BannerUploadedRead:
     summary="Remove the profile banner",
     description=(
         "Unsets the banner, so the cover shows `cover_color` and `cover_art` again, "
-        "and deletes the stored image. `204` whether or not there was one."
+        "and deletes the stored image. `204` whether or not there was one, "
+        "except while a mentor application is in review (`409`)."
     ),
+    responses=IN_REVIEW_RESPONSE,
 )
 async def remove_banner(_: RemovedBannerDep) -> None:
     return None
@@ -541,8 +550,10 @@ async def remove_banner(_: RemovedBannerDep) -> None:
     description=(
         "Unsets the photo and its `avatar_focus`, so the UI falls back to the "
         "initials avatar, and deletes the stored image. `204` whether or not there "
-        "was one. Owner only: anyone else gets `404`."
+        "was one, except while a mentor application is in review (`409`). Owner "
+        "only: anyone else gets `404`."
     ),
+    responses=IN_REVIEW_RESPONSE,
 )
 async def remove_avatar(_: RemovedAvatarDep) -> None:
     return None
