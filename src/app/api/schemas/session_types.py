@@ -38,7 +38,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-from app.api.schemas.common import Normalised, publish_window_minimum
+from app.api.schemas.common import Normalised, publish_window_minimum, refuse_repeats
 from app.api.schemas.intake import QuestionRead, QuestionWrite
 from app.api.schemas.profile import LookupRef
 from app.core.config import BOOKING_WINDOW_CEILING, MIN_BOOKING_WINDOW_DAYS
@@ -86,9 +86,10 @@ def _refuse_two_set_fields(model: BaseModel) -> None:
     # spelling of one of them, so it is refused rather than guessed at (#215).
     if "application_stages" in fields and getattr(model, "application_stages", None) is None:
         raise ValueError("application_stages: send [] for any stage, or leave it out")
-    ids = getattr(model, "service_offering_ids", None)
-    if ids is not None and len(set(ids)) != len(ids):
-        raise ValueError("service_offering_ids: an offering appears twice")
+    refuse_repeats(
+        getattr(model, "service_offering_ids", None),
+        "service_offering_ids: an offering appears twice",
+    )
 
 
 def _stages(row: dict[str, object]) -> list[ApplicationStage]:

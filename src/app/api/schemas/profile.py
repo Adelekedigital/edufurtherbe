@@ -33,6 +33,7 @@ from app.api.schemas.common import (
     XWrite,
     YouTubeWrite,
     publish_window_minimum,
+    refuse_repeats,
 )
 from app.core.config import BOOKING_WINDOW_CEILING, MIN_BOOKING_WINDOW_DAYS
 from app.domain.availability import (
@@ -508,8 +509,22 @@ class GoalWrite(Normalised):
     )
     target_start_term: str | None = Field(default=None, max_length=50)
     notes: str | None = Field(default=None, max_length=2000)
-    country_ids: list[UUID] | None = None
-    need_ids: list[UUID] | None = None
+    country_ids: list[UUID] | None = Field(
+        default=None,
+        description=(
+            "`/catalog/countries` ids, highest priority first; the list replaces the saved "
+            "one. A country twice is a `422` at `/country_ids`; an id that names no "
+            "country is a `422` at `/country_ids/{index}`. Nothing is saved on a `422`."
+        ),
+    )
+    need_ids: list[UUID] | None = Field(
+        default=None,
+        description=(
+            "`/catalog/service-offerings` ids; the list replaces the saved one. A need "
+            "twice is a `422` at `/need_ids`; an id that names no offering is a `422` "
+            "at `/need_ids/{index}`. Nothing is saved on a `422`."
+        ),
+    )
     #: Omitted or `null` leaves the list, as `country_ids` does; `[]` clears it.
     schools: list[GoalSchoolWrite] | None = Field(
         default=None,
@@ -526,6 +541,18 @@ class GoalWrite(Normalised):
         if value is None:
             return None
         return _composed_visible(value, "a field of study", FIELD_OF_STUDY_MAX_LENGTH)
+
+    @field_validator("country_ids")
+    @classmethod
+    def _each_country_once(cls, value: list[UUID] | None) -> list[UUID] | None:
+        refuse_repeats(value, "a country appears twice")
+        return value
+
+    @field_validator("need_ids")
+    @classmethod
+    def _each_need_once(cls, value: list[UUID] | None) -> list[UUID] | None:
+        refuse_repeats(value, "a need appears twice")
+        return value
 
 
 class AwardWrite(Normalised):
@@ -625,8 +652,7 @@ class MentorProfileWrite(Normalised):
     @field_validator("guide_country_ids")
     @classmethod
     def _each_country_once(cls, value: list[UUID] | None) -> list[UUID] | None:
-        if value is not None and len(set(value)) != len(value):
-            raise ValueError("a country appears twice")
+        refuse_repeats(value, "a country appears twice")
         return value
 
 
@@ -948,9 +974,9 @@ class UserLanguagesWrite(Normalised):
         primaries = [entry for entry in self.languages if entry.is_primary]
         if len(primaries) > 1:
             raise ValueError("only one language may be primary")
-        ids = [entry.language_id for entry in self.languages]
-        if len(ids) != len(set(ids)):
-            raise ValueError("a language may appear only once")
+        refuse_repeats(
+            [entry.language_id for entry in self.languages], "a language may appear only once"
+        )
         return self
 
 

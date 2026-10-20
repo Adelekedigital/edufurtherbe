@@ -13,7 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.api.schemas.common import Normalised
+from app.api.schemas.common import Normalised, refuse_repeats
 from app.domain.enums import IntakeFileType, QuestionType
 from app.domain.intake import MAX_OPTION_LENGTH, MAX_OPTIONS, MIN_OPTIONS
 
@@ -48,9 +48,7 @@ def _check_options(options: list[OptionWrite] | list[OptionPatch]) -> None:
         raise ValueError(
             f"a choice question needs {MIN_OPTIONS} to {MAX_OPTIONS} options; {len(options)} given"
         )
-    texts = [option.text.casefold() for option in options]
-    if len(set(texts)) != len(texts):
-        raise ValueError("two options have the same text")
+    refuse_repeats([option.text.casefold() for option in options], "two options have the same text")
 
 
 class QuestionRead(BaseModel):
@@ -144,9 +142,10 @@ class QuestionPatch(Normalised):
     def _options_are_well_formed(self) -> Self:
         if self.options is not None:
             _check_options(self.options)
-            ids = [o.id for o in self.options if o.id is not None]
-            if len(set(ids)) != len(ids):
-                raise ValueError("an option id appears more than once")
+            refuse_repeats(
+                [o.id for o in self.options if o.id is not None],
+                "an option id appears more than once",
+            )
         return self
 
 
