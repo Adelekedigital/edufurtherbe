@@ -35,6 +35,7 @@ from app.api.deps import (
     DeletedAvailabilityRuleDep,
     UpdatedAvailabilityRuleDep,
 )
+from app.api.errors import with_declined
 from app.api.schemas.acks import CreatedRead, DeletedRead, UpdatedRead
 from app.api.schemas.availability import AvailabilityExceptionRead, AvailabilityRuleRead
 from app.core.errors import NotFoundError
@@ -112,7 +113,7 @@ async def list_availability_rules(rules: AvailabilityRulesDep) -> list[Availabil
         "will not split it: which side of midnight was meant is not something "
         "it can know."
     ),
-    responses=WRITE_RESPONSES,
+    responses=with_declined(WRITE_RESPONSES),
 )
 async def add_availability_rule(
     created: CreatedAvailabilityRuleDep, user_id: str, response: Response
@@ -130,7 +131,7 @@ async def add_availability_rule(
         "Moving a window onto one of the mentor's others is refused with 409, "
         "the same as adding an overlapping one."
     ),
-    responses=WRITE_RESPONSES,
+    responses=with_declined(WRITE_RESPONSES),
 )
 async def edit_availability_rule(changed: UpdatedAvailabilityRuleDep) -> UpdatedRead:
     if not changed:
@@ -147,7 +148,7 @@ async def edit_availability_rule(changed: UpdatedAvailabilityRuleDep) -> Updated
         "slot it occupied, so the mentor can immediately declare a different "
         "one covering the same hours."
     ),
-    responses=WRITE_RESPONSES,
+    responses=with_declined(WRITE_RESPONSES),
 )
 async def remove_availability_rule(removed: DeletedAvailabilityRuleDep) -> DeletedRead:
     if not removed:
@@ -187,7 +188,7 @@ async def list_availability_exceptions(
         "older one-off: the cost of being wrong that way is a mentor with no "
         "booking, and the other way it is a mentor booked on their holiday."
     ),
-    responses=WRITE_RESPONSES,
+    responses=with_declined(WRITE_RESPONSES),
 )
 async def add_availability_exception(
     created: CreatedAvailabilityExceptionDep, user_id: str, response: Response
@@ -201,7 +202,7 @@ async def add_availability_exception(
     response_model=DeletedRead,
     summary="Remove a dated exception",
     description="Soft delete. The dates it covered return to whatever the weekly rules say.",
-    responses=WRITE_RESPONSES,
+    responses=with_declined(WRITE_RESPONSES),
 )
 async def remove_availability_exception(
     removed: DeletedAvailabilityExceptionDep,

@@ -29,6 +29,7 @@ from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionT
 from app.core.errors import (
     NotFoundError,
 )
+from app.infra.db.application_freeze import refuse_while_declined
 from app.infra.db.idempotency import Replayed, record_response
 from app.infra.db.intake_store import (
     create_question,
@@ -75,6 +76,7 @@ async def own_session_type_windows(
 async def created_session_type_window(
     session_type_id: UUID, payload: AvailabilityRuleWrite, user: CurrentUserDep, session: SessionDep
 ) -> UUID:
+    await refuse_while_declined(session, user["id"])
     window_id = await create_window(session, user["id"], session_type_id, payload.model_dump())
     if window_id is None:
         raise NotFoundError("no such session type")
@@ -89,6 +91,7 @@ async def updated_session_type_window(
     user: CurrentUserDep,
     session: SessionDep,
 ) -> bool:
+    await refuse_while_declined(session, user["id"])
     changed = await update_window(
         session, user["id"], session_type_id, window_id, payload.model_dump(exclude_unset=True)
     )
@@ -99,6 +102,7 @@ async def updated_session_type_window(
 async def deleted_session_type_window(
     session_type_id: UUID, window_id: UUID, user: CurrentUserDep, session: SessionDep
 ) -> bool:
+    await refuse_while_declined(session, user["id"])
     removed = await delete_window(session, user["id"], session_type_id, window_id)
     await session.commit()
     return removed
@@ -209,7 +213,8 @@ async def created_own_session_type(
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
     # After the replay lookup: a retry of a create that already succeeded gets
-    # its stored answer, whatever the configured maximum became since.
+    # its stored answer, whatever the configured maximum or the decision became since.
+    await refuse_while_declined(session, user["id"])
     refuse_window_out_of_range(payload.booking_window_days, window)
 
     session_type_id = await create_session_type(session, user["id"], payload.model_dump())
@@ -240,6 +245,7 @@ async def updated_own_session_type(
     """`exclude_unset` is what makes this a PATCH: a field the client did not send
     is absent, not null. Without it every omitted field is written as its default
     and a one-field edit blanks the rest."""
+    await refuse_while_declined(session, user["id"])
     stored = None
     if window_out_of_range(payload.booking_window_days, window):
         own = await get_own_session_type(session, user["id"], session_type_id, window=window)
@@ -257,6 +263,7 @@ async def deleted_own_session_type(
 ) -> bool | DeletionScheduled:
     """Delete now (`True`), schedule behind booked sessions (a `DeletionScheduled`),
     or `False` for not yours or already gone (#218)."""
+    await refuse_while_declined(session, user["id"])
     removed = await delete_session_type(session, user["id"], session_type_id)
     await session.commit()
     return removed
@@ -266,6 +273,7 @@ async def restored_own_session_type(
     session_type_id: UUID, user: CurrentUserDep, session: SessionDep, window: BookingWindowDep
 ) -> dict[str, Any]:
     """Cancel a scheduled deletion and answer the offering as the list shows it."""
+    await refuse_while_declined(session, user["id"])
     if not await restore_session_type(session, user["id"], session_type_id):
         raise NotFoundError("no such session type")
     await session.commit()
@@ -324,6 +332,8 @@ async def created_own_question(
     )
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
+    # After the replay lookup, as for the offering above.
+    await refuse_while_declined(session, user["id"])
 
     question_id = await create_question(session, user["id"], session_type_id, payload.model_dump())
     if question_id is None:
@@ -342,6 +352,7 @@ async def updated_own_question(
     user: CurrentUserDep,
     session: SessionDep,
 ) -> bool:
+    await refuse_while_declined(session, user["id"])
     changed = await update_question(
         session,
         user["id"],
@@ -356,6 +367,7 @@ async def updated_own_question(
 async def deleted_own_question(
     session_type_id: UUID, question_id: UUID, user: CurrentUserDep, session: SessionDep
 ) -> bool:
+    await refuse_while_declined(session, user["id"])
     removed = await delete_question(session, user["id"], session_type_id, question_id)
     await session.commit()
     return removed
@@ -365,6 +377,7 @@ async def reordered_own_questions(
     session_type_id: UUID, payload: QuestionOrderWrite, user: CurrentUserDep, session: SessionDep
 ) -> bool:
     """The whole form renumbered in one transaction (#197)."""
+    await refuse_while_declined(session, user["id"])
     reordered = await reorder_questions(session, user["id"], session_type_id, payload.question_ids)
     await session.commit()
     return reordered

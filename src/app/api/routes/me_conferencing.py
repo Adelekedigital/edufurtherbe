@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import OwnConferencingDep, UpdatedConferencingDep
+from app.api.errors import with_declined
 from app.api.schemas.conferencing import ConferencingRead
 from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
 
@@ -49,7 +50,7 @@ async def read_own_conferencing(saved: OwnConferencingDep) -> ConferencingRead:
         "`custom` and refused for the others (`422`). Replaces your previous "
         "default."
     ),
-    responses=RESPONSES,
+    responses=with_declined(RESPONSES),
 )
 async def update_own_conferencing(saved: UpdatedConferencingDep) -> ConferencingRead:
     return ConferencingRead.of(saved)

@@ -42,6 +42,7 @@ from app.api.deps import (
     UpsertedGoalDep,
     UpsertedProfileDep,
 )
+from app.api.errors import with_declined
 from app.api.schemas.acks import CreatedRead, UpdatedRead
 from app.api.schemas.common import AvatarFocusRead, Page
 from app.api.schemas.profile import (
@@ -377,7 +378,7 @@ async def apply_as_mentor(profile_id: CreatedMentorProfileDep, response: Respons
         "writable here — a mentor who could approve or relist themselves is not "
         "being reviewed."
     ),
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=with_declined(WRITE_RESPONSES | IN_REVIEW_RESPONSE),
 )
 async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> UpdatedRead:
     if not changed:

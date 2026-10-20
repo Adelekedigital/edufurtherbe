@@ -26,6 +26,7 @@ from app.api.deps import (
     ReorderedOwnQuestionsDep,
     UpdatedOwnQuestionDep,
 )
+from app.api.errors import with_declined
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.acks import CreatedRead, UpdatedRead
 from app.api.schemas.common import Page
@@ -107,7 +108,7 @@ async def read_own_questions(questions: OwnQuestionsDep) -> Page[QuestionRead]:
         "the same key replays the first answer; the same key sent to a different "
         "offering, or with a different body, is a `422`."
     ),
-    responses=QUESTION_RESPONSES | FULL_FORM,
+    responses=with_declined(QUESTION_RESPONSES | FULL_FORM),
 )
 async def create_own_question(
     created: CreatedOwnQuestionDep, session_type_id: str, response: Response
@@ -132,7 +133,7 @@ async def create_own_question(
         "not change retroactively, and reworded questions are why a form's "
         "history is worth keeping."
     ),
-    responses=QUESTION_RESPONSES,
+    responses=with_declined(QUESTION_RESPONSES),
 )
 async def edit_own_question(changed: UpdatedOwnQuestionDep) -> UpdatedRead:
     if not changed:
@@ -152,7 +153,7 @@ async def edit_own_question(changed: UpdatedOwnQuestionDep) -> UpdatedRead:
         "This frees a slot against the "
         f"{MAX_QUESTIONS}-question limit immediately."
     ),
-    responses=QUESTION_RESPONSES,
+    responses=with_declined(QUESTION_RESPONSES),
 )
 async def remove_own_question(removed: DeletedOwnQuestionDep) -> None:
     if not removed:
@@ -172,7 +173,7 @@ async def remove_own_question(removed: DeletedOwnQuestionDep) -> None:
         "the new order is needed, rather than a second copy of it here.\n\n"
         "An offering that is not yours, or is deleted, gets `404`."
     ),
-    responses=QUESTION_RESPONSES,
+    responses=with_declined(QUESTION_RESPONSES),
 )
 async def reorder_own_questions(reordered: ReorderedOwnQuestionsDep) -> Response:
     if not reordered:

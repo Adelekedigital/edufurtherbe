@@ -34,6 +34,7 @@ from app.api.deps import (
     UpdatedOwnSessionTypeDep,
     UpdatedSessionTypeWindowDep,
 )
+from app.api.errors import with_declined
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.acks import CreatedRead, DeletedRead, UpdatedRead
 from app.api.schemas.availability import AvailabilityRuleRead
@@ -160,7 +161,7 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
         "of creating a second offering; the same key with a different body is a "
         "`422`. Absent, nothing changes."
     ),
-    responses=WRITE_RESPONSES | NAME_CONFLICT,
+    responses=with_declined(WRITE_RESPONSES | NAME_CONFLICT),
 )
 async def create_own_session_type(
     created: CreatedOwnSessionTypeDep, response: Response
@@ -192,7 +193,7 @@ async def create_own_session_type(
         "An offering that is not yours, or is deleted, gets `404`. Not "
         "`403`: that would confirm the id exists."
     ),
-    responses=WRITE_RESPONSES | NAME_CONFLICT,
+    responses=with_declined(WRITE_RESPONSES | NAME_CONFLICT),
 )
 async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> UpdatedRead:
     if not changed:
@@ -223,7 +224,7 @@ async def edit_own_session_type(changed: UpdatedOwnSessionTypeDep) -> UpdatedRea
         "it.\n\n"
         "An offering that is not yours, or is already deleted, gets `404`."
     ),
-    responses=WRITE_RESPONSES
+    responses=with_declined(WRITE_RESPONSES)
     | {
         status.HTTP_202_ACCEPTED: {
             "model": DeletionScheduledRead,
@@ -260,7 +261,7 @@ async def remove_own_session_type(removed: DeletedOwnSessionTypeDep) -> Response
         "no-op on an offering with nothing scheduled.\n\n"
         "An offering that is not yours, or is deleted, gets `404`."
     ),
-    responses=WRITE_RESPONSES,
+    responses=with_declined(WRITE_RESPONSES),
 )
 async def restore_own_session_type(restored: RestoredOwnSessionTypeDep) -> OwnSessionTypeRead:
     return OwnSessionTypeRead.from_row(restored)
@@ -295,7 +296,7 @@ async def list_session_type_windows(windows: SessionTypeWindowsDep) -> Page[Avai
     status_code=status.HTTP_201_CREATED,
     summary="Add a weekly window to an offering",
     description=WINDOW_DESCRIPTION,
-    responses=OWNER_RESPONSES,
+    responses=with_declined(OWNER_RESPONSES),
 )
 async def add_session_type_window(
     created: CreatedSessionTypeWindowDep, session_type_id: str, response: Response
@@ -311,7 +312,7 @@ async def add_session_type_window(
     description=(
         "Only the fields sent change. Moving onto another window of this offering is a 409."
     ),
-    responses=OWNER_RESPONSES,
+    responses=with_declined(OWNER_RESPONSES),
 )
 async def edit_session_type_window(changed: UpdatedSessionTypeWindowDep) -> UpdatedRead:
     if not changed:
@@ -327,7 +328,7 @@ async def edit_session_type_window(changed: UpdatedSessionTypeWindowDep) -> Upda
         "Soft delete: the window stops being offered and stops blocking its hours. "
         "Removing an offering's last window returns it to your general availability."
     ),
-    responses=OWNER_RESPONSES,
+    responses=with_declined(OWNER_RESPONSES),
 )
 async def remove_session_type_window(removed: DeletedSessionTypeWindowDep) -> DeletedRead:
     if not removed:
