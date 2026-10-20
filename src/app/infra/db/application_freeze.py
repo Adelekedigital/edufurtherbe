@@ -32,8 +32,10 @@ from app.infra.db.models.mentoring import (
     MentorGuideCountry,
     MentorProfile,
     MentorServiceOffering,
+    ServiceOffering,
 )
 from app.infra.db.models.user import UserProfile
+from app.infra.db.offerings import live_offering
 from app.infra.db.predicates import application_in_review
 from app.infra.db.profile_writer import held_languages, resolved_languages
 
@@ -68,9 +70,15 @@ async def _in_review(session: AsyncSession, user_id: UUID) -> dict[str, Any] | N
     """
     if not await lock_mentor(session, user_id):
         return None
-    offerings = _mentor_array(
-        func.array_agg(MentorServiceOffering.service_offering_id),
-        MentorServiceOffering.mentor_user_id,
+    # **Live offerings only**, the set the profile read shows and a write may
+    # send: a retired one held is invisible, so counting it would refuse every
+    # resend of the list the mentor can see.
+    offerings = (
+        select(func.coalesce(func.array_agg(MentorServiceOffering.service_offering_id), []))
+        .join(ServiceOffering, ServiceOffering.id == MentorServiceOffering.service_offering_id)
+        .where(MentorServiceOffering.mentor_user_id == MentorProfile.user_id, live_offering())
+        .correlate(MentorProfile)
+        .scalar_subquery()
     )
     guide_countries = _mentor_array(
         func.array_agg(

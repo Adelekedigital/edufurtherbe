@@ -634,7 +634,15 @@ class MentorProfileWrite(Normalised):
         ),
     )
     primary_study_program: str | None = Field(default=None, max_length=300)
-    offering_ids: list[UUID] | None = None
+    offering_ids: list[UUID] | None = Field(
+        default=None,
+        description=(
+            "The `/catalog/service-offerings` ids you help with; the list replaces the "
+            "saved one, `[]` clears it, omitted or `null` leaves it. An offering twice is "
+            "a `422` at `/offering_ids`; one that is unknown or retired is a `422` at "
+            "`/offering_ids/{index}`. Nothing is saved on a `422`."
+        ),
+    )
     #: Decision 276. Absent and `null` alike leave the list, as `offering_ids`
     #: does, so one body carries one absent-value rule.
     guide_country_ids: list[UUID] | None = Field(
@@ -653,6 +661,12 @@ class MentorProfileWrite(Normalised):
     @classmethod
     def _each_country_once(cls, value: list[UUID] | None) -> list[UUID] | None:
         refuse_repeats(value, "a country appears twice")
+        return value
+
+    @field_validator("offering_ids")
+    @classmethod
+    def _each_offering_once(cls, value: list[UUID] | None) -> list[UUID] | None:
+        refuse_repeats(value, "an offering appears twice")
         return value
 
 
