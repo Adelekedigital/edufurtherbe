@@ -120,12 +120,6 @@ def canonical(network: str, value: str | None) -> str | None:
 #: Each old column, the platform it becomes, and the position it lands at.
 COLUMNS = (("social_twitter", "x", 0), ("social_youtube", "youtube", 1))
 
-#: Clearing one copied column, written out per column rather than composed.
-_CLEAR = {
-    "social_twitter": "UPDATE user_profiles SET social_twitter = NULL WHERE user_id = :user_id",
-    "social_youtube": "UPDATE user_profiles SET social_youtube = NULL WHERE user_id = :user_id",
-}
-
 
 def upgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
@@ -222,12 +216,12 @@ def downgrade() -> None:
     ``users``, so it may exist without one). Losing it is an operator's call,
     made before downgrading.
 
-    **The table is the truth once upgraded**, so every column value the backfill
-    could read is cleared first and then rewritten from the table: a link the
-    user deleted stays deleted, rather than coming back from its old column.
-    X and YouTube go back in their canonical form, which is what a read
-    published. A value the backfill could not read was never copied, and keeps
-    its column.
+    **A row overwrites its column; a column with no row is kept.** No row is
+    deleted before the code PR, which is the first writer of this table, and
+    from then on deleting a link also clears its column. So a column value with
+    no row is one written after the upgrade, and keeping it is what preserves
+    it. X and YouTube go back in their canonical form, which is what a read
+    published.
     """
     op.execute("SET lock_timeout = '3s'")
     bind = op.get_bind()
@@ -250,19 +244,6 @@ def downgrade() -> None:
             f"{homeless} X or YouTube link(s) belong to users with no profile row, "
             "so their column does not exist; downgrading would delete them"
         )
-    rows = bind.execute(
-        sa.text(
-            "SELECT user_id, social_twitter, social_youtube FROM user_profiles "
-            "WHERE social_twitter IS NOT NULL OR social_youtube IS NOT NULL"
-        )
-    ).mappings()
-    for row in list(rows):
-        for column, platform, _position in COLUMNS:
-            if canonical(platform, row[column]) is not None:
-                bind.execute(
-                    sa.text(_CLEAR[column]),
-                    {"user_id": row["user_id"]},
-                )
     bind.execute(
         sa.text(
             "UPDATE user_profiles p SET social_twitter = l.url FROM user_links l "
