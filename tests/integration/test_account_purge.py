@@ -458,3 +458,37 @@ async def test_a_loops_contact_a_live_account_shares_is_kept(db_engine: AsyncEng
 
     assert (await purge(db_engine, FakeAdmin(), FakeStorage(), contacts))["purged"] == 1
     assert contacts.deleted == []
+
+
+async def test_an_account_restored_after_being_listed_keeps_its_sign_in(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run lists every due account first; one restored before its turn (a
+    clock between two servers is enough) must keep its sign-in and contact,
+    not only its rows. The account row is locked before either provider call."""
+    first, _ = await a_full_account(db_engine, "listed-first")
+    second, second_auth = await a_full_account(db_engine, "listed-restored")
+    await deleted(db_engine, first, purge_in=-2 * DAY)
+    await deleted(db_engine, second, purge_in=-DAY)
+    real = account_purge._lock_due
+
+    async def restored_first(session: Any, user_id: UUID, *, now: dt.datetime) -> Any:
+        if user_id == second:
+            async with db_engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "UPDATE users SET deleted_at = NULL, deletion_purge_at = NULL WHERE id = :u"
+                    ),
+                    {"u": second},
+                )
+        return await real(session, user_id, now=now)
+
+    monkeypatch.setattr(account_purge, "_lock_due", restored_first)
+    admin, contacts = FakeAdmin(), FakeContacts()
+
+    counts = await purge(db_engine, admin, FakeStorage(), contacts)
+
+    assert counts == {"due": 2, "purged": 1, "failed": 0}
+    assert second_auth not in admin.deleted
+    assert "purge-listed-restored@example.test" not in contacts.deleted
+    assert await count(db_engine, "user_profiles", "user_id", second) == 1

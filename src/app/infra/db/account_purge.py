@@ -141,9 +141,8 @@ def _tombstone(user_id: UUID) -> str:
 async def purge_account(
     session: AsyncSession, user_id: UUID, *, now: dt.datetime
 ) -> list[str] | None:
-    """Purge one account, or ``None`` if it is no longer due (restored since it
-    was listed). Returns the image URLs to drop **after** the caller commits.
-    Does not commit."""
+    """Purge one account, or ``None`` if it is no longer due. Returns the image
+    URLs to drop **after** the caller commits. Does not commit."""
     locked = await session.execute(
         select(User.id).where(User.id == user_id, *_due(now)).with_for_update()
     )
@@ -198,6 +197,21 @@ async def purge_account(
     return [url for url in (images or ()) if url]
 
 
+async def _lock_due(
+    session: AsyncSession, user_id: UUID, *, now: dt.datetime
+) -> tuple[UUID | None, str] | None:
+    """Lock the account row if it is still due, and read what the providers need
+    (`auth_id`, the real address). ``None`` once it is not: restored, or purged
+    by another run. Restore's own clock may differ from this job's, so the lock,
+    not the shared boundary alone, is what keeps a restored sign-in safe."""
+    row = (
+        await session.execute(
+            select(User.auth_id, User.email).where(User.id == user_id, *_due(now)).with_for_update()
+        )
+    ).first()
+    return None if row is None else (row.auth_id, row.email)
+
+
 async def _loops_contact(session: AsyncSession, user_id: UUID, email: str) -> str | None:
     """The address to delete at Loops, unless a live account now holds it too:
     the contact would then be theirs as much as this one's."""
@@ -234,8 +248,8 @@ async def purge_due_accounts(
     """
     async with factory() as session:
         due = (
-            await session.execute(
-                select(User.id, User.auth_id, User.email)
+            await session.scalars(
+                select(User.id)
                 .where(*_due(now))
                 .order_by(User.deletion_purge_at, User.id)
                 .limit(PURGE_BATCH)
@@ -245,18 +259,24 @@ async def purge_due_accounts(
     if dry_run:
         return counts
 
-    for user_id, auth_id, email in due:
+    for user_id in due:
         try:
-            if contacts is not None:
-                async with factory() as session:
-                    address = await _loops_contact(session, user_id, email)
-                if address is not None:
-                    await asyncio.to_thread(contacts.delete, address)
-            if auth_id is not None:
-                await asyncio.to_thread(admin.delete_user, auth_id)
+            # **Locked before either provider is called**, and held through our
+            # commit: an account restored after it was listed is skipped whole,
+            # sign-in and contact included, and a restore arriving now waits.
             async with factory() as session:
+                held = await _lock_due(session, user_id, now=now)
+                if held is None:
+                    continue
+                auth_id, email = held
+                if contacts is not None:
+                    address = await _loops_contact(session, user_id, email)
+                    if address is not None:
+                        await asyncio.to_thread(contacts.delete, address)
+                if auth_id is not None:
+                    await asyncio.to_thread(admin.delete_user, auth_id)
                 images = await purge_account(session, user_id, now=now)
-                if images is None:
+                if images is None:  # pragma: no cover - the lock above holds the row
                     continue
                 await session.commit()
         except (AdminApiError, ContactsError, SQLAlchemyError) as exc:
