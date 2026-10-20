@@ -12,13 +12,13 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from app.api.schemas.common import AvatarFocusRead
+from app.api.schemas.common import AvatarFocusRead, CoverRead
 from app.domain.met_mentors import Bookability, bookability
 
 
-class MetMentorRead(BaseModel):
+class MetMentorRead(CoverRead):
     """One mentor you have had at least one completed session with."""
 
     id: str = Field(
@@ -82,6 +82,7 @@ class MetMentorRead(BaseModel):
             last_name=row["last_name"],
             avatar_url=row["avatar_url"],
             avatar_focus=AvatarFocusRead.of(row["avatar_focus_x"], row["avatar_focus_y"]),
+            **CoverRead.cover_of(row["cover_color"], row["cover_art"]),
             degree=row["degree"],
             institution=row["institution"],
             session_count=int(row["session_count"]),

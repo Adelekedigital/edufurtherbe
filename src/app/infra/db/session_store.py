@@ -168,6 +168,8 @@ _PARTY_COLUMNS = (
     _MENTOR_PROFILE.avatar_url.label("mentor_avatar_url"),
     _MENTOR_PROFILE.avatar_focus_x.label("mentor_avatar_focus_x"),
     _MENTOR_PROFILE.avatar_focus_y.label("mentor_avatar_focus_y"),
+    _MENTOR_PROFILE.cover_color.label("mentor_cover_color"),
+    _MENTOR_PROFILE.cover_art.label("mentor_cover_art"),
     # Through the same `live()` join as the name, so a party who left takes
     # their zone with them.
     _MENTOR.timezone.label("mentor_timezone"),
@@ -176,6 +178,8 @@ _PARTY_COLUMNS = (
     _MENTEE_PROFILE.avatar_url.label("mentee_avatar_url"),
     _MENTEE_PROFILE.avatar_focus_x.label("mentee_avatar_focus_x"),
     _MENTEE_PROFILE.avatar_focus_y.label("mentee_avatar_focus_y"),
+    _MENTEE_PROFILE.cover_color.label("mentee_cover_color"),
+    _MENTEE_PROFILE.cover_art.label("mentee_cover_art"),
     _MENTEE.timezone.label("mentee_timezone"),
     # Each party's top qualification, the pending card's "BSc Student at
     # FUTA". Correlated on the **live** alias, so a party who left loses it

@@ -478,6 +478,8 @@ def _card(
             UserProfile.avatar_url,
             UserProfile.avatar_focus_x,
             UserProfile.avatar_focus_y,
+            UserProfile.cover_color,
+            UserProfile.cover_art,
             _STUDY_COUNTRY.c.display_name.label("primary_study_country"),
             _ORIGIN_COUNTRY.c.display_name.label("origin_country"),
             qualification.c.degree,

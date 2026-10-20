@@ -102,6 +102,8 @@ async def test_each_mentor_met_is_listed_with_their_card(
             "last_name": "Lovelace",
             "avatar_url": "https://example.test/ada.jpg",
             "avatar_focus": {"x": 0.25, "y": 0.75},
+            "cover_color": None,
+            "cover_art": "none",
             "degree": "PhD",
             "institution": "WashU",
             "session_count": 2,

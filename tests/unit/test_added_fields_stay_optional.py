@@ -15,7 +15,9 @@ from app.main import create_app
 
 #: Each schema, and the fields added to it after the frontend first consumed it.
 ADDED = {
-    "PartyRead": ("in_room_at", "degree", "institution"),
+    "PartyRead": ("in_room_at", "degree", "institution", "cover_color", "cover_art"),
+    # The cover on every card that shows an avatar (owner, 2026-10-20).
+    "MentorSummaryRead": ("cover_color", "cover_art"),
     "SessionRead": ("mentee_attendance_sessions", "refund_until"),
     "UserRead": ("mentee_cancel_refund_hours", "onboarding", "languages", "links"),
     "GoalRead": ("field_of_study", "schools"),
@@ -69,6 +71,8 @@ ADDED = {
         "degree",
         "institution",
         "session_count",
+        "cover_color",
+        "cover_art",
     ),
     # The mentor dashboard's review quote (decision 251).
     "OwnReviewRead": ("session_type",),
