@@ -67,6 +67,11 @@ class AvatarFocusRead(BaseModel):
         return cls(x=float(str(x)), y=float(str(y)))
 
 
+def _publish_no_default(schema: dict[str, Any]) -> None:
+    """Drop a field's `default` from the spec, for a response field that is always sent."""
+    schema.pop("default", None)
+
+
 class CoverRead(BaseModel):
     """A person's cover, wherever their avatar is sent: the initials sit on its
     tone (owner, 2026-10-20), so a card that drew it differently from the
@@ -85,8 +90,12 @@ class CoverRead(BaseModel):
             "theirs is normally automatic."
         ),
     )
+    #: Always sent, but **published with no `default`**: the frontend's
+    #: generator types a property with one as required (owner, 2026-10-20).
     cover_art: CoverArt = Field(
-        default=CoverArt.NONE, description="What is drawn over the cover colour."
+        default=CoverArt.NONE,
+        description="What is drawn over the cover colour. `none` when they chose none.",
+        json_schema_extra=_publish_no_default,
     )
 
     @staticmethod
