@@ -9,8 +9,9 @@ WHAT GOES AND WHAT STAYS
 **Goes**: the PRD's list (profile, goals, education, languages, avatar files,
 the Supabase account), the contact a migrated account has at Loops, and the rest
 that is only theirs and that nothing kept points at: sign-in identities, calendar
-tokens, awards, onboarding, interest, writing-assist counts, idempotency keys, a
-mentor's availability, listings and personal meeting links.
+tokens, social links, awards, onboarding, interest, writing-assist counts,
+idempotency keys, a mentor's availability, listings, guide countries and
+personal meeting links.
 
 **Stays, unnamed**: sessions, reviews, the credit ledger and the audit logs, as
 the privacy policy keeps them for 12 months. They are anonymised by the account
@@ -49,13 +50,21 @@ from app.infra.db.models.mentoring import (
     FeaturedMentor,
     MenteeGoal,
     MentorConferencingOption,
+    MentorGuideCountry,
     MentorProfile,
     MentorServiceOffering,
 )
 from app.infra.db.models.platform import FeatureInterest, IdempotencyKey
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.sessions import SessionType
-from app.infra.db.models.user import AuthIdentity, User, UserLanguage, UserOnboarding, UserProfile
+from app.infra.db.models.user import (
+    AuthIdentity,
+    User,
+    UserLanguage,
+    UserLink,
+    UserOnboarding,
+    UserProfile,
+)
 from app.infra.db.models.writing_assist import WritingAssistRequest
 from app.infra.db.predicates import LIVE
 
@@ -72,6 +81,7 @@ _OWN_ROWS: tuple[tuple[Any, Any], ...] = (
     (UserProfile, UserProfile.user_id),
     (AuthIdentity, AuthIdentity.user_id),
     (UserOnboarding, UserOnboarding.user_id),
+    (UserLink, UserLink.user_id),
     (UserLanguage, UserLanguage.user_id),
     (EducationEntry, EducationEntry.user_id),
     (UserAward, UserAward.user_id),
@@ -84,6 +94,7 @@ _OWN_ROWS: tuple[tuple[Any, Any], ...] = (
     (AvailabilityException, AvailabilityException.mentor_user_id),
     (MentorServiceOffering, MentorServiceOffering.mentor_user_id),
     (FeaturedMentor, FeaturedMentor.mentor_user_id),
+    (MentorGuideCountry, MentorGuideCountry.mentor_user_id),
     (MentorNextAvailability, MentorNextAvailability.mentor_user_id),
     (MentorConferencingOption, MentorConferencingOption.user_id),
 )

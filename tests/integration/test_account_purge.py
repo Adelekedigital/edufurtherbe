@@ -117,6 +117,8 @@ async def a_full_account(engine: AsyncEngine, tag: str) -> tuple[UUID, UUID]:
             "INSERT INTO auth_identities (user_id, provider, provider_user_id) "
             "VALUES (:u, 'google', :a)",
             "INSERT INTO feature_interest (user_id, feature) VALUES (:u, 'messaging')",
+            "INSERT INTO user_links (user_id, kind, platform, url) "
+            "VALUES (:u, 'social', 'x', 'https://x.com/ada')",
             "INSERT INTO user_onboarding (user_id) VALUES (:u)",
             "INSERT INTO legal_documents (type, version, content_url, effective_from) "
             "VALUES ('terms_of_service', :a, 'https://example.com/terms', now())",
@@ -141,6 +143,7 @@ PURGED_TABLES = (
     ("auth_identities", "user_id"),
     ("feature_interest", "user_id"),
     ("user_onboarding", "user_id"),
+    ("user_links", "user_id"),
 )
 
 
@@ -331,6 +334,13 @@ async def test_a_mentors_profile_is_scrubbed_and_their_availability_cleared(
             ),
             {"u": mentor},
         )
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_guide_countries (mentor_user_id, country_id, position) "
+                "SELECT :u, id, 0 FROM countries ORDER BY id LIMIT 1"
+            ),
+            {"u": mentor},
+        )
         option = (
             await conn.execute(
                 text(
@@ -362,6 +372,7 @@ async def test_a_mentors_profile_is_scrubbed_and_their_availability_cleared(
     # The personal room link goes; the offering stays for its sessions, hidden
     # and without what the mentor wrote.
     assert await count(db_engine, "mentor_conferencing_options", "user_id", mentor) == 0
+    assert await count(db_engine, "mentor_guide_countries", "mentor_user_id", mentor) == 0
     kept = await one(
         db_engine,
         "SELECT description, is_active, deleted_at IS NOT NULL AS gone, conferencing_option_id "
