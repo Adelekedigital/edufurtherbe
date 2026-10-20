@@ -199,7 +199,6 @@ async def created_own_session_type(
     `CurrentUserDep` rather than `OwnerDep`: there is no `{user_id}` in the path
     to resolve, so the caller *is* the scope, matching `own_session_types` above.
     """
-    await refuse_while_declined(session, user["id"])
     reservation = (
         await claim_idempotency_key(
             session,
@@ -214,7 +213,8 @@ async def created_own_session_type(
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
     # After the replay lookup: a retry of a create that already succeeded gets
-    # its stored answer, whatever the configured maximum became since.
+    # its stored answer, whatever the configured maximum or the decision became since.
+    await refuse_while_declined(session, user["id"])
     refuse_window_out_of_range(payload.booking_window_days, window)
 
     session_type_id = await create_session_type(session, user["id"], payload.model_dump())
@@ -319,7 +319,6 @@ async def created_own_question(
     to a different offering is a different request (a `422`), never a replay of
     a question on the wrong form.
     """
-    await refuse_while_declined(session, user["id"])
     reservation = (
         await claim_idempotency_key(
             session,
@@ -333,6 +332,8 @@ async def created_own_question(
     )
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
+    # After the replay lookup, as for the offering above.
+    await refuse_while_declined(session, user["id"])
 
     question_id = await create_question(session, user["id"], session_type_id, payload.model_dump())
     if question_id is None:

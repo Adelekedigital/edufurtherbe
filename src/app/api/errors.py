@@ -101,8 +101,8 @@ DECLINED_CONFLICT = (
     "`/problems/mentor-application-declined`: your mentor application was "
     "declined, so your booking setup is read-only: session types with their "
     "windows and questions, hours, calendar connect, conferencing and the "
-    "booking rules. Your profile stays editable. `fields` names the booking "
-    "rules a mentor-profile write sent."
+    "booking rules. Your profile stays editable. On a mentor-profile write, "
+    "`fields` names the booking rules it would have changed; elsewhere it is empty."
 )
 
 

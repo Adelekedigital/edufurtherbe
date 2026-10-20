@@ -44,7 +44,13 @@ from app.infra.db.offerings import live_offering
 from app.infra.db.predicates import application_declined, application_in_review
 from app.infra.db.profile_writer import held_languages, resolved_languages
 
-__all__ = ["language_rows_unless_frozen", "refuse_frozen_changes", "refuse_while_in_review"]
+__all__ = [
+    "language_rows_unless_frozen",
+    "refuse_declined_booking_rules",
+    "refuse_frozen_changes",
+    "refuse_while_declined",
+    "refuse_while_in_review",
+]
 
 #: Stored text compared in the form a write leaves it: trimmed, blank as null.
 #: A legacy blank link is no link, so clearing it is not a change.
@@ -131,10 +137,21 @@ async def _under_review(session: AsyncSession, user_id: UUID) -> bool:
     """
     if not await lock_mentor(session, user_id):
         return False
-    found = await session.scalar(
-        select(MentorProfile.id).where(MentorProfile.user_id == user_id, *application_in_review())
-    )
-    return found is not None
+    return await _profile_where(session, user_id, application_in_review()) is not None
+
+
+async def _profile_where(
+    session: AsyncSession, user_id: UUID, predicate: list[Any], *columns: Any
+) -> Any:
+    """The mentor's profile row if it meets `predicate` (its id, or `columns`),
+    else `None`: the one lookup behind the review freeze and the declined lock."""
+    return (
+        await session.execute(
+            select(*(columns or (MentorProfile.id,))).where(
+                MentorProfile.user_id == user_id, *predicate
+            )
+        )
+    ).first()
 
 
 def _refusal(fields: tuple[str, ...]) -> MentorApplicationInReviewError:
@@ -185,27 +202,41 @@ async def refuse_while_in_review(
         raise _refusal((record.value,))
 
 
-async def refuse_while_declined(
-    session: AsyncSession, user_id: UUID, fields: tuple[str, ...] = ()
-) -> None:
+async def refuse_while_declined(session: AsyncSession, user_id: UUID) -> None:
     """Refuse a write to a declined mentor's booking setup (owner, 2026-10-20).
 
     No lock: a decision racing the write only moves which side of it the write
     lands, and either side is harmless.
     """
-    declined = await session.scalar(
-        select(MentorProfile.id).where(MentorProfile.user_id == user_id, *application_declined())
-    )
-    if declined is not None:
-        raise MentorApplicationDeclinedError(
-            "Your application was declined, so your booking setup can't change.", fields=fields
-        )
+    if await _profile_where(session, user_id, application_declined()) is not None:
+        raise _declined(())
 
 
 async def refuse_declined_booking_rules(
     session: AsyncSession, user_id: UUID, sent: Mapping[str, Any]
 ) -> None:
-    """Refuse a mentor-profile write that sends a booking rule while declined.
-    A write sending none is not checked; the rest of the profile stays editable."""
-    if fields := tuple(sorted(BOOKING_RULE_FIELDS & sent.keys())):
-        await refuse_while_declined(session, user_id, fields)
+    """Refuse a mentor-profile write that **changes** a booking rule while declined.
+
+    Compared with the stored values, as the review freeze compares: a form
+    resending the rules unchanged beside a headline edit saves. A write sending
+    no rule is not checked.
+    """
+    names = sorted(BOOKING_RULE_FIELDS & sent.keys())
+    if not names:
+        return
+    stored = await _profile_where(
+        session,
+        user_id,
+        application_declined(),
+        *(getattr(MentorProfile, name) for name in names),
+    )
+    if stored is None:
+        return
+    if changed := tuple(n for n, held in zip(names, stored, strict=True) if sent[n] != held):
+        raise _declined(changed)
+
+
+def _declined(fields: tuple[str, ...]) -> MentorApplicationDeclinedError:
+    return MentorApplicationDeclinedError(
+        "Your application was declined, so your booking setup can't change.", fields=fields
+    )

@@ -223,3 +223,83 @@ async def test_a_removed_mentor_profile_is_not_held_by_its_old_decline(
     )
 
     assert response.status_code != 409 or not response.json()["type"].endswith(PROBLEM)
+
+
+async def test_booking_rules_resent_unchanged_beside_a_profile_edit_save(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A settings form resending every field: only a change is refused."""
+    mentor, token = await a_mentor(db_engine, "declined-resend", status="declined")
+    async with db_engine.connect() as conn:
+        held = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT requires_booking_confirmation, booking_window_days, "
+                        "default_duration_minutes FROM mentor_profiles WHERE user_id = :u"
+                    ),
+                    {"u": mentor},
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+    response = await send(
+        api_client,
+        "patch",
+        f"/api/v1/users/{mentor}/mentor-profile",
+        {"headline": "Reapplying", **{k: v for k, v in held.items() if v is not None}},
+        token,
+    )
+
+    assert response.status_code == 200, response.text
+
+
+async def test_an_approved_mentor_sets_up_bookings_as_before(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The positive half of the lock: the same writes succeed when approved."""
+    mentor, token = await a_mentor(db_engine, "approved-setup", status="approved")
+    wire(api_client, settings=configured())
+
+    answers = [
+        (
+            await send(
+                api_client,
+                "post",
+                "/api/v1/me/session-types",
+                {"name": "Intro chat", "duration_minutes": 30},
+                token,
+            )
+        ).status_code,
+        (
+            await send(
+                api_client, "post", f"/api/v1/users/{mentor}/availability/rules", RULE, token
+            )
+        ).status_code,
+        (
+            await send(
+                api_client,
+                "post",
+                f"/api/v1/users/{mentor}/availability/exceptions",
+                EXCEPTION,
+                token,
+            )
+        ).status_code,
+        (
+            await send(api_client, "patch", "/api/v1/me/conferencing", {"provider": "daily"}, token)
+        ).status_code,
+        (
+            await send(
+                api_client,
+                "patch",
+                f"/api/v1/users/{mentor}/mentor-profile",
+                {"booking_window_days": 30},
+                token,
+            )
+        ).status_code,
+        (await send(api_client, "get", "/api/v1/me/calendar/connect", None, token)).status_code,
+    ]
+
+    assert answers == [201, 201, 201, 200, 200, 200]
