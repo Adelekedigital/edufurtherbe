@@ -42,6 +42,8 @@ from app.core.errors import ValidationError
 from app.domain.enums import LanguageProficiency
 from app.infra.db.avatar_focus_store import chosen_focus_columns
 from app.infra.db.education_writer import resolve_institution
+from app.infra.db.guide_countries import replace_guide_countries
+from app.infra.db.mentor_status_store import lock_mentor
 from app.infra.db.models.mentoring import (
     MenteeGoal,
     MenteeGoalCountry,
@@ -350,6 +352,7 @@ async def create_mentor_profile(
     (settled decision 17); what a pending mentor may *do* is gated on
     `approval_status`.
     """
+    await _refuse_unknown_mentor_countries(session, payload)
     result = await session.execute(
         insert(MentorProfile)
         .values(user_id=user_id, **_sent(payload, MENTOR_COLUMNS))
@@ -357,7 +360,16 @@ async def create_mentor_profile(
     )
     await session.execute(update(User).where(User.id == user_id).values(primary_role="mentor"))
     await _write_offerings(session, user_id, payload)
+    await _write_guide_countries(session, user_id, payload)
     return result.scalar_one()
+
+
+async def _write_guide_countries(
+    session: AsyncSession, user_id: UUID, payload: dict[str, Any]
+) -> None:
+    """Absent or `null` leaves the list, as `offering_ids` does; `[]` clears it."""
+    if payload.get("guide_country_ids") is not None:
+        await replace_guide_countries(session, user_id, payload["guide_country_ids"])
 
 
 async def _write_offerings(session: AsyncSession, user_id: UUID, payload: dict[str, Any]) -> None:
@@ -378,14 +390,16 @@ async def update_mentor_profile(
     session: AsyncSession, user_id: UUID, payload: dict[str, Any]
 ) -> bool:
     """`approval_status`, `listing_status` and every audit column are absent from
-    `MENTOR_COLUMNS`, so a mentor cannot approve or relist themselves."""
-    found = await session.execute(
-        select(MentorProfile.id).where(
-            MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
-        )
-    )
-    if found.first() is None:
+    `MENTOR_COLUMNS`, so a mentor cannot approve or relist themselves.
+
+    **Every write takes `lock_mentor` first**, the row lock the freeze and every
+    transition take, so two replacements of one list (help areas or guide
+    countries) run one after the other rather than meeting on its unique
+    constraint as a 500. It is also the existence check: no live mentor, no write.
+    """
+    if not await lock_mentor(session, user_id):
         return False
+    await _refuse_unknown_mentor_countries(session, payload)
     values = {key: value for key, value in payload.items() if key in MENTOR_COLUMNS}
     if values:
         await session.execute(
@@ -394,6 +408,7 @@ async def update_mentor_profile(
             .values(**values)
         )
     await _write_offerings(session, user_id, payload)
+    await _write_guide_countries(session, user_id, payload)
     return True
 
 
@@ -447,20 +462,39 @@ COUNTRY_FIELDS = ("origin_country_id", "current_country_id")
 
 
 async def _refuse_unknown_countries(session: AsyncSession, payload: dict[str, Any]) -> None:
-    """A `422` at each country field whose id names no country.
+    """The profile's country fields, each checked at its own pointer."""
+    await _refuse_unknown_country_ids(
+        session,
+        {f"/{field}": payload[field] for field in COUNTRY_FIELDS if payload.get(field) is not None},
+    )
+
+
+async def _refuse_unknown_mentor_countries(session: AsyncSession, payload: dict[str, Any]) -> None:
+    """The mentor profile's study country, and each guide country at its index."""
+    sent = {
+        f"/guide_country_ids/{index}": value
+        for index, value in enumerate(payload.get("guide_country_ids") or ())
+    }
+    if payload.get("primary_study_country_id") is not None:
+        sent["/primary_study_country_id"] = payload["primary_study_country_id"]
+    await _refuse_unknown_country_ids(session, sent)
+
+
+async def _refuse_unknown_country_ids(session: AsyncSession, sent: dict[str, UUID]) -> None:
+    """A `422` at each JSON pointer whose id names no country.
 
     The foreign key would refuse it too, as an `IntegrityError` and a 500; one
-    query asked first turns that into an answer naming the field.
+    query asked first turns that into an answer naming the field. The profile and
+    mentor-profile writes both ask here, so the check exists once.
     """
-    sent = {field: payload[field] for field in COUNTRY_FIELDS if payload.get(field) is not None}
     if not sent:
         return
     known = set(
         (await session.execute(select(Country.id).where(Country.id.in_(sent.values())))).scalars()
     )
     errors = tuple(
-        (f"/{field}", "not a country in /catalog/countries")
-        for field, value in sent.items()
+        (pointer, "not a country in /catalog/countries")
+        for pointer, value in sent.items()
         if value not in known
     )
     if errors:

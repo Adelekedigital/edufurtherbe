@@ -406,6 +406,28 @@ async def test_resending_the_stored_mentor_default_is_accepted_after_the_max_dro
     assert (profile["headline"], profile["booking_window_days"]) == ("New line", 40)
 
 
+async def test_another_mentors_stored_default_is_not_yours_to_resend(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """The stored value a resend may match is the caller's own row, never another's."""
+    other, other_auth = await as_mentor(db_engine, "resend-other")
+    await api_client.patch(
+        f"/api/v1/users/{other}/mentor-profile",
+        json={"booking_window_days": 40},
+        headers=bearer(api_token(other_auth)),
+    )
+    mentor, auth = await as_mentor(db_engine, "resend-own")
+    url = f"/api/v1/users/{mentor}/mentor-profile"
+
+    async with fortnight_client(db_engine, api_storage) as client:
+        refused = await client.patch(
+            url, json={"booking_window_days": 40}, headers=bearer(api_token(auth))
+        )
+
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["errors"][0]["pointer"] == "/booking_window_days"
+
+
 async def test_a_new_mentor_profile_over_the_max_is_refused(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:

@@ -90,6 +90,7 @@ from app.infra.db.profile_store import (
     list_awards,
     list_education,
     list_languages,
+    stored_booking_window_days,
 )
 from app.infra.db.profile_writer import (
     create_award,
@@ -510,8 +511,7 @@ async def updated_mentor_profile(
 ) -> bool:
     stored = None
     if window_out_of_range(payload.booking_window_days, window):
-        current = await get_mentor_profile(session, user_id)
-        stored = current["booking_window_days"] if current else None
+        stored = await stored_booking_window_days(session, user_id)
     refuse_window_out_of_range(payload.booking_window_days, window, stored=stored)
     sent = payload.model_dump(exclude_unset=True)
     await refuse_frozen_changes(session, user_id, sent)

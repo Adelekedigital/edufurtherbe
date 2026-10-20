@@ -35,6 +35,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import ApprovalStatus, MentorStatusType
+from app.infra.db.guide_countries import guide_countries_of
 from app.infra.db.mentor_listing import paused_by_mentor
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
 from app.infra.db.models.mentoring import (
@@ -327,7 +328,27 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
     # One id, because the shared query is batched for discovery. Absent from
     # the mapping means "this mentor claimed none", which is an empty list here.
     grouped = await offerings_for(session, [user_id])
-    return dict(row) | {"offerings": grouped.get(user_id, [])}
+    return dict(row) | {
+        "offerings": grouped.get(user_id, []),
+        # The public profile's reader too (decision 276).
+        "guide_countries": await guide_countries_of(session, user_id),
+    }
+
+
+async def stored_booking_window_days(session: AsyncSession, user_id: UUID) -> int | None:
+    """The mentor's own booking window, or `None` (unset, or no live mentor).
+
+    The one column the PATCH's range check needs, so it does not read the
+    whole profile with its lists.
+    """
+    stored: int | None = (
+        await session.execute(
+            select(MentorProfile.booking_window_days).where(
+                MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    return stored
 
 
 async def list_languages(session: AsyncSession, user_id: UUID) -> list[dict[str, Any]]:

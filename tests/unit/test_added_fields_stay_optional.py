@@ -84,7 +84,7 @@ ADDED = {
     "MatchBasisRead": ("degree", "field", "country", "origin"),
     "DegreeBasisRead": ("id", "label", "raw"),
     # Where a mentor's bio came from, in their own view only (decision 267).
-    "MentorPublicRead": ("about_me_drafted_at",),
+    "MentorPublicRead": ("about_me_drafted_at", "guide_countries"),
     # A mentor application's state, in the owner's view (Mentor Onboarding B2).
     "MentorProfileRead": (
         "submitted_at",
@@ -93,6 +93,8 @@ ADDED = {
         "reviewed_at",
         # The platform's response window (decision 278).
         "response_window_hours",
+        # Where the mentor can guide mentees towards (decision 276), as on the public read.
+        "guide_countries",
     ),
 }
 

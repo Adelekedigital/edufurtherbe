@@ -43,6 +43,7 @@ from app.domain.mentor_stats import (
 from app.infra.db.featured_store import (
     current_featured,
 )
+from app.infra.db.guide_countries import guide_countries_of
 from app.infra.db.mentee_dashboard import mentee_dashboard
 from app.infra.db.mentor_dashboard import mentor_monthly_stats, mentor_window_stats
 from app.infra.db.mentor_public_store import (
@@ -105,15 +106,17 @@ async def public_mentor(
         raise NotFoundError("no such mentor")
 
     user_id = row["user_id"]
-    # Six statements for one profile, and that is a decision rather than an
+    # A statement per list for one profile, and that is a decision rather than an
     # accident. Each list is a different table with a different scope, so they
     # cannot be one join without a fan-out to unpick in Python; and a profile is
     # a single-resource read a client makes once per page, not per row of a list.
-    # The alternative — six round trips from the browser — is worse for the same
+    # The alternative — a round trip per list from the browser — is worse for the same
     # work. `mentor_page` is where a count like this would be a defect.
     return {
         "row": row,
         "offerings": (await offerings_for(session, [user_id])).get(user_id, []),
+        # The owner's read calls the same function (decision 276).
+        "guide_countries": await guide_countries_of(session, user_id),
         "session_types": await _with_forms(
             session, await list_session_types(session, user_id, window=window)
         ),
