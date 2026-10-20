@@ -1,8 +1,7 @@
 """A user's own links: the reader and the one writer (decision 275).
 
-**Every write goes through here**, the settings endpoints and the profile
-PATCH's legacy `social_twitter`/`social_youtube` alike, so the one-per-platform
-rule, the three-website count and the old-column contract live in one place.
+**Every write goes through here**, so the one-per-platform rule, the
+three-website count and the old-column contract live in one place.
 
 **The old columns.** Until they are dropped, writing or deleting an X or
 YouTube link also clears that platform's `user_profiles` column. That is what
@@ -48,7 +47,6 @@ __all__ = [
     "change_link",
     "delete_link",
     "links_of",
-    "set_platform_link",
 ]
 
 #: Namespace for this module's advisory lock: `'LINK'` as four ASCII bytes.
@@ -196,26 +194,3 @@ async def delete_link(session: AsyncSession, user_id: UUID, link_id: UUID) -> bo
         return False
     await _clear_legacy(session, user_id, LinkPlatform(str(platform)))
     return True
-
-
-async def set_platform_link(
-    session: AsyncSession, user_id: UUID, platform: LinkPlatform, url: str | None
-) -> None:
-    """The profile PATCH's legacy `social_twitter`/`social_youtube`: set the one
-    link on `platform` to an already-canonical `url`, or remove it on `None`.
-
-    For one release only, so a client still sending the old fields keeps
-    working; the same lock and the same column contract as the endpoints.
-    """
-    await _lock(session, user_id)
-    existing = await session.scalar(
-        select(UserLink.id).where(UserLink.user_id == user_id, UserLink.platform == platform)
-    )
-    if url is None:
-        if existing is not None:
-            await session.execute(delete(UserLink).where(UserLink.id == existing))
-    elif existing is not None:
-        await session.execute(update(UserLink).where(UserLink.id == existing).values(url=url))
-    else:
-        await _insert(session, user_id, platform, url)
-    await _clear_legacy(session, user_id, platform)

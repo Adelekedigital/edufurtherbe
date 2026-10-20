@@ -36,10 +36,8 @@ from app.api.schemas.common import (
     CoverRead,
     LinkedInRead,
     Page,
-    XRead,
-    YouTubeRead,
 )
-from app.api.schemas.links import PublicLinkRead, legacy_social
+from app.api.schemas.links import PublicLinkRead
 from app.api.schemas.profile import LookupRef
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
@@ -396,10 +394,6 @@ class MentorPublicRead(BaseModel):
     )
     #: Canonical `https://` links or `null` — render them, never parse them (#182).
     social_linkedin: LinkedInRead = None
-    #: **Deprecated, kept for one release**: their X and YouTube entries in
-    #: `links`. Read `links` instead.
-    social_twitter: XRead = None
-    social_youtube: YouTubeRead = None
     links: list[PublicLinkRead] = Field(
         default_factory=list,
         description=(
@@ -560,8 +554,6 @@ class MentorPublicRead(BaseModel):
             primary_study_country_id=_uuid(row.get("primary_study_country_id")),
             origin_country_id=_uuid(row.get("origin_country_id")),
             social_linkedin=_text(row["social_linkedin"]),
-            social_twitter=legacy_social(links)["social_twitter"],
-            social_youtube=legacy_social(links)["social_youtube"],
             links=[PublicLinkRead.of(link) for link in links],
             offerings=[ServiceOfferingRead(**o) for o in offerings],  # type: ignore[arg-type]
             guide_countries=[LookupRef.model_validate(c) for c in guide_countries],

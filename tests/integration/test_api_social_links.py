@@ -74,21 +74,15 @@ async def test_a_handle_or_a_link_is_stored_canonical(
         url(user_id, "profile"),
         json={
             "social_linkedin": "linkedin.com/in/ada-lovelace?trk=x",
-            "social_twitter": "@ada",
-            "social_youtube": "https://m.youtube.com/@ada.codes/videos",
         },
         headers=headers,
     )
 
     assert response.status_code == 204
-    expected = {
-        "social_linkedin": "https://www.linkedin.com/in/ada-lovelace",
-        "social_twitter": "https://x.com/ada",
-        "social_youtube": "https://www.youtube.com/@ada.codes",
-    }
-    assert await stored(db_engine, user_id) == expected
+    linkedin = "https://www.linkedin.com/in/ada-lovelace"
+    assert (await stored(db_engine, user_id))["social_linkedin"] == linkedin
     me = (await api_client.get("/api/v1/me", headers=headers)).json()
-    assert {k: me["profile"][k] for k in expected} == expected
+    assert me["profile"]["social_linkedin"] == linkedin
 
 
 @pytest.mark.parametrize(
@@ -96,8 +90,6 @@ async def test_a_handle_or_a_link_is_stored_canonical(
     [
         ("social_linkedin", "https://linkedin.com.evil.com/in/ada"),
         ("social_linkedin", "https://linkedin.com@evil.com/in/ada"),
-        ("social_twitter", "javascript:alert(1)"),
-        ("social_youtube", "https://evil.com/?u=youtube.com/@ada"),
     ],
 )
 async def test_anything_else_is_refused_by_name(
@@ -125,14 +117,16 @@ async def test_an_empty_value_still_clears_the_link(
     auth_id = uuid4()
     user_id = await make_user(db_engine, auth_id, "social-clear@example.com")
     headers = bearer(api_token(auth_id))
-    await api_client.patch(url(user_id, "profile"), json={"social_twitter": "ada"}, headers=headers)
+    await api_client.patch(
+        url(user_id, "profile"), json={"social_linkedin": "ada-lovelace"}, headers=headers
+    )
 
     response = await api_client.patch(
-        url(user_id, "profile"), json={"social_twitter": ""}, headers=headers
+        url(user_id, "profile"), json={"social_linkedin": ""}, headers=headers
     )
 
     assert response.status_code == 204
-    assert (await stored(db_engine, user_id))["social_twitter"] is None
+    assert (await stored(db_engine, user_id))["social_linkedin"] is None
 
 
 async def test_a_legacy_value_reads_canonical_or_null_on_me(
@@ -146,8 +140,6 @@ async def test_a_legacy_value_reads_canonical_or_null_on_me(
 
     # A bare handle the old system kept is still a handle: published canonical.
     assert me["profile"]["social_linkedin"] == "https://www.linkedin.com/in/ada-lovelace"
-    assert me["profile"]["social_twitter"] is None
-    assert me["profile"]["social_youtube"] is None
     # Nothing stored was rewritten — the read converts, it does not migrate.
     assert (await stored(db_engine, user_id))["social_twitter"] == "https://evil.example/ada"
     # The owner still sees the row as stored, to delete it (decision 275).
@@ -169,8 +161,6 @@ async def test_a_legacy_value_reads_canonical_or_null_on_the_public_profile(
     body = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
 
     assert body["social_linkedin"] is None
-    assert body["social_twitter"] == "https://x.com/ada"
-    assert body["social_youtube"] == "https://www.youtube.com/@ada"
     assert body["links"] == [
         {"platform": "x", "url": "https://x.com/ada"},
         {"platform": "youtube", "url": "https://www.youtube.com/@ada"},

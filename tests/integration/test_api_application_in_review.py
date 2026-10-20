@@ -148,10 +148,9 @@ async def test_a_profile_write_changing_a_reviewed_field_is_refused(
         {"social_linkedin": "linkedin.com/in/ada", "timezone": "Europe/London"},
         # A corrected link is allowed in review (2026-10-19); only clearing is not.
         {"social_linkedin": "linkedin.com/in/ada-lovelace"},
-        {"social_twitter": "@ada", "social_youtube": "@ada"},
         {"first_name": "Bo", "gender": "female"},
     ],
-    ids=["timezone", "primary-role", "same-linkedin", "new-linkedin", "socials", "name"],
+    ids=["timezone", "primary-role", "same-linkedin", "new-linkedin", "name"],
 )
 async def test_a_profile_write_that_leaves_reviewed_fields_alone_saves(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, body: dict[str, str]
