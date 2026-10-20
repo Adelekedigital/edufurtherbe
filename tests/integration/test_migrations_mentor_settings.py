@@ -504,22 +504,21 @@ def _columns(url: str) -> str | None:
     )
 
 
-def test_the_drop_copies_a_leftover_value_before_the_columns_go(
+def test_the_drop_leaves_the_links_as_they_are(
     disposable_database: str, make_alembic_config: ConfigFactory
 ) -> None:
-    """A column no link write touched still lands in `user_links`; a link the
-    owner deleted (its column cleared by the writer) does not come back."""
+    """Nothing is copied again: a stale column never rolls a newer link back,
+    and a column value whose link was deleted does not bring it back."""
     config = make_alembic_config(disposable_database)
     command.upgrade(config, CATCH_UP)
-    _person(disposable_database, "leftover@example.test", "@ada", None)
-    _person(disposable_database, "deleted@example.test", None, None)
+    _person(disposable_database, "stale@example.test", "https://x.com/old", None)
+    _link(disposable_database, "stale@example.test", "x", "https://x.com/new")
+    _person(disposable_database, "deleted@example.test", "https://x.com/gone", None)
 
     command.upgrade(config, DROP)
 
     assert _columns(disposable_database) is None
-    assert _links_of(disposable_database, "leftover@example.test") == [
-        ("x", "https://x.com/ada", 0)
-    ]
+    assert _links_of(disposable_database, "stale@example.test") == [("x", "https://x.com/new", 0)]
     assert _links_of(disposable_database, "deleted@example.test") == []
 
 
