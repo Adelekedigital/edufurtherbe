@@ -143,6 +143,7 @@ async def test_a_request_carries_a_deadline_twelve_hours_before_the_session(
     early enough for it to be useful — and a window measured from `created_at`
     guarantees them nothing.
     """
+    with_response_window(api_client, 12)
     request = await a_request(db_engine, api_client, "rb-set")
 
     starts_at = dt.datetime.fromisoformat(request["starts_at"])
@@ -179,6 +180,7 @@ async def test_the_mentor_profile_publishes_the_window(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """The Booking tab's line reads the number rather than repeating it."""
+    with_response_window(api_client, 12)
     request = await a_request(db_engine, api_client, "rb-published")
     url = f"/api/v1/users/{request['mentor_id']}/mentor-profile"
 

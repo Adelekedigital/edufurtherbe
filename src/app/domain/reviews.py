@@ -8,13 +8,15 @@ module exists rather than joining it because reviews are their own concern
 and ``domain/intake.py`` already establishes that a small domain module is
 the house size.
 
-**Why not configuration.** ``core/config.py`` holds no product rule today. A
-rule in env config can differ *per environment*, so staging and production would
-disagree about when a review may be written and the resulting bug is
-unreproducible. The review asymmetry matters too: a constant changes by a
-one-line pull request through the gate, an env var by a dashboard edit with no
-test and no reviewer. If `REVIEW_INTERVAL` ever needs real runtime tuning the
-precedent is a column with a server default, additive whenever it is wanted.
+**Why not configuration.** ``core/config.py`` holds a product rule only where
+the owner asked for it to be tunable (the refund and response windows,
+decisions 229 and 278), and the interval is not one. A rule in env config can
+differ *per environment*, so staging and production would disagree about when a
+review may be written and the resulting bug is unreproducible. The review
+asymmetry matters too: a constant changes by a one-line pull request through
+the gate, an env var by a dashboard edit with no test and no reviewer. If
+`REVIEW_INTERVAL` ever needs real runtime tuning the precedent is a column with
+a server default, additive whenever it is wanted.
 
 **The edit window is the exception, on request** (2026-09-29): the frontend
 renders its edge from `editable_until` rather than hard-coding ten minutes, and

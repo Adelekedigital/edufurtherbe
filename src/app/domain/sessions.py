@@ -44,6 +44,7 @@ __all__ = [
     "records_unavailability",
     "respond_by",
     "response_window",
+    "response_window_hours",
     "stage_label_problem",
     "too_late_to_cancel",
 ]
@@ -93,7 +94,13 @@ def response_window(settings: Settings) -> dt.timedelta:
     floor in `core.config` and checked at boot. Reminders count back from the
     deadline (`domain.notifications.reminders_for`).
     """
-    return dt.timedelta(hours=settings.response_window_hours)
+    return dt.timedelta(hours=response_window_hours(settings))
+
+
+def response_window_hours(settings: Settings) -> int:
+    """The window in whole hours, as the mentor profile publishes it: the one
+    place the setting is read, so the published number and the deadline agree."""
+    return settings.response_window_hours
 
 
 def respond_by(

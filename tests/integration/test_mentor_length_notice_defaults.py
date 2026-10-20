@@ -7,8 +7,8 @@ is null follows them, then the platform's (60 minutes, 24 hours) — the
 `COALESCE(type, mentor, platform)` #204 uses for window and break.
 
 **The 24-hour floor stands** (#104): a 6-hour option was asked for and declined
-on 2026-09-29, because #121 expires an unanswered request six hours before the
-session.
+on 2026-09-29, because #121 then expired an unanswered request six hours before
+the session (now `RESPONSE_WINDOW_HOURS`, decision 278).
 """
 
 from __future__ import annotations
