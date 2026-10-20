@@ -20,6 +20,7 @@ RUNTIME_JOB_NAMES = frozenset(
         "sync-institutions",
         "refresh-next-available",
         "sweep-intake-files",
+        "purge-deleted-users",
     }
 )
 

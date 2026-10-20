@@ -57,6 +57,14 @@
       "environments": {"local": false, "ci": false, "staging": true, "production": false},
       "timeout": "300s",
       "retries": 3
+    },
+    {
+      "name": "purge-deleted-users",
+      "handler": "/api/v1/internal/jobs/purge-deleted-users",
+      "cron": "30 3 * * *",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "300s",
+      "retries": 3
     }
   ]
 }

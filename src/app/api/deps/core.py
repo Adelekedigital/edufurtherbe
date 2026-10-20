@@ -39,7 +39,7 @@ from app.infra.db.idempotency import Held, Mismatched, Replayed, reserve
 # collision a reader resolves by scrolling, and the wrong one is a plausible
 # mistake rather than an obvious error — `bubble_id` shadowed a local the same
 # way in the M4 transform and raised `UnboundLocalError` far from the edit.
-from app.infra.storage.supabase import SupabaseStorage
+from app.infra.storage.supabase import SupabaseStorage, image_storage_for
 
 logger = logging.getLogger(__name__)
 
@@ -436,15 +436,13 @@ def get_storage() -> SupabaseStorage:
     A client per request would open a connection pool per request — the same
     reason `get_session_factory` is cached.
     """
-    settings = get_settings()
-    if settings.supabase_url is None or settings.supabase_service_role_key is None:
+    client = httpx.Client(timeout=UPLOAD_TIMEOUT)
+    storage = image_storage_for(get_settings(), client)
+    if storage is None:
+        # Not cached when it raises, so an unclosed client would leak per request.
+        client.close()
         raise ConfigurationError("Supabase storage is not configured")
-    return SupabaseStorage(
-        base_url=str(settings.supabase_url).rstrip("/"),
-        service_role_key=settings.supabase_service_role_key.get_secret_value(),
-        bucket=settings.supabase_storage_bucket,
-        client=httpx.Client(timeout=UPLOAD_TIMEOUT),
-    )
+    return storage
 
 
 ENDPOINT_BOOKING = "POST /api/v1/sessions"

@@ -20,7 +20,9 @@ from app.core.errors import ConfigurationError, ValidationError
 from app.domain.availability import booking_window
 from app.domain.credits import credit_ladder
 from app.domain.institutions import CatalogueError, CatalogueRow, to_catalogue_row
+from app.infra.auth.admin import auth_admin_for
 from app.infra.clients.hipolabs import FileCatalogue, HipolabsCatalogue
+from app.infra.clients.loops_contacts import loops_contacts_for
 from app.infra.clients.meetings import (
     CalendarPort,
     NullCalendar,
@@ -31,6 +33,7 @@ from app.infra.clients.meetings import (
     rooms_for,
 )
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier, notifier_for
+from app.infra.db.account_purge import purge_counts, purge_due_accounts
 from app.infra.db.calendar_store import check_connections, free_busy_reader
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
 from app.infra.db.credit_grants import grant_monthly_credits, unlocked_mentee_count
@@ -56,7 +59,7 @@ from app.infra.db.session_writer import (
 from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
-from app.infra.storage.supabase import intake_storage_for
+from app.infra.storage.supabase import image_storage_for, intake_storage_for
 
 logger = logging.getLogger(__name__)
 INSTITUTION_TABLES = ("institutions", "education_entries")
@@ -93,7 +96,7 @@ class JobResult:
 
 
 class RuntimeJobs:
-    """Dispatch the seven supported jobs through one reusable surface."""
+    """Dispatch the eight supported jobs through one reusable surface."""
 
     def __init__(
         self,
@@ -138,6 +141,7 @@ class RuntimeJobs:
             "sync-institutions": self._sync_institutions,
             "refresh-next-available": self._refresh_next_available,
             "sweep-intake-files": self._sweep_intake_files,
+            "purge-deleted-users": self._purge_deleted_users,
         }
         counts = await methods[name](dry_run=dry_run)
         status = "no-op" if not any(counts.values()) else "completed"
@@ -349,6 +353,33 @@ class RuntimeJobs:
             return retention_counts(files, idempotency_keys=keys)
         finally:
             await engine.dispose()
+
+    async def _purge_deleted_users(self, *, dry_run: bool) -> dict[str, int]:
+        """Purge self-deleted accounts past their 30 days (`account_purge`).
+
+        **Never without Supabase**: purging our row while Supabase keeps the
+        sign-in would orphan it, so an unconfigured run purges nothing and says
+        so. The image bucket rides on the same two settings. Without a Loops key
+        the contact is kept, which only an unconfigured local run meets.
+        """
+        with httpx.Client(timeout=CATALOGUE_TIMEOUT) as client:
+            admin = auth_admin_for(self.settings)
+            storage = image_storage_for(self.settings, client)
+            if admin is None or storage is None:
+                logger.warning("account purge skipped: Supabase is not configured")
+                return purge_counts()
+            engine = create_database_engine(self.settings)
+            try:
+                return await purge_due_accounts(
+                    create_session_factory(engine),
+                    admin=admin,
+                    contacts=loops_contacts_for(self.settings),
+                    storage=storage,
+                    now=dt.datetime.now(dt.UTC),
+                    dry_run=dry_run,
+                )
+            finally:
+                await engine.dispose()
 
     async def _credit_reminders(self, *, dry_run: bool) -> dict[str, int]:
         engine = create_database_engine(self.settings)

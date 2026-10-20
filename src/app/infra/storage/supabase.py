@@ -57,6 +57,19 @@ def intake_storage_for(settings: Settings, client: httpx.Client) -> SupabaseStor
     )
 
 
+def image_storage_for(settings: Settings, client: httpx.Client) -> SupabaseStorage | None:
+    """The public image bucket (avatars, banners) for a job, or ``None`` when
+    Supabase is not configured. The API builds the same bucket in `get_storage`."""
+    if settings.supabase_url is None or settings.supabase_service_role_key is None:
+        return None
+    return SupabaseStorage(
+        base_url=str(settings.supabase_url).rstrip("/"),
+        service_role_key=settings.supabase_service_role_key.get_secret_value(),
+        bucket=settings.supabase_storage_bucket,
+        client=client,
+    )
+
+
 class SupabaseStorage:
     """Uploads objects and says where they ended up."""
 

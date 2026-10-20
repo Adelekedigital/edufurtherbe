@@ -261,6 +261,28 @@ class SupabaseAdminClient:
         if response.status_code >= httpx.codes.BAD_REQUEST:
             raise AdminApiError(f"sign out failed with {response.status_code}")
 
+    def delete_user(self, auth_id: UUID) -> None:
+        """Remove a sign-in for good: the purge of a self-deleted account.
+
+        `DELETE /auth/v1/admin/users/{id}`, a hard delete (Supabase's default;
+        `shouldSoftDelete` is not sent). **Already gone is done**, so a purge
+        that died after this call and before its own commit finishes on the
+        next run. Raises :class:`AdminApiError` naming only the status or the
+        error's type.
+        """
+        try:
+            response = self._send(
+                lambda: self._client.delete(
+                    f"{self._base_url}{ADMIN_USERS}/{auth_id}", headers=self._headers
+                )
+            )
+        except httpx.HTTPError as exc:
+            raise AdminApiError(f"delete user failed: {type(exc).__name__}") from None
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            raise AdminApiError(f"delete user failed with {response.status_code}")
+
     @staticmethod
     def _safe_json(response: httpx.Response) -> dict[str, object]:
         try:
