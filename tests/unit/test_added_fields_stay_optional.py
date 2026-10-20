@@ -109,3 +109,20 @@ def test_an_added_field_is_not_required(schema: str, fields: tuple[str, ...]) ->
 
     assert set(fields) <= set(spec["properties"])
     assert not set(fields) & set(spec.get("required", []))
+
+
+#: Added fields the frontend's generator must type as optional. It types a
+#: property with a spec `default` as always sent, so these publish none, though
+#: the response always sends them (owner, 2026-10-20).
+NO_DEFAULT = {
+    "MentorSummaryRead": ("cover_art",),
+    "PartyRead": ("cover_art",),
+    "MetMentorRead": ("cover_art",),
+}
+
+
+@pytest.mark.parametrize(("schema", "fields"), NO_DEFAULT.items())
+def test_an_added_field_publishes_no_default(schema: str, fields: tuple[str, ...]) -> None:
+    spec = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"][schema]  # type: ignore[call-arg]
+
+    assert not [field for field in fields if "default" in spec["properties"][field]]
