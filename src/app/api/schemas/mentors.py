@@ -31,6 +31,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.api.schemas.catalogue import GuideCountryRead
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
@@ -390,6 +391,14 @@ class MentorPublicRead(BaseModel):
     offerings: list[ServiceOfferingRead] = Field(
         default_factory=list, description="What kind of help they give."
     )
+    guide_countries: list[GuideCountryRead] = Field(
+        default_factory=list,
+        description=(
+            "Countries they can guide mentees towards, in the mentor's order; empty "
+            "when they have named none. The same list, from the same reader, as "
+            "`guide_countries` on their own `/users/{id}/mentor-profile`."
+        ),
+    )
     session_types: list[SessionTypeRead] = Field(
         default_factory=list,
         description=(
@@ -510,6 +519,8 @@ class MentorPublicRead(BaseModel):
         languages: list[dict[str, object]],
         stats: dict[str, object],
         reviews: dict[str, Any],
+        *,
+        guide_countries: list[dict[str, object]],
     ) -> MentorPublicRead:
         return cls(
             id=str(row["user_id"]),
@@ -535,6 +546,7 @@ class MentorPublicRead(BaseModel):
             social_twitter=_text(row["social_twitter"]),
             social_youtube=_text(row["social_youtube"]),
             offerings=[ServiceOfferingRead(**o) for o in offerings],  # type: ignore[arg-type]
+            guide_countries=[GuideCountryRead.model_validate(c) for c in guide_countries],
             session_types=[SessionTypeRead.from_row(s) for s in session_types],
             education=[EducationRead.from_row(e) for e in education],
             scholarships=[AwardRead.from_row(a) for a in scholarships],

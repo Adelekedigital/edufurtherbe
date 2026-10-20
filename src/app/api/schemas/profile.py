@@ -24,7 +24,7 @@ from pydantic import (
 )
 
 from app.api.schemas.availability import validated_zone
-from app.api.schemas.catalogue import CountryRef, InstitutionRead
+from app.api.schemas.catalogue import CountryRef, GuideCountryRead, InstitutionRead
 from app.api.schemas.common import (
     AvatarFocusRead,
     AvatarFocusWrite,
@@ -45,6 +45,7 @@ from app.domain.availability import (
 )
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency, PrimaryRole
 from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH, MAX_GOAL_SCHOOLS, SCHOOL_NAME_MAX_LENGTH
+from app.domain.guide_countries import MAX_GUIDE_COUNTRIES
 from app.domain.names import split_full_name
 from app.domain.profile_text import ABOUT_ME_MAX_LENGTH, PROMPT_VERSION_MAX_LENGTH
 from app.domain.text import has_letter, hidden_characters
@@ -320,6 +321,13 @@ class MentorProfileRead(BaseModel):
     primary_study_program: str | None = None
     primary_study_country: CountryRef | None = None
     offerings: list[LookupRef] = []
+    guide_countries: list[GuideCountryRead] = Field(
+        default_factory=list,
+        description=(
+            "Countries you can guide mentees towards, in your order; empty when you "
+            "have named none. Write them as `guide_country_ids`."
+        ),
+    )
     #: True only while you are unlisted **by your own pause** — an admin's
     #: unlisting reads `listing_status: unlisted` with this false (#75).
     paused_by_mentor: bool = Field(
@@ -404,6 +412,7 @@ class MentorProfileRead(BaseModel):
                 LookupRef(id=o["id"], code=o["slug"], display_name=o["display_name"])
                 for o in row.get("offerings", [])
             ],
+            guide_countries=[GuideCountryRead.model_validate(c) for c in row["guide_countries"]],
             paused_by_mentor=bool(row.get("paused_by_mentor")),
             return_on=row.get("return_on"),
             max_booking_window_days=window.max_days,
@@ -590,9 +599,37 @@ class MentorProfileWrite(Normalised):
             "the platform's 24 hours."
         ),
     )
-    primary_study_country_id: UUID | None = None
+    primary_study_country_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Where you studied, a `/catalog/countries` id; `null` clears it. One that "
+            "names no country is a `422` at this field."
+        ),
+    )
     primary_study_program: str | None = Field(default=None, max_length=300)
     offering_ids: list[UUID] | None = None
+    #: Decision 276. **`list`, not `list | None`**: `[]` already clears, so an
+    #: explicit `null` would mean nothing and is a `422`, as on the names. The
+    #: `None` default is never written (the writer takes `exclude_unset`).
+    guide_country_ids: list[UUID] = Field(
+        default=None,  # type: ignore[arg-type]
+        max_length=MAX_GUIDE_COUNTRIES,
+        description=(
+            f"Up to {MAX_GUIDE_COUNTRIES} `/catalog/countries` ids you can guide mentees "
+            "towards, in your order; the list replaces the saved one. Omitted leaves it, "
+            "`[]` clears it. More than "
+            f"{MAX_GUIDE_COUNTRIES}, a country twice or `null` is a `422` at "
+            "`/guide_country_ids`; an id that names no country is a `422` at "
+            "`/guide_country_ids/{index}`, and nothing is saved."
+        ),
+    )
+
+    @field_validator("guide_country_ids")
+    @classmethod
+    def _each_country_once(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("a country appears twice")
+        return value
 
 
 #: A person's first or last name, trimmed. Generous: legal names run long.
