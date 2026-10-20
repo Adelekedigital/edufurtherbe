@@ -32,8 +32,8 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, Page, XRead, YouTubeRead
-from app.api.schemas.profile import LookupRef
 from app.api.schemas.links import PublicLinkRead, legacy_social
+from app.api.schemas.profile import LookupRef
 from app.api.schemas.reviews import ReviewSummaryRead
 from app.api.schemas.session_types import SessionTypeRead
 from app.domain.enums import ApprovalStatus, AwardFunding, CoverArt, CoverColor, ListingStatus
