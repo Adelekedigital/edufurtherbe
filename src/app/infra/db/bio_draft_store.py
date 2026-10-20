@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.writing_assist import AssistResult
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.predicates import LIVE, blank
+from app.infra.db.predicates import LIVE, blank, has_mentor_profile
 
 __all__ = ["bio_unwritten", "save_bio_draft"]
 
@@ -42,8 +42,10 @@ async def save_bio_draft(session: AsyncSession, user_id: UUID, draft: AssistResu
     """Save the draft with its provenance, only while the account is live and
     the bio unwritten. Returns whether it was saved. Does not commit.
 
-    One statement. The row comes from `SELECT … FROM users WHERE id AND LIVE`,
-    so an account deleted during the call writes nothing; a user with no
+    One statement. The row comes from `SELECT … FROM users WHERE id AND LIVE`
+    and no mentor profile, so an account deleted, or turned mentor, during the
+    call writes nothing: a mentor's About is theirs, and while their application
+    is in review it is frozen (decision 273); a user with no
     profile gets one, as the profile writer does; an existing row is updated
     only where `_unwritten` still holds. The server stamps the time.
     """
@@ -52,7 +54,7 @@ async def save_bio_draft(session: AsyncSession, user_id: UUID, draft: AssistResu
         literal(draft.text),
         func.now(),
         literal(draft.prompt_version),
-    ).where(User.id == user_id, LIVE)
+    ).where(User.id == user_id, LIVE, ~has_mentor_profile(User.id))
     columns = ["user_id", "about_me", "about_me_drafted_at", "about_me_prompt_version"]
     insert = pg_insert(UserProfile).from_select(columns, source)
     upsert = insert.on_conflict_do_update(

@@ -526,6 +526,28 @@ async def test_a_person_typing_during_the_call_wins(world: World) -> None:
     assert bio["about_me_drafted_at"] is None
 
 
+async def test_a_mentor_profile_made_during_the_call_gets_no_bio(world: World) -> None:
+    """The draft is owed only to someone with no mentor profile, re-checked by
+    the save: a mentor's About is theirs, and frozen while in review."""
+    person = await a_mentee(world.engine)
+    loop = asyncio.get_running_loop()
+
+    def become_a_mentor() -> None:
+        asyncio.run_coroutine_threadsafe(
+            run_sql(
+                world.engine,
+                "INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'Mentor')",
+                u=person.id,
+            ),
+            loop,
+        ).result(timeout=10)
+
+    world.assistant.during = become_a_mentor
+
+    assert (await deliver(world, person)).json() == {"drafted": False}
+    assert (await bio_of(world.engine, person))["about_me"] is None
+
+
 async def test_an_account_deleted_during_the_call_gets_no_bio(world: World) -> None:
     person = await a_mentee(world.engine)
     loop = asyncio.get_running_loop()

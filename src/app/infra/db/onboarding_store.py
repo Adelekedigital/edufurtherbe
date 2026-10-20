@@ -15,9 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import BookingNeedsOnboardingError
 from app.domain.onboarding import ProfileEvidence, missing_codes
-from app.infra.db.models.mentoring import MenteeGoal, MentorProfile
+from app.infra.db.models.mentoring import MenteeGoal
 from app.infra.db.models.user import UserOnboarding, UserProfile
 from app.infra.db.offerings import live_goal_exists
+from app.infra.db.predicates import has_mentor_profile
 
 __all__ = [
     "get_onboarding",
@@ -72,7 +73,7 @@ async def onboarding_state(
                 .label("last_step"),
                 exists().where(UserProfile.user_id == user_id).label("profile"),
                 exists().where(MenteeGoal.user_id == user_id).label("goal"),
-                exists().where(MentorProfile.user_id == user_id).label("mentor"),
+                has_mentor_profile(user_id).label("mentor"),
                 live_goal_exists(user_id).label("need"),
                 exists()
                 .where(UserProfile.user_id == user_id, UserProfile.origin_country_id.is_not(None))
