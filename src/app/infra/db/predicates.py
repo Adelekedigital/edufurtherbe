@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from sqlalchemy import and_, func, true
+from sqlalchemy import and_, exists, func, true
 
 from app.domain.enums import ApprovalStatus
 from app.infra.db.models.mentoring import MentorProfile
@@ -36,6 +36,12 @@ def live(user: Any) -> Any:
 #: statement that omits it is missing a *name* — something a reader and a test
 #: can both see — rather than missing a substring nobody notices.
 LIVE = live(User)
+
+
+def has_mentor_profile(user_id: Any) -> Any:
+    """Whether `user_id` has a mentor profile at all, soft-deleted or not: the
+    fact `finishes_as_mentee` reads, so onboarding and the bio draft agree."""
+    return exists().where(MentorProfile.user_id == user_id)
 
 
 def application_in_review() -> list[Any]:
