@@ -32,6 +32,7 @@ path, so a typed school matches and queues the same way wherever it is typed.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn, cast
 from uuid import UUID
 
@@ -188,24 +189,34 @@ async def _locked_goal(session: AsyncSession, user_id: UUID) -> UUID | None:
 
 async def _refuse_unknown_goal_ids(session: AsyncSession, payload: dict[str, Any]) -> None:
     """A `422` at each `/country_ids/{i}` and `/need_ids/{i}` naming no catalogue row.
+    The foreign keys would refuse them too, as a 500."""
+    await _refuse_unknown_ids(
+        session,
+        "unknown goal id",
+        (_refuse_unknown_country_ids, _indexed(payload, "country_ids")),
+        (_refuse_unknown_offering_ids, _indexed(payload, "need_ids")),
+    )
 
-    Both lists are checked before either answers, so one response names every
-    unknown id. The foreign keys would refuse them too, as a 500.
-    """
+
+def _indexed(payload: dict[str, Any], field: str) -> dict[str, UUID]:
+    """Each id of an optional list at its own pointer, `/{field}/{index}`."""
+    return {f"/{field}/{index}": value for index, value in enumerate(payload.get(field) or ())}
+
+
+async def _refuse_unknown_ids(
+    session: AsyncSession,
+    message: str,
+    *checks: tuple[Callable[[AsyncSession, dict[str, UUID]], Awaitable[None]], dict[str, UUID]],
+) -> None:
+    """Run every check before any answers, so one `422` names every unknown id."""
     errors: list[tuple[str, str]] = []
-    for refuse, field in (
-        (_refuse_unknown_country_ids, "country_ids"),
-        (_refuse_unknown_offering_ids, "need_ids"),
-    ):
+    for refuse, sent in checks:
         try:
-            await refuse(
-                session,
-                {f"/{field}/{i}": value for i, value in enumerate(payload.get(field) or ())},
-            )
+            await refuse(session, sent)
         except ValidationError as refused:
             errors.extend(refused.field_errors)
     if errors:
-        raise ValidationError("unknown goal id", field_errors=tuple(errors))
+        raise ValidationError(message, field_errors=tuple(errors))
 
 
 async def _write_goal_schools(
@@ -535,21 +546,16 @@ async def _refuse_unknown_countries(session: AsyncSession, payload: dict[str, An
 
 async def _refuse_unknown_mentor_ids(session: AsyncSession, payload: dict[str, Any]) -> None:
     """The mentor profile's study country, each guide country and each offering,
-    every one at its own pointer."""
-    await _refuse_unknown_offering_ids(
-        session,
-        {
-            f"/offering_ids/{index}": value
-            for index, value in enumerate(payload.get("offering_ids") or ())
-        },
-    )
-    sent = {
-        f"/guide_country_ids/{index}": value
-        for index, value in enumerate(payload.get("guide_country_ids") or ())
-    }
+    every one at its own pointer and all in one `422`."""
+    countries = _indexed(payload, "guide_country_ids")
     if payload.get("primary_study_country_id") is not None:
-        sent["/primary_study_country_id"] = payload["primary_study_country_id"]
-    await _refuse_unknown_country_ids(session, sent)
+        countries["/primary_study_country_id"] = payload["primary_study_country_id"]
+    await _refuse_unknown_ids(
+        session,
+        "unknown mentor profile id",
+        (_refuse_unknown_offering_ids, _indexed(payload, "offering_ids")),
+        (_refuse_unknown_country_ids, countries),
+    )
 
 
 async def _refuse_unknown_country_ids(session: AsyncSession, sent: dict[str, UUID]) -> None:

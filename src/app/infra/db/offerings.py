@@ -38,6 +38,7 @@ __all__ = [
     "has_live_goals",
     "live_goal_exists",
     "live_goal_offering_ids",
+    "live_offering",
     "live_offering_ids",
     "live_offering_slugs",
     "offerings_for",
@@ -48,7 +49,7 @@ __all__ = [
 ]
 
 
-def _live() -> Any:
+def live_offering() -> Any:
     """Whether an offering is still one the platform offers.
 
     One clause, read by the card, the profile and the filter's validation. A
@@ -84,7 +85,7 @@ def claims_a_live_help_area(mentor_user_id: Any) -> Any:
     return exists().where(
         MentorServiceOffering.mentor_user_id == mentor_user_id,
         ServiceOffering.id == MentorServiceOffering.service_offering_id,
-        _live(),
+        live_offering(),
     )
 
 
@@ -95,7 +96,7 @@ def offers_any(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
     one-to-many and a join lists a mentor once for every slug they match — the
     same reason the search module gives for reading education this way.
 
-    **No `_live()` here, deliberately.** `slugs` arrive already checked by
+    **No `live_offering()` here, deliberately.** `slugs` arrive already checked by
     `live_offering_slugs`, and a second copy of that check would be a guard no
     test can reach — the retired case is refused before this runs.
     """
@@ -107,7 +108,7 @@ def shared_offering_count(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
 
     `offers_any` asks *whether*; this asks *how many*, for ranking similar
     mentors. The same clauses (`_gives`), and the same contract on `slugs`: they
-    arrive live, so no second `_live()` here.
+    arrive live, so no second `live_offering()` here.
     """
     return (
         select(func.count())
@@ -120,7 +121,7 @@ def shared_offering_count(mentor_user_id: Any, slugs: Sequence[str]) -> Any:
 def _live_goals(mentee: UUID) -> list[Any]:
     """This mentee's goal needs that name an offering the platform still offers.
 
-    **`_live()` applies here, unlike the filter**, because goal needs are stored
+    **`live_offering()` applies here, unlike the filter**, because goal needs are stored
     rows: a mentee can hold a goal for an offering retired after they chose it.
     Counting it would rank a mentor up for a reason their card — which drops
     retired offerings — can no longer show. Shared by the overlap and
@@ -130,7 +131,7 @@ def _live_goals(mentee: UUID) -> list[Any]:
     return [
         MenteeGoalNeed.user_id == mentee,
         ServiceOffering.id == MenteeGoalNeed.service_offering_id,
-        _live(),
+        live_offering(),
     ]
 
 
@@ -190,7 +191,7 @@ async def live_offering_slugs(session: AsyncSession, slugs: Sequence[str]) -> se
     if not slugs:
         return set()
     result = await session.execute(
-        select(ServiceOffering.slug).where(ServiceOffering.slug.in_(slugs), _live())
+        select(ServiceOffering.slug).where(ServiceOffering.slug.in_(slugs), live_offering())
     )
     return set(result.scalars())
 
@@ -201,7 +202,7 @@ async def live_offering_ids(session: AsyncSession, ids: Sequence[UUID]) -> set[U
     if not ids:
         return set()
     result = await session.execute(
-        select(ServiceOffering.id).where(ServiceOffering.id.in_(ids), _live())
+        select(ServiceOffering.id).where(ServiceOffering.id.in_(ids), live_offering())
     )
     return set(result.scalars())
 
@@ -247,7 +248,7 @@ async def offerings_for(
         .join(ServiceOffering, ServiceOffering.id == MentorServiceOffering.service_offering_id)
         .where(
             MentorServiceOffering.mentor_user_id.in_(user_ids),
-            _live(),
+            live_offering(),
         )
         .order_by(ServiceOffering.sort_order)
     )
