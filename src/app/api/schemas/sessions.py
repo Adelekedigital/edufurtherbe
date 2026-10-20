@@ -298,7 +298,8 @@ class SessionRead(BaseModel):
         default=None,
         description=(
             "When this request stops waiting and becomes `expired`, shown to "
-            "users as **Unconfirmed**. Six hours before the session.\n\n"
+            "users as **Unconfirmed**: `response_window_hours` (on the mentor profile) "
+            "before the session, fixed when the request was made.\n\n"
             "**Null on an offering that auto-confirms**, where nothing is "
             "awaiting an answer — not merely unset. A `confirmed` session never "
             "has one.\n\n"

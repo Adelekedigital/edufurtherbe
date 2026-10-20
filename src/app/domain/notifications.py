@@ -38,6 +38,7 @@ __all__ = [
     "AUDIENCE",
     "CREDIT_REMINDERS",
     "REMINDER_OFFSETS",
+    "REMINDER_QUIET_AFTER_BOOKING",
     "REVIEW_REMINDER_AFTER",
     "REVIEW_REMINDER_INTERVAL",
     "REVIEW_REMINDER_KIND",
@@ -203,10 +204,9 @@ class Notification(StrEnum):
     #: And declined, carrying whatever reason the reviewer gave.
     MENTOR_DECLINED = "mentor_declined"
 
-    #: **Settled and unbuilt.** Three sends per pending request — on booking, 24
-    #: hours before `respond_by` where the lead allows it, and 12 hours before.
-    #: Named here so its absence reads as deferred rather than forgotten; it
-    #: needs QStash and a callback endpoint, which arrive together.
+    #: Up to two nudges per pending request, 24 and 12 hours before `respond_by`
+    #: where the lead allows each (`reminders_for`), as QStash callbacks; the
+    #: on-booking message is `SESSION_REQUESTED`.
     MENTOR_RESPONSE_REMINDER = "mentor_response_reminder"
 
     #: **A self-paused mentor is nudged to come back.** One template, two
@@ -354,9 +354,10 @@ def unique(ids: Iterable[UUID]) -> tuple[UUID, ...]:
 #: on the wire and into the outbox row.
 #:
 #: **Measured back from `respond_by`, not forward from the booking**, and that is
-#: the only well-formed reading: the minimum gap from booking to deadline is
-#: eighteen hours, so a reminder twenty-four hours *after* booking would fire
-#: after the deadline had already passed on every minimum-notice request.
+#: the only well-formed reading: the gap from booking to deadline can be as short
+#: as the notice floor less the response window (decision 278), so a reminder
+#: twenty-four hours *after* booking would fire after the deadline had already
+#: passed on every minimum-notice request.
 #:
 #: `on_booking` is absent because it is not scheduled — it is enqueued directly
 #: by the booking that causes it, which needs no scheduler and cannot be missed.
@@ -364,6 +365,10 @@ REMINDER_OFFSETS: dict[str, dt.timedelta] = {
     "t24": dt.timedelta(hours=24),
     "t12": dt.timedelta(hours=12),
 }
+
+#: How soon after a booking a deadline reminder is still worth sending: one due
+#: earlier repeats the request the mentor was just sent (`reminders_for`).
+REMINDER_QUIET_AFTER_BOOKING = dt.timedelta(hours=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -513,13 +518,15 @@ def session_reminders_for(
 def reminders_for(
     respond_by: dt.datetime, *, now: dt.datetime
 ) -> tuple[tuple[str, dt.datetime], ...]:
-    """Which reminders are still ahead, and when each fires.
+    """Which reminders to schedule for a request booked at ``now``, and when.
 
-    **A reminder whose moment has already passed is dropped rather than fired
-    immediately.** At the 24-hour booking floor the deadline is eighteen hours
-    away, so `t24` is already behind — sending it the instant the booking is
-    made would be a second copy of the on-booking message, thirty seconds later,
-    saying the same thing.
+    **A reminder due within `REMINDER_QUIET_AFTER_BOOKING` of the booking is
+    dropped**, not only one already past: the mentor has just been sent the
+    request itself, and a "please respond" a few minutes later says the same
+    thing again. Which reminders that removes depends on the configured window
+    (decision 278), so it is one rule rather than a per-window list: with a
+    12-hour window, a booking at the 24-hour floor would otherwise get `t12`
+    at the moment it was made.
 
     Returns pairs rather than a mapping so the order is the order they fire in,
     which is what a reader checking a schedule wants to see.
@@ -527,5 +534,5 @@ def reminders_for(
     return tuple(
         (kind, respond_by - offset)
         for kind, offset in REMINDER_OFFSETS.items()
-        if respond_by - offset > now
+        if respond_by - offset > now + REMINDER_QUIET_AFTER_BOOKING
     )

@@ -31,7 +31,7 @@ from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.domain.refunds import refund_policy
 from app.domain.suggestions import SUGGESTION_REMINDER_KIND, SUGGESTION_REMINDER_LEAD
-from conftest import A_REASON, PLATFORM_WINDOW
+from conftest import A_REASON, PLATFORM_RESPONSE_WINDOW, PLATFORM_WINDOW
 
 #: The deployment default: `MENTEE_CANCEL_REFUND_HOURS` unset.
 REFUNDS = refund_policy(Settings(_env_file=None))  # type: ignore[call-arg]
@@ -325,6 +325,7 @@ async def test_a_booking_racing_a_suggestion_is_refused_at_the_lock(
                 now=now,
                 require_answers=True,
                 window=PLATFORM_WINDOW,
+                response_window=PLATFORM_RESPONSE_WINDOW,
             )
         )
         await until_blocked(db_engine)
@@ -714,6 +715,7 @@ async def test_the_earliest_time_stays_bookable_through_the_hold(
             now=later,
             require_answers=True,
             window=PLATFORM_WINDOW,
+            response_window=PLATFORM_RESPONSE_WINDOW,
         )
         await session.commit()
 
@@ -777,6 +779,7 @@ async def test_a_stranger_racing_into_the_held_break_is_refused_at_the_lock(
                 now=now,
                 require_answers=True,
                 window=PLATFORM_WINDOW,
+                response_window=PLATFORM_RESPONSE_WINDOW,
             )
         )
         await until_blocked(db_engine)
@@ -824,6 +827,7 @@ async def test_a_held_time_is_never_booked_after_it_starts(
                 now=at + dt.timedelta(minutes=1),
                 require_answers=True,
                 window=PLATFORM_WINDOW,
+                response_window=PLATFORM_RESPONSE_WINDOW,
             )
 
 

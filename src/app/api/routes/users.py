@@ -10,6 +10,7 @@ from app.api.deps import (
     DeletedAccountDep,
     OwnAttributesDep,
     RefundPolicyDep,
+    ResponseWindowHoursDep,
 )
 from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
@@ -111,6 +112,7 @@ async def read_me(
     attributes: OwnAttributesDep,
     window: BookingWindowDep,
     refunds: RefundPolicyDep,
+    response_hours: ResponseWindowHoursDep,
 ) -> UserRead:
     profile = UserProfileRead.from_row(user) if user["has_profile"] else None
     mentor_profile = attributes["mentor_profile"]
@@ -123,7 +125,9 @@ async def read_me(
         awards=[AwardRead.from_row(row) for row in attributes["awards"]],
         languages=[LanguageRead.from_row(row) for row in attributes["languages"]],
         mentor_profile=(
-            MentorProfileRead.from_row(mentor_profile, window, owner=True)
+            MentorProfileRead.from_row(
+                mentor_profile, window, owner=True, response_window_hours=response_hours
+            )
             if mentor_profile is not None
             else None
         ),

@@ -120,6 +120,18 @@ NOTICE_CEILING_MINUTES = 4320
 #: platform maximum can never silently switch an offering off.
 MIN_BOOKING_WINDOW_DAYS = NOTICE_CEILING_MINUTES // (24 * 60) + 1
 
+#: How long an offered time is held for its mentee (#230), in hours. Here so the
+#: response window's ceiling below can be derived from it; `SUGGESTION_HOLD` in
+#: `domain/suggestions.py` is built from it.
+SUGGESTION_HOLD_HOURS = 2
+
+#: The longest response window a deployment may set (decision 278). The
+#: mentor's time to answer is the notice given less the window, and the least
+#: notice a request can carry is the 24-hour floor less a held offer's two hours
+#: (an offered time's notice is measured from the offer). Four hours of that is
+#: kept for the mentor, so no permitted request is born expired or nearly so.
+RESPONSE_WINDOW_CEILING_HOURS = NOTICE_FLOOR_MINUTES // 60 - SUGGESTION_HOLD_HOURS - 4
+
 
 def env_key(field: str) -> str:
     """The environment variable a field is read from.
@@ -295,6 +307,19 @@ class Settings(BaseSettings):
     #: short of the overflow a slipped extra zero would raise on every read.
     mentee_cancel_refund_hours: int = Field(
         default=12, gt=0, le=8760, validation_alias=env_key("mentee_cancel_refund_hours")
+    )
+
+    #: How long before a session a request must be answered, in hours (decision
+    #: 278; owner, 2026-10-19): unanswered by then, it expires. Read through
+    #: `domain.sessions.response_window`, the one reader. **A whole number from 1
+    #: to `RESPONSE_WINDOW_CEILING_HOURS`, or the boot fails**: above it, a
+    #: request booked at the notice floor would leave its mentor almost no time.
+    #: A change applies to new requests only; a stored deadline is never moved.
+    response_window_hours: int = Field(
+        default=12,
+        ge=1,
+        le=RESPONSE_WINDOW_CEILING_HOURS,
+        validation_alias=env_key("response_window_hours"),
     )
 
     #: How many hours after an account is created it may still claim an invite

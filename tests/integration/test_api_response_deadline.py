@@ -6,10 +6,10 @@ something writes a terminal status an abandoned request holds the mentor's hour
 indefinitely. Every test here that matters ends by asking whether the hour came
 back.
 
-`respond_by` is `starts_at - 6h`, and six rather than twenty-four because the
-mentor's time to answer is `(starts_at - booked_at) - W` against a 24-hour
-booking floor. That arithmetic has its own unit test; these are about the
-behaviour it produces.
+`respond_by` is `starts_at - W`, where W is `RESPONSE_WINDOW_HOURS` (12 unless
+configured, decision 278), bounded so the mentor's time to answer,
+`(starts_at - booked_at) - W`, is never short against the 24-hour booking floor.
+That arithmetic has its own unit test; these are about the behaviour it produces.
 """
 
 from __future__ import annotations
@@ -128,7 +128,13 @@ async def make_overdue(engine: AsyncEngine, session_id: str) -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_a_request_carries_a_deadline_six_hours_before_the_session(
+def with_response_window(client: httpx.AsyncClient, hours: int) -> None:
+    """Run this app on a `RESPONSE_WINDOW_HOURS` of ``hours``."""
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.state.settings = app.state.settings.model_copy(update={"response_window_hours": hours})
+
+
+async def test_a_request_carries_a_deadline_twelve_hours_before_the_session(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """Measured backwards from the session, not forwards from the request.
@@ -141,7 +147,50 @@ async def test_a_request_carries_a_deadline_six_hours_before_the_session(
 
     starts_at = dt.datetime.fromisoformat(request["starts_at"])
     respond_by = dt.datetime.fromisoformat(request["body"]["respond_by"])
-    assert starts_at - respond_by == dt.timedelta(hours=6)
+    assert starts_at - respond_by == dt.timedelta(hours=12)
+
+
+async def test_the_deadline_follows_the_setting(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    with_response_window(api_client, 8)
+
+    request = await a_request(db_engine, api_client, "rb-configured")
+
+    starts_at = dt.datetime.fromisoformat(request["starts_at"])
+    respond_by = dt.datetime.fromisoformat(request["body"]["respond_by"])
+    assert starts_at - respond_by == dt.timedelta(hours=8)
+
+
+async def test_a_pending_request_keeps_its_deadline_when_the_setting_changes(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A change applies to new requests only: a mentee was told this deadline."""
+    request = await a_request(db_engine, api_client, "rb-kept")
+    with_response_window(api_client, 4)
+
+    read = await api_client.get(f"/api/v1/sessions/{request['id']}", headers=request["mentee"])
+
+    assert read.status_code == 200, read.text
+    assert read.json()["respond_by"] == request["body"]["respond_by"]
+
+
+async def test_the_mentor_profile_publishes_the_window(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The Booking tab's line reads the number rather than repeating it."""
+    request = await a_request(db_engine, api_client, "rb-published")
+    url = f"/api/v1/users/{request['mentor_id']}/mentor-profile"
+
+    assert (await api_client.get(url, headers=request["mentor"])).json()[
+        "response_window_hours"
+    ] == 12
+    with_response_window(api_client, 8)
+    assert (await api_client.get(url, headers=request["mentor"])).json()[
+        "response_window_hours"
+    ] == 8
+    me = await api_client.get("/api/v1/me", headers=request["mentor"])
+    assert me.json()["mentor_profile"]["response_window_hours"] == 8
 
 
 async def test_an_auto_confirming_offering_has_no_deadline(

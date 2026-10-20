@@ -35,7 +35,15 @@ from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.session_writer import book_session
 from app.infra.db.slot_store import list_slots
 from app.infra.storage.supabase import SupabaseStorage
-from conftest import PLATFORM_WINDOW, add_user, api_token, bearer, build_api_app, client_for
+from conftest import (
+    PLATFORM_RESPONSE_WINDOW,
+    PLATFORM_WINDOW,
+    add_user,
+    api_token,
+    bearer,
+    build_api_app,
+    client_for,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -166,11 +174,23 @@ async def test_booking_beyond_a_lowered_max_is_refused(db_engine: AsyncEngine) -
     async with factory() as session:
         with pytest.raises(ValidationError, match="not available"):
             await book_session(
-                session, mentee, payload, now=NOW, require_answers=False, window=FORTNIGHT
+                session,
+                mentee,
+                payload,
+                now=NOW,
+                require_answers=False,
+                window=FORTNIGHT,
+                response_window=PLATFORM_RESPONSE_WINDOW,
             )
         await session.rollback()
         await book_session(
-            session, mentee, payload, now=NOW, require_answers=False, window=PLATFORM_WINDOW
+            session,
+            mentee,
+            payload,
+            now=NOW,
+            require_answers=False,
+            window=PLATFORM_WINDOW,
+            response_window=PLATFORM_RESPONSE_WINDOW,
         )
 
 
@@ -282,6 +302,7 @@ async def test_booking_inside_the_smallest_window_is_legal(db_engine: AsyncEngin
             now=NOW,
             require_answers=False,
             window=FOUR_DAYS,
+            response_window=PLATFORM_RESPONSE_WINDOW,
         )
         assert booked is not None
         with pytest.raises(ValidationError, match="not available"):
@@ -292,6 +313,7 @@ async def test_booking_inside_the_smallest_window_is_legal(db_engine: AsyncEngin
                 now=NOW,
                 require_answers=False,
                 window=FOUR_DAYS,
+                response_window=PLATFORM_RESPONSE_WINDOW,
             )
 
 

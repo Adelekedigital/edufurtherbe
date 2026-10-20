@@ -19,7 +19,11 @@ import jwt
 import pytest
 
 from app.core.config import QSTASH_EU
-from app.domain.notifications import REMINDER_OFFSETS, reminders_for
+from app.domain.notifications import (
+    REMINDER_OFFSETS,
+    REMINDER_QUIET_AFTER_BOOKING,
+    reminders_for,
+)
 from app.infra.clients.scheduler import (
     NullScheduler,
     QStashScheduler,
@@ -121,15 +125,38 @@ def test_the_default_scheduler_schedules_nothing_and_raises_nothing() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_only_reminders_still_ahead_are_scheduled() -> None:
-    """**At the 24-hour booking floor the deadline is eighteen hours away**, so
-    `t24` is already behind — firing it immediately would be the booking message
-    again, thirty seconds later, saying the same thing."""
-    booked_at = DEADLINE - dt.timedelta(hours=18)
+@pytest.mark.parametrize(
+    ("window_hours", "expected"),
+    [(6, ["t12"]), (12, []), (18, [])],
+    ids=["6h-window", "12h-window", "18h-window"],
+)
+def test_at_the_booking_floor_only_reminders_well_ahead_are_scheduled(
+    window_hours: int, expected: list[str]
+) -> None:
+    """A booking at the 24-hour floor puts the deadline `24 - W` hours away. A
+    reminder already behind, or due within the hour, would repeat the request
+    the mentor was just sent (decision 278): at 12 hours `t12` falls at the
+    moment of booking, and is dropped."""
+    booked_at = DEADLINE - (dt.timedelta(hours=24) - dt.timedelta(hours=window_hours))
 
-    kinds = [kind for kind, _ in reminders_for(DEADLINE, now=booked_at)]
+    assert [kind for kind, _ in reminders_for(DEADLINE, now=booked_at)] == expected
 
-    assert kinds == ["t12"]
+
+@pytest.mark.parametrize(
+    ("lead", "kept"),
+    [
+        (dt.timedelta(hours=13), False),
+        (dt.timedelta(hours=13, minutes=1), True),
+    ],
+    ids=["exactly-an-hour-after-booking", "just-over-an-hour"],
+)
+def test_a_reminder_within_the_hour_of_booking_is_dropped(lead: dt.timedelta, kept: bool) -> None:
+    """`t12` falls `lead - 12h` after the booking; it is kept only when that is
+    more than `REMINDER_QUIET_AFTER_BOOKING`."""
+    kinds = [kind for kind, _ in reminders_for(DEADLINE, now=DEADLINE - lead)]
+
+    assert ("t12" in kinds) is kept
+    assert dt.timedelta(hours=1) == REMINDER_QUIET_AFTER_BOOKING
 
 
 def test_a_long_lead_gets_both() -> None:

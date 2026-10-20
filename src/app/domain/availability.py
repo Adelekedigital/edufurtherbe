@@ -151,8 +151,9 @@ DEFAULT_DURATION_MINUTES = 60
 #: How far ahead a booking must be made, in minutes: what an offering or a
 #: mentor's default may set (#104). **24 hours is the platform floor** — no
 #: same-day booking — and 72 the current ceiling. A 6-hour option was asked for
-#: on 2026-09-29 and declined: #121's approval deadline is six hours before the
-#: start, so at 6 hours' notice a request would expire the moment it was made.
+#: on 2026-09-29 and declined: a request's answer deadline is the response
+#: window before the start (decision 278, at least an hour), so at 6 hours'
+#: notice a request could expire the moment it was made.
 #: The columns' `CHECK`s are sanity only; this is the product rule.
 MIN_NOTICE_MINUTES = (NOTICE_FLOOR_MINUTES, NOTICE_CEILING_MINUTES)
 

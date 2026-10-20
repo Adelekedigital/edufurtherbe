@@ -3,10 +3,10 @@
 Two windows and one vocabulary. The interval and the vocabulary are here rather
 than in ``core/config.py`` because they are **product rules, not deployment
 settings** —
-`CANCELLATION_CUTOFF` and `RESPONSE_WINDOW` in ``domain/sessions.py`` are the
-same shape, and this module exists rather than joining them because reviews are
-their own concern and ``domain/intake.py`` already establishes that a small
-domain module is the house size.
+`CANCELLATION_CUTOFF` in ``domain/sessions.py`` is the same shape, and this
+module exists rather than joining it because reviews are their own concern
+and ``domain/intake.py`` already establishes that a small domain module is
+the house size.
 
 **Why not configuration.** ``core/config.py`` holds no product rule today. A
 rule in env config can differ *per environment*, so staging and production would
