@@ -388,7 +388,7 @@ async def create_mentor_profile(
     (settled decision 17); what a pending mentor may *do* is gated on
     `approval_status`.
     """
-    await _refuse_unknown_mentor_countries(session, payload)
+    await _refuse_unknown_mentor_ids(session, payload)
     result = await session.execute(
         insert(MentorProfile)
         .values(user_id=user_id, **_sent(payload, MENTOR_COLUMNS))
@@ -435,7 +435,7 @@ async def update_mentor_profile(
     """
     if not await lock_mentor(session, user_id):
         return False
-    await _refuse_unknown_mentor_countries(session, payload)
+    await _refuse_unknown_mentor_ids(session, payload)
     values = {key: value for key, value in payload.items() if key in MENTOR_COLUMNS}
     if values:
         await session.execute(
@@ -522,7 +522,7 @@ async def refuse_invalid_profile(
 
 async def refuse_invalid_mentor_profile(session: AsyncSession, payload: dict[str, Any]) -> None:
     """The mentor-profile write's own `422`s, without writing; as `refuse_invalid_profile`."""
-    await _refuse_unknown_mentor_countries(session, payload)
+    await _refuse_unknown_mentor_ids(session, payload)
 
 
 async def _refuse_unknown_countries(session: AsyncSession, payload: dict[str, Any]) -> None:
@@ -533,8 +533,16 @@ async def _refuse_unknown_countries(session: AsyncSession, payload: dict[str, An
     )
 
 
-async def _refuse_unknown_mentor_countries(session: AsyncSession, payload: dict[str, Any]) -> None:
-    """The mentor profile's study country, and each guide country at its index."""
+async def _refuse_unknown_mentor_ids(session: AsyncSession, payload: dict[str, Any]) -> None:
+    """The mentor profile's study country, each guide country and each offering,
+    every one at its own pointer."""
+    await _refuse_unknown_offering_ids(
+        session,
+        {
+            f"/offering_ids/{index}": value
+            for index, value in enumerate(payload.get("offering_ids") or ())
+        },
+    )
     sent = {
         f"/guide_country_ids/{index}": value
         for index, value in enumerate(payload.get("guide_country_ids") or ())
