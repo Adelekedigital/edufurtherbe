@@ -32,6 +32,7 @@ from app.api.deps import (
     RemovedAvatarDep,
     RemovedBannerDep,
     ReplacedLanguagesDep,
+    ResponseWindowHoursDep,
     ResumedSelfDep,
     UpdatedAwardDep,
     UpdatedEducationDep,
@@ -141,10 +142,14 @@ async def awards(rows: AwardsDep) -> Page[AwardRead]:
     ),
     responses=SCOPED_RESPONSES,
 )
-async def mentor_profile(row: MentorProfileDep, window: BookingWindowDep) -> MentorProfileRead:
+async def mentor_profile(
+    row: MentorProfileDep, window: BookingWindowDep, response_hours: ResponseWindowHoursDep
+) -> MentorProfileRead:
     if row is None:
         raise NotFoundError("this user has no mentor profile")
-    return MentorProfileRead.from_row(row, window, owner=row["owner"])
+    return MentorProfileRead.from_row(
+        row, window, owner=row["owner"], response_window_hours=response_hours
+    )
 
 
 # --------------------------------------------------------------------------

@@ -31,7 +31,15 @@ from tests.integration.factories import (
     until_blocked,
 )
 
-from conftest import PLATFORM_WINDOW, add_user, api_token, bearer, finish_onboarding, fund
+from conftest import (
+    PLATFORM_RESPONSE_WINDOW,
+    PLATFORM_WINDOW,
+    add_user,
+    api_token,
+    bearer,
+    finish_onboarding,
+    fund,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -605,7 +613,13 @@ async def test_the_exclusion_constraint_refuses_a_genuine_race(
 
     async with factory() as first, factory() as second:
         await book_session(
-            first, winner, payload, now=now, require_answers=True, window=PLATFORM_WINDOW
+            first,
+            winner,
+            payload,
+            now=now,
+            require_answers=True,
+            window=PLATFORM_WINDOW,
+            response_window=PLATFORM_RESPONSE_WINDOW,
         )
         # `second` reads the grid while `first`'s row is still uncommitted and
         # therefore invisible, so it passes the same pre-check the winner did —
@@ -618,6 +632,7 @@ async def test_the_exclusion_constraint_refuses_a_genuine_race(
                 now=now,
                 require_answers=True,
                 window=PLATFORM_WINDOW,
+                response_window=PLATFORM_RESPONSE_WINDOW,
             )
         )
         await until_blocked(db_engine)

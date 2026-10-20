@@ -194,13 +194,14 @@ not forwards from creation. The guarantee is to the *mentee*: you will know befo
 early enough for the answer to still be useful. A window measured from `created_at` guarantees the
 mentee nothing.
 
-- **W is a platform value today and a mentor preference later.** Legacy default 24h; moving to 6h.
-  The final number is **still open**.
+- **W is a platform value today and a mentor preference later.** Legacy default 24h, then 6h;
+  **answered 2026-10-19: the deploy setting `RESPONSE_WINDOW_HOURS`, default 12, 1 to 18**
+  (decision 278).
 - **Reminders fire during the window** so the mentor can act. ~~The schedule is **still
   open**.~~ **Answered: on booking, 24 hours before `respond_by` where the lead allows it, and
   12 hours before**, measured from the deadline — the minimum gap from booking to deadline is
-  eighteen hours, so a reminder measured forward from booking would fire after it had passed.
-  **Unbuilt**: it needs a notification channel (ADR 0025).
+  the notice floor less the window, so a reminder measured forward from booking would fire
+  after it had passed. Built; one due within an hour of booking is skipped (decision 278).
 - **On elapse the session becomes `expired`**, surfaced to users as **"Unconfirmed"**, and both
   parties are told. `expired` existed in `SessionStatus` with nothing able to produce it, and
   the expiry sweep is its producer — shipped, and telling both parties is the part that has not.
@@ -702,7 +703,7 @@ Nothing below blocks PR 12. Each is named where it will be decided.
 
 | | Open | Decide with |
 |---|---|---|
-| 1 | **`W` — the response window.** Legacy 24h, moving to 6h, mentor's choice later | *still open — the transitions shipped without needing it* |
+| 1 | ~~**`W` — the response window.**~~ **Answered: `RESPONSE_WINDOW_HOURS`, default 12** (decision 278) | *closed* |
 | 2 | **The reminder schedule** during that window — how many, when | *still open — and it needs a notification channel that does not exist yet* |
 | 3 | ~~Is the 24-hour notice a floor or a default?~~ **Answered: a floor.** Mentors raise it per session type, 24h–72h; the mock's 6-hour option is dropped | *closed* |
 | 4 | ~~`withdrawn`: status, or `cancelled` + reason code?~~ **Answered: a status.** Shipped in #107 | *closed* |

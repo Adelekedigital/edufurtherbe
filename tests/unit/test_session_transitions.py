@@ -13,17 +13,19 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.config import NOTICE_FLOOR_MINUTES, RESPONSE_WINDOW_CEILING_HOURS, Settings
 from app.domain.attendance import within_join_window
 from app.domain.enums import SessionReasonCode, SessionRole, SessionStatus
 from app.domain.sessions import (
     CANCELLATION_CUTOFF,
-    RESPONSE_WINDOW,
     TRANSITIONS,
     ending_for,
     respond_by,
+    response_window,
     role_of,
     too_late_to_cancel,
 )
+from app.domain.suggestions import SUGGESTION_HOLD
 
 #: The four endpoints in `api/routes/sessions.py`. Written out rather than
 #: derived from the table, because deriving it would make this assert that the
@@ -112,31 +114,41 @@ def test_no_instant_is_both_cancellable_and_joinable(
     assert not (joinable and cancellable)
 
 
-def test_the_response_window_leaves_the_mentor_time_at_the_booking_floor() -> None:
-    """**The arithmetic that chose six hours over twenty-four.**
+@pytest.mark.parametrize("hours", range(1, RESPONSE_WINDOW_CEILING_HOURS + 1))
+def test_every_permitted_window_leaves_the_mentor_time(hours: int) -> None:
+    """**The arithmetic behind the setting's ceiling** (decision 278).
 
-    The mentor's time to answer is `(starts_at - booked_at) - RESPONSE_WINDOW`,
-    and `booked_at` is at best `starts_at - min_notice_minutes`. Against the
-    24-hour notice floor a window of 24 hours leaves **zero** — every request on
-    a default-configured offering would expire the instant it was made.
-
-    Asserted rather than trusted, because the two values live in different
-    modules — the floor is a Pydantic bound on the write schema — and nothing
-    else would notice if one moved.
+    The mentor's time to answer is the notice given less the window, and the
+    least notice a request can carry is the 24-hour floor less a held offer's
+    two hours. Every window the setting admits must leave four hours of that.
     """
-    floor = dt.timedelta(hours=24)
+    least_notice = dt.timedelta(minutes=NOTICE_FLOOR_MINUTES) - SUGGESTION_HOLD
+    window = response_window(Settings(_env_file=None, response_window_hours=hours))
 
-    assert floor - RESPONSE_WINDOW == dt.timedelta(hours=18)
-    assert floor - dt.timedelta(hours=24) == dt.timedelta(0), "24h would leave no time at all"
+    assert least_notice - window >= dt.timedelta(hours=4)
+
+
+def test_the_ceiling_is_where_four_hours_are_left() -> None:
+    least_notice = dt.timedelta(minutes=NOTICE_FLOOR_MINUTES) - SUGGESTION_HOLD
+
+    assert least_notice - dt.timedelta(hours=RESPONSE_WINDOW_CEILING_HOURS) == dt.timedelta(hours=4)
 
 
 def test_only_an_offering_that_awaits_an_answer_gets_a_deadline() -> None:
     """Null is the domain rule rather than a default: an auto-confirming
     offering has no response window, because nothing is waiting."""
     starts_at = dt.datetime(2026, 8, 20, 15, 0, tzinfo=dt.UTC)
+    window = dt.timedelta(hours=12)
 
-    assert respond_by(starts_at, requires_confirmation=True) == starts_at - RESPONSE_WINDOW
-    assert respond_by(starts_at, requires_confirmation=False) is None
+    assert respond_by(starts_at, window=window, requires_confirmation=True) == starts_at - window
+    assert respond_by(starts_at, window=window, requires_confirmation=False) is None
+
+
+def test_the_window_is_the_setting() -> None:
+    assert response_window(Settings(_env_file=None)) == dt.timedelta(hours=12)
+    assert response_window(Settings(_env_file=None, response_window_hours=8)) == dt.timedelta(
+        hours=8
+    )
 
 
 @pytest.mark.parametrize(

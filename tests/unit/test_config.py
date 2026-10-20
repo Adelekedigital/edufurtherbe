@@ -5,6 +5,7 @@ than silently leave a default in place.
 """
 
 import base64
+import datetime as dt
 import re
 from pathlib import Path
 
@@ -12,9 +13,16 @@ import pytest
 from pydantic import SecretStr
 from pydantic import ValidationError as PydanticValidationError
 
-from app.core.config import Settings, env_key, get_settings
+from app.core.config import (
+    RESPONSE_WINDOW_CEILING_HOURS,
+    SUGGESTION_HOLD_HOURS,
+    Settings,
+    env_key,
+    get_settings,
+)
 from app.domain.attendance import JOIN_LEAD_CEILING
 from app.domain.sessions import CANCELLATION_CUTOFF
+from app.domain.suggestions import SUGGESTION_HOLD
 
 
 def test_settings_default_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -449,6 +457,38 @@ def test_the_mentee_refund_window_is_read_from_the_environment(
     monkeypatch.setenv("MENTEE_CANCEL_REFUND_HOURS", "6")
 
     assert Settings(_env_file=None).mentee_cancel_refund_hours == 6  # type: ignore[call-arg]
+
+
+def test_the_response_window_defaults_to_twelve_hours(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RESPONSE_WINDOW_HOURS", raising=False)
+
+    assert Settings(_env_file=None).response_window_hours == 12  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("value", ["1", "8", "18"])
+def test_the_response_window_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("RESPONSE_WINDOW_HOURS", value)
+
+    assert Settings(_env_file=None).response_window_hours == int(value)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "19", "24", "1.5", "twelve"])
+def test_a_response_window_outside_one_to_eighteen_refuses_to_boot(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Above 18, a request booked at the notice floor on a held offer would leave
+    its mentor under four hours (decision 278); so the boot fails instead."""
+    monkeypatch.setenv("RESPONSE_WINDOW_HOURS", value)
+
+    with pytest.raises(PydanticValidationError, match="RESPONSE_WINDOW_HOURS"):
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_the_response_window_ceiling_is_derived_from_the_notice_floor() -> None:
+    assert RESPONSE_WINDOW_CEILING_HOURS == 18
+    assert dt.timedelta(hours=SUGGESTION_HOLD_HOURS) == SUGGESTION_HOLD
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "twelve", "1.5", "8761", "120000000"])

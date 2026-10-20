@@ -29,6 +29,7 @@ from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole
 from app.domain.idempotency import request_fingerprint
+from app.domain.sessions import response_window_hours
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims, issuer_for
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.first_sign_in import provision_first_sign_in
@@ -529,6 +530,15 @@ def _booking_window(request: Request) -> BookingWindow:
 
 
 BookingWindowDep = Annotated[BookingWindow, Depends(_booking_window)]
+
+
+def _response_hours(request: Request) -> int:
+    """This app's response window in whole hours (decision 278), for the routes
+    that publish it."""
+    return response_window_hours(_configured(request))
+
+
+ResponseWindowHoursDep = Annotated[int, Depends(_response_hours)]
 
 
 def window_out_of_range(days: int | None, window: BookingWindow) -> bool:

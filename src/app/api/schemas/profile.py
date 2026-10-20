@@ -340,6 +340,16 @@ class MentorProfileRead(BaseModel):
     default_booking_window_days: int = Field(
         description="What an offering uses when neither it nor you set a window."
     )
+    #: The platform's response window (decision 278), so the Booking tab's line
+    #: reads it rather than a hard-coded number. Configuration, not the mentor's.
+    response_window_hours: int | None = Field(
+        default=None,
+        description=(
+            "How many hours before a session a request must be answered; "
+            "unanswered by then, it expires and the mentee can book another time. "
+            "Each request's own deadline is its `respond_by`."
+        ),
+    )
     # Mentor Onboarding (B2). The owner's own view: an admin reading this
     # profile gets null in all four; the decision log is where they read notes.
     submitted_at: datetime | None = Field(
@@ -364,7 +374,12 @@ class MentorProfileRead(BaseModel):
 
     @classmethod
     def from_row(
-        cls, row: dict[str, Any], window: BookingWindow, *, owner: bool
+        cls,
+        row: dict[str, Any],
+        window: BookingWindow,
+        *,
+        owner: bool,
+        response_window_hours: int,
     ) -> MentorProfileRead:
         country = None
         if row.get("primary_study_country_code") is not None:
@@ -393,6 +408,7 @@ class MentorProfileRead(BaseModel):
             return_on=row.get("return_on"),
             max_booking_window_days=window.max_days,
             default_booking_window_days=window.default_days,
+            response_window_hours=response_window_hours,
             submitted_at=row.get("submitted_at") if owner else None,
             approved_seen_at=row.get("approved_seen_at") if owner else None,
             review_note=row.get("review_note") if owner else None,

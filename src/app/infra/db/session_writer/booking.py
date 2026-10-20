@@ -193,6 +193,7 @@ async def book_session(
     external_busy: Any = None,
     require_answers: bool,
     window: BookingWindow,
+    response_window: dt.timedelta,
 ) -> UUID:
     """Book ``starts_at`` on an offering, and return the new session's id.
 
@@ -362,6 +363,11 @@ async def book_session(
     status = (
         SessionStatus.PENDING_MENTOR_APPROVAL if requires_confirmation else SessionStatus.CONFIRMED
     )
+    # Stored once and never recomputed: a change to the window applies to new
+    # requests only (decision 278).
+    deadline = respond_by(
+        starts_at, window=response_window, requires_confirmation=requires_confirmation
+    )
     duration = int(offer["duration_minutes"] if offer else offering["duration_minutes"])
     if await holds_against(
         session,
@@ -402,7 +408,7 @@ async def book_session(
                     # Null unless the mentor has to answer. The two are decided
                     # by the same fact and are written together, so a confirmed
                     # session can never carry a deadline nobody is waiting on.
-                    respond_by=respond_by(starts_at, requires_confirmation=requires_confirmation),
+                    respond_by=deadline,
                     # **Snapshotted, never read live from the config.** Settled
                     # decision #10 gives the reason for a mentor's rate and it
                     # is the same one here: a later edit to the offering must
@@ -523,16 +529,15 @@ async def book_session(
     # gets those from `follow_ups.on_confirmed`, which the caller runs after this.
     #
     # Only for a request that waits: an auto-confirmed session has no deadline
-    # to nudge the mentor about. And only for the ones still ahead — at the 24-hour booking floor
-    # the deadline is eighteen hours away, so `t24` is already behind and
-    # sending it now would be the booking message again, thirty seconds later.
+    # to nudge the mentor about. And only for the ones far enough ahead
+    # (`reminders_for`): one due within the hour would be the booking message
+    # again.
     #
     # **A scheduling failure does not fail the booking.** The session exists and
     # holds its slot; the mentor is simply not nudged, and the deadline still
     # arrives on its own. Refusing the booking because a scheduler was slow
     # would lose something that cannot be recovered to protect something that
     # can.
-    deadline = respond_by(starts_at, requires_confirmation=requires_confirmation)
     if deadline is not None and scheduler is not None and callback_url:
         # The nudges, then **the request's own expiry at its deadline** (owner,
         # 2026-10-13), which the hourly sweep backs up if it is lost.

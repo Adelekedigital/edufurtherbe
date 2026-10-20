@@ -34,6 +34,7 @@ from app.api.limits import BodyLimitMiddleware
 from app.core.config import Settings, get_settings
 from app.domain.availability import booking_window
 from app.domain.credits import CreditLadder, credit_ladder
+from app.domain.sessions import response_window
 from app.infra.auth.admin import SupabaseAdminClient
 from app.infra.auth.dev_tokens import mint_dev_token
 from app.infra.auth.supabase import SupabaseTokenVerifier
@@ -63,6 +64,10 @@ _SKIP_REASON = (
 #: settings defaults, never retyped, so a test calling a store directly uses
 #: exactly what the app would (Round 5).
 PLATFORM_WINDOW = booking_window(Settings(_env_file=None))
+
+#: The response window an unconfigured deployment runs with (decision 278), read
+#: the same way.
+PLATFORM_RESPONSE_WINDOW = response_window(Settings(_env_file=None))
 
 
 @pytest.fixture

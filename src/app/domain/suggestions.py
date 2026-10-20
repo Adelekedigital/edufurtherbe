@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from app.core.config import SUGGESTION_HOLD_HOURS
 from app.domain.enums import SessionStatus
 
 __all__ = [
@@ -32,7 +33,7 @@ __all__ = [
 ]
 
 #: How long a suggested slot is kept for the mentee it was offered to.
-SUGGESTION_HOLD = dt.timedelta(hours=2)
+SUGGESTION_HOLD = dt.timedelta(hours=SUGGESTION_HOLD_HOURS)
 
 #: **The ends whose offered time is approved in advance** (owner, 2026-10-13):
 #: booking it confirms at once, whatever the mentor's standing setting. Only a

@@ -86,7 +86,14 @@ ADDED = {
     # Where a mentor's bio came from, in their own view only (decision 267).
     "MentorPublicRead": ("about_me_drafted_at",),
     # A mentor application's state, in the owner's view (Mentor Onboarding B2).
-    "MentorProfileRead": ("submitted_at", "approved_seen_at", "review_note", "reviewed_at"),
+    "MentorProfileRead": (
+        "submitted_at",
+        "approved_seen_at",
+        "review_note",
+        "reviewed_at",
+        # The platform's response window (decision 278).
+        "response_window_hours",
+    ),
 }
 
 

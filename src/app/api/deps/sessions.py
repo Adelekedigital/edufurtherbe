@@ -44,7 +44,7 @@ from app.domain.attendance import door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
 from app.domain.refunds import RefundPolicy, refund_policy
-from app.domain.sessions import TRANSITIONS
+from app.domain.sessions import TRANSITIONS, response_window
 from app.infra.clients.meetings import (
     CalendarPort,
     RoomsPort,
@@ -331,6 +331,7 @@ async def booked_session(
         external_busy=_free_busy(request),
         require_answers=_configured(request).require_intake_answers,
         window=booking_window(_configured(request)),
+        response_window=response_window(_configured(request)),
     )
     # **In the booking's own transaction**, so a session cannot be committed
     # without whatever venue it was going to get. It no-ops unless the session
