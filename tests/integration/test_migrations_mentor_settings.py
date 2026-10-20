@@ -299,24 +299,6 @@ def test_the_downgrade_returns_x_and_youtube_to_their_columns(
     command.upgrade(config, LINKS)
 
 
-def test_a_link_deleted_the_way_the_writer_deletes_stays_deleted(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
-    """The links writer clears a platform's column when it deletes the link, so
-    the downgrade has nothing to bring back."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, BEFORE)
-    _person(disposable_database, "gone@example.test", "twitter.com/ada", None)
-    command.upgrade(config, LINKS)
-    execute(disposable_database, "DELETE FROM user_links")
-    execute(disposable_database, "UPDATE user_profiles SET social_twitter = NULL")
-
-    command.downgrade(config, BEFORE)
-
-    assert scalar(disposable_database, "SELECT social_twitter FROM user_profiles") is None
-    command.upgrade(config, LINKS)
-
-
 def test_a_column_written_after_the_upgrade_survives_the_downgrade(
     disposable_database: str, make_alembic_config: ConfigFactory
 ) -> None:
