@@ -221,7 +221,7 @@ async def own_attributes(
         # One query, the public profile's own (`list_languages`).
         "languages": await list_languages(session, user_id),
         # The settings page's own read (`links_of`, decision 275).
-        "links": await links_of(session, user_id),
+        "links": await links_of(session, user_id, published=False),
         "mentor_profile": mentor_profile,
         # One grouped query. Every caller may book, so it always runs; the
         # route gates only the mentor half.

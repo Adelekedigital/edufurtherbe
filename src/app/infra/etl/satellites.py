@@ -20,7 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.resolve import Resolution
-from app.domain.social_links import SocialNetwork, canonical_social
+from app.domain.social_links import LEGACY_LINK_FIELDS, SocialNetwork, canonical_social
 from app.domain.transform import AdminGrantRow, IdentityRow, OnboardingRow, ProfileRow
 
 UPSERT_PROFILE = """
@@ -70,9 +70,9 @@ ON CONFLICT (user_id, platform) WHERE platform <> 'website' DO UPDATE SET
 """
 
 #: Each Bubble field, the platform it becomes, and where it lands in the order.
-_LINK_SOURCES = (
-    ("social_twitter", SocialNetwork.X, 0),
-    ("social_youtube", SocialNetwork.YOUTUBE, 1),
+_LINK_SOURCES = tuple(
+    (field, SocialNetwork(platform.value), position)
+    for position, (platform, field) in enumerate(LEGACY_LINK_FIELDS.items())
 )
 
 UPSERT_ONBOARDING = """

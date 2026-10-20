@@ -18,7 +18,11 @@ from fastapi import APIRouter, Response, status
 from app.api.deps.links import ChangedLinkDep, CreatedLinkDep, DeletedLinkDep, OwnLinksDep
 from app.api.schemas.common import Page
 from app.api.schemas.links import LinkRead
+from app.domain.enums import LinkPlatform
 from app.domain.social_links import MAX_WEBSITES
+
+#: One link per platform, except websites.
+MAX_LINKS = len(LinkPlatform) - 1 + MAX_WEBSITES
 
 router = APIRouter(prefix="/api/v1/me/links", tags=["links"])
 
@@ -49,7 +53,7 @@ INVALID: dict[int | str, dict[str, Any]] = {
     description=(
         "Your links in your order (`position`, then the oldest first). An empty "
         "`data` means you have none, never a `404`. `next_cursor` is always "
-        f"`null`: there are at most {5 + MAX_WEBSITES}, so the list comes whole."
+        f"`null`: there are at most {MAX_LINKS}, so the list comes whole."
     ),
     responses=RESPONSES,
 )

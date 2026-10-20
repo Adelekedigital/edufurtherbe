@@ -310,10 +310,11 @@ async def test_the_profile_patchs_x_field_writes_the_link(
     assert cleared == []
 
 
-async def test_a_link_only_profile_patch_starts_no_profile(
+async def test_a_link_only_profile_patch_still_starts_a_profile(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """A link is the person's, not the profile row's: `/me` still says no profile."""
+    """As before this release, so an older client reading `profile.social_*`
+    sees the link it saved."""
     user_id, headers = await a_user(db_engine, "no-profile")
 
     response = await api_client.patch(
@@ -322,7 +323,7 @@ async def test_a_link_only_profile_patch_starts_no_profile(
 
     assert response.status_code == 204
     me = (await api_client.get("/api/v1/me", headers=headers)).json()
-    assert me["profile"] is None
+    assert me["profile"]["social_youtube"] == "https://www.youtube.com/@ada"
     assert [link["platform"] for link in me["links"]] == ["youtube"]
 
 
@@ -369,3 +370,30 @@ async def test_the_public_profile_shows_platform_and_url_only(
     ]
     assert body["social_twitter"] == "https://x.com/ada"
     assert body["social_youtube"] is None
+
+
+async def test_a_link_the_rule_no_longer_reads_stays_the_owners_to_delete(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """It still holds the platform's slot, so the owner must see it to remove it;
+    nobody else is ever shown it (#182)."""
+    mentor = await make_bookable_mentor(db_engine, "links-unreadable")
+    headers = bearer(await token_for(db_engine, mentor))
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO user_links (user_id, platform, url) "
+                "VALUES (:u, 'x', 'https://evil.example/ada')"
+            ),
+            {"u": mentor},
+        )
+
+    own = (await api_client.get(LINKS, headers=headers)).json()["data"]
+    public = (await api_client.get(f"/api/v1/mentors/{mentor}")).json()
+    deleted = await api_client.delete(f"{LINKS}/{own[0]['id']}", headers=headers)
+
+    assert [(k["platform"], k["url"]) for k in own] == [("x", "https://evil.example/ada")]
+    assert public["links"] == []
+    assert public["social_twitter"] is None
+    assert deleted.status_code == 204
+    assert (await add(api_client, headers, "x", "ada")).status_code == 201

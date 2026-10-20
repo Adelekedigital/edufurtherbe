@@ -25,7 +25,7 @@ _NO_SUCH_LINK = "you have no link with that id"
 
 async def own_links(user: CurrentUserDep, session: SessionDep) -> list[Link]:
     """The caller's links in their order. An empty list, never `404`."""
-    return await links_of(session, user["id"])
+    return await links_of(session, user["id"], published=False)
 
 
 async def created_link(body: LinkCreate, user: CurrentUserDep, session: SessionDep) -> Link:

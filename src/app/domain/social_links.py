@@ -44,13 +44,17 @@ from enum import StrEnum
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 from uuid import UUID
 
+from app.domain.enums import LinkPlatform
+
 __all__ = [
+    "LEGACY_LINK_FIELDS",
     "MAX_LENGTH",
     "MAX_WEBSITES",
     "Link",
     "SocialNetwork",
     "canonical_social",
     "handle_of",
+    "owned_link",
     "stored_link",
 ]
 
@@ -63,6 +67,15 @@ MAX_LENGTH = 2048
 #: How many websites one person may list (Mentor Settings PRD, decision 275);
 #: every other platform takes one link.
 MAX_WEBSITES = 3
+
+#: The profile field each platform's link stood in for before `user_links`, in
+#: the order the Bubble import places them (decision 275). The one copy: the
+#: writer clears these columns, the loader and the catch-up read them, and the
+#: deprecated response fields are filled from them.
+LEGACY_LINK_FIELDS: dict[LinkPlatform, str] = {
+    LinkPlatform.X: "social_twitter",
+    LinkPlatform.YOUTUBE: "social_youtube",
+}
 
 
 class SocialNetwork(StrEnum):
@@ -120,7 +133,7 @@ _INSTAGRAM_RESERVED = frozenset(
     {"p", "reel", "reels", "explore", "stories", "accounts", "direct", "tv", "about"}
 )
 _FACEBOOK_RESERVED = frozenset(
-    {"pages", "groups", "events", "watch", "marketplace", "share", "login", "home.php",
+    {"pages", "groups", "events", "watch", "marketplace", "share", "login", "home.php", "people",
      "profile.php", "permalink.php", "story.php", "photo.php", "gaming", "help", "settings"}
 )  # fmt: skip
 
@@ -213,7 +226,9 @@ def _website(text: str) -> str | None:
     `javascript:`, `localhost` and a bare word all fail. The fragment is dropped.
     """
     if not _SCHEME.match(text):
-        if ":" in text.split("/", 1)[0]:
+        # A scheme of any other kind (`javascript:`, `mailto:`) is a colon in
+        # the authority, which ends at the first `/`, `?` or `#`.
+        if ":" in re.split(r"[/?#]", text, maxsplit=1)[0]:
             return None
         text = f"https://{text}"
     try:
@@ -293,6 +308,11 @@ def _from_url(network: SocialNetwork, text: str) -> str | None:
         return _from_handle(network, segments[0])
     if network is SocialNetwork.FACEBOOK:
         # `profile.php?id=…` is how Facebook links a profile with no username.
+        # `/people/<Name>/<id>` is the same profile, by id.
+        if segments[0] == "people":
+            if len(segments) >= 3 and _FACEBOOK_ID.fullmatch(segments[2]):
+                return f"https://www.facebook.com/profile.php?id={segments[2]}"
+            return None
         if segments[0] == "profile.php":
             ids = parse_qs(parts.query).get("id", [])
             if len(ids) == 1 and _FACEBOOK_ID.fullmatch(ids[0]):
@@ -333,5 +353,22 @@ def stored_link(link_id: UUID, platform: str, url: str, position: int) -> Link |
         platform=platform,
         url=canonical,
         value=handle_of(network, canonical),
+        position=position,
+    )
+
+
+def owned_link(link_id: UUID, platform: str, url: str, position: int) -> Link:
+    """A stored row as its owner sees it: canonical where the rule reads it, and
+    as stored where it no longer does, so the owner can still see and delete a
+    link that holds a platform's slot. Never published to anyone else (#182);
+    the column's `CHECK` keeps it an `https://` link either way."""
+    link = stored_link(link_id, platform, url, position)
+    if link is not None:
+        return link
+    return Link(
+        id=link_id,
+        platform=platform,
+        url=url,
+        value=handle_of(SocialNetwork(platform), url),
         position=position,
     )

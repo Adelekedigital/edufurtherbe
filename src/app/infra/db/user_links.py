@@ -30,11 +30,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import LinkPlatformTakenError, ValidationError, WebsiteLimitReachedError
 from app.domain.enums import LinkPlatform
 from app.domain.social_links import (
+    LEGACY_LINK_FIELDS,
     MAX_WEBSITES,
     Link,
     SocialNetwork,
     canonical_social,
     handle_of,
+    owned_link,
     stored_link,
 )
 from app.infra.db.models.user import UserLink, UserProfile
@@ -52,17 +54,17 @@ __all__ = [
 #: Namespace for this module's advisory lock: `'LINK'` as four ASCII bytes.
 LINK_LOCK_NAMESPACE = 0x4C494E4B
 
-#: The `user_profiles` column each platform's link mirrored before this table.
-_LEGACY_COLUMNS = {LinkPlatform.X: "social_twitter", LinkPlatform.YOUTUBE: "social_youtube"}
-
 _PLATFORM_TAKEN = "You already have a link on this platform. Edit or delete it instead."
 _WEBSITE_LIMIT = f"You can list up to {MAX_WEBSITES} websites."
 _UNIQUE_INDEX = "ix_user_links_one_per_platform"
 
 
-async def links_of(session: AsyncSession, user_id: UUID) -> list[Link]:
+async def links_of(session: AsyncSession, user_id: UUID, *, published: bool) -> list[Link]:
     """The user's links in their order, then oldest first.
 
+    `published` is the public profile's read: only links the rule can read.
+    The owner's read (`published=False`) also returns one it no longer can, as
+    stored, because it still holds its platform's slot and must stay deletable.
     The caller decides whether this user may be shown (`LIVE`, the public
     profile's visibility); this reads one user's rows and nobody else's.
     """
@@ -71,6 +73,8 @@ async def links_of(session: AsyncSession, user_id: UUID) -> list[Link]:
         .where(UserLink.user_id == user_id)
         .order_by(UserLink.position, UserLink.created_at, UserLink.id)
     )
+    if not published:
+        return [owned_link(r.id, str(r.platform), r.url, r.position) for r in rows]
     return [
         link
         for r in rows
@@ -97,7 +101,7 @@ async def _lock(session: AsyncSession, user_id: UUID) -> None:
 
 
 async def _clear_legacy(session: AsyncSession, user_id: UUID, platform: LinkPlatform) -> None:
-    column = _LEGACY_COLUMNS.get(platform)
+    column = LEGACY_LINK_FIELDS.get(platform)
     if column is not None:
         await session.execute(
             update(UserProfile).where(UserProfile.user_id == user_id).values({column: None})
@@ -125,6 +129,22 @@ async def add_link(
     url = canonical_or_refuse(platform, value)
     await _lock(session, user_id)
     await _refuse_if_full(session, user_id, platform)
+    link_id, position = await _insert(session, user_id, platform, url)
+    await _clear_legacy(session, user_id, platform)
+    return Link(
+        id=link_id,
+        platform=platform.value,
+        url=url,
+        value=handle_of(SocialNetwork(platform.value), url),
+        position=position,
+    )
+
+
+async def _insert(
+    session: AsyncSession, user_id: UUID, platform: LinkPlatform, url: str
+) -> tuple[UUID, int]:
+    """Append a row at the end of the user's order: the one insert. A second
+    link on a platform fails the unique index, answered as a `409` (#169)."""
     position = await session.scalar(
         select(func.coalesce(func.max(UserLink.position) + 1, 0)).where(UserLink.user_id == user_id)
     )
@@ -139,14 +159,7 @@ async def add_link(
         if _UNIQUE_INDEX in str(exc.orig):
             raise LinkPlatformTakenError(_PLATFORM_TAKEN) from exc
         raise
-    await _clear_legacy(session, user_id, platform)
-    return Link(
-        id=UUID(str(link_id)),
-        platform=platform.value,
-        url=url,
-        value=handle_of(SocialNetwork(platform.value), url),
-        position=int(position or 0),
-    )
+    return UUID(str(link_id)), int(position or 0)
 
 
 async def change_link(
@@ -204,14 +217,5 @@ async def set_platform_link(
     elif existing is not None:
         await session.execute(update(UserLink).where(UserLink.id == existing).values(url=url))
     else:
-        position = await session.scalar(
-            select(func.coalesce(func.max(UserLink.position) + 1, 0)).where(
-                UserLink.user_id == user_id
-            )
-        )
-        await session.execute(
-            insert(UserLink).values(
-                user_id=user_id, platform=platform.value, url=url, position=position
-            )
-        )
+        await _insert(session, user_id, platform, url)
     await _clear_legacy(session, user_id, platform)

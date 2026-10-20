@@ -7,10 +7,16 @@ the table, so a value written to a column in between is the only thing not yet
 there. This copies it.
 
 **Run after the code deploys**: from then on nothing writes the columns, so the
-copy is complete. **Idempotent**: ``ON CONFLICT DO NOTHING`` on the one-per-
-platform index, so a link already in the table, including one edited since, is
-never overwritten, and a second run copies nothing. A link deleted in the new
-settings cleared its column at the same moment, so nothing deleted comes back.
+copy is complete. **A column value wins over the first copy**: the new writer
+clears a platform's column on every write and delete, so a column still holding
+a value is the old writer's, and either equals what was first copied or is a
+later edit. **Idempotent**: a second run writes the same urls again.
+
+**One case it cannot see, and why it does not arise**: a link cleared through the
+old PATCH in the window leaves its first copy behind. Only a database that ran
+``d6f2a9c4e185`` before this release has a window, and staging's copied no links
+(it holds no X or YouTube values); a new database runs the chain before any
+code, so it has no window at all.
 
 The rule is the one ``d6f2a9c4e185`` froze, loaded from that file rather than
 copied a second time: a migration is fixed history, so it cannot drift.
@@ -64,20 +70,21 @@ def upgrade() -> None:
                 links.append(
                     {"user_id": row["user_id"], "platform": platform, "url": url, "pos": position}
                 )
-    copied = 0
+    written = 0
     for link in links:
-        copied += (
+        written += (
             bind.execute(
                 sa.text(
                     "INSERT INTO user_links (user_id, platform, url, position) "
                     "VALUES (:user_id, :platform, :url, :pos) "
-                    "ON CONFLICT (user_id, platform) WHERE platform <> 'website' DO NOTHING"
+                    "ON CONFLICT (user_id, platform) WHERE platform <> 'website' "
+                    "DO UPDATE SET url = EXCLUDED.url"
                 ),
                 link,
             ).rowcount
             or 0
         )
-    print(f"user_links catch-up: copied {copied} link(s) of {len(links)} readable value(s)")
+    print(f"user_links catch-up: wrote {written} link(s) from {len(links)} readable value(s)")
 
 
 def downgrade() -> None:

@@ -150,7 +150,8 @@ async def test_a_legacy_value_reads_canonical_or_null_on_me(
     assert me["profile"]["social_youtube"] is None
     # Nothing stored was rewritten — the read converts, it does not migrate.
     assert (await stored(db_engine, user_id))["social_twitter"] == "https://evil.example/ada"
-    assert me["links"] == []
+    # The owner still sees the row as stored, to delete it (decision 275).
+    assert [(k["platform"], k["url"]) for k in me["links"]] == [("x", "https://evil.example/ada")]
 
 
 async def test_a_legacy_value_reads_canonical_or_null_on_the_public_profile(

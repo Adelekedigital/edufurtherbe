@@ -126,7 +126,7 @@ async def public_mentor(
         "languages": await list_languages(session, user_id),
         # The same reader as `/me/links`; `get_public_mentor` already decided
         # this mentor may be shown (decision 275).
-        "links": await links_of(session, user_id),
+        "links": await links_of(session, user_id, published=True),
         "stats": await mentor_stats(session, user_id),
         "reviews": await mentor_review_stats(session, user_id),
     }

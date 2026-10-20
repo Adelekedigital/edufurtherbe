@@ -40,6 +40,12 @@ ACCEPTED = [
     (WEB, "https://medium.com/@ada/post", "https://medium.com/@ada/post"),
     (WEB, "https://bücher.de/x", "https://xn--bcher-kva.de/x"),
     (WEB, "ada.substack.com/p/hello", "https://ada.substack.com/p/hello"),
+    (WEB, "ada.dev?t=10:30", "https://ada.dev?t=10:30"),
+    (
+        FB,
+        "https://www.facebook.com/people/Ada-Lovelace/100012345678",
+        "https://www.facebook.com/profile.php?id=100012345678",
+    ),
 ]
 
 REFUSED = [
@@ -53,6 +59,8 @@ REFUSED = [
     (FB, "facebook.com/groups/abc"),
     (FB, "https://facebook.com/profile.php?id=abc"),
     (FB, "https://facebook.com/profile.php"),
+    (FB, "https://www.facebook.com/people/Ada-Lovelace"),
+    (FB, "people"),
     (TT, "a"),
     (TT, "tiktok.com/ada"),
     (TT, "@ada."),
