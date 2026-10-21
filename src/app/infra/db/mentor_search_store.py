@@ -71,7 +71,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import public_next_available_state
+from app.infra.db.next_available_store import OPEN, public_next_available_state
 from app.infra.db.offerings import (
     goal_overlap_count,
     offerings_for,
@@ -772,7 +772,7 @@ async def mentor_card(
 
 
 #: At most this many similar mentors — a row under a profile, not a list.
-SIMILAR_LIMIT = 3
+SIMILAR_LIMIT = 5
 
 
 async def similar_mentors(
@@ -793,10 +793,13 @@ async def similar_mentors(
     `?offering=` uses. A suggestion that links to a 404 is worse than none; one
     not taking bookings is shown, and its card says so in `taking_bookings`.
 
-    **Ranked by how many offerings are shared, then by delivered sessions, then
-    by review count** — the two proofs of a working mentor the card already
-    shows — and finally by `mentor_profiles.id`, newest first, so the order is
-    total and a refresh never reshuffles a tie.
+    **A card with an open time comes first** (owner, 2026-10-21): its time
+    opens booking, so it is the suggestion a visitor can act on. `open` is
+    `public_next_available_state`, already gated on `taking_bookings()`. **Then
+    by how many offerings are shared, delivered sessions and review count** —
+    the two proofs of a working mentor the card already shows — and finally by
+    `mentor_profiles.id`, newest first, so the order is total and a refresh
+    never reshuffles a tie.
 
     `shared_offering` is the first shared offering in the platform's own order:
     `offerings_for` returns each list in `sort_order`, so the first candidate
@@ -815,6 +818,7 @@ async def similar_mentors(
         .add_columns(shared)
         .where(MentorProfile.user_id != mentor_user_id)
         .order_by(
+            (public_next_available_state(window) == OPEN).desc(),
             shared.desc(),
             literal_column("completed_sessions").desc(),
             literal_column("review_count").desc(),

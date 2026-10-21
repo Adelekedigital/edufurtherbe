@@ -230,7 +230,7 @@ async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
     response_model=Page[SimilarMentorRead],
     summary="Mentors who give the same kind of help",
     description=(
-        "Up to three listed mentors who share a service offering with this "
+        "Up to five listed mentors who share a service offering with this "
         "one, as discovery cards, each with the `shared_offering` that makes "
         "them similar.\n\n"
         "**Public, and served for a hidden mentor too.** A visitor who opens the "
@@ -241,8 +241,9 @@ async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
         "who is not a mentor is an empty `data`, so this endpoint cannot say which "
         'hidden mentors exist, and a mistyped link gets the same "see other '
         'mentors" state.\n\n'
-        "**Ranked** by how many offerings are shared, then delivered sessions, "
-        "then review count, then newest profile — a total order, so a refresh "
+        "**Ranked** with a card whose `next_available_state` is `open` first, "
+        "then by how many offerings are shared, delivered sessions, review "
+        "count, then newest profile — a total order, so a refresh "
         "never reshuffles. Candidates are exactly who `/mentors` lists: approved "
         "and listed, each card carrying `taking_bookings`, never the mentor "
         "themself.\n\n"
