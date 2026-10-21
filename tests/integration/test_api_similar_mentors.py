@@ -1,4 +1,4 @@
-"""`GET /mentors/{handle}/similar` — up to three mentors who give the same help.
+"""`GET /mentors/{handle}/similar` — a few mentors who give the same help.
 
 Similar means **shares a service offering**: the closed six-row taxonomy is the
 axis matching already runs on. Candidates are exactly who discovery lists —
@@ -24,11 +24,13 @@ from tests.integration.factories import (
     add_completed_sessions,
     make_bookable_mentor,
     make_public_mentor,
+    mark_open,
     token_for,
 )
 from tests.integration.test_api_booking import a_mentee
 from tests.integration.test_api_mentor_search import give_offering
 
+from app.domain.similar import SIMILAR_LIMIT
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -119,6 +121,53 @@ async def test_more_shared_offerings_rank_first(
     assert ids(body) == [str(three), str(two), str(one)]
 
 
+async def test_a_mentor_with_an_open_time_ranks_first(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The PRD's leading key (Mentor Profile, 21 Oct): a suggestion the visitor
+    can book from its card beats one that shares more offerings."""
+    me = await mentor_with(db_engine, "open-me", TEST_PREP, DOCS)
+    closer = await mentor_with(db_engine, "open-closer", TEST_PREP, DOCS)
+    bookable = await mentor_with(db_engine, "open-bookable", TEST_PREP)
+    await mark_open(db_engine, bookable)
+
+    body = (await api_client.get(url(me))).json()
+
+    assert ids(body) == [str(bookable), str(closer)]
+    states = [card["next_available_state"] for card in body["data"]]  # type: ignore[attr-defined]
+    assert states[0] == "open"
+
+
+async def test_an_open_time_only_counts_for_a_mentor_taking_bookings(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A left-over fresh time on a mentor nobody can book reads `none` on the
+    card, so it must not lift them above a bookable mentor with no time yet:
+    the sort key is the gated state."""
+    me = await mentor_with(db_engine, "gate-me", TEST_PREP, DOCS)
+    bookable = await mentor_with(db_engine, "gate-bookable", TEST_PREP)
+    stale = await mentor_with(db_engine, "gate-stale", TEST_PREP, DOCS, bookable=False)
+    await mark_open(db_engine, stale)
+
+    body = (await api_client.get(url(me))).json()
+
+    assert ids(body) == [str(bookable), str(stale)]
+
+
+async def test_a_bookable_mentor_ranks_before_one_not_taking_bookings(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """With no open time either way, taking bookings comes before sharing more
+    offerings, as on Explore (#220): the card a visitor can act on first."""
+    me = await mentor_with(db_engine, "book-me", TEST_PREP, DOCS)
+    idle = await mentor_with(db_engine, "book-idle", TEST_PREP, DOCS, bookable=False)
+    bookable = await mentor_with(db_engine, "book-yes", TEST_PREP)
+
+    body = (await api_client.get(url(me))).json()
+
+    assert ids(body) == [str(bookable), str(idle)]
+
+
 async def test_a_tie_goes_to_the_mentor_with_more_delivered_sessions(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -134,16 +183,16 @@ async def test_a_tie_goes_to_the_mentor_with_more_delivered_sessions(
     assert ids(body) == [str(proven), str(quiet)]
 
 
-async def test_at_most_three_are_suggested(
+async def test_at_most_the_limit_are_suggested(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     me = await mentor_with(db_engine, "cap-me", TEST_PREP)
-    for n in range(4):
+    for n in range(SIMILAR_LIMIT + 1):
         await mentor_with(db_engine, f"cap-{n}", TEST_PREP)
 
     body = (await api_client.get(url(me))).json()
 
-    assert len(body["data"]) == 3
+    assert len(body["data"]) == SIMILAR_LIMIT == 5
 
 
 async def test_the_shared_offering_is_the_first_in_platform_order(

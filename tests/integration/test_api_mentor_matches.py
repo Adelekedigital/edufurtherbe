@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 from uuid import UUID, uuid4
 
 import httpx
@@ -13,6 +12,7 @@ from tests.integration.factories import (
     add_education,
     make_bookable_mentor,
     make_public_mentor,
+    mark_open,
     token_for,
 )
 from tests.integration.test_api_mentors import give_offering, set_study_country
@@ -86,23 +86,6 @@ async def a_mentee(
     if origin is not None:
         await set_origin(engine, user, origin)
     return user, bearer(api_token(auth_id))
-
-
-async def mark_open(engine: AsyncEngine, mentor: UUID) -> None:
-    """Give the mentor a fresh next free time, so their state reads `open`."""
-    at = (dt.datetime.now(dt.UTC) + dt.timedelta(days=3)).replace(microsecond=0)
-    await _sql(
-        engine,
-        "INSERT INTO mentor_next_availability "
-        "(mentor_user_id, next_available_at, bookable_until, computed_at) "
-        "VALUES (:u, :at, :until, now())",
-        u=mentor,
-        at=at,
-        until=at - dt.timedelta(hours=1),
-    )
-    await _sql(
-        engine, "DELETE FROM mentor_availability_changes WHERE mentor_user_id = :u", u=mentor
-    )
 
 
 async def matches(

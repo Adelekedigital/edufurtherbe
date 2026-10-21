@@ -65,13 +65,14 @@ from app.domain.search import (
     prefix_terms,
     search_groups,
 )
+from app.domain.similar import SIMILAR_LIMIT
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import public_next_available_state
+from app.infra.db.next_available_store import OPEN, public_next_available_state
 from app.infra.db.offerings import (
     goal_overlap_count,
     offerings_for,
@@ -85,7 +86,6 @@ from app.infra.db.review_stats import card_summary
 from app.infra.db.session_stats import delivered
 
 __all__ = [
-    "SIMILAR_LIMIT",
     "bookable_cards",
     "completed_sessions",
     "count_mentors",
@@ -771,10 +771,6 @@ async def mentor_card(
     return card
 
 
-#: At most this many similar mentors — a row under a profile, not a list.
-SIMILAR_LIMIT = 3
-
-
 async def similar_mentors(
     session: AsyncSession,
     mentor_user_id: UUID,
@@ -793,10 +789,14 @@ async def similar_mentors(
     `?offering=` uses. A suggestion that links to a 404 is worse than none; one
     not taking bookings is shown, and its card says so in `taking_bookings`.
 
-    **Ranked by how many offerings are shared, then by delivered sessions, then
-    by review count** — the two proofs of a working mentor the card already
-    shows — and finally by `mentor_profiles.id`, newest first, so the order is
-    total and a refresh never reshuffles a tie.
+    **A card with an open time comes first** (owner, 2026-10-21): its time
+    opens booking, so it is the suggestion a visitor can act on. `open` is
+    `public_next_available_state`, already gated on `taking_bookings()`. Then
+    mentors taking bookings before those who are not, as on Explore (#220).
+    **Then by how many offerings are shared, delivered sessions and review
+    count** — the two proofs of a working mentor the card already shows — and
+    finally by `mentor_profiles.id`, newest first, so the order is total and
+    ties never reshuffle. The first two keys move as times open and close.
 
     `shared_offering` is the first shared offering in the platform's own order:
     `offerings_for` returns each list in `sort_order`, so the first candidate
@@ -815,6 +815,10 @@ async def similar_mentors(
         .add_columns(shared)
         .where(MentorProfile.user_id != mentor_user_id)
         .order_by(
+            # The expression, not the `next_available_state` label: Postgres
+            # resolves an output name only bare, never inside an expression.
+            (public_next_available_state(window) == OPEN).desc(),
+            _bookable_first(),
             shared.desc(),
             literal_column("completed_sessions").desc(),
             literal_column("review_count").desc(),
