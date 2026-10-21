@@ -782,7 +782,13 @@ async def test_two_transactions_racing_for_one_slot_leave_exactly_one_winner(
     index and exactly one commits.
 
     No sleeps and no polling: the database guarantees a single winner, so
-    gathering both and counting the failures is deterministic.
+    gathering both and counting the failures is deterministic. **Which error
+    the loser gets is not**: two conflicting inserts can each wait on the
+    other's uncommitted row, and PostgreSQL then breaks the cycle as a deadlock
+    (40P01) rather than an exclusion violation — documented behaviour of
+    exclusion constraints under concurrency. Either way exactly one commits,
+    which is the thesis. The booking path never meets the deadlock: it takes
+    `lock_mentor_slots` first, so two bookings for one mentor run in turn.
     """
     async with db_engine.begin() as setup:
         mentor = await make_mentor(setup, "race-mentor@example.test")
@@ -797,7 +803,8 @@ async def test_two_transactions_racing_for_one_slot_leave_exactly_one_winner(
     refused = [o for o in outcomes if isinstance(o, BaseException)]
 
     assert len(refused) == 1, f"expected exactly one loser, got {outcomes}"
-    assert CONSTRAINT in str(refused[0])
+    refusal = str(refused[0])
+    assert CONSTRAINT in refusal or "DeadlockDetectedError" in refusal, refusal
 
     async with db_engine.connect() as conn:
         count = await conn.execute(text("SELECT count(*) FROM sessions"))
