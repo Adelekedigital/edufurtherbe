@@ -653,19 +653,21 @@ def test_the_conferencing_backfill_seeds_before_it_drops(
         scalar(disposable_database, resolved.format(fallback=fallback, email="venue-custom%"))
         == "daily"
     ), "a mentor whose only venue was `custom` is not on the platform default"
-    # The pointed row itself, not a resolution: a `coalesce` onto the `daily`
-    # fallback would pass even if the mentor's own row had been deleted.
+    # The mentor's own default row, not a resolution: a `coalesce` onto the
+    # `daily` fallback would pass even if that row had been deleted. Unpinned at
+    # head (`b2d6f9a1c4e7`), so the offering follows that default.
     assert (
         scalar(
             disposable_database,
-            "SELECT o.provider FROM session_types st "
+            "SELECT o.provider || ':' || (st.conferencing_option_id IS NULL)::text "
+            "  FROM session_types st "
             "  JOIN mentor_conferencing_options o "
-            "    ON o.id = st.conferencing_option_id AND o.user_id = st.mentor_user_id "
+            "    ON o.user_id = st.mentor_user_id AND o.is_default "
             "  JOIN users u ON u.id = st.mentor_user_id "
             " WHERE u.email LIKE 'venue-daily%'",
         )
-        == "daily"
-    ), "a carried `daily` choice did not survive to head"
+        == "daily:true"
+    ), "a carried `daily` choice did not survive to head as the mentor's default"
 
 
 def test_the_primary_pointer_downgrade_restores_data_not_just_a_column(
@@ -854,7 +856,7 @@ def test_every_schema_identifier_appears_verbatim_in_source(
 
 #: A mentor with one offering, as the precedent above builds one; the caller
 #: formats in the email, name, stage and label as SQL literals.
-_MENTOR_WITH_OFFERING = """
+MENTOR_WITH_OFFERING = """
     WITH u AS (
         INSERT INTO users (email, auth_id, first_name, primary_role, timezone)
         VALUES ('{email}', gen_random_uuid(), 'Probe', 'mentor', 'UTC')
@@ -877,13 +879,13 @@ def test_the_stage_set_backfill_carries_every_staged_type(
     command.upgrade(config, "7b3e91c4a2d6")
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="staged@example.test", name="Staged", stage="'revisions'", label="NULL"
         ),
     )
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="any@example.test", name="Any", stage="NULL", label="NULL"
         ),
     )
@@ -912,7 +914,7 @@ def test_the_stage_set_downgrade_keeps_the_mentors_label(
     command.upgrade(config, "e0d7461f13ce")
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="set@example.test", name="Set", stage="'drafting_stage'", label="'Gap year'"
         ),
     )
@@ -945,13 +947,13 @@ def test_the_inherit_downgrade_writes_the_resolved_values(
     command.upgrade(config, "228315723d63")
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="inherit@example.test", name="Inherits", stage="NULL", label="NULL"
         ),
     )
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="inherit-notice@example.test", name="Inherits notice", stage="NULL", label="NULL"
         ),
     )
@@ -1000,7 +1002,7 @@ def test_featured_and_scheduled_deletion_arrive_as_defaults(
     command.upgrade(config, "228315723d63")
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="round4-up@example.test", name="Existing", stage="NULL", label="NULL"
         ),
     )
@@ -1036,13 +1038,13 @@ def test_the_round_four_downgrade_keeps_a_scheduled_offering_hidden(
     command.upgrade(config, "f3a91d2c7b45")
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="round4-feat@example.test", name="Featured", stage="NULL", label="NULL"
         ),
     )
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="round4-sched@example.test", name="Scheduled", stage="NULL", label="NULL"
         ),
     )
@@ -1082,7 +1084,7 @@ def test_the_return_date_downgrade_keeps_the_pause(
     command.upgrade(config, "b7c41e9a2d58")
     execute(
         disposable_database,
-        _MENTOR_WITH_OFFERING.format(
+        MENTOR_WITH_OFFERING.format(
             email="returning@example.test", name="Back soon", stage="NULL", label="NULL"
         ),
     )
@@ -1126,138 +1128,6 @@ def test_the_return_date_downgrade_keeps_the_pause(
     )
     command.upgrade(config, "b7c41e9a2d58")
     assert scalar(disposable_database, "SELECT return_on FROM mentor_profiles") is None
-
-
-_OPTION = """
-    INSERT INTO mentor_conferencing_options (user_id, provider, is_default)
-    SELECT id, '{provider}', {default} FROM users WHERE email = '{email}'
-"""
-
-_POINT = """
-    UPDATE session_types st SET conferencing_option_id = o.id
-      FROM mentor_conferencing_options o, users u
-     WHERE u.email = '{email}' AND st.mentor_user_id = u.id
-       AND o.user_id = u.id AND o.provider = '{provider}'
-"""
-
-_VENUES = """
-    SELECT string_agg(
-        u.email || '=' || coalesce((
-            SELECT string_agg(
-                o.provider::text || (CASE WHEN o.is_default THEN '*' ELSE '' END),
-                '+' ORDER BY o.provider::text)
-              FROM mentor_conferencing_options o WHERE o.user_id = u.id), '-')
-        || '>' || coalesce((
-            SELECT o.provider::text FROM session_types st
-              JOIN mentor_conferencing_options o ON o.id = st.conferencing_option_id
-             WHERE st.mentor_user_id = u.id), 'none'),
-        ',' ORDER BY u.email)
-      FROM users u WHERE u.email LIKE 'venue-%'
-"""
-
-
-def _venue_probes(url: str) -> None:
-    """A never chose (an imported `google_meet` default). B chose daily. C has a
-    daily default plus an imported `google_meet` its offering points at."""
-    for email in ("venue-a@example.test", "venue-b@example.test", "venue-c@example.test"):
-        execute(
-            url, _MENTOR_WITH_OFFERING.format(email=email, name=email, stage="NULL", label="NULL")
-        )
-    for email, provider, default in (
-        ("venue-a@example.test", "google_meet", "true"),
-        ("venue-b@example.test", "daily", "true"),
-        ("venue-c@example.test", "daily", "true"),
-        ("venue-c@example.test", "google_meet", "false"),
-    ):
-        execute(url, _OPTION.format(email=email, provider=provider, default=default))
-    for email, provider in (
-        ("venue-a@example.test", "google_meet"),
-        ("venue-b@example.test", "daily"),
-        ("venue-c@example.test", "google_meet"),
-    ):
-        execute(url, _POINT.format(email=email, provider=provider))
-
-
-def test_imported_meet_options_go_so_nobody_is_held_to_a_choice_they_never_made(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
-    """`a7c4e2d91f3b`: before `/me/conferencing` (#224) nothing let a mentor
-    choose Meet, so every `google_meet` option was imported from a blank or an
-    unrepresentable legacy venue. They go, with the pointers to them; a genuine
-    `daily` choice stays."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, "f3a91d2c7b45")
-    _venue_probes(disposable_database)
-    assert scalar(disposable_database, _VENUES) == (
-        "venue-a@example.test=google_meet*>google_meet,"
-        "venue-b@example.test=daily*>daily,"
-        "venue-c@example.test=daily*+google_meet>google_meet"
-    )
-
-    command.upgrade(config, "a7c4e2d91f3b")
-
-    assert scalar(disposable_database, _VENUES) == (
-        "venue-a@example.test=->none,"
-        "venue-b@example.test=daily*>daily,"
-        "venue-c@example.test=daily*>none"
-    )
-
-
-def test_a_meet_the_mentor_chose_survives_a_downgrade_and_upgrade(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
-    """Provenance, not provider, decides what the cleanup removes: `source`
-    records who wrote the row, so a Meet set through `/me/conferencing` is kept
-    when `a7c4e2d91f3b` runs again after a downgrade, and an imported one goes."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, "a7c4e2d91f3b")
-    for email in ("venue-chose@example.test", "venue-import@example.test"):
-        execute(
-            disposable_database,
-            _MENTOR_WITH_OFFERING.format(email=email, name=email, stage="NULL", label="NULL"),
-        )
-    execute(
-        disposable_database,
-        "INSERT INTO mentor_conferencing_options (user_id, provider, is_default, source) "
-        "SELECT id, 'google_meet', true, 'mentor' FROM users "
-        "WHERE email = 'venue-chose@example.test'; "
-        "INSERT INTO mentor_conferencing_options (user_id, provider, is_default) "
-        "SELECT id, 'google_meet', true FROM users WHERE email = 'venue-import@example.test'",
-    )
-
-    command.downgrade(config, "-1")
-    command.upgrade(config, "a7c4e2d91f3b")
-
-    assert (
-        scalar(
-            disposable_database,
-            "SELECT string_agg(u.email || '=' || o.source, ',' ORDER BY u.email) "
-            "FROM mentor_conferencing_options o JOIN users u ON u.id = o.user_id "
-            "WHERE u.email LIKE 'venue-%'",
-        )
-        == "venue-chose@example.test=mentor"
-    )
-
-
-def test_the_imported_meet_downgrade_restores_the_old_load_rule(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
-    """Down, a mentor left with no default gets the `google_meet` default the old
-    load gave them, and their offering points at it again. A mentor who kept a
-    default is left alone: which imported option the old seeding made default is
-    not recoverable, and their offering follows that default."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, "f3a91d2c7b45")
-    _venue_probes(disposable_database)
-    command.upgrade(config, "a7c4e2d91f3b")
-
-    command.downgrade(config, "f3a91d2c7b45")
-
-    assert scalar(disposable_database, _VENUES) == (
-        "venue-a@example.test=google_meet*>google_meet,"
-        "venue-b@example.test=daily*>daily,"
-        "venue-c@example.test=daily*>none"
-    )
 
 
 _MENTEE_IN_TWO = """
