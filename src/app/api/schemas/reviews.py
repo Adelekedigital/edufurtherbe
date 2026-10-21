@@ -27,6 +27,8 @@ from app.domain.reviews import (
     MENTOR_RATINGS,
     OVERALL_SCALE,
     RECOMMEND_SCALE,
+    REVIEW_UPDATE_AGE,
+    REVIEW_UPDATE_SESSIONS,
     VALUABLE_SCALE,
     MentorRating,
     from_ordinal,
@@ -299,6 +301,17 @@ class MentorRelationshipRead(BaseModel):
             "Whether `/me/reviewable-sessions?mentor_id=` lists anything right "
             "now — the same query, asked for existence, so the prompt and the "
             "list never disagree."
+        )
+    )
+    review_update_due: bool = Field(
+        description=(
+            "Whether to ask you to update your review of this mentor, by writing "
+            "a new one (reviews are not edited after the edit window): your "
+            "latest review (as `last_reviewed_at`) is at least "
+            f"{REVIEW_UPDATE_AGE.days} days old, you have completed "
+            f"{REVIEW_UPDATE_SESSIONS} or more sessions with them that started "
+            "after it, and `review_due` is true. So it implies `review_due`, and "
+            "is false when you have never reviewed them."
         )
     )
 

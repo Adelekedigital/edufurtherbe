@@ -39,6 +39,8 @@ __all__ = [
     "OVERALL_STANDS_ALONE_FROM",
     "RECOMMEND_SCALE",
     "REVIEW_INTERVAL",
+    "REVIEW_UPDATE_AGE",
+    "REVIEW_UPDATE_SESSIONS",
     "VALUABLE_SCALE",
     "WOULD_RECOMMEND_FROM",
     "MentorRating",
@@ -46,6 +48,7 @@ __all__ = [
     "edit_window_open",
     "editable_until",
     "from_ordinal",
+    "review_update_due",
     "to_ordinal",
 ]
 
@@ -181,3 +184,38 @@ def editable_until(
 def edit_window_open(created_at: dt.datetime, now: dt.datetime, window: dt.timedelta) -> bool:
     """Whether a review written at ``created_at`` may still be edited."""
     return editable_until(created_at, now, window) is not None
+
+
+#: How old the mentee's latest review of a mentor must be before the profile
+#: asks them to update it (PRD Mentor Profile, P6). Measured from ``created_at``
+#: for the same reason as ``REVIEW_INTERVAL``: ``updated_at`` is rewritten by a
+#: trigger on every write — a typo fix, a moderation withdrawal — so it says
+#: nothing about when the mentee last said something new.
+REVIEW_UPDATE_AGE = dt.timedelta(days=60)
+#: Completed sessions with that mentor since the review, before the ask.
+REVIEW_UPDATE_SESSIONS = 2
+
+
+def review_update_due(
+    last_reviewed_at: dt.datetime | None,
+    sessions_since: int,
+    now: dt.datetime,
+    *,
+    review_due: bool,
+) -> bool:
+    """Whether the profile should ask "update your review?".
+
+    **An update is a new review** (owner, 2026-10-21, option A): reviews are
+    never rewritten after the edit window, so the ask is "write a fresh one",
+    and it stands only where one can be written — ``review_due``. Otherwise the
+    prompt would point at a refusal.
+
+    Then: there is a review, it is at least ``REVIEW_UPDATE_AGE`` old
+    (inclusive: at exactly sixty days it is due), and ``sessions_since`` —
+    completed sessions with this mentor that started after it — reaches
+    ``REVIEW_UPDATE_SESSIONS``. No review is never an update: the first review
+    is plain `review_due`.
+    """
+    if not review_due or last_reviewed_at is None:
+        return False
+    return now - last_reviewed_at >= REVIEW_UPDATE_AGE and sessions_since >= REVIEW_UPDATE_SESSIONS

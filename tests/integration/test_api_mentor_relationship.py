@@ -75,6 +75,7 @@ async def test_no_history_is_zeros_not_an_error(world: World) -> None:
         "completed_sessions_with_mentor": 0,
         "last_reviewed_at": None,
         "review_due": False,
+        "review_update_due": False,
     }
 
 
@@ -232,3 +233,83 @@ async def test_another_mentees_review_is_not_my_last_review(world: World) -> Non
     body = await relationship(world)
 
     assert body["last_reviewed_at"] is None
+
+
+async def reviewed_long_ago(w: World, *, days: int = 70) -> None:
+    """A review of an old session, written `days` ago — the review an update
+    prompt is about. The session predates the review, as a reviewed one does."""
+    review = (await w.review(await w.completed(w.offering_a, days_ago=days + 30))).json()
+    await w.age(review["id"], dt.timedelta(days=days))
+
+
+async def test_an_update_is_due_after_sixty_days_and_two_sessions_since(world: World) -> None:
+    await reviewed_long_ago(world)
+    await world.completed(world.offering_b, days_ago=5)
+    await world.completed(world.offering_b, days_ago=10)
+
+    body = await relationship(world)
+
+    assert body["review_update_due"] is True
+    # Option A: the update is a new review, so one must be writable.
+    assert body["review_due"] is True
+
+
+async def test_an_update_is_not_due_after_one_session_since(world: World) -> None:
+    await reviewed_long_ago(world)
+    await world.completed(world.offering_b, days_ago=5)
+
+    body = await relationship(world)
+
+    assert body["review_update_due"] is False
+
+
+async def test_an_update_is_not_due_on_a_review_under_sixty_days_old(world: World) -> None:
+    await reviewed_long_ago(world, days=30)
+    await world.completed(world.offering_b, days_ago=5)
+    await world.completed(world.offering_b, days_ago=10)
+
+    body = await relationship(world)
+
+    assert body["review_update_due"] is False
+
+
+async def test_sessions_before_the_review_do_not_count_towards_an_update(world: World) -> None:
+    await reviewed_long_ago(world)
+    await world.completed(world.offering_b, days_ago=80)
+    await world.completed(world.offering_b, days_ago=5)
+
+    body = await relationship(world)
+
+    assert body["review_update_due"] is False
+
+
+async def test_sessions_that_did_not_happen_do_not_count_towards_an_update(
+    world: World,
+) -> None:
+    await reviewed_long_ago(world)
+    await world.completed(world.offering_b, days_ago=5)
+    await session_with(world, "cancelled")
+
+    body = await relationship(world)
+
+    assert body["review_update_due"] is False
+
+
+async def test_another_mentees_sessions_do_not_make_my_update_due(world: World) -> None:
+    await reviewed_long_ago(world)
+    await world.completed(world.offering_b, days_ago=5)
+    other = await another_mentee(world)
+    await world.completed(world.offering_b, days_ago=6, mentee=other)
+
+    body = await relationship(world)
+
+    assert body["review_update_due"] is False
+
+
+async def test_no_review_means_no_update_however_many_sessions(world: World) -> None:
+    await world.completed(world.offering_a, days_ago=5)
+    await world.completed(world.offering_b, days_ago=10)
+
+    body = await relationship(world)
+
+    assert body["review_update_due"] is False
