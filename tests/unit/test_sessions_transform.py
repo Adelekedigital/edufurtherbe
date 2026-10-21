@@ -541,24 +541,12 @@ def test_the_offering_carries_its_mentors_venue() -> None:
     assert not hasattr(offering, "requires_booking_confirmation")
 
 
-def test_a_custom_venue_is_quarantined_rather_than_carried() -> None:
-    """**`custom` cannot be loaded faithfully, and it is reported rather than
-    guessed.**
-
-    `mentor_conferencing_options` requires a URL for `custom` — a symmetric
-    `CHECK`, so a provider with nowhere to meet is unrepresentable. The legacy
-    export carries no such URL: `mentor_profiles.custom_meeting_url` was removed
-    *as a removal rather than a move, because nothing had ever written it*.
-
-    So the offering loads with **no venue of its own**, which is the platform
-    default and keeps the mentor bookable, and the mentor is named for a human
-    to follow up. It used to load on `google_meet`, which every re-run kept
-    re-creating as if the mentor had chosen it. The three alternatives were
-    inventing a URL, relaxing the constraint the table exists to enforce, and
-    silently rewriting the venue — the last of which is what this assertion
-    distinguishes itself from: **the value is the same either way**, and only the
-    report tells them apart.
-    """
+def test_an_external_video_tool_is_no_venue_and_nothing_to_follow_up() -> None:
+    """Legacy "External Video Tool" is "never chose" (owner's Integrations PRD,
+    21 Oct): there is no URL to carry, and the mentor lands on the platform
+    default, exactly as a blank does. It used to map to `custom` and be reported
+    for a human to re-declare, a follow-up nobody owned for a result that was
+    already right."""
     result = plan(
         [booking()],
         mentors=[{"bubble_id": "m-1", "meetingVenueSelection": "External Video Tool"}],
@@ -566,7 +554,7 @@ def test_a_custom_venue_is_quarantined_rather_than_carried() -> None:
 
     (offering,) = result.session_types
     assert offering.meeting_venue is None
-    assert result.custom_venue_quarantined == (MENTOR,)
+    assert "CUSTOM VENUE" not in result.report()
 
 
 def test_an_offering_whose_mentor_has_no_record_takes_the_column_defaults() -> None:
@@ -592,9 +580,8 @@ def test_a_mentor_record_nobody_points_at_is_skipped_rather_than_raising() -> No
     **The two venues differ deliberately.** Both rows read `External Video Tool`
     when this was written, so the assertion held whichever record won — and it is
     the orphan *losing* that is under test. The attached mentor is on `daily` and
-    the orphan on the `google_meet` default, so a transform that let the orphan
-    through now fails here rather than passing on a coincidence. Neither is
-    `custom`, which the quarantine would rewrite and mask the discrimination.
+    the orphan on no venue, so a transform that let the orphan through now
+    fails here rather than passing on a coincidence.
     """
     result = plan(
         [booking()],

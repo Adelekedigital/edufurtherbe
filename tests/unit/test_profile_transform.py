@@ -191,7 +191,8 @@ def test_a_listed_mentor_has_no_unlisted_reason() -> None:
     ("legacy", "venue"),
     [
         ("Edufurther Video (Recommended)", MeetingProvider.DAILY),
-        ("External Video Tool", MeetingProvider.CUSTOM),
+        # No URL to carry, so no venue either (Integrations PRD, 2026-10-21).
+        ("External Video Tool", None),
         # Blank is "never chose": no venue, so the platform default applies
         # (owner, 2026-10-01). It used to load as `google_meet`, a choice nobody made.
         ("", None),
