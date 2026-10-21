@@ -26,6 +26,7 @@ from app.infra.clients.daily_presence import Sighting, Stay
 from app.infra.clients.meetings import VenueUnavailableError
 from app.infra.db.session_stats import mentee_window_figures, mentor_stats
 from app.infra.db.session_writer import measure_minutes
+from app.infra.jobs import runner
 from app.infra.jobs.runner import RuntimeJobs
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -192,14 +193,37 @@ async def test_unreadable_records_count_booked_and_are_asked_again(
 
 
 @pytest.mark.usefixtures("door")
-async def test_an_unconfigured_provider_is_unreadable_not_fatal(
+async def test_an_unconfigured_provider_stops_asking_and_is_not_fatal(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    venue = await held(db_engine, api_client, "mm-noprovider")
+    """No provider means no session can be read this run, so it asks once and
+    stops rather than logging every due session."""
+    first = await held(db_engine, api_client, "mm-noprov-1")
+    second = await held(db_engine, api_client, "mm-noprov-2")
+    records = StayRecords(error=NotImplementedError("no provider"))
 
-    await measure(db_engine, StayRecords(error=NotImplementedError("no provider")))
+    await measure(db_engine, records)
 
-    assert await measured_of(db_engine, venue["id"]) is None
+    assert len(records.asked) == 1
+    assert await measured_of(db_engine, first["id"]) is None
+    assert await measured_of(db_engine, second["id"]) is None
+
+
+@pytest.mark.usefixtures("door")
+async def test_a_party_is_matched_as_a_uuid_not_as_text(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The same parse attendance uses: an id echoed in another spelling of the
+    same UUID is still that party, so the measure is not silently zero."""
+    venue = await held(db_engine, api_client, "mm-uuid")
+    shouted = [
+        Stay(s.user_id.upper(), s.joined, s.left)
+        for s in stays(venue, mentor=(0, 50), mentee=(0, 50))
+    ]
+
+    await measure(db_engine, StayRecords({venue["room"]: shouted}))
+
+    assert await measured_of(db_engine, venue["id"]) == 50
 
 
 @pytest.mark.usefixtures("door")
@@ -298,3 +322,28 @@ async def test_the_settlement_job_measures_a_finished_session(
     await jobs.run("settle-sessions")
 
     assert await measured_of(db_engine, venue["id"]) == 72
+
+
+async def test_a_failure_measuring_minutes_does_not_stop_the_settlement_run(
+    migrated_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """**Its own error boundary.** Minutes are a stats refinement; the drain
+    that sends this run's messages comes after them and must still run."""
+    drained: list[bool] = []
+
+    async def measuring_breaks(*_: Any, **__: Any) -> int:
+        raise RuntimeError("an unexpected failure in the minutes phase")
+
+    async def drain_records(*_: Any, **__: Any) -> dict[str, int]:
+        drained.append(True)
+        return {}
+
+    monkeypatch.setattr(runner, "measure_minutes", measuring_breaks)
+    monkeypatch.setattr(runner, "drain", drain_records)
+    monkeypatch.setattr(RuntimeJobs, "_rooms", lambda _self: StayRecords())
+
+    jobs = RuntimeJobs(Settings(_env_file=None, database_url=SecretStr(migrated_database)))
+    await jobs.run("settle-sessions")
+
+    assert drained == [True]

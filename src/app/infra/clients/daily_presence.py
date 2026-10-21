@@ -19,6 +19,7 @@ import binascii
 import datetime as dt
 import hashlib
 import hmac
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -179,7 +180,14 @@ def stays_from_records(room: str, records: dict[str, Any]) -> list[Stay]:
         if meeting.get("ongoing") is not False:
             raise UnreadableRecordsError(f"a meeting in {room} is still going or unmarked")
         seconds = person.get("duration")
-        if not isinstance(seconds, int | float) or isinstance(seconds, bool) or seconds < 0:
+        # Finite too: JSON may carry NaN, which compares false to everything
+        # and would reach `timedelta` as a crash rather than an unreadable read.
+        if (
+            not isinstance(seconds, int | float)
+            or isinstance(seconds, bool)
+            or not math.isfinite(seconds)
+            or seconds < 0
+        ):
             raise UnreadableRecordsError("a participant has no usable duration")
         try:
             left = joined + dt.timedelta(seconds=seconds)

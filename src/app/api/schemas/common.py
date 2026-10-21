@@ -36,21 +36,21 @@ from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
 #: Anything above this is clamped rather than refused. A client asking for 5,000
 #: rows has made a mistake, and a 422 in the middle of an autocomplete is a worse
 #: answer than the 50 it should have asked for.
-#: How a session's minutes count, in every stats field that sums them
-#: (`session_stats.counted_minutes`): one sentence, so the fields cannot
-#: describe the rule differently.
-COUNTED_MINUTES = (
-    "Each session counts the longer of its booked length and, for EduFurther "
-    "video, the minutes both of you were in the room; Google Meet and older "
-    "sessions count their booked length."
-)
-
 MAX_PAGE_SIZE = 50
 DEFAULT_PAGE_SIZE = 10
 
 #: Lookup lists serve select boxes rather than autocomplete, and `countries` is
 #: 249 rows a client wants in one call — so their page is larger than a search's.
 LOOKUP_PAGE_SIZE = 300
+
+#: How a session's minutes count, in every stats field that sums them
+#: (`session_stats.counted_minutes`): one sentence, so the fields cannot
+#: describe the rule differently.
+COUNTED_MINUTES = (
+    "Each session counts the longer of its booked length and, for EduFurther "
+    "video, the minutes the mentor and the mentee were both in the room; Google "
+    "Meet and older sessions count their booked length."
+)
 
 
 class AvatarFocusRead(BaseModel):

@@ -268,6 +268,20 @@ def test_each_participant_record_is_a_stay_from_its_join_for_its_duration() -> N
             {"ongoing": False, "participants": [{"user_id": "u", "join_time": 1, "duration": "x"}]},
             id="duration not a number",
         ),
+        pytest.param(
+            {
+                "ongoing": False,
+                "participants": [{"user_id": "u", "join_time": 1, "duration": float("nan")}],
+            },
+            id="duration NaN",
+        ),
+        pytest.param(
+            {
+                "ongoing": False,
+                "participants": [{"user_id": "u", "join_time": 1, "duration": float("inf")}],
+            },
+            id="duration infinite",
+        ),
     ],
 )
 def test_stays_that_are_not_final_are_unreadable(meeting: dict[str, object]) -> None:

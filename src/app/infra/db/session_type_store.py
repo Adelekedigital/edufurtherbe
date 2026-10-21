@@ -83,6 +83,7 @@ from app.infra.db.offerings import (
     offerings_for_session_types,
     set_session_type_offerings,
 )
+from app.infra.db.predicates import session_ends
 from app.infra.db.public_visibility import (
     has_own_windows,
     mentor_is_public,
@@ -130,13 +131,7 @@ def _deletes_after(session_type_id: Any) -> Any:
     The end is `session_window(...)`'s upper bound — the function the
     double-booking constraint uses, so "when a session ends" has one definition.
     """
-    return (
-        select(
-            func.max(func.upper(func.session_window(Session.starts_at, Session.duration_minutes)))
-        )
-        .where(*_live_on(session_type_id))
-        .scalar_subquery()
-    )
+    return select(func.max(session_ends())).where(*_live_on(session_type_id)).scalar_subquery()
 
 
 #: Featured first, then by name — unique per mentor among live rows, so the

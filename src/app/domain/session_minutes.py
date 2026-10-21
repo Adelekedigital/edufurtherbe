@@ -21,15 +21,16 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Iterable
 
-__all__ = ["co_present_minutes"]
+__all__ = ["Interval", "co_present_minutes"]
 
-Stay = tuple[dt.datetime, dt.datetime]
+#: One person in the room, from one instant to another.
+Interval = tuple[dt.datetime, dt.datetime]
 
 
-def _joined(stays: Iterable[Stay]) -> list[Stay]:
+def _joined(stays: Iterable[Interval]) -> list[Interval]:
     """One person's stays as disjoint intervals. Daily writes a record per join,
     and a rejoin can overlap the stay it replaced, so they are merged first."""
-    merged: list[Stay] = []
+    merged: list[Interval] = []
     for start, end in sorted(stays):
         if merged and start <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
@@ -38,7 +39,7 @@ def _joined(stays: Iterable[Stay]) -> list[Stay]:
     return merged
 
 
-def co_present_minutes(mentor: Iterable[Stay], mentee: Iterable[Stay]) -> int:
+def co_present_minutes(mentor: Iterable[Interval], mentee: Iterable[Interval]) -> int:
     """Whole minutes both were in the room at once, rounded down."""
     together = dt.timedelta()
     for a_start, a_end in _joined(mentor):

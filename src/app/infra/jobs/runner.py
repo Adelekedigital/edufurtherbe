@@ -228,7 +228,8 @@ class RuntimeJobs:
                 # from Daily's records, and a session those cannot be read for
                 # waits rather than settling on silence.
                 reads_started = time.monotonic()
-                check = await confirm_presence(session, now=now, rooms=self._rooms())
+                rooms = self._rooms()
+                check = await confirm_presence(session, now=now, rooms=rooms)
                 settled = await settle_attendance(
                     session, now=now, unverified=check.waiting, unread=check.unread
                 )
@@ -249,12 +250,19 @@ class RuntimeJobs:
                 # Measured minutes after attendance is committed, and inside
                 # what is left of the **one** records budget, so the job's limit
                 # still holds with both reads (Integrations PRD, decision 4).
+                # **Its own error boundary**: a stats refinement must never stop
+                # the drain and the releases below from running.
                 left = RECORDS_READ_BUDGET - dt.timedelta(seconds=time.monotonic() - reads_started)
-                measured = await measure_minutes(
-                    session, now=now, rooms=self._rooms(), budget=max(left, dt.timedelta())
-                )
-                if not dry_run:
-                    await session.commit()
+                try:
+                    measured = await measure_minutes(
+                        session, now=now, rooms=rooms, budget=max(left, dt.timedelta())
+                    )
+                    if not dry_run:
+                        await session.commit()
+                except Exception:
+                    logger.exception("measuring minutes failed; the settlement run goes on")
+                    await session.rollback()
+                    measured = 0
                 oauth = self._calendar_health()
                 health = (
                     {"checked": 0, "healthy": 0, "disconnected": 0, "unreachable": 0}
