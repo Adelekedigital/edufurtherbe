@@ -309,7 +309,7 @@ FeaturedMentorDep = Annotated[dict[str, Any] | None, Depends(featured_mentor)]
 async def similar_to_mentor(
     handle: str, session: SessionDep, window: BookingWindowDep
 ) -> list[dict[str, Any]]:
-    """Up to five bookable mentors like this one — whatever state this one is in.
+    """Up to `SIMILAR_LIMIT` mentors like this one — whatever state this one is in.
 
     **Resolved for any existing mentor, live or not** (owner, 2026-09-29,
     superseding #186's 404). A visitor who opens a pending, unlisted or

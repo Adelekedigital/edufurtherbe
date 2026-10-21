@@ -298,6 +298,25 @@ async def add_education(
         ).scalar_one()
 
 
+async def mark_open(engine: AsyncEngine, mentor: UUID) -> None:
+    """Give the mentor a fresh next free time, so their state reads `open` when
+    they are taking bookings (`none` when they are not: the time is gated)."""
+    at = (dt.datetime.now(dt.UTC) + dt.timedelta(days=3)).replace(microsecond=0)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_next_availability "
+                "(mentor_user_id, next_available_at, bookable_until, computed_at) "
+                "VALUES (:u, :at, :until, now())"
+            ),
+            {"u": mentor, "at": at, "until": at - dt.timedelta(hours=1)},
+        )
+        await conn.execute(
+            text("DELETE FROM mentor_availability_changes WHERE mentor_user_id = :u"),
+            {"u": mentor},
+        )
+
+
 async def add_completed_sessions(
     engine: AsyncEngine, mentor: UUID, count: int, *, status: str = "completed"
 ) -> None:

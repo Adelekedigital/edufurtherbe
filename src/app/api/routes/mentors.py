@@ -37,6 +37,7 @@ from app.api.schemas.mentors import (
     SimilarMentorRead,
 )
 from app.api.schemas.reviews import MentorReviewRead
+from app.domain.similar import SIMILAR_LIMIT
 
 router = APIRouter(prefix="/api/v1/mentors", tags=["public"])
 
@@ -230,7 +231,7 @@ async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
     response_model=Page[SimilarMentorRead],
     summary="Mentors who give the same kind of help",
     description=(
-        "Up to five listed mentors who share a service offering with this "
+        f"Up to {SIMILAR_LIMIT} listed mentors who share a service offering with this "
         "one, as discovery cards, each with the `shared_offering` that makes "
         "them similar.\n\n"
         "**Public, and served for a hidden mentor too.** A visitor who opens the "
@@ -242,9 +243,10 @@ async def read_mentor_reviews(page: MentorReviewsDep) -> Page[MentorReviewRead]:
         'hidden mentors exist, and a mistyped link gets the same "see other '
         'mentors" state.\n\n'
         "**Ranked** with a card whose `next_available_state` is `open` first, "
-        "then by how many offerings are shared, delivered sessions, review "
-        "count, then newest profile — a total order, so a refresh "
-        "never reshuffles. Candidates are exactly who `/mentors` lists: approved "
+        "then mentors taking bookings, then by how many offerings are shared, "
+        "delivered sessions, review count, then newest profile. The order is "
+        "total, so ties never reshuffle; the first two keys move as times open "
+        "and close. Candidates are exactly who `/mentors` lists: approved "
         "and listed, each card carrying `taking_bookings`, never the mentor "
         "themself.\n\n"
         "**An empty `data`** when the mentor gives no offering or nobody "
