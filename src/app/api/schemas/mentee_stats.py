@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.api.schemas.common import COUNTED_MINUTES
 from app.api.schemas.mentor_stats import WindowBoundsRead
 from app.domain.mentee_stats import MISSED_DAYS, TREND_DAYS
 
@@ -21,7 +22,7 @@ class MenteeStatsWindowRead(WindowBoundsRead):
     completed_sessions: int = Field(
         default=0, description="Sessions you received that are `completed`, starting in the window."
     )
-    minutes: int = Field(default=0, description="Scheduled minutes of those sessions.")
+    minutes: int = Field(default=0, description=f"Minutes of those sessions. {COUNTED_MINUTES}")
 
     @classmethod
     def of(cls, row: dict[str, Any]) -> MenteeStatsWindowRead:
@@ -49,8 +50,8 @@ class MenteeStatsRead(BaseModel):
     minutes_of_guidance: int = Field(
         default=0,
         description=(
-            "Scheduled minutes of those completed sessions, all time. Minutes, "
-            "like `mentoring_minutes` on `/me/mentor-stats`; divide for hours."
+            "Minutes of those completed sessions, all time, like "
+            f"`mentoring_minutes` on `/me/mentor-stats`; divide for hours. {COUNTED_MINUTES}"
         ),
     )
     missed_sessions: int = Field(

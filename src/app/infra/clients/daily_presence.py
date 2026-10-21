@@ -26,10 +26,12 @@ from app.infra.clients.scheduler import UntrustedCallbackError
 
 __all__ = [
     "Sighting",
+    "Stay",
     "UnreadableRecordsError",
     "UntrustedCallbackError",
     "sighting_from",
     "sightings_from_records",
+    "stays_from_records",
     "verify_daily_signature",
 ]
 
@@ -45,6 +47,16 @@ class Sighting:
     room: str
     user_id: str
     at: dt.datetime
+
+
+@dataclass(frozen=True, slots=True)
+class Stay:
+    """One person in the room from one instant to another: a participant record
+    of a finished meeting, for measured minutes (Integrations PRD, 2026-10-21)."""
+
+    user_id: str
+    joined: dt.datetime
+    left: dt.datetime
 
 
 def _moment(value: object) -> dt.datetime | None:
@@ -104,19 +116,22 @@ def sighting_from(event: dict[str, Any]) -> Sighting | None:
     return Sighting(room=str(room), user_id=str(user_id), at=at)
 
 
-def sightings_from_records(room: str, records: dict[str, Any]) -> list[Sighting]:
-    """Everyone Daily's meeting records saw in ``room``.
+def _participants(
+    records: dict[str, Any],
+) -> list[tuple[dict[str, Any], dict[str, Any], str, dt.datetime]]:
+    """Every participant record in every meeting, with its meeting, user and join.
 
-    **The shape is the one our spike observed** (`docs/daily-spike-guide.md`,
-    Q3 and Q4): ``GET /meetings?room=`` returns meetings under ``data``, each
-    with ``participants`` carrying the ``user_id`` we minted and a ``join_time``
-    in epoch seconds. A room holds a meeting per rejoin, so every meeting is read.
+    **The one reader of ``GET /meetings?room=``**, which attendance and measured
+    minutes both go through, so neither can accept a body the other refuses.
+    The shape is the one our spike observed (`docs/daily-spike-guide.md`, Q3
+    and Q4): meetings under ``data``, each with ``participants`` carrying the
+    ``user_id`` we minted and a ``join_time`` in epoch seconds. A room holds a
+    meeting per rejoin, so every meeting is read.
 
     **Anything else raises** :class:`UnreadableRecordsError` (Codex on #393).
     Daily's reference is inconsistent about this endpoint, and a changed or
     error body read as an empty room would settle every party absent and move a
-    refund. Raised, the session waits like any unreadable read. Only a
-    well-formed ``data`` with nobody in it is an empty room.
+    refund. Only a well-formed ``data`` with nobody in it is an empty room.
     """
     meetings = records.get("data")
     if not isinstance(meetings, list):
@@ -126,7 +141,7 @@ def sightings_from_records(room: str, records: dict[str, Any]) -> list[Sighting]
     total = records.get("total_count")
     if isinstance(total, int) and total > len(meetings):
         raise UnreadableRecordsError(f"one page of {total} meetings is not the room")
-    found: list[Sighting] = []
+    found: list[tuple[dict[str, Any], dict[str, Any], str, dt.datetime]] = []
     for meeting in meetings:
         people = meeting.get("participants") if isinstance(meeting, dict) else None
         if not isinstance(people, list):
@@ -136,5 +151,39 @@ def sightings_from_records(room: str, records: dict[str, Any]) -> list[Sighting]
             joined = _moment(person.get("join_time")) if isinstance(person, dict) else None
             if not user_id or joined is None:
                 raise UnreadableRecordsError("a participant has no user or readable join time")
-            found.append(Sighting(room, str(user_id), joined))
+            found.append((meeting, person, str(user_id), joined))
     return found
+
+
+def sightings_from_records(room: str, records: dict[str, Any]) -> list[Sighting]:
+    """Everyone Daily's meeting records saw in ``room``, when they joined.
+
+    Read at settlement for any party a webhook left undecided; a meeting still
+    going is fine here, since its joins are already written.
+    """
+    return [Sighting(room, user_id, joined) for _, _, user_id, joined in _participants(records)]
+
+
+def stays_from_records(room: str, records: dict[str, Any]) -> list[Stay]:
+    """How long each person was in ``room``: ``join_time`` plus ``duration``
+    (seconds, Daily's reference and the spike's Q3), per participant record.
+
+    **Only from finished meetings.** A record read mid-call carries a partial
+    duration (the spike's ``ongoing`` trap), and a measured figure is stored
+    once, so a meeting not explicitly ``ongoing: false``, or a record without a
+    usable length, is unreadable rather than short. ``room`` names the room in
+    the error only; the records were fetched for it.
+    """
+    stays: list[Stay] = []
+    for meeting, person, user_id, joined in _participants(records):
+        if meeting.get("ongoing") is not False:
+            raise UnreadableRecordsError(f"a meeting in {room} is still going or unmarked")
+        seconds = person.get("duration")
+        if not isinstance(seconds, int | float) or isinstance(seconds, bool) or seconds < 0:
+            raise UnreadableRecordsError("a participant has no usable duration")
+        try:
+            left = joined + dt.timedelta(seconds=seconds)
+        except OverflowError as exc:
+            raise UnreadableRecordsError("a participant's duration overflows") from exc
+        stays.append(Stay(user_id, joined, left))
+    return stays

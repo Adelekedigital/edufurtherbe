@@ -52,10 +52,12 @@ from app.infra.db.session_type_store import finalise_scheduled_deletions
 from app.infra.db.session_writer import (
     confirm_presence,
     expire_requests,
+    measure_minutes,
     remind_unreviewed,
     retry_releases,
     settle_attendance,
 )
+from app.infra.db.session_writer.attendance import RECORDS_READ_BUDGET
 from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
@@ -225,6 +227,7 @@ class RuntimeJobs:
                 # Presence first (#382): a party no webhook reported is read
                 # from Daily's records, and a session those cannot be read for
                 # waits rather than settling on silence.
+                reads_started = time.monotonic()
                 check = await confirm_presence(session, now=now, rooms=self._rooms())
                 settled = await settle_attendance(
                     session, now=now, unverified=check.waiting, unread=check.unread
@@ -241,6 +244,15 @@ class RuntimeJobs:
                 # calendar phase runs the job out, the outcomes and refunds
                 # decided above must not roll back with it. Each phase above is
                 # idempotent, so a retry after this point repeats nothing.
+                if not dry_run:
+                    await session.commit()
+                # Measured minutes after attendance is committed, and inside
+                # what is left of the **one** records budget, so the job's limit
+                # still holds with both reads (Integrations PRD, decision 4).
+                left = RECORDS_READ_BUDGET - dt.timedelta(seconds=time.monotonic() - reads_started)
+                measured = await measure_minutes(
+                    session, now=now, rooms=self._rooms(), budget=max(left, dt.timedelta())
+                )
                 if not dry_run:
                     await session.commit()
                 oauth = self._calendar_health()
@@ -287,6 +299,7 @@ class RuntimeJobs:
                 return {
                     "expired_requests": expired,
                     "settled_sessions": settled,
+                    "measured_sessions": measured,
                     "deleted_session_types": finalised,
                     "review_nudges": nudged,
                     "return_reminders": returning,

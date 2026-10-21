@@ -258,7 +258,7 @@ def _join_closes_sql() -> Any:
     return Session.starts_at + func.least(fifteen, length)
 
 
-def _presence_decides_sql() -> Any:
+def presence_decides_sql() -> Any:
     """:func:`presence_decides` in SQL, held to it by a test: a venue that
     reports presence, and a room that exists."""
     return and_(
@@ -347,7 +347,7 @@ async def settle_attendance(
         .where(
             Session.id == SessionParticipant.session_id,
             ready,
-            _presence_decides_sql(),
+            presence_decides_sql(),
             _not_seen_in_time(),
         )
         .correlate(SessionParticipant)
@@ -420,7 +420,7 @@ async def settle_attendance(
                     Session.mentee_id,
                     mentor_came.label("mentor_came"),
                     mentee_came.label("mentee_came"),
-                    _presence_decides_sql().label("observed"),
+                    presence_decides_sql().label("observed"),
                 )
             )
         )
@@ -606,7 +606,7 @@ async def observe_presence(session: AsyncSession, sighting: Sighting) -> bool:
             SessionParticipant.session_id == Session.id,
             SessionParticipant.user_id == user_id,
             Session.external_room_id == sighting.room,
-            _presence_decides_sql(),
+            presence_decides_sql(),
         )
         .values(
             in_room_at=func.least(
@@ -641,7 +641,7 @@ async def presence_to_confirm(
         .where(
             Session.status == SessionStatus.CONFIRMED,
             _window_shut(now),
-            _presence_decides_sql(),
+            presence_decides_sql(),
             pending,
         )
         # Oldest first, so a session the read budget skips is reached on a

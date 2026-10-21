@@ -32,6 +32,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.api.schemas.common import (
+    COUNTED_MINUTES,
     AvatarFocusRead,
     CoverRead,
     LinkedInRead,
@@ -433,10 +434,9 @@ class MentorPublicRead(BaseModel):
     #: discovery card shows, from the same predicate, because two definitions of
     #: "delivered" is the defect #8 describes.
     completed_sessions: int = 0
-    #: Scheduled duration summed over completed sessions, not measured time:
-    #: Daily could supply real minutes and Google Meet cannot, and one number
-    #: with two definitions by venue is worse than one honest definition.
-    mentoring_minutes: int = 0
+    #: Summed over completed sessions by `session_stats.counted_minutes`: the
+    #: longer of booked and measured (Integrations PRD, 2026-10-21).
+    mentoring_minutes: int = Field(default=0, description=COUNTED_MINUTES)
     mentees_mentored: int = 0
     #: Whole-number percentage, or **null when nothing is known** — zero would
     #: say "never shows up" where null says "no data yet".

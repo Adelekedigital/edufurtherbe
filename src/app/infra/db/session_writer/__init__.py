@@ -26,6 +26,7 @@ from app.infra.db.session_writer.follow_ups import (
     retry_releases,
 )
 from app.infra.db.session_writer.meetings import add_meet_link
+from app.infra.db.session_writer.minutes import measure_minutes
 from app.infra.db.session_writer.reminders import (
     remind_before_session,
     remind_if_still_waiting,
@@ -48,6 +49,7 @@ __all__ = [
     "confirm_presence",
     "door_row",
     "expire_requests",
+    "measure_minutes",
     "observe_presence",
     "on_confirmed",
     "on_ended",
