@@ -20,7 +20,16 @@ from sqlalchemy import and_, exists, func, true
 
 from app.domain.enums import ApprovalStatus
 from app.infra.db.models.mentoring import MentorProfile
+from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
+
+
+def session_ends() -> Any:
+    """When a session is over, in SQL: the upper bound of ``session_window()``,
+    the function the double-booking constraint uses, so "when a session ends"
+    has one definition. Read by the calendar retries, the offering retirement,
+    met-mentors and measured minutes."""
+    return func.upper(func.session_window(Session.starts_at, Session.duration_minutes))
 
 
 def live(user: Any) -> Any:

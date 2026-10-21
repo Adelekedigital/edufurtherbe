@@ -63,8 +63,10 @@ from app.domain.availability import CALENDAR_REVOKED, UtcInterval
 from app.domain.enums import ConferencingProvider
 from app.infra.clients.daily_presence import (
     Sighting,
+    Stay,
     UnreadableRecordsError,
     sightings_from_records,
+    stays_from_records,
 )
 from app.infra.http.client import shared
 
@@ -161,6 +163,8 @@ class RoomsPort(Protocol):
 
     def sightings(self, room: str) -> list[Sighting]: ...
 
+    def stays(self, room: str) -> list[Stay]: ...
+
 
 class CalendarPort(Protocol):
     """What the session code needs of the platform calendar (ADR 0012's
@@ -188,6 +192,10 @@ class NullRooms:
     def sightings(self, room: str) -> list[Sighting]:
         """No provider configured, so no records to read. The caller treats this
         as unreadable, not empty, and waits its day before settling (#393)."""
+        raise NotImplementedError("no room provider is configured")
+
+    def stays(self, room: str) -> list[Stay]:
+        """No records to measure from: the session keeps its booked minutes."""
         raise NotImplementedError("no room provider is configured")
 
     def create(self, *, name: str, opens_at: dt.datetime, closes_at: dt.datetime) -> MeetingRoom:
@@ -338,13 +346,24 @@ class DailyRooms:
         settlement's check on any party a webhook did not report. A failure is
         `VenueUnavailableError`, so the caller can wait rather than settle on
         silence."""
-        # A room is one session, so a hundred meetings is a hundred rejoins: a
-        # page this size makes a partial one a fault, which the parser refuses.
-        records = self._call("GET", "/meetings", params={"room": room, "limit": "100"})
         try:
-            return sightings_from_records(room, records)
+            return sightings_from_records(room, self._records(room))
         except UnreadableRecordsError as exc:
             raise VenueUnavailableError(f"daily /meetings unreadable: {exc}") from exc
+
+    def stays(self, room: str) -> list[Stay]:
+        """How long each person was in ``room``, once every meeting in it has
+        ended: measured minutes (Integrations PRD, 2026-10-21). A meeting still
+        going, like any unreadable body, is `VenueUnavailableError`."""
+        try:
+            return stays_from_records(room, self._records(room))
+        except UnreadableRecordsError as exc:
+            raise VenueUnavailableError(f"daily /meetings unreadable: {exc}") from exc
+
+    def _records(self, room: str) -> dict[str, Any]:
+        # A room is one session, so a hundred meetings is a hundred rejoins: a
+        # page this size makes a partial one a fault, which the parser refuses.
+        return self._call("GET", "/meetings", params={"room": room, "limit": "100"})
 
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         return self._call("POST", path, json=body)

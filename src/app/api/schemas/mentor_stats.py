@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.api.schemas.common import COUNTED_MINUTES
 from app.domain.mentor_stats import DEFAULT_MONTHS, DEFAULT_WINDOW_DAYS
 
 
@@ -41,7 +42,7 @@ class MentorStatsWindowRead(WindowBoundsRead):
     )
     mentoring_minutes: int = Field(
         default=0,
-        description="Scheduled minutes of those sessions, as on your public profile.",
+        description=f"Minutes of those sessions, as on your public profile. {COUNTED_MINUTES}",
     )
     mentees_mentored: int = Field(default=0, description="Distinct mentees across those sessions.")
     attendance_rate: int | None = Field(

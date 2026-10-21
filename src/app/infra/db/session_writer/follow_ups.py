@@ -29,6 +29,7 @@ from app.domain.enums import SessionStatus
 from app.infra.clients.meetings import TIMEOUT, CalendarPort, NullCalendar, RoomsPort
 from app.infra.clients.scheduler import SchedulerPort
 from app.infra.db.models.sessions import FREES_THE_HOUR, Session
+from app.infra.db.predicates import session_ends
 from app.infra.db.session_writer.meetings import (
     ReleaseOutcome,
     provision_meeting,
@@ -128,7 +129,7 @@ async def _unreleased(
     refuses would hold every slot of an ordered queue until their sessions
     ended; drawn at random, every candidate gets a turn.
     """
-    ends_at = func.upper(func.session_window(Session.starts_at, Session.duration_minutes))
+    ends_at = session_ends()
     ids = await session.scalars(
         select(Session.id)
         .where(

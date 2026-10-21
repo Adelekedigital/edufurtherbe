@@ -504,6 +504,12 @@ class Session(TimestampMixin, Base):
     meeting_url: Mapped[str | None] = mapped_column(Text)
     external_room_id: Mapped[str | None] = mapped_column(Text)
     external_calendar_event_id: Mapped[str | None] = mapped_column(Text)
+    #: Minutes the mentor and the mentee were in the room together, from
+    #: Daily's records once the call is over (`domain.session_minutes`). Null
+    #: when nothing measured it — Meet, a migrated session, records not read —
+    #: and the stats then count `duration_minutes`; they count the larger of
+    #: the two (Integrations PRD, 2026-10-21).
+    measured_minutes: Mapped[int | None] = mapped_column(nullable=True)
 
     #: When an unanswered request dies — ``starts_at`` minus the response
     #: window, or **null on an offering that auto-confirms**, where nothing is
@@ -632,6 +638,10 @@ class Session(TimestampMixin, Base):
         CheckConstraint(
             check_is_known("meeting_provider", MeetingProvider),
             name="meeting_provider_is_known",
+        ),
+        CheckConstraint(
+            "measured_minutes IS NULL OR measured_minutes >= 0",
+            name="measured_minutes_not_negative",
         ),
     )
 

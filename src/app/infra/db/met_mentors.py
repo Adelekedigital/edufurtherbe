@@ -38,6 +38,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.pending_requests import awaiting_mentor
+from app.infra.db.predicates import session_ends
 from app.infra.db.public_visibility import mentor_exists, mentor_is_live, taking_bookings
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.session_stats import received
@@ -55,8 +56,7 @@ def _not_over(now: dt.datetime) -> list[Any]:
     `open` would invite them to book again. The end is `session_window()`'s
     upper bound, the one definition of a session's window.
     """
-    window = func.session_window(Session.starts_at, Session.duration_minutes)
-    return [Session.status == SessionStatus.CONFIRMED, func.upper(window) > now]
+    return [Session.status == SessionStatus.CONFIRMED, session_ends() > now]
 
 
 def _with_mentor(mentee: UUID, *clauses: Any) -> Any:

@@ -490,8 +490,19 @@ def current_streak(mentor: Any) -> Any:
     )
 
 
+def counted_minutes() -> Any:
+    """The minutes one session counts: the longer of booked and measured
+    (Integrations PRD, 2026-10-21, decision 4).
+
+    ``GREATEST`` skips nulls in PostgreSQL, so an unmeasured session — Meet,
+    migrated, records not read — counts its booked length, which is the whole
+    reason ``measured_minutes`` is nullable rather than defaulted.
+    """
+    return func.greatest(Session.duration_minutes, Session.measured_minutes)
+
+
 def _held_figures(counterpart: Any, among: Any = None) -> tuple[Any, Any, Any]:
-    """Count, scheduled minutes and distinct ``counterpart`` of the sessions a
+    """Count, counted minutes and distinct ``counterpart`` of the sessions a
     statement reads, or of those matching ``among`` (a `FILTER`, so several
     windows share one scan): one definition for both sides, labelled by each
     caller."""
@@ -503,7 +514,7 @@ def _held_figures(counterpart: Any, among: Any = None) -> tuple[Any, Any, Any]:
         of(func.count()),
         # `SUM` over no rows is `NULL`; zero is the real answer, and a nullable
         # count makes every client write the same fallback.
-        func.coalesce(of(func.sum(Session.duration_minutes)), 0),
+        func.coalesce(of(func.sum(counted_minutes())), 0),
         of(func.count(func.distinct(counterpart))),
     )
 
@@ -562,13 +573,14 @@ async def mentor_stats(session: AsyncSession, mentor: UUID) -> dict[str, Any]:
     nothing comes back as zeros rather than as `None` — which is why this returns
     a dict rather than an optional and why the caller needs no fallback.
 
-    **`mentoring_minutes` is scheduled duration, not measured time**, and that is
-    a limit rather than a shortcut. Daily's REST API exposes per-participant
-    `join_time` and `duration`, so a measured figure is reachable there; Google
-    Meet is not — its conference records need domain-wide delegation on the
-    *organiser's* Workspace, which a platform never holds for individual mentors,
-    and ADR 0012 requests no scope that would reach them. One number with two
-    definitions depending on venue is worse than one honest definition.
+    **`mentoring_minutes` is `counted_minutes()`: the longer of booked and
+    measured** (owner, Integrations PRD 2026-10-21, decision 4, reversing the
+    "one definition" this docstring argued for). Daily's records give how long
+    both parties were in the room, so an EduFurther video session that ran over
+    counts the overrun; Google Meet cannot be measured — its conference records
+    need domain-wide delegation on the *organiser's* Workspace, which a platform
+    never holds for individual mentors — so it counts booked, as do migrated
+    sessions. Booked is the floor, so no session counts less than it did.
     """
     row = (await session.execute(_delivered_figures(mentor, None))).mappings().one()
     return dict(row)

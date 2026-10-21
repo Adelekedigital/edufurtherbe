@@ -19,10 +19,12 @@ import pytest
 
 from app.infra.clients.daily_presence import (
     Sighting,
+    Stay,
     UnreadableRecordsError,
     UntrustedCallbackError,
     sighting_from,
     sightings_from_records,
+    stays_from_records,
     verify_daily_signature,
 )
 from app.infra.clients.meetings import TIMEOUT
@@ -210,4 +212,92 @@ def test_records_at_an_impossible_time_are_unreadable() -> None:
     with pytest.raises(UnreadableRecordsError):
         sightings_from_records(
             ROOM, {"data": [{"participants": [{"user_id": "u", "join_time": 1e300}]}]}
+        )
+
+
+# --------------------------------------------------------------------------
+# Stays: how long each person was in, for measured minutes
+# --------------------------------------------------------------------------
+
+
+def at(epoch: int) -> dt.datetime:
+    return dt.datetime.fromtimestamp(epoch, tz=dt.UTC)
+
+
+def test_each_participant_record_is_a_stay_from_its_join_for_its_duration() -> None:
+    """`join_time` plus `duration` in seconds (Daily's reference, and the spike's
+    Q3): two ends, so co-presence can be measured. Every meeting is read, as a
+    rejoin opens another."""
+    records = {
+        "total_count": 2,
+        "data": [
+            {
+                "ongoing": False,
+                "participants": [{"user_id": "a", "join_time": 100, "duration": 60}],
+            },
+            {"ongoing": False, "participants": [{"user_id": "b", "join_time": 130, "duration": 5}]},
+        ],
+    }
+
+    assert stays_from_records(ROOM, records) == [
+        Stay("a", at(100), at(160)),
+        Stay("b", at(130), at(135)),
+    ]
+
+
+@pytest.mark.parametrize(
+    "meeting",
+    [
+        pytest.param(
+            {"ongoing": True, "participants": [{"user_id": "u", "join_time": 1, "duration": 9}]},
+            id="still going: partial durations",
+        ),
+        pytest.param(
+            {"participants": [{"user_id": "u", "join_time": 1, "duration": 9}]},
+            id="no ongoing flag",
+        ),
+        pytest.param(
+            {"ongoing": False, "participants": [{"user_id": "u", "join_time": 1}]},
+            id="no duration",
+        ),
+        pytest.param(
+            {"ongoing": False, "participants": [{"user_id": "u", "join_time": 1, "duration": -1}]},
+            id="negative duration",
+        ),
+        pytest.param(
+            {"ongoing": False, "participants": [{"user_id": "u", "join_time": 1, "duration": "x"}]},
+            id="duration not a number",
+        ),
+        pytest.param(
+            {
+                "ongoing": False,
+                "participants": [{"user_id": "u", "join_time": 1, "duration": float("nan")}],
+            },
+            id="duration NaN",
+        ),
+        pytest.param(
+            {
+                "ongoing": False,
+                "participants": [{"user_id": "u", "join_time": 1, "duration": float("inf")}],
+            },
+            id="duration infinite",
+        ),
+    ],
+)
+def test_stays_that_are_not_final_are_unreadable(meeting: dict[str, object]) -> None:
+    """**A partial duration stored is a wrong number for good.** A meeting still
+    going, or a record without a length, is unreadable: the session keeps its
+    booked minutes until a later read, never a figure measured mid-call."""
+    with pytest.raises(UnreadableRecordsError):
+        stays_from_records(ROOM, {"data": [meeting]})
+
+
+def test_stays_refuse_what_sightings_refuse() -> None:
+    """One reader: a partial page or a participant without a user is as
+    unreadable for minutes as for attendance."""
+    with pytest.raises(UnreadableRecordsError):
+        stays_from_records(ROOM, {"total_count": 2, "data": []})
+    with pytest.raises(UnreadableRecordsError):
+        stays_from_records(
+            ROOM, {"data": [{"ongoing": False, "participants": [{"join_time": 1, "duration": 1}]}]}
         )

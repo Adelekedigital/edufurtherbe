@@ -52,10 +52,12 @@ from app.infra.db.session_type_store import finalise_scheduled_deletions
 from app.infra.db.session_writer import (
     confirm_presence,
     expire_requests,
+    measure_minutes,
     remind_unreviewed,
     retry_releases,
     settle_attendance,
 )
+from app.infra.db.session_writer.attendance import RECORDS_READ_BUDGET
 from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
@@ -225,7 +227,9 @@ class RuntimeJobs:
                 # Presence first (#382): a party no webhook reported is read
                 # from Daily's records, and a session those cannot be read for
                 # waits rather than settling on silence.
-                check = await confirm_presence(session, now=now, rooms=self._rooms())
+                reads_started = time.monotonic()
+                rooms = self._rooms()
+                check = await confirm_presence(session, now=now, rooms=rooms)
                 settled = await settle_attendance(
                     session, now=now, unverified=check.waiting, unread=check.unread
                 )
@@ -243,6 +247,22 @@ class RuntimeJobs:
                 # idempotent, so a retry after this point repeats nothing.
                 if not dry_run:
                     await session.commit()
+                # Measured minutes after attendance is committed, and inside
+                # what is left of the **one** records budget, so the job's limit
+                # still holds with both reads (Integrations PRD, decision 4).
+                # **Its own error boundary**: a stats refinement must never stop
+                # the drain and the releases below from running.
+                left = RECORDS_READ_BUDGET - dt.timedelta(seconds=time.monotonic() - reads_started)
+                try:
+                    measured = await measure_minutes(
+                        session, now=now, rooms=rooms, budget=max(left, dt.timedelta())
+                    )
+                    if not dry_run:
+                        await session.commit()
+                except Exception:
+                    logger.exception("measuring minutes failed; the settlement run goes on")
+                    await session.rollback()
+                    measured = 0
                 oauth = self._calendar_health()
                 health = (
                     {"checked": 0, "healthy": 0, "disconnected": 0, "unreachable": 0}
@@ -287,6 +307,7 @@ class RuntimeJobs:
                 return {
                     "expired_requests": expired,
                     "settled_sessions": settled,
+                    "measured_sessions": measured,
                     "deleted_session_types": finalised,
                     "review_nudges": nudged,
                     "return_reminders": returning,
