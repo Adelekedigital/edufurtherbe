@@ -23,6 +23,7 @@ import pytest
 from app.domain.enums import ApprovalStatus, ListingStatus, MeetingProvider, UnlistedReason
 from app.domain.transform import TransformError
 from app.domain.transform.profiles import (
+    MEETING_VENUES,
     SERVICE_OFFERINGS,
     booking_defaults,
     export_date,
@@ -208,6 +209,13 @@ def test_the_venue_mapping(legacy: str, venue: MeetingProvider | None) -> None:
     """
     mapped, _ = booking_defaults(record(meetingVenueSelection=legacy), bubble_id=USER_ID)
     assert mapped is venue
+
+
+def test_no_legacy_venue_maps_to_custom() -> None:
+    """`custom` needs a URL (the options table's symmetric `CHECK`) and the
+    export carries none, so a mapping to it would abort the load at the insert.
+    The session transform no longer guards against it; this does."""
+    assert MeetingProvider.CUSTOM not in MEETING_VENUES.values()
 
 
 def test_a_blank_confirmation_is_false() -> None:
