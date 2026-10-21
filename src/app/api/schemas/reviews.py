@@ -301,6 +301,15 @@ class MentorRelationshipRead(BaseModel):
             "list never disagree."
         )
     )
+    review_update_due: bool = Field(
+        description=(
+            "Whether to ask you to update your review of this mentor: your "
+            "latest review (as `last_reviewed_at`) is at least 60 days old and "
+            "you have completed 2 or more sessions with them that started after "
+            "it. False when you have never reviewed them — `review_due` covers "
+            "the first review."
+        )
+    )
 
 
 class ReviewableSessionRead(BaseModel):

@@ -10,7 +10,11 @@ points at (non-negotiable #8):
   mentor's public figures — narrowed to this author;
 - `review_due` is `review_eligibility.reviewable_sessions()` for this mentor —
   literally the query behind `/me/reviewable-sessions?mentor_id=`, asked for
-  existence.
+  existence;
+- `review_update_due` is `domain.reviews.review_update_due()` over that last
+  review and the count of `received()` sessions with this mentor whose
+  `starts_at` is after it — the same completed rule as the count, and the same
+  time column `held()` places a session by.
 
 **Scoped to the caller in the statement** (non-negotiable #5): every clause
 names the mentee, so there is no row belonging to somebody else to filter out
@@ -27,6 +31,7 @@ from uuid import UUID
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.reviews import review_update_due
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session
 from app.infra.db.review_eligibility import reviewable_sessions
@@ -39,23 +44,26 @@ __all__ = ["mentor_relationship"]
 async def mentor_relationship(
     session: AsyncSession, mentee: UUID, mentor: UUID, *, now: dt.datetime
 ) -> dict[str, Any]:
-    """`completed_sessions_with_mentor`, `last_reviewed_at` and `review_due`.
+    """`completed_sessions_with_mentor`, `last_reviewed_at`, `review_due` and
+    `review_update_due`.
 
-    One statement of three scalar subqueries, so the three figures are read from
-    one snapshot and cannot describe two different moments.
+    One statement of scalar subqueries, so the figures are read from one
+    snapshot and cannot describe two different moments.
     """
-    completed = (
-        select(func.count())
-        .select_from(Session)
-        .where(and_(received(mentee), Session.mentor_id == mentor))
-        .scalar_subquery()
-    )
+    from_mentor = and_(received(mentee), Session.mentor_id == mentor)
+    completed = select(func.count()).select_from(Session).where(from_mentor).scalar_subquery()
     last_reviewed = (
         select(func.max(Review.created_at))
         .where(and_(published(mentor), Review.reviewed_by == mentee))
         .scalar_subquery()
     )
     due = reviewable_sessions(mentee, now, mentor).exists()
+    since_review = (
+        select(func.count())
+        .select_from(Session)
+        .where(from_mentor, Session.starts_at > last_reviewed)
+        .scalar_subquery()
+    )
 
     row = (
         await session.execute(
@@ -63,7 +71,11 @@ async def mentor_relationship(
                 completed.label("completed_sessions_with_mentor"),
                 last_reviewed.label("last_reviewed_at"),
                 due.label("review_due"),
+                since_review.label("sessions_since_review"),
             )
         )
     ).one()
-    return dict(row._mapping)
+    figures = dict(row._mapping)
+    since = figures.pop("sessions_since_review")
+    figures["review_update_due"] = review_update_due(figures["last_reviewed_at"], since, now)
+    return figures

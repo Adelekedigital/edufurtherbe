@@ -127,8 +127,8 @@ async def list_reviewable_sessions(
     summary="Your history with one mentor",
     description=(
         "How many sessions you have had with this mentor, when you last "
-        "reviewed them, and whether a review is owed now — what a profile's "
-        "review prompts need.\n\n"
+        "reviewed them, whether a review is owed now, and whether to ask you to "
+        "update your last one — what a profile's review prompts need.\n\n"
         "Each figure is read by the same rule as the endpoint it summarises, so "
         "`review_due` is true exactly when `/me/reviewable-sessions?mentor_id=` "
         "is non-empty.\n\n"
