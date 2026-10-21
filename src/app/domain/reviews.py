@@ -197,16 +197,25 @@ REVIEW_UPDATE_SESSIONS = 2
 
 
 def review_update_due(
-    last_reviewed_at: dt.datetime | None, sessions_since: int, now: dt.datetime
+    last_reviewed_at: dt.datetime | None,
+    sessions_since: int,
+    now: dt.datetime,
+    *,
+    review_due: bool,
 ) -> bool:
     """Whether the profile should ask "update your review?".
 
-    True when there is a review, it is at least ``REVIEW_UPDATE_AGE`` old
+    **An update is a new review** (owner, 2026-10-21, option A): reviews are
+    never rewritten after the edit window, so the ask is "write a fresh one",
+    and it stands only where one can be written — ``review_due``. Otherwise the
+    prompt would point at a refusal.
+
+    Then: there is a review, it is at least ``REVIEW_UPDATE_AGE`` old
     (inclusive: at exactly sixty days it is due), and ``sessions_since`` —
     completed sessions with this mentor that started after it — reaches
     ``REVIEW_UPDATE_SESSIONS``. No review is never an update: the first review
-    is `review_due`'s question.
+    is plain `review_due`.
     """
-    if last_reviewed_at is None:
+    if not review_due or last_reviewed_at is None:
         return False
     return now - last_reviewed_at >= REVIEW_UPDATE_AGE and sessions_since >= REVIEW_UPDATE_SESSIONS

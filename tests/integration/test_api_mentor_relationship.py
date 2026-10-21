@@ -250,6 +250,8 @@ async def test_an_update_is_due_after_sixty_days_and_two_sessions_since(world: W
     body = await relationship(world)
 
     assert body["review_update_due"] is True
+    # Option A: the update is a new review, so one must be writable.
+    assert body["review_due"] is True
 
 
 async def test_an_update_is_not_due_after_one_session_since(world: World) -> None:

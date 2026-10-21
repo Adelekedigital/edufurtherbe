@@ -168,30 +168,36 @@ def test_the_update_prompt_rule_is_sixty_days_and_two_sessions() -> None:
 
 
 def test_an_update_is_due_at_sixty_days_with_two_sessions_since() -> None:
-    assert review_update_due(days_ago(60), 2, NOW) is True
+    assert review_update_due(days_ago(60), 2, NOW, review_due=True) is True
 
 
 def test_an_update_is_due_well_past_both_thresholds() -> None:
-    assert review_update_due(days_ago(400), 7, NOW) is True
+    assert review_update_due(days_ago(400), 7, NOW, review_due=True) is True
 
 
 def test_an_update_is_not_due_at_fifty_nine_days() -> None:
-    assert review_update_due(days_ago(59), 2, NOW) is False
+    assert review_update_due(days_ago(59), 2, NOW, review_due=True) is False
 
 
 def test_an_update_is_not_due_a_second_short_of_sixty_days() -> None:
     almost = NOW - REVIEW_UPDATE_AGE + dt.timedelta(seconds=1)
-    assert review_update_due(almost, 2, NOW) is False
+    assert review_update_due(almost, 2, NOW, review_due=True) is False
 
 
 def test_an_update_is_not_due_after_one_session_since() -> None:
-    assert review_update_due(days_ago(60), 1, NOW) is False
+    assert review_update_due(days_ago(60), 1, NOW, review_due=True) is False
 
 
 def test_an_update_is_not_due_with_no_sessions_since() -> None:
-    assert review_update_due(days_ago(90), 0, NOW) is False
+    assert review_update_due(days_ago(90), 0, NOW, review_due=True) is False
 
 
 def test_an_update_is_not_due_without_a_review() -> None:
     """No review to update: the first-review prompt (`review_due`) owns that case."""
-    assert review_update_due(None, 5, NOW) is False
+    assert review_update_due(None, 5, NOW, review_due=True) is False
+
+
+def test_an_update_is_not_due_when_no_new_review_can_be_written() -> None:
+    """Option A (owner, 2026-10-21): an update is a new review, so the prompt
+    only stands where one can be written — never pointing at a 409."""
+    assert review_update_due(days_ago(90), 3, NOW, review_due=False) is False

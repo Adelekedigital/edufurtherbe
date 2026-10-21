@@ -11,10 +11,11 @@ points at (non-negotiable #8):
 - `review_due` is `review_eligibility.reviewable_sessions()` for this mentor —
   literally the query behind `/me/reviewable-sessions?mentor_id=`, asked for
   existence;
-- `review_update_due` is `domain.reviews.review_update_due()` over that last
-  review and the count of `received()` sessions with this mentor whose
-  `starts_at` is after it — the same completed rule as the count, and the same
-  time column `held()` places a session by.
+- `review_update_due` is `domain.reviews.review_update_due()` over
+  `review_due`, that last review and the count of `received()` sessions with
+  this mentor whose `starts_at` is after it — the same completed rule as the
+  count, and the same time column `held()` places a session by. It implies
+  `review_due`: an update is a new review (option A, 2026-10-21).
 
 **Scoped to the caller in the statement** (non-negotiable #5): every clause
 names the mentee, so there is no row belonging to somebody else to filter out
@@ -77,5 +78,7 @@ async def mentor_relationship(
     ).one()
     figures = dict(row._mapping)
     since = figures.pop("sessions_since_review")
-    figures["review_update_due"] = review_update_due(figures["last_reviewed_at"], since, now)
+    figures["review_update_due"] = review_update_due(
+        figures["last_reviewed_at"], since, now, review_due=figures["review_due"]
+    )
     return figures
