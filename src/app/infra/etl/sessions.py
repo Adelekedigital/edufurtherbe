@@ -47,7 +47,6 @@ off for them would be copying M3's shape without its reason.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import cast
 from uuid import UUID
 
 from sqlalchemy import bindparam, text
@@ -86,19 +85,29 @@ RETURNING id
 # default with no option at all (`a7c4e2d91f3b` removed the `google_meet` rows
 # older loads created for them).
 #
-# `DO UPDATE SET provider = EXCLUDED.provider` is a no-op write that exists so
-# `RETURNING id` yields a row on conflict — the same reason `UPSERT_SESSION_TYPE`
-# uses it. `DO NOTHING` returns nothing and the id is what the offering needs.
+# **Default only while the mentor has none.** A default they chose through
+# `/me/conferencing` stays theirs, and claiming a second would trip the
+# one-default index and abort the load. An existing row keeps its `source`, and
+# is promoted only when no default exists, so the unpinned offering resolves to
+# the mentor's venue rather than the platform fallback.
 UPSERT_CONFERENCING_OPTION = """
 INSERT INTO mentor_conferencing_options (user_id, provider, is_default, source)
-VALUES (:user_id, :provider, true, 'import')
-ON CONFLICT (user_id, provider) DO UPDATE SET provider = EXCLUDED.provider
-RETURNING id
+SELECT :user_id, :provider,
+       NOT EXISTS (
+           SELECT 1 FROM mentor_conferencing_options d
+            WHERE d.user_id = :user_id AND d.is_default
+       ),
+       'import'
+ON CONFLICT (user_id, provider) DO UPDATE SET is_default = true
+ WHERE NOT EXISTS (
+       SELECT 1 FROM mentor_conferencing_options d
+        WHERE d.user_id = EXCLUDED.user_id AND d.is_default
+ )
 """
 
 # `meeting_venue` is gone from this table. It used to be selected off
-# `mentor_profiles`, then passed in, and is now a reference: the offering names
-# one of the mentor's conferencing options, or null to follow their default.
+# `mentor_profiles`, then passed in; the venue is now the mentor's default
+# option, which the offering follows.
 #
 # **`requires_booking_confirmation` is deliberately not written here.** It went
 # back to `mentor_profiles`, the profile load writes it, and on this table null
@@ -116,11 +125,13 @@ ON CONFLICT (session_type_id) DO UPDATE SET
     duration_minutes = EXCLUDED.duration_minutes
 """
 
-# `:option_id` is null for a mentor who never chose: the offering follows the
-# platform default, and a re-run clears a pointer an older load left.
-SET_CONFERENCING_OPTION = """
+# **The offering is never pinned** (owner, 2026-10-21): it follows the mentor's
+# default, which the option above is. A pin kept the offering on the old venue
+# after the mentor switched default, with no screen to show it
+# (`b2d6f9a1c4e7`). Written anyway so a re-run clears a pointer an older load left.
+CLEAR_CONFERENCING_OPTION = """
 UPDATE session_types
-   SET conferencing_option_id = :option_id
+   SET conferencing_option_id = NULL
  WHERE id = :session_type_id
 """
 
@@ -217,26 +228,23 @@ class SessionLoader:
             await self._load_participants(plan, session_ids, user_id)
             await self._load_events(plan, session_ids, users)
 
-    async def _conferencing_option_id(self, mentor_user_id: UUID, venue: MeetingProvider) -> UUID:
-        """This mentor's option for ``venue``, created on first sight.
+    async def _ensure_default_option(self, mentor_user_id: UUID, venue: MeetingProvider) -> None:
+        """This mentor's option for ``venue``, created on first sight, and their
+        default unless they already have one.
 
-        **``is_default`` is written ``true`` and the partial unique index is what
-        makes that safe.** A migrated mentor has exactly one offering, so the
-        first insert is also the only one; were a second provider ever to arrive
-        the index would refuse it, loudly, rather than leaving two defaults. That
-        is preferable to picking silently — the transform is where a rule about
-        *which* default belongs, and it has no basis to choose one.
+        A migrated mentor has exactly one offering, so on a fresh load this is
+        their only option and their default. On a re-run a default already set
+        wins, which is how a choice made through ``/me/conferencing`` survives.
 
         ``venue`` is never ``CUSTOM``: the transform leaves those on the
         platform default and reports them, because the symmetric ``CHECK``
         requires a URL the export does not carry. A mentor who never chose has
         no venue, and this is not called for them.
         """
-        result = await self._connection.execute(
+        await self._connection.execute(
             text(UPSERT_CONFERENCING_OPTION),
             {"user_id": mentor_user_id, "provider": venue.value},
         )
-        return cast("UUID", result.scalar_one())
 
     async def _load_session_types(
         self, plan: SessionPlan, user_id: UserResolver
@@ -259,16 +267,12 @@ class SessionLoader:
                     "duration_minutes": row.duration_minutes,
                 },
             )
-            option_id = (
-                await self._conferencing_option_id(
+            if row.meeting_venue is not None:
+                await self._ensure_default_option(
                     user_id(row.mentor_bubble_id, "session type"), row.meeting_venue
                 )
-                if row.meeting_venue is not None
-                else None
-            )
             await self._connection.execute(
-                text(SET_CONFERENCING_OPTION),
-                {"option_id": option_id, "session_type_id": type_id},
+                text(CLEAR_CONFERENCING_OPTION), {"session_type_id": type_id}
             )
         return type_ids
 

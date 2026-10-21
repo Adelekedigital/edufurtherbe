@@ -376,45 +376,31 @@ async def test_two_live_types_with_one_name_are_refused(
 # --------------------------------------------------------------------------
 
 
-async def test_the_load_points_the_offering_at_a_conferencing_option(
+async def test_the_load_makes_the_venue_the_mentors_default_not_a_pin(
     seeded: tuple[AsyncConnection, dict[str, UUID]],
 ) -> None:
-    """**The venue arrives on `SessionTypeRow` and lands as a reference.**
+    """**The venue arrives on `SessionTypeRow` and lands as the mentor's default.**
 
-    It used to be selected off `mentor_profiles`, which worked only because the
-    profile load runs first and left it there — two ETL processes coupled through
-    a column. Then it was a column on the config. It is now a row the mentor owns
-    and an offering points at, so the loader has to *create* it rather than write
-    a label.
+    The loader *creates* the option the mentor owns, since a database built
+    fresh — migrate, then load — would otherwise put them on the platform
+    fallback instead of their real choice.
 
-    The migration's backfill runs **once**, so a database built fresh — migrate,
-    then load — is exactly the path that would otherwise take the platform
-    fallback instead of the mentor's real choice. The join below needs the
-    pointer, so a loader that dropped the option fails here even though `daily`
-    is now also the platform fallback.
-
-    Loaded from the real export this is not hypothetical: the twelve mentors
-    split `google_meet` 5, `daily` 5, `custom` 2.
+    **The offering is not pointed at it** (owner, 2026-10-21). A pin was never
+    the mentor's, no screen shows one, and it kept the offering on the old venue
+    after the mentor switched default — the defect `b2d6f9a1c4e7` cleared.
     """
     conn, users = seeded
 
     await SessionLoader(conn).load(users=users, plan=plan_of())
 
-    row = (
+    option = (
         await conn.execute(
-            text(
-                "SELECT o.provider, o.is_default "
-                "  FROM session_types st "
-                "  JOIN mentor_conferencing_options o "
-                "    ON o.id = st.conferencing_option_id AND o.user_id = st.mentor_user_id"
-            )
+            text("SELECT provider, is_default, source FROM mentor_conferencing_options")
         )
     ).one()
-    assert row.provider == "daily"
-    # The mentor's only option is also their default, so an offering that later
-    # clears its pointer still resolves to what they chose rather than to the
-    # platform fallback.
-    assert row.is_default is True
+    assert (option.provider, option.is_default, option.source) == ("daily", True, "import")
+    pointer = await conn.execute(text("SELECT conferencing_option_id FROM session_types"))
+    assert pointer.scalar_one() is None
 
 
 async def test_a_mentor_who_never_chose_gets_no_option(
@@ -435,22 +421,88 @@ async def test_a_mentor_who_never_chose_gets_no_option(
     assert pointer.scalar_one() is None
 
 
-async def test_a_reload_with_no_venue_clears_the_old_pointer(
-    seeded: tuple[AsyncConnection, dict[str, UUID]],
+@pytest.mark.parametrize("venue", [MeetingProvider.DAILY, None])
+async def test_a_reload_clears_a_pin_an_older_load_left(
+    seeded: tuple[AsyncConnection, dict[str, UUID]], venue: MeetingProvider | None
 ) -> None:
-    """The load converges on the plan: an offering a previous run pointed at an
-    option follows the platform default once the plan says the mentor never chose."""
+    """The load converges on the plan, with a venue or without: a pointer an
+    older load wrote goes on the next run, so the offering follows the default."""
     conn, users = seeded
     loader = SessionLoader(conn)
     await loader.load(users=users, plan=plan_of())
+    await conn.execute(
+        text(
+            "UPDATE session_types st SET conferencing_option_id = o.id "
+            "FROM mentor_conferencing_options o WHERE o.user_id = st.mentor_user_id"
+        )
+    )
 
     await loader.load(
         users=users,
-        plan=plan_of(session_types=(SessionTypeRow(MENTOR, "General Mentorship", 45, None),)),
+        plan=plan_of(session_types=(SessionTypeRow(MENTOR, "General Mentorship", 45, venue),)),
     )
 
     pointer = await conn.execute(text("SELECT conferencing_option_id FROM session_types"))
     assert pointer.scalar_one() is None
+
+
+@pytest.mark.parametrize(
+    "imported",
+    [
+        "DELETE FROM mentor_conferencing_options",
+        "UPDATE mentor_conferencing_options SET is_default = false",
+    ],
+    ids=["no-daily-row", "daily-demoted"],
+)
+async def test_a_reload_keeps_the_default_a_mentor_switched_to(
+    seeded: tuple[AsyncConnection, dict[str, UUID]], imported: str
+) -> None:
+    """A mentor who chose Meet keeps it as the default when a reload plans
+    `daily`, whether their imported `daily` row is gone or demoted. Neither the
+    insert nor the conflict update may claim a second default, which the
+    one-default index would refuse, aborting the whole load."""
+    conn, users = seeded
+    loader = SessionLoader(conn)
+    await loader.load(users=users, plan=plan_of())
+    await conn.execute(text(imported))
+    await conn.execute(
+        text(
+            "INSERT INTO mentor_conferencing_options (user_id, provider, is_default, source) "
+            "VALUES (:u, 'google_meet', true, 'mentor')"
+        ),
+        {"u": users[MENTOR]},
+    )
+
+    await loader.load(users=users, plan=plan_of())
+
+    rows = await conn.execute(
+        text(
+            "SELECT provider, is_default, source FROM mentor_conferencing_options ORDER BY provider"
+        )
+    )
+    assert [tuple(r) for r in rows] == [
+        ("daily", False, "import"),
+        ("google_meet", True, "mentor"),
+    ]
+
+
+async def test_a_reload_with_no_other_default_makes_the_imported_option_default(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """An imported option left non-default with no default beside it becomes the
+    default again, so the unpinned offering resolves to the mentor's venue and
+    not to the platform fallback."""
+    conn, users = seeded
+    loader = SessionLoader(conn)
+    await loader.load(users=users, plan=plan_of())
+    await conn.execute(text("UPDATE mentor_conferencing_options SET is_default = false"))
+
+    await loader.load(users=users, plan=plan_of())
+
+    default = await conn.execute(
+        text("SELECT provider FROM mentor_conferencing_options WHERE is_default")
+    )
+    assert default.scalar_one() == "daily"
 
 
 async def test_a_reload_never_takes_back_a_choice_the_mentor_made(
