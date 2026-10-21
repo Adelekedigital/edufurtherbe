@@ -160,12 +160,15 @@ PROGRAM_DEGREE_LEVELS: dict[str, str] = {
 #: A blank is the majority and means the mentor never chose, so it maps to
 #: ``None``: no venue of the mentor's own, and the platform default applies
 #: (owner, 2026-10-01). It used to map to ``GOOGLE_MEET``, which loaded as a saved
-#: choice the mentor never made. ``meetingVenueLink`` is not
+#: choice the mentor never made. **"External video tool" is the same**: it has
+#: no URL to carry, so it is no venue too (owner's Integrations PRD, 2026-10-21);
+#: it used to map to ``CUSTOM`` and be reported for a re-declaring nobody owned,
+#: when the platform default it fell to was already the result. ``meetingVenueLink`` is not
 #: mapped at all: selecting a venue auto-created a per-session link that lived on
 #: the session record, so what remains on the mentor row is residue.
 MEETING_VENUES: dict[str, MeetingProvider | None] = {
     "edufurther video (recommended)": MeetingProvider.DAILY,
-    "external video tool": MeetingProvider.CUSTOM,
+    "external video tool": None,
     "": None,
 }
 

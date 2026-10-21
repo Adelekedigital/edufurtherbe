@@ -236,10 +236,9 @@ class SessionLoader:
         their only option and their default. On a re-run a default already set
         wins, which is how a choice made through ``/me/conferencing`` survives.
 
-        ``venue`` is never ``CUSTOM``: the transform leaves those on the
-        platform default and reports them, because the symmetric ``CHECK``
-        requires a URL the export does not carry. A mentor who never chose has
-        no venue, and this is not called for them.
+        ``venue`` is never ``CUSTOM``: the export carries no URL, and the
+        symmetric ``CHECK`` requires one, so the transform maps "External video
+        tool" to no venue, like a blank. A mentor with no venue is not called for.
         """
         await self._connection.execute(
             text(UPSERT_CONFERENCING_OPTION),
