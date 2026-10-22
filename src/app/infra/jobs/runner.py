@@ -251,17 +251,24 @@ class RuntimeJobs:
                 # what is left of the **one** records budget, so the job's limit
                 # still holds with both reads (Integrations PRD, decision 4).
                 # **Its own error boundary**: a stats refinement must never stop
-                # the drain and the releases below from running.
+                # the drain and the releases below from running. A savepoint
+                # undoes only this phase: a dry run has committed nothing yet,
+                # and a session rollback would discard what it settled and queued.
                 left = RECORDS_READ_BUDGET - dt.timedelta(seconds=time.monotonic() - reads_started)
                 try:
-                    measured = await measure_minutes(
-                        session, now=now, rooms=rooms, budget=max(left, dt.timedelta())
-                    )
+                    async with session.begin_nested():
+                        measured = await measure_minutes(
+                            session, now=now, rooms=rooms, budget=max(left, dt.timedelta())
+                        )
                     if not dry_run:
                         await session.commit()
                 except Exception:
                     logger.exception("measuring minutes failed; the settlement run goes on")
-                    await session.rollback()
+                    # A real run committed everything before this phase, so
+                    # a rollback loses only the minutes; a dry run keeps its
+                    # pending writes for the drain to count.
+                    if not dry_run:
+                        await session.rollback()
                     measured = 0
                 oauth = self._calendar_health()
                 health = (

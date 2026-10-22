@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.domain.session_minutes import LONGEST_STAY
 from app.infra.clients.daily_presence import (
     Sighting,
     Stay,
@@ -282,6 +283,26 @@ def test_each_participant_record_is_a_stay_from_its_join_for_its_duration() -> N
             },
             id="duration infinite",
         ),
+        pytest.param(
+            {
+                "ongoing": False,
+                "participants": [
+                    {
+                        "user_id": "u",
+                        "join_time": 1,
+                        "duration": LONGEST_STAY.total_seconds() + 1,
+                    }
+                ],
+            },
+            id="duration longer than any real stay",
+        ),
+        pytest.param(
+            {
+                "ongoing": False,
+                "participants": [{"user_id": "u", "join_time": 1, "duration": 2e11}],
+            },
+            id="duration huge but finite: overflows the stored minutes",
+        ),
     ],
 )
 def test_stays_that_are_not_final_are_unreadable(meeting: dict[str, object]) -> None:
@@ -290,6 +311,35 @@ def test_stays_that_are_not_final_are_unreadable(meeting: dict[str, object]) -> 
     booked minutes until a later read, never a figure measured mid-call."""
     with pytest.raises(UnreadableRecordsError):
         stays_from_records(ROOM, {"data": [meeting]})
+
+
+def test_the_longest_real_stay_is_still_read_whole() -> None:
+    """**A bound on one record, not a cap on minutes** (decision 281): a stay
+    from the door opening, through the longest session, to the patience's end
+    is read whole. Past it no record is real, and a finite `2e11` would
+    overflow the stored minutes."""
+    longest = LONGEST_STAY.total_seconds()
+    meeting = {
+        "ongoing": False,
+        "participants": [{"user_id": "u", "join_time": 100, "duration": longest}],
+    }
+
+    assert stays_from_records(ROOM, {"data": [meeting]}) == [
+        Stay("u", at(100), at(100) + LONGEST_STAY)
+    ]
+
+
+def test_a_party_who_stays_almost_the_whole_patience_is_still_read() -> None:
+    """The case a bound of the patience alone got wrong (review on this PR): in
+    at the start of a 60-minute session and out 23h50m after its end is 24h50m
+    in the room, yet the meeting is over before the patience ends."""
+    stayed = dt.timedelta(minutes=60) + dt.timedelta(hours=23) + dt.timedelta(minutes=50)
+    meeting = {
+        "ongoing": False,
+        "participants": [{"user_id": "u", "join_time": 100, "duration": stayed.total_seconds()}],
+    }
+
+    assert stays_from_records(ROOM, {"data": [meeting]}) == [Stay("u", at(100), at(100) + stayed)]
 
 
 def test_stays_refuse_what_sightings_refuse() -> None:

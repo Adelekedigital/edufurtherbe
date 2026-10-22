@@ -21,10 +21,23 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Iterable
 
-__all__ = ["Interval", "co_present_minutes"]
+from app.domain.attendance import JOIN_LEAD_CEILING, PRESENCE_RECORDS_PATIENCE
+from app.domain.availability import SESSION_DURATION_MINUTES
+
+__all__ = ["LONGEST_STAY", "Interval", "co_present_minutes"]
 
 #: One person in the room, from one instant to another.
 Interval = tuple[dt.datetime, dt.datetime]
+
+#: The longest one stay can truly be when it is read: from the earliest the
+#: door opens before the start, through the longest session, to the end of the
+#: patience, when records stop being read. **A bound on one record, not a cap
+#: on minutes** (decision 281): a longer one is unreadable, never clipped.
+LONGEST_STAY = (
+    JOIN_LEAD_CEILING
+    + dt.timedelta(minutes=SESSION_DURATION_MINUTES[1])
+    + PRESENCE_RECORDS_PATIENCE
+)
 
 
 def _joined(stays: Iterable[Interval]) -> list[Interval]:

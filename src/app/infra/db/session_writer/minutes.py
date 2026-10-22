@@ -93,6 +93,11 @@ async def measure_minutes(
 
     The provider's client is blocking, so each read runs in a thread, under the
     same read budget the presence check uses.
+
+    **Every per-session failure is a per-session skip.** Candidates come oldest
+    first, so a session that fails the same way on every run would otherwise
+    hold back every newer one for the whole patience. Each write is in its own
+    savepoint, so a refused one cannot abort the transaction for the rest.
     """
     measured = 0
     deadline = time.monotonic() + budget.total_seconds()
@@ -110,9 +115,17 @@ async def measure_minutes(
             # length stands, and the next run asks again.
             logger.info("minutes not measured for session %s yet: %s", session_id, exc)
             continue
-        minutes = co_present_minutes(_of(stays, mentor_id), _of(stays, mentee_id))
-        await session.execute(
-            update(Session).where(Session.id == session_id).values(measured_minutes=minutes)
-        )
+        except Exception:
+            logger.exception("minutes not measured for session %s: unexpected failure", session_id)
+            continue
+        try:
+            minutes = co_present_minutes(_of(stays, mentor_id), _of(stays, mentee_id))
+            async with session.begin_nested():
+                await session.execute(
+                    update(Session).where(Session.id == session_id).values(measured_minutes=minutes)
+                )
+        except Exception:
+            logger.exception("minutes not stored for session %s", session_id)
+            continue
         measured += 1
     return measured
