@@ -23,6 +23,34 @@ from conftest import add_user
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 
+#: The public allowlist, pinned once: a field added to the response fails the
+#: comparison whatever it is called. `test_api_me_session_types` reads it too.
+PUBLIC_FIELDS = {
+    "id",
+    "name",
+    "description",
+    "duration_minutes",
+    "min_notice_minutes",
+    "meeting_venue",
+    "service_offerings",
+    "application_stages",
+    "application_stage",
+    "custom_stage_label",
+    "icon",
+    # The intake form a mentee answers when booking (#207).
+    "questions",
+    # Which one the mentor puts first (#217).
+    "is_featured",
+    # How far ahead it can be booked, resolved and clamped (Round 5).
+    "booking_window_days",
+    # Whether booking is a request, resolved: told before "Send request" (#409).
+    "requires_booking_confirmation",
+    # This offering's own next free time, as the mentor's (decision 284).
+    "next_available_at",
+    "next_available_state",
+}
+
+
 def url(mentor: object) -> str:
     return f"/api/v1/users/{mentor}/session-types"
 
@@ -300,27 +328,7 @@ async def test_the_response_carries_nothing_it_should_not(
     body = response.text
     (offering,) = response.json()["data"]
 
-    assert set(offering) == {
-        "id",
-        "name",
-        "description",
-        "duration_minutes",
-        "min_notice_minutes",
-        "meeting_venue",
-        "service_offerings",
-        "application_stages",
-        "application_stage",
-        "custom_stage_label",
-        "icon",
-        # The intake form a mentee answers when booking (#207).
-        "questions",
-        # Which one the mentor puts first (#217).
-        "is_featured",
-        # How far ahead it can be booked, resolved and clamped (Round 5).
-        "booking_window_days",
-        # Whether booking is a request, resolved: told before "Send request" (#409).
-        "requires_booking_confirmation",
-    }
+    assert set(offering) == PUBLIC_FIELDS
     assert offering["service_offerings"][0] == {
         "id": await offering_id(db_engine, "document-preparation"),
         "code": "document-preparation",

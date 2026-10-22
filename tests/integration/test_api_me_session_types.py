@@ -33,6 +33,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.factories import add_session_type, make_public_mentor, token_for
+from tests.integration.test_api_session_types import PUBLIC_FIELDS
 
 from app.infra.db.session_type_store import _own_session_types, list_own_session_types
 from conftest import PLATFORM_WINDOW, add_user, bearer
@@ -352,32 +353,8 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
     response = await api_client.get(public_url(mentor))
     (offering,) = response.json()["data"]
 
-    assert set(offering) == {
-        "id",
-        "name",
-        "description",
-        "duration_minutes",
-        "min_notice_minutes",
-        "meeting_venue",
-        # The two vocabularies are published now that both have a designed
-        # shape, so this set grew — but `is_active` is still owner-only, which
-        # is what this test is actually about.
-        "service_offerings",
-        # The stage set (#215); `application_stage` is its first, for a release.
-        "application_stages",
-        "application_stage",
-        "custom_stage_label",
-        "icon",
-        # The intake form a mentee answers when booking (#207).
-        "questions",
-        # Which one the mentor puts first (#217); mentees see the order.
-        "is_featured",
-        # How far ahead it can be booked, resolved and clamped (Round 5).
-        "booking_window_days",
-        # Whether booking is a request, **resolved** (#409). The owner's nullable
-        # override is not here: resolved values are public, inheritance is not.
-        "requires_booking_confirmation",
-    }
+    # The public allowlist, pinned once in `test_api_session_types.py`.
+    assert set(offering) == PUBLIC_FIELDS
     assert "is_active" not in offering
     # Resolved length and notice are public; whether they were inherited is not.
     assert "duration_inherited" not in offering

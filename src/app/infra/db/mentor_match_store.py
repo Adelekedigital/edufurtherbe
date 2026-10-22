@@ -39,7 +39,7 @@ from app.infra.db.models.education import DegreeLevel, EducationEntry
 from app.infra.db.models.mentoring import MenteeGoal, MenteeGoalCountry, MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import OPEN
+from app.infra.db.next_available_state import OPEN
 from app.infra.db.offerings import live_goal_offering_ids, offerings_for
 
 __all__ = ["Candidate", "field_scores", "match_candidates", "mentee_answers", "mentee_of"]

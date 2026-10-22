@@ -24,12 +24,20 @@ script beside the schedule. So a write lands only if it was computed later than
 the stored value, and a refused write deletes nothing: the older run's answer
 cannot replace a newer one, and cannot clear a change it never saw.
 
+**Each offering's time is kept too** (decision 284), in
+`session_type_next_availability`, for the profile's session-type cards. The
+mentor's row is the earliest of them (`_earliest`), and they are replaced in
+the same transaction only when the mentor's write lands, so that one guard
+covers both. Their state is the mentor's rule per offering
+(`next_available_state`), with no age of their own.
+
 WHY THE SLOTS ARE `list_slots`
 ==============================
 The card's time is the first instant `list_slots` offers for any of the
-mentor's live offerings, from `mentor_today()` through the configured maximum
-window's last day (`BookingWindow.max_days`, #221) — the furthest any slot can be
-offered, with `list_slots`' instant cutoff dropping what falls past it.
+mentor's live offerings (an offering's own time: the first it offers for that
+one), from `mentor_today()` through the configured maximum window's last day
+(`BookingWindow.max_days`, #221) — the furthest any slot can be offered, with
+`list_slots`' instant cutoff dropping what falls past it.
 `bookable_until` is that slot's start less the offering's notice: past it
 `/slots` no longer offers the slot, so the card stops showing it rather than
 promise a time booking refuses.
@@ -58,136 +66,35 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from typing import Any
+from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import and_, case, delete, exists, func, literal, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.domain.availability import BookingWindow, UtcInterval
-from app.infra.db.booking_rules import effective_window_days
-from app.infra.db.models.availability import MentorAvailabilityChange, MentorNextAvailability
+from app.infra.db.models.availability import (
+    MentorAvailabilityChange,
+    MentorNextAvailability,
+    SessionTypeNextAvailability,
+)
 from app.infra.db.models.mentoring import MentorProfile
-from app.infra.db.models.sessions import SessionTypeBookingConfig
 from app.infra.db.models.user import User
-from app.infra.db.public_visibility import bookable_mentors, taking_bookings
+from app.infra.db.next_available_state import unchanged
+from app.infra.db.public_visibility import bookable_mentors
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import FreeBusyReader, list_slots, mentor_today
 
-__all__ = [
-    "free_within",
-    "next_available_state",
-    "refresh_next_available",
-    "vouched",
-]
+__all__ = ["refresh_next_available"]
 
 logger = logging.getLogger(__name__)
-
-OPEN = "open"
-NONE = "none"
-REFRESHING = "refreshing"
 
 #: How early a run may arrive and still count a value as due. QStash delivers a
 #: few seconds either side of the cron, so a maximum age equal to the interval
 #: would otherwise recompute on some runs and skip others. With this, the
 #: default of five minutes on a five-minute cron means *every run*.
 JITTER = dt.timedelta(seconds=60)
-
-
-def _unchanged() -> Any:
-    """A value was computed and nothing has changed for this mentor since."""
-    changed = exists().where(
-        MentorAvailabilityChange.mentor_user_id == MentorNextAvailability.mentor_user_id
-    )
-    return MentorNextAvailability.id.is_not(None) & ~changed
-
-
-def _cached_window_days(window: BookingWindow) -> Any:
-    """The cached offering's effective window **now** — `effective_window_days`
-    over its own config and its mentor's default, under the current settings."""
-    config = aliased(SessionTypeBookingConfig)
-    return (
-        select(effective_window_days(window, config, MentorProfile))
-        .where(
-            config.session_type_id == MentorNextAvailability.next_available_session_type_id,
-            MentorProfile.user_id == MentorNextAvailability.mentor_user_id,
-        )
-        .correlate(MentorNextAvailability)
-        .scalar_subquery()
-    )
-
-
-def next_available_state(window: BookingWindow) -> Any:
-    """`open`, `none` or `refreshing` — the three things a null time can hide.
-
-    **One `CASE`, so the change log is probed once per card.** The time itself
-    is shown only when this says `open`; the schema applies that, so the card
-    never evaluates the vouching twice.
-
-    A slot whose booking window has closed reads as `refreshing`, not `none`:
-    something *was* free, and the next run will say what is free now.
-
-    **So does a cached time past the cached offering's window as it is now**
-    (#221). The cache was vouched for under the settings it was computed with;
-    lower the maximum or the platform default and `/slots` and booking refuse
-    a time the card would still offer. Compared through `effective_window_days`,
-    the one resolution, so an offering with its own longer window keeps its time.
-    """
-    return case(
-        (~_unchanged(), REFRESHING),
-        (
-            MentorNextAvailability.next_available_at
-            > func.now() + func.make_interval(0, 0, 0, _cached_window_days(window)),
-            REFRESHING,
-        ),
-        (MentorNextAvailability.bookable_until > func.now(), OPEN),
-        (MentorNextAvailability.next_available_at.is_(None), NONE),
-        else_=REFRESHING,
-    )
-
-
-def public_next_available_state(window: BookingWindow) -> Any:
-    """`next_available_state()`, but `none` for anyone a stranger cannot book.
-
-    **The job refreshes `bookable_mentors()` and nobody else**, so a visible
-    mentor who is not taking bookings — or an owner reading a hidden profile —
-    has either no row, which reads `refreshing` and promises a time that never
-    comes, or a left-over one the job has stopped watching. Both read `none`.
-    Gated on `taking_bookings()`, the same expression the flag beside it reads
-    and the job's `bookable_mentors()` filters on, so all three agree.
-    """
-    return case(
-        (taking_bookings(), next_available_state(window)),
-        else_=literal(NONE),
-    )
-
-
-def vouched(window: BookingWindow) -> Any:
-    """The card vouches for the stored time: its public state is `open`.
-
-    **The one spelling of the gate as a predicate**, for a query that filters or
-    sorts on it rather than reading the state as a column. The card's schema
-    shows the time only when that column says `open`, so the two agree by
-    construction.
-    """
-    return public_next_available_state(window) == OPEN
-
-
-def free_within(window: BookingWindow, days: int) -> Any:
-    """`vouched()`, and the stored time is before `now() + days x 24 hours`.
-
-    Half-open, by the database's `now()` (the transaction's start), the clock
-    `next_available_state()` compares `bookable_until` against. Hours rather
-    than days, so the edge is exact whatever the connection's `TimeZone`: a
-    `timestamptz` plus `'1 day'` steps calendar days in that zone.
-    """
-    return and_(
-        vouched(window),
-        MentorNextAvailability.next_available_at
-        < func.now() + func.make_interval(0, 0, 0, 0, days * 24),
-    )
 
 
 class _OneReadPerMentor:
@@ -210,16 +117,24 @@ class _OneReadPerMentor:
         return self.seen[key]
 
 
-async def _first_free(
+@dataclass(frozen=True)
+class _Free:
+    """One offering's first bookable instant, and until when; both null for none."""
+
+    session_type_id: UUID
+    first: dt.datetime | None
+    until: dt.datetime | None
+
+
+async def _free_by_offering(
     session: AsyncSession,
     mentor: UUID,
     *,
     now: dt.datetime,
     reader: FreeBusyReader,
     window: BookingWindow,
-) -> tuple[dt.datetime | None, dt.datetime | None, UUID | None]:
-    """The earliest instant any offering could be booked, until when, and which
-    offering it is — the one whose slot is kept, so the three always agree."""
+) -> list[_Free]:
+    """Each live offering's earliest bookable instant, and until when."""
     offerings = await list_session_types(session, mentor, window=window) or []
     zone = (await session.execute(select(User.timezone).where(User.id == mentor))).scalar_one()
     start = mentor_today(zone, now)
@@ -229,7 +144,7 @@ async def _first_free(
     # ones past the instant itself.
     end = start + dt.timedelta(days=window.projection_days)
     once = _OneReadPerMentor(reader)
-    best: tuple[dt.datetime, dt.datetime, UUID] | None = None
+    found: list[_Free] = []
     for offering in offerings:
         slots = await list_slots(
             session,
@@ -241,35 +156,50 @@ async def _first_free(
             window=window,
             external_busy=once,
         )
-        if not slots:
+        first = min((slot.start for slot in slots or ()), default=None)
+        until = (
+            None
+            if first is None
+            else first - dt.timedelta(minutes=int(offering["min_notice_minutes"]))
+        )
+        found.append(_Free(UUID(str(offering["id"])), first, until))
+    return found
+
+
+def _earliest(found: list[_Free]) -> _Free | None:
+    """The mentor's value: the earliest offering's, whole, so its time, deadline
+    and offering always agree with that offering's own row (decision 284)."""
+    best: tuple[dt.datetime, dt.datetime, _Free] | None = None
+    for free in found:
+        if free.first is None or free.until is None:
             continue
-        first = min(slot.start for slot in slots)
-        until = first - dt.timedelta(minutes=int(offering["min_notice_minutes"]))
         # The same start from two offerings stays bookable while either takes it.
-        if best is None or first < best[0] or (first == best[0] and until > best[1]):
-            best = (first, until, UUID(str(offering["id"])))
-    return best if best is not None else (None, None, None)
+        if best is None or free.first < best[0] or (free.first == best[0] and free.until > best[1]):
+            best = (free.first, free.until, free)
+    return best[2] if best is not None else None
 
 
 async def _save(
     session: AsyncSession,
     mentor: UUID,
     *,
-    first: dt.datetime | None,
-    until: dt.datetime | None,
-    session_type: UUID | None,
+    found: list[_Free],
     computed_at: dt.datetime,
     seen: list[UUID],
 ) -> bool:
     """Write one mentor's answer unless a later one is already stored.
 
-    Returns whether it was written. A refused write deletes no change rows: the
-    run that wrote the newer value owns them.
+    Returns whether it was written. **The mentor's row is the one guard**: its
+    offerings' rows are written, and rows for offerings no longer live deleted,
+    only when it lands, in the same transaction, so they are always from the
+    run that wrote it. A refused write deletes no
+    change rows: the run that wrote the newer value owns them.
     """
+    best = _earliest(found)
     values = {
-        "next_available_at": first,
-        "bookable_until": until,
-        "next_available_session_type_id": session_type,
+        "next_available_at": best.first if best else None,
+        "bookable_until": best.until if best else None,
+        "next_available_session_type_id": best.session_type_id if best else None,
         "computed_at": computed_at,
     }
     written = (
@@ -284,11 +214,42 @@ async def _save(
             .returning(MentorNextAvailability.id)
         )
     ).first() is not None
-    if written and seen:
+    if not written:
+        return False
+    await session.execute(
+        delete(SessionTypeNextAvailability).where(
+            SessionTypeNextAvailability.mentor_user_id == mentor,
+            SessionTypeNextAvailability.session_type_id.not_in(
+                [free.session_type_id for free in found]
+            ),
+        )
+    )
+    if found:
+        offering = insert(SessionTypeNextAvailability).values(
+            [
+                {
+                    "mentor_user_id": mentor,
+                    "session_type_id": free.session_type_id,
+                    "next_available_at": free.first,
+                    "bookable_until": free.until,
+                }
+                for free in found
+            ]
+        )
+        await session.execute(
+            offering.on_conflict_do_update(
+                index_elements=["mentor_user_id", "session_type_id"],
+                set_={
+                    "next_available_at": offering.excluded.next_available_at,
+                    "bookable_until": offering.excluded.bookable_until,
+                },
+            )
+        )
+    if seen:
         await session.execute(
             delete(MentorAvailabilityChange).where(MentorAvailabilityChange.id.in_(seen))
         )
-    return written
+    return True
 
 
 async def refresh_next_available(
@@ -323,7 +284,7 @@ async def refresh_next_available(
         .where(MentorProfile.user_id.in_(bookable_mentors()))
         .where(
             or_(
-                ~_unchanged(),
+                ~unchanged(),
                 MentorNextAvailability.computed_at <= run_clock - max_age + JITTER,
             )
         )
@@ -343,7 +304,7 @@ async def refresh_next_available(
                     )
                 ).scalars()
             )
-            first, until, session_type = await _first_free(
+            found = await _free_by_offering(
                 session, mentor, now=moment, reader=reader, window=window
             )
             if dry_run:
@@ -356,9 +317,7 @@ async def refresh_next_available(
                 written = await _save(
                     session,
                     mentor,
-                    first=first,
-                    until=until,
-                    session_type=session_type,
+                    found=found,
                     computed_at=run_clock,
                     seen=seen,
                 )
@@ -375,7 +334,7 @@ async def refresh_next_available(
             continue
         counts["created"] += bool(new)
         counts["refreshed"] += 1
-        counts["open"] += first is not None
+        counts["open"] += _earliest(found) is not None
 
     if dry_run:
         await session.rollback()

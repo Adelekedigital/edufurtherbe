@@ -21,7 +21,7 @@ of the slugs asked for appears, because chips in one category widen — a mentee
 who picks two kinds of help wants mentors for either. It is an `EXISTS` because
 `mentor_service_offerings` is one-to-many and a join would list a mentor once
 per matching slug. And free within N days (`within_days`): the card's own stored
-time, only while the card vouches for it (`next_available_store.free_within`).
+time, only while the card vouches for it (`next_available_state.free_within`).
 Both apply in `_who()`, so browse, search and the count cannot disagree.
 
 School, degree, country of study and country of origin are still to come. They
@@ -76,7 +76,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import free_within, public_next_available_state, vouched
+from app.infra.db.next_available_state import free_within, public_next_available_state, vouched
 from app.infra.db.offerings import (
     goal_overlap_count,
     offerings_for,

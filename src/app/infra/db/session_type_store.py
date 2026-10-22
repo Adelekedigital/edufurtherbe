@@ -68,6 +68,7 @@ from app.infra.db.booking_rules import (
     inherits_min_notice,
 )
 from app.infra.db.intake_store import live_question_count
+from app.infra.db.models.availability import MentorNextAvailability, SessionTypeNextAvailability
 from app.infra.db.models.mentoring import (
     MentorConferencingOption,
     MentorProfile,
@@ -79,6 +80,7 @@ from app.infra.db.models.sessions import (
     SessionTypeBookingConfig,
 )
 from app.infra.db.models.user import User
+from app.infra.db.next_available_state import public_session_type_next_available_state
 from app.infra.db.offerings import (
     offerings_for_session_types,
     set_session_type_offerings,
@@ -293,6 +295,11 @@ def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
             effective_window_days(window).label("booking_window_days"),
             # Resolved, not read. See `_resolved_venue`.
             _resolved_venue(),
+            # This offering's stored next free time (decision 284), in this
+            # statement so neither public reader pays a query per offering.
+            # Shown only while the state is `open`; the schema applies that.
+            SessionTypeNextAvailability.next_available_at,
+            public_session_type_next_available_state(window).label("next_available_state"),
         )
         .select_from(SessionType)
         .join(
@@ -301,6 +308,17 @@ def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
         )
         .join(MentorProfile, MentorProfile.user_id == SessionType.mentor_user_id)
         .join(User, User.id == SessionType.mentor_user_id)
+        # Both unique per key, so neither multiplies a row: the offering's own
+        # cached row, and its mentor's, whose change log vouches for it.
+        .outerjoin(
+            SessionTypeNextAvailability,
+            (SessionTypeNextAvailability.session_type_id == SessionType.id)
+            & (SessionTypeNextAvailability.mentor_user_id == SessionType.mentor_user_id),
+        )
+        .outerjoin(
+            MentorNextAvailability,
+            MentorNextAvailability.mentor_user_id == SessionType.mentor_user_id,
+        )
     )
     return (
         _with_venue(statement)

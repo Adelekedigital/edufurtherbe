@@ -24,7 +24,12 @@ ADDED = {
     # New with the goal's schools (Mentee Settings PRD): the link is optional.
     "GoalSchoolRead": ("institution_id", "institution_name"),
     "OnboardingStatusRead": ("last_step",),
-    "SessionTypeRead": ("requires_booking_confirmation",),
+    # Each offering's own next free time (decision 284).
+    "SessionTypeRead": (
+        "requires_booking_confirmation",
+        "next_available_at",
+        "next_available_state",
+    ),
     "SessionAnswerRead": ("answered", "required"),
     # New with the mentor dashboard (decision 246): every figure optional from
     # the start. The window's bounds and the two blocks are required.

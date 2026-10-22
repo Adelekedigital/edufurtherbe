@@ -51,6 +51,10 @@ way to reach Google. If it is adopted, re-price this job against it.
    comes from `list_slots`, the function booking uses, and the range starts at
    `mentor_today()`, the function `list_slots` uses, so the card searches
    exactly what `/slots` answers.
+   *Widened 2026-10-21 (decision 284):* each live offering's own value is kept
+   beside it in `session_type_next_availability`, written in the same
+   transaction and only when the mentor's write lands; the mentor's is the
+   earliest of them, and each offering's state follows points 3 and 7 unchanged.
 2. **`mentor_availability_changes` is an append-only log.**
    `trg_log_availability_change` appends to it on the nine tables that decide
    when a mentor is free: `sessions`, `availability_rules`,
