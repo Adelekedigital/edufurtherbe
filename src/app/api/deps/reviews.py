@@ -17,6 +17,7 @@ from app.api.deps.core import (
     SessionDep,
     _configured,
 )
+from app.api.deps.offerings import MAX_OFFERING_FILTERS, OfferingSlugs, live_slugs
 from app.api.schemas.common import (
     MAX_PAGE_SIZE,
     clamp_limit,
@@ -217,6 +218,20 @@ async def mentor_reviews_page(
             )
         ),
     ] = None,
+    offering: Annotated[
+        OfferingSlugs,
+        Query(
+            max_length=MAX_OFFERING_FILTERS,
+            description=(
+                "Only reviews about this service offering: a `slug` from a review's "
+                "`service_offerings`, the profile's `reviews.review_topics`, or "
+                "`/api/v1/catalog/service-offerings`. Repeatable, and **any** one "
+                "matches: `?offering=a&offering=b` lists reviews about either. "
+                "Combines with `session_type` (both must hold). An unknown or retired "
+                "slug is a `422`; a blank one is no filter."
+            ),
+        ),
+    ] = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """One page of a mentor's published reviews.
 
@@ -229,6 +244,8 @@ async def mentor_reviews_page(
     mentor = await get_public_mentor_id(session, handle, viewer)
     if mentor is None:
         raise NotFoundError("no such mentor")
+    # The same reading of `?offering=` as Explore's (decision 283).
+    slugs = await live_slugs(session, offering)
     # The **two-part** codec, because the list sorts on `created_at` rather than
     # on the id. Mispairing the two forms is a paging bug that only shows on page
     # two, which this endpoint has already had once.
@@ -238,6 +255,7 @@ async def mentor_reviews_page(
         limit=clamp_limit(limit),
         after=decode_cursor(cursor),
         session_type=session_type,
+        offerings=slugs,
     )
     # **Minted here, beside the decode.** `mentor_page` states the rule: the token
     # is issued where the sort key is known, because deriving it again in the

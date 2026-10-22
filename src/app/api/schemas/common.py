@@ -147,6 +147,20 @@ class SessionTypeRefRead(BaseModel):
         return cls(id=UUID(str(type_id)), name=str(name))
 
 
+class ServiceOfferingRead(BaseModel):
+    """One kind of help: an offering from the platform's closed taxonomy.
+
+    The six-row taxonomy from settled decision #53 — **not** a session type.
+    This is *what kind of help*; a session type is the bookable product with a
+    duration and a notice window. Both words are in the domain vocabulary
+    because they are close enough to be swapped by accident. Here rather than
+    beside the mentor card because a review names its offerings too (decision 283).
+    """
+
+    slug: str = Field(description="Pass as `?offering=` to filter by this offering.")
+    display_name: str
+
+
 class Page[T](BaseModel):
     """One page of results, and how to ask for the next.
 

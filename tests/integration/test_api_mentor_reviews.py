@@ -152,14 +152,20 @@ class Profile:
         return next(row for row in rows if row["id"] == str(self.mentor))
 
 
-@pytest_asyncio.fixture
-async def profile(db_engine: AsyncEngine, api_client: httpx.AsyncClient) -> Profile:
+async def a_profile(db_engine: AsyncEngine, api_client: httpx.AsyncClient) -> Profile:
+    """A public, bookable mentor with one unclassified session type. Shared with
+    `test_api_review_offerings`, whose `profile` fixture is this too."""
     tag = uuid4().hex[:8]
     mentor = await make_public_mentor(db_engine, tag)
     offering = await add_session_type(db_engine, mentor, name=f"CV review {tag}")
     # Bookable, so the mentor appears on the discovery card as well as the profile.
     await add_availability(db_engine, mentor, day_of_week=1, start="09:00", end="17:00")
     return Profile(engine=db_engine, client=api_client, mentor=mentor, offering=offering)
+
+
+@pytest_asyncio.fixture
+async def profile(db_engine: AsyncEngine, api_client: httpx.AsyncClient) -> Profile:
+    return await a_profile(db_engine, api_client)
 
 
 # --------------------------------------------------------------------------
@@ -470,6 +476,7 @@ async def test_the_platform_feedback_never_reaches_the_list(profile: Profile) ->
         "author_institution",
         "author_deleted",
         "session_type",
+        "service_offerings",
     }
 
 

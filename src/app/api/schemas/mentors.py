@@ -37,6 +37,7 @@ from app.api.schemas.common import (
     CoverRead,
     LinkedInRead,
     Page,
+    ServiceOfferingRead,
 )
 from app.api.schemas.links import PublicLinkRead
 from app.api.schemas.profile import LookupRef
@@ -45,19 +46,6 @@ from app.api.schemas.session_types import SessionTypeRead
 from app.domain.enums import ApprovalStatus, AwardFunding, CoverArt, CoverColor, ListingStatus
 from app.domain.profile_strength import COMPLETENESS_ORDER, ProfileFacts, completeness
 from app.domain.social_links import Link
-
-
-class ServiceOfferingRead(BaseModel):
-    """One kind of help this mentor gives.
-
-    The closed six-row taxonomy from settled decision #53 — **not** a session
-    type. This is *what kind of help*; a session type is the bookable product
-    with a duration and a notice window. Both words are in the domain vocabulary
-    because they are close enough to be swapped by accident.
-    """
-
-    slug: str
-    display_name: str
 
 
 class MentorSummaryRead(CoverRead):

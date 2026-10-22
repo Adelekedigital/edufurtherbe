@@ -6,9 +6,9 @@ import datetime as dt
 from typing import Annotated, Any
 
 from fastapi import Depends, Query
-from pydantic import StringConstraints
 
 from app.api.deps.core import BookingWindowDep, CurrentUserDep, OptionalViewerDep, SessionDep
+from app.api.deps.offerings import MAX_OFFERING_FILTERS, OfferingSlugs, live_slugs
 from app.api.deps.session_types import _with_forms
 from app.api.schemas.common import (
     MAX_PAGE_SIZE,
@@ -57,7 +57,7 @@ from app.infra.db.mentor_search_store import (
     similar_mentors,
 )
 from app.infra.db.met_mentors import list_met_mentors
-from app.infra.db.offerings import has_live_goals, live_offering_slugs, offerings_for
+from app.infra.db.offerings import has_live_goals, offerings_for
 from app.infra.db.profile_store import (
     list_awards,
     list_education,
@@ -132,15 +132,6 @@ async def public_mentor(
     }
 
 
-#: An input bound, not the taxonomy's size: #53 closes the list at six, and a
-#: second copy of that number here would be the one that drifts.
-MAX_OFFERING_FILTERS = 10
-
-#: An input bound on one offering slug. The column is unbounded `text`; the six
-#: platform-authored slugs are all far shorter, and this only keeps a 422's echo
-#: of what the caller sent short.
-MAX_SLUG_LENGTH = 60
-
 #: `available_within_days` runs from one day to two weeks: the window the
 #: frontend asked for ("this week"), with room for "next week", and well inside
 #: the booking window the stored time is computed over.
@@ -166,10 +157,7 @@ async def mentor_page(
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
     offering: Annotated[
-        # `StorableText` per item, not on the list: a NUL in a slug reached
-        # Postgres and was a 500 from one anonymous request — #97's fourth
-        # parameter. The length bound keeps what a 422 echoes back short.
-        list[Annotated[str, StringConstraints(max_length=MAX_SLUG_LENGTH), StorableText]] | None,
+        OfferingSlugs,
         Query(
             max_length=MAX_OFFERING_FILTERS,
             description=(
@@ -217,14 +205,7 @@ async def mentor_page(
     # precisely because the two agreed. Now this decides and the store trusts.
     term = (q or "").strip() or None
 
-    # Refused rather than matching nobody: a typo'd slug would otherwise render
-    # as "no mentors" and read as a supply problem. Retired counts as unknown,
-    # for the reason `offerings._live()` gives.
-    # A value that empties is no filter, as a blank `q` is no search.
-    slugs = list(dict.fromkeys(s for s in (v.strip() for v in offering or ()) if s))
-    unknown = set(slugs) - await live_offering_slugs(session, slugs)
-    if unknown:
-        raise ValidationError(f"unknown offering: {', '.join(sorted(unknown))}")
+    slugs = await live_slugs(session, offering)
 
     # Counted on the first page only: on the search path the count is a second
     # sequential scan, and a client paging on already has the number.

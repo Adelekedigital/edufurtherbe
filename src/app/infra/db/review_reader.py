@@ -19,6 +19,7 @@ fetched and then refused, which is what lets the route answer `404` without a
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -30,7 +31,7 @@ from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session
 from app.infra.db.review_authors import author_columns, with_author
 from app.infra.db.review_stats import published, review_value
-from app.infra.db.review_topics import topic_columns, with_topic
+from app.infra.db.review_topics import about_any, offerings_column, topic_columns, with_topic
 
 __all__ = ["get_review_row", "list_authored_reviews", "list_mentor_reviews"]
 
@@ -85,6 +86,7 @@ async def list_mentor_reviews(
     limit: int,
     after: tuple[str, UUID] | None = None,
     session_type: UUID | None = None,
+    offerings: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of a mentor's published reviews, newest first.
 
@@ -93,6 +95,9 @@ async def list_mentor_reviews(
     listed with no topic rather than vanishing from a list whose length is
     `reviews.count`. `session_type` narrows the page to one offering, and the
     cursor still works within it because the sort key is unchanged.
+    `offerings` (live slugs, checked by the caller) narrows it to reviews about
+    any of those service offerings, through the predicate the profile's
+    `review_topics` counts with, and combines with `session_type`.
 
     **Ordered on `created_at`, with the id breaking ties** — ADR 0016's amended
     form, *"the cursor is the sort column plus the id"*.
@@ -138,6 +143,7 @@ async def list_mentor_reviews(
                     Review.overall_rating,
                     review_value().label("session_value"),
                     *topic_columns(),
+                    offerings_column(),
                     *author_columns(),
                 ).select_from(Review)
             )
@@ -146,6 +152,7 @@ async def list_mentor_reviews(
             published(mentor),
             *([keyset.after(Review.created_at, Review.id, after)] if after is not None else []),
             *([Session.session_type_id == session_type] if session_type is not None else []),
+            *([about_any(offerings)] if offerings else []),
         )
         .order_by(Review.created_at.desc(), Review.id.desc())
         .limit(limit + 1)

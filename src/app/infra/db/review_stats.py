@@ -72,6 +72,7 @@ from app.domain.reviews import (
 )
 from app.infra.db.models.reviews import Review
 from app.infra.db.predicates import during
+from app.infra.db.review_topics import offering_counts
 
 __all__ = [
     "card_summary",
@@ -273,6 +274,10 @@ async def mentor_review_stats(session: AsyncSession, mentor: UUID) -> dict[str, 
     Aggregates over no rows still produce a row, so a mentor nobody has reviewed
     comes back as a count of zero and nulls rather than as `None` — which is why
     this returns a dict and the caller needs no fallback.
+
+    `review_topics` is the same `published()` rows counted per service offering
+    (decision 283), a second statement because it is one row per offering.
     """
     row = (await session.execute(profile_summary(mentor))).mappings().one()
-    return dict(row)
+    topics = await session.execute(offering_counts(published(mentor)))
+    return dict(row) | {"review_topics": [dict(topic) for topic in topics.mappings()]}
