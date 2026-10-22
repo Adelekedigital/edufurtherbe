@@ -61,7 +61,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, delete, exists, func, literal, or_, select
+from sqlalchemy import and_, case, delete, exists, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -76,7 +76,12 @@ from app.infra.db.public_visibility import bookable_mentors, taking_bookings
 from app.infra.db.session_type_store import list_session_types
 from app.infra.db.slot_store import FreeBusyReader, list_slots, mentor_today
 
-__all__ = ["next_available_state", "refresh_next_available"]
+__all__ = [
+    "free_within",
+    "next_available_state",
+    "refresh_next_available",
+    "vouched",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +161,32 @@ def public_next_available_state(window: BookingWindow) -> Any:
     return case(
         (taking_bookings(), next_available_state(window)),
         else_=literal(NONE),
+    )
+
+
+def vouched(window: BookingWindow) -> Any:
+    """The card vouches for the stored time: its public state is `open`.
+
+    **The one spelling of the gate as a predicate**, for a query that filters or
+    sorts on it rather than reading the state as a column. The card's schema
+    shows the time only when that column says `open`, so the two agree by
+    construction.
+    """
+    return public_next_available_state(window) == OPEN
+
+
+def free_within(window: BookingWindow, days: int) -> Any:
+    """`vouched()`, and the stored time is before `now() + days x 24 hours`.
+
+    Half-open, by the database's `now()` (the transaction's start), the clock
+    `next_available_state()` compares `bookable_until` against. Hours rather
+    than days, so the edge is exact whatever the connection's `TimeZone`: a
+    `timestamptz` plus `'1 day'` steps calendar days in that zone.
+    """
+    return and_(
+        vouched(window),
+        MentorNextAvailability.next_available_at
+        < func.now() + func.make_interval(0, 0, 0, 0, days * 24),
     )
 
 

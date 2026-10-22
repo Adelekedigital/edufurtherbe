@@ -11,14 +11,18 @@ windows minus bookings and cannot be a `WHERE` clause. Filtering on it would
 mean computing slots for every candidate before paging, which stops the cursor
 being a database keyset; and caching it in a column is the drift D20 rejected,
 where a stored `is_available` was wrong the moment somebody booked. *When* is
-what `/slots` answers, freshly, one click later.
+what `/slots` answers, freshly, one click later. The one exception is opt-in:
+`within_days` filters on the card's stored next free time (ADR 0029), and only
+while the card vouches for it, so a mentor just booked drops out rather than
+showing a stale time.
 
-**One filter: service offering, any of.** A mentor who gives *at least one* of
-the slugs asked for appears, because chips in one category widen — a mentee who
-picks two kinds of help wants mentors for either. It applies in `_who()`, so
-browse and search cannot disagree about it, and it is an `EXISTS` because
-`mentor_service_offerings` is one-to-many and a join would list a mentor once per
-matching slug.
+**Two filters.** Service offering, any of: a mentor who gives *at least one*
+of the slugs asked for appears, because chips in one category widen — a mentee
+who picks two kinds of help wants mentors for either. It is an `EXISTS` because
+`mentor_service_offerings` is one-to-many and a join would list a mentor once
+per matching slug. And free within N days (`within_days`): the card's own stored
+time, only while the card vouches for it (`next_available_store.free_within`).
+Both apply in `_who()`, so browse, search and the count cannot disagree.
 
 School, degree, country of study and country of origin are still to come. They
 were held back because a query parameter is additive and a sort order is not
@@ -72,7 +76,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import OPEN, public_next_available_state
+from app.infra.db.next_available_store import free_within, public_next_available_state, vouched
 from app.infra.db.offerings import (
     goal_overlap_count,
     offerings_for,
@@ -412,7 +416,9 @@ def completed_sessions() -> Any:
     )
 
 
-def _who(offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
+def _who(
+    offerings: Sequence[str], viewer: UUID | None = None, free: Any | None = None
+) -> Select[Any]:
     """Which mentors are visible — the joins and predicates, and no card.
 
     Extracted so browse, search and the count cannot drift on *who is visible*.
@@ -425,6 +431,12 @@ def _who(offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
     `LIMIT 1` per mentor that Postgres cannot drop from a query that never reads
     it, so carrying it here made `count_mentors` run it for every visible mentor
     where a page runs it for twenty-one.
+
+    **The next-free row is joined here, not in `_card()`**, because the
+    `within_days` filter (`free`) reads it. One row per mentor at most
+    (`uq_mentor_next_availability_mentor_user_id`), so the outer join cannot
+    repeat a mentor, and a count that never reads it has it removed by the
+    planner.
     """
     return (
         select(MentorProfile.id)
@@ -440,6 +452,12 @@ def _who(offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
         # and it was the one field the search document indexed while the
         # payload withheld it — findable by a fact a client could not display.
         .outerjoin(_ORIGIN_COUNTRY, _ORIGIN_COUNTRY.c.id == UserProfile.origin_country_id)
+        # Outer: a mentor the job has not reached yet has no row, and reads as
+        # `refreshing` rather than disappearing.
+        .outerjoin(
+            MentorNextAvailability,
+            MentorNextAvailability.mentor_user_id == MentorProfile.user_id,
+        )
         .where(*mentor_is_live())
         .where(*([offers_any(MentorProfile.user_id, offerings)] if offerings else []))
         # **A signed-in mentor is never listed to themself.** Here rather than
@@ -447,7 +465,13 @@ def _who(offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
         # agree — a count that still included the viewer would promise a
         # mentor the pages never show.
         .where(*([MentorProfile.user_id != viewer] if viewer is not None else []))
+        .where(*([free] if free is not None else []))
     )
+
+
+def _free(window: BookingWindow, within_days: int | None) -> Any | None:
+    """The `within_days` filter, or `None` when the request did not ask."""
+    return None if within_days is None else free_within(window, within_days)
 
 
 def _card(
@@ -500,12 +524,6 @@ def _card(
             top_award(MentorProfile.user_id).label("top_award"),
             *(more(qualification) if more is not None else []),
         )
-        # Outer: a mentor the job has not reached yet has no row, and reads as
-        # `refreshing` rather than disappearing.
-        .outerjoin(
-            MentorNextAvailability,
-            MentorNextAvailability.mentor_user_id == MentorProfile.user_id,
-        )
         # Outer: an academic line is something a card *displays*, and a mentor
         # without one is a worse card, not a hidden mentor. Bookability is what
         # decides who appears, and it is in `_who()`.
@@ -526,6 +544,7 @@ def _page(
     window: BookingWindow,
     viewer: UUID | None = None,
     offset: int = 0,
+    within_days: int | None = None,
 ) -> Select[Any]:
     """One page of mentors, bookable first, then newest first (#220).
 
@@ -535,7 +554,7 @@ def _page(
     reach for the visible one when building the next token.
     """
     return (
-        _card(_scope(None, offerings, viewer), window)
+        _card(_scope(None, offerings, viewer, _free(window, within_days)), window)
         .where(
             *(
                 [
@@ -556,14 +575,19 @@ def _page(
     )
 
 
-def _scope(term: str | None, offerings: Sequence[str], viewer: UUID | None = None) -> Select[Any]:
+def _scope(
+    term: str | None,
+    offerings: Sequence[str],
+    viewer: UUID | None = None,
+    free: Any | None = None,
+) -> Select[Any]:
     """Who a request lists, before any ordering or paging.
 
     The page and the count both read this, so `total` cannot describe a
     different set from the pages it sits beside — a count that forgot the text
     match or the filter would still return a plausible number.
     """
-    base = _who(offerings, viewer)
+    base = _who(offerings, viewer, free)
     return base if term is None else base.where(_search_match(term))
 
 
@@ -574,6 +598,7 @@ def _matched(
     limit: int,
     offerings: Sequence[str],
     window: BookingWindow,
+    within_days: int | None = None,
 ) -> Select[Any]:
     """One page of mentors for a mentee with goals: most goals covered first.
 
@@ -589,7 +614,7 @@ def _matched(
     """
     overlap = goal_overlap_count(MentorProfile.user_id, viewer)
     return (
-        _card(_scope(None, offerings, viewer), window)
+        _card(_scope(None, offerings, viewer, _free(window, within_days)), window)
         .order_by(
             _bookable_first(), overlap.desc(), daily_shuffle(viewer, day), MentorProfile.id.desc()
         )
@@ -635,6 +660,7 @@ def _ranked(
     offerings: Sequence[str],
     window: BookingWindow,
     viewer: UUID | None = None,
+    within_days: int | None = None,
 ) -> Select[Any]:
     """One page of mentors matching `term`, best first.
 
@@ -655,7 +681,7 @@ def _ranked(
     tier = case(*((condition, len(tiers) - n) for n, (condition, _) in enumerate(tiers)), else_=0)
     rank = case(*((condition, score) for condition, score in tiers), else_=0)
     return (
-        _card(_scope(term, offerings, viewer), window)
+        _card(_scope(term, offerings, viewer, _free(window, within_days)), window)
         .add_columns(rank.label("rank"))
         .order_by(_bookable_first(), tier.desc(), rank.desc(), MentorProfile.id.desc())
         .offset(offset)
@@ -674,6 +700,7 @@ async def search_mentors(
     viewer: UUID | None = None,
     goal_day: dt.date | None = None,
     window: BookingWindow,
+    within_days: int | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """One page of listed mentors, and whether another follows.
 
@@ -708,13 +735,14 @@ async def search_mentors(
     # Re-deciding would be a second copy of the rule, and the copy that drifts is
     # the one nobody is looking at.
     #
-    # `offerings` arrives validated as live slugs; the store only applies them.
+    # `offerings` arrives validated as live slugs, and `within_days` in range;
+    # the store only applies them.
     if q is not None:
-        statement = _ranked(q, offset, limit, offerings, window, viewer)
+        statement = _ranked(q, offset, limit, offerings, window, viewer, within_days)
     elif viewer is not None and goal_day is not None:
-        statement = _matched(viewer, goal_day, offset, limit, offerings, window)
+        statement = _matched(viewer, goal_day, offset, limit, offerings, window, within_days)
     else:
-        statement = _page(after, limit, offerings, window, viewer, offset)
+        statement = _page(after, limit, offerings, window, viewer, offset, within_days)
 
     rows = [dict(r) for r in (await session.execute(statement)).mappings()]
     page, has_more = rows[:limit], len(rows) > limit
@@ -731,6 +759,8 @@ async def count_mentors(
     q: str | None = None,
     offerings: Sequence[str] = (),
     viewer: UUID | None = None,
+    window: BookingWindow,
+    within_days: int | None = None,
 ) -> int:
     """How many mentors `search_mentors` would list across every page.
 
@@ -744,7 +774,9 @@ async def count_mentors(
     qualification lateral, the review and session subqueries — runs per mentor
     counted.
     """
-    statement = _scope(q, offerings, viewer).with_only_columns(func.count(MentorProfile.id))
+    statement = _scope(q, offerings, viewer, _free(window, within_days)).with_only_columns(
+        func.count(MentorProfile.id)
+    )
     return int((await session.execute(statement)).scalar_one())
 
 
@@ -791,7 +823,7 @@ async def similar_mentors(
 
     **A card with an open time comes first** (owner, 2026-10-21): its time
     opens booking, so it is the suggestion a visitor can act on. `open` is
-    `public_next_available_state`, already gated on `taking_bookings()`. Then
+    `vouched()`, the card's gate, already on `taking_bookings()`. Then
     mentors taking bookings before those who are not, as on Explore (#220).
     **Then by how many offerings are shared, delivered sessions and review
     count** — the two proofs of a working mentor the card already shows — and
@@ -817,7 +849,7 @@ async def similar_mentors(
         .order_by(
             # The expression, not the `next_available_state` label: Postgres
             # resolves an output name only bare, never inside an expression.
-            (public_next_available_state(window) == OPEN).desc(),
+            vouched(window).desc(),
             _bookable_first(),
             shared.desc(),
             literal_column("completed_sessions").desc(),
