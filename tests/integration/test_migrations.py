@@ -191,6 +191,8 @@ EXPECTED_TABLES = [
     "user_links",
     # The countries a mentor can guide mentees towards (decision 276).
     "mentor_guide_countries",
+    # Each offering's next free time, beside the mentor's (decision 284).
+    "session_type_next_availability",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

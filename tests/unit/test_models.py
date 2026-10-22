@@ -31,6 +31,8 @@ EXPECTED_MODELS = {
     "FeaturedMentor",
     "MentorAvailabilityChange",
     "MentorNextAvailability",
+    # Each offering's next free time (decision 284).
+    "SessionTypeNextAvailability",
     "AdminCreditGrant",
     "CreditLot",
     "CreditTransaction",

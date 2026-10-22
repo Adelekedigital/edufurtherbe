@@ -461,6 +461,61 @@ class MentorNextAvailability(TimestampMixin, Base):
     )
 
 
+class SessionTypeNextAvailability(TimestampMixin, Base):
+    """When one offering is next free: `MentorNextAvailability`, per session type.
+
+    Written by the same refresh, in the same transaction, as the mentor's row —
+    the mentor's time is the earliest of these — and vouched for by the same
+    change log, so it carries no `computed_at` of its own (decision 284). A
+    live offering with no row reads `refreshing`.
+    """
+
+    __tablename__ = "session_type_next_availability"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    #: Cascades with the profile, as the mentor's row does.
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "mentor_profiles.user_id",
+            ondelete="CASCADE",
+            name="fk_session_type_next_availability_mentor",
+        ),
+        nullable=False,
+    )
+    #: Cascades: a deleted offering's cached time is meaningless.
+    session_type_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "session_types.id",
+            ondelete="CASCADE",
+            name="fk_session_type_next_availability_session_type",
+        ),
+        nullable=False,
+    )
+    #: This offering's first bookable instant within the horizon, or null for none.
+    next_available_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: That slot's start less this offering's notice.
+    bookable_until: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "(next_available_at IS NULL) = (bookable_until IS NULL)",
+            name="deadline_with_time",
+        ),
+        Index(
+            "uq_session_type_next_availability_pair",
+            "mentor_user_id",
+            "session_type_id",
+            unique=True,
+        ),
+        # An offering has one mentor, so one row; the pair above scopes reads.
+        Index("uq_session_type_next_availability_session_type", "session_type_id", unique=True),
+    )
+
+
 class MentorAvailabilityChange(Base):
     """Something that decides a mentor's availability changed, and nobody has
     recomputed since.
