@@ -132,6 +132,13 @@ on 2026-10-08, when code review moved to Codex after the push.
    non-negotiable #2, which stopped at every tier and cost a round trip on
    renames and docs.
 
+   **Only if confident** (owner, 2026-10-21). The standing approval holds only
+   when the written confidence check (`build-workflow` Step 2) is high against
+   the code and the docs, with every expected bug, regression, stale doc and
+   data risk named and given a guard in the checklist. If confidence is not
+   high, read more first; if it is still not high, or the call is the owner's,
+   ask before building.
+
    ~~Tier 1 still stops for approval before implementation.~~ **Widened
    2026-08-18, on evidence rather than preference.** Four consecutive Tier 1
    pauses changed the outcome **once**: a migration that could not carry a value
