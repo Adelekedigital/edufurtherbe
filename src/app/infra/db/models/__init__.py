@@ -19,6 +19,7 @@ from app.infra.db.models.availability import (
     CalendarConnection,
     MentorAvailabilityChange,
     MentorNextAvailability,
+    SessionTypeNextAvailability,
     SessionTypeSchedulingWindow,
 )
 from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTransaction
@@ -124,6 +125,7 @@ __all__ = [
     "SessionSuggestion",
     "SessionType",
     "SessionTypeBookingConfig",
+    "SessionTypeNextAvailability",
     "SessionTypeOffering",
     "SessionTypeQuestion",
     "SessionTypeQuestionOption",

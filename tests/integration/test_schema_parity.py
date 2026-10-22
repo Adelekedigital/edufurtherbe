@@ -458,6 +458,9 @@ def test_the_natural_keys_survive_as_unique_constraints(migrated_database: str) 
         ("mentor_guide_countries", "(mentor_user_id, country_id)"),
         ("mentor_guide_countries", '(mentor_user_id, "position")'),
         ("session_type_booking_configs", "(session_type_id)"),
+        # One cached next free time per offering (decision 284).
+        ("session_type_next_availability", "(mentor_user_id, session_type_id)"),
+        ("session_type_next_availability", "(session_type_id)"),
     }
 
     for table, columns in required:
