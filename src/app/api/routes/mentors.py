@@ -208,6 +208,13 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
         "had no link to a session. Pass its `id` as `?session_type=` to list "
         "only reviews of that offering; paging works the same within the "
         "filter.\n\n"
+        "**`service_offerings` says what kind of help it was about**: the "
+        "platform's service offerings that session type covers, `[]` for a "
+        "migrated review. `?offering=<slug>` (repeatable, any of) lists only "
+        "reviews about those offerings, with the same slugs and the same `422` "
+        "as `GET /mentors?offering=`; it combines with `?session_type=`. For "
+        "each slug in the profile's `reviews.review_topics`, its `count` is the "
+        "number of reviews this filter pages through.\n\n"
         "`session_value` on a row is that review's own `overall_rating`, or its "
         "`valuable_rating` when it predates the stars, `1..5` — the badge beside "
         "it. The mentor's overall "
@@ -223,7 +230,8 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
         },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "description": (
-                "The `cursor` was not one this endpoint issued, or `session_type` is not a UUID."
+                "The `cursor` was not one this endpoint issued, `session_type` is not "
+                "a UUID, or an `offering` is not a slug the platform offers."
             )
         },
     },

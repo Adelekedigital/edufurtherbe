@@ -7,6 +7,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Query
 from pydantic import StringConstraints
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.core import BookingWindowDep, CurrentUserDep, OptionalViewerDep, SessionDep
 from app.api.deps.session_types import _with_forms
@@ -147,6 +148,33 @@ MAX_SLUG_LENGTH = 60
 MIN_AVAILABLE_WITHIN_DAYS = 1
 MAX_AVAILABLE_WITHIN_DAYS = 14
 
+#: `?offering=` as every list that filters by it receives it: Explore and a
+#: mentor's reviews (decision 283). Each endpoint wraps it in its own `Query`,
+#: which holds only the description and `MAX_OFFERING_FILTERS`.
+#:
+#: `StorableText` per item, not on the list: a NUL in a slug reached Postgres
+#: and was a 500 from one anonymous request — #97's fourth parameter. The
+#: length bound keeps what a 422 echoes back short.
+OfferingSlugs = (
+    list[Annotated[str, StringConstraints(max_length=MAX_SLUG_LENGTH), StorableText]] | None
+)
+
+
+async def live_slugs(session: AsyncSession, offering: list[str] | None) -> list[str]:
+    """`?offering=` normalised and checked: the slugs to filter by, in order, once each.
+
+    The one reading of the parameter for every list that takes it (decision
+    174, widened by 283). A value that empties is no filter, as a blank `q` is
+    no search. An unknown slug is **refused rather than matching nothing**: a
+    typo would otherwise render as an empty list and read as a supply problem.
+    Retired counts as unknown, for the reason `offerings.live_offering()` gives.
+    """
+    slugs = list(dict.fromkeys(s for s in (v.strip() for v in offering or ()) if s))
+    unknown = set(slugs) - await live_offering_slugs(session, slugs)
+    if unknown:
+        raise ValidationError(f"unknown offering: {', '.join(sorted(unknown))}")
+    return slugs
+
 
 async def mentor_page(
     session: SessionDep,
@@ -166,10 +194,7 @@ async def mentor_page(
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
     offering: Annotated[
-        # `StorableText` per item, not on the list: a NUL in a slug reached
-        # Postgres and was a 500 from one anonymous request — #97's fourth
-        # parameter. The length bound keeps what a 422 echoes back short.
-        list[Annotated[str, StringConstraints(max_length=MAX_SLUG_LENGTH), StorableText]] | None,
+        OfferingSlugs,
         Query(
             max_length=MAX_OFFERING_FILTERS,
             description=(
@@ -217,14 +242,7 @@ async def mentor_page(
     # precisely because the two agreed. Now this decides and the store trusts.
     term = (q or "").strip() or None
 
-    # Refused rather than matching nobody: a typo'd slug would otherwise render
-    # as "no mentors" and read as a supply problem. Retired counts as unknown,
-    # for the reason `offerings._live()` gives.
-    # A value that empties is no filter, as a blank `q` is no search.
-    slugs = list(dict.fromkeys(s for s in (v.strip() for v in offering or ()) if s))
-    unknown = set(slugs) - await live_offering_slugs(session, slugs)
-    if unknown:
-        raise ValidationError(f"unknown offering: {', '.join(sorted(unknown))}")
+    slugs = await live_slugs(session, offering)
 
     # Counted on the first page only: on the search path the count is a second
     # sequential scan, and a client paging on already has the number.

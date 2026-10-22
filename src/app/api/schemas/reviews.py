@@ -22,7 +22,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.api.schemas.common import Normalised, SessionTypeRefRead
+from app.api.schemas.common import Normalised, ServiceOfferingRead, SessionTypeRefRead
 from app.domain.reviews import (
     MENTOR_RATINGS,
     OVERALL_SCALE,
@@ -367,6 +367,20 @@ class RatingAggregate(BaseModel):
         )
 
 
+class ReviewOfferingCountRead(ServiceOfferingRead):
+    """One service offering a mentor's reviews were about, and how many."""
+
+    count: int = Field(
+        ge=1,
+        description=(
+            "How many published reviews were about this offering: the total "
+            "`/mentors/{handle}/reviews?offering=<slug>` pages through. A review "
+            "about several offerings counts once under each, so these can add up "
+            "to more than `count`."
+        ),
+    )
+
+
 class ReviewSummaryRead(BaseModel):
     """What a mentor's reviews add up to, as the profile renders it.
 
@@ -409,6 +423,16 @@ class ReviewSummaryRead(BaseModel):
     knowledge_rating: RatingAggregate = Field(default_factory=RatingAggregate)
     practicality_rating: RatingAggregate = Field(default_factory=RatingAggregate)
     support_rating: RatingAggregate = Field(default_factory=RatingAggregate)
+    review_topics: list[ReviewOfferingCountRead] = Field(
+        default_factory=list,
+        description=(
+            "The service offerings this mentor's reviews were about, each with its "
+            "review count, most reviewed first, then by name. Only offerings with "
+            "at least one review, and only ones the platform still offers. A "
+            "migrated review was about no offering and is in no topic. Pass a "
+            "`slug` as `?offering=` on `/mentors/{handle}/reviews` to list them."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> ReviewSummaryRead:
@@ -422,6 +446,7 @@ class ReviewSummaryRead(BaseModel):
                 None if row["would_recommend_in_10"] is None else int(row["would_recommend_in_10"])
             ),
             **{rating: RatingAggregate.of(row, rating) for rating in MENTOR_RATINGS},
+            review_topics=[ReviewOfferingCountRead(**topic) for topic in row["review_topics"]],
         )
 
 
@@ -470,6 +495,16 @@ class MentorReviewRead(BaseModel):
     #: review**: the legacy review had no link to a session, so nothing records
     #: what it was about.
     session_type: ReviewTopicRead | None = None
+    service_offerings: list[ServiceOfferingRead] = Field(
+        default_factory=list,
+        description=(
+            "The kinds of help the reviewed session was booked for: the service "
+            "offerings of its `session_type`, in the mentor's order. Empty for a "
+            "migrated review and for a session type with no service offering; an "
+            "offering the platform has retired is left out. Pass a "
+            "`slug` as `?offering=` to list only reviews about it."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> MentorReviewRead:
@@ -484,4 +519,5 @@ class MentorReviewRead(BaseModel):
             author_institution=row["author_institution"],
             author_deleted=bool(row["author_deleted"]),
             session_type=ReviewTopicRead.from_row(row),
+            service_offerings=[ServiceOfferingRead(**o) for o in row["service_offerings"]],
         )
