@@ -29,6 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import MentorPageDep, MentorReviewsDep, PublicMentorDep, SimilarMentorsDep
+from app.api.deps.mentors import MAX_AVAILABLE_WITHIN_DAYS, MIN_AVAILABLE_WITHIN_DAYS
 from app.api.schemas.common import Page
 from app.api.schemas.mentors import (
     MentorPage,
@@ -106,6 +107,12 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
         "a `q` search to those mentors. Slugs come from "
         "`/api/v1/catalog/service-offerings`; an unknown or retired one is a "
         "`422`. School, degree and country filters are still to come.\n\n"
+        f"**`available_within_days=N` ({MIN_AVAILABLE_WITHIN_DAYS}-{MAX_AVAILABLE_WITHIN_DAYS}) "
+        "lists only mentors free in the next "
+        "N days**: those whose card says `open` with a `next_available_at` before "
+        "now plus N x 24 hours. It reads the stored time, so a `refreshing` "
+        "mentor is left out until the next refresh. It combines with `offering` "
+        "and `q`, and `total` counts with it.\n\n"
         "`offerings` is what kind of help each mentor gives — the platform "
         "taxonomy, and what matching runs on. What can be *booked* is on the "
         "profile."

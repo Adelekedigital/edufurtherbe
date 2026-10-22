@@ -141,6 +141,12 @@ MAX_OFFERING_FILTERS = 10
 #: of what the caller sent short.
 MAX_SLUG_LENGTH = 60
 
+#: `available_within_days` runs from one day to two weeks: the window the
+#: frontend asked for ("this week"), with room for "next week", and well inside
+#: the booking window the stored time is computed over.
+MIN_AVAILABLE_WITHIN_DAYS = 1
+MAX_AVAILABLE_WITHIN_DAYS = 14
+
 
 async def mentor_page(
     session: SessionDep,
@@ -174,6 +180,25 @@ async def mentor_page(
             ),
         ),
     ] = None,
+    available_within_days: Annotated[
+        int | None,
+        Query(
+            ge=MIN_AVAILABLE_WITHIN_DAYS,
+            le=MAX_AVAILABLE_WITHIN_DAYS,
+            description=(
+                f"Only mentors with a free time in the next N days, {MIN_AVAILABLE_WITHIN_DAYS} "
+                f"to {MAX_AVAILABLE_WITHIN_DAYS} (anything "
+                "else is a `422`). Read from each card's stored next free time: a "
+                "mentor matches when `next_available_state` is `open` and "
+                "`next_available_at` is **before** the time of the request plus N x 24 hours "
+                "(a time exactly at that instant does not match). A mentor whose "
+                "state is `refreshing` or `none` does not match, so one who was just "
+                "booked or changed their hours is left out until the next refresh, "
+                "a few minutes later. Combines with `offering` and `q`, and `total` "
+                "counts with it. Booking still reads live slots."
+            ),
+        ),
+    ] = None,
 ) -> tuple[list[dict[str, Any]], bool, str | None, int | None]:
     """One page of bookable mentors, browsing or searching.
 
@@ -204,7 +229,14 @@ async def mentor_page(
     # Counted on the first page only: on the search path the count is a second
     # sequential scan, and a client paging on already has the number.
     total = (
-        await count_mentors(session, q=term, offerings=slugs, viewer=viewer)
+        await count_mentors(
+            session,
+            q=term,
+            offerings=slugs,
+            viewer=viewer,
+            window=window,
+            within_days=available_within_days,
+        )
         if cursor is None
         else None
     )
@@ -242,6 +274,7 @@ async def mentor_page(
             offerings=slugs,
             viewer=viewer,
             goal_day=goal_day,
+            within_days=available_within_days,
         )
         next_cursor = next_goal_cursor(offset + len(rows)) if has_more else None
         return rows, has_more, next_cursor, total
@@ -259,6 +292,7 @@ async def mentor_page(
             offerings=slugs,
             viewer=viewer,
             goal_day=goal_day,
+            within_days=available_within_days,
         )
         # `next_offset_cursor`, not `encode_offset_cursor`: past the depth cap
         # there is no next page, and minting one the decoder then refuses ends a
@@ -273,6 +307,7 @@ async def mentor_page(
         after=decode_browse_cursor(cursor),
         offerings=slugs,
         viewer=viewer,
+        within_days=available_within_days,
     )  # `goal_day` is not passed: a browse cursor continues bookable first, then newest.
     next_cursor = (
         encode_browse_cursor(rows[-1]["taking_bookings"], rows[-1]["cursor_id"])
