@@ -21,13 +21,14 @@ from tests.integration.test_api_meeting_provisioning import a_mentor_on, started
 from tests.integration.test_api_session_door import attendance_of, status_of
 from tests.integration.test_presence_attendance import room_and_users, seen
 from tests.off_the_loop import guarded
+from tests.unit.test_daily_rooms import rooms as daily_rooms
 
 from app.core.config import Settings
+from app.domain.session_minutes import co_present_minutes
 from app.infra.clients.daily_presence import Sighting, Stay
-from app.infra.clients.meetings import API_BASE, DailyRooms, VenueUnavailableError
+from app.infra.clients.meetings import DailyRooms, VenueUnavailableError
 from app.infra.db.session_stats import mentee_window_figures, mentor_stats
 from app.infra.db.session_writer import measure_minutes
-from app.infra.db.session_writer import minutes as minutes_writer
 from app.infra.jobs import runner
 from app.infra.jobs.runner import RuntimeJobs
 
@@ -109,8 +110,8 @@ def daily_answering(records: dict[str, dict[str, Any]]) -> DailyRooms:
     def answer(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=records[request.url.params["room"]])
 
-    client = httpx.Client(base_url=API_BASE, transport=httpx.MockTransport(answer))
-    return DailyRooms("test-key", client=client)
+    adapter, _ = daily_rooms(answer)
+    return adapter
 
 
 def finished_meeting(venue: dict[str, Any], seconds: float) -> dict[str, Any]:
@@ -144,7 +145,7 @@ def stays(venue: dict[str, Any], mentor: tuple[int, int], mentee: tuple[int, int
 
 
 async def measure(
-    engine: AsyncEngine, records: StayRecords, *, budget: dt.timedelta | None = None
+    engine: AsyncEngine, records: StayRecords | DailyRooms, *, budget: dt.timedelta | None = None
 ) -> int:
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
         kwargs = {} if budget is None else {"budget": budget}
@@ -509,14 +510,13 @@ async def test_a_write_the_database_refuses_is_skipped_not_fatal(
             normal["room"]: stays(normal, mentor=(0, 66), mentee=(0, 66)),
         }
     )
-    real = minutes_writer.co_present_minutes
     calls: list[int] = []
 
     def refused_first(*args: Any) -> int:
         calls.append(1)
-        return -1 if len(calls) == 1 else real(*args)
+        return -1 if len(calls) == 1 else co_present_minutes(*args)
 
-    monkeypatch.setattr(minutes_writer, "co_present_minutes", refused_first)
+    monkeypatch.setattr("app.infra.db.session_writer.minutes.co_present_minutes", refused_first)
 
     assert await measure(db_engine, records) == 1
 
