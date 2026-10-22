@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.domain.attendance import PRESENCE_RECORDS_PATIENCE
 from app.infra.clients.daily_presence import (
     Sighting,
     Stay,
@@ -282,6 +283,26 @@ def test_each_participant_record_is_a_stay_from_its_join_for_its_duration() -> N
             },
             id="duration infinite",
         ),
+        pytest.param(
+            {
+                "ongoing": False,
+                "participants": [
+                    {
+                        "user_id": "u",
+                        "join_time": 1,
+                        "duration": PRESENCE_RECORDS_PATIENCE.total_seconds() + 1,
+                    }
+                ],
+            },
+            id="duration longer than the patience",
+        ),
+        pytest.param(
+            {
+                "ongoing": False,
+                "participants": [{"user_id": "u", "join_time": 1, "duration": 2e11}],
+            },
+            id="duration huge but finite: overflows the stored minutes",
+        ),
     ],
 )
 def test_stays_that_are_not_final_are_unreadable(meeting: dict[str, object]) -> None:
@@ -290,6 +311,21 @@ def test_stays_that_are_not_final_are_unreadable(meeting: dict[str, object]) -> 
     booked minutes until a later read, never a figure measured mid-call."""
     with pytest.raises(UnreadableRecordsError):
         stays_from_records(ROOM, {"data": [meeting]})
+
+
+def test_a_stay_as_long_as_the_patience_is_still_read() -> None:
+    """**A bound on one record, not a cap on minutes** (decision 281): a stay up
+    to the patience is read whole. Past it the record cannot be a session read
+    inside the patience, and a finite `2e11` would overflow the stored minutes."""
+    longest = PRESENCE_RECORDS_PATIENCE.total_seconds()
+    meeting = {
+        "ongoing": False,
+        "participants": [{"user_id": "u", "join_time": 100, "duration": longest}],
+    }
+
+    assert stays_from_records(ROOM, {"data": [meeting]}) == [
+        Stay("u", at(100), at(100) + PRESENCE_RECORDS_PATIENCE)
+    ]
 
 
 def test_stays_refuse_what_sightings_refuse() -> None:

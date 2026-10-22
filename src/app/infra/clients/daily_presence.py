@@ -23,6 +23,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from app.domain.attendance import PRESENCE_RECORDS_PATIENCE
 from app.infra.clients.scheduler import UntrustedCallbackError
 
 __all__ = [
@@ -172,8 +173,9 @@ def stays_from_records(room: str, records: dict[str, Any]) -> list[Stay]:
     **Only from finished meetings.** A record read mid-call carries a partial
     duration (the spike's ``ongoing`` trap), and a measured figure is stored
     once, so a meeting not explicitly ``ongoing: false``, or a record without a
-    usable length, is unreadable rather than short. ``room`` names the room in
-    the error only; the records were fetched for it.
+    usable length, is unreadable rather than short. So is one stay longer than
+    ``PRESENCE_RECORDS_PATIENCE``, refused whole and never clipped. ``room``
+    names the room in the error only; the records were fetched for it.
     """
     stays: list[Stay] = []
     for meeting, person, user_id, joined in _participants(records):
@@ -189,6 +191,11 @@ def stays_from_records(room: str, records: dict[str, Any]) -> list[Stay]:
             or seconds < 0
         ):
             raise UnreadableRecordsError("a participant has no usable duration")
+        # A bound on one record, not a cap on minutes (decision 281): a stay
+        # longer than the patience cannot belong to a session read inside it,
+        # and a finite `2e11` would overflow the stored minutes on every run.
+        if seconds > PRESENCE_RECORDS_PATIENCE.total_seconds():
+            raise UnreadableRecordsError("a participant's duration is longer than the patience")
         try:
             left = joined + dt.timedelta(seconds=seconds)
         except OverflowError as exc:
