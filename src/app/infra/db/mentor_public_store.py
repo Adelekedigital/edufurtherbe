@@ -38,7 +38,7 @@ from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.next_available_store import public_next_available_state
+from app.infra.db.next_available_state import public_next_available_state
 from app.infra.db.profile_store import top_award
 from app.infra.db.public_visibility import (
     has_live_offering,

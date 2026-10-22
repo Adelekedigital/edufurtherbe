@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 from pydantic import (
@@ -51,6 +51,25 @@ COUNTED_MINUTES = (
     "video, the minutes the mentor and the mentee were both in the room; Google "
     "Meet and older sessions count their booked length."
 )
+
+
+#: What a null stored next free time means (ADR 0029): the mentor's, and each
+#: session type's (decision 284).
+NextAvailableState = Literal["open", "none", "refreshing"]
+
+
+def next_available(row: dict[str, Any]) -> dict[str, Any]:
+    """`next_available_at` and `next_available_state` from a row carrying both.
+
+    **The stored time is only a claim while the state says `open`.** The state
+    is computed once in SQL; this is the one place it gates the time, for the
+    card, the profile and each of its session types alike.
+    """
+    state = row["next_available_state"]
+    return {
+        "next_available_at": row["next_available_at"] if state == "open" else None,
+        "next_available_state": state,
+    }
 
 
 class AvatarFocusRead(BaseModel):

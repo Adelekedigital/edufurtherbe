@@ -38,7 +38,13 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-from app.api.schemas.common import Normalised, publish_window_minimum, refuse_repeats
+from app.api.schemas.common import (
+    NextAvailableState,
+    Normalised,
+    next_available,
+    publish_window_minimum,
+    refuse_repeats,
+)
 from app.api.schemas.intake import QuestionRead, QuestionWrite
 from app.api.schemas.profile import LookupRef
 from app.core.config import BOOKING_WINDOW_CEILING, MIN_BOOKING_WINDOW_DAYS
@@ -221,6 +227,29 @@ class SessionTypeRead(BaseModel):
             "Answer them as `answers` on `POST /api/v1/sessions` (#207)."
         ),
     )
+    # Always sent; the defaults only keep both out of `required` (decision 284).
+    next_available_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "The first instant **this offering** could be booked, within its booking "
+            "window: the mentor-level `next_available_at`, for this offering alone, "
+            "which is the earliest of its offerings'. **Non-null only when "
+            "`next_available_state` is `open`.** Stored and refreshed by a job "
+            "(ADR 0029), so it can lag the mentor's calendar by a few minutes; "
+            "booking always reads live slots."
+        ),
+    )
+    next_available_state: NextAvailableState = Field(
+        default="refreshing",
+        description=(
+            "What a null `next_available_at` means, as the mentor-level field of the "
+            "same name, for this offering alone. `open`: the time is shown. `none`: "
+            "nothing free for this offering within its booking window, or the mentor "
+            "is not taking bookings. `refreshing`: not recomputed since a booking, an "
+            "hours or offering change, or since this offering was added, or its "
+            "time's booking deadline has passed: unknown, not empty."
+        ),
+    )
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> SessionTypeRead:
@@ -245,6 +274,7 @@ class SessionTypeRead(BaseModel):
                 QuestionRead.from_row(q)
                 for q in cast("list[dict[str, object]]", row.get("questions") or [])
             ],
+            **next_available(row),
         )
 
 

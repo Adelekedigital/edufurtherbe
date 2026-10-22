@@ -36,8 +36,10 @@ from app.api.schemas.common import (
     AvatarFocusRead,
     CoverRead,
     LinkedInRead,
+    NextAvailableState,
     Page,
     ServiceOfferingRead,
+    next_available,
 )
 from app.api.schemas.links import PublicLinkRead
 from app.api.schemas.profile import LookupRef
@@ -116,7 +118,7 @@ class MentorSummaryRead(CoverRead):
     #: What a null `next_available_at` means. `none`: nothing free in the
     #: booking horizon. `refreshing`: not recomputed since a booking, an hours
     #: change or the mentor becoming bookable — unknown, not empty.
-    next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
+    next_available_state: NextAvailableState = "refreshing"
     #: The offering `next_available_at` belongs to — open booking on it. Null
     #: whenever the time is (settled decision #189).
     next_available_session_type_id: UUID | None = None
@@ -458,7 +460,7 @@ class MentorPublicRead(BaseModel):
     #: the same stored table (ADR 0029) and gated by the same helper. Anyone
     #: not taking bookings, or not public, reads `none`.
     next_available_at: datetime | None = None
-    next_available_state: Literal["open", "none", "refreshing"] = "refreshing"
+    next_available_state: NextAvailableState = "refreshing"
     #: The offering `next_available_at` belongs to — open booking on it. Null
     #: whenever the time is (settled decision #189).
     next_available_session_type_id: UUID | None = None
@@ -570,23 +572,18 @@ class MentorPublicRead(BaseModel):
 
 
 def _next_available(row: dict[str, Any]) -> dict[str, Any]:
-    """`next_available_at` and `next_available_state`, for a card or a profile.
-
-    **The stored time is only a claim while the state says `open`.** The state
-    is computed once in SQL; this is the one place it gates the time — shared by
-    the discovery card and the profile, so the two cannot disagree about when a
-    mentor is free.
-    """
-    state = row["next_available_state"]
-    vouched = state == "open"
+    """`next_available_*` for a card or a profile: `common.next_available`, and
+    the offering the time belongs to, gated with it."""
+    shown = next_available(row)
     session_type = row.get("next_available_session_type_id")
     return {
-        "next_available_at": row["next_available_at"] if vouched else None,
+        **shown,
         # Gated with the time, never apart from it: a change to any offering
         # logs a change and the state leaves `open`, so an id sent here is one
         # of the offerings the mentor still has live.
-        "next_available_session_type_id": session_type if vouched and session_type else None,
-        "next_available_state": state,
+        "next_available_session_type_id": (
+            session_type if shown["next_available_state"] == "open" and session_type else None
+        ),
     }
 
 
