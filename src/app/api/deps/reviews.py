@@ -17,7 +17,7 @@ from app.api.deps.core import (
     SessionDep,
     _configured,
 )
-from app.api.deps.mentors import MAX_OFFERING_FILTERS, OfferingSlugs, live_slugs
+from app.api.deps.offerings import MAX_OFFERING_FILTERS, OfferingSlugs, live_slugs
 from app.api.schemas.common import (
     MAX_PAGE_SIZE,
     clamp_limit,
