@@ -103,6 +103,8 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "`profile.current_country` is where you live now, the same shape, or "
         "null when unset. It is returned here and nowhere else, for mentees and "
         "mentors alike.\n\n"
+        "`session_type_limit` is how many session types a mentor may have (the "
+        "default, or support's limit for them), null without a mentor profile.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -144,6 +146,9 @@ async def read_me(
             mentor=mentor_profile is not None,
         ),
         mentee_cancel_refund_hours=int(refunds.mentee_cancel_notice.total_seconds() // 3600),
+        session_type_limit=(
+            mentor_profile["session_type_limit"] if mentor_profile is not None else None
+        ),
     )
 
 

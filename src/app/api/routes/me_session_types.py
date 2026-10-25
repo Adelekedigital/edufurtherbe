@@ -45,6 +45,7 @@ from app.api.schemas.session_types import (
     SessionTypeCreated,
 )
 from app.core.errors import NotFoundError
+from app.domain.session_type_limit import DEFAULT_SESSION_TYPE_LIMIT
 
 router = APIRouter(prefix="/api/v1/me", tags=["session-types"])
 
@@ -127,6 +128,16 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
     }
 }
 
+#: The create's own `409`s: the name, and the limit (decision 285).
+CREATE_CONFLICT: dict[int | str, dict[str, str]] = {
+    status.HTTP_409_CONFLICT: {
+        "description": NAME_CONFLICT[status.HTTP_409_CONFLICT]["description"]
+        + "\n\n`/problems/session-type-limit-reached`: you already have as many "
+        "session types as you may (the problem's `limit` says how many). Every one "
+        "not deleted counts, hidden and scheduled for deletion included."
+    }
+}
+
 
 @router.post(
     "/session-types",
@@ -159,9 +170,14 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
         "**`Idempotency-Key` is optional.** Sent, a retry with the same key and "
         "body replays the first answer (with `Idempotent-Replayed: true`) instead "
         "of creating a second offering; the same key with a different body is a "
-        "`422`. Absent, nothing changes."
+        "`422`. Absent, nothing changes, and a replay answers its first `201` "
+        "even once the list is full.\n\n"
+        f"**At most {DEFAULT_SESSION_TYPE_LIMIT} session types**, unless support set "
+        "another limit for you (`session_type_limit` on `GET /me`). Every one not "
+        "deleted counts, hidden and scheduled for deletion included; one more is "
+        "a `409` `/problems/session-type-limit-reached` with `limit`."
     ),
-    responses=with_declined(WRITE_RESPONSES | NAME_CONFLICT),
+    responses=with_declined(WRITE_RESPONSES | CREATE_CONFLICT),
 )
 async def create_own_session_type(
     created: CreatedOwnSessionTypeDep, response: Response

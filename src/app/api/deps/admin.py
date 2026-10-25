@@ -23,7 +23,12 @@ from app.api.deps.core import (
     SessionDep,
     claim_idempotency_key,
 )
-from app.api.schemas.admin import DeclineRequest, FeaturedWrite, MergeRequest
+from app.api.schemas.admin import (
+    DeclineRequest,
+    FeaturedWrite,
+    MergeRequest,
+    SessionTypeLimitWrite,
+)
 from app.api.schemas.admin_credits import AdminCreditGrantWrite
 from app.api.schemas.common import (
     MAX_PAGE_SIZE,
@@ -34,6 +39,7 @@ from app.api.schemas.common import (
 from app.api.schemas.profile import PauseRequest
 from app.core.errors import (
     ConflictError,
+    NotFoundError,
     ValidationError,
 )
 from app.domain.enums import MentorStatusType
@@ -60,6 +66,7 @@ from app.infra.db.mentor_status_store import (
     resume,
     set_listing,
 )
+from app.infra.db.session_type_limit import set_session_type_limit
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -368,6 +375,21 @@ async def restored_account(user_id: UUID, _: CatalogueAdminDep, session: Session
     return restored
 
 
+async def set_mentor_session_type_limit(
+    user_id: UUID, payload: SessionTypeLimitWrite, _: CatalogueAdminDep, session: SessionDep
+) -> tuple[int, bool]:
+    """Support raising or resetting one mentor's session-type limit (decision 285).
+
+    **Super admin only** (`CatalogueAdminDep`): it changes what a mentor may
+    publish. A user with no live mentor profile is a `404`.
+    """
+    result = await set_session_type_limit(session, user_id, payload.limit)
+    if result is None:
+        raise NotFoundError("no such mentor")
+    await session.commit()
+    return result
+
+
 PendingInstitutionsDep = Annotated[list[dict[str, Any]], Depends(pending_institution_rows)]
 ApprovedInstitutionDep = Annotated[bool, Depends(approved_institution)]
 MergedInstitutionDep = Annotated[int, Depends(merged_institution)]
@@ -378,5 +400,6 @@ MentorHistoryDep = Annotated[list[dict[str, Any]], Depends(mentor_history)]
 PausedSelfDep = Annotated[bool, Depends(paused_self)]
 ResumedSelfDep = Annotated[bool, Depends(resumed_self)]
 RestoredAccountDep = Annotated[bool, Depends(restored_account)]
+SessionTypeLimitSetDep = Annotated[tuple[int, bool], Depends(set_mentor_session_type_limit)]
 
 AdminCreditGrantDep = Annotated[tuple[dict[str, Any], int, bool], Depends(granted_admin_credits)]

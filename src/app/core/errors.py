@@ -51,6 +51,19 @@ class WebsiteLimitReachedError(ConflictError):
         return {"limit": self.limit}
 
 
+class SessionTypeLimitReachedError(ConflictError):
+    """The mentor already holds as many session types as they may (Session
+    Types PRD, decision 285). `limit` says how many, so the client need not
+    know the default or a support override."""
+
+    def __init__(self, message: str = "", *, limit: int) -> None:
+        super().__init__(message)
+        self.limit = limit
+
+    def problem_members(self) -> dict[str, object]:
+        return {"limit": self.limit}
+
+
 class AccountExistsError(ConflictError):
     """A first sign-in's email already belongs to an account it is not linked to.
 
