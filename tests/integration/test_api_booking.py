@@ -106,8 +106,15 @@ async def a_bookable_offering(
     return mentor, session_type
 
 
+#: How far ahead a slot must start for a test to book it. With `notice=0` the
+#: first slot can be seconds away, read just before a boundary and booked just
+#: after it, which is a 422 for a time already past (#542's CI, 15:00:03 UTC).
+BOOKING_LEEWAY = dt.timedelta(minutes=2)
+
+
 async def first_slot(client: httpx.AsyncClient, mentor: UUID, session_type: UUID) -> str:
-    """The next instant the public endpoint offers, exactly as it words it."""
+    """The next instant the public endpoint offers that is still bookable by the
+    time the test books it, exactly as the endpoint words it."""
     response = await client.get(
         f"/api/v1/users/{mentor}/availability/slots",
         params={"session_type_id": str(session_type)},
@@ -115,7 +122,10 @@ async def first_slot(client: httpx.AsyncClient, mentor: UUID, session_type: UUID
     assert response.status_code == 200, response.text
     slots = response.json()["data"]
     assert slots, "the fixture mentor offers nothing, so nothing here tests booking"
-    return str(slots[0]["start"])
+    soonest = dt.datetime.now(dt.UTC) + BOOKING_LEEWAY
+    later = [s for s in slots if dt.datetime.fromisoformat(s["start"]) >= soonest]
+    assert later, "every slot offered starts within the booking leeway"
+    return str(later[0]["start"])
 
 
 def body(session_type: UUID, starts_at: str, **overrides: Any) -> dict[str, Any]:
