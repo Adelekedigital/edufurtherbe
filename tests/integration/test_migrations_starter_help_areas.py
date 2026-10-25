@@ -17,7 +17,7 @@ from tests.integration.test_migrations import (
 pytestmark = pytest.mark.db
 
 REVISION = "056f597d551a"
-PREVIOUS = "a1f4c8e2d6b9"
+PREVIOUS = "b8d2e6f4a3c7"
 
 
 def _offering(url: str, email: str, name: str) -> None:
