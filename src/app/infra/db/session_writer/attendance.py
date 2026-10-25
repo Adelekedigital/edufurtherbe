@@ -20,7 +20,6 @@ from app.core.errors import ConflictError, JoinWindowClosedError, NotFoundError
 from app.domain.attendance import (
     DOOR_STATUSES,
     JOIN_CLOSES,
-    PRESENCE_REPORTING,
     AttendanceEvidence,
     absent_party,
     door_window,
@@ -43,7 +42,7 @@ from app.domain.notifications import (
     Notification,
 )
 from app.domain.refunds import no_show_refund
-from app.infra.clients.daily_presence import Sighting
+from app.infra.clients.daily_presence import Departure, Sighting
 from app.infra.clients.meetings import RoomsPort, VenueUnavailableError
 from app.infra.db.credit_writer import refund_credit
 from app.infra.db.models.sessions import (
@@ -52,7 +51,9 @@ from app.infra.db.models.sessions import (
     SessionParticipant,
 )
 from app.infra.db.outbox import enqueue
+from app.infra.db.predicates import presence_decides_sql
 from app.infra.db.review_eligibility import within_interval
+from app.infra.db.room_stays import close_stay, open_stay
 from app.infra.db.session_store import is_a_party
 
 logger = logging.getLogger(__name__)
@@ -256,15 +257,6 @@ def _join_closes_sql() -> Any:
     fifteen = text(f"interval '{int(JOIN_CLOSES.total_seconds())} seconds'")
     length = func.make_interval(0, 0, 0, 0, 0, Session.duration_minutes)
     return Session.starts_at + func.least(fifteen, length)
-
-
-def presence_decides_sql() -> Any:
-    """:func:`presence_decides` in SQL, held to it by a test: a venue that
-    reports presence, and a room that exists."""
-    return and_(
-        Session.meeting_provider.in_([str(p) for p in PRESENCE_REPORTING]),
-        Session.external_room_id.is_not(None),
-    )
 
 
 def _not_seen_in_time() -> Any:
@@ -574,8 +566,44 @@ def _absence_code(*, mentor_came: bool, mentee_came: bool) -> SessionReasonCode 
 
 
 async def observe_presence(session: AsyncSession, sighting: Sighting) -> bool:
-    """Record that the provider saw a party in the room. Returns whether a row
-    matched. Does not commit.
+    """Record that the provider saw a party in the room, and open its stay when
+    a webhook's join carries one (#394). Returns whether a row matched. Does
+    not commit. The rules are :func:`_seen`'s.
+    """
+    user_id = await _seen(session, sighting)
+    # The records carry no join id and open no stay.
+    if user_id is not None and sighting.stay is not None:
+        await open_stay(
+            session, room=sighting.room, user_id=user_id, stay=sighting.stay, joined=sighting.at
+        )
+    return user_id is not None
+
+
+async def observe_departure(session: AsyncSession, departure: Departure) -> bool:
+    """Record that a party left the room (#394). Returns whether a row matched.
+    Does not commit.
+
+    **A leave is also its join's sighting**, at the join's own time, so a join
+    whose delivery was lost still counts towards attendance by the same rule
+    (:func:`_seen`). Then the stay closes, or is written closed when its join
+    never arrived, so a late join cannot reopen it.
+    """
+    sighting = departure.sighting
+    user_id = await _seen(session, sighting)
+    if user_id is not None and sighting.stay is not None:
+        await close_stay(
+            session,
+            room=sighting.room,
+            user_id=user_id,
+            stay=sighting.stay,
+            joined=sighting.at,
+            left=departure.left,
+        )
+    return user_id is not None
+
+
+async def _seen(session: AsyncSession, sighting: Sighting) -> UUID | None:
+    """Record a sighting on its party's row; the party's id when a row matched.
 
     **Room and user, together, in one statement** (#382). The room must be the
     session's own Daily room and the user one of its parties, so a sighting for
@@ -589,12 +617,17 @@ async def observe_presence(session: AsyncSession, sighting: Sighting) -> bool:
     **Counted only before arrivals stop.** A sighting after that is kept, so the
     page can show it, but never turns a pending party present: the outcome is
     decided at that instant, as it is for the press.
+
+    **A match is a match even when nothing moves**: PostgreSQL counts the rows
+    an ``UPDATE`` matched, not the ones it changed, so a rejoin or a second tab
+    (whose earlier sighting already set ``in_room_at``) still matches and still
+    opens or closes its stay.
     """
     try:
         user_id = UUID(sighting.user_id)
     except ValueError:
         # Not one of ours: every token we mint carries a user's uuid.
-        return False
+        return None
     in_time = and_(
         sighting.at < _join_closes_sql(),
         SessionParticipant.attendance_status == AttendanceStatus.PENDING,
@@ -618,7 +651,7 @@ async def observe_presence(session: AsyncSession, sighting: Sighting) -> bool:
             ),
         )
     )
-    return bool(cast("CursorResult[Any]", matched).rowcount)
+    return user_id if cast("CursorResult[Any]", matched).rowcount else None
 
 
 async def presence_to_confirm(

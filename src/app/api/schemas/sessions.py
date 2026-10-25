@@ -119,11 +119,28 @@ class PartyRead(CoverRead):
             "rejoin do not move it.\n\n"
             "**It means *has been in the room*, not *is in the room now*.** "
             "Leaving does not clear it, so do not use it for a live *Here now*: "
-            "a party who joined and left still has it. Use it for *Joined* / "
-            "*Didn't join*, and `joined_at` to decide who may re-enter. For a "
-            "video session, attendance follows this: a party seen before "
-            "arrivals stop is `attended`, and pressing Join without entering "
-            "the room is not."
+            "that is `in_room`. Use it for *Joined* / *Didn't join*, and "
+            "`joined_at` to decide who may re-enter. For a video session, "
+            "attendance follows this: a party seen before arrivals stop is "
+            "`attended`, and pressing Join without entering the room is not."
+        ),
+    )
+    in_room: bool | None = Field(
+        default=None,
+        description=(
+            "Whether this party is in the video room **now**, for an "
+            "EduFurther video (Daily) session (#394): `true` from the moment "
+            "Daily reports them joining until it reports them leaving, and "
+            "`true` again on a rejoin. A party open in two tabs stays `true` "
+            "until both have left.\n\n"
+            "`false` once the session has ended, whatever Daily last said, "
+            "because the room closes then and a lost leave must not keep "
+            "somebody in it.\n\n"
+            "**`null` means *not reported*, not *absent***: Google Meet and "
+            "custom venues send no presence, and neither does a session with "
+            "no video room. Show nothing live for `null`.\n\n"
+            "Live within seconds of Daily's own webhook, so a page polling the "
+            "session sees a change on its next read."
         ),
     )
     attendance_status: AttendanceStatus = Field(
@@ -523,11 +540,17 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
         institution=_text(row.get(f"{side}_institution")),
         joined_at=row.get(f"{side}_joined_at"),  # type: ignore[arg-type]
         in_room_at=row.get(f"{side}_in_room_at"),  # type: ignore[arg-type]
+        in_room=_flag(row.get(f"{side}_in_room")),
         # A missing participant row arrives as `None` and becomes `pending`,
         # which is the same answer as an unsettled row and the right one: both
         # mean *we do not know*, and only a settled row can say otherwise.
         attendance_status=(AttendanceStatus(str(status)) if status else AttendanceStatus.PENDING),
     )
+
+
+def _flag(value: object) -> bool | None:
+    """A nullable boolean column, kept nullable: `None` is *not reported*."""
+    return None if value is None else bool(value)
 
 
 def _text(value: object) -> str | None:
