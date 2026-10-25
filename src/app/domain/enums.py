@@ -334,6 +334,16 @@ class ApplicationStage(StrEnum):
     #: At interview (#198), between revising and `OTHER` — the design's order.
     INTERVIEWING = "interviewing"
     OTHER = "other"
+    # The design's six (Session Types PRD, founder 2026-10-21), replacing the six
+    # above with no custom stage. **Expand step**: both sets are legal while the
+    # code moves to the new six; the old values and `OTHER` leave with the
+    # contract migration, which remaps every stored row first.
+    EXPLORING = "exploring"
+    RESEARCHING = "researching"
+    PREPARING_DOCUMENTS = "preparing_documents"
+    APPLYING = "applying"
+    INTERVIEW_PREP = "interview_prep"
+    AWAITING_DECISION = "awaiting_decision"
 
 
 class QuestionType(StrEnum):
