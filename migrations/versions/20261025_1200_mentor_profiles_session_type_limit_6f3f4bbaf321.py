@@ -12,7 +12,7 @@ The downgrade drops the column, and with it any override support set: those
 are re-set by hand, and until then the mentor has the default.
 
 Revision ID: 6f3f4bbaf321
-Revises: b7779986392d
+Revises: e5b1c7d3a920
 Create Date: 2026-10-25 12:00:00
 """
 
@@ -23,7 +23,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "6f3f4bbaf321"
-down_revision: str | Sequence[str] | None = "b7779986392d"
+down_revision: str | Sequence[str] | None = "e5b1c7d3a920"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

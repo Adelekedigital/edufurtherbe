@@ -13,7 +13,7 @@ from app.domain.session_type_limit import SESSION_TYPE_LIMIT_CEILING
 pytestmark = pytest.mark.db
 
 REVISION = "6f3f4bbaf321"
-PREVIOUS = "b7779986392d"
+PREVIOUS = "e5b1c7d3a920"
 
 COLUMN = (
     "SELECT count(*) FROM information_schema.columns "
