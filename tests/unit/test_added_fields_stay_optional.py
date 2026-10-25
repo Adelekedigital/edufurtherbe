@@ -19,7 +19,14 @@ ADDED = {
     # The cover on every card that shows an avatar (owner, 2026-10-20).
     "MentorSummaryRead": ("cover_color", "cover_art"),
     "SessionRead": ("mentee_attendance_sessions", "refund_until"),
-    "UserRead": ("mentee_cancel_refund_hours", "onboarding", "languages", "links"),
+    "UserRead": (
+        "mentee_cancel_refund_hours",
+        "onboarding",
+        "languages",
+        "links",
+        # The effective session-type limit, mentors only (decision 286).
+        "session_type_limit",
+    ),
     "GoalRead": ("field_of_study", "schools"),
     # New with the goal's schools (Mentee Settings PRD): the link is optional.
     "GoalSchoolRead": ("institution_id", "institution_name"),

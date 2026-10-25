@@ -37,11 +37,10 @@ class LinkPlatformTakenError(ConflictError):
     websites (decision 275). Edit or delete the one they have."""
 
 
-class WebsiteLimitReachedError(ConflictError):
-    """The caller already lists the most websites allowed (decision 275).
-
-    `limit` says how many, so the client need not repeat the number.
-    """
+class LimitReachedError(ConflictError):
+    """A count has reached its limit; `limit` says how many, as the problem's
+    `limit` member, so the client need not repeat the number. Subclassed once
+    per problem type, never raised itself."""
 
     def __init__(self, message: str = "", *, limit: int) -> None:
         super().__init__(message)
@@ -49,6 +48,15 @@ class WebsiteLimitReachedError(ConflictError):
 
     def problem_members(self) -> dict[str, object]:
         return {"limit": self.limit}
+
+
+class WebsiteLimitReachedError(LimitReachedError):
+    """The caller already lists the most websites allowed (decision 275)."""
+
+
+class SessionTypeLimitReachedError(LimitReachedError):
+    """The mentor already holds as many session types as they may (Session
+    Types PRD, decision 286): the default, or a support override."""
 
 
 class AccountExistsError(ConflictError):

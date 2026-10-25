@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from scripts.seed_demo_mentors import refuse, roster
+from scripts.seed_demo_mentors import CATALOGUE, MAX_TYPES, refuse, roster, session_types_for
 
 from app.core.config import Settings
+from app.domain.session_type_limit import DEFAULT_SESSION_TYPE_LIMIT
 
 PEOPLE = [
     {"file": f"face-{n:02d}.webp", "first_name": f"First{n}", "last_name": f"Last{n}"}
@@ -48,3 +49,10 @@ def test_the_roster_varies_what_the_card_shows() -> None:
     assert sum(not m.open for m in mentors) == 2
     assert len({m.school for m in mentors}) > 5
     assert len({m.key for m in mentors}) == 24
+
+
+def test_a_demo_mentor_stays_within_the_session_type_limit() -> None:
+    """The seed writes rows directly, past the create guard (decision 286), so
+    it must never give a mentor more than the API would let them hold."""
+    assert MAX_TYPES <= DEFAULT_SESSION_TYPE_LIMIT
+    assert len(session_types_for(tuple(CATALOGUE))) <= DEFAULT_SESSION_TYPE_LIMIT

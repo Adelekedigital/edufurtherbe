@@ -301,6 +301,15 @@ class UserRead(NormalisedEmail):
             "is its `refund_until`."
         ),
     )
+    session_type_limit: int | None = Field(
+        default=None,
+        description=(
+            "How many session types you may have, for a mentor: support's limit for "
+            "you, or the platform default. Every session type not deleted counts, "
+            "hidden and scheduled for deletion included; creating one past it is "
+            "`409 /problems/session-type-limit-reached`. Null without a mentor profile."
+        ),
+    )
 
 
 class AccountDeletionWrite(BaseModel):

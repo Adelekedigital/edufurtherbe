@@ -23,6 +23,7 @@ from app.api.deps.admin import (
     PendingMentorsDep,
     RestoredAccountDep,
     ResumedSelfDep,
+    SessionTypeLimitSetDep,
 )
 from app.api.deps.availability import (
     AvailabilityExceptionsDep,
@@ -268,6 +269,7 @@ __all__ = [
     "SessionDetailDep",
     "SessionDoorDep",
     "SessionEventsDep",
+    "SessionTypeLimitSetDep",
     "SessionTypeWindowsDep",
     "SessionTypesDep",
     "SessionsPageDep",

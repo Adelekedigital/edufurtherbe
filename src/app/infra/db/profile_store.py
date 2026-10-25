@@ -51,6 +51,7 @@ from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.scholarships import ScholarshipProgram, UserAward
 from app.infra.db.models.user import UserLanguage
 from app.infra.db.offerings import offerings_for
+from app.infra.db.session_type_limit import effective_limit
 
 #: The institution columns an embedded reference carries, matching what
 #: `catalogue_store` projects — so `InstitutionRead.from_row` builds the same
@@ -307,6 +308,7 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
                     paused_by_mentor().label("paused_by_mentor"),
                     MentorProfile.submitted_at,
                     MentorProfile.approved_seen_at,
+                    effective_limit().label("session_type_limit"),
                     _latest_decline(MentorStatusEvent.reason).label("review_note"),
                     _latest_decline(MentorStatusEvent.created_at).label("reviewed_at"),
                     MentorProfile.primary_study_program,

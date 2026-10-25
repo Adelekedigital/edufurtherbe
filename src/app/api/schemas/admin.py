@@ -11,10 +11,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.api.schemas.common import Normalised
 from app.domain.enums import FeaturedSource
+from app.domain.session_type_limit import SESSION_TYPE_LIMIT_CEILING
 
 
 class PendingInstitutionRead(BaseModel):
@@ -144,3 +145,28 @@ class FeaturedWeekSetRead(BaseModel):
     """The week whose featured mentor was chosen."""
 
     week_start: date = Field(description="The week's Monday, UTC.")
+
+
+class SessionTypeLimitWrite(BaseModel):
+    """`PUT /admin/mentors/{user_id}/session-type-limit`'s body (decision 286)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Required although nullable: null resets, so an omitted field must be a
+    #: `422` rather than a reset nobody asked for.
+    #: Strict: `true`, `"7"` and `7.0` are a `422`, not a coerced limit.
+    limit: StrictInt | None = Field(
+        ge=1,
+        le=SESSION_TYPE_LIMIT_CEILING,
+        description=(
+            f"How many session types this mentor may hold, 1 to {SESSION_TYPE_LIMIT_CEILING}. "
+            "`null` resets to the platform default."
+        ),
+    )
+
+
+class SessionTypeLimitRead(BaseModel):
+    """The mentor's limit after the write."""
+
+    limit: int = Field(description="The limit now in force: the override, or the default.")
+    is_default: bool = Field(description="Whether `limit` is the platform default (no override).")

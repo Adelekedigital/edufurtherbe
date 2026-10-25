@@ -39,6 +39,7 @@ from app.api.deps import (
     PendingInstitutionsDep,
     PendingMentorsDep,
     RestoredAccountDep,
+    SessionTypeLimitSetDep,
 )
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.admin import (
@@ -50,12 +51,14 @@ from app.api.schemas.admin import (
     MentorListingChangedRead,
     PendingInstitutionRead,
     PendingMentorRead,
+    SessionTypeLimitRead,
     StatusEventRead,
 )
 from app.api.schemas.admin_credits import AdminCreditGrantRead, AdminGrantHistoryRead
 from app.api.schemas.common import Page
 from app.api.schemas.review_reports import ModeratedReportRead, ModeratedReviewRead
 from app.core.errors import NotFoundError
+from app.domain.session_type_limit import DEFAULT_SESSION_TYPE_LIMIT, SESSION_TYPE_LIMIT_CEILING
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -433,3 +436,35 @@ async def featured_weeks_list(rows: FeaturedWeeksDep) -> Page[FeaturedWeekRead]:
 async def restore_deleted_account(restored: RestoredAccountDep) -> None:
     if not restored:
         raise NotFoundError("no restorable account")
+
+
+@router.put(
+    "/mentors/{user_id}/session-type-limit",
+    response_model=SessionTypeLimitRead,
+    summary="Set a mentor's session-type limit",
+    description=(
+        "Raises or lowers how many session types one mentor may hold; "
+        '`{"limit": null}` resets it to the platform default '
+        f"({DEFAULT_SESSION_TYPE_LIMIT}). "
+        "Every session type not deleted counts, hidden and scheduled for deletion "
+        "included. **Super admin only.**\n\n"
+        f"**A number is pinned, even the default's**: `{DEFAULT_SESSION_TYPE_LIMIT}` "
+        "keeps this mentor there if the default changes, and answers "
+        "`is_default: false`; `null` follows "
+        "the default.\n\n"
+        "**Lowering it below what the mentor holds deletes nothing**: their "
+        "session types stay as they are, and only new ones are refused until they "
+        "are under the limit again. `404` for a user who is not a mentor, and for a "
+        "caller without the grant. `422` for a limit outside 1 to "
+        f"{SESSION_TYPE_LIMIT_CEILING}, or a body without `limit`."
+    ),
+    responses=ADMIN_RESPONSES
+    | {
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "`limit` is missing, not an integer, or outside the range."
+        }
+    },
+)
+async def set_session_type_limit(limit: SessionTypeLimitSetDep) -> SessionTypeLimitRead:
+    value, is_default = limit
+    return SessionTypeLimitRead(limit=value, is_default=is_default)

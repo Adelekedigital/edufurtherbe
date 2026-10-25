@@ -92,6 +92,7 @@ from app.infra.db.public_visibility import (
     session_type_is_live,
     session_type_of,
 )
+from app.infra.db.session_type_limit import live_profile, refuse_if_full
 from app.infra.db.stages import stages_for_session_types, write_session_type_stages
 
 __all__ = [
@@ -521,17 +522,20 @@ async def create_session_type(
 
     `conferencing_option_id` is left null: it means *use my default*, and nothing
     can create an option yet. The venue still resolves — see `_resolved_venue`.
+
+    **At most the mentor's limit** (decision 286), counted under a per-mentor
+    lock by `refuse_if_full`; a full list is a `SessionTypeLimitReachedError`.
     """
     owns = await session.execute(
-        select(literal(1))
-        .select_from(MentorProfile)
-        .where(MentorProfile.user_id == mentor_user_id, MentorProfile.deleted_at.is_(None))
+        select(literal(1)).select_from(MentorProfile).where(*live_profile(mentor_user_id))
     )
     if owns.first() is None:
         return None
 
     stages = named_stages(payload) or []
     _refuse_stage_label(stages, payload.get("custom_stage_label"))
+    # After the stage checks, so a body they refuse is told so first.
+    await refuse_if_full(session, mentor_user_id)
     async with _distinct_names():
         session_type_id = (
             await session.execute(
