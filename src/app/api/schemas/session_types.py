@@ -61,6 +61,7 @@ from app.domain.sessions import (
     MAX_SESSION_TYPE_OFFERINGS,
     WritableStage,
     current_stages,
+    first_stage,
     named_stages,
     stage_label_problem,
 )
@@ -110,8 +111,7 @@ def _stages(row: dict[str, object]) -> list[WritableStage]:
 def _stage(row: dict[str, object]) -> WritableStage | None:
     """The single `application_stage` kept this release: **the first of the set**
     (#215), so the old field and the new list can never disagree."""
-    stages = _stages(row)
-    return stages[0] if stages else None
+    return first_stage(_stages(row))
 
 
 #: What a set of stages may hold: each stage once, so at most all of them.
@@ -549,22 +549,12 @@ def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePa
     """`stage_label_problem`, asked at the boundary so the answer is a 422 early.
 
     **One function, called from both write models**, and the rule itself is the
-    domain's — the store asks it again against the row's final state, because
-    the database's `CHECK` can see only the first stage (#215).
-
-    **On a `PATCH`, only when both halves are sent.** An absent field means
-    *leave it alone*, so a request naming only `custom_stage_label` cannot be
-    judged here; the store judges it against what the row holds. Judging it here
-    anyway would refuse a legal edit: setting the label on an offering whose set
-    already holds `other`.
+    domain's — the store asks it again before writing a set (#215). Since the
+    design's six (decision 288) a write carries no label, so what is left to
+    judge is the set itself: each stage once.
     """
-    fields = model.model_fields_set
-    if isinstance(model, MentorSessionTypePatch) and not (
-        "custom_stage_label" in fields and ({"application_stages", "application_stage"} & fields)
-    ):
-        return model
     sent = named_stages(model.model_dump(exclude_unset=True)) or []
-    problem = stage_label_problem(sent, model.custom_stage_label)
+    problem = stage_label_problem(sent, None)
     if problem is not None:
         raise ValueError(problem[1])
     return model

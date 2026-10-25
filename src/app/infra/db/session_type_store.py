@@ -542,7 +542,8 @@ async def create_session_type(
         return None
 
     stages = named_stages(payload) or []
-    _refuse_stage_label(stages, payload.get("custom_stage_label"))
+    # No custom stage since the six (decision 288): a write never carries a label.
+    _refuse_stage_label(stages, None)
     # After the stage checks, so a body they refuse is told so first.
     await refuse_if_full(session, mentor_user_id)
     option_id = await _venue_option(session, mentor_user_id, payload.get("meeting_venue"))
@@ -555,7 +556,6 @@ async def create_session_type(
                     name=payload["name"],
                     description=payload.get("description"),
                     application_stage=first_stage(stages),
-                    custom_stage_label=payload.get("custom_stage_label"),
                     icon=payload.get("icon"),
                     conferencing_option_id=option_id,
                 )
@@ -623,11 +623,12 @@ def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
 #: offering*, and that it spans two tables is this layer's problem.
 #:
 #: `application_stage` is absent on purpose: it is derived from the stage set
-#: and written beside the label in one statement (#215).
+#: and written beside the label in one statement (#215). `custom_stage_label`
+#: is too: writes may send only `null`, a no-op, and a stored label is cleared
+#: only with the set it belonged to (decision 288).
 SESSION_TYPE_COLUMNS = (
     "name",
     "description",
-    "custom_stage_label",
     "icon",
     "is_active",
     "is_featured",
@@ -706,24 +707,11 @@ async def update_session_type(
             .values(is_featured=False)
         )
     stages = named_stages(payload)
-    if stages is not None or "custom_stage_label" in payload:
-        current = (
-            await session.execute(
-                select(SessionType.custom_stage_label).where(SessionType.id == session_type_id)
-            )
-        ).scalar_one()
-        final = (
-            stages
-            if stages is not None
-            else (await stages_for_session_types(session, [session_type_id])).get(
-                session_type_id, []
-            )
-        )
-        # A new set is the design's six, which hold no `other`, so a label left
-        # from a retired `other` goes with the set it described.
-        label = None if stages is not None else payload.get("custom_stage_label", current)
-        _refuse_stage_label(final, label)
     if stages is not None:
+        # A new set is the design's six, which hold no `other`, so a label left
+        # from a retired `other` goes with the set it described. A write that
+        # leaves the set out leaves the stored set and label as they are.
+        _refuse_stage_label(stages, None)
         own["application_stage"] = first_stage(stages)
         own["custom_stage_label"] = None
         await write_session_type_stages(session, session_type_id, stages)

@@ -355,7 +355,7 @@ def current_stages(stages: Sequence[ApplicationStage]) -> list[WritableStage]:
     return seen
 
 
-def first_stage(stages: Sequence[ApplicationStage]) -> ApplicationStage | None:
+def first_stage[Stage: StrEnum](stages: Sequence[Stage]) -> Stage | None:
     """The first of a stage set: what `session_types.application_stage` holds and
     the deprecated single `application_stage` field reports, this release."""
     return stages[0] if stages else None

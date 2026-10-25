@@ -395,3 +395,27 @@ async def test_an_edit_that_leaves_a_stored_other_alone_still_saves(
     )
 
     assert response.status_code == 200, response.text
+
+
+async def test_a_null_label_alone_is_a_no_op_on_a_stored_other(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A client echoing the form back sends the label it read, `null`. That
+    must save, and must not clear a label its stored `other` still needs."""
+    mentor, auth = await as_mentor(db_engine, "stages-null-label")
+    type_id = await stored_retired(db_engine, mentor)
+
+    response = await api_client.patch(
+        f"{URL}/{type_id}",
+        json={"name": "Echoed", "custom_stage_label": None},
+        headers=bearer(api_token(auth)),
+    )
+
+    assert response.status_code == 200, response.text
+    async with db_engine.begin() as conn:
+        label = (
+            await conn.execute(
+                text("SELECT custom_stage_label FROM session_types WHERE id = :t"), {"t": type_id}
+            )
+        ).scalar_one()
+    assert label == "Gap year"
