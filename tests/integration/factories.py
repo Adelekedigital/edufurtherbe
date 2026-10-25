@@ -23,8 +23,10 @@ import datetime as dt
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app.domain.enums import ApplicationStage
+from app.infra.db.stages import write_session_type_stages
 from conftest import add_user, api_token
 
 LAGOS = "Africa/Lagos"
@@ -93,21 +95,25 @@ async def add_session_type(
             await conn.execute(
                 text(
                     "INSERT INTO session_types "
-                    "(mentor_user_id, name, description, "
-                    " application_stage, custom_stage_label, is_active) "
-                    "VALUES (:u, :n, :d, :s, :label, :active) RETURNING id"
+                    "(mentor_user_id, name, description, application_stage, is_active) "
+                    "VALUES (:u, :n, :d, :s, :active) RETURNING id"
                 ),
                 {
                     "u": mentor,
                     "n": name,
                     "d": description,
+                    # Dual-written as the app does until the column goes (#215).
                     "s": application_stage,
-                    # No custom stage since the six (decision 288).
-                    "label": None,
                     "active": active,
                 },
             )
         ).scalar_one()
+        if application_stage is not None:
+            # The set is where stages are read from (decision 293): written by
+            # the app's own writer, on this transaction.
+            await write_session_type_stages(
+                AsyncSession(bind=conn), session_type, [ApplicationStage(application_stage)]
+            )
         if service_offering is not None:
             # The set is where a type's offerings live (#274); the legacy
             # column is no longer read.

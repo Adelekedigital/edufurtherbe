@@ -292,25 +292,21 @@ MAX_SESSION_TYPE_OFFERINGS = 3
 def named_stages(fields: Mapping[str, object]) -> list[ApplicationStage] | None:
     """The stage set a write names, or ``None`` when it names none (#215).
 
-    **The one reading of the pair**, asked by the boundary and by the store.
-    `application_stages` is the set; the legacy `application_stage` is a set of
-    one, and `null` there clears it. **`application_stages: null` is refused at
-    the boundary** — `[]` means any stage and leaving it out means unchanged —
-    so a `None` reaching here is a field nobody sent, which is how a full
-    `model_dump()` spells it. The boundary also refuses sending both.
+    Asked by the boundary and by the store. **`application_stages: null` is
+    refused at the boundary** — `[]` means any stage and leaving it out means
+    unchanged — so a `None` reaching here is a field nobody sent, which is how
+    a full `model_dump()` spells it.
     """
     stages = fields.get("application_stages")
     if stages is not None:
         return [ApplicationStage(value) for value in stages]  # type: ignore[attr-defined]
-    if "application_stage" in fields:
-        value = fields["application_stage"]
-        return [ApplicationStage(str(value))] if value is not None else []
     return None
 
 
 def first_stage(stages: Sequence[ApplicationStage]) -> ApplicationStage | None:
-    """The first of a stage set: what `session_types.application_stage` holds and
-    the deprecated single `application_stage` field reports, this release."""
+    """The first of a stage set: what `session_types.application_stage` holds
+    while that deprecated column is kept (decision 293), so a rollback still
+    reads a stage."""
     return stages[0] if stages else None
 
 

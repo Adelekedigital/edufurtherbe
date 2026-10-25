@@ -17,8 +17,9 @@ The fields here are an allowlist rather than a projection of the table.
 `created_by` is internal attribution and null on every migrated row and stays
 out.
 
-**The service offerings (as the list `service_offerings`) and `application_stage`
-are now published, and that reverses the reason they were withheld.** The single
+**The service offerings (as the list `service_offerings`) and the application
+stages (`application_stages`) are now published, and that reverses the reason
+they were withheld.** The single
 `service_offering`, which only repeated the list's first item, was removed in
 #274. They were free text with no
 constraint, no vocabulary and no value in any row, so publishing them would have
@@ -59,7 +60,6 @@ from app.domain.intake import MAX_QUESTIONS
 from app.domain.meetings import OFFERING_VENUES, PLATFORM_DEFAULT_PROVIDER
 from app.domain.sessions import (
     MAX_SESSION_TYPE_OFFERINGS,
-    first_stage,
     named_stages,
     stage_set_problem,
 )
@@ -80,14 +80,10 @@ def _offerings(row: dict[str, object]) -> list[LookupRef]:
     return [LookupRef(**o) for o in row.get("service_offerings") or []]  # type: ignore[attr-defined]
 
 
-def _refuse_two_set_fields(model: BaseModel) -> None:
-    """Each set and its legacy single field: `application_stages` beside
-    `application_stage` (#215). A request sending both of a pair has two answers
-    and no rule for which wins. (`service_offering_id` was the other pair until
-    #274 removed it.)"""
+def _refuse_bad_sets(model: BaseModel) -> None:
+    """What the two sets, stages and offerings, refuse before the store sees
+    them. Their legacy single fields are gone (#274, decision 293)."""
     fields = model.model_fields_set
-    if "application_stages" in fields and "application_stage" in fields:
-        raise ValueError("send application_stages or application_stage, not both")
     # `[]` is any stage and absent is unchanged; `null` would be a third
     # spelling of one of them, so it is refused rather than guessed at (#215).
     if "application_stages" in fields and getattr(model, "application_stages", None) is None:
@@ -101,12 +97,6 @@ def _refuse_two_set_fields(model: BaseModel) -> None:
 def _stages(row: dict[str, object]) -> list[ApplicationStage]:
     """The stages a type is aimed at, in the mentor's order (#215); empty is any."""
     return [ApplicationStage(str(v)) for v in row.get("application_stages") or []]  # type: ignore[attr-defined]
-
-
-def _stage(row: dict[str, object]) -> ApplicationStage | None:
-    """The single `application_stage` kept this release: **the first of the set**
-    (#215), so the old field and the new list can never disagree."""
-    return first_stage(_stages(row))
 
 
 #: What a set of stages may hold: each stage once, so at most all of them.
@@ -190,21 +180,6 @@ class SessionTypeRead(BaseModel):
             "Every stage of an application this offering is aimed at, in the "
             "mentor's order. **Empty means any stage.** One of the design's six; "
             "there is no custom stage."
-        ),
-    )
-    application_stage: ApplicationStage | None = Field(
-        default=None,
-        description=(
-            "**Deprecated: read `application_stages`.** The first of "
-            "`application_stages`, kept for one release; null when that list is "
-            "empty."
-        ),
-    )
-    custom_stage_label: str | None = Field(
-        default=None,
-        description=(
-            "**Deprecated: always `null`.** Custom stages were removed with the "
-            "design's six (2026-10-21); the field goes in a later release."
         ),
     )
     icon: SessionTypeIcon | None = Field(
@@ -299,10 +274,6 @@ class SessionTypeRead(BaseModel):
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
             service_offerings=_offerings(row),
             application_stages=_stages(row),
-            application_stage=_stage(row),
-            # No custom stage since the six (founder 2026-10-21); a stored
-            # label belonged to `other`, which no longer reads.
-            custom_stage_label=None,
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
             is_starter=bool(row.get("is_starter")),
@@ -422,17 +393,6 @@ class OwnSessionTypeRead(BaseModel):
             "order; empty means any stage."
         ),
     )
-    application_stage: ApplicationStage | None = Field(
-        default=None,
-        description=("**Deprecated: read `application_stages`.** Its first, kept for one release."),
-    )
-    custom_stage_label: str | None = Field(
-        default=None,
-        description=(
-            "**Deprecated: always `null`.** Custom stages were removed with the "
-            "design's six (2026-10-21)."
-        ),
-    )
     icon: SessionTypeIcon | None = Field(
         default=None,
         description=(
@@ -537,10 +497,6 @@ class OwnSessionTypeRead(BaseModel):
             break_after_minutes=_int_or_none(row.get("break_after_minutes")),
             service_offerings=_offerings(row),
             application_stages=_stages(row),
-            application_stage=_stage(row),
-            # No custom stage since the six (founder 2026-10-21); a stored
-            # label belonged to `other`, which no longer reads.
-            custom_stage_label=None,
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
             is_starter=bool(row.get("is_starter")),
@@ -579,14 +535,29 @@ class _SessionTypeWriteBase(Normalised):
     it classified. Declared as a hidden field rather than checked on the raw
     body so the `422` points at it (`/service_offering_id`); never dumped, never
     published, and never valid.
+    The stage pair went the same way (decision 293): `application_stage` for
+    `application_stages`, and `custom_stage_label`, which had no stage left to
+    label. Refused even as `null`, because the field itself is gone.
     """
 
     service_offering_id: SkipJsonSchema[object] = Field(default=None, exclude=True)
+    application_stage: SkipJsonSchema[object] = Field(default=None, exclude=True)
+    custom_stage_label: SkipJsonSchema[object] = Field(default=None, exclude=True)
 
     @field_validator("service_offering_id", mode="before")
     @classmethod
     def _removed(cls, _value: object) -> object:
         raise ValueError("service_offering_id was removed; send service_offering_ids instead")
+
+    @field_validator("application_stage", mode="before")
+    @classmethod
+    def _stage_removed(cls, _value: object) -> object:
+        raise ValueError("application_stage was removed; send application_stages instead")
+
+    @field_validator("custom_stage_label", mode="before")
+    @classmethod
+    def _label_removed(cls, _value: object) -> object:
+        raise ValueError("custom_stage_label was removed; there is no custom stage")
 
 
 class MentorSessionTypeWrite(_SessionTypeWriteBase):
@@ -654,25 +625,15 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
         ),
     )
     #: The stage set, in order, each once (#215). `[]` means any stage; absent
-    #: leaves it. `application_stage` below is a set of one, for one release.
+    #: leaves it.
     application_stages: list[ApplicationStage] | None = Field(
         default=None,
         max_length=MAX_STAGES,
         description=(
             "Every stage this offering is aimed at, in the order to show them; each "
-            "once, from the design's six. `[]` means any stage. Send this or "
-            "`application_stage`, not both. The retired stages and `other` are refused."
+            "once, from the design's six. `[]` means any stage. The retired stages "
+            "and `other` are refused."
         ),
-    )
-    application_stage: ApplicationStage | None = Field(
-        default=None,
-        description="**Deprecated: send `application_stages`.** A set of one; `null` clears it.",
-    )
-    #: Custom stages are gone (founder 2026-10-21): only `null`, kept so a
-    #: client still sending it is answered rather than silently ignored.
-    custom_stage_label: None = Field(
-        default=None,
-        description="**Removed.** There is no custom stage; anything but `null` is a `422`.",
     )
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
     #: each request, `false` confirms bookings at once (#199). Booking already
@@ -736,7 +697,7 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
-        _refuse_two_set_fields(self)
+        _refuse_bad_sets(self)
         return _refuse_repeated_stages(self)
 
 
@@ -787,25 +748,15 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
         ),
     )
     #: The stage set, in order, each once (#215). `[]` means any stage; absent
-    #: leaves it. `application_stage` below is a set of one, for one release.
+    #: leaves it.
     application_stages: list[ApplicationStage] | None = Field(
         default=None,
         max_length=MAX_STAGES,
         description=(
             "Every stage this offering is aimed at, in the order to show them; each "
-            "once, from the design's six. `[]` means any stage. Send this or "
-            "`application_stage`, not both. The retired stages and `other` are refused."
+            "once, from the design's six. `[]` means any stage. The retired stages "
+            "and `other` are refused."
         ),
-    )
-    application_stage: ApplicationStage | None = Field(
-        default=None,
-        description="**Deprecated: send `application_stages`.** A set of one; `null` clears it.",
-    )
-    #: Custom stages are gone (founder 2026-10-21): only `null`, kept so a
-    #: client still sending it is answered rather than silently ignored.
-    custom_stage_label: None = Field(
-        default=None,
-        description="**Removed.** There is no custom stage; anything but `null` is a `422`.",
     )
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
     #: each request, `false` confirms bookings at once (#199). Booking already
@@ -867,7 +818,7 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
-        _refuse_two_set_fields(self)
+        _refuse_bad_sets(self)
         return _refuse_repeated_stages(self)
 
 

@@ -3,9 +3,11 @@ design's six (Session Types PRD, founder 2026-10-21).
 
 Session Types frontend round 3 A, approved by the product owner 2026-09-29: "Best
 for mentees who are…" became "Pick all that apply". The set lives in
-`session_type_stages`; `application_stage` stays for this release as the
-**first** of the set (expand/contract, the #205 shape). Since the six there is
-no custom stage: `other` and `custom_stage_label` are refused on writes.
+`session_type_stages`, the only place stages are read from. The deprecated
+`application_stage` and `custom_stage_label` are gone from the contract
+(decision 293): a write sending either is a `422` at it. The column
+`session_types.application_stage` is still dual-written as the set's first,
+deprecated and kept on purpose.
 """
 
 from __future__ import annotations
@@ -47,9 +49,8 @@ async def test_a_type_can_be_aimed_at_several_stages_in_order(
 
     assert created.status_code == 201, created.text
     assert row["application_stages"] == [INTERVIEW_PREP, PREPARING]
-    # The single field this release keeps is the first of the set.
-    assert row["application_stage"] == INTERVIEW_PREP
-    assert row["custom_stage_label"] is None
+    assert "application_stage" not in row
+    assert "custom_stage_label" not in row
 
 
 async def test_an_empty_set_means_any_stage(
@@ -62,40 +63,70 @@ async def test_an_empty_set_means_any_stage(
 
     assert created.status_code == 201
     assert row["application_stages"] == []
-    assert row["application_stage"] is None
 
 
-async def test_the_single_field_still_writes_a_set_of_one(
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("application_stage", APPLYING),
+        ("application_stage", None),
+        ("custom_stage_label", "Gap year"),
+        ("custom_stage_label", None),
+    ],
+)
+async def test_a_removed_field_is_refused_on_every_write_even_as_null(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, field: str, value: object
+) -> None:
+    """Refused rather than ignored (the #274 rule): a client still sending one
+    would otherwise get a 2xx for a change that never happened."""
+    tag = f"stages-gone-{field[:6]}-{'v' if value else 'n'}"
+    mentor, auth = await as_mentor(db_engine, tag)
+    kept = (await create(api_client, auth, name="Kept", application_stages=[PREPARING])).json()
+
+    created = await create(api_client, auth, **{field: value})
+    patched = await api_client.patch(
+        f"{URL}/{kept['id']}",
+        json={"name": "Changed", field: value},
+        headers=bearer(api_token(auth)),
+    )
+
+    for response in (created, patched):
+        assert response.status_code == 422, response.text
+        assert [e["pointer"] for e in response.json()["errors"]] == [f"/{field}"]
+    row = await own(api_client, auth, kept["id"])
+    assert (row["name"], row["application_stages"]) == ("Kept", [PREPARING])
+    async with db_engine.begin() as conn:
+        written = await conn.execute(
+            text("SELECT count(*) FROM session_types WHERE mentor_user_id = :u"), {"u": mentor}
+        )
+    assert written.scalar_one() == 1
+
+
+async def test_a_type_written_only_to_the_old_column_reads_as_any_stage(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    _, auth = await as_mentor(db_engine, "stages-legacy")
-
-    created = await create(api_client, auth, application_stage=APPLYING)
-
-    assert (await own(api_client, auth, created.json()["id"]))["application_stages"] == [APPLYING]
-
-
-async def test_a_type_written_only_to_the_old_column_still_reads(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """Old code during the deploy, the demo seed and the factories write only
-    `application_stage`. Reads fall back to it rather than showing any stage."""
-    mentor, auth = await as_mentor(db_engine, "stages-fallback")
-    type_id = await add_session_type(db_engine, mentor, application_stage=APPLYING)
+    """Reads no longer fall back to `session_types.application_stage`
+    (decision 293): the set is the only source, so no rows is any stage.
+    `d9a3f6b1c2e8` gave every stored column-only type its row before this
+    shipped, so only a write bypassing the app can reach this state."""
+    mentor, auth = await as_mentor(db_engine, "stages-no-fallback")
+    type_id = await add_session_type(db_engine, mentor)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE session_types SET application_stage = :s WHERE id = :t"),
+            {"s": APPLYING, "t": type_id},
+        )
 
     row = await own(api_client, auth, str(type_id))
 
-    assert row["application_stages"] == [APPLYING]
-    assert row["application_stage"] == APPLYING
+    assert row["application_stages"] == []
 
 
 @pytest.mark.parametrize(
     ("case", "payload"),
     [
         ("duplicate", {"application_stages": [PREPARING, PREPARING]}),
-        ("both-fields", {"application_stages": [PREPARING], "application_stage": APPLYING}),
         ("other", {"application_stages": [PREPARING, "other"]}),
-        ("label", {"application_stages": [PREPARING], "custom_stage_label": "stray"}),
         ("unknown", {"application_stages": ["someday"]}),
     ],
 )
@@ -131,9 +162,7 @@ async def test_patching_replaces_the_set_and_empty_clears_it(
 
     assert first.status_code == 200, first.text
     assert replaced["application_stages"] == [APPLYING, INTERVIEW_PREP]
-    assert replaced["application_stage"] == APPLYING
     assert cleared["application_stages"] == []
-    assert cleared["application_stage"] is None
 
 
 async def test_a_patch_that_leaves_the_set_out_keeps_it(
@@ -155,9 +184,8 @@ async def test_a_patch_that_leaves_the_set_out_keeps_it(
 async def test_the_old_column_holds_the_first_of_the_set(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The expand step: code from before this release reads only
-    `session_types.application_stage`, so it must hold the set's first — the API
-    cannot show this, because it derives the single field from the set."""
+    """Dual-written while the deprecated column is kept, so a rollback to code that still
+    read it finds the set's first; the API no longer shows it."""
     _, auth = await as_mentor(db_engine, "stages-dual")
     headers = bearer(api_token(auth))
     created = (
@@ -238,7 +266,6 @@ async def test_patching_reorders_the_same_stages(
     assert response.status_code == 200, response.text
     row = await own(api_client, auth, created["id"])
     assert row["application_stages"] == [APPLYING, PREPARING]
-    assert row["application_stage"] == APPLYING
 
 
 async def test_two_concurrent_edits_of_one_offering_serialise(db_engine: AsyncEngine) -> None:
@@ -281,13 +308,13 @@ RETIRED = ["early_exploration", "drafting_stage", "revisions", "post_submission"
 
 
 @pytest.mark.parametrize("retired", [*RETIRED, "other"])
-@pytest.mark.parametrize("field", ["application_stages", "application_stage"])
 async def test_a_retired_stage_is_refused_on_every_write(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, retired: str, field: str
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, retired: str
 ) -> None:
-    """Only the design's six may be written, through either field."""
-    _, auth = await as_mentor(db_engine, f"stages-retired-{field[-1]}-{retired[:6]}")
-    value: object = [retired] if field == "application_stages" else retired
+    """Only the design's six may be written."""
+    field = "application_stages"
+    _, auth = await as_mentor(db_engine, f"stages-retired-{retired[:6]}")
+    value: object = [retired]
 
     created = await create(api_client, auth, **{field: value})
     kept = (await create(api_client, auth, name="Kept", application_stages=[PREPARING])).json()
@@ -299,33 +326,3 @@ async def test_a_retired_stage_is_refused_on_every_write(
     assert created.json()["errors"][0]["pointer"].startswith(f"/{field}")
     assert patched.status_code == 422, patched.text
     assert (await own(api_client, auth, kept["id"]))["application_stages"] == [PREPARING]
-
-
-async def test_a_custom_label_is_refused_and_null_is_accepted(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    _, auth = await as_mentor(db_engine, "stages-label")
-
-    labelled = await create(api_client, auth, custom_stage_label="Gap year")
-    nulled = await create(api_client, auth, name="Plain", custom_stage_label=None)
-
-    assert labelled.status_code == 422, labelled.text
-    assert labelled.json()["errors"][0]["pointer"] == "/custom_stage_label"
-    assert nulled.status_code == 201, nulled.text
-
-
-async def test_a_null_label_alone_saves(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """A client echoing the form back sends the label it read, `null`."""
-    _, auth = await as_mentor(db_engine, "stages-null-label")
-    created = (await create(api_client, auth, application_stages=[PREPARING])).json()
-
-    response = await api_client.patch(
-        f"{URL}/{created['id']}",
-        json={"name": "Echoed", "custom_stage_label": None},
-        headers=bearer(api_token(auth)),
-    )
-
-    assert response.status_code == 200, response.text
-    assert (await own(api_client, auth, created["id"]))["application_stages"] == [PREPARING]

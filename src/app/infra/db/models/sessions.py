@@ -152,13 +152,14 @@ class SessionType(TimestampMixin, Base):
     # What *kind* of help a type is lives in `session_type_offerings` (#266);
     # the single `service_offering_id` column was dropped in #274.
 
-    #: **The first of the offering's stage set** (#215), dual-written by the
-    #: store; `session_type_stages` holds the set. Kept for code from before the
-    #: set and dropped in the contract step. A closed set (#100), `text` +
-    #: `CHECK`, with `ApplicationStage` at the boundary.
+    #: **Deprecated (decision 293): read `session_type_stages`.** The first of
+    #: the offering's stage set (#215), still dual-written by the store but no
+    #: longer read or published. **Kept on purpose** (owner, 2026-10-25): not
+    #: dropped for now. A closed set (#100), `text` + `CHECK`.
     application_stage: Mapped[ApplicationStage | None] = mapped_column(str_enum(ApplicationStage))
-    #: **Always null** since the design's six (decision 288): it held the
-    #: retired `OTHER`'s label. Kept until the field leaves the API.
+    #: **Deprecated, always null** since the design's six (decision 288; its
+    #: `CHECK` holds it null): it held the retired `OTHER`'s label. Out of the
+    #: API (decision 293) and **kept on purpose** (owner, 2026-10-25).
     custom_stage_label: Mapped[str | None] = mapped_column(Text)
     #: The icon the client shows (#198), from the design's closed set; `NULL`
     #: is the client's automatic pick.
@@ -287,9 +288,8 @@ class SessionTypeStage(TimestampMixin, Base):
 
     The set, in the mentor's order, each stage once — the #205 shape of
     `session_type_offerings`, for the other axis. **No rows means any stage.**
-    The first is dual-written to `session_types.application_stage` this release,
-    and a type with no rows here falls back to that column on read, which is
-    what code from before the set still writes during the deploy.
+    The only place stages are read from (decision 293); the first is still
+    dual-written to the deprecated `session_types.application_stage`.
 
     Cascades with the session type: the row means nothing without it.
     """

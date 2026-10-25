@@ -161,31 +161,7 @@ async def test_an_unknown_stage_is_a_422_not_a_500(
 
     refused = await api_client.post(
         URL,
-        json={"name": "X", "duration_minutes": 45, "application_stage": "postgrad"},
-        headers=bearer(api_token(auth_id)),
-    )
-
-    assert refused.status_code == 422, refused.text
-
-
-@pytest.mark.parametrize(
-    ("stage", "label"),
-    [("other", None), ("applying", "left over")],
-)
-async def test_a_mismatched_label_is_a_422(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, stage: str, label: str | None
-) -> None:
-    """`other` is no stage, and no label may be written (decision 288)."""
-    _, auth_id = await as_mentor(db_engine, f"api-mismatch-{stage}")
-
-    refused = await api_client.post(
-        URL,
-        json={
-            "name": "X",
-            "duration_minutes": 45,
-            "application_stage": stage,
-            "custom_stage_label": label,
-        },
+        json={"name": "X", "duration_minutes": 45, "application_stages": ["postgrad"]},
         headers=bearer(api_token(auth_id)),
     )
 
