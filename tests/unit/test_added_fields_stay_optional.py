@@ -37,6 +37,8 @@ ADDED = {
         "next_available_at",
         "next_available_state",
     ),
+    # Whether the offering follows the mentor's venue, owner view only (decision 288).
+    "OwnSessionTypeRead": ("meeting_venue_inherited",),
     "SessionAnswerRead": ("answered", "required"),
     # New with the mentor dashboard (decision 246): every figure optional from
     # the start. The window's bounds and the two blocks are required.

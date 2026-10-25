@@ -126,14 +126,10 @@ ON CONFLICT (session_type_id) DO UPDATE SET
 """
 
 # **The offering is never pinned** (owner, 2026-10-21): it follows the mentor's
-# default, which the option above is. A pin kept the offering on the old venue
-# after the mentor switched default, with no screen to show it
-# (`b2d6f9a1c4e7`). Written anyway so a re-run clears a pointer an older load left.
-CLEAR_CONFERENCING_OPTION = """
-UPDATE session_types
-   SET conferencing_option_id = NULL
- WHERE id = :session_type_id
-"""
+# default, which the option above is. **Nor is a pin cleared** (decision 288):
+# a pin is the mentor's own choice now, so a re-run leaves it, as it leaves a
+# default chosen through `/me/conferencing`. `b2d6f9a1c4e7` already removed the
+# pins older loads wrote.
 
 # `SET_PRIMARY_OFFERING` is gone with `primary_session_type_id`. It existed
 # because the two tables referenced each other, which forced a three-step write
@@ -270,9 +266,6 @@ class SessionLoader:
                 await self._ensure_default_option(
                     user_id(row.mentor_bubble_id, "session type"), row.meeting_venue
                 )
-            await self._connection.execute(
-                text(CLEAR_CONFERENCING_OPTION), {"session_type_id": type_id}
-            )
         return type_ids
 
     async def _load_sessions(

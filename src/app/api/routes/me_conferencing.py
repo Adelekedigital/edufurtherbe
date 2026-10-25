@@ -30,7 +30,8 @@ RESPONSES: dict[int | str, dict[str, str]] = {
     response_model=ConferencingRead,
     summary="Your default video provider",
     description=(
-        "Where your sessions are held unless an offering says otherwise. "
+        "Where your sessions are held unless an offering has its own venue "
+        "(`meeting_venue` on `/api/v1/me/session-types`). "
         "`is_default_choice` is true while you have never chosen and get the "
         f"platform default, `{PLATFORM_DEFAULT_PROVIDER.value}`."
     ),
@@ -48,7 +49,7 @@ async def read_own_conferencing(saved: OwnConferencingDep) -> ConferencingRead:
         "`daily` (EduFurther video), `google_meet`, or `custom` with your own "
         "`https` room link in `custom_url`. `custom_url` is required for "
         "`custom` and refused for the others (`422`). Replaces your previous "
-        "default."
+        "default; an offering with its own venue stays on it."
     ),
     responses=with_declined(RESPONSES),
 )

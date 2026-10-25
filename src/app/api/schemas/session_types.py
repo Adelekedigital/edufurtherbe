@@ -32,10 +32,10 @@ was ever high.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Self, cast
+from typing import Annotated, Any, Self, cast
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from app.api.schemas.common import (
@@ -56,7 +56,7 @@ from app.domain.availability import (
 )
 from app.domain.enums import ApplicationStage, ConferencingProvider, SessionTypeIcon
 from app.domain.intake import MAX_QUESTIONS
-from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
+from app.domain.meetings import OFFERING_VENUES, PLATFORM_DEFAULT_PROVIDER
 from app.domain.sessions import (
     MAX_SESSION_TYPE_OFFERINGS,
     first_stage,
@@ -112,6 +112,36 @@ def _stage(row: dict[str, object]) -> ApplicationStage | None:
 #: What a set of stages may hold: each stage once, so at most all of them.
 MAX_STAGES = len(ApplicationStage)
 
+
+def _offering_venue(value: object) -> object:
+    """Refuse a provider one offering cannot hold (decision 288): `custom` needs
+    a URL, which only the mentor's default takes. Before the enum check, so
+    `zoom` gets this message too rather than a list that offers `custom`."""
+    # `isinstance` first: an unhashable body value must be a 422, not a TypeError.
+    if value is not None and not (isinstance(value, str) and value in OFFERING_VENUES):
+        raise ValueError(
+            "an offering can be held on daily or google_meet; a personal link "
+            "(custom) is set as your default at /me/conferencing"
+        )
+    return value
+
+
+def _publish_offering_venues(schema: dict[str, Any]) -> None:
+    """Publish only the selectable providers, from the constant the validator
+    refuses against, so a generated client never offers `custom` (#124)."""
+    for item in schema.get("anyOf", []):
+        if "enum" in item or "$ref" in item:
+            item.clear()
+            item.update(type="string", enum=sorted(v.value for v in OFFERING_VENUES))
+
+
+#: Both writes take it the same way; absent on `PATCH` leaves the offering's.
+VENUE_WRITE_DESCRIPTION = (
+    "Where sessions of this offering are held: `daily` (EduFurther video) or "
+    "`google_meet`, whatever your default is. `null` follows your default "
+    "(`/api/v1/me/conferencing`), then the platform's. `custom` is a `422` at "
+    "`/meeting_venue`: a personal link is set as your default, not per offering."
+)
 
 #: One description for both writes. The static bound is the ceiling the column
 #: holds; the configured maximum is checked where settings are known
@@ -350,6 +380,14 @@ class OwnSessionTypeRead(BaseModel):
             "**link** is generated per session and never appears here."
         ),
     )
+    # Always sent; the default only keeps it out of `required` (decision 288).
+    meeting_venue_inherited: bool = Field(
+        default=True,
+        description=(
+            "`true` when this offering chose no venue and `meeting_venue` is your "
+            "default (or the platform's); `false` when you set one for it."
+        ),
+    )
     is_active: bool = Field(
         description=(
             "Whether this offering is currently on offer. **`false` covers off, "
@@ -471,6 +509,7 @@ class OwnSessionTypeRead(BaseModel):
             duration_inherited=bool(row["duration_inherited"]),
             min_notice_inherited=bool(row["min_notice_inherited"]),
             meeting_venue=ConferencingProvider(str(row["meeting_venue"])),
+            meeting_venue_inherited=bool(row["meeting_venue_inherited"]),
             is_active=bool(row["is_active"]),
             requires_booking_confirmation=(
                 None
@@ -549,14 +588,12 @@ class _SessionTypeWriteBase(Normalised):
 class MentorSessionTypeWrite(_SessionTypeWriteBase):
     """A new offering, as its mentor describes it.
 
-    **`meeting_venue` is deliberately absent.** An offering is held on one of the
-    mentor's `mentor_conferencing_options`, and nothing yet lists or creates
-    those — so a value here could only be a provider name this endpoint would
-    have to turn into a row, inventing a `custom_url` it has no way to ask for.
-    A new offering leaves `conferencing_option_id` null, which resolves to the
-    mentor's default and then to the platform fallback, so it is never null on
-    the way out. Per-offering venue arrives with the surface that manages
-    options (settled decision #21).
+    **`meeting_venue` is a provider name, not an option id** (decision 288).
+    The store turns it into the mentor's own row for that provider, creating it
+    as a non-default row if missing. `custom` is refused: it would need a URL
+    this endpoint does not ask for. Null, or absent, leaves
+    `conferencing_option_id` null, which resolves to the mentor's default and
+    then to the platform fallback.
 
     **`is_active` is absent too, and that is not the same reason.** A new
     offering is active; there is no draft state, and `POST {"is_active": false}`
@@ -660,6 +697,11 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
     )
     #: One of the design's icons, or `null` for the automatic pick (#198).
     icon: SessionTypeIcon | None = None
+    meeting_venue: Annotated[ConferencingProvider | None, BeforeValidator(_offering_venue)] = Field(
+        default=None,
+        description=VENUE_WRITE_DESCRIPTION,
+        json_schema_extra=_publish_offering_venues,
+    )
     #: The intake questions, created **in the same transaction** as the offering
     #: (#196): a question refused refuses the whole create, so a mentor never
     #: ends up with a live offering and half its form. Each is a `QuestionWrite`,
@@ -773,6 +815,11 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
     )
     #: One of the design's icons, or `null` for the automatic pick (#198).
     icon: SessionTypeIcon | None = None
+    meeting_venue: Annotated[ConferencingProvider | None, BeforeValidator(_offering_venue)] = Field(
+        default=None,
+        description=VENUE_WRITE_DESCRIPTION,
+        json_schema_extra=_publish_offering_venues,
+    )
     is_active: bool | None = None
     #: **`bool`, not `bool | None`** — an explicit `null` is a `422`, and the
     #: `None` default is never written (`exclude_unset`); it keeps the spec from

@@ -49,7 +49,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, insert, literal, select, text, update
+from sqlalchemy import Select, case, func, insert, literal, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -67,6 +67,7 @@ from app.infra.db.booking_rules import (
     inherits_duration,
     inherits_min_notice,
 )
+from app.infra.db.conferencing_store import offering_option
 from app.infra.db.intake_store import live_question_count
 from app.infra.db.models.availability import MentorNextAvailability, SessionTypeNextAvailability
 from app.infra.db.models.mentoring import (
@@ -214,7 +215,12 @@ async def resolve_venue(
                 _with_venue(
                     select(
                         _resolved_venue(),
-                        func.coalesce(_chosen.custom_url, _default.custom_url).label("custom_url"),
+                        # The link of the row that won, never the default's
+                        # under a pin (decision 288).
+                        case(
+                            (_chosen.id.is_not(None), _chosen.custom_url),
+                            else_=_default.custom_url,
+                        ).label("custom_url"),
                     ).select_from(SessionType)
                 ).where(SessionType.id == session_type_id)
             )
@@ -391,6 +397,8 @@ def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[An
             # The form's size, so the list needs no per-type call (frontend #147).
             live_question_count(SessionType.id).label("question_count"),
             _resolved_venue(),
+            # Null follows the mentor's default (#108); a value is a pin (#288).
+            SessionType.conferencing_option_id.is_(None).label("meeting_venue_inherited"),
         )
         .select_from(SessionType)
         .join(
@@ -520,8 +528,9 @@ async def create_session_type(
     404 `PATCH /mentor-profile` gives, and it is checked here rather than after
     the fact because the check *is* a query.
 
-    `conferencing_option_id` is left null: it means *use my default*, and nothing
-    can create an option yet. The venue still resolves — see `_resolved_venue`.
+    `conferencing_option_id` is null unless `meeting_venue` names a provider
+    (decision 288): null means *use my default*, and the venue still resolves
+    through `_resolved_venue`.
 
     **At most the mentor's limit** (decision 286), counted under a per-mentor
     lock by `refuse_if_full`; a full list is a `SessionTypeLimitReachedError`.
@@ -536,6 +545,7 @@ async def create_session_type(
     _refuse_stage_label(stages, payload.get("custom_stage_label"))
     # After the stage checks, so a body they refuse is told so first.
     await refuse_if_full(session, mentor_user_id)
+    option_id = await _venue_option(session, mentor_user_id, payload.get("meeting_venue"))
     async with _distinct_names():
         session_type_id = (
             await session.execute(
@@ -547,6 +557,7 @@ async def create_session_type(
                     application_stage=first_stage(stages),
                     custom_stage_label=payload.get("custom_stage_label"),
                     icon=payload.get("icon"),
+                    conferencing_option_id=option_id,
                 )
                 .returning(SessionType.id)
             )
@@ -573,6 +584,16 @@ async def create_session_type(
     if offerings is not None:
         await set_session_type_offerings(session, session_type_id, offerings)
     return session_type_id
+
+
+async def _venue_option(
+    session: AsyncSession, mentor_user_id: UUID, venue: ConferencingProvider | None
+) -> UUID | None:
+    """The option row an offering is pinned to, or ``None`` to follow the
+    mentor's default (decision 288). Only after the caller scoped the offering
+    to this mentor, so a refused write creates no row; the composite key makes a
+    row of anybody else's unrepresentable anyway."""
+    return None if venue is None else await offering_option(session, mentor_user_id, venue)
 
 
 def _refuse_stage_label(stages: list[ApplicationStage], label: str | None) -> None:
@@ -702,6 +723,11 @@ async def update_session_type(
     if stages is not None:
         own["application_stage"] = first_stage(stages)
         await write_session_type_stages(session, session_type_id, stages)
+    # Absent leaves the pin; `null` resets it to follow the default (#288).
+    if "meeting_venue" in payload:
+        own["conferencing_option_id"] = await _venue_option(
+            session, mentor_user_id, payload["meeting_venue"]
+        )
     if own:
         async with _distinct_names():
             await session.execute(
