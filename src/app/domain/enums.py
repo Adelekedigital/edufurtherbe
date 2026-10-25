@@ -868,3 +868,15 @@ class LinkKind(StrEnum):
     titled URL of the user's own) joins when something writes one (#21)."""
 
     SOCIAL = "social"
+
+
+class MissedReason(StrEnum):
+    """Why a party says they missed a session (Session Join PRD, founder
+    decisions 2026-10-21). Internal: only admins read it, never the other party.
+    ``other`` is the hatch, with the optional note saying what."""
+
+    FORGOT = "forgot"
+    TECHNICAL = "technical"
+    EMERGENCY = "emergency"
+    WRONG_TIME_ZONE = "wrong_time_zone"
+    OTHER = "other"

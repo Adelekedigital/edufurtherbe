@@ -195,6 +195,8 @@ EXPECTED_TABLES = [
     "mentor_guide_countries",
     # Each offering's next free time, beside the mentor's (decision 284).
     "session_type_next_availability",
+    # Why a party missed a session (Session Join PRD).
+    "session_missed_reasons",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**
