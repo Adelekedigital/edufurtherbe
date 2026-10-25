@@ -101,6 +101,7 @@ __all__ = [
     "attendance_rate",
     "attendance_sessions",
     "cancellations",
+    "canceller",
     "current_streak",
     "delivered",
     "held",
@@ -297,6 +298,19 @@ def _attendance_of(user: Any, side: Any, window: Window | None, column: Any) -> 
     )
 
 
+def canceller(actor_id: Any, actor_type: Any, *, other: str | None = BY_OTHER) -> Any:
+    """Who a `cancelled` event's actor was to the session: `BY_MENTOR`,
+    `BY_MENTEE`, or ``other`` for anybody else (decision 247). One rule for the
+    dashboard's counts and the session read's `cancelled_by`, which passes
+    ``other=None``."""
+    as_user = actor_type == ActorType.USER
+    return case(
+        (and_(as_user, actor_id == Session.mentor_id), BY_MENTOR),
+        (and_(as_user, actor_id == Session.mentee_id), BY_MENTEE),
+        else_=other,
+    )
+
+
 def cancellations(mentor: Any, window: Bounds | None) -> Any:
     """The mentor's cancelled sessions whose cancellation happened inside
     ``window`` (ever, for ``None``), one row each, with when (`cancelled_at`)
@@ -341,14 +355,11 @@ def cancellations(mentor: Any, window: Bounds | None) -> Any:
         .limit(1)
         .lateral("cancellation")
     )
-    as_user = event.c.actor_type == ActorType.USER
-    canceller = case(
-        (and_(as_user, event.c.actor_id == Session.mentor_id), BY_MENTOR),
-        (and_(as_user, event.c.actor_id == Session.mentee_id), BY_MENTEE),
-        else_=BY_OTHER,
-    )
     return (
-        select(canceller.label("canceller"), event.c.cancelled_at)
+        select(
+            canceller(event.c.actor_id, event.c.actor_type).label("canceller"),
+            event.c.cancelled_at,
+        )
         .select_from(Session)
         .join(event, true())
         .where(
