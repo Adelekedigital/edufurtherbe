@@ -80,7 +80,7 @@ def _offerings(row: dict[str, object]) -> list[LookupRef]:
     return [LookupRef(**o) for o in row.get("service_offerings") or []]  # type: ignore[attr-defined]
 
 
-def _refuse_two_set_fields(model: BaseModel) -> None:
+def _refuse_bad_sets(model: BaseModel) -> None:
     """What the two sets, stages and offerings, refuse before the store sees
     them. Their legacy single fields are gone (#274, decision 293)."""
     fields = model.model_fields_set
@@ -697,7 +697,7 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
-        _refuse_two_set_fields(self)
+        _refuse_bad_sets(self)
         return _refuse_repeated_stages(self)
 
 
@@ -818,7 +818,7 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
-        _refuse_two_set_fields(self)
+        _refuse_bad_sets(self)
         return _refuse_repeated_stages(self)
 
 

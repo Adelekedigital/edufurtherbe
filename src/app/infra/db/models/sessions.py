@@ -287,9 +287,8 @@ class SessionTypeStage(TimestampMixin, Base):
 
     The set, in the mentor's order, each stage once — the #205 shape of
     `session_type_offerings`, for the other axis. **No rows means any stage.**
-    The first is dual-written to `session_types.application_stage` this release,
-    and a type with no rows here falls back to that column on read, which is
-    what code from before the set still writes during the deploy.
+    The only place stages are read from (decision 293); the first is still
+    dual-written to `session_types.application_stage` until that column's drop.
 
     Cascades with the session type: the row means nothing without it.
     """

@@ -256,8 +256,9 @@ async def apply_demo_session_types(
         type_id = existing.get(template.name)
         if type_id is None and index == 0:
             type_id = existing.get(LEGACY_SESSION_TYPE)
-        # Through the stage set (#215), so the rows the reads prefer and the
-        # legacy column agree. A template stage outside the six fails here.
+        # Through the stage set (#215), the only place stages are read from
+        # (decision 293); the column is dual-written until its drop. A template
+        # stage outside the six fails here.
         stages = [ApplicationStage(template.stage)] if template.stage else []
         values = {
             "u": user,

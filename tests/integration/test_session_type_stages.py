@@ -106,7 +106,9 @@ async def test_a_type_written_only_to_the_old_column_reads_as_any_stage(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """Reads no longer fall back to `session_types.application_stage`
-    (decision 293): the set is the only source, so no rows is any stage."""
+    (decision 293): the set is the only source, so no rows is any stage.
+    `d9a3f6b1c2e8` gave every stored column-only type its row before this
+    shipped, so only a write bypassing the app can reach this state."""
     mentor, auth = await as_mentor(db_engine, "stages-no-fallback")
     type_id = await add_session_type(db_engine, mentor)
     async with db_engine.begin() as conn:
