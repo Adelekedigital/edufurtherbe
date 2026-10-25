@@ -135,18 +135,20 @@ def answer_problems(
             elif not set(chosen) <= question.option_ids:
                 problems.append((f"{at}/option_ids", "not an option of this question"))
     for question in asked:
-        if (
-            require_answers
-            and question.is_required
-            and question.id not in seen
-            and not _nothing_to_choose(question)
-        ):
+        required = is_required_now(
+            question.question_type, question.is_required, len(question.option_ids)
+        )
+        if require_answers and required and question.id not in seen:
             problems.append(("/answers", f"question {question.id} is required"))
     return problems
 
 
-def _nothing_to_choose(question: AskedQuestion) -> bool:
-    """A choice question offering no option cannot be answered, so it is never
-    required. Only a help-area question can be empty: its options are the
-    mentor's live help areas, and a mentor may hold none."""
-    return question.question_type is QuestionType.MULTI_CHOICE and not question.option_ids
+def is_required_now(question_type: QuestionType, is_required: bool, option_count: int) -> bool:
+    """Whether a mentee must answer this question today: its own flag, except
+    that a choice question offering no option is never required, since no
+    answer to it could be valid. Only a help-area question can be empty: its
+    options are the mentor's live help areas, and a mentor may hold none.
+
+    The one rule for the booking check, the public form and the form kept at
+    booking, so what a mentee is told is required is what booking enforces."""
+    return is_required and not (question_type is QuestionType.MULTI_CHOICE and option_count == 0)

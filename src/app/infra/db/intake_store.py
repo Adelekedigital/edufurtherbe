@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, ValidationError
 from app.domain.enums import IntakeStatus, QuestionOptionsSource, QuestionType
-from app.domain.intake import MAX_QUESTIONS
+from app.domain.intake import MAX_QUESTIONS, is_required_now
 from app.infra.db.models.intake import (
     IntakeAnswer,
     IntakeFormQuestion,
@@ -35,6 +35,7 @@ from app.infra.db.offerings import offerings_for
 from app.infra.db.public_visibility import session_type_of
 
 __all__ = [
+    "as_asked",
     "create_question",
     "delete_question",
     "list_questions",
@@ -115,6 +116,18 @@ async def questions_by_type(
         )
         grouped.setdefault(question.pop("session_type_id"), []).append(question)
     return grouped
+
+
+def as_asked(question: dict[str, Any]) -> dict[str, Any]:
+    """A loaded question as a mentee is asked it: `is_required` is what booking
+    enforces (`is_required_now`), so an empty help-area question reads as
+    optional. The owner's own list keeps the stored flag, their setting."""
+    required = is_required_now(
+        QuestionType(str(question["question_type"])),
+        bool(question["is_required"]),
+        len(question["options"]),
+    )
+    return question | {"is_required": required}
 
 
 async def _help_areas_of(
@@ -498,7 +511,7 @@ async def record_answers(
                     "question_id": question["id"],
                     "question_text": question["question_text"],
                     "question_type": question["question_type"],
-                    "is_required": question["is_required"],
+                    "is_required": as_asked(question)["is_required"],
                     "sort_order": position,
                 }
                 for position, question in enumerate(form)

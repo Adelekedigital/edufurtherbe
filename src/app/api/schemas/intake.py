@@ -70,7 +70,12 @@ class QuestionRead(BaseModel):
         )
     )
     is_required: bool = Field(
-        description="Whether a mentee must answer before the form can be submitted."
+        description=(
+            "Whether a mentee must answer before the form can be submitted. On the "
+            "public form (`SessionTypeRead.questions`), `false` for a choice question "
+            "with no options, which booking never requires; your own list keeps "
+            "your setting."
+        )
     )
     display_order: int = Field(
         description=(
@@ -87,8 +92,7 @@ class QuestionRead(BaseModel):
             "A `multi_choice` question's options, in order. Empty for other types. On "
             "a help-area question (`options_source: help_areas`), the mentor's current "
             "help areas in the platform's order, read fresh each time, so they follow "
-            "the profile; empty if the mentor has none, and the question is then "
-            "never required."
+            "the profile; empty if the mentor has none (see `is_required`)."
         )
     )
     # Always sent; the default only keeps it out of `required` for the frontend's CI.
@@ -133,9 +137,9 @@ class QuestionWrite(Normalised):
     options: list[OptionWrite] = Field(
         default_factory=list,
         description=(
-            f"For `multi_choice` only, and required by it: {MIN_OPTIONS} to "
-            f"{MAX_OPTIONS} options, unique ignoring case, in the order to show them. "
-            "Not sent with `options_source`."
+            f"For `multi_choice` only: {MIN_OPTIONS} to {MAX_OPTIONS} options, unique "
+            "ignoring case, in the order to show them. Required by `multi_choice` "
+            "unless `options_source` is set, when sending any is a `422`."
         ),
     )
     options_source: QuestionOptionsSource | None = Field(

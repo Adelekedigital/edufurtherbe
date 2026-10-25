@@ -676,7 +676,9 @@ class SessionBookingWrite(BaseModel):
             "its `options` (service offerings the mentor helps with now); "
             "`file_id` for a `file_upload` one — upload "
             "the file first with `POST /me/intake-files`. Every required question "
-            "must be answered, file questions included. Any problem is a `422` "
+            "must be answered, file questions included, as the public form's "
+            "`is_required` says (false for a choice question with nothing to "
+            "choose). Any problem is a `422` "
             "whose `errors` point at the answer (`/answers/2/option_ids`, "
             "`/answers/0/file_id`) or, for a missing required one, at `/answers`."
         ),

@@ -21,10 +21,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import token_for
 from tests.integration.test_api_booking import a_bookable_offering, a_mentee, body, first_slot, key
+from tests.integration.test_booking_answers import add_question, enforcing_client
 
 from conftest import bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
+
+__all__ = ["enforcing_client"]
 
 OWN = "/api/v1/me/session-types"
 
@@ -312,6 +315,7 @@ async def test_the_source_and_its_options_are_not_edited(
         headers=headers,
     )
     assert options.status_code == 422, options.text
+    assert pointers(options) == ["/options"]
     # Wording and single-or-several still change.
     edited = await api_client.patch(
         f"{OWN}/{session_type}/questions/{help_area}",
@@ -439,3 +443,96 @@ async def test_a_single_help_area_answer_is_booked(
         None,
         form["every"][1]["text"],
     )
+
+
+async def test_a_help_area_question_with_no_help_areas_is_not_required(
+    enforcing_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Required, but nothing to choose: the public form says it is optional,
+    booking does not ask for it, and the kept form records it as not required.
+    The owner's own list keeps the mentor's setting."""
+    client = enforcing_client
+    mentor, session_type = await a_bookable_offering(db_engine, "ha-empty")
+    headers = await mentor_headers(db_engine, mentor)
+    await set_help_areas(db_engine, mentor, [])
+    created = await client.post(
+        f"{OWN}/{session_type}/questions",
+        json=help_area_question(is_required=True),
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+
+    (own,) = (await client.get(f"{OWN}/{session_type}/questions", headers=headers)).json()["data"]
+    (public,) = (await client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
+    assert (own["is_required"], own["options"]) == (True, [])
+    assert (public["questions"][0]["is_required"], public["questions"][0]["options"]) == (
+        False,
+        [],
+    )
+
+    _, mentee = await a_mentee(db_engine, "ha-empty-mentee")
+    booked = await client.post(
+        "/api/v1/sessions",
+        json=body(session_type, await first_slot(client, mentor, session_type)),
+        headers=mentee | key(),
+    )
+    assert booked.status_code == 201, booked.text
+    (answer,) = (
+        await client.get(f"/api/v1/sessions/{booked.json()['id']}/answers", headers=headers)
+    ).json()["data"]
+    assert (answer["answered"], answer["required"]) == (False, False)
+
+
+async def test_a_booking_mixes_help_area_written_choice_and_text_answers(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    form = await help_area_offering(api_client, db_engine, "ha-mixed", allows_multiple=False)
+    every = form["every"]
+    choice, (ielts, _toefl) = await add_question(
+        db_engine,
+        form["session_type"],
+        "Which test?",
+        question_type="multi_choice",
+        options=("IELTS", "TOEFL"),
+        order=1,
+    )
+    prose, _ = await add_question(db_engine, form["session_type"], "Programme?", order=2)
+    _, headers = await a_mentee(db_engine, "ha-mixed-mentee")
+    payload = body(
+        form["session_type"], await first_slot(api_client, form["mentor"], form["session_type"])
+    )
+    payload["answers"] = [
+        {"question_id": str(prose), "text": "MSc Data Science"},
+        {"question_id": form["question"], "option_ids": [every[1]["id"]]},
+        {"question_id": str(choice), "option_ids": [str(ielts)]},
+    ]
+
+    booked = await api_client.post("/api/v1/sessions", json=payload, headers=headers | key())
+
+    assert booked.status_code == 201, booked.text
+    async with db_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT a.question_id, a.selected_offering_id, a.selected_option_id, "
+                    "       a.answer_text, a.option_text "
+                    "FROM intake_answers a JOIN intake_submissions s ON s.id = a.submission_id "
+                    "WHERE s.session_id = :s"
+                ),
+                {"s": booked.json()["id"]},
+            )
+        ).all()
+    stored = {
+        str(r.question_id): (
+            r.selected_offering_id and str(r.selected_offering_id),
+            r.selected_option_id,
+            r.answer_text,
+            r.option_text,
+        )
+        for r in rows
+    }
+    assert stored == {
+        form["question"]: (every[1]["id"], None, None, every[1]["text"]),
+        str(choice): (None, ielts, None, "IELTS"),
+        str(prose): (None, None, "MSc Data Science", None),
+    }
