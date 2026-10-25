@@ -30,6 +30,7 @@ from app.api.schemas.common import (
     encode_session_cursor,
 )
 from app.api.schemas.sessions import (
+    MissedReasonWrite,
     SessionBookingWrite,
     SessionCancellationWrite,
     SessionDeclineWrite,
@@ -54,6 +55,7 @@ from app.infra.clients.meetings import (
 )
 from app.infra.clients.scheduler import SchedulerPort, scheduler_for
 from app.infra.db.idempotency import Replayed, record_response
+from app.infra.db.missed_reasons import send_missed_reason
 from app.infra.db.onboarding_store import require_finished_onboarding
 
 # `get_session` is aliased: this module already has one, and it is the **database
@@ -160,6 +162,7 @@ async def target_sessions(
     rows, has_more = await list_sessions(
         session,
         user_id,
+        viewer_id=user["id"],
         limit=clamp_limit(limit),
         cursor=decode_session_cursor(cursor, ascending=ascending),
         starts_from=local_day_start(from_, zone) if from_ is not None else None,
@@ -643,6 +646,23 @@ async def session_door(
 JoinedSessionDep = Annotated[str | None, Depends(joined_session)]
 SessionDoorDep = Annotated[str | None, Depends(session_door)]
 
+
+async def sent_missed_reason(
+    session_id: UUID, payload: MissedReasonWrite, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
+    """The caller's reason for missing ``session_id``, written and committed.
+
+    The caller is the only sender: the store reads the session scoped to them
+    and writes their own id, never one from the body.
+    """
+    row = await send_missed_reason(
+        session, session_id, user["id"], reason=payload.reason, note=payload.note
+    )
+    await session.commit()
+    return row
+
+
+SentMissedReasonDep = Annotated[dict[str, Any], Depends(sent_missed_reason)]
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
 SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events)]

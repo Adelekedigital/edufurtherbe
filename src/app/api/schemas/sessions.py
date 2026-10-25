@@ -26,7 +26,7 @@ import datetime as dt
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from app.api.schemas.common import AvatarFocusRead, CoverRead, Normalised, SessionTypeRefRead
 from app.domain.attendance import DOOR_STATUSES, door_window, join_window
@@ -34,10 +34,12 @@ from app.domain.enums import (
     ActorType,
     AttendanceStatus,
     MeetingProvider,
+    MissedReason,
     SessionReasonCode,
     SessionStatus,
 )
 from app.domain.intake import MAX_ANSWER_LENGTH, MAX_OPTIONS, MAX_QUESTIONS
+from app.domain.missed_reasons import NOTE_MAX_LENGTH
 from app.domain.refunds import RefundPolicy
 
 
@@ -402,6 +404,16 @@ class SessionRead(BaseModel):
             "`0` with a `null` rate is a new mentee."
         ),
     )
+    missed_reason_sent: bool = Field(
+        default=False,
+        description=(
+            "Whether **you**, the caller, have said why you missed this session "
+            "(`POST /sessions/{id}/missed-reason`). Always about the viewer: it "
+            "says nothing about the other party, who never sees your reason, and "
+            "an admin listing somebody's sessions reads their own flag, not "
+            "that user's."
+        ),
+    )
     refund_until: dt.datetime | None = Field(
         default=None,
         description=(
@@ -465,6 +477,7 @@ class SessionRead(BaseModel):
             ),
             mentee_attendance_sessions=int(str(row.get("mentee_attendance_sessions") or 0)),
             refund_until=(starts_at - refunds.mentee_cancel_notice if confirmed else None),
+            missed_reason_sent=bool(row.get("missed_reason_sent")),
         )
 
 
@@ -773,3 +786,31 @@ class SessionCancelledRead(BaseModel):
     """A confirmed session was cancelled."""
 
     cancelled: bool = Field(description="Always true: the session is cancelled.")
+
+
+class MissedReasonWrite(Normalised):
+    """Why you missed a session. Trimmed; a blank note is stored as none."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: MissedReason
+    note: str | None = Field(
+        default=None,
+        max_length=NOTE_MAX_LENGTH,
+        description="Anything you want to add, in your words. Read by EduFurther only.",
+    )
+
+
+class MissedReasonRead(BaseModel):
+    """The reason as stored: what you sent, trimmed, and when."""
+
+    reason: MissedReason
+    note: str | None
+    created_at: dt.datetime
+
+
+class AdminMissedReasonRead(MissedReasonRead):
+    """One party's reason, for an admin: who sent it and on which side."""
+
+    user_id: UUID
+    role: Literal["mentor", "mentee"]

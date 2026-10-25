@@ -67,6 +67,7 @@ from app.infra.db.mentor_status_store import (
     resume,
     set_listing,
 )
+from app.infra.db.missed_reasons import missed_reasons_of
 from app.infra.db.session_type_limit import set_session_type_limit
 
 logger = logging.getLogger(__name__)
@@ -397,6 +398,17 @@ async def set_mentor_session_type_limit(
     return result
 
 
+async def session_missed_reasons(
+    session_id: UUID, _: QueueViewerDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    """Every reason sent for one session. Every live grant may look, as on the
+    other admin reads; a party reads none, theirs included."""
+    rows = await missed_reasons_of(session, session_id)
+    if rows is None:
+        raise NotFoundError("no such session")
+    return rows
+
+
 PendingInstitutionsDep = Annotated[list[dict[str, Any]], Depends(pending_institution_rows)]
 ApprovedInstitutionDep = Annotated[bool, Depends(approved_institution)]
 MergedInstitutionDep = Annotated[int, Depends(merged_institution)]
@@ -408,5 +420,6 @@ PausedSelfDep = Annotated[bool, Depends(paused_self)]
 ResumedSelfDep = Annotated[bool, Depends(resumed_self)]
 RestoredAccountDep = Annotated[bool, Depends(restored_account)]
 SessionTypeLimitSetDep = Annotated[tuple[int, bool], Depends(set_mentor_session_type_limit)]
+SessionMissedReasonsDep = Annotated[list[dict[str, Any]], Depends(session_missed_reasons)]
 
 AdminCreditGrantDep = Annotated[tuple[dict[str, Any], int, bool], Depends(granted_admin_credits)]

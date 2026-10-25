@@ -32,6 +32,24 @@ class ConflictError(AppError):
     """The request cannot be applied to the current state of the resource."""
 
 
+class MissedReasonAlreadySentError(ConflictError):
+    """The caller already said why they missed this session; one each."""
+
+
+class ForbiddenError(AppError):
+    """The caller may see this resource but may not take this action on it.
+
+    Only where the caller already knows the row exists, such as a party to a
+    session, so the refusal discloses nothing. Anywhere else a refusal is
+    :class:`NotFoundError`.
+    """
+
+
+class MissedReasonNotYoursError(ForbiddenError):
+    """The other party missed this session and the caller did not, so the
+    caller has nothing to explain."""
+
+
 class LinkPlatformTakenError(ConflictError):
     """The caller already has a link on this platform; one each, except
     websites (decision 275). Edit or delete the one they have."""
@@ -245,6 +263,12 @@ class ValidationError(AppError):
     def __init__(self, message: str = "", *, field_errors: tuple[tuple[str, str], ...] = ()):
         super().__init__(message)
         self.field_errors = field_errors
+
+
+class SessionNotMissedError(ValidationError):
+    """Nobody is recorded as missing this session: it is not settled
+    (`completed` or `no_show`) yet, or it is and neither party's attendance
+    is recorded as `no_show`."""
 
 
 class ConfigurationError(AppError):

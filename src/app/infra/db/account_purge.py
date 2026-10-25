@@ -13,7 +13,8 @@ tokens, social links, awards, onboarding, interest, writing-assist counts,
 idempotency keys, a mentor's availability, listings, guide countries and
 personal meeting links.
 
-**Stays, unnamed**: sessions, reviews, the credit ledger and the audit logs, as
+**Stays, unnamed**: sessions, reviews, the reasons a party gave for missing a
+session (without the note they wrote), the credit ledger and the audit logs, as
 the privacy policy keeps them for 12 months. They are anonymised by the account
 row losing its name, email, slug and sign-in: every read already shows a deleted
 party as unnamed. A mentor profile and offerings stay too, because sessions and
@@ -54,6 +55,7 @@ from app.infra.db.models.mentoring import (
     MentorProfile,
     MentorServiceOffering,
 )
+from app.infra.db.models.missed_reasons import SessionMissedReason
 from app.infra.db.models.platform import FeatureInterest, IdempotencyKey
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.sessions import SessionType
@@ -182,6 +184,10 @@ async def purge_account(
     )
     for model, column in _OWN_ROWS:
         await session.execute(delete(model).where(column == user_id))
+    # Why they missed a session stays, like the session; their own words go.
+    await session.execute(
+        update(SessionMissedReason).where(SessionMissedReason.user_id == user_id).values(note=None)
+    )
     # Consent stays as evidence of what was agreed; where from does not.
     await session.execute(
         update(UserLegalConsent).where(UserLegalConsent.user_id == user_id).values(ip_address=None)
