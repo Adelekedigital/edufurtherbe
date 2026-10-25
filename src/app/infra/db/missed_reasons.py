@@ -57,8 +57,9 @@ async def send_missed_reason(
 
     Raises, in this order: :class:`NotFoundError` when the session is not the
     caller's (or does not exist); :class:`SessionNotMissedError` when it is not
-    settled, or nobody missed it (both attended); :class:`MissedReasonNotYoursError`
-    when the other party missed it and the caller did not;
+    settled, or neither party's attendance is recorded as `no_show`;
+    :class:`MissedReasonNotYoursError` when the other party missed it and the
+    caller did not;
     :class:`MissedReasonAlreadySentError` on a second send.
 
     **The unique pair is the only duplicate check.** A pre-check would race

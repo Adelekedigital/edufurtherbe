@@ -266,8 +266,9 @@ class ValidationError(AppError):
 
 
 class SessionNotMissedError(ValidationError):
-    """Nobody missed this session: it is not settled (`completed` or
-    `no_show`) yet, or it is and both parties attended."""
+    """Nobody is recorded as missing this session: it is not settled
+    (`completed` or `no_show`) yet, or it is and neither party's attendance
+    is recorded as `no_show`."""
 
 
 class ConfigurationError(AppError):

@@ -410,7 +410,8 @@ class SessionRead(BaseModel):
             "Whether **you**, the caller, have said why you missed this session "
             "(`POST /sessions/{id}/missed-reason`). Always about the viewer: it "
             "says nothing about the other party, who never sees your reason, and "
-            "an admin listing somebody's sessions reads their own `false`."
+            "an admin listing somebody's sessions reads their own flag, not "
+            "that user's."
         ),
     )
     refund_until: dt.datetime | None = Field(

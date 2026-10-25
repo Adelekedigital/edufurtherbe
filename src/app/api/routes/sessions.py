@@ -58,7 +58,8 @@ from app.api.schemas.sessions import (
     SessionRead,
     SessionWithdrawnRead,
 )
-from app.domain.enums import SessionReasonCode
+from app.domain.enums import MissedReason, SessionReasonCode
+from app.domain.missed_reasons import NOTE_MAX_LENGTH
 from app.domain.sessions import TRANSITIONS
 
 router = APIRouter(prefix="/api/v1", tags=["sessions"])
@@ -650,11 +651,12 @@ MISSED_REASON_RESPONSES: dict[int | str, dict[str, str]] = {
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         "description": (
-            "`/problems/session-not-missed`: nobody missed this session. Either "
-            "it is not settled yet (its status is not `completed` or `no_show`) "
-            "or both of you attended. Checked before the `403`. Otherwise the "
-            "request itself: an unknown `reason`, a `note` over 1000 characters, "
-            "or a field this endpoint does not take."
+            "`/problems/session-not-missed`: nobody is recorded as missing this "
+            "session. Either it is not settled yet (its status is not "
+            "`completed` or `no_show`), or it is and neither party's attendance "
+            "is recorded as `no_show`. Checked before the `403`. Otherwise the "
+            f"request itself: an unknown `reason`, a `note` over {NOTE_MAX_LENGTH} "
+            "characters, or a field this endpoint does not take."
         )
     },
 }
@@ -670,9 +672,9 @@ MISSED_REASON_RESPONSES: dict[int | str, dict[str, str]] = {
         "`completed` or `no_show`. **Internal**: EduFurther's admins read it; "
         "the other party never sees it, through this or any endpoint. If both "
         "of you missed it, each may send their own.\n\n"
-        "`reason` is one of `forgot`, `technical`, `emergency`, "
-        "`wrong_time_zone`, `other`. `note` is optional, at most 1000 "
-        "characters, trimmed, and a blank one is stored as `null`.\n\n"
+        f"`reason` is one of {', '.join(f'`{m.value}`' for m in MissedReason)}. "
+        f"`note` is optional, at most {NOTE_MAX_LENGTH} characters, trimmed, and "
+        "a blank one is stored as `null`.\n\n"
         "**Once each.** A second send is a `409`, which is also what a retry of "
         "a send that succeeded gets, so no `Idempotency-Key` is needed. "
         "`missed_reason_sent` on the session then reads `true` for you, and "
