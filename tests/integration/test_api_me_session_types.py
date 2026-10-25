@@ -315,6 +315,8 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "icon",
         # Featured first, and a deletion waiting on booked sessions (#217, #218).
         "is_featured",
+        # Onboarding's offering, "Created for you" (Session Types PRD, 2026-10-21).
+        "is_starter",
         "booked_count",
         "last_booked_ends_at",
         "pending_deletion",

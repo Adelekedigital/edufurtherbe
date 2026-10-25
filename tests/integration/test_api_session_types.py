@@ -41,6 +41,8 @@ PUBLIC_FIELDS = {
     "questions",
     # Which one the mentor puts first (#217).
     "is_featured",
+    # Onboarding's offering, "Created for you" (Session Types PRD, 2026-10-21).
+    "is_starter",
     # How far ahead it can be booked, resolved and clamped (Round 5).
     "booking_window_days",
     # Whether booking is a request, resolved: told before "Send request" (#409).

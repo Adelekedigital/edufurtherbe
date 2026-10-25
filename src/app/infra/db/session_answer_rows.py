@@ -31,6 +31,7 @@ from app.infra.db.models.intake import (
     SessionTypeQuestion,
     SessionTypeQuestionOption,
 )
+from app.infra.db.models.mentoring import ServiceOffering
 from app.infra.db.models.sessions import Session
 
 __all__ = [
@@ -47,10 +48,13 @@ def answer_rows(*filters: Any) -> Select[Any]:
     """One row per answer and chosen option, in form order, narrowed by ``filters``.
 
     The form's order is the question's ``display_order`` and, inside a choice,
-    the option's ``sort_order`` — not the order the mentee picked them in. Ties
-    break on the ids, so the order is stable. Question and option text are the
-    wording at booking where it was kept, else the current wording.
+    the option's ``sort_order`` (a help area's, the platform's) — not the order
+    the mentee picked them in. Ties break on the ids, so the order is stable.
+    Question and option text are the wording at booking where it was kept, else
+    the current wording. A help area chosen is read as an option whose id is the
+    service offering's.
     """
+    option_id = func.coalesce(SessionTypeQuestionOption.id, IntakeAnswer.selected_offering_id)
     return (
         select(
             IntakeSubmission.session_id,
@@ -62,10 +66,12 @@ def answer_rows(*filters: Any) -> Select[Any]:
             ),
             SessionTypeQuestion.deleted_at.is_not(None).label("retired"),
             IntakeAnswer.answer_text,
-            SessionTypeQuestionOption.id.label("option_id"),
-            func.coalesce(IntakeAnswer.option_text, SessionTypeQuestionOption.option_text).label(
-                "option_text"
-            ),
+            option_id.label("option_id"),
+            func.coalesce(
+                IntakeAnswer.option_text,
+                SessionTypeQuestionOption.option_text,
+                ServiceOffering.display_name,
+            ).label("option_text"),
             IntakeFile.id.label("file_id"),
             IntakeFile.filename,
             IntakeFile.content_type,
@@ -80,13 +86,14 @@ def answer_rows(*filters: Any) -> Select[Any]:
             SessionTypeQuestionOption,
             SessionTypeQuestionOption.id == IntakeAnswer.selected_option_id,
         )
+        .outerjoin(ServiceOffering, ServiceOffering.id == IntakeAnswer.selected_offering_id)
         .outerjoin(IntakeFile, IntakeFile.storage_key == IntakeAnswer.file_storage_key)
         .where(*filters)
         .order_by(
             SessionTypeQuestion.display_order,
             SessionTypeQuestion.id,
-            SessionTypeQuestionOption.sort_order,
-            SessionTypeQuestionOption.id,
+            func.coalesce(SessionTypeQuestionOption.sort_order, ServiceOffering.sort_order),
+            option_id,
         )
     )
 

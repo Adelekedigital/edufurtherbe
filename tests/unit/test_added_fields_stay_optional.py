@@ -36,9 +36,13 @@ ADDED = {
         "requires_booking_confirmation",
         "next_available_at",
         "next_available_state",
+        # Onboarding's offering, "Created for you" (decision 291).
+        "is_starter",
     ),
     # Whether the offering follows the mentor's venue, owner view only (decision 289).
-    "OwnSessionTypeRead": ("meeting_venue_inherited",),
+    "OwnSessionTypeRead": ("meeting_venue_inherited", "is_starter"),
+    # Where a choice question's options come from (decision 291).
+    "QuestionRead": ("options_source",),
     "SessionAnswerRead": ("answered", "required"),
     # New with the mentor dashboard (decision 246): every figure optional from
     # the start. The window's bounds and the two blocks are required.

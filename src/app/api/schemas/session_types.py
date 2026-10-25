@@ -229,6 +229,14 @@ class SessionTypeRead(BaseModel):
         default=False,
         description=("The one offering this mentor puts first (at most one); it is listed first."),
     )
+    # Always sent; the default only keeps it out of `required` for the frontend's CI.
+    is_starter: bool = Field(
+        default=False,
+        description=(
+            'The offering onboarding created for the mentor ("Created for you"). '
+            "Set when it was created and never changed; at most one per mentor."
+        ),
+    )
     requires_booking_confirmation: bool = Field(
         # Always sent. The default only keeps it out of the spec's `required`, so
         # the frontend's CI, which pulls the published spec, does not break the
@@ -297,6 +305,7 @@ class SessionTypeRead(BaseModel):
             custom_stage_label=None,
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
+            is_starter=bool(row.get("is_starter")),
             requires_booking_confirmation=bool(row["requires_booking_confirmation"]),
             booking_window_days=int(str(row["booking_window_days"])),
             questions=[
@@ -457,6 +466,14 @@ class OwnSessionTypeRead(BaseModel):
             "another un-features this, and hiding it un-features it."
         ),
     )
+    # Always sent; the default only keeps it out of `required` for the frontend's CI.
+    is_starter: bool = Field(
+        default=False,
+        description=(
+            'The offering onboarding created for the mentor ("Created for you"). '
+            "Set when it was created and never changed; at most one per mentor."
+        ),
+    )
     uses_own_windows: bool = Field(
         default=False,
         description=(
@@ -526,6 +543,7 @@ class OwnSessionTypeRead(BaseModel):
             custom_stage_label=None,
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
+            is_starter=bool(row.get("is_starter")),
             uses_own_windows=bool(row.get("uses_own_windows")),
             question_count=int(str(row.get("question_count") or 0)),
             booked_count=booked_count,
@@ -693,6 +711,16 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
         description=VENUE_WRITE_DESCRIPTION,
         json_schema_extra=_publish_offering_venues,
     )
+    #: **The starter** ("Created for you"): onboarding's offering. Only here, and
+    #: refused on `PATCH`, so it never changes after the create.
+    is_starter: bool = Field(
+        default=False,
+        description=(
+            '`true` marks the offering onboarding creates for you ("Created for '
+            'you"). At most one per mentor: a second is a `409` while the first '
+            "exists. Set only here; it never changes afterwards."
+        ),
+    )
     #: The intake questions, created **in the same transaction** as the offering
     #: (#196): a question refused refuses the whole create, so a mentor never
     #: ends up with a live offering and half its form. Each is a `QuestionWrite`,
@@ -827,6 +855,15 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
             "`false` un-features it. Only an offering on offer can be featured."
         ),
     )
+
+    #: **Refused, not ignored** (as `service_offering_id` above): the starter is
+    #: fixed at create, so a `PATCH` sending it is a `422` at `/is_starter`.
+    is_starter: SkipJsonSchema[object] = Field(default=None, exclude=True)
+
+    @field_validator("is_starter", mode="before")
+    @classmethod
+    def _fixed_starter(cls, _value: object) -> object:
+        raise ValueError("is_starter is set when the offering is created and cannot change")
 
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:

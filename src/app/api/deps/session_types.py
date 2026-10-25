@@ -32,6 +32,7 @@ from app.core.errors import (
 from app.infra.db.application_freeze import refuse_while_declined
 from app.infra.db.idempotency import Replayed, record_response
 from app.infra.db.intake_store import (
+    as_asked,
     create_question,
     delete_question,
     list_questions,
@@ -144,7 +145,7 @@ async def _with_forms(
     rows = rows or []
     forms = await questions_by_type(session, [row["id"] for row in rows])
     for row in rows:
-        row["questions"] = forms.get(row["id"], [])
+        row["questions"] = [as_asked(q) for q in forms.get(row["id"], [])]
     return rows
 
 
