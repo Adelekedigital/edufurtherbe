@@ -1,8 +1,8 @@
-"""A session type's icon, and the "interviewing" stage (Session Types #18, #10).
+"""A session type's icon, and the interview stage (Session Types #18, #10).
 
 `icon` is one of nine Material Symbols names, in the design's order, or null for
-the client's automatic pick. `interviewing` joins `ApplicationStage` between
-`revisions` and `other`, the design's order; one stage per type still.
+the client's automatic pick. The interview stage was `interviewing` (#198) and is
+`interview_prep` among the design's six since decision 288.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import add_availability
 from tests.integration.test_api_me_session_type_writes import URL, as_mentor, body
 
-from app.domain.enums import ApplicationStage, SessionTypeIcon
+from app.domain.enums import SessionTypeIcon
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -27,12 +27,6 @@ ICONS = [
 
 def test_the_icons_are_the_designs_in_its_order() -> None:
     assert [i.value for i in SessionTypeIcon] == ICONS
-
-
-def test_interviewing_sits_before_other() -> None:
-    stages = [s.value for s in ApplicationStage]
-    assert stages.index("interviewing") == stages.index("other") - 1
-    assert stages.index("interviewing") == stages.index("revisions") + 1
 
 
 async def test_an_icon_is_written_and_read_back_everywhere(

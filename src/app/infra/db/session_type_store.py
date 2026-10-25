@@ -58,7 +58,7 @@ from app.core.errors import ConflictError, ValidationError
 from app.domain.availability import BookingWindow
 from app.domain.enums import ApplicationStage, ConferencingProvider
 from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
-from app.domain.sessions import first_stage, named_stages, stage_label_problem
+from app.domain.sessions import first_stage, named_stages, stage_set_problem
 from app.infra.db.booking_rules import (
     effective_duration_minutes,
     effective_min_notice_minutes,
@@ -543,7 +543,7 @@ async def create_session_type(
 
     stages = named_stages(payload) or []
     # No custom stage since the six (decision 288): a write never carries a label.
-    _refuse_stage_label(stages, None)
+    _refuse_stage_set(stages)
     # After the stage checks, so a body they refuse is told so first.
     await refuse_if_full(session, mentor_user_id)
     option_id = await _venue_option(session, mentor_user_id, payload.get("meeting_venue"))
@@ -596,13 +596,10 @@ async def _venue_option(
     return None if venue is None else await offering_option(session, mentor_user_id, venue)
 
 
-def _refuse_stage_label(stages: list[ApplicationStage], label: str | None) -> None:
-    """The stage set and label the row will end up with, judged whole (#215).
-
-    Asked **before** writing, against the final state, because the `CHECK` sees
-    only the first stage and a `PATCH` may change either half alone.
-    """
-    problem = stage_label_problem(stages, label)
+def _refuse_stage_set(stages: list[ApplicationStage]) -> None:
+    """The stage set a write names, judged before it is written (#215), so a
+    repeated stage is a 422 rather than the pair index's 500."""
+    problem = stage_set_problem(stages)
     if problem is not None:
         raise ValidationError(problem[1], field_errors=(problem,))
 
@@ -711,7 +708,7 @@ async def update_session_type(
         # A new set is the design's six, which hold no `other`, so a label left
         # from a retired `other` goes with the set it described. A write that
         # leaves the set out leaves the stored set and label as they are.
-        _refuse_stage_label(stages, None)
+        _refuse_stage_set(stages)
         own["application_stage"] = first_stage(stages)
         own["custom_stage_label"] = None
         await write_session_type_stages(session, session_type_id, stages)

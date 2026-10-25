@@ -350,7 +350,7 @@ async def test_the_public_contract_did_not_gain_the_owner_only_fields(
         mentor,
         name="Public",
         service_offering="document-preparation",
-        application_stage="other",
+        application_stage="preparing_documents",
     )
 
     response = await api_client.get(public_url(mentor))

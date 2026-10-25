@@ -7,15 +7,11 @@ them. Split from `test_migrations.py` by area (non-negotiable 11).
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 from typing import Any
 
 import pytest
 from alembic import command
 from tests.integration.test_migrations import ConfigFactory, execute, scalar
-
-from app.domain.sessions import RETIRED_STAGES
 
 pytestmark = pytest.mark.db
 
@@ -145,16 +141,3 @@ def test_running_it_on_current_data_changes_nothing(
         f"SELECT updated_at FROM session_types WHERE id = '{type_id(current)}'",  # noqa: S608
     )
     assert before == after
-
-
-def test_the_migration_s_copy_of_the_remap_is_the_code_s() -> None:
-    """No migration imports from `app` (decision 105), so its `MAP` is a copy;
-    this is what stops the two disagreeing (non-negotiable 8)."""
-    path = next(Path("migrations/versions").glob(f"*_{REVISION}.py"))
-    spec = importlib.util.spec_from_file_location("remap_migration", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    code = {old.value: None if new is None else new.value for old, new in RETIRED_STAGES.items()}
-    assert code == module.MAP

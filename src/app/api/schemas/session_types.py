@@ -59,11 +59,9 @@ from app.domain.intake import MAX_QUESTIONS
 from app.domain.meetings import OFFERING_VENUES, PLATFORM_DEFAULT_PROVIDER
 from app.domain.sessions import (
     MAX_SESSION_TYPE_OFFERINGS,
-    WritableStage,
-    current_stages,
     first_stage,
     named_stages,
-    stage_label_problem,
+    stage_set_problem,
 )
 
 
@@ -100,22 +98,19 @@ def _refuse_two_set_fields(model: BaseModel) -> None:
     )
 
 
-def _stages(row: dict[str, object]) -> list[WritableStage]:
-    """The stages a type is aimed at, in the mentor's order (#215); empty is any.
-    **As the design's six**: a retired stage still stored reads as the one it
-    became, and `other` not at all (`current_stages`)."""
-    stored = [ApplicationStage(str(v)) for v in row.get("application_stages") or []]  # type: ignore[attr-defined]
-    return current_stages(stored)
+def _stages(row: dict[str, object]) -> list[ApplicationStage]:
+    """The stages a type is aimed at, in the mentor's order (#215); empty is any."""
+    return [ApplicationStage(str(v)) for v in row.get("application_stages") or []]  # type: ignore[attr-defined]
 
 
-def _stage(row: dict[str, object]) -> WritableStage | None:
+def _stage(row: dict[str, object]) -> ApplicationStage | None:
     """The single `application_stage` kept this release: **the first of the set**
     (#215), so the old field and the new list can never disagree."""
     return first_stage(_stages(row))
 
 
 #: What a set of stages may hold: each stage once, so at most all of them.
-MAX_STAGES = len(WritableStage)
+MAX_STAGES = len(ApplicationStage)
 
 
 def _offering_venue(value: object) -> object:
@@ -189,7 +184,7 @@ class SessionTypeRead(BaseModel):
             "Every service offering this type covers, at most three, in the mentor's order."
         ),
     )
-    application_stages: list[WritableStage] = Field(
+    application_stages: list[ApplicationStage] = Field(
         default_factory=list,
         description=(
             "Every stage of an application this offering is aimed at, in the "
@@ -197,7 +192,7 @@ class SessionTypeRead(BaseModel):
             "there is no custom stage."
         ),
     )
-    application_stage: WritableStage | None = Field(
+    application_stage: ApplicationStage | None = Field(
         default=None,
         description=(
             "**Deprecated: read `application_stages`.** The first of "
@@ -411,14 +406,14 @@ class OwnSessionTypeRead(BaseModel):
         default_factory=list,
         description=("Every service offering this type covers, at most three, in your order."),
     )
-    application_stages: list[WritableStage] = Field(
+    application_stages: list[ApplicationStage] = Field(
         default_factory=list,
         description=(
             "Every stage of an application this offering is aimed at, in your "
             "order; empty means any stage."
         ),
     )
-    application_stage: WritableStage | None = Field(
+    application_stage: ApplicationStage | None = Field(
         default=None,
         description=("**Deprecated: read `application_stages`.** Its first, kept for one release."),
     )
@@ -554,7 +549,7 @@ def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePa
     judge is the set itself: each stage once.
     """
     sent = named_stages(model.model_dump(exclude_unset=True)) or []
-    problem = stage_label_problem(sent, None)
+    problem = stage_set_problem(sent)
     if problem is not None:
         raise ValueError(problem[1])
     return model
@@ -645,7 +640,7 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
     )
     #: The stage set, in order, each once (#215). `[]` means any stage; absent
     #: leaves it. `application_stage` below is a set of one, for one release.
-    application_stages: list[WritableStage] | None = Field(
+    application_stages: list[ApplicationStage] | None = Field(
         default=None,
         max_length=MAX_STAGES,
         description=(
@@ -654,7 +649,7 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
             "`application_stage`, not both. The retired stages and `other` are refused."
         ),
     )
-    application_stage: WritableStage | None = Field(
+    application_stage: ApplicationStage | None = Field(
         default=None,
         description="**Deprecated: send `application_stages`.** A set of one; `null` clears it.",
     )
@@ -768,7 +763,7 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
     )
     #: The stage set, in order, each once (#215). `[]` means any stage; absent
     #: leaves it. `application_stage` below is a set of one, for one release.
-    application_stages: list[WritableStage] | None = Field(
+    application_stages: list[ApplicationStage] | None = Field(
         default=None,
         max_length=MAX_STAGES,
         description=(
@@ -777,7 +772,7 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
             "`application_stage`, not both. The retired stages and `other` are refused."
         ),
     )
-    application_stage: WritableStage | None = Field(
+    application_stage: ApplicationStage | None = Field(
         default=None,
         description="**Deprecated: send `application_stages`.** A set of one; `null` clears it.",
     )

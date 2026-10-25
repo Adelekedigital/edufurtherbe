@@ -157,11 +157,8 @@ class SessionType(TimestampMixin, Base):
     #: set and dropped in the contract step. A closed set (#100), `text` +
     #: `CHECK`, with `ApplicationStage` at the boundary.
     application_stage: Mapped[ApplicationStage | None] = mapped_column(str_enum(ApplicationStage))
-    #: `OTHER`'s label, and **only** when the set holds `OTHER`. The `CHECK`
-    #: below can see only the first stage, so it holds one direction; the whole
-    #: rule is `stage_label_problem`. **Retired with `OTHER` (decision 288)**:
-    #: nothing writes one, reads publish `null`, and a write replacing the set
-    #: clears it; the contract migration clears the rest.
+    #: **Always null** since the design's six (decision 288): it held the
+    #: retired `OTHER`'s label. Kept until the field leaves the API.
     custom_stage_label: Mapped[str | None] = mapped_column(Text)
     #: The icon the client shows (#198), from the design's closed set; `NULL`
     #: is the client's automatic pick.
@@ -279,18 +276,9 @@ class SessionType(TimestampMixin, Base):
             f"icon IS NULL OR {check_is_known('icon', SessionTypeIcon)}",
             name="icon_is_known",
         ),
-        # **One direction only, since the stage became a set (#215).** It was
-        # symmetric while `application_stage` was the offering's only stage; it
-        # is now the first of a set, so `[drafting_stage, other]` carries a label
-        # beside a first stage that is not `other`, and the old form would refuse
-        # it. A `CHECK` cannot see `session_type_stages`, so the other direction
-        # — no label without `other` in the set — is `stage_label_problem`'s,
-        # asked before every write. `other` first with no label is still
-        # impossible here.
-        CheckConstraint(
-            "application_stage IS DISTINCT FROM 'other' OR custom_stage_label IS NOT NULL",
-            name="custom_stage_label_matches_stage",
-        ),
+        # No custom stage since the design's six (decision 288): the column
+        # waits for its contract step as always-null, and this says so.
+        CheckConstraint("custom_stage_label IS NULL", name="no_custom_stage_label"),
     )
 
 
