@@ -529,6 +529,10 @@ class Session(TimestampMixin, Base):
     #: evidence of how long the mentor actually had.
     respond_by: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
+    #: When the mentee reminded the mentor about this request, or null. At most
+    #: once per session (decision 294): the conditional write is the guard.
+    reminder_sent_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
     rescheduled_from_session_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("sessions.id", ondelete="RESTRICT")
     )
