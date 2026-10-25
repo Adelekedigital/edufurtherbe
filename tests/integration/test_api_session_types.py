@@ -321,7 +321,10 @@ async def test_the_response_carries_nothing_it_should_not(
     """
     mentor = await make_public_mentor(db_engine, "leak")
     await add_session_type(
-        db_engine, mentor, service_offering="document-preparation", application_stage="other"
+        db_engine,
+        mentor,
+        service_offering="document-preparation",
+        application_stage="preparing_documents",
     )
 
     response = await api_client.get(url(mentor))
@@ -334,10 +337,11 @@ async def test_the_response_carries_nothing_it_should_not(
         "code": "document-preparation",
         "display_name": "Document preparation",
     }
-    assert offering["application_stage"] == "other"
+    assert offering["application_stage"] == "preparing_documents"
     # A single-stage type written before the set reads as a set of one (#215).
-    assert offering["application_stages"] == ["other"]
-    assert offering["custom_stage_label"] == "My own wording"
+    assert offering["application_stages"] == ["preparing_documents"]
+    # No custom stage since the six (founder 2026-10-21): always null.
+    assert offering["custom_stage_label"] is None
     assert "created_by" not in body
 
 

@@ -1,10 +1,12 @@
-"""A session type is aimed at several application stages (#215).
+"""A session type is aimed at several application stages (#215), from the
+design's six (Session Types PRD, founder 2026-10-21).
 
 Session Types frontend round 3 A, approved by the product owner 2026-09-29: "Best
 for mentees who are…" became "Pick all that apply". The set lives in
 `session_type_stages`; `application_stage` stays for this release as the
-**first** of the set (expand/contract, the #205 shape), and `custom_stage_label`
-belongs to the set whenever it holds `other`.
+**first** of the set (expand/contract, the #205 shape). Since the six there is
+no custom stage: `other` and `custom_stage_label` are refused on writes, and a
+stored retired stage reads as the one it became.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
-DRAFTING, INTERVIEWING, REVISIONS, OTHER = "drafting_stage", "interviewing", "revisions", "other"
+DRAFTING, INTERVIEWING, REVISIONS = "preparing_documents", "interview_prep", "applying"
 
 
 async def own(client: httpx.AsyncClient, auth: UUID, type_id: str) -> dict[str, object]:
@@ -49,27 +51,6 @@ async def test_a_type_can_be_aimed_at_several_stages_in_order(
     # The single field this release keeps is the first of the set.
     assert row["application_stage"] == INTERVIEWING
     assert row["custom_stage_label"] is None
-
-
-async def test_other_anywhere_in_the_set_carries_the_label(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """`other` behind a named stage: legal, and the case the symmetric `CHECK`
-    on the first stage would have refused."""
-    mentor, auth = await as_mentor(db_engine, "stages-other-second")
-
-    created = await create(
-        api_client, auth, application_stages=[DRAFTING, OTHER], custom_stage_label="Gap year"
-    )
-    row = await own(api_client, auth, created.json()["id"])
-    public = (await api_client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
-
-    assert created.status_code == 201, created.text
-    assert row["application_stages"] == [DRAFTING, OTHER]
-    assert row["custom_stage_label"] == "Gap year"
-    (listed,) = [t for t in public if t["id"] == created.json()["id"]]
-    assert listed["application_stages"] == [DRAFTING, OTHER]
-    assert listed["custom_stage_label"] == "Gap year"
 
 
 async def test_an_empty_set_means_any_stage(
@@ -114,11 +95,8 @@ async def test_a_type_written_only_to_the_old_column_still_reads(
     [
         ("duplicate", {"application_stages": [DRAFTING, DRAFTING]}),
         ("both-fields", {"application_stages": [DRAFTING], "application_stage": REVISIONS}),
-        ("other-without-label", {"application_stages": [DRAFTING, OTHER]}),
-        (
-            "label-without-other",
-            {"application_stages": [DRAFTING], "custom_stage_label": "stray"},
-        ),
+        ("other", {"application_stages": [DRAFTING, "other"]}),
+        ("label", {"application_stages": [DRAFTING], "custom_stage_label": "stray"}),
         ("unknown", {"application_stages": ["someday"]}),
     ],
 )
@@ -175,64 +153,6 @@ async def test_a_patch_that_leaves_the_set_out_keeps_it(
     ]
 
 
-async def test_moving_off_other_without_clearing_the_label_is_refused(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """**The dead-label case, judged against the row's final state.** The PATCH
-    names only the set; the label it would strand is already stored, which the
-    boundary cannot see and the database's one-way `CHECK` would accept."""
-    _, auth = await as_mentor(db_engine, "stages-strand")
-    headers = bearer(api_token(auth))
-    created = (
-        await create(
-            api_client, auth, application_stages=[DRAFTING, OTHER], custom_stage_label="Gap year"
-        )
-    ).json()
-
-    stranded = await api_client.patch(
-        f"{URL}/{created['id']}", json={"application_stages": [DRAFTING]}, headers=headers
-    )
-    moved = await api_client.patch(
-        f"{URL}/{created['id']}",
-        json={"application_stages": [DRAFTING], "custom_stage_label": None},
-        headers=headers,
-    )
-
-    assert stranded.status_code == 422, stranded.text
-    assert stranded.json()["errors"][0]["pointer"] == "/custom_stage_label"
-    assert moved.status_code == 200, moved.text
-    row = await own(api_client, auth, created["id"])
-    assert row["application_stages"] == [DRAFTING]
-    assert row["custom_stage_label"] is None
-
-
-async def test_adding_other_needs_a_label_already_stored_or_sent(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    _, auth = await as_mentor(db_engine, "stages-add-other")
-    headers = bearer(api_token(auth))
-    created = (await create(api_client, auth, application_stages=[DRAFTING])).json()
-    path = f"{URL}/{created['id']}"
-
-    bare = await api_client.patch(
-        path, json={"application_stages": [DRAFTING, OTHER]}, headers=headers
-    )
-    labelled = await api_client.patch(
-        path,
-        json={"application_stages": [DRAFTING, OTHER], "custom_stage_label": "Gap year"},
-        headers=headers,
-    )
-    relabelled = await api_client.patch(
-        path, json={"custom_stage_label": "Career change"}, headers=headers
-    )
-
-    assert bare.status_code == 422, bare.text
-    assert labelled.status_code == 200, labelled.text
-    # A label alone is judged against the stored set, which holds `other`.
-    assert relabelled.status_code == 200, relabelled.text
-    assert (await own(api_client, auth, created["id"]))["custom_stage_label"] == "Career change"
-
-
 async def test_the_old_column_holds_the_first_of_the_set(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -279,28 +199,6 @@ async def test_an_explicit_null_set_is_refused(
     assert patched.status_code == 422, patched.text
     assert posted.status_code == 422, posted.text
     assert (await own(api_client, auth, created["id"]))["application_stages"] == [DRAFTING]
-
-
-async def test_a_label_alone_relabels_a_set_holding_other_behind_a_named_stage(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """The label is judged against the **stored** set, whose first stage is not
-    `other` — the case a check on the first stage alone would refuse."""
-    _, auth = await as_mentor(db_engine, "stages-relabel")
-    created = (
-        await create(
-            api_client, auth, application_stages=[DRAFTING, OTHER], custom_stage_label="Gap year"
-        )
-    ).json()
-
-    response = await api_client.patch(
-        f"{URL}/{created['id']}", json={"custom_stage_label": "x"}, headers=bearer(api_token(auth))
-    )
-
-    assert response.status_code == 200, response.text
-    row = await own(api_client, auth, created["id"])
-    assert row["custom_stage_label"] == "x"
-    assert row["application_stages"] == [DRAFTING, OTHER]
 
 
 async def test_a_patch_with_a_stage_twice_is_a_422_not_a_500(
@@ -376,3 +274,124 @@ async def test_two_concurrent_edits_of_one_offering_serialise(db_engine: AsyncEn
             )
         ]
     assert stages == [INTERVIEWING]
+
+
+RETIRED = ["early_exploration", "drafting_stage", "revisions", "post_submission", "interviewing"]
+
+
+@pytest.mark.parametrize("retired", [*RETIRED, "other"])
+@pytest.mark.parametrize("field", ["application_stages", "application_stage"])
+async def test_a_retired_stage_is_refused_on_every_write(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, retired: str, field: str
+) -> None:
+    """Only the design's six may be written, through either field."""
+    _, auth = await as_mentor(db_engine, f"stages-retired-{field[-1]}-{retired[:6]}")
+    value: object = [retired] if field == "application_stages" else retired
+
+    created = await create(api_client, auth, **{field: value})
+    kept = (await create(api_client, auth, name="Kept", application_stages=[DRAFTING])).json()
+    patched = await api_client.patch(
+        f"{URL}/{kept['id']}", json={field: value}, headers=bearer(api_token(auth))
+    )
+
+    assert created.status_code == 422, created.text
+    assert created.json()["errors"][0]["pointer"].startswith(f"/{field}")
+    assert patched.status_code == 422, patched.text
+    assert (await own(api_client, auth, kept["id"]))["application_stages"] == [DRAFTING]
+
+
+async def test_a_custom_label_is_refused_and_null_is_accepted(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, auth = await as_mentor(db_engine, "stages-label")
+
+    labelled = await create(api_client, auth, custom_stage_label="Gap year")
+    nulled = await create(api_client, auth, name="Plain", custom_stage_label=None)
+
+    assert labelled.status_code == 422, labelled.text
+    assert labelled.json()["errors"][0]["pointer"] == "/custom_stage_label"
+    assert nulled.status_code == 201, nulled.text
+
+
+async def stored_retired(engine: AsyncEngine, mentor: UUID) -> UUID:
+    """An offering as the expand step left it: a retired set holding `other`
+    behind two stages that both became one, with its label."""
+    type_id = await add_session_type(engine, mentor)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE session_types SET application_stage = 'drafting_stage', "
+                "custom_stage_label = 'Gap year' WHERE id = :t"
+            ),
+            {"t": type_id},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO session_type_stages (session_type_id, stage, position) VALUES "
+                "(:t, 'drafting_stage', 0), (:t, 'other', 1), (:t, 'revisions', 2), "
+                "(:t, 'early_exploration', 3)"
+            ),
+            {"t": type_id},
+        )
+    return type_id
+
+
+async def test_a_stored_retired_set_reads_as_the_six(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Remapped on the way out until the contract migration rewrites the rows:
+    `drafting_stage` and `revisions` became one stage, kept at the first one's
+    place; `other` and its label read as nothing."""
+    mentor, auth = await as_mentor(db_engine, "stages-stored")
+    type_id = await stored_retired(db_engine, mentor)
+
+    row = await own(api_client, auth, str(type_id))
+    public = (await api_client.get(f"/api/v1/users/{mentor}/session-types")).json()["data"]
+    (listed,) = [t for t in public if t["id"] == str(type_id)]
+
+    for read in (row, listed):
+        assert read["application_stages"] == ["preparing_documents", "exploring"]
+        assert read["application_stage"] == "preparing_documents"
+        assert read["custom_stage_label"] is None
+
+
+async def test_a_new_set_replaces_a_stored_other_and_its_label(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The stored label belonged to `other`; the new set holds none, so the
+    label goes with it rather than stranding the write on a 422."""
+    mentor, auth = await as_mentor(db_engine, "stages-replace-other")
+    type_id = await stored_retired(db_engine, mentor)
+
+    response = await api_client.patch(
+        f"{URL}/{type_id}",
+        json={"application_stages": [REVISIONS]},
+        headers=bearer(api_token(auth)),
+    )
+
+    assert response.status_code == 200, response.text
+    async with db_engine.begin() as conn:
+        stored = (
+            await conn.execute(
+                text(
+                    "SELECT application_stage, custom_stage_label FROM session_types WHERE id = :t"
+                ),
+                {"t": type_id},
+            )
+        ).one()
+    assert tuple(stored) == (REVISIONS, None)
+
+
+async def test_an_edit_that_leaves_a_stored_other_alone_still_saves(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A rename on an offering the remap has not reached yet: the stored set
+    and its label are left as they are, and the write succeeds."""
+    mentor, auth = await as_mentor(db_engine, "stages-rename-other")
+    type_id = await stored_retired(db_engine, mentor)
+
+    response = await api_client.patch(
+        f"{URL}/{type_id}", json={"name": "Renamed"}, headers=bearer(api_token(auth))
+    )
+
+    assert response.status_code == 200, response.text

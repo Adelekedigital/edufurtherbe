@@ -59,7 +59,8 @@ from app.domain.intake import MAX_QUESTIONS
 from app.domain.meetings import OFFERING_VENUES, PLATFORM_DEFAULT_PROVIDER
 from app.domain.sessions import (
     MAX_SESSION_TYPE_OFFERINGS,
-    first_stage,
+    WritableStage,
+    current_stages,
     named_stages,
     stage_label_problem,
 )
@@ -98,19 +99,23 @@ def _refuse_two_set_fields(model: BaseModel) -> None:
     )
 
 
-def _stages(row: dict[str, object]) -> list[ApplicationStage]:
-    """The stages a type is aimed at, in the mentor's order (#215); empty is any."""
-    return [ApplicationStage(str(v)) for v in row.get("application_stages") or []]  # type: ignore[attr-defined]
+def _stages(row: dict[str, object]) -> list[WritableStage]:
+    """The stages a type is aimed at, in the mentor's order (#215); empty is any.
+    **As the design's six**: a retired stage still stored reads as the one it
+    became, and `other` not at all (`current_stages`)."""
+    stored = [ApplicationStage(str(v)) for v in row.get("application_stages") or []]  # type: ignore[attr-defined]
+    return current_stages(stored)
 
 
-def _stage(row: dict[str, object]) -> ApplicationStage | None:
+def _stage(row: dict[str, object]) -> WritableStage | None:
     """The single `application_stage` kept this release: **the first of the set**
     (#215), so the old field and the new list can never disagree."""
-    return first_stage(_stages(row))
+    stages = _stages(row)
+    return stages[0] if stages else None
 
 
 #: What a set of stages may hold: each stage once, so at most all of them.
-MAX_STAGES = len(ApplicationStage)
+MAX_STAGES = len(WritableStage)
 
 
 def _offering_venue(value: object) -> object:
@@ -184,16 +189,15 @@ class SessionTypeRead(BaseModel):
             "Every service offering this type covers, at most three, in the mentor's order."
         ),
     )
-    application_stages: list[ApplicationStage] = Field(
+    application_stages: list[WritableStage] = Field(
         default_factory=list,
         description=(
             "Every stage of an application this offering is aimed at, in the "
-            "mentor's order. **Empty means any stage.** When it holds `other`, "
-            "`custom_stage_label` carries the mentor's wording, and it never "
-            "does otherwise."
+            "mentor's order. **Empty means any stage.** One of the design's six; "
+            "there is no custom stage."
         ),
     )
-    application_stage: ApplicationStage | None = Field(
+    application_stage: WritableStage | None = Field(
         default=None,
         description=(
             "**Deprecated: read `application_stages`.** The first of "
@@ -204,8 +208,8 @@ class SessionTypeRead(BaseModel):
     custom_stage_label: str | None = Field(
         default=None,
         description=(
-            "The mentor's own wording, and **only** when `application_stages` "
-            "holds `other`. Render it in place of that stage's name."
+            "**Deprecated: always `null`.** Custom stages were removed with the "
+            "design's six (2026-10-21); the field goes in a later release."
         ),
     )
     icon: SessionTypeIcon | None = Field(
@@ -293,9 +297,9 @@ class SessionTypeRead(BaseModel):
             service_offerings=_offerings(row),
             application_stages=_stages(row),
             application_stage=_stage(row),
-            custom_stage_label=(
-                str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
-            ),
+            # No custom stage since the six (founder 2026-10-21); a stored
+            # label belonged to `other`, which no longer reads.
+            custom_stage_label=None,
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
             requires_booking_confirmation=bool(row["requires_booking_confirmation"]),
@@ -407,22 +411,22 @@ class OwnSessionTypeRead(BaseModel):
         default_factory=list,
         description=("Every service offering this type covers, at most three, in your order."),
     )
-    application_stages: list[ApplicationStage] = Field(
+    application_stages: list[WritableStage] = Field(
         default_factory=list,
         description=(
             "Every stage of an application this offering is aimed at, in your "
             "order; empty means any stage."
         ),
     )
-    application_stage: ApplicationStage | None = Field(
+    application_stage: WritableStage | None = Field(
         default=None,
         description=("**Deprecated: read `application_stages`.** Its first, kept for one release."),
     )
     custom_stage_label: str | None = Field(
         default=None,
         description=(
-            "Your own wording, and only when `application_stages` holds `other`. "
-            "Sending one without `other` is refused, and so is `other` without one."
+            "**Deprecated: always `null`.** Custom stages were removed with the "
+            "design's six (2026-10-21)."
         ),
     )
     icon: SessionTypeIcon | None = Field(
@@ -522,9 +526,9 @@ class OwnSessionTypeRead(BaseModel):
             service_offerings=_offerings(row),
             application_stages=_stages(row),
             application_stage=_stage(row),
-            custom_stage_label=(
-                str(row["custom_stage_label"]) if row.get("custom_stage_label") else None
-            ),
+            # No custom stage since the six (founder 2026-10-21); a stored
+            # label belonged to `other`, which no longer reads.
+            custom_stage_label=None,
             icon=SessionTypeIcon(str(row["icon"])) if row.get("icon") else None,
             is_featured=bool(row.get("is_featured")),
             uses_own_windows=bool(row.get("uses_own_windows")),
@@ -651,20 +655,25 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
     )
     #: The stage set, in order, each once (#215). `[]` means any stage; absent
     #: leaves it. `application_stage` below is a set of one, for one release.
-    application_stages: list[ApplicationStage] | None = Field(
+    application_stages: list[WritableStage] | None = Field(
         default=None,
         max_length=MAX_STAGES,
         description=(
             "Every stage this offering is aimed at, in the order to show them; each "
-            "once. `[]` means any stage. Send this or `application_stage`, not both."
+            "once, from the design's six. `[]` means any stage. Send this or "
+            "`application_stage`, not both. The retired stages and `other` are refused."
         ),
     )
-    application_stage: ApplicationStage | None = Field(
+    application_stage: WritableStage | None = Field(
         default=None,
         description="**Deprecated: send `application_stages`.** A set of one; `null` clears it.",
     )
-    #: Only when the set holds `OTHER`, and required by it (`stage_label_problem`).
-    custom_stage_label: str | None = Field(default=None, max_length=100)
+    #: Custom stages are gone (founder 2026-10-21): only `null`, kept so a
+    #: client still sending it is answered rather than silently ignored.
+    custom_stage_label: None = Field(
+        default=None,
+        description="**Removed.** There is no custom stage; anything but `null` is a `422`.",
+    )
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
     #: each request, `false` confirms bookings at once (#199). Booking already
     #: resolves it with `COALESCE`, so this only makes it writable.
@@ -769,20 +778,25 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
     )
     #: The stage set, in order, each once (#215). `[]` means any stage; absent
     #: leaves it. `application_stage` below is a set of one, for one release.
-    application_stages: list[ApplicationStage] | None = Field(
+    application_stages: list[WritableStage] | None = Field(
         default=None,
         max_length=MAX_STAGES,
         description=(
             "Every stage this offering is aimed at, in the order to show them; each "
-            "once. `[]` means any stage. Send this or `application_stage`, not both."
+            "once, from the design's six. `[]` means any stage. Send this or "
+            "`application_stage`, not both. The retired stages and `other` are refused."
         ),
     )
-    application_stage: ApplicationStage | None = Field(
+    application_stage: WritableStage | None = Field(
         default=None,
         description="**Deprecated: send `application_stages`.** A set of one; `null` clears it.",
     )
-    #: Only when the set holds `OTHER`, and required by it (`stage_label_problem`).
-    custom_stage_label: str | None = Field(default=None, max_length=100)
+    #: Custom stages are gone (founder 2026-10-21): only `null`, kept so a
+    #: client still sending it is answered rather than silently ignored.
+    custom_stage_label: None = Field(
+        default=None,
+        description="**Removed.** There is no custom stage; anything but `null` is a `422`.",
+    )
     #: `null` inherits the mentor's own setting; `true` asks the mentor to accept
     #: each request, `false` confirms bookings at once (#199). Booking already
     #: resolves it with `COALESCE`, so this only makes it writable.

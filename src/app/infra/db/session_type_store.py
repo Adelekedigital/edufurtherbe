@@ -719,9 +719,13 @@ async def update_session_type(
                 session_type_id, []
             )
         )
-        _refuse_stage_label(final, payload.get("custom_stage_label", current))
+        # A new set is the design's six, which hold no `other`, so a label left
+        # from a retired `other` goes with the set it described.
+        label = None if stages is not None else payload.get("custom_stage_label", current)
+        _refuse_stage_label(final, label)
     if stages is not None:
         own["application_stage"] = first_stage(stages)
+        own["custom_stage_label"] = None
         await write_session_type_stages(session, session_type_id, stages)
     # Absent leaves the pin; `null` resets it to follow the default (#289).
     if "meeting_venue" in payload:
