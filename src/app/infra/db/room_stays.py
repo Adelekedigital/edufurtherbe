@@ -21,6 +21,7 @@ from sqlalchemy import TIMESTAMP, and_, case, func, literal, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.attendance import DOOR_STATUSES
 from app.infra.db.models.sessions import Session, SessionParticipant, SessionRoomStay
 from app.infra.db.predicates import presence_decides_sql, session_ends
 
@@ -83,16 +84,22 @@ async def close_stay(
     )
 
 
-def in_room(side: Any, label: str) -> Any:
+def in_room(side: Any, label: str, *, party_left: Any) -> Any:
     """Whether the party in ``side`` (``Session.mentor_id`` or ``mentee_id``) is
     in the room now, correlated to ``Session``.
 
     ``NULL`` where presence is not reported (Meet, custom, no room), because
-    "unknown" is not "absent". Otherwise true while one of their stays is open
-    **and the session has not ended**: the room closes then (``door_window``),
-    and a leave whose delivery was lost (Daily stops after three failures)
-    must not leave somebody in the room forever. Compared on the database's
-    clock, the only one in a read.
+    "unknown" is not "absent", and for a party whose account is gone
+    (``party_left``, the reader's ``live()`` join), who takes their presence
+    with the rest of their details (decision 212).
+
+    Otherwise true while one of their stays is open, **the session is one the
+    room is open for** (``DOOR_STATUSES``: not cancelled, declined, withdrawn
+    or expired) **and it has not ended**: the room closes then
+    (``door_window``), and a leave whose delivery was lost (Daily stops after
+    three failures) must not leave somebody in the room forever. The two cheap
+    tests come first, so an ended session never reaches the subquery. Compared
+    on the database's clock, the only one in a read.
     """
     open_stay_exists = (
         select(SessionRoomStay.id)
@@ -106,6 +113,14 @@ def in_room(side: Any, label: str) -> Any:
         .exists()
     )
     return case(
-        (presence_decides_sql(), and_(open_stay_exists, func.now() < session_ends())),
+        (party_left, None),
+        (
+            presence_decides_sql(),
+            and_(
+                Session.status.in_([str(s) for s in DOOR_STATUSES]),
+                func.now() < session_ends(),
+                open_stay_exists,
+            ),
+        ),
         else_=None,
     ).label(label)

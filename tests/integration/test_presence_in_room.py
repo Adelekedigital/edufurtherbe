@@ -275,3 +275,61 @@ async def test_a_stay_is_written_only_for_a_party_of_the_session_with_that_room(
             .all()
         )
     assert stays == ["e"]
+
+
+@pytest.mark.usefixtures("door")
+async def test_nobody_is_in_the_room_of_a_session_that_was_called_off(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A cancelled session's room is not one the door opens (`DOOR_STATUSES`),
+    so a stay still open there is not *in the room*."""
+    setup, session, venue = await a_daily_call(api_client, db_engine, "room-cancelled")
+    at = venue["starts_at"] + dt.timedelta(minutes=1)
+    await send(api_client, joined(venue["room"], str(venue["mentee_id"]), at, "tab-1"))
+
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET status = 'cancelled' WHERE id = :i"), {"i": session["id"]}
+        )
+
+    assert await in_room(api_client, setup, session["id"]) == (False, False)
+
+
+@pytest.mark.usefixtures("door")
+async def test_a_party_whose_account_is_gone_takes_their_presence_with_them(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`null`, as their name and avatar are (decision 212), never a live `true`."""
+    setup, session, venue = await a_daily_call(api_client, db_engine, "room-deleted")
+    at = venue["starts_at"] + dt.timedelta(minutes=1)
+    await send(api_client, joined(venue["room"], str(venue["mentor_id"]), at, "tab-1"))
+
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": venue["mentor_id"]}
+        )
+
+    assert await in_room(api_client, setup, session["id"]) == (None, False)
+
+
+@pytest.mark.usefixtures("door")
+async def test_a_leave_whose_length_cannot_be_read_still_takes_them_out(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The event says they left; only the length is unknown. And a leave whose
+    join never arrived still counts as their arrival."""
+    setup, session, venue = await a_daily_call(api_client, db_engine, "room-no-length")
+    mentee = str(venue["mentee_id"])
+    at = venue["starts_at"] + dt.timedelta(minutes=1)
+    await send(api_client, joined(venue["room"], str(venue["mentor_id"]), at, "tab-m"))
+    await send(api_client, joined(venue["room"], mentee, at, "tab-1"))
+    broken = left(venue["room"], mentee, at, "tab-1")
+    del broken["payload"]["duration"]
+    lost_join = left(venue["room"], str(venue["mentor_id"]), at, "tab-m2")
+    lost_join["payload"]["duration"] = "not a number"
+
+    await send(api_client, broken)
+    await send(api_client, lost_join)
+
+    assert await in_room(api_client, setup, session["id"]) == (True, False)
+    assert (await party(db_engine, session["id"], "mentee"))["attendance_status"] == "attended"

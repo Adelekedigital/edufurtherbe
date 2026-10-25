@@ -18,6 +18,7 @@ from app.infra.clients.daily_presence import (
     STAY_ID_MAX_LENGTH,
     Departure,
     Sighting,
+    _moment,
     departure_from,
     sighting_from,
 )
@@ -75,13 +76,17 @@ def test_a_leave_of_no_length_is_a_departure() -> None:
         pytest.param(LONGEST_STAY.total_seconds() + 1, id="longer than any real stay"),
     ],
 )
-def test_a_leave_without_a_usable_duration_is_ignored(duration: object) -> None:
-    """Acknowledged and ignored, as a partial join is: never a crash."""
+def test_a_leave_without_a_usable_duration_ends_at_its_join(duration: object) -> None:
+    """**The event says they left**, so the stay still closes, at its join,
+    and the join is still sighted; only the length is unknown. Never a crash."""
     payload = leave(duration=duration)
     if duration is None:
         del payload["payload"]["duration"]
 
-    assert departure_from(payload) is None
+    found = departure_from(payload)
+
+    assert found is not None
+    assert found.left == found.sighting.at == dt.datetime.fromtimestamp(JOINED, tz=dt.UTC)
 
 
 @pytest.mark.parametrize(
@@ -134,3 +139,18 @@ def test_the_stored_limit_is_the_column_s() -> None:
     ]
 
     assert checks == [f"char_length(provider_session_id) BETWEEN 1 AND {STAY_ID_MAX_LENGTH}"]
+
+
+def test_a_leave_whose_end_no_clock_can_hold_ends_at_its_join() -> None:
+    """A join at the very end of the calendar plus a real length overflows a
+    `datetime`; the leave still ends the stay, at its join, never a crash."""
+    last_second = dt.datetime(9999, 12, 31, 23, 59, 59, tzinfo=dt.UTC).timestamp()
+    if _moment(last_second) is None:
+        # Windows' clock stops in year 3000, so the join itself is unreadable
+        # there; CI (Linux) reaches the overflow.
+        pytest.skip("this platform cannot hold the join's instant")
+
+    found = departure_from(leave(joined_at=last_second, duration=3600))
+
+    assert found is not None
+    assert found.left == found.sighting.at

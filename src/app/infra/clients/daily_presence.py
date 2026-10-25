@@ -183,22 +183,25 @@ def sighting_from(event: dict[str, Any]) -> Sighting | None:
 def departure_from(event: dict[str, Any]) -> Departure | None:
     """The departure in a ``participant.left`` delivery, or ``None``.
 
-    ``None`` for anything else, and for a leave missing the room, the user, the
-    join time, or a usable ``duration``: acknowledged and ignored, as for a
-    join. A leave with no storable join id is still its join's sighting, so a
-    join whose own delivery was lost still counts.
+    ``None`` for anything else, and for a leave missing the room, the user or
+    the join time: acknowledged and ignored, as for a join. **A leave whose
+    ``duration`` is unusable still ends its stay**, at its join (the records'
+    own rule, :func:`_seconds_or_problem`, decides usable), because the event
+    itself says they left. A leave with no storable join id is still its
+    join's sighting, so a join whose own delivery was lost still counts.
     """
     found = _event_sighting(event, "participant.left")
     if found is None:
         return None
     sighting, payload = found
+    # A leave says they left whatever its length says; one we cannot read
+    # closes the stay at its join, rather than leaving them in the room.
     seconds = _seconds_or_problem(payload.get("duration"))
-    if isinstance(seconds, str):
-        return None
+    length = dt.timedelta(seconds=seconds) if isinstance(seconds, float) else dt.timedelta(0)
     try:
-        left = sighting.at + dt.timedelta(seconds=seconds)
+        left = sighting.at + length
     except OverflowError:
-        return None
+        left = sighting.at
     return Departure(sighting=sighting, left=left)
 
 

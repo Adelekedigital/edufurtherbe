@@ -202,8 +202,8 @@ _PARTY_COLUMNS = (
     ),
     # Who is in the Daily room now (#394), an `EXISTS` per side for the same
     # reason as attendance: a join would multiply the page's rows.
-    in_room(Session.mentor_id, "mentor_in_room"),
-    in_room(Session.mentee_id, "mentee_in_room"),
+    in_room(Session.mentor_id, "mentor_in_room", party_left=_MENTOR.id.is_(None)),
+    in_room(Session.mentee_id, "mentee_in_room", party_left=_MENTEE.id.is_(None)),
 )
 
 
