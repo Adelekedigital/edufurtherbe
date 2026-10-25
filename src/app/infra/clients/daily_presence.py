@@ -5,8 +5,10 @@ observed rather than from a press of Join (owner, 2026-10-08). Two sources
 carry the same fact, and both reduce to a :class:`Sighting`: the room, the
 ``user_id`` we minted into the person's meeting token, and when they were seen.
 
-- **Webhooks** (``participant.joined``) arrive live, so a party is shown present
-  while the call runs.
+- **Webhooks** (``participant.joined``, ``participant.left``) arrive live, so a
+  party is shown present while the call runs, and in the room *now* until they
+  leave (#394). A leave is a :class:`Departure`: the sighting of its join, and
+  when that join ended.
 - **Meeting records** are read at settlement for any session a webhook left
   undecided. Daily stops sending webhooks after three failed deliveries, and
   settling on silence would brand everyone absent and refund the wrong people.
@@ -27,10 +29,13 @@ from app.domain.session_minutes import LONGEST_STAY
 from app.infra.clients.scheduler import UntrustedCallbackError
 
 __all__ = [
+    "STAY_ID_MAX_LENGTH",
+    "Departure",
     "Sighting",
     "Stay",
     "UnreadableRecordsError",
     "UntrustedCallbackError",
+    "departure_from",
     "sighting_from",
     "sightings_from_records",
     "stays_from_records",
@@ -49,6 +54,25 @@ class Sighting:
     room: str
     user_id: str
     at: dt.datetime
+    #: Daily's id for this one join (its ``session_id``), on a webhook only:
+    #: what opens and closes a stay in the room (#394). ``None`` from the
+    #: records, and from a webhook whose id we could not store.
+    stay: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Departure:
+    """A ``participant.left``: the join it ends, seen at its own join time, and
+    when it ended (``joined_at + duration``)."""
+
+    sighting: Sighting
+    left: dt.datetime
+
+
+#: The longest Daily join id stored, matching the column's ``CHECK``. A longer
+#: id is kept as a sighting with no stay, never refused: refusing counts as a
+#: failed delivery.
+STAY_ID_MAX_LENGTH = 128
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +121,52 @@ def verify_daily_signature(*, secret: str, timestamp: str, body: bytes, signatur
         raise UntrustedCallbackError("the webhook signature does not match its body")
 
 
+def _stay_id(value: object) -> str | None:
+    """Daily's join id, when it is one we can store."""
+    if not isinstance(value, str) or not 1 <= len(value) <= STAY_ID_MAX_LENGTH:
+        return None
+    return value
+
+
+def _seconds_or_problem(seconds: object) -> float | str:
+    """``seconds`` as a length of stay in the room, or why it is not one (a
+    ``str``). One rule for the records and for a leave, so a duration settlement
+    refuses is one the webhook refuses too.
+
+    Finite too: JSON may carry NaN, which compares false to everything and
+    would reach `timedelta` as a crash. And bounded, as a bound on one record
+    rather than a cap on minutes (decision 281): no real stay is longer, and a
+    finite `2e11` would overflow the stored minutes on every run.
+    """
+    if (
+        not isinstance(seconds, int | float)
+        or isinstance(seconds, bool)
+        or not math.isfinite(seconds)
+        or seconds < 0
+    ):
+        return "a participant has no usable duration"
+    if seconds > LONGEST_STAY.total_seconds():
+        return "a participant's duration is longer than any real stay"
+    return float(seconds)
+
+
+def _event_sighting(event: dict[str, Any], kind: str) -> tuple[Sighting, dict[str, Any]] | None:
+    """The sighting in a delivery of ``kind``, with its payload, or ``None``."""
+    if event.get("type") != kind:
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    room, user_id = payload.get("room"), payload.get("user_id")
+    at = _moment(payload.get("joined_at"))
+    if not room or not user_id or at is None:
+        return None
+    sighting = Sighting(
+        room=str(room), user_id=str(user_id), at=at, stay=_stay_id(payload.get("session_id"))
+    )
+    return sighting, payload
+
+
 def sighting_from(event: dict[str, Any]) -> Sighting | None:
     """The sighting in a ``participant.joined`` delivery, or ``None``.
 
@@ -106,16 +176,33 @@ def sighting_from(event: dict[str, Any]) -> Sighting | None:
     because refusing counts as a failed delivery, and three of those switch the
     webhook off.
     """
-    if event.get("type") != "participant.joined":
+    found = _event_sighting(event, "participant.joined")
+    return None if found is None else found[0]
+
+
+def departure_from(event: dict[str, Any]) -> Departure | None:
+    """The departure in a ``participant.left`` delivery, or ``None``.
+
+    ``None`` for anything else, and for a leave missing the room, the user or
+    the join time: acknowledged and ignored, as for a join. **A leave whose
+    ``duration`` is unusable still ends its stay**, at its join (the records'
+    own rule, :func:`_seconds_or_problem`, decides usable), because the event
+    itself says they left. A leave with no storable join id is still its
+    join's sighting, so a join whose own delivery was lost still counts.
+    """
+    found = _event_sighting(event, "participant.left")
+    if found is None:
         return None
-    payload = event.get("payload")
-    if not isinstance(payload, dict):
-        return None
-    room, user_id = payload.get("room"), payload.get("user_id")
-    at = _moment(payload.get("joined_at"))
-    if not room or not user_id or at is None:
-        return None
-    return Sighting(room=str(room), user_id=str(user_id), at=at)
+    sighting, payload = found
+    # A leave says they left whatever its length says; one we cannot read
+    # closes the stay at its join, rather than leaving them in the room.
+    seconds = _seconds_or_problem(payload.get("duration"))
+    length = dt.timedelta(seconds=seconds) if isinstance(seconds, float) else dt.timedelta(0)
+    try:
+        left = sighting.at + length
+    except OverflowError:
+        left = sighting.at
+    return Departure(sighting=sighting, left=left)
 
 
 def _participants(
@@ -181,21 +268,9 @@ def stays_from_records(room: str, records: dict[str, Any]) -> list[Stay]:
     for meeting, person, user_id, joined in _participants(records):
         if meeting.get("ongoing") is not False:
             raise UnreadableRecordsError(f"a meeting in {room} is still going or unmarked")
-        seconds = person.get("duration")
-        # Finite too: JSON may carry NaN, which compares false to everything
-        # and would reach `timedelta` as a crash rather than an unreadable read.
-        if (
-            not isinstance(seconds, int | float)
-            or isinstance(seconds, bool)
-            or not math.isfinite(seconds)
-            or seconds < 0
-        ):
-            raise UnreadableRecordsError("a participant has no usable duration")
-        # A bound on one record, not a cap on minutes (decision 281): no real
-        # stay is longer, and a finite `2e11` would overflow the stored minutes
-        # on every run.
-        if seconds > LONGEST_STAY.total_seconds():
-            raise UnreadableRecordsError("a participant's duration is longer than any real stay")
+        seconds = _seconds_or_problem(person.get("duration"))
+        if isinstance(seconds, str):
+            raise UnreadableRecordsError(seconds)
         try:
             left = joined + dt.timedelta(seconds=seconds)
         except OverflowError as exc:

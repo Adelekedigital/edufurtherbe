@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.infra.db.session_writer.attendance import (
     confirm_presence,
     door_row,
+    observe_departure,
     observe_presence,
     presence_to_confirm,
     record_arrival,
@@ -50,6 +51,7 @@ __all__ = [
     "door_row",
     "expire_requests",
     "measure_minutes",
+    "observe_departure",
     "observe_presence",
     "on_confirmed",
     "on_ended",

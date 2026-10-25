@@ -18,6 +18,7 @@ from typing import Any, Protocol
 
 from sqlalchemy import and_, exists, func, true
 
+from app.domain.attendance import PRESENCE_REPORTING
 from app.domain.enums import ApprovalStatus
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session
@@ -30,6 +31,16 @@ def session_ends() -> Any:
     has one definition. Read by the calendar retries, the offering retirement,
     met-mentors and measured minutes."""
     return func.upper(func.session_window(Session.starts_at, Session.duration_minutes))
+
+
+def presence_decides_sql() -> Any:
+    """:func:`app.domain.attendance.presence_decides` in SQL, held to it by a
+    test: a venue that reports presence, and a room that exists. Here rather
+    than in the attendance writer so the session read can use it too (#394)."""
+    return and_(
+        Session.meeting_provider.in_([str(p) for p in PRESENCE_REPORTING]),
+        Session.external_room_id.is_not(None),
+    )
 
 
 def live(user: Any) -> Any:

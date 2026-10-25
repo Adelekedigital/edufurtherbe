@@ -32,8 +32,8 @@ from app.domain.session_minutes import Interval, co_present_minutes
 from app.infra.clients.daily_presence import Stay
 from app.infra.clients.meetings import RoomsPort, VenueUnavailableError
 from app.infra.db.models.sessions import Session
-from app.infra.db.predicates import session_ends
-from app.infra.db.session_writer.attendance import RECORDS_READ_BUDGET, presence_decides_sql
+from app.infra.db.predicates import presence_decides_sql, session_ends
+from app.infra.db.session_writer.attendance import RECORDS_READ_BUDGET
 
 __all__ = ["measure_minutes"]
 

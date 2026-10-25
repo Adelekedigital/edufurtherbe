@@ -86,13 +86,15 @@ def test_anything_else_is_refused(signature: str, timestamp: str, body: bytes) -
 
 
 def test_a_participant_joined_is_a_sighting() -> None:
-    """The room, our user id (minted into the token), and when Daily saw them."""
+    """The room, our user id (minted into the token), when Daily saw them, and
+    Daily's id for this one join (#394)."""
     sighting = sighting_from(json.loads(BODY))
 
     assert sighting == Sighting(
         room="ef-daily-0193a5b2-0000-7000-8000-000000000001",
         user_id="0193a5b2-0000-7000-8000-0000000000aa",
         at=dt.datetime.fromtimestamp(1728432060.5, tz=dt.UTC),
+        stay="daily-participant-1",
     )
 
 

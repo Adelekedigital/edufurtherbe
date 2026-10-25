@@ -134,6 +134,9 @@ async def test_party_keys_are_exactly_these(
         # #382: when Daily first saw this party in the room. Optional in the
         # spec; `joined_at` stays the Join press.
         "in_room_at",
+        # #394: whether they are in the Daily room now; null where presence is
+        # not reported. What the other party learns is only that.
+        "in_room",
         "attendance_status",
         # The pending card's "BSc Student at FUTA": `top_qualification`.
         "degree",

@@ -25,7 +25,11 @@ from app.domain.notifications import (
 )
 from app.domain.sessions import EXPIRY_KIND
 from app.domain.suggestions import SUGGESTION_REMINDER_KIND
-from app.infra.clients.daily_presence import sighting_from, verify_daily_signature
+from app.infra.clients.daily_presence import (
+    departure_from,
+    sighting_from,
+    verify_daily_signature,
+)
 from app.infra.clients.notifications import live_notifier
 from app.infra.clients.scheduler import (
     UntrustedCallbackError,
@@ -41,6 +45,7 @@ from app.infra.db.outbox import drain
 from app.infra.db.session_writer import (
     add_meet_link,
     expire_requests,
+    observe_departure,
     observe_presence,
     on_ended,
     remind_before_session,
@@ -185,8 +190,9 @@ async def daily_presence_callback(request: Request, session: SessionDep) -> bool
     join would mark a party present and move a refund.
 
     Unconfigured refuses everything, as the QStash callback does. Once verified,
-    anything that is not a complete ``participant.joined`` (Daily's creation
-    check, other event types) is acknowledged and records nothing: refusing it
+    anything that is not a complete ``participant.joined`` or
+    ``participant.left`` (Daily's creation check, other event types) is
+    acknowledged and records nothing: refusing it
     would count as a failed delivery, and three of those switch the webhook off.
     """
     secret = _configured(request).daily_webhook_secret
@@ -208,10 +214,14 @@ async def daily_presence_callback(request: Request, session: SessionDep) -> bool
         event = json.loads(body or b"{}")
     except ValueError:
         return False
-    sighting = sighting_from(event) if isinstance(event, dict) else None
-    if sighting is None:
+    if not isinstance(event, dict):
         return False
-    recorded = await observe_presence(session, sighting)
+    if (departure := departure_from(event)) is not None:
+        recorded = await observe_departure(session, departure)
+    elif (sighting := sighting_from(event)) is not None:
+        recorded = await observe_presence(session, sighting)
+    else:
+        return False
     await session.commit()
     return recorded
 

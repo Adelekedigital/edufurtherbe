@@ -15,7 +15,7 @@ from app.main import create_app
 
 #: Each schema, and the fields added to it after the frontend first consumed it.
 ADDED = {
-    "PartyRead": ("in_room_at", "degree", "institution", "cover_color", "cover_art"),
+    "PartyRead": ("in_room_at", "in_room", "degree", "institution", "cover_color", "cover_art"),
     # The cover on every card that shows an avatar (owner, 2026-10-20).
     "MentorSummaryRead": ("cover_color", "cover_art"),
     "SessionRead": ("mentee_attendance_sessions", "refund_until", "missed_reason_sent"),
