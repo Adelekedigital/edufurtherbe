@@ -172,6 +172,10 @@ class SessionType(TimestampMixin, Base):
     #: most one per mentor (`ix_session_types_one_featured`), and only a shown
     #: one (`ck_session_types_featured_is_active`) — hiding un-features.
     is_featured: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    #: **The offering onboarding created for the mentor** ("Created for you",
+    #: Session Types PRD 2026-10-21). Set only by the create, never changed
+    #: after; at most one per mentor among live rows (`ix_session_types_one_starter`).
+    is_starter: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     #: **When the mentor asked for this offering to go while sessions were still
     #: booked on it** (#218). Hidden meanwhile; the hourly settle run deletes it
     #: once nothing live remains. When it will go, and how many sessions hold
@@ -248,6 +252,14 @@ class SessionType(TimestampMixin, Base):
             "mentor_user_id",
             unique=True,
             postgresql_where=text("is_featured AND deleted_at IS NULL"),
+        ),
+        # **One starter per mentor**, as the featured one above: a second
+        # create asking for it is a `409`.
+        Index(
+            "ix_session_types_one_starter",
+            "mentor_user_id",
+            unique=True,
+            postgresql_where=text("is_starter AND deleted_at IS NULL"),
         ),
         CheckConstraint("NOT is_featured OR is_active", name="featured_is_active"),
         # A scheduled deletion is hidden until it goes (#218); showing it again

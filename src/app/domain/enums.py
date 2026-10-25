@@ -373,6 +373,18 @@ class QuestionType(StrEnum):
     MULTI_CHOICE = "multi_choice"
 
 
+class QuestionOptionsSource(StrEnum):
+    """Where a `multi_choice` question's options come from when the mentor did not
+    write them (Session Types PRD 2026-10-21, amending decision 203).
+
+    `HELP_AREAS`: the mentor's live help areas (service offerings), read at every
+    load, so the options follow the profile. Null on the column means the mentor
+    wrote the options. Not `OptionSource`, a conferencing option's provenance.
+    """
+
+    HELP_AREAS = "help_areas"
+
+
 class IntakeStatus(StrEnum):
     """How far a mentee has got with the form attached to their booking.
 

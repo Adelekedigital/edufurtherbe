@@ -60,6 +60,7 @@ from app.domain.enums import (
     MissedReason,
     OptionSource,
     PrimaryRole,
+    QuestionOptionsSource,
     QuestionType,
     ReviewReportOutcome,
     ReviewReportReason,
@@ -158,6 +159,8 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # The intake stack. `question_type` carries `multi_choice`, which nothing
     # writes yet — see the enum for why shipping it early is now cheap.
     QuestionType: frozenset({"ck_session_type_questions_question_type_is_known"}),
+    # Where a choice question's options come from; null is the mentor's own (amends #203).
+    QuestionOptionsSource: frozenset({"ck_session_type_questions_options_source_is_known"}),
     IntakeStatus: frozenset({"ck_intake_submissions_status_is_known"}),
     IntakeFileType: frozenset({"ck_intake_files_content_type_is_known"}),
     # The second table to carry this vocabulary. `reviews.reviewed_for_role` is
