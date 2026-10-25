@@ -115,6 +115,8 @@ EXPECTED_MODELS = {
     "IntakeFormQuestion",
     "Session",
     "SessionParticipant",
+    # Who is in the Daily room now, one row per join (#394).
+    "SessionRoomStay",
     "SessionSuggestion",
     "SessionEvent",
     # Platform infrastructure, which serves every feature and belongs to none.

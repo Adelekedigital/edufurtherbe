@@ -446,6 +446,8 @@ def test_the_natural_keys_survive_as_unique_constraints(migrated_database: str) 
         # person on one session, and two booking configs for one session type,
         # both become legal and nothing surfaces it.
         ("session_participants", "(session_id, user_id)"),
+        # One row per Daily join of one party (#394).
+        ("session_room_stays", "(participant_id, provider_session_id)"),
         # ADR 0027 section 8: the package made `user_id` the primary key, and
         # non-negotiable #10 admits no natural keys. The invariant it carried —
         # one unlock per user, ever — survives as this unique constraint, and

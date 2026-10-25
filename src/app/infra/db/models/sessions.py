@@ -718,6 +718,47 @@ class SessionParticipant(TimestampMixin, Base):
     )
 
 
+class SessionRoomStay(TimestampMixin, Base):
+    """One join of one party to a session's Daily room: who is in it **now** (#394).
+
+    Daily names every join with its own ``session_id``, the key here with the
+    participant. ``participant.joined`` opens a stay; ``participant.left``
+    closes it at ``joined_at + duration``. Either may arrive first, or twice,
+    and the pair ends the same. A party is in the room while any stay is open,
+    so a second tab keeps them in until both tabs leave.
+
+    Live state for the join page, not attendance: ``in_room_at`` and
+    ``attendance_status`` on the participant row decide that.
+    """
+
+    __tablename__ = "session_room_stays"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    participant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("session_participants.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Daily's id for this one join, never ours and never shown.
+    provider_session_id: Mapped[str] = mapped_column(Text, nullable=False)
+    joined_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    left_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        Index(
+            "uq_session_room_stays_join",
+            "participant_id",
+            "provider_session_id",
+            unique=True,
+        ),
+        CheckConstraint(
+            "char_length(provider_session_id) BETWEEN 1 AND 128",
+            name="provider_session_id_length",
+        ),
+        CheckConstraint("left_at IS NULL OR left_at >= joined_at", name="left_after_joined"),
+    )
+
+
 class SessionEvent(Base):
     """Every state a session passed through, append-only.
 
