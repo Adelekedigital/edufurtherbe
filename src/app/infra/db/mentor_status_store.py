@@ -53,7 +53,7 @@ from app.infra.db.mentor_listing import (
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
-from app.infra.db.predicates import LIVE
+from app.infra.db.predicates import LIVE, mentor_approved
 
 
 async def _approval_before(session: AsyncSession, user_id: UUID) -> str | None:
@@ -433,9 +433,7 @@ async def may_self_resume(session: AsyncSession, user_id: UUID) -> bool:
     Approval matters too: a mentor who was never approved has nothing to return
     to, and relisting them would put an unapproved profile in the directory.
     """
-    allowed = and_(
-        MentorProfile.approval_status == ApprovalStatus.APPROVED, newest_unlisting_is_self()
-    )
+    allowed = and_(mentor_approved(), newest_unlisting_is_self())
     return bool(await _profile_flag(session, user_id, allowed))
 
 

@@ -60,6 +60,7 @@ from app.domain.referrals import claim_window
 from app.domain.writing_assist import provenance_problem
 from app.infra.db.application_freeze import (
     language_rows_unless_frozen,
+    refuse_clearing_help_areas,
     refuse_declined_booking_rules,
     refuse_frozen_changes,
     refuse_while_in_review,
@@ -527,6 +528,7 @@ async def updated_mentor_profile(
     sent = payload.model_dump(exclude_unset=True)
     # A bad value is a `422` whatever the review state, so it is asked first.
     await refuse_invalid_mentor_profile(session, sent)
+    await refuse_clearing_help_areas(session, user_id, sent)
     await refuse_frozen_changes(session, user_id, sent)
     await refuse_declined_booking_rules(session, user_id, sent)
     changed = await update_mentor_profile(session, user_id, sent)

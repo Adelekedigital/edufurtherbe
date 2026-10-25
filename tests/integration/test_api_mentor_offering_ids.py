@@ -197,6 +197,84 @@ async def test_an_offering_twice_is_a_422_at_the_list(
     assert _pointers(response) == ["/offering_ids"]
 
 
+async def test_an_approved_mentor_clearing_every_help_area_is_a_422_and_writes_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """An approved mentor always has a help area (owner, 2026-10-25; decision 292)."""
+    mentor = await make_public_mentor(db_engine, "off-clear")
+    a, b = await _offerings(db_engine, 2)
+    assert (await _patch(api_client, db_engine, mentor, {"offering_ids": [a]})).status_code == 200
+    headline = await _headline(db_engine, mentor)
+
+    response = await _patch(
+        api_client, db_engine, mentor, {"offering_ids": [], "headline": "Changed"}
+    )
+
+    assert response.status_code == 422, response.text
+    assert _pointers(response) == ["/offering_ids"]
+    assert await _held(db_engine, mentor) == [a]
+    assert await _headline(db_engine, mentor) == headline
+    replaced = await _patch(api_client, db_engine, mentor, {"offering_ids": [b]})
+    assert replaced.status_code == 200, replaced.text
+    assert await _held(db_engine, mentor) == [b]
+
+
+async def test_an_unlisted_approved_mentor_cannot_clear_them_either(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Approved, listed or not: pausing does not make a mentor a draft."""
+    mentor = await make_public_mentor(db_engine, "off-clear-unlisted", listed=False)
+    (a,) = await _offerings(db_engine, 1)
+    assert (await _patch(api_client, db_engine, mentor, {"offering_ids": [a]})).status_code == 200
+
+    response = await _patch(api_client, db_engine, mentor, {"offering_ids": []})
+
+    assert response.status_code == 422, response.text
+    assert await _held(db_engine, mentor) == [a]
+
+
+async def test_an_approved_mentor_holding_only_a_retired_offering_can_resend_empty(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The read shows `[]` once support retires their last offering, so
+    resending it beside another edit changes nothing and saves."""
+    mentor = await make_public_mentor(db_engine, "off-clear-retired")
+    retired = await _retired_offering(db_engine)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM mentor_service_offerings WHERE mentor_user_id = :u"), {"u": mentor}
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_service_offerings (mentor_user_id, service_offering_id) "
+                "VALUES (:u, :o)"
+            ),
+            {"u": mentor, "o": retired},
+        )
+
+    response = await _patch(
+        api_client, db_engine, mentor, {"offering_ids": [], "headline": "Still here"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert await _headline(db_engine, mentor) == "Still here"
+
+
+async def test_a_draft_mentor_may_clear_their_help_areas(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Before applying, an empty list is a step in filling the form in; the
+    application's own check asks for one at submit."""
+    mentor = await make_applicant(db_engine, "off-draft-clear", complete=False)
+    (a,) = await _offerings(db_engine, 1)
+    assert (await _patch(api_client, db_engine, mentor, {"offering_ids": [a]})).status_code == 200
+
+    response = await _patch(api_client, db_engine, mentor, {"offering_ids": []})
+
+    assert response.status_code == 200, response.text
+    assert await _held(db_engine, mentor) == []
+
+
 @pytest.mark.parametrize("case", ["unknown", "retired", "twice"])
 async def test_applying_with_a_bad_offering_creates_nothing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, case: str

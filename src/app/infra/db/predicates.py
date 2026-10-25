@@ -77,6 +77,17 @@ def application_in_review() -> list[Any]:
     ]
 
 
+def mentor_approved() -> Any:
+    """The mentor was approved, listed or not: the one statement of it, as an
+    expression so a `SELECT` can read it as a column too."""
+    return MentorProfile.approval_status == ApprovalStatus.APPROVED
+
+
+def application_approved() -> list[Any]:
+    """An approved mentor, on a live profile, listed or not."""
+    return [mentor_approved(), MentorProfile.deleted_at.is_(None)]
+
+
 def application_declined() -> list[Any]:
     """A mentor application that was declined, on a live profile: its booking
     setup is locked (owner, 2026-10-20)."""

@@ -25,7 +25,11 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import MentorApplicationDeclinedError, MentorApplicationInReviewError
+from app.core.errors import (
+    MentorApplicationDeclinedError,
+    MentorApplicationInReviewError,
+    ValidationError,
+)
 from app.domain.mentor_application import (
     BOOKING_RULE_FIELDS,
     FROZEN_FIELDS,
@@ -40,12 +44,17 @@ from app.infra.db.models.mentoring import (
     ServiceOffering,
 )
 from app.infra.db.models.user import UserProfile
-from app.infra.db.offerings import live_offering
-from app.infra.db.predicates import application_declined, application_in_review
+from app.infra.db.offerings import claims_a_live_help_area, live_offering
+from app.infra.db.predicates import (
+    application_approved,
+    application_declined,
+    application_in_review,
+)
 from app.infra.db.profile_writer import held_languages, resolved_languages
 
 __all__ = [
     "language_rows_unless_frozen",
+    "refuse_clearing_help_areas",
     "refuse_declined_booking_rules",
     "refuse_frozen_changes",
     "refuse_while_declined",
@@ -234,6 +243,25 @@ async def refuse_declined_booking_rules(
         return
     if changed := tuple(n for n, held in zip(names, stored, strict=True) if sent[n] != held):
         raise _declined(changed)
+
+
+async def refuse_clearing_help_areas(
+    session: AsyncSession, user_id: UUID, sent: Mapping[str, Any]
+) -> None:
+    """Refuse `offering_ids: []` that would leave an approved mentor with no
+    help area (owner, 2026-10-25; decision 292). A draft may clear the list; the
+    application asks for one at submit, and the review freeze holds it after.
+    One already holding none (an offering retired) resends `[]` unchanged."""
+    if sent.get("offering_ids") != []:
+        return
+    if not await lock_mentor(session, user_id):
+        return
+    holding = [*application_approved(), claims_a_live_help_area(MentorProfile.user_id)]
+    if await _profile_where(session, user_id, holding) is not None:
+        raise ValidationError(
+            "Keep at least one help area.",
+            field_errors=(("/offering_ids", "an approved mentor keeps at least one help area"),),
+        )
 
 
 def _declined(fields: tuple[str, ...]) -> MentorApplicationDeclinedError:

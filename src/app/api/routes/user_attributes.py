@@ -376,7 +376,8 @@ async def apply_as_mentor(profile_id: CreatedMentorProfileDep, response: Respons
     description=(
         "`approval_status`, `listing_status` and every audit field are not "
         "writable here — a mentor who could approve or relist themselves is not "
-        "being reviewed."
+        "being reviewed. An approved mentor keeps at least one help area: "
+        "`offering_ids: []` that would leave none is a `422` at `/offering_ids`."
     ),
     responses=with_declined(WRITE_RESPONSES | IN_REVIEW_RESPONSE),
 )
