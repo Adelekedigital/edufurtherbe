@@ -57,6 +57,7 @@ from app.domain.enums import (
     LookupStatus,
     MeetingProvider,
     MentorStatusType,
+    MissedReason,
     OptionSource,
     PrimaryRole,
     QuestionType,
@@ -211,6 +212,8 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # A user's own links (decision 275): the platform, and the kind of link.
     LinkPlatform: frozenset({"ck_user_links_platform_is_known"}),
     LinkKind: frozenset({"ck_user_links_kind_is_known"}),
+    # Why a party missed a session (Session Join PRD); internal, admins only.
+    MissedReason: frozenset({"ck_session_missed_reasons_reason_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.

@@ -463,6 +463,8 @@ def test_the_natural_keys_survive_as_unique_constraints(migrated_database: str) 
         # One cached next free time per offering (decision 284).
         ("session_type_next_availability", "(mentor_user_id, session_type_id)"),
         ("session_type_next_availability", "(session_type_id)"),
+        # One missed reason per party per session (Session Join PRD).
+        ("session_missed_reasons", "(session_id, user_id)"),
     }
 
     for table, columns in required:

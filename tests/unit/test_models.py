@@ -117,6 +117,8 @@ EXPECTED_MODELS = {
     "SessionParticipant",
     # Who is in the Daily room now, one row per join (#394).
     "SessionRoomStay",
+    # Why a party missed a session (Session Join PRD).
+    "SessionMissedReason",
     "SessionSuggestion",
     "SessionEvent",
     # Platform infrastructure, which serves every feature and belongs to none.
@@ -160,6 +162,8 @@ APPEND_ONLY = frozenset(
         "InviteLinkRetiredCode",
         # A call the writing assistant made is a fact about a moment.
         "WritingAssistRequest",
+        # A reason a party gave for missing a session is what they said then.
+        "SessionMissedReason",
     }
 )
 

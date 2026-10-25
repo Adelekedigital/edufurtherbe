@@ -47,6 +47,7 @@ from app.infra.db.models.mentoring import (
     ServiceOffering,
     SessionTypeOffering,
 )
+from app.infra.db.models.missed_reasons import SessionMissedReason
 from app.infra.db.models.platform import FeatureInterest, IdempotencyKey, OutboxEvent
 from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.referrals import (
@@ -122,6 +123,7 @@ __all__ = [
     "ServiceOffering",
     "Session",
     "SessionEvent",
+    "SessionMissedReason",
     "SessionParticipant",
     "SessionRoomStay",
     "SessionSuggestion",
