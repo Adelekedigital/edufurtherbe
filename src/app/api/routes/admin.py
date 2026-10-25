@@ -39,6 +39,7 @@ from app.api.deps import (
     PendingInstitutionsDep,
     PendingMentorsDep,
     RestoredAccountDep,
+    SessionMissedReasonsDep,
     SessionTypeLimitSetDep,
 )
 from app.api.routes.sessions import REPLAYED_HEADER
@@ -57,6 +58,7 @@ from app.api.schemas.admin import (
 from app.api.schemas.admin_credits import AdminCreditGrantRead, AdminGrantHistoryRead
 from app.api.schemas.common import Page
 from app.api.schemas.review_reports import ModeratedReportRead, ModeratedReviewRead
+from app.api.schemas.sessions import AdminMissedReasonRead
 from app.core.errors import NotFoundError
 from app.domain.session_type_limit import DEFAULT_SESSION_TYPE_LIMIT, SESSION_TYPE_LIMIT_CEILING
 
@@ -468,3 +470,20 @@ async def restore_deleted_account(restored: RestoredAccountDep) -> None:
 async def set_session_type_limit(limit: SessionTypeLimitSetDep) -> SessionTypeLimitRead:
     value, is_default = limit
     return SessionTypeLimitRead(limit=value, is_default=is_default)
+
+
+@router.get(
+    "/sessions/{session_id}/missed-reasons",
+    response_model=Page[AdminMissedReasonRead],
+    summary="Why a session's parties missed it",
+    description=(
+        "Every reason a party sent for missing this session, oldest first, "
+        "with who sent it and on which side (`mentor` or `mentee`). An empty "
+        "page when nobody has; `404` for a session that does not exist. One "
+        "page, since a session has at most two.\n\n"
+        "Every live admin grant may look. The parties never read these back."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def session_missed_reasons(rows: SessionMissedReasonsDep) -> Page[AdminMissedReasonRead]:
+    return Page(data=[AdminMissedReasonRead(**row) for row in rows])

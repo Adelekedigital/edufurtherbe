@@ -47,6 +47,7 @@ from sqlalchemy.orm import aliased
 from app.domain.enums import SessionRole
 from app.infra.db import keyset
 from app.infra.db.holds import active_hold
+from app.infra.db.models.missed_reasons import SessionMissedReason
 from app.infra.db.models.sessions import Session, SessionEvent, SessionParticipant, SessionType
 from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User, UserProfile
@@ -243,6 +244,25 @@ _EVENT_COLUMNS = (
 )
 
 
+def _missed_reason_sent(viewer_id: UUID) -> Any:
+    """Whether **the viewer** has said why they missed this session.
+
+    The viewer, never the user a list is about: an admin listing somebody's
+    sessions reads their own `false`, and the other party never learns that a
+    reason exists. Served by the unique `(session_id, user_id)` pair.
+    """
+    return (
+        select(SessionMissedReason.id)
+        .where(
+            SessionMissedReason.session_id == Session.id,
+            SessionMissedReason.user_id == viewer_id,
+        )
+        .correlate(Session)
+        .exists()
+        .label("missed_reason_sent")
+    )
+
+
 def is_a_party(viewer_id: UUID) -> Any:
     """The predicate every read here is scoped by.
 
@@ -274,6 +294,7 @@ async def list_sessions(
     session: AsyncSession,
     user_id: UUID,
     *,
+    viewer_id: UUID,
     limit: int,
     cursor: tuple[str, UUID] | None = None,
     starts_from: dt.datetime | None = None,
@@ -294,6 +315,9 @@ async def list_sessions(
     **Optionally narrowed to one side** (``side``): the sessions they mentor or
     the ones they booked, as a filter in the paged statement so ``limit``
     counts only matching rows.
+
+    ``missed_reason_sent`` is the **viewer**'s (``viewer_id``), who differs
+    from ``user_id`` when an admin reads somebody's list.
 
     **Either party, in one list** otherwise. A user may be a mentor and a mentee — dual
     roles are free by design, since authorization is profile existence rather
@@ -316,7 +340,7 @@ async def list_sessions(
     """
     keys = (Session.starts_at, Session.id)
     statement = (
-        _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS))
+        _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS, _missed_reason_sent(viewer_id)))
         .where(_on_side(user_id, side) if side is not None else is_a_party(user_id))
         .order_by(*(k.asc() if ascending else k.desc() for k in keys))
     )
@@ -351,9 +375,9 @@ async def get_session(
     can enumerate ids which sessions exist.
     """
     result = await session.execute(
-        _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS)).where(
-            Session.id == session_id, is_a_party(viewer_id)
-        )
+        _with_parties(
+            select(*_SESSION_COLUMNS, *_PARTY_COLUMNS, _missed_reason_sent(viewer_id))
+        ).where(Session.id == session_id, is_a_party(viewer_id))
     )
     row = result.mappings().one_or_none()
     if row is None:

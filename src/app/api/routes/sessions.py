@@ -25,6 +25,8 @@ so a client can tell which side they were on.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
@@ -35,6 +37,7 @@ from app.api.deps import (
     JoinedSessionDep,
     JoinLeadDep,
     RefundPolicyDep,
+    SentMissedReasonDep,
     SessionAnswersDep,
     SessionDetailDep,
     SessionDoorDep,
@@ -47,6 +50,7 @@ from app.api.schemas.intake import SessionAnswerRead
 from app.api.schemas.sessions import (
     DoorRead,
     JoinRead,
+    MissedReasonRead,
     SessionAcceptedRead,
     SessionCancelledRead,
     SessionDeclinedRead,
@@ -627,3 +631,59 @@ async def enter_session(door: SessionDoorDep) -> DoorRead:
     """`/join`'s door without its claim that you joined — this endpoint makes no
     such claim, and the response schema leaves no field to read one into."""
     return DoorRead(meeting_url=door)
+
+
+MISSED_REASON_RESPONSES: dict[int | str, dict[str, str]] = {
+    **READ_RESPONSES,
+    status.HTTP_403_FORBIDDEN: {
+        "description": (
+            "`/problems/missed-reason-not-yours`: the other party missed this "
+            "session and you did not (your attendance is not `no_show`). Only a "
+            "party gets this, so it discloses nothing."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "`/problems/missed-reason-already-sent`: you already said why. "
+            "One reason per person per session."
+        )
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": (
+            "`/problems/session-not-missed`: nobody missed this session. Either "
+            "it is not settled yet (its status is not `completed` or `no_show`) "
+            "or both of you attended. Checked before the `403`. Otherwise the "
+            "request itself: an unknown `reason`, a `note` over 1000 characters, "
+            "or a field this endpoint does not take."
+        )
+    },
+}
+
+
+@router.post(
+    "/sessions/{session_id}/missed-reason",
+    status_code=status.HTTP_201_CREATED,
+    response_model=MissedReasonRead,
+    summary="Say why you missed a session",
+    description=(
+        "For a party whose own attendance is `no_show` on a session settled as "
+        "`completed` or `no_show`. **Internal**: EduFurther's admins read it; "
+        "the other party never sees it, through this or any endpoint. If both "
+        "of you missed it, each may send their own.\n\n"
+        "`reason` is one of `forgot`, `technical`, `emergency`, "
+        "`wrong_time_zone`, `other`. `note` is optional, at most 1000 "
+        "characters, trimmed, and a blank one is stored as `null`.\n\n"
+        "**Once each.** A second send is a `409`, which is also what a retry of "
+        "a send that succeeded gets, so no `Idempotency-Key` is needed. "
+        "`missed_reason_sent` on the session then reads `true` for you, and "
+        "`Location` names that session: the reason has no URL of its own."
+    ),
+    responses=MISSED_REASON_RESPONSES,
+)
+async def send_missed_reason(
+    session_id: UUID, reason: SentMissedReasonDep, response: Response
+) -> MissedReasonRead:
+    # The reason has no URL of its own; the session is where it shows, as
+    # `missed_reason_sent`.
+    response.headers["Location"] = f"/api/v1/sessions/{session_id}"
+    return MissedReasonRead(**reason)

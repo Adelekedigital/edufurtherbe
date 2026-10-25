@@ -23,6 +23,7 @@ from app.api.deps.admin import (
     PendingMentorsDep,
     RestoredAccountDep,
     ResumedSelfDep,
+    SessionMissedReasonsDep,
     SessionTypeLimitSetDep,
 )
 from app.api.deps.availability import (
@@ -151,6 +152,7 @@ from app.api.deps.sessions import (
     JoinedSessionDep,
     JoinLeadDep,
     RefundPolicyDep,
+    SentMissedReasonDep,
     SessionDetailDep,
     SessionDoorDep,
     SessionEventsDep,
@@ -265,10 +267,12 @@ __all__ = [
     "ReviewableSessionsDep",
     "RuntimeJobDep",
     "SeenApprovalDep",
+    "SentMissedReasonDep",
     "SessionAnswersDep",
     "SessionDetailDep",
     "SessionDoorDep",
     "SessionEventsDep",
+    "SessionMissedReasonsDep",
     "SessionTypeLimitSetDep",
     "SessionTypeWindowsDep",
     "SessionTypesDep",

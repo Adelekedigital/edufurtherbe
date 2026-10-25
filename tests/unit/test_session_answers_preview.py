@@ -42,6 +42,8 @@ def test_the_session_read_has_exactly_these_fields() -> None:
         "mentee_attendance_sessions",
         # Until when the mentee's cancellation refunds (MENTEE_CANCEL_REFUND_HOURS).
         "refund_until",
+        # Whether the viewer said why they missed it (Session Join PRD).
+        "missed_reason_sent",
     }
 
 
