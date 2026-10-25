@@ -1,4 +1,4 @@
-"""The stage-set label rule (#215) and the duration range's one home (#216)."""
+"""The stage set's rule (#215, decision 288) and the duration range's one home (#216)."""
 
 from __future__ import annotations
 
@@ -7,49 +7,35 @@ from sqlalchemy import CheckConstraint, Table
 
 from app.domain.availability import SESSION_DURATION_MINUTES
 from app.domain.enums import ApplicationStage
-from app.domain.sessions import stage_label_problem
+from app.domain.sessions import stage_set_problem
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session, SessionTypeBookingConfig
 
-DRAFTING, REVISIONS, OTHER = (
-    ApplicationStage.DRAFTING_STAGE,
-    ApplicationStage.REVISIONS,
-    ApplicationStage.OTHER,
-)
+EXPLORING, APPLYING = ApplicationStage.EXPLORING, ApplicationStage.APPLYING
 
 
-@pytest.mark.parametrize(
-    ("stages", "label"),
-    [
-        ([], None),
-        ([DRAFTING], None),
-        ([DRAFTING, REVISIONS], None),
-        ([OTHER], "Gap year"),
-        # `other` behind a named stage — what the old symmetric CHECK refused.
-        ([DRAFTING, OTHER], "Gap year"),
-    ],
-)
-def test_a_legal_set_and_label(stages: list[ApplicationStage], label: str | None) -> None:
-    assert stage_label_problem(stages, label) is None
+def test_the_six_are_in_the_design_s_order() -> None:
+    """Decision 288. Clients render them in this order."""
+    assert [s.value for s in ApplicationStage] == [
+        "exploring",
+        "researching",
+        "preparing_documents",
+        "applying",
+        "interview_prep",
+        "awaiting_decision",
+    ]
 
 
-@pytest.mark.parametrize(
-    ("stages", "label", "pointer"),
-    [
-        ([DRAFTING, OTHER], None, "/custom_stage_label"),
-        ([OTHER], None, "/custom_stage_label"),
-        ([DRAFTING], "stray", "/custom_stage_label"),
-        ([], "stray", "/custom_stage_label"),
-        ([DRAFTING, DRAFTING], None, "/application_stages"),
-    ],
-)
-def test_an_illegal_set_and_label_names_the_field(
-    stages: list[ApplicationStage], label: str | None, pointer: str
-) -> None:
-    problem = stage_label_problem(stages, label)
+@pytest.mark.parametrize("stages", [[], [EXPLORING], [APPLYING, EXPLORING]])
+def test_a_set_with_each_stage_once_is_legal(stages: list[ApplicationStage]) -> None:
+    assert stage_set_problem(stages) is None
 
-    assert problem is not None
-    assert problem[0] == pointer
+
+def test_a_stage_twice_names_the_field() -> None:
+    assert stage_set_problem([APPLYING, APPLYING]) == (
+        "/application_stages",
+        "a stage appears twice",
+    )
 
 
 def _check(table: Table, name: str) -> str:

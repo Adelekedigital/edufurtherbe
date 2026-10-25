@@ -102,7 +102,8 @@ async def add_session_type(
                     "n": name,
                     "d": description,
                     "s": application_stage,
-                    "label": "My own wording" if application_stage == "other" else None,
+                    # No custom stage since the six (decision 288).
+                    "label": None,
                     "active": active,
                 },
             )

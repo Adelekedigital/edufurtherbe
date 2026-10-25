@@ -58,10 +58,8 @@ async def write_session_type_stages(
 ) -> None:
     """Replace one session type's rows, in order.
 
-    **Only the rows.** The legacy column is written by the caller in the same
-    statement as `custom_stage_label` — `first_stage` says what — because the
-    `CHECK` tying the two is immediate: writing the stage and the label in two
-    statements refuses a legal change halfway through it.
+    **Only the rows.** The legacy column is written by the caller, with
+    `first_stage`, in the statement that updates the type.
     """
     await session.execute(
         delete(SessionTypeStage).where(SessionTypeStage.session_type_id == session_type_id)

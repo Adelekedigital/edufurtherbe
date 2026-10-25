@@ -28,7 +28,6 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 
 from app.core.config import Settings
 from app.domain.enums import ApplicationStage, SessionReasonCode, SessionRole, SessionStatus
@@ -38,18 +37,15 @@ __all__ = [
     "EXPIRY_GRACE",
     "EXPIRY_KIND",
     "MAX_SESSION_TYPE_OFFERINGS",
-    "RETIRED_STAGES",
     "TRANSITIONS",
     "Transition",
-    "WritableStage",
-    "current_stages",
     "first_stage",
     "named_stages",
     "records_unavailability",
     "respond_by",
     "response_window",
     "response_window_hours",
-    "stage_label_problem",
+    "stage_set_problem",
     "too_late_to_cancel",
 ]
 
@@ -312,75 +308,18 @@ def named_stages(fields: Mapping[str, object]) -> list[ApplicationStage] | None:
     return None
 
 
-class WritableStage(StrEnum):
-    """The design's six application stages, in its order: **all a write may
-    name** (Session Types PRD, founder 2026-10-21). No custom stage.
-
-    A second vocabulary only while `ApplicationStage` still carries the retired
-    six for the rows not yet remapped; a test pins every member here to one
-    there, and the contract migration folds this back into it.
-    """
-
-    EXPLORING = "exploring"
-    RESEARCHING = "researching"
-    PREPARING_DOCUMENTS = "preparing_documents"
-    APPLYING = "applying"
-    INTERVIEW_PREP = "interview_prep"
-    AWAITING_DECISION = "awaiting_decision"
-
-
-#: Each retired stage and the current one it became; `OTHER` has none and is
-#: dropped. The founder's remap (2026-10-21). **The contract migration copies
-#: this table literally**, and a test pins the copy to it.
-RETIRED_STAGES: Mapping[ApplicationStage, WritableStage | None] = {
-    ApplicationStage.EARLY_EXPLORATION: WritableStage.EXPLORING,
-    ApplicationStage.DRAFTING_STAGE: WritableStage.PREPARING_DOCUMENTS,
-    ApplicationStage.REVISIONS: WritableStage.PREPARING_DOCUMENTS,
-    ApplicationStage.POST_SUBMISSION: WritableStage.AWAITING_DECISION,
-    ApplicationStage.INTERVIEWING: WritableStage.INTERVIEW_PREP,
-    ApplicationStage.OTHER: None,
-}
-
-
-def current_stages(stages: Sequence[ApplicationStage]) -> list[WritableStage]:
-    """A stored stage set as the design's six: each retired stage remapped,
-    `other` dropped, and a stage two retired ones both became kept once, at
-    the first one's place. What every read publishes until the contract
-    migration has remapped the rows themselves."""
-    seen: list[WritableStage] = []
-    for stage in stages:
-        current = RETIRED_STAGES[stage] if stage in RETIRED_STAGES else WritableStage(stage)
-        if current is not None and current not in seen:
-            seen.append(current)
-    return seen
-
-
-def first_stage[Stage: StrEnum](stages: Sequence[Stage]) -> Stage | None:
+def first_stage(stages: Sequence[ApplicationStage]) -> ApplicationStage | None:
     """The first of a stage set: what `session_types.application_stage` holds and
     the deprecated single `application_stage` field reports, this release."""
     return stages[0] if stages else None
 
 
-def stage_label_problem(
-    stages: Sequence[ApplicationStage], label: str | None
-) -> tuple[str, str] | None:
-    """What is wrong with this stage set and label together, as ``(pointer,
-    message)``, or ``None`` (#215).
-
-    **A label exactly when the set holds `other`**, in both directions: `other`
-    with no label renders a blank chip, and a label beside a set without `other`
-    is dead data that survives an edit. The database's `CHECK` can see only the
-    first stage (`session_types.application_stage`), so it holds one direction;
-    this is the whole rule, and the boundary and the store both ask it.
+def stage_set_problem(stages: Sequence[ApplicationStage]) -> tuple[str, str] | None:
+    """What is wrong with this stage set, as ``(pointer, message)``, or ``None``
+    (#215): each stage once. Asked at the boundary and again before the store
+    writes, because the pair index would otherwise answer with a 500. There is no
+    label to judge since the design's six (decision 288).
     """
     if len(set(stages)) != len(stages):
         return ("/application_stages", "a stage appears twice")
-    has_other = ApplicationStage.OTHER in stages
-    if has_other and label is None:
-        return ("/custom_stage_label", "a stage set with 'other' needs custom_stage_label")
-    if not has_other and label is not None:
-        return (
-            "/custom_stage_label",
-            "custom_stage_label belongs only to a stage set that includes 'other'",
-        )
     return None

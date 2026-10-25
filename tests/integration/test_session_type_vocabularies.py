@@ -3,19 +3,12 @@
 `session_types.category` and `application_stage` shipped with no constraint and
 no value in any row, withheld from the public contract because publishing them
 *"would commit this contract to a shape nobody has designed"*. Both have a shape
-now: a reference to the closed six-row `service_offerings` taxonomy, and a
-five-value closed set.
+now: a reference to the closed six-row `service_offerings` taxonomy, and the
+design's six stages with no custom stage (decision 288).
 
-**The symmetric `CHECK` is the interesting one.** `other` carries a label and no
-other value does. The half a one-directional form misses is **`other` with no
-label** — `custom_url IS NULL OR provider = 'custom'` is satisfied by a null, so
-it never required the payload it exists to require. That is the shape
-`ck_mentor_profiles_custom_url_requires_custom_venue` had, and it is why a mentor
-could be on a custom venue with nowhere to meet.
-
-It is enforced twice on purpose: at the boundary so a mismatch is a `422`
-naming the field, and in the database so it holds for every writer including
-the ETL and `psql`.
+Enforced twice on purpose: at the boundary so a bad value is a `422` naming the
+field, and in the database so it holds for every writer including the ETL and
+`psql`.
 """
 
 from __future__ import annotations
@@ -104,43 +97,35 @@ async def test_a_null_stage_is_permitted(db_engine: AsyncEngine) -> None:
     await write_stage(db_engine, session_type, None, None)
 
 
-async def test_other_without_a_label_is_refused(db_engine: AsyncEngine) -> None:
-    """**The direction a one-directional constraint misses**, verified by
-    breaking it: rewriting the `CHECK` as
-    `custom_stage_label IS NULL OR application_stage = 'other'` — the shape
-    `ck_mentor_profiles_custom_url_requires_custom_venue` had — fails only this
-    test. `other` with a null label satisfies the first clause and slips through,
-    which is the same hole that let a mentor be on a custom venue with no URL.
-
-    What it leaves behind is a blank chip: a stage whose whole meaning is the
-    label, rendering nothing.
-    """
-    mentor = await make_public_mentor(db_engine, "other-no-label")
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "early_exploration",
+        "drafting_stage",
+        "post_submission",
+        "revisions",
+        "interviewing",
+        "other",
+    ],
+)
+async def test_a_retired_stage_is_refused_by_the_database(
+    db_engine: AsyncEngine, stage: str
+) -> None:
+    """The contract migration narrowed the `CHECK` to the six (decision 288)."""
+    mentor = await make_public_mentor(db_engine, f"retired-{stage}")
     session_type = await add_session_type(db_engine, mentor)
 
     with pytest.raises(IntegrityError):
-        await write_stage(db_engine, session_type, "other", None)
+        await write_stage(db_engine, session_type, stage, None)
 
 
-async def test_a_label_beside_a_named_first_stage_is_legal_in_the_database(
-    db_engine: AsyncEngine,
-) -> None:
-    """**The half the database gave up when the stage became a set (#215).**
-
-    `[revisions, other]` is a legal set with a label, and its first — the only
-    stage the `CHECK` can see — is `revisions`. So the constraint holds one
-    direction now, and this pins that it does not quietly hold the other: were
-    the symmetric form restored, every such offering would fail to save.
-
-    The dead-label case this test used to guard — a mentor moves from `other` to
-    `revisions` and the label survives — is refused before the write by
-    `stage_label_problem`, and asserted through the API in
-    `test_session_type_stages.py`.
-    """
-    mentor = await make_public_mentor(db_engine, "label-no-other")
+async def test_any_label_is_refused_by_the_database(db_engine: AsyncEngine) -> None:
+    """No custom stage, so the column holds nothing, for every writer."""
+    mentor = await make_public_mentor(db_engine, "label-refused")
     session_type = await add_session_type(db_engine, mentor)
 
-    await write_stage(db_engine, session_type, "revisions", "beside other")
+    with pytest.raises(IntegrityError):
+        await write_stage(db_engine, session_type, "applying", "beside a stage")
 
 
 async def test_an_offering_cannot_point_at_a_service_offering_that_is_not_there(
@@ -185,17 +170,12 @@ async def test_an_unknown_stage_is_a_422_not_a_500(
 
 @pytest.mark.parametrize(
     ("stage", "label"),
-    [("other", None), ("revisions", "left over")],
+    [("other", None), ("applying", "left over")],
 )
 async def test_a_mismatched_label_is_a_422(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, stage: str, label: str | None
 ) -> None:
-    """Both directions at the boundary, mirroring the `CHECK`.
-
-    One shared validator serves the create and patch models, because the rule is
-    one rule and a copy in each is the duplication that stops matching the
-    database the day one is edited.
-    """
+    """`other` is no stage, and no label may be written (decision 288)."""
     _, auth_id = await as_mentor(db_engine, f"api-mismatch-{stage}")
 
     refused = await api_client.post(

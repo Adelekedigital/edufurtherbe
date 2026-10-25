@@ -308,19 +308,10 @@ class ApplicationStage(StrEnum):
     commit this contract to a shape nobody has designed"*. The UI designed it, so
     that reason has lapsed and the column stops being free text.
 
-    **`OTHER` was the escape hatch, and the founder removed it with the design's
-    six (decision 288, 2026-10-21).** It was kept because a closed set drawn
-    from mock screens was expected to be incomplete; the six came from the
-    finished design instead, with no custom stage. It stays in this class only
-    until the contract migration has remapped every stored row; nothing may
-    write it (`WritableStage`) and no read publishes it.
-
-    Its label lives in ``session_types.custom_stage_label``, present exactly
-    when an offering's stage set holds ``OTHER`` (#215): ``OTHER`` with no label
-    renders a blank chip, and a label beside a set without it is dead data that
-    survives an edit. Both directions, for the same reason the conferencing
-    constraint is symmetric — but since the stage became a set the ``CHECK`` can
-    see only its first member, so the whole rule is ``stage_label_problem``.
+    **The design's six, in its order, with no custom stage** (decision 288,
+    founder 2026-10-21). They replaced a five-value set plus an `other` escape
+    hatch with a mentor-written label; the retired values were remapped in the
+    stored rows by `b8d2e6f4a3c7` and are refused by the `CHECK`.
 
     **Not a lookup table**, unlike ``service_offerings`` next door. The handoff's
     test applies: adding a value here requires a code change anyway, because
@@ -328,17 +319,6 @@ class ApplicationStage(StrEnum):
     set, and #100 makes a closed set ``text`` + ``CHECK``.
     """
 
-    EARLY_EXPLORATION = "early_exploration"
-    DRAFTING_STAGE = "drafting_stage"
-    POST_SUBMISSION = "post_submission"
-    REVISIONS = "revisions"
-    #: At interview (#198), between revising and `OTHER` — the design's order.
-    INTERVIEWING = "interviewing"
-    OTHER = "other"
-    # The design's six (Session Types PRD, founder 2026-10-21), replacing the six
-    # above with no custom stage. **Expand step**: both sets are legal while the
-    # code moves to the new six; the old values and `OTHER` leave with the
-    # contract migration, which remaps every stored row first.
     EXPLORING = "exploring"
     RESEARCHING = "researching"
     PREPARING_DOCUMENTS = "preparing_documents"

@@ -342,8 +342,8 @@ async def test_the_upgrade_keeps_history_on_the_legacy_offering(db_engine: Async
 
 async def test_reseeding_writes_the_stage_set_the_reads_prefer(db_engine: AsyncEngine) -> None:
     """Reads prefer `session_type_stages` over the legacy column (#215), so a
-    seed that wrote only the column would leave an edited set standing — and a
-    label beside it — with the column saying something else."""
+    seed that wrote only the column would leave an edited set standing with the
+    column saying something else."""
     await seed(db_engine, replace(OPEN, key="demo-stages", session_types=(MOCK, INTRO)))
     user = await demo_user(db_engine, "demo-stages")
     mock = (await session_types_of(db_engine, user))["Mock interview with feedback"]["id"]
@@ -355,15 +355,12 @@ async def test_reseeding_writes_the_stage_set_the_reads_prefer(db_engine: AsyncE
         await conn.execute(
             text(
                 "INSERT INTO session_type_stages (session_type_id, stage, position) "
-                "VALUES (:t, 'drafting_stage', 0), (:t, 'other', 1)"
+                "VALUES (:t, 'applying', 0), (:t, 'researching', 1)"
             ),
             {"t": mock},
         )
         await conn.execute(
-            text(
-                "UPDATE session_types SET application_stage = 'drafting_stage', "
-                "custom_stage_label = 'Edited' WHERE id = :t"
-            ),
+            text("UPDATE session_types SET application_stage = 'applying' WHERE id = :t"),
             {"t": mock},
         )
 
