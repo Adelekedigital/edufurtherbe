@@ -21,7 +21,7 @@ from sqlalchemy import CursorResult, Select, delete, exists, func, insert, selec
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, ValidationError
-from app.domain.enums import IntakeStatus, QuestionType
+from app.domain.enums import IntakeStatus, QuestionOptionsSource, QuestionType
 from app.domain.intake import MAX_QUESTIONS
 from app.infra.db.models.intake import (
     IntakeAnswer,
@@ -31,6 +31,7 @@ from app.infra.db.models.intake import (
     SessionTypeQuestionOption,
 )
 from app.infra.db.models.sessions import SessionType
+from app.infra.db.offerings import offerings_for
 from app.infra.db.public_visibility import session_type_of
 
 __all__ = [
@@ -55,6 +56,7 @@ QUESTION_COLUMNS = (
     SessionTypeQuestion.is_required,
     SessionTypeQuestion.display_order,
     SessionTypeQuestion.allows_multiple,
+    SessionTypeQuestion.options_source,
 )
 
 
@@ -100,11 +102,41 @@ async def questions_by_type(
     result = await session.execute(_live_questions(session_type_ids))
     questions = [dict(row) for row in result.mappings()]
     options = await _options_of(session, [q["id"] for q in questions])
+    help_areas = await _help_areas_of(
+        session,
+        [q["session_type_id"] for q in questions if q["options_source"] is not None],
+    )
     grouped: dict[UUID, list[dict[str, Any]]] = {}
     for question in questions:
-        question["options"] = options.get(question["id"], [])
+        question["options"] = (
+            help_areas.get(question["session_type_id"], [])
+            if question["options_source"] == QuestionOptionsSource.HELP_AREAS
+            else options.get(question["id"], [])
+        )
         grouped.setdefault(question.pop("session_type_id"), []).append(question)
     return grouped
+
+
+async def _help_areas_of(
+    session: AsyncSession, session_type_ids: list[UUID]
+) -> dict[UUID, list[dict[str, Any]]]:
+    """A help-area question's options, per offering: its mentor's **live** help
+    areas, each `{id: service offering id, text: its name}`, in the platform's
+    order. Read through `offerings_for`, the one query of a mentor's help areas
+    (#8), so a retired offering is never an option, exactly as it is never shown."""
+    if not session_type_ids:
+        return {}
+    rows = await session.execute(
+        select(SessionType.id, SessionType.mentor_user_id).where(
+            SessionType.id.in_(set(session_type_ids))
+        )
+    )
+    owners = {row.id: row.mentor_user_id for row in rows}
+    by_mentor = await offerings_for(session, list(set(owners.values())))
+    return {
+        type_id: [{"id": o["id"], "text": o["display_name"]} for o in by_mentor.get(mentor, [])]
+        for type_id, mentor in owners.items()
+    }
 
 
 async def _owns(session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID) -> bool:
@@ -205,6 +237,7 @@ async def create_question(
                 is_required=payload["is_required"],
                 display_order=payload["display_order"],
                 allows_multiple=payload.get("allows_multiple", False),
+                options_source=payload.get("options_source"),
             )
             .returning(SessionTypeQuestion.id)
         )
@@ -230,17 +263,18 @@ async def update_question(
     """
     if not await _owns(session, mentor_user_id, session_type_id):
         return False
-    current = (
+    found = (
         await session.execute(
-            select(SessionTypeQuestion.question_type).where(
+            select(SessionTypeQuestion.question_type, SessionTypeQuestion.options_source).where(
                 SessionTypeQuestion.id == question_id,
                 SessionTypeQuestion.session_type_id == session_type_id,
                 *live_question(),
             )
         )
-    ).scalar_one_or_none()
-    if current is None:
+    ).one_or_none()
+    if found is None:
         return False
+    current, source = found
     if not payload:
         return True
 
@@ -256,6 +290,11 @@ async def update_question(
         )
     if not is_choice and (options is not None or payload.get("allows_multiple")):
         raise ValidationError("options and allows_multiple are only for multi_choice questions")
+    if source is not None and options is not None:
+        raise ValidationError(
+            "this question's options are your help areas; change them on your profile",
+            field_errors=(("/options", "a help-area question takes no options"),),
+        )
 
     if payload:
         await session.execute(
@@ -468,6 +507,11 @@ async def record_answers(
     if not answers:
         return
     question_text, option_text = await _wording(session, answers)
+    help_areas = {
+        str(q["id"]): {str(o["id"]): o["text"] for o in q["options"]}
+        for q in form
+        if q.get("options_source") == QuestionOptionsSource.HELP_AREAS
+    }
     rows: list[dict[str, Any]] = []
     for answer in answers:
         base = {
@@ -475,8 +519,20 @@ async def record_answers(
             "question_id": answer["question_id"],
             "question_text": question_text[str(answer["question_id"])],
         }
+        chosen_areas = help_areas.get(str(answer["question_id"]))
         if answer.get("file_storage_key") is not None:
             rows.append({**base, "file_storage_key": answer["file_storage_key"]})
+        elif chosen_areas is not None:
+            # A help area is a service offering, not an option row; its name is
+            # the one the answer was checked against, kept as chosen.
+            rows += [
+                {
+                    **base,
+                    "selected_offering_id": offering_id,
+                    "option_text": chosen_areas[str(offering_id)],
+                }
+                for offering_id in answer["option_ids"]
+            ]
         elif answer.get("option_ids") is not None:
             rows += [
                 {

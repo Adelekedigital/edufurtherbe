@@ -11,17 +11,24 @@ from __future__ import annotations
 from typing import Any, Self, cast
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from app.api.schemas.common import Normalised, refuse_repeats
-from app.domain.enums import IntakeFileType, QuestionType
+from app.domain.enums import IntakeFileType, QuestionOptionsSource, QuestionType
 from app.domain.intake import MAX_OPTION_LENGTH, MAX_OPTIONS, MIN_OPTIONS
 
 
 class OptionRead(BaseModel):
-    """One option of a choice question, in the order the mentor set."""
+    """One option of a choice question, in the order the mentor set, or one of
+    the mentor's help areas on a help-area question."""
 
-    id: str
+    id: str = Field(
+        description=(
+            "The option's id; on a help-area question, the service offering's id "
+            "(`/api/v1/catalog/service-offerings`). Send it in `answers[].option_ids`."
+        )
+    )
     text: str
 
 
@@ -76,7 +83,21 @@ class QuestionRead(BaseModel):
         description="For `multi_choice`: several options may be picked. False is single choice."
     )
     options: list[OptionRead] = Field(
-        description="A `multi_choice` question's options, in order. Empty for other types."
+        description=(
+            "A `multi_choice` question's options, in order. Empty for other types. On "
+            "a help-area question (`options_source: help_areas`), the mentor's current "
+            "help areas in the platform's order, read fresh each time, so they follow "
+            "the profile; empty if the mentor has none, and the question is then "
+            "never required."
+        )
+    )
+    # Always sent; the default only keeps it out of `required` for the frontend's CI.
+    options_source: QuestionOptionsSource | None = Field(
+        default=None,
+        description=(
+            "`help_areas`: the options are the mentor's help areas, not a list they "
+            "wrote. `null`: the mentor wrote `options` (or the question is not a choice)."
+        ),
     )
 
     @classmethod
@@ -90,6 +111,11 @@ class QuestionRead(BaseModel):
             display_order=int(str(row["display_order"])),
             allows_multiple=bool(row.get("allows_multiple", False)),
             options=[OptionRead(id=str(o["id"]), text=str(o["text"])) for o in options],
+            options_source=(
+                QuestionOptionsSource(str(row["options_source"]))
+                if row.get("options_source")
+                else None
+            ),
         )
 
 
@@ -108,13 +134,28 @@ class QuestionWrite(Normalised):
         default_factory=list,
         description=(
             f"For `multi_choice` only, and required by it: {MIN_OPTIONS} to "
-            f"{MAX_OPTIONS} options, unique ignoring case, in the order to show them."
+            f"{MAX_OPTIONS} options, unique ignoring case, in the order to show them. "
+            "Not sent with `options_source`."
+        ),
+    )
+    options_source: QuestionOptionsSource | None = Field(
+        default=None,
+        description=(
+            "`help_areas` makes the options your help areas, kept in step with your "
+            "profile: `multi_choice` only (either `allows_multiple`), and sent "
+            "**without** `options` (a `422` otherwise). Set when the question is "
+            "created and never changed: delete the question and add another."
         ),
     )
 
     @model_validator(mode="after")
     def _options_match_the_type(self) -> Self:
-        if self.question_type is QuestionType.MULTI_CHOICE:
+        if self.options_source is not None:
+            if self.question_type is not QuestionType.MULTI_CHOICE:
+                raise ValueError("options_source is only for multi_choice questions")
+            if self.options:
+                raise ValueError("a help-area question takes no options: they are your help areas")
+        elif self.question_type is QuestionType.MULTI_CHOICE:
             _check_options(self.options)
         elif self.options or self.allows_multiple:
             raise ValueError("options and allows_multiple are only for multi_choice questions")
@@ -134,9 +175,21 @@ class QuestionPatch(Normalised):
         description=(
             "Replaces the options of a `multi_choice` question: each with an `id` is "
             "kept (text and position may change), each without is added, and one left "
-            "out is removed — a `409` if a booking answer chose it."
+            "out is removed — a `409` if a booking answer chose it. A `422` on a "
+            "help-area question, whose options are your help areas."
         ),
     )
+    #: **Refused, not ignored**: a question never crosses between written and
+    #: help-area options, so an answer never changes meaning (decision 200's rule).
+    #: Hidden so the `422` points at it; never dumped, never published.
+    options_source: SkipJsonSchema[object] = Field(default=None, exclude=True)
+
+    @field_validator("options_source", mode="before")
+    @classmethod
+    def _fixed_source(cls, _value: object) -> object:
+        raise ValueError(
+            "options_source is set when a question is created; delete it and add another"
+        )
 
     @model_validator(mode="after")
     def _options_are_well_formed(self) -> Self:
@@ -178,7 +231,9 @@ class IntakeFileRead(BaseModel):
 class AnsweredOptionRead(BaseModel):
     """A choice the mentee picked."""
 
-    id: UUID
+    id: UUID = Field(
+        description="The option's id; on a help-area question, the service offering's id."
+    )
     text: str = Field(
         description="The option's wording when it was chosen, or its current wording for "
         "answers given before that was kept."

@@ -291,6 +291,7 @@ def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
             SessionType.application_stage,
             SessionType.icon,
             SessionType.is_featured,
+            SessionType.is_starter,
             # Resolved, not read (#216): the offering's own, else its mentor's
             # default, else the platform's. The field stays an int.
             effective_duration_minutes().label("duration_minutes"),
@@ -378,6 +379,7 @@ def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[An
             SessionType.icon,
             SessionType.is_active,
             SessionType.is_featured,
+            SessionType.is_starter,
             SessionType.deletion_scheduled_at,
             # Derived, so a cancellation moves them without a write (#218).
             _booked_count(SessionType.id).label("booked_count"),
@@ -483,10 +485,14 @@ async def _with_sets(session: AsyncSession, rows: list[dict[str, Any]]) -> list[
 #: neither.
 NAME_INDEX = "ix_session_types_mentor_name"
 
+#: At most one live starter per mentor; a second create is a `409`.
+STARTER_INDEX = "ix_session_types_one_starter"
+
 
 @asynccontextmanager
 async def _distinct_names() -> AsyncIterator[None]:
-    """Turn the partial unique index into a 409 rather than a 500.
+    """Turn the partial unique indexes into a 409 rather than a 500: the name,
+    and the one starter per mentor (whose only writer is the create).
 
     The index is the mechanism. Selecting first and inserting after is a
     check-then-insert race, and being unraceable is why the invariant lives in
@@ -503,6 +509,10 @@ async def _distinct_names() -> AsyncIterator[None]:
     except IntegrityError as exc:
         if NAME_INDEX in str(exc.orig):
             raise ConflictError("you already have a live session type with this name") from exc
+        if STARTER_INDEX in str(exc.orig):
+            raise ConflictError(
+                "you already have a starter session type; only one is created for you"
+            ) from exc
         raise
 
 
@@ -555,6 +565,7 @@ async def create_session_type(
                     description=payload.get("description"),
                     application_stage=first_stage(stages),
                     icon=payload.get("icon"),
+                    is_starter=payload.get("is_starter", False),
                     conferencing_option_id=option_id,
                 )
                 .returning(SessionType.id)

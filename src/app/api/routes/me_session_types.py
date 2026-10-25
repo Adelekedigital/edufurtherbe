@@ -128,13 +128,15 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
     }
 }
 
-#: The create's own `409`s: the name, and the limit (decision 286).
+#: The create's own `409`s: the name, the limit (decision 286) and the starter (291).
 CREATE_CONFLICT: dict[int | str, dict[str, str]] = {
     status.HTTP_409_CONFLICT: {
         "description": NAME_CONFLICT[status.HTTP_409_CONFLICT]["description"]
         + "\n\n`/problems/session-type-limit-reached`: you already have as many "
         "session types as you may (the problem's `limit` says how many). Every one "
-        "not deleted counts, hidden and scheduled for deletion included."
+        "not deleted counts, hidden and scheduled for deletion included.\n\n"
+        "`is_starter: true` while you already have a live starter: only one is "
+        "created for you."
     }
 }
 
@@ -167,6 +169,10 @@ CREATE_CONFLICT: dict[int | str, dict[str, str]] = {
         "**`questions`** (at most five) are created with the offering in one "
         "transaction; an invalid question refuses the whole request. The response "
         "is `{id, question_ids}`.\n\n"
+        "**`is_starter: true`** marks the offering onboarding creates for you "
+        '("Created for you"); both lists return it. One live starter per mentor '
+        "(a second is a `409`), and it never changes: `PATCH` refuses it with a "
+        "`422` at `/is_starter`.\n\n"
         "**`Idempotency-Key` is optional.** Sent, a retry with the same key and "
         "body replays the first answer (with `Idempotent-Replayed: true`) instead "
         "of creating a second offering, even once the list is full; the same key "

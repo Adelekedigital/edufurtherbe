@@ -84,6 +84,9 @@ def answer_problems(
     and file checks are what stop an id from another form, or another user,
     being stored against this booking.
 
+    A choice question with no options (a help-area question whose mentor holds
+    no live help area) is never required: no answer to it could be valid.
+
     **`require_answers` switches off only the last step** — a required question
     left unanswered, file questions included. It is configuration
     (`require_intake_answers`) because the frontend that collects answers ships
@@ -132,6 +135,18 @@ def answer_problems(
             elif not set(chosen) <= question.option_ids:
                 problems.append((f"{at}/option_ids", "not an option of this question"))
     for question in asked:
-        if require_answers and question.is_required and question.id not in seen:
+        if (
+            require_answers
+            and question.is_required
+            and question.id not in seen
+            and not _nothing_to_choose(question)
+        ):
             problems.append(("/answers", f"question {question.id} is required"))
     return problems
+
+
+def _nothing_to_choose(question: AskedQuestion) -> bool:
+    """A choice question offering no option cannot be answered, so it is never
+    required. Only a help-area question can be empty: its options are the
+    mentor's live help areas, and a mentor may hold none."""
+    return question.question_type is QuestionType.MULTI_CHOICE and not question.option_ids
