@@ -24,12 +24,11 @@ from app.core.errors import NotFoundError, SessionTypeLimitReachedError
 from app.domain.session_type_limit import DEFAULT_SESSION_TYPE_LIMIT
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType
-from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE
 
 __all__ = [
     "SESSION_TYPE_LIMIT_LOCK_NAMESPACE",
     "effective_limit",
+    "live_profile",
     "refuse_if_full",
     "set_session_type_limit",
 ]
@@ -65,13 +64,10 @@ def _held() -> ColumnElement[int]:
     )
 
 
-def _live_mentor(user_id: UUID) -> list[ColumnElement[bool]]:
-    """A live mentor profile on a live account."""
-    return [
-        MentorProfile.user_id == user_id,
-        MentorProfile.deleted_at.is_(None),
-        MentorProfile.user_id.in_(select(User.id).where(LIVE)),
-    ]
+def live_profile(user_id: UUID) -> list[ColumnElement[bool]]:
+    """The user's mentor profile, not deleted: the one test of "is a mentor"
+    the create, its guard and the admin write share."""
+    return [MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None)]
 
 
 async def refuse_if_full(session: AsyncSession, mentor_user_id: UUID) -> None:
@@ -82,15 +78,17 @@ async def refuse_if_full(session: AsyncSession, mentor_user_id: UUID) -> None:
     await _lock(session, mentor_user_id)
     row = (
         await session.execute(
-            select(effective_limit(), _held()).where(*_live_mentor(mentor_user_id))
+            select(effective_limit(), _held()).where(*live_profile(mentor_user_id))
         )
     ).first()
-    if row is None:  # pragma: no cover - the caller has just found the live profile
+    if row is None:  # pragma: no cover - the caller found it in this transaction
         raise NotFoundError("this user has no mentor profile")
     limit, held = row
     if held >= limit:
         raise SessionTypeLimitReachedError(
-            f"You can have up to {limit} session types. Delete one to add another.",
+            f"You can have up to {limit} session types. To add another, delete one "
+            "with no booked sessions; one scheduled for deletion still counts until "
+            "its last session is over.",
             limit=limit,
         )
 
@@ -109,7 +107,7 @@ async def set_session_type_limit(
     row = (
         await session.execute(
             update(MentorProfile)
-            .where(*_live_mentor(user_id))
+            .where(*live_profile(user_id))
             .values(session_type_limit=limit)
             .returning(effective_limit(), MentorProfile.session_type_limit.is_(None))
         )
