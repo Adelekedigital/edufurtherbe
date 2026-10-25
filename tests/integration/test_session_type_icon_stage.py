@@ -105,9 +105,9 @@ async def test_preparing_for_interview_is_a_stage_a_type_can_have(
     headers = bearer(api_token(auth))
 
     created = await api_client.post(
-        URL, json=body(application_stage="interview_prep"), headers=headers
+        URL, json=body(application_stages=["interview_prep"]), headers=headers
     )
     (row,) = (await api_client.get(URL, headers=headers)).json()["data"]
 
     assert created.status_code == 201
-    assert row["application_stage"] == "interview_prep"
+    assert row["application_stages"] == ["interview_prep"]

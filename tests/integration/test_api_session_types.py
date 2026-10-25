@@ -34,8 +34,6 @@ PUBLIC_FIELDS = {
     "meeting_venue",
     "service_offerings",
     "application_stages",
-    "application_stage",
-    "custom_stage_label",
     "icon",
     # The intake form a mentee answers when booking (#207).
     "questions",
@@ -300,8 +298,9 @@ async def test_the_response_carries_nothing_it_should_not(
 ) -> None:
     """An allowlist, asserted as one.
 
-    **Changed deliberately: the service offerings, `application_stage` and
-    `custom_stage_label` are now *in* the allowlist.** (As the list
+    **Changed deliberately: the service offerings and the stages are now *in*
+    the allowlist**, and the deprecated `application_stage` and
+    `custom_stage_label` are out again (decision 293). (As the list
     `service_offerings`; the single `service_offering`, which only repeated its
     first item, was removed in #274.) They were withheld because
     they were free text with no vocabulary, so publishing them would have
@@ -339,11 +338,7 @@ async def test_the_response_carries_nothing_it_should_not(
         "code": "document-preparation",
         "display_name": "Document preparation",
     }
-    assert offering["application_stage"] == "preparing_documents"
-    # A single-stage type written before the set reads as a set of one (#215).
     assert offering["application_stages"] == ["preparing_documents"]
-    # No custom stage since the six (founder 2026-10-21): always null.
-    assert offering["custom_stage_label"] is None
     assert "created_by" not in body
 
 

@@ -310,8 +310,6 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "min_notice_inherited",
         "service_offerings",
         "application_stages",
-        "application_stage",
-        "custom_stage_label",
         "icon",
         # Featured first, and a deletion waiting on booked sessions (#217, #218).
         "is_featured",
@@ -330,9 +328,8 @@ async def test_the_response_carries_the_three_owner_only_fields(
     # reference to the taxonomy mentees are matched on, so the owner sees the
     # same `code`/`display_name` pair a client would render.
     assert offering["service_offerings"][0]["code"] == "document-preparation"
-    assert offering["application_stage"] == "preparing_documents"
-    # No custom stage since the six (founder 2026-10-21): always null.
-    assert offering["custom_stage_label"] is None
+    # The deprecated single stage and custom label went in decision 293.
+    assert offering["application_stages"] == ["preparing_documents"]
 
 
 async def test_the_public_contract_did_not_gain_the_owner_only_fields(

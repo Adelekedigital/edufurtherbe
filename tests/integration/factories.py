@@ -93,21 +93,28 @@ async def add_session_type(
             await conn.execute(
                 text(
                     "INSERT INTO session_types "
-                    "(mentor_user_id, name, description, "
-                    " application_stage, custom_stage_label, is_active) "
-                    "VALUES (:u, :n, :d, :s, :label, :active) RETURNING id"
+                    "(mentor_user_id, name, description, application_stage, is_active) "
+                    "VALUES (:u, :n, :d, :s, :active) RETURNING id"
                 ),
                 {
                     "u": mentor,
                     "n": name,
                     "d": description,
+                    # Dual-written as the app does until the column goes (#215).
                     "s": application_stage,
-                    # No custom stage since the six (decision 288).
-                    "label": None,
                     "active": active,
                 },
             )
         ).scalar_one()
+        if application_stage is not None:
+            # The set is where a type's stages are read from (decision 293).
+            await conn.execute(
+                text(
+                    "INSERT INTO session_type_stages (session_type_id, stage, position) "
+                    "VALUES (:t, :s, 0)"
+                ),
+                {"t": session_type, "s": application_stage},
+            )
         if service_offering is not None:
             # The set is where a type's offerings live (#274); the legacy
             # column is no longer read.

@@ -270,8 +270,8 @@ def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
     **`created_by` is absent on purpose** — internal attribution, null on every
     migrated row.
 
-    **The service offerings (as the set, `service_offerings`) and
-    `application_stage` are no longer absent.** The single
+    **The service offerings (as the set, `service_offerings`) and the stages
+    (`application_stages`) are no longer absent.** The single
     `service_offering_id` is gone (#274). They were withheld while they were
     free text with no vocabulary, because
     publishing them would have committed a public contract to a shape nobody had
@@ -288,7 +288,6 @@ def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
             SessionType.id,
             SessionType.name,
             SessionType.description,
-            SessionType.application_stage,
             SessionType.icon,
             SessionType.is_featured,
             SessionType.is_starter,
@@ -348,7 +347,7 @@ def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[An
     returned and flagged rather than hidden — a management list that silently
     omits what you switched off gives you no way to switch it back on.
 
-    **`category` and `application_stage` used to be returned here and withheld
+    **`category` and the stage used to be returned here and withheld
     publicly, and that asymmetry is gone.** The public reasoning was that
     publishing free text with no vocabulary would commit a *public* contract to
     an undesigned shape; both columns have a shape now, so both lists carry them.
@@ -375,7 +374,6 @@ def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[An
             SessionType.id,
             SessionType.name,
             SessionType.description,
-            SessionType.application_stage,
             SessionType.icon,
             SessionType.is_active,
             SessionType.is_featured,
@@ -629,8 +627,8 @@ def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
 #: offering*, and that it spans two tables is this layer's problem.
 #:
 #: `application_stage` is absent on purpose: it is derived from the stage set
-#: (#215). `custom_stage_label` is too: writes may send only `null`, a no-op,
-#: and the column's `CHECK` holds it null (decision 288).
+#: (#215) and dual-written until its drop. Neither it nor `custom_stage_label`
+#: is a writable field any more (decision 293).
 SESSION_TYPE_COLUMNS = (
     "name",
     "description",

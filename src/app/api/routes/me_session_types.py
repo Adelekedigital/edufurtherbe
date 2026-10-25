@@ -95,8 +95,7 @@ OWNER_RESPONSES: dict[int | str, dict[str, str]] = {
         "its length, notice and venue are its own or follow your defaults. "
         "`service_offerings` and the application stages were owner-only while "
         "they were free text with no vocabulary, and are public now that each "
-        "has one: the stages are the design's six, with no custom stage "
-        "(`custom_stage_label` always reads `null`).\n\n"
+        "has one: the stages are the design's six, with no custom stage.\n\n"
         "**A caller who is not a mentor gets `200` with an empty page**, not a "
         "refusal. A session type belongs to a mentor profile, so somebody without "
         'one cannot own any — and "you have none" is a true statement, where a '

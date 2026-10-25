@@ -1,9 +1,10 @@
 """Which application stages a session type is aimed at — the set (#215).
 
 The #205 shape of `offerings.py`, for the other axis: `session_type_stages`
-holds the set in the mentor's order, and the first is dual-written to
-`session_types.application_stage` so code from before the set keeps reading it.
-**No rows means any stage.**
+holds the set in the mentor's order and is the only place stages are read
+from (decision 293). The first is still dual-written to
+`session_types.application_stage` until that column's drop, so a rollback finds
+it. **No rows means any stage.**
 """
 
 from __future__ import annotations
@@ -11,11 +12,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import delete, exists, insert, literal, select
+from sqlalchemy import delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import ApplicationStage
-from app.infra.db.models.sessions import SessionType, SessionTypeStage
+from app.infra.db.models.sessions import SessionTypeStage
 
 __all__ = ["stages_for_session_types", "write_session_type_stages"]
 
@@ -23,30 +24,17 @@ __all__ = ["stages_for_session_types", "write_session_type_stages"]
 async def stages_for_session_types(
     session: AsyncSession, session_type_ids: Sequence[Any]
 ) -> dict[Any, list[ApplicationStage]]:
-    """Each session type's stages, in the mentor's order.
-
-    **One statement for a whole list**, keyed by session type. A type with rows
-    reads them; **a type with none falls back to the legacy column** — which is
-    what code from before the set, the demo seed and the ETL still write, so a
-    single-stage offering reads the same as it did.
+    """Each session type's stages, in the mentor's order: **one statement for a
+    whole list**, keyed by session type. A type with no rows is absent, which
+    reads as any stage.
     """
     if not session_type_ids:
         return {}
-    joined = select(
-        SessionTypeStage.session_type_id.label("type_id"),
-        SessionTypeStage.stage,
-        SessionTypeStage.position,
-    ).where(SessionTypeStage.session_type_id.in_(session_type_ids))
-    legacy = select(
-        SessionType.id.label("type_id"),
-        SessionType.application_stage.label("stage"),
-        literal(0).label("position"),
-    ).where(
-        SessionType.id.in_(session_type_ids),
-        SessionType.application_stage.is_not(None),
-        ~exists().where(SessionTypeStage.session_type_id == SessionType.id),
+    rows = await session.execute(
+        select(SessionTypeStage.session_type_id.label("type_id"), SessionTypeStage.stage)
+        .where(SessionTypeStage.session_type_id.in_(session_type_ids))
+        .order_by(SessionTypeStage.session_type_id, SessionTypeStage.position)
     )
-    rows = await session.execute(joined.union_all(legacy).order_by("type_id", "position"))
     result: dict[Any, list[ApplicationStage]] = {}
     for row in rows:
         result.setdefault(row.type_id, []).append(ApplicationStage(str(row.stage)))
