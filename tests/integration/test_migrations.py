@@ -143,6 +143,8 @@ EXPECTED_TABLES = [
     # are the wrong shape. See the M4 migration's docstring.
     "session_events",
     "session_participants",
+    # Who is in the Daily room now, one row per join (#394).
+    "session_room_stays",
     "session_suggestions",
     "session_type_booking_configs",
     # Session Types #9: the offerings one session type covers, up to three.
