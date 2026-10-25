@@ -9,7 +9,7 @@ it and the session read that publishes it (*Migration ordering*).
 The downgrade drops the column; it only loses which requests were already
 nudged, so a mentee could nudge one again.
 
-Revision ID: e5b1c7a3d940
+Revision ID: 7c41e9b2a6d3
 Revises: d9a3f6b1c2e8
 Create Date: 2026-10-25 23:00:00
 """
@@ -20,7 +20,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "e5b1c7a3d940"
+revision: str = "7c41e9b2a6d3"
 down_revision: str | Sequence[str] | None = "d9a3f6b1c2e8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

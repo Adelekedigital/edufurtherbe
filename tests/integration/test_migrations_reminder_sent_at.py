@@ -1,4 +1,4 @@
-"""What `e5b1c7a3d940` leaves behind, beyond "the chain runs".
+"""What `7c41e9b2a6d3` leaves behind, beyond "the chain runs".
 
 Split from `test_migrations.py` by area, as the file-size limit asks
 (non-negotiable 11); the helpers are imported from there, not copied.
@@ -10,7 +10,7 @@ from tests.integration.test_migrations import ConfigFactory, scalar
 
 pytestmark = pytest.mark.db
 
-REVISION = "e5b1c7a3d940"
+REVISION = "7c41e9b2a6d3"
 PREVIOUS = "d9a3f6b1c2e8"
 
 COLUMN = (
