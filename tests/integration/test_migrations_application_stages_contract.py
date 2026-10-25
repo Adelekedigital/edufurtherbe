@@ -8,7 +8,7 @@ from tests.integration.test_migrations import ConfigFactory, execute, scalar
 pytestmark = pytest.mark.db
 
 REVISION = "c4e7a9b2d5f8"
-PREVIOUS = "b8d2e6f4a3c7"
+PREVIOUS = "056f597d551a"
 
 SEED = """
 INSERT INTO users (id, auth_id, email, primary_role, timezone)

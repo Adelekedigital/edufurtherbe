@@ -26,7 +26,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c4e7a9b2d5f8"
-down_revision: str | Sequence[str] | None = "b8d2e6f4a3c7"
+down_revision: str | Sequence[str] | None = "056f597d551a"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
