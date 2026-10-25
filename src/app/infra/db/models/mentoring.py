@@ -40,6 +40,7 @@ from app.domain.goals import (
     SCHOOL_NAME_MAX_LENGTH,
 )
 from app.domain.guide_countries import MAX_GUIDE_COUNTRIES
+from app.domain.session_type_limit import SESSION_TYPE_LIMIT_CEILING
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -212,6 +213,9 @@ class MentorProfile(TimestampMixin, Base):
     #: When an approved mentor first saw the approved screen, so it shows once
     #: per account on any device.
     approved_seen_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: How many session types this mentor may hold, set by support; null means
+    #: `domain.session_type_limit.DEFAULT_SESSION_TYPE_LIMIT`.
+    session_type_limit: Mapped[int | None] = mapped_column(nullable=True)
 
     # `primary_session_type_id` is gone, and with it
     # `trg_refuse_retiring_a_primary_offering`. D88 gave it two jobs: the
@@ -252,6 +256,11 @@ class MentorProfile(TimestampMixin, Base):
         CheckConstraint(
             "default_min_notice_minutes IS NULL OR default_min_notice_minutes BETWEEN 0 AND 43200",
             name="default_min_notice_minutes_sane",
+        ),
+        CheckConstraint(
+            "session_type_limit IS NULL OR session_type_limit "
+            f"BETWEEN 1 AND {SESSION_TYPE_LIMIT_CEILING}",
+            name="session_type_limit_sane",
         ),
         # These indexes plus the user_profiles ones ARE the search
         # implementation. No Typesense, no Meilisearch, no synced table.
