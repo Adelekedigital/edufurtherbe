@@ -538,15 +538,12 @@ class OwnSessionTypeRead(BaseModel):
         )
 
 
-def _refuse_mismatched_label[Write: MentorSessionTypeWrite | MentorSessionTypePatch](
+def _refuse_repeated_stages[Write: MentorSessionTypeWrite | MentorSessionTypePatch](
     model: Write,
 ) -> Write:
-    """`stage_label_problem`, asked at the boundary so the answer is a 422 early.
-
-    **One function, called from both write models**, and the rule itself is the
-    domain's — the store asks it again before writing a set (#215). Since the
-    design's six (decision 288) a write carries no label, so what is left to
-    judge is the set itself: each stage once.
+    """`stage_set_problem`, asked at the boundary so a repeated stage is a 422
+    early. **One function, called from both write models**, and the rule itself
+    is the domain's; the store asks it again before writing a set (#215).
     """
     sent = named_stages(model.model_dump(exclude_unset=True)) or []
     problem = stage_set_problem(sent)
@@ -712,7 +709,7 @@ class MentorSessionTypeWrite(_SessionTypeWriteBase):
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
         _refuse_two_set_fields(self)
-        return _refuse_mismatched_label(self)
+        return _refuse_repeated_stages(self)
 
 
 class MentorSessionTypePatch(_SessionTypeWriteBase):
@@ -834,7 +831,7 @@ class MentorSessionTypePatch(_SessionTypeWriteBase):
     @model_validator(mode="after")
     def _label_matches_stage(self) -> Self:
         _refuse_two_set_fields(self)
-        return _refuse_mismatched_label(self)
+        return _refuse_repeated_stages(self)
 
 
 class DeletionScheduledRead(BaseModel):

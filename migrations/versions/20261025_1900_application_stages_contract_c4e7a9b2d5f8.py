@@ -13,6 +13,11 @@ both ``CHECK``s narrow to the six here:
 A row the remap missed would make this fail rather than pass silently, which is
 the point of running it after the data step. The downgrade widens both back to
 the previous revision's twelve and restores the label rule.
+
+**`NOT VALID` is deliberately not used**, as in ``e5a71c9b382d`` on the same
+table: a mentor holds at most five session types, so the validating scan is
+short, and a constraint that exists without being validated looks enforced and
+is not.
 """
 
 from collections.abc import Sequence

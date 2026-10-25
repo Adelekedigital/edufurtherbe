@@ -25,7 +25,7 @@ from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
-DRAFTING, INTERVIEWING, REVISIONS = "preparing_documents", "interview_prep", "applying"
+PREPARING, INTERVIEW_PREP, APPLYING = "preparing_documents", "interview_prep", "applying"
 
 
 async def own(client: httpx.AsyncClient, auth: UUID, type_id: str) -> dict[str, object]:
@@ -42,13 +42,13 @@ async def test_a_type_can_be_aimed_at_several_stages_in_order(
 ) -> None:
     _, auth = await as_mentor(db_engine, "stages-many")
 
-    created = await create(api_client, auth, application_stages=[INTERVIEWING, DRAFTING])
+    created = await create(api_client, auth, application_stages=[INTERVIEW_PREP, PREPARING])
     row = await own(api_client, auth, created.json()["id"])
 
     assert created.status_code == 201, created.text
-    assert row["application_stages"] == [INTERVIEWING, DRAFTING]
+    assert row["application_stages"] == [INTERVIEW_PREP, PREPARING]
     # The single field this release keeps is the first of the set.
-    assert row["application_stage"] == INTERVIEWING
+    assert row["application_stage"] == INTERVIEW_PREP
     assert row["custom_stage_label"] is None
 
 
@@ -70,9 +70,9 @@ async def test_the_single_field_still_writes_a_set_of_one(
 ) -> None:
     _, auth = await as_mentor(db_engine, "stages-legacy")
 
-    created = await create(api_client, auth, application_stage=REVISIONS)
+    created = await create(api_client, auth, application_stage=APPLYING)
 
-    assert (await own(api_client, auth, created.json()["id"]))["application_stages"] == [REVISIONS]
+    assert (await own(api_client, auth, created.json()["id"]))["application_stages"] == [APPLYING]
 
 
 async def test_a_type_written_only_to_the_old_column_still_reads(
@@ -81,21 +81,21 @@ async def test_a_type_written_only_to_the_old_column_still_reads(
     """Old code during the deploy, the demo seed and the factories write only
     `application_stage`. Reads fall back to it rather than showing any stage."""
     mentor, auth = await as_mentor(db_engine, "stages-fallback")
-    type_id = await add_session_type(db_engine, mentor, application_stage=REVISIONS)
+    type_id = await add_session_type(db_engine, mentor, application_stage=APPLYING)
 
     row = await own(api_client, auth, str(type_id))
 
-    assert row["application_stages"] == [REVISIONS]
-    assert row["application_stage"] == REVISIONS
+    assert row["application_stages"] == [APPLYING]
+    assert row["application_stage"] == APPLYING
 
 
 @pytest.mark.parametrize(
     ("case", "payload"),
     [
-        ("duplicate", {"application_stages": [DRAFTING, DRAFTING]}),
-        ("both-fields", {"application_stages": [DRAFTING], "application_stage": REVISIONS}),
-        ("other", {"application_stages": [DRAFTING, "other"]}),
-        ("label", {"application_stages": [DRAFTING], "custom_stage_label": "stray"}),
+        ("duplicate", {"application_stages": [PREPARING, PREPARING]}),
+        ("both-fields", {"application_stages": [PREPARING], "application_stage": APPLYING}),
+        ("other", {"application_stages": [PREPARING, "other"]}),
+        ("label", {"application_stages": [PREPARING], "custom_stage_label": "stray"}),
         ("unknown", {"application_stages": ["someday"]}),
     ],
 )
@@ -119,19 +119,19 @@ async def test_patching_replaces_the_set_and_empty_clears_it(
 ) -> None:
     _, auth = await as_mentor(db_engine, "stages-patch")
     headers = bearer(api_token(auth))
-    created = (await create(api_client, auth, application_stages=[DRAFTING])).json()
+    created = (await create(api_client, auth, application_stages=[PREPARING])).json()
     path = f"{URL}/{created['id']}"
 
     first = await api_client.patch(
-        path, json={"application_stages": [REVISIONS, INTERVIEWING]}, headers=headers
+        path, json={"application_stages": [APPLYING, INTERVIEW_PREP]}, headers=headers
     )
     replaced = await own(api_client, auth, created["id"])
     await api_client.patch(path, json={"application_stages": []}, headers=headers)
     cleared = await own(api_client, auth, created["id"])
 
     assert first.status_code == 200, first.text
-    assert replaced["application_stages"] == [REVISIONS, INTERVIEWING]
-    assert replaced["application_stage"] == REVISIONS
+    assert replaced["application_stages"] == [APPLYING, INTERVIEW_PREP]
+    assert replaced["application_stage"] == APPLYING
     assert cleared["application_stages"] == []
     assert cleared["application_stage"] is None
 
@@ -140,15 +140,15 @@ async def test_a_patch_that_leaves_the_set_out_keeps_it(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     _, auth = await as_mentor(db_engine, "stages-keep")
-    created = (await create(api_client, auth, application_stages=[DRAFTING, REVISIONS])).json()
+    created = (await create(api_client, auth, application_stages=[PREPARING, APPLYING])).json()
 
     await api_client.patch(
         f"{URL}/{created['id']}", json={"name": "Renamed"}, headers=bearer(api_token(auth))
     )
 
     assert (await own(api_client, auth, created["id"]))["application_stages"] == [
-        DRAFTING,
-        REVISIONS,
+        PREPARING,
+        APPLYING,
     ]
 
 
@@ -160,7 +160,9 @@ async def test_the_old_column_holds_the_first_of_the_set(
     cannot show this, because it derives the single field from the set."""
     _, auth = await as_mentor(db_engine, "stages-dual")
     headers = bearer(api_token(auth))
-    created = (await create(api_client, auth, application_stages=[INTERVIEWING, DRAFTING])).json()
+    created = (
+        await create(api_client, auth, application_stages=[INTERVIEW_PREP, PREPARING])
+    ).json()
 
     async def column() -> str | None:
         async with db_engine.begin() as conn:
@@ -177,7 +179,7 @@ async def test_the_old_column_holds_the_first_of_the_set(
         f"{URL}/{created['id']}", json={"application_stages": []}, headers=headers
     )
 
-    assert first == INTERVIEWING
+    assert first == INTERVIEW_PREP
     assert await column() is None
 
 
@@ -188,7 +190,7 @@ async def test_an_explicit_null_set_is_refused(
     a third spelling of one of them, so it is a 422 rather than a guess."""
     _, auth = await as_mentor(db_engine, "stages-null")
     headers = bearer(api_token(auth))
-    created = (await create(api_client, auth, application_stages=[DRAFTING])).json()
+    created = (await create(api_client, auth, application_stages=[PREPARING])).json()
 
     patched = await api_client.patch(
         f"{URL}/{created['id']}", json={"application_stages": None}, headers=headers
@@ -197,7 +199,7 @@ async def test_an_explicit_null_set_is_refused(
 
     assert patched.status_code == 422, patched.text
     assert posted.status_code == 422, posted.text
-    assert (await own(api_client, auth, created["id"]))["application_stages"] == [DRAFTING]
+    assert (await own(api_client, auth, created["id"]))["application_stages"] == [PREPARING]
 
 
 async def test_a_patch_with_a_stage_twice_is_a_422_not_a_500(
@@ -206,16 +208,16 @@ async def test_a_patch_with_a_stage_twice_is_a_422_not_a_500(
     """Without a label in the request the boundary does not judge the set, so
     the store's final-state check is what stops the unique index answering."""
     _, auth = await as_mentor(db_engine, "stages-patch-dup")
-    created = (await create(api_client, auth, application_stages=[DRAFTING])).json()
+    created = (await create(api_client, auth, application_stages=[PREPARING])).json()
 
     response = await api_client.patch(
         f"{URL}/{created['id']}",
-        json={"application_stages": [REVISIONS, REVISIONS]},
+        json={"application_stages": [APPLYING, APPLYING]},
         headers=bearer(api_token(auth)),
     )
 
     assert response.status_code == 422, response.text
-    assert (await own(api_client, auth, created["id"]))["application_stages"] == [DRAFTING]
+    assert (await own(api_client, auth, created["id"]))["application_stages"] == [PREPARING]
 
 
 async def test_patching_reorders_the_same_stages(
@@ -225,18 +227,18 @@ async def test_patching_reorders_the_same_stages(
     position or pair index halfway."""
     _, auth = await as_mentor(db_engine, "stages-reorder")
     headers = bearer(api_token(auth))
-    created = (await create(api_client, auth, application_stages=[DRAFTING, REVISIONS])).json()
+    created = (await create(api_client, auth, application_stages=[PREPARING, APPLYING])).json()
 
     response = await api_client.patch(
         f"{URL}/{created['id']}",
-        json={"application_stages": [REVISIONS, DRAFTING]},
+        json={"application_stages": [APPLYING, PREPARING]},
         headers=headers,
     )
 
     assert response.status_code == 200, response.text
     row = await own(api_client, auth, created["id"])
-    assert row["application_stages"] == [REVISIONS, DRAFTING]
-    assert row["application_stage"] == REVISIONS
+    assert row["application_stages"] == [APPLYING, PREPARING]
+    assert row["application_stage"] == APPLYING
 
 
 async def test_two_concurrent_edits_of_one_offering_serialise(db_engine: AsyncEngine) -> None:
@@ -246,13 +248,13 @@ async def test_two_concurrent_edits_of_one_offering_serialise(db_engine: AsyncEn
     commits. With it the second waits on the offering row, then replaces the
     committed set — last write wins, no 500."""
     mentor, _ = await as_mentor(db_engine, "stages-race")
-    session_type = await add_session_type(db_engine, mentor, application_stage=DRAFTING)
+    session_type = await add_session_type(db_engine, mentor, application_stage=PREPARING)
 
     async with AsyncSession(db_engine) as first, AsyncSession(db_engine) as second:
-        await update_session_type(first, mentor, session_type, {"application_stages": [REVISIONS]})
+        await update_session_type(first, mentor, session_type, {"application_stages": [APPLYING]})
         racing = asyncio.create_task(
             update_session_type(
-                second, mentor, session_type, {"application_stages": [INTERVIEWING]}
+                second, mentor, session_type, {"application_stages": [INTERVIEW_PREP]}
             )
         )
         done, _ = await asyncio.wait({racing}, timeout=1)
@@ -272,7 +274,7 @@ async def test_two_concurrent_edits_of_one_offering_serialise(db_engine: AsyncEn
                 {"t": session_type},
             )
         ]
-    assert stages == [INTERVIEWING]
+    assert stages == [INTERVIEW_PREP]
 
 
 RETIRED = ["early_exploration", "drafting_stage", "revisions", "post_submission", "interviewing"]
@@ -288,7 +290,7 @@ async def test_a_retired_stage_is_refused_on_every_write(
     value: object = [retired] if field == "application_stages" else retired
 
     created = await create(api_client, auth, **{field: value})
-    kept = (await create(api_client, auth, name="Kept", application_stages=[DRAFTING])).json()
+    kept = (await create(api_client, auth, name="Kept", application_stages=[PREPARING])).json()
     patched = await api_client.patch(
         f"{URL}/{kept['id']}", json={field: value}, headers=bearer(api_token(auth))
     )
@@ -296,7 +298,7 @@ async def test_a_retired_stage_is_refused_on_every_write(
     assert created.status_code == 422, created.text
     assert created.json()["errors"][0]["pointer"].startswith(f"/{field}")
     assert patched.status_code == 422, patched.text
-    assert (await own(api_client, auth, kept["id"]))["application_stages"] == [DRAFTING]
+    assert (await own(api_client, auth, kept["id"]))["application_stages"] == [PREPARING]
 
 
 async def test_a_custom_label_is_refused_and_null_is_accepted(
@@ -317,7 +319,7 @@ async def test_a_null_label_alone_saves(
 ) -> None:
     """A client echoing the form back sends the label it read, `null`."""
     _, auth = await as_mentor(db_engine, "stages-null-label")
-    created = (await create(api_client, auth, application_stages=[DRAFTING])).json()
+    created = (await create(api_client, auth, application_stages=[PREPARING])).json()
 
     response = await api_client.patch(
         f"{URL}/{created['id']}",
@@ -326,4 +328,4 @@ async def test_a_null_label_alone_saves(
     )
 
     assert response.status_code == 200, response.text
-    assert (await own(api_client, auth, created["id"]))["application_stages"] == [DRAFTING]
+    assert (await own(api_client, auth, created["id"]))["application_stages"] == [PREPARING]

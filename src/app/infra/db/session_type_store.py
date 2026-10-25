@@ -289,7 +289,6 @@ def _live_session_types(user_id: UUID, window: BookingWindow) -> Select[Any]:
             SessionType.name,
             SessionType.description,
             SessionType.application_stage,
-            SessionType.custom_stage_label,
             SessionType.icon,
             SessionType.is_featured,
             # Resolved, not read (#216): the offering's own, else its mentor's
@@ -376,7 +375,6 @@ def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[An
             SessionType.name,
             SessionType.description,
             SessionType.application_stage,
-            SessionType.custom_stage_label,
             SessionType.icon,
             SessionType.is_active,
             SessionType.is_featured,
@@ -620,9 +618,8 @@ def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
 #: offering*, and that it spans two tables is this layer's problem.
 #:
 #: `application_stage` is absent on purpose: it is derived from the stage set
-#: and written beside the label in one statement (#215). `custom_stage_label`
-#: is too: writes may send only `null`, a no-op, and a stored label is cleared
-#: only with the set it belonged to (decision 288).
+#: (#215). `custom_stage_label` is too: writes may send only `null`, a no-op,
+#: and the column's `CHECK` holds it null (decision 288).
 SESSION_TYPE_COLUMNS = (
     "name",
     "description",
@@ -705,12 +702,8 @@ async def update_session_type(
         )
     stages = named_stages(payload)
     if stages is not None:
-        # A new set is the design's six, which hold no `other`, so a label left
-        # from a retired `other` goes with the set it described. A write that
-        # leaves the set out leaves the stored set and label as they are.
         _refuse_stage_set(stages)
         own["application_stage"] = first_stage(stages)
-        own["custom_stage_label"] = None
         await write_session_type_stages(session, session_type_id, stages)
     # Absent leaves the pin; `null` resets it to follow the default (#289).
     if "meeting_venue" in payload:
