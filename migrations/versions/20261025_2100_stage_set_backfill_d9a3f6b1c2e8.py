@@ -8,9 +8,12 @@ which kept a remapped column for a type with no set rows) still reads its stage
 through the fallback. This gives each such type its one row, at position 0, so
 the set alone reads the same.
 
-A type that already has rows is not touched, nor is one with no stage. Safe in
-either deploy order: the code running now prefers the rows, and they hold what
-the fallback read.
+A type that already has rows is not touched, nor is one with no stage. A
+soft-deleted type is filled like any other, because the fallback read did not
+filter on deletion either. Safe in either deploy order: the code running now
+prefers the rows, and they hold what the fallback read. **`ON CONFLICT DO
+NOTHING`** because the app keeps serving: a mentor saving a set between the
+`NOT EXISTS` and the insert wins, as their write would have.
 """
 
 from collections.abc import Sequence
@@ -29,7 +32,8 @@ def upgrade() -> None:
         "INSERT INTO session_type_stages (session_type_id, stage, position) "
         "SELECT t.id, t.application_stage, 0 FROM session_types t "
         "WHERE t.application_stage IS NOT NULL AND NOT EXISTS ("
-        "SELECT 1 FROM session_type_stages s WHERE s.session_type_id = t.id)"
+        "SELECT 1 FROM session_type_stages s WHERE s.session_type_id = t.id) "
+        "ON CONFLICT DO NOTHING"
     )
 
 

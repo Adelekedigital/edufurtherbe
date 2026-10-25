@@ -28,7 +28,11 @@ CASES: dict[str, tuple[list[str], str | None, list[str]]] = {
     # The column disagrees with a set the mentor wrote: the set wins, as reads did.
     "set-disagrees": (["exploring"], "applying", ["exploring"]),
     "no-stage": ([], None, []),
+    # The fallback read did not filter on deletion, so neither does the copy.
+    "deleted-column-only": ([], "exploring", ["exploring"]),
 }
+
+DELETED = "deleted-column-only"
 
 
 def type_id(index: int) -> str:
@@ -45,10 +49,12 @@ def seed(url: str) -> None:
     for index, (name, (stages, legacy, _)) in enumerate(CASES.items()):
         tid = type_id(index)
         column = "NULL" if legacy is None else f"'{legacy}'"
+        deleted = "now()" if name == DELETED else "NULL"
         execute(
             url,
-            "INSERT INTO session_types (id, mentor_user_id, name, application_stage) "  # noqa: S608
-            f"VALUES ('{tid}', '{MENTOR}', '{name}', {column})",
+            "INSERT INTO session_types "  # noqa: S608
+            "(id, mentor_user_id, name, application_stage, is_active, deleted_at) "
+            f"VALUES ('{tid}', '{MENTOR}', '{name}', {column}, {deleted} IS NULL, {deleted})",
         )
         for position, stage in enumerate(stages):
             execute(
@@ -104,5 +110,5 @@ def test_running_it_twice_adds_nothing(
 
     command.upgrade(config, REVISION)
 
-    only = list(CASES).index("column-only")
-    assert stored(disposable_database, only) == (["applying"], [0])
+    for index, (name, (_, _, want)) in enumerate(CASES.items()):
+        assert stored(disposable_database, index) == (want, list(range(len(want)))), name
