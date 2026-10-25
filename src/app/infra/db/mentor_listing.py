@@ -14,7 +14,7 @@ from sqlalchemy import ColumnElement, Integer, Time, and_, case, exists, func, l
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
+from app.domain.enums import ListingStatus, MentorStatusType, UnlistedReason
 from app.domain.listing import (
     RETURN_REMINDER_HOUR,
     cadence,
@@ -25,7 +25,7 @@ from app.domain.listing import (
 )
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE
+from app.infra.db.predicates import LIVE, mentor_approved
 
 
 def _newest_unlisting_id() -> Any:
@@ -82,7 +82,7 @@ def reminder_eligible() -> ColumnElement[bool]:
     return and_(
         LIVE,
         MentorProfile.deleted_at.is_(None),
-        MentorProfile.approval_status == ApprovalStatus.APPROVED,
+        mentor_approved(),
         paused_by_mentor(),
     )
 

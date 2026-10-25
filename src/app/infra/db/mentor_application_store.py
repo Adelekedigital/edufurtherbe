@@ -35,7 +35,7 @@ from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.user import UserProfile
 from app.infra.db.offerings import claims_a_live_help_area
 from app.infra.db.outbox import enqueue
-from app.infra.db.predicates import blank
+from app.infra.db.predicates import blank, mentor_approved
 from app.infra.db.public_visibility import has_live_offering, has_weekly_hours
 
 __all__ = [
@@ -182,7 +182,7 @@ async def mark_approved_seen(session: AsyncSession, user_id: UUID) -> datetime:
             # `lock_mentor` already found the live row; approval is the check.
             .where(
                 MentorProfile.user_id == user_id,
-                MentorProfile.approval_status == ApprovalStatus.APPROVED,
+                mentor_approved(),
             )
             .values(approved_seen_at=func.coalesce(MentorProfile.approved_seen_at, func.now()))
             .returning(MentorProfile.approved_seen_at)

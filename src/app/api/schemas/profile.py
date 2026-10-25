@@ -636,7 +636,8 @@ class MentorProfileWrite(Normalised):
         default=None,
         description=(
             "The `/catalog/service-offerings` ids you help with; the list replaces the "
-            "saved one, `[]` clears it, omitted or `null` leaves it. An offering twice is "
+            "saved one, `[]` clears it, omitted or `null` leaves it. An approved mentor "
+            "keeps at least one: their `[]` is a `422` at `/offering_ids`. An offering twice is "
             "a `422` at `/offering_ids`; one that is unknown or retired is a `422` at "
             "`/offering_ids/{index}`. Nothing is saved on a `422`."
         ),
