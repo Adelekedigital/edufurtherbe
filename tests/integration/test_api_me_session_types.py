@@ -284,7 +284,7 @@ async def test_the_response_carries_the_three_owner_only_fields(
         name="Full",
         description="Everything filled in",
         service_offering="document-preparation",
-        application_stage="other",
+        application_stage="preparing_documents",
         active=False,
     )
 
@@ -328,8 +328,9 @@ async def test_the_response_carries_the_three_owner_only_fields(
     # reference to the taxonomy mentees are matched on, so the owner sees the
     # same `code`/`display_name` pair a client would render.
     assert offering["service_offerings"][0]["code"] == "document-preparation"
-    assert offering["application_stage"] == "other"
-    assert offering["custom_stage_label"] == "My own wording"
+    assert offering["application_stage"] == "preparing_documents"
+    # No custom stage since the six (founder 2026-10-21): always null.
+    assert offering["custom_stage_label"] is None
 
 
 async def test_the_public_contract_did_not_gain_the_owner_only_fields(

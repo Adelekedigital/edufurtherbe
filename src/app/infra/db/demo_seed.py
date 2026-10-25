@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import BOOKING_WINDOW_CEILING
 from app.domain.enums import ApplicationStage
-from app.domain.sessions import first_stage
+from app.domain.sessions import WritableStage, first_stage
 from app.infra.db.offerings import set_session_type_offerings
 from app.infra.db.stages import write_session_type_stages
 
@@ -259,7 +259,9 @@ async def apply_demo_session_types(
         # Through the stage set (#215), so the rows the reads prefer and the
         # legacy column agree; the demo's stages never include `other`, so no
         # label is written.
-        stages = [ApplicationStage(template.stage)] if template.stage else []
+        # Parsed as one of the design's six (decision 288), so the seed cannot
+        # write a stage the contract migration would have to remap.
+        stages = [ApplicationStage(WritableStage(template.stage))] if template.stage else []
         values = {
             "u": user,
             "n": template.name,

@@ -159,8 +159,9 @@ class SessionType(TimestampMixin, Base):
     application_stage: Mapped[ApplicationStage | None] = mapped_column(str_enum(ApplicationStage))
     #: `OTHER`'s label, and **only** when the set holds `OTHER`. The `CHECK`
     #: below can see only the first stage, so it holds one direction; the whole
-    #: rule is `stage_label_problem`. See `ApplicationStage` for why the escape
-    #: hatch is kept.
+    #: rule is `stage_label_problem`. **Retired with `OTHER` (decision 288)**:
+    #: nothing writes one, reads publish `null`, and a write replacing the set
+    #: clears it; the contract migration clears the rest.
     custom_stage_label: Mapped[str | None] = mapped_column(Text)
     #: The icon the client shows (#198), from the design's closed set; `NULL`
     #: is the client's automatic pick.

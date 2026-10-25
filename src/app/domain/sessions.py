@@ -28,6 +28,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from app.core.config import Settings
 from app.domain.enums import ApplicationStage, SessionReasonCode, SessionRole, SessionStatus
@@ -37,8 +38,11 @@ __all__ = [
     "EXPIRY_GRACE",
     "EXPIRY_KIND",
     "MAX_SESSION_TYPE_OFFERINGS",
+    "RETIRED_STAGES",
     "TRANSITIONS",
     "Transition",
+    "WritableStage",
+    "current_stages",
     "first_stage",
     "named_stages",
     "records_unavailability",
@@ -308,7 +312,50 @@ def named_stages(fields: Mapping[str, object]) -> list[ApplicationStage] | None:
     return None
 
 
-def first_stage(stages: Sequence[ApplicationStage]) -> ApplicationStage | None:
+class WritableStage(StrEnum):
+    """The design's six application stages, in its order: **all a write may
+    name** (Session Types PRD, founder 2026-10-21). No custom stage.
+
+    A second vocabulary only while `ApplicationStage` still carries the retired
+    six for the rows not yet remapped; a test pins every member here to one
+    there, and the contract migration folds this back into it.
+    """
+
+    EXPLORING = "exploring"
+    RESEARCHING = "researching"
+    PREPARING_DOCUMENTS = "preparing_documents"
+    APPLYING = "applying"
+    INTERVIEW_PREP = "interview_prep"
+    AWAITING_DECISION = "awaiting_decision"
+
+
+#: Each retired stage and the current one it became; `OTHER` has none and is
+#: dropped. The founder's remap (2026-10-21). **The contract migration copies
+#: this table literally**, and a test pins the copy to it.
+RETIRED_STAGES: Mapping[ApplicationStage, WritableStage | None] = {
+    ApplicationStage.EARLY_EXPLORATION: WritableStage.EXPLORING,
+    ApplicationStage.DRAFTING_STAGE: WritableStage.PREPARING_DOCUMENTS,
+    ApplicationStage.REVISIONS: WritableStage.PREPARING_DOCUMENTS,
+    ApplicationStage.POST_SUBMISSION: WritableStage.AWAITING_DECISION,
+    ApplicationStage.INTERVIEWING: WritableStage.INTERVIEW_PREP,
+    ApplicationStage.OTHER: None,
+}
+
+
+def current_stages(stages: Sequence[ApplicationStage]) -> list[WritableStage]:
+    """A stored stage set as the design's six: each retired stage remapped,
+    `other` dropped, and a stage two retired ones both became kept once, at
+    the first one's place. What every read publishes until the contract
+    migration has remapped the rows themselves."""
+    seen: list[WritableStage] = []
+    for stage in stages:
+        current = RETIRED_STAGES[stage] if stage in RETIRED_STAGES else WritableStage(stage)
+        if current is not None and current not in seen:
+            seen.append(current)
+    return seen
+
+
+def first_stage[Stage: StrEnum](stages: Sequence[Stage]) -> Stage | None:
     """The first of a stage set: what `session_types.application_stage` holds and
     the deprecated single `application_stage` field reports, this release."""
     return stages[0] if stages else None

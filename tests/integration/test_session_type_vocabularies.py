@@ -212,34 +212,6 @@ async def test_a_mismatched_label_is_a_422(
     assert refused.status_code == 422, refused.text
 
 
-async def test_a_patch_naming_only_the_label_is_left_to_the_database(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """**The one case the boundary deliberately does not judge.**
-
-    On a `PATCH` an absent field means *leave it alone*, so a request naming only
-    `custom_stage_label` gives the validator nothing to compare against. Judging
-    it anyway would refuse a legal edit — setting the label on an offering that
-    is already `other`. So it is allowed through, and the row it would produce is
-    still refused by the `CHECK`.
-
-    This asserts the legal edit succeeds. The illegal one reaching the database
-    is the accepted cost of not refusing this one.
-    """
-    mentor, auth_id = await as_mentor(db_engine, "patch-label-only")
-    session_type = await add_session_type(db_engine, mentor, application_stage="other")
-
-    changed = await api_client.patch(
-        f"{URL}/{session_type}",
-        json={"custom_stage_label": "Reworded"},
-        headers=bearer(api_token(auth_id)),
-    )
-
-    assert changed.status_code == 200, changed.text
-    (offering,) = (await api_client.get(URL, headers=bearer(api_token(auth_id)))).json()["data"]
-    assert offering["custom_stage_label"] == "Reworded"
-
-
 async def test_classifying_an_offering_shows_the_taxonomy_on_both_reads(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

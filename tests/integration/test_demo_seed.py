@@ -182,7 +182,7 @@ MOCK = DemoSessionType(
     offering="interview-preparation",
     duration=60,
     notice=2880,
-    stage="post_submission",
+    stage="awaiting_decision",
     questions=(
         DemoQuestion("Which programme or scholarship is the interview for?", required=True),
         DemoQuestion("When is your interview?", required=False),
@@ -239,7 +239,7 @@ async def test_a_seeded_mentor_offers_every_session_type_given(db_engine: AsyncE
     assert (mock["duration_minutes"], mock["min_notice_minutes"]) == (60, 2880)
     assert (mock["offering"], mock["application_stage"]) == (
         "interview-preparation",
-        "post_submission",
+        "awaiting_decision",
     )
     assert mock["description"]
     assert mock["questions"] == 2
@@ -390,8 +390,8 @@ async def test_reseeding_writes_the_stage_set_the_reads_prefer(db_engine: AsyncE
                 {"t": mock},
             )
         ).one()
-    assert rows == ["post_submission"]
-    assert (column, label) == ("post_submission", None)
+    assert rows == ["awaiting_decision"]
+    assert (column, label) == ("awaiting_decision", None)
 
 
 async def test_reseeding_restores_a_type_a_tester_scheduled_for_deletion(

@@ -75,7 +75,7 @@ CATALOGUE: dict[str, tuple[DemoSessionType, ...]] = {
             offering="test-preparation",
             duration=45,
             notice=DAY,
-            stage="early_exploration",
+            stage="exploring",
             questions=(
                 Q("Which test are you taking, and when?", required=True),
                 Q("What is your latest practice score, and your target?"),
@@ -92,7 +92,7 @@ CATALOGUE: dict[str, tuple[DemoSessionType, ...]] = {
             offering="document-preparation",
             duration=60,
             notice=2 * DAY,
-            stage="drafting_stage",
+            stage="preparing_documents",
             questions=(
                 Q("Which programme is this statement for?", required=True),
                 Q("Paste a link to your current draft (a shared Google Doc is fine)."),
@@ -107,7 +107,7 @@ CATALOGUE: dict[str, tuple[DemoSessionType, ...]] = {
             offering="document-preparation",
             duration=30,
             notice=DAY,
-            stage="revisions",
+            stage="preparing_documents",
             questions=(Q("What role or programme is this CV for?", required=True),),
         ),
     ),
@@ -121,7 +121,7 @@ CATALOGUE: dict[str, tuple[DemoSessionType, ...]] = {
             offering="school-selection",
             duration=45,
             notice=DAY,
-            stage="early_exploration",
+            stage="exploring",
             questions=(
                 Q("Which countries are you considering?", required=True),
                 Q("Roughly what can you spend per year, including living costs?"),
@@ -138,7 +138,7 @@ CATALOGUE: dict[str, tuple[DemoSessionType, ...]] = {
             offering="program-selection",
             duration=45,
             notice=DAY,
-            stage="early_exploration",
+            stage="exploring",
             questions=(
                 Q("What did you study, and what do you want to study next?", required=True),
             ),
@@ -154,7 +154,7 @@ CATALOGUE: dict[str, tuple[DemoSessionType, ...]] = {
             offering="scholarships-financial-aid",
             duration=60,
             notice=2 * DAY,
-            stage="early_exploration",
+            stage="exploring",
             questions=(
                 Q("Which scholarships are you considering?", required=True),
                 Q("When is your earliest deadline?"),
@@ -171,7 +171,7 @@ CATALOGUE: dict[str, tuple[DemoSessionType, ...]] = {
             offering="interview-preparation",
             duration=60,
             notice=2 * DAY,
-            stage="post_submission",
+            stage="awaiting_decision",
             questions=(
                 Q("Which programme or scholarship is the interview for?", required=True),
                 Q("When is your interview?"),

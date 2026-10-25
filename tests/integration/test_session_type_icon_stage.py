@@ -104,16 +104,16 @@ async def test_the_database_refuses_an_unknown_icon(db_engine: AsyncEngine) -> N
             )
 
 
-async def test_interviewing_is_a_stage_a_type_can_have(
+async def test_preparing_for_interview_is_a_stage_a_type_can_have(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     _, auth = await as_mentor(db_engine, "stage-interviewing")
     headers = bearer(api_token(auth))
 
     created = await api_client.post(
-        URL, json=body(application_stage="interviewing"), headers=headers
+        URL, json=body(application_stage="interview_prep"), headers=headers
     )
     (row,) = (await api_client.get(URL, headers=headers)).json()["data"]
 
     assert created.status_code == 201
-    assert row["application_stage"] == "interviewing"
+    assert row["application_stage"] == "interview_prep"

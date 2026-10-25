@@ -308,11 +308,12 @@ class ApplicationStage(StrEnum):
     commit this contract to a shape nobody has designed"*. The UI designed it, so
     that reason has lapsed and the column stops being free text.
 
-    **`OTHER` is the one that costs something**, and it is kept deliberately. A
-    closed set with no escape hatch pushes anything unanticipated into whichever
-    member is least wrong, which is worse than an honest "something else" — and
-    this vocabulary was drawn from fourteen mock screens rather than from data,
-    so being incomplete is the expected case rather than the surprising one.
+    **`OTHER` was the escape hatch, and the founder removed it with the design's
+    six (decision 288, 2026-10-21).** It was kept because a closed set drawn
+    from mock screens was expected to be incomplete; the six came from the
+    finished design instead, with no custom stage. It stays in this class only
+    until the contract migration has remapped every stored row; nothing may
+    write it (`WritableStage`) and no read publishes it.
 
     Its label lives in ``session_types.custom_stage_label``, present exactly
     when an offering's stage set holds ``OTHER`` (#215): ``OTHER`` with no label
