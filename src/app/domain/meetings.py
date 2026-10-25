@@ -41,7 +41,7 @@ __all__ = [
 #: reports, so the two cannot disagree.
 PLATFORM_DEFAULT_PROVIDER = ConferencingProvider.DAILY
 
-#: What one offering may be pinned to (decision 288). Not `custom`: it needs a
+#: What one offering may be pinned to (decision 289). Not `custom`: it needs a
 #: URL, which only the mentor's default takes (`/me/conferencing`).
 OFFERING_VENUES = frozenset({ConferencingProvider.DAILY, ConferencingProvider.GOOGLE_MEET})
 

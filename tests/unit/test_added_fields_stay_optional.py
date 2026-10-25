@@ -37,7 +37,7 @@ ADDED = {
         "next_available_at",
         "next_available_state",
     ),
-    # Whether the offering follows the mentor's venue, owner view only (decision 288).
+    # Whether the offering follows the mentor's venue, owner view only (decision 289).
     "OwnSessionTypeRead": ("meeting_venue_inherited",),
     "SessionAnswerRead": ("answered", "required"),
     # New with the mentor dashboard (decision 246): every figure optional from

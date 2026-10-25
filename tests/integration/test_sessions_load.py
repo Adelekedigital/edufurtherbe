@@ -425,7 +425,7 @@ async def test_a_mentor_who_never_chose_gets_no_option(
 async def test_a_reload_keeps_a_pin_the_mentor_chose_and_writes_none(
     seeded: tuple[AsyncConnection, dict[str, UUID]], venue: MeetingProvider | None
 ) -> None:
-    """A pin is the mentor's choice since decision 288, so a re-run leaves it,
+    """A pin is the mentor's choice since decision 289, so a re-run leaves it,
     as decision 280 already leaves a default chosen through `/me/conferencing`.
     The load still writes no pin of its own: the first run leaves it null."""
     conn, users = seeded

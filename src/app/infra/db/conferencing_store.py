@@ -3,7 +3,7 @@ offering is pinned to.
 
 **The only writer `mentor_conferencing_options` has** (#124 shipped the table
 with none): the default through `/me/conferencing` (#224), and a non-default row
-for an offering's own venue (decision 288). Both go through one upsert on
+for an offering's own venue (decision 289). Both go through one upsert on
 `(user_id, provider)`. The three connection columns are not touched: no provider
 authenticates yet, and they are "declared now, written by nothing" (#21).
 
@@ -85,7 +85,7 @@ async def set_default_option(
 async def offering_option(
     session: AsyncSession, user_id: UUID, provider: ConferencingProvider
 ) -> UUID:
-    """The id of this mentor's row for ``provider``, created if missing (decision 288).
+    """The id of this mentor's row for ``provider``, created if missing (decision 289).
 
     **Never the default**: a new row is inserted with `is_default = false`, and
     an existing one keeps whatever it was, so pinning an offering cannot change

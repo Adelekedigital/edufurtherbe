@@ -1,4 +1,4 @@
-"""A mentor holds one offering on its own video provider (decision 288).
+"""A mentor holds one offering on its own video provider (decision 289).
 
 `meeting_venue` on `POST`/`PATCH /me/session-types` is `daily`, `google_meet` or
 `null`. A value points the offering at the mentor's own option row for that

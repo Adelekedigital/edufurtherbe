@@ -216,7 +216,7 @@ async def test_a_new_offering_resolves_a_venue_without_choosing_one(
     It leaves `conferencing_option_id` null — *use my default* — which resolves
     to the mentor's default and then to the platform fallback. The field is
     required on the way out, so "not chosen" must not mean "absent". Choosing
-    one is `test_session_type_venue.py` (decision 288).
+    one is `test_session_type_venue.py` (decision 289).
     """
     _, auth_id = await as_mentor(db_engine, "venue-resolves")
 

@@ -114,7 +114,7 @@ MAX_STAGES = len(ApplicationStage)
 
 
 def _offering_venue(value: object) -> object:
-    """Refuse a provider one offering cannot hold (decision 288): `custom` needs
+    """Refuse a provider one offering cannot hold (decision 289): `custom` needs
     a URL, which only the mentor's default takes. Before the enum check, so
     `zoom` gets this message too rather than a list that offers `custom`."""
     # `isinstance` first: an unhashable body value must be a 422, not a TypeError.
@@ -380,7 +380,7 @@ class OwnSessionTypeRead(BaseModel):
             "**link** is generated per session and never appears here."
         ),
     )
-    # Always sent; the default only keeps it out of `required` (decision 288).
+    # Always sent; the default only keeps it out of `required` (decision 289).
     meeting_venue_inherited: bool = Field(
         default=True,
         description=(
@@ -588,7 +588,7 @@ class _SessionTypeWriteBase(Normalised):
 class MentorSessionTypeWrite(_SessionTypeWriteBase):
     """A new offering, as its mentor describes it.
 
-    **`meeting_venue` is a provider name, not an option id** (decision 288).
+    **`meeting_venue` is a provider name, not an option id** (decision 289).
     The store turns it into the mentor's own row for that provider, creating it
     as a non-default row if missing. `custom` is refused: it would need a URL
     this endpoint does not ask for. Null, or absent, leaves

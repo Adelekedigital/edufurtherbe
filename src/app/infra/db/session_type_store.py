@@ -216,7 +216,7 @@ async def resolve_venue(
                     select(
                         _resolved_venue(),
                         # The link of the row that won, never the default's
-                        # under a pin (decision 288).
+                        # under a pin (decision 289).
                         case(
                             (_chosen.id.is_not(None), _chosen.custom_url),
                             else_=_default.custom_url,
@@ -397,7 +397,7 @@ def _own_session_types(mentor_user_id: UUID, window: BookingWindow) -> Select[An
             # The form's size, so the list needs no per-type call (frontend #147).
             live_question_count(SessionType.id).label("question_count"),
             _resolved_venue(),
-            # Null follows the mentor's default (#108); a value is a pin (#288).
+            # Null follows the mentor's default (#108); a value is a pin (#289).
             SessionType.conferencing_option_id.is_(None).label("meeting_venue_inherited"),
         )
         .select_from(SessionType)
@@ -529,7 +529,7 @@ async def create_session_type(
     the fact because the check *is* a query.
 
     `conferencing_option_id` is null unless `meeting_venue` names a provider
-    (decision 288): null means *use my default*, and the venue still resolves
+    (decision 289): null means *use my default*, and the venue still resolves
     through `_resolved_venue`.
 
     **At most the mentor's limit** (decision 286), counted under a per-mentor
@@ -590,7 +590,7 @@ async def _venue_option(
     session: AsyncSession, mentor_user_id: UUID, venue: ConferencingProvider | None
 ) -> UUID | None:
     """The option row an offering is pinned to, or ``None`` to follow the
-    mentor's default (decision 288). Only after the caller scoped the offering
+    mentor's default (decision 289). Only after the caller scoped the offering
     to this mentor, so a refused write creates no row; the composite key makes a
     row of anybody else's unrepresentable anyway."""
     return None if venue is None else await offering_option(session, mentor_user_id, venue)
@@ -723,7 +723,7 @@ async def update_session_type(
     if stages is not None:
         own["application_stage"] = first_stage(stages)
         await write_session_type_stages(session, session_type_id, stages)
-    # Absent leaves the pin; `null` resets it to follow the default (#288).
+    # Absent leaves the pin; `null` resets it to follow the default (#289).
     if "meeting_venue" in payload:
         own["conferencing_option_id"] = await _venue_option(
             session, mentor_user_id, payload["meeting_venue"]

@@ -453,7 +453,7 @@ async def test_the_offerings_own_choice_beats_the_mentors_default(
 async def test_an_offering_pinned_through_the_api_books_on_its_pin(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, fakes: tuple[FakeRooms, FakeCalendar]
 ) -> None:
-    """Decision 288 end to end: the mentor's default is Daily, the offering is
+    """Decision 289 end to end: the mentor's default is Daily, the offering is
     pinned to Meet with `PATCH`, and the booking is provisioned on Meet."""
     rooms, calendar = fakes
     setup = await a_mentor_on(db_engine, "mp-pinned", "daily")

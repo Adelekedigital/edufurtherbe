@@ -79,7 +79,7 @@ def test_every_duration_check_is_the_one_range(table: Table, name: str) -> None:
 
 @pytest.mark.parametrize("schema", ["MentorSessionTypeWrite", "MentorSessionTypePatch"])
 def test_the_published_venues_are_the_ones_an_offering_may_hold(schema: str) -> None:
-    """Decision 288: a generated client offers `daily` and `google_meet` and no
+    """Decision 289: a generated client offers `daily` and `google_meet` and no
     `custom`, from the same constant the validator refuses against."""
     from app.core.config import Settings
     from app.domain.meetings import OFFERING_VENUES

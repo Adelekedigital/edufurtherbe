@@ -126,7 +126,7 @@ ON CONFLICT (session_type_id) DO UPDATE SET
 """
 
 # **The offering is never pinned** (owner, 2026-10-21): it follows the mentor's
-# default, which the option above is. **Nor is a pin cleared** (decision 288):
+# default, which the option above is. **Nor is a pin cleared** (decision 289):
 # a pin is the mentor's own choice now, so a re-run leaves it, as it leaves a
 # default chosen through `/me/conferencing`. `b2d6f9a1c4e7` already removed the
 # pins older loads wrote.

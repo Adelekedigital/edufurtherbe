@@ -297,7 +297,7 @@ async def test_the_response_carries_the_three_owner_only_fields(
         "duration_minutes",
         "min_notice_minutes",
         "meeting_venue",
-        # Whether it follows your default venue (decision 288).
+        # Whether it follows your default venue (decision 289).
         "meeting_venue_inherited",
         "is_active",
         "requires_booking_confirmation",
