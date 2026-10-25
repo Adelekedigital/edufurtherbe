@@ -305,7 +305,8 @@ def named_stages(fields: Mapping[str, object]) -> list[ApplicationStage] | None:
 
 def first_stage(stages: Sequence[ApplicationStage]) -> ApplicationStage | None:
     """The first of a stage set: what `session_types.application_stage` holds
-    until its drop (decision 293), so a rollback still reads a stage."""
+    while that deprecated column is kept (decision 293), so a rollback still
+    reads a stage."""
     return stages[0] if stages else None
 
 

@@ -627,7 +627,7 @@ def _requested_offerings(payload: dict[str, Any]) -> list[UUID] | None:
 #: offering*, and that it spans two tables is this layer's problem.
 #:
 #: `application_stage` is absent on purpose: it is derived from the stage set
-#: (#215) and dual-written until its drop. Neither it nor `custom_stage_label`
+#: (#215) and dual-written, deprecated. Neither it nor `custom_stage_label`
 #: is a writable field any more (decision 293).
 SESSION_TYPE_COLUMNS = (
     "name",

@@ -2,9 +2,9 @@
 
 The #205 shape of `offerings.py`, for the other axis: `session_type_stages`
 holds the set in the mentor's order and is the only place stages are read
-from (decision 293). The first is still dual-written to
-`session_types.application_stage` until that column's drop, so a rollback finds
-it. **No rows means any stage.**
+from (decision 293). The first is still dual-written to the deprecated
+`session_types.application_stage`, kept on purpose, so a rollback finds it.
+**No rows means any stage.**
 """
 
 from __future__ import annotations

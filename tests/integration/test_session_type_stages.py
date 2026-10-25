@@ -6,8 +6,8 @@ for mentees who are…" became "Pick all that apply". The set lives in
 `session_type_stages`, the only place stages are read from. The deprecated
 `application_stage` and `custom_stage_label` are gone from the contract
 (decision 293): a write sending either is a `422` at it. The column
-`session_types.application_stage` is still dual-written as the set's first
-until its drop.
+`session_types.application_stage` is still dual-written as the set's first,
+deprecated and kept on purpose.
 """
 
 from __future__ import annotations
@@ -184,7 +184,7 @@ async def test_a_patch_that_leaves_the_set_out_keeps_it(
 async def test_the_old_column_holds_the_first_of_the_set(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Dual-written until the column's drop, so a rollback to code that still
+    """Dual-written while the deprecated column is kept, so a rollback to code that still
     read it finds the set's first; the API no longer shows it."""
     _, auth = await as_mentor(db_engine, "stages-dual")
     headers = bearer(api_token(auth))
