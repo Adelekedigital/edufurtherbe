@@ -450,6 +450,51 @@ async def test_the_offerings_own_choice_beats_the_mentors_default(
     assert calendar.conferences == []
 
 
+async def test_an_offering_pinned_through_the_api_books_on_its_pin(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fakes: tuple[FakeRooms, FakeCalendar]
+) -> None:
+    """Decision 289 end to end: the mentor's default is Daily, the offering is
+    pinned to Meet with `PATCH`, and the booking is provisioned on Meet."""
+    rooms, calendar = fakes
+    setup = await a_mentor_on(db_engine, "mp-pinned", "daily")
+    pinned = await api_client.patch(
+        f"/api/v1/me/session-types/{setup['session_type']}",
+        json={"meeting_venue": "google_meet"},
+        headers=setup["mentor_headers"],
+    )
+    assert pinned.status_code == 200, pinned.text
+
+    session = await book(api_client, setup)
+
+    assert rooms.calls == []
+    assert len(calendar.calls) == 1
+    assert (await venue_of(db_engine, session["id"]))["meeting_provider"] == "google_meet"
+
+
+async def test_a_pin_made_before_accepting_is_the_venue_at_accept(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fakes: tuple[FakeRooms, FakeCalendar]
+) -> None:
+    """Decision 236 with a pin: a request follows the venue current at accept,
+    so pinning Meet after the booking and before `/accept` mints no Daily room."""
+    rooms, calendar = fakes
+    setup = await a_mentor_on(db_engine, "mp-pin-accept", "daily", confirmation=True)
+    session = await book(api_client, setup)
+    await api_client.patch(
+        f"/api/v1/me/session-types/{setup['session_type']}",
+        json={"meeting_venue": "google_meet"},
+        headers=setup["mentor_headers"],
+    )
+
+    accepted = await api_client.post(
+        f"/api/v1/sessions/{session['id']}/accept", headers=setup["mentor_headers"]
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    assert rooms.calls == []
+    assert len(calendar.calls) == 1
+    assert (await venue_of(db_engine, session["id"]))["meeting_provider"] == "google_meet"
+
+
 # --------------------------------------------------------------------------
 # When it happens
 # --------------------------------------------------------------------------

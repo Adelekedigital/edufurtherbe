@@ -28,6 +28,7 @@ from app.domain.enums import ConferencingProvider
 
 __all__ = [
     "MAX_MEETING_LINK_LENGTH",
+    "OFFERING_VENUES",
     "PLATFORM_DEFAULT_PROVIDER",
     "MeetingPlan",
     "meeting_link",
@@ -39,6 +40,10 @@ __all__ = [
 #: calendar. The last step of venue resolution and the default `/me/conferencing`
 #: reports, so the two cannot disagree.
 PLATFORM_DEFAULT_PROVIDER = ConferencingProvider.DAILY
+
+#: What one offering may be pinned to (decision 289). Not `custom`: it needs a
+#: URL, which only the mentor's default takes (`/me/conferencing`).
+OFFERING_VENUES = frozenset({ConferencingProvider.DAILY, ConferencingProvider.GOOGLE_MEET})
 
 #: A personal room link's longest allowed form.
 MAX_MEETING_LINK_LENGTH = 2048

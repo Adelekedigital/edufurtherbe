@@ -211,11 +211,12 @@ async def test_omitting_notice_takes_the_platform_floor(
 async def test_a_new_offering_resolves_a_venue_without_choosing_one(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """`meeting_venue` is not writable, and the response still carries one.
+    """An offering created without `meeting_venue` still carries one.
 
-    A new offering leaves `conferencing_option_id` null — *use my default* —
-    which resolves to the mentor's default and then to the platform fallback. The
-    field is required on the way out, so "not writable" must not mean "absent".
+    It leaves `conferencing_option_id` null — *use my default* — which resolves
+    to the mentor's default and then to the platform fallback. The field is
+    required on the way out, so "not chosen" must not mean "absent". Choosing
+    one is `test_session_type_venue.py` (decision 289).
     """
     _, auth_id = await as_mentor(db_engine, "venue-resolves")
 

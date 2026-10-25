@@ -422,20 +422,28 @@ async def test_a_mentor_who_never_chose_gets_no_option(
 
 
 @pytest.mark.parametrize("venue", [MeetingProvider.DAILY, None])
-async def test_a_reload_clears_a_pin_an_older_load_left(
+async def test_a_reload_keeps_a_pin_the_mentor_chose_and_writes_none(
     seeded: tuple[AsyncConnection, dict[str, UUID]], venue: MeetingProvider | None
 ) -> None:
-    """The load converges on the plan, with a venue or without: a pointer an
-    older load wrote goes on the next run, so the offering follows the default."""
+    """A pin is the mentor's choice since decision 289, so a re-run leaves it,
+    as decision 280 already leaves a default chosen through `/me/conferencing`.
+    The load still writes no pin of its own: the first run leaves it null."""
     conn, users = seeded
     loader = SessionLoader(conn)
     await loader.load(users=users, plan=plan_of())
-    await conn.execute(
-        text(
-            "UPDATE session_types st SET conferencing_option_id = o.id "
-            "FROM mentor_conferencing_options o WHERE o.user_id = st.mentor_user_id"
+    assert (
+        await conn.execute(text("SELECT conferencing_option_id FROM session_types"))
+    ).scalar_one() is None
+    chosen = (
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_conferencing_options (user_id, provider, source) "
+                "SELECT mentor_user_id, 'google_meet', 'mentor' FROM session_types "
+                "RETURNING id"
+            )
         )
-    )
+    ).scalar_one()
+    await conn.execute(text("UPDATE session_types SET conferencing_option_id = :o"), {"o": chosen})
 
     await loader.load(
         users=users,
@@ -443,7 +451,7 @@ async def test_a_reload_clears_a_pin_an_older_load_left(
     )
 
     pointer = await conn.execute(text("SELECT conferencing_option_id FROM session_types"))
-    assert pointer.scalar_one() is None
+    assert pointer.scalar_one() == chosen
 
 
 @pytest.mark.parametrize(
