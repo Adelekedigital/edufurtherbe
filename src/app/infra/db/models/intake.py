@@ -46,7 +46,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.enums import IntakeFileType, IntakeStatus, QuestionType
+from app.domain.enums import IntakeFileType, IntakeStatus, QuestionOptionsSource, QuestionType
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -85,6 +85,12 @@ class SessionTypeQuestion(TimestampMixin, Base):
     #: vocabulary value, because the canonical package declares one choice type
     #: (ADR 0007) and "one or several" is a property of it, not a new kind (#200).
     allows_multiple: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    #: For `multi_choice` only: where the options come from when the mentor did
+    #: not write them. `help_areas` stores no option rows; every read fills the
+    #: options from the mentor's live help areas. Null is the mentor's own list.
+    options_source: Mapped[QuestionOptionsSource | None] = mapped_column(
+        str_enum(QuestionOptionsSource)
+    )
 
     #: Who added it. `RESTRICT` rather than the package's unspecified action:
     #: ADR 0013 makes an authorship record evidence, and a user delete that
@@ -110,6 +116,14 @@ class SessionTypeQuestion(TimestampMixin, Base):
         CheckConstraint(
             "NOT allows_multiple OR question_type = 'multi_choice'",
             name="only_choice_allows_multiple",
+        ),
+        CheckConstraint(
+            f"options_source IS NULL OR {check_is_known('options_source', QuestionOptionsSource)}",
+            name="options_source_is_known",
+        ),
+        CheckConstraint(
+            "options_source IS NULL OR question_type = 'multi_choice'",
+            name="only_choice_has_options_source",
         ),
     )
 
@@ -195,7 +209,8 @@ class IntakeSubmission(TimestampMixin, Base):
 
 
 class IntakeAnswer(TimestampMixin, Base):
-    """One answer, in exactly one of three forms.
+    """One answer, in exactly one of four forms: text, a file, an option, or a
+    help area (a service offering, for a help-area question).
 
     **`exactly_one_answer_form` is the constraint that carries the design.** A
     `file_upload` answer must not also carry text, and a `multi_choice` one must
@@ -250,6 +265,19 @@ class IntakeAnswer(TimestampMixin, Base):
         ),
     )
 
+    #: The help area chosen, on an answer to a help-area question
+    #: (`options_source = 'help_areas'`), whose options are service offerings
+    #: rather than option rows. Restricts like the option key; the six offerings
+    #: are retired, never deleted. `option_text` keeps the name as chosen.
+    selected_offering_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "service_offerings.id",
+            ondelete="RESTRICT",
+            name="fk_intake_answers_selected_offering_id",
+        ),
+    )
+
     #: The question's wording when the mentee answered it (#350). A mentor may
     #: reword a question afterwards; the answer belongs to the words it was given
     #: to. Null on answers recorded before this column existed, which readers
@@ -268,17 +296,18 @@ class IntakeAnswer(TimestampMixin, Base):
         # on one name — the defect `base.py` warns about and
         # `mentor_conferencing_options` already hit.
         # **One row per chosen option for a multiple-choice answer** (#207): the
-        # CHECK below allows one `selected_option_id` per row, so several options
-        # are several rows. What the old `UNIQUE (submission_id, question_id)`
-        # protected survives as two partial indexes — one text or file answer
-        # per question, and each option chosen once. Partial, so `alembic check`
+        # CHECK below allows one `selected_option_id` (or `selected_offering_id`)
+        # per row, so several options are several rows. What the old
+        # `UNIQUE (submission_id, question_id)` protected survives as partial
+        # indexes: one text or file answer per question, and each option (or
+        # help area) chosen once. Partial, so `alembic check`
         # cannot compare the predicates; a test asserts them.
         Index(
             "ux_intake_answers_one_per_question",
             "submission_id",
             "question_id",
             unique=True,
-            postgresql_where=text("selected_option_id IS NULL"),
+            postgresql_where=text("selected_option_id IS NULL AND selected_offering_id IS NULL"),
         ),
         Index(
             "ux_intake_answers_one_per_option",
@@ -288,11 +317,21 @@ class IntakeAnswer(TimestampMixin, Base):
             unique=True,
             postgresql_where=text("selected_option_id IS NOT NULL"),
         ),
+        # Each help area chosen once, as each option is above.
+        Index(
+            "ux_intake_answers_one_per_offering",
+            "submission_id",
+            "question_id",
+            "selected_offering_id",
+            unique=True,
+            postgresql_where=text("selected_offering_id IS NOT NULL"),
+        ),
         Index("ix_intake_answers_submission", "submission_id"),
         CheckConstraint(
             "(answer_text IS NOT NULL)::int "
             "+ (file_storage_key IS NOT NULL)::int "
-            "+ (selected_option_id IS NOT NULL)::int = 1",
+            "+ (selected_option_id IS NOT NULL)::int "
+            "+ (selected_offering_id IS NOT NULL)::int = 1",
             name="exactly_one_answer_form",
         ),
     )
