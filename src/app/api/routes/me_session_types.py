@@ -128,7 +128,7 @@ NAME_CONFLICT: dict[int | str, dict[str, str]] = {
     }
 }
 
-#: The create's own `409`s: the name, and the limit (decision 285).
+#: The create's own `409`s: the name, and the limit (decision 286).
 CREATE_CONFLICT: dict[int | str, dict[str, str]] = {
     status.HTTP_409_CONFLICT: {
         "description": NAME_CONFLICT[status.HTTP_409_CONFLICT]["description"]
@@ -169,9 +169,8 @@ CREATE_CONFLICT: dict[int | str, dict[str, str]] = {
         "is `{id, question_ids}`.\n\n"
         "**`Idempotency-Key` is optional.** Sent, a retry with the same key and "
         "body replays the first answer (with `Idempotent-Replayed: true`) instead "
-        "of creating a second offering; the same key with a different body is a "
-        "`422`. Absent, nothing changes, and a replay answers its first `201` "
-        "even once the list is full.\n\n"
+        "of creating a second offering, even once the list is full; the same key "
+        "with a different body is a `422`. Absent, nothing changes.\n\n"
         f"**At most {DEFAULT_SESSION_TYPE_LIMIT} session types**, unless support set "
         "another limit for you (`session_type_limit` on `GET /me`). Every one not "
         "deleted counts, hidden and scheduled for deletion included; one more is "

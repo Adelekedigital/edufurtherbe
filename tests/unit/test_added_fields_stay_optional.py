@@ -24,7 +24,7 @@ ADDED = {
         "onboarding",
         "languages",
         "links",
-        # The effective session-type limit, mentors only (decision 285).
+        # The effective session-type limit, mentors only (decision 286).
         "session_type_limit",
     ),
     "GoalRead": ("field_of_study", "schools"),

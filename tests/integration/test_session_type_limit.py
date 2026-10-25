@@ -1,8 +1,8 @@
-"""At most five session types per mentor, raisable by support (decision 285).
+"""At most five session types per mentor, raisable by support (decision 286).
 
 Every offering not truly deleted counts — live, hidden and scheduled for
 deletion — and the limit is support's override or the default. The count runs
-under `lock_mentor`, so two creates at the edge cannot both land; a replayed
+under a per-mentor advisory lock, so two creates at the edge cannot both land; a replayed
 `Idempotency-Key` still answers its first `201`.
 """
 
@@ -169,7 +169,7 @@ async def test_a_limit_below_what_is_held_refuses_and_deletes_nothing(
 async def test_two_creates_at_the_edge_land_one(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """`lock_mentor` serialises them; without it both count four and both land."""
+    """The guard's lock serialises them; without it both count four and both land."""
     mentor, auth = await as_mentor(db_engine, "limit-race")
     await give(db_engine, mentor, DEFAULT_SESSION_TYPE_LIMIT - 1)
     headers = bearer(api_token(auth))
@@ -180,6 +180,55 @@ async def test_two_creates_at_the_edge_land_one(
 
     assert sorted(a.status_code for a in answers) == [201, 409]
     assert await held(db_engine, mentor) == DEFAULT_SESSION_TYPE_LIMIT
+
+
+async def test_two_keyed_creates_at_the_edge_land_one_and_never_deadlock(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Each claims its own `Idempotency-Key` first, whose row references the
+    user; a row lock on that user taken after it would deadlock the pair."""
+    mentor, auth = await as_mentor(db_engine, "limit-race-keyed")
+    await give(db_engine, mentor, DEFAULT_SESSION_TYPE_LIMIT - 1)
+    token = bearer(api_token(auth))
+
+    answers = await asyncio.gather(
+        *(
+            api_client.post(
+                URL, json=body(name=f"Keyed {n}"), headers=token | {"Idempotency-Key": f"k-{n}"}
+            )
+            for n in range(2)
+        )
+    )
+
+    assert sorted(a.status_code for a in answers) == [201, 409], [a.text for a in answers]
+    assert await held(db_engine, mentor) == DEFAULT_SESSION_TYPE_LIMIT
+
+
+async def test_the_create_lock_does_not_wait_on_a_key_share_of_the_user(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The deadlock's precondition, made deterministic: another transaction's
+    claimed key holds `FOR KEY SHARE` on the user row, as each keyed create's own
+    claim does. A create whose lock conflicts with it would wait here, and two
+    keyed creates would each wait on the other."""
+    mentor, auth = await as_mentor(db_engine, "limit-key-share")
+    async with db_engine.connect() as other:
+        transaction = await other.begin()
+        await other.execute(
+            text(
+                "INSERT INTO idempotency_keys (key, user_id, endpoint, request_hash, locked_at) "
+                "VALUES ('held', :u, 'elsewhere', 'h', now())"
+            ),
+            {"u": mentor},
+        )
+        try:
+            response = await asyncio.wait_for(
+                api_client.post(URL, json=body(), headers=bearer(api_token(auth))), timeout=5
+            )
+        finally:
+            await transaction.rollback()
+
+    assert response.status_code == 201, response.text
 
 
 async def test_a_replay_of_the_create_that_filled_the_list_is_its_201(
@@ -270,7 +319,7 @@ async def test_a_limit_at_the_ceiling_is_accepted(
     assert response.json()["limit"] == SESSION_TYPE_LIMIT_CEILING
 
 
-@pytest.mark.parametrize("value", [0, SESSION_TYPE_LIMIT_CEILING + 1, "five"])
+@pytest.mark.parametrize("value", [0, SESSION_TYPE_LIMIT_CEILING + 1, "five", "7", True, 7.0])
 async def test_a_limit_out_of_range_is_a_422(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, value: object
 ) -> None:

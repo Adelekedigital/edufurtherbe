@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from typing import Annotated, Any
 from uuid import UUID
@@ -67,6 +68,8 @@ from app.infra.db.mentor_status_store import (
     set_listing,
 )
 from app.infra.db.session_type_limit import set_session_type_limit
+
+logger = logging.getLogger(__name__)
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -376,9 +379,9 @@ async def restored_account(user_id: UUID, _: CatalogueAdminDep, session: Session
 
 
 async def set_mentor_session_type_limit(
-    user_id: UUID, payload: SessionTypeLimitWrite, _: CatalogueAdminDep, session: SessionDep
+    user_id: UUID, payload: SessionTypeLimitWrite, admin: CatalogueAdminDep, session: SessionDep
 ) -> tuple[int, bool]:
-    """Support raising or resetting one mentor's session-type limit (decision 285).
+    """Support raising or resetting one mentor's session-type limit (decision 286).
 
     **Super admin only** (`CatalogueAdminDep`): it changes what a mentor may
     publish. A user with no live mentor profile is a `404`.
@@ -387,6 +390,10 @@ async def set_mentor_session_type_limit(
     if result is None:
         raise NotFoundError("no such mentor")
     await session.commit()
+    # Who changed an entitlement, and to what: the record support asks for.
+    logger.info(
+        "session type limit for mentor %s set to %s by admin %s", user_id, payload.limit, admin
+    )
     return result
 
 

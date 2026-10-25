@@ -53,7 +53,7 @@ class WebsiteLimitReachedError(ConflictError):
 
 class SessionTypeLimitReachedError(ConflictError):
     """The mentor already holds as many session types as they may (Session
-    Types PRD, decision 285). `limit` says how many, so the client need not
+    Types PRD, decision 286). `limit` says how many, so the client need not
     know the default or a support override."""
 
     def __init__(self, message: str = "", *, limit: int) -> None:

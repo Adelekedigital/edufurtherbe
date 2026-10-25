@@ -52,7 +52,7 @@ def test_the_roster_varies_what_the_card_shows() -> None:
 
 
 def test_a_demo_mentor_stays_within_the_session_type_limit() -> None:
-    """The seed writes rows directly, past the create guard (decision 285), so
+    """The seed writes rows directly, past the create guard (decision 286), so
     it must never give a mentor more than the API would let them hold."""
     assert MAX_TYPES <= DEFAULT_SESSION_TYPE_LIMIT
     assert len(session_types_for(tuple(CATALOGUE))) <= DEFAULT_SESSION_TYPE_LIMIT

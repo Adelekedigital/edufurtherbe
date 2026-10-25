@@ -68,7 +68,6 @@ from app.infra.db.booking_rules import (
     inherits_min_notice,
 )
 from app.infra.db.intake_store import live_question_count
-from app.infra.db.mentor_status_store import lock_mentor
 from app.infra.db.models.availability import MentorNextAvailability, SessionTypeNextAvailability
 from app.infra.db.models.mentoring import (
     MentorConferencingOption,
@@ -524,17 +523,21 @@ async def create_session_type(
     `conferencing_option_id` is left null: it means *use my default*, and nothing
     can create an option yet. The venue still resolves — see `_resolved_venue`.
 
-    **At most the mentor's limit** (decision 285), counted under `lock_mentor`;
-    a full list is a `SessionTypeLimitReachedError`.
+    **At most the mentor's limit** (decision 286), counted under a per-mentor
+    lock by `refuse_if_full`; a full list is a `SessionTypeLimitReachedError`.
     """
-    # The mentor's row lock first (decision 285): the count below must not be
-    # raced by a second create, and the lock is also the live-profile check.
-    if not await lock_mentor(session, mentor_user_id):
+    owns = await session.execute(
+        select(literal(1))
+        .select_from(MentorProfile)
+        .where(MentorProfile.user_id == mentor_user_id, MentorProfile.deleted_at.is_(None))
+    )
+    if owns.first() is None:
         return None
-    await refuse_if_full(session, mentor_user_id)
 
     stages = named_stages(payload) or []
     _refuse_stage_label(stages, payload.get("custom_stage_label"))
+    # Last before the insert, so a body wrong in itself is told so first.
+    await refuse_if_full(session, mentor_user_id)
     async with _distinct_names():
         session_type_id = (
             await session.execute(

@@ -1,34 +1,54 @@
-"""How many session types a mentor may hold, and how many they do (decision 285).
+"""How many session types a mentor may hold, and how many they do (decision 286).
 
 **One expression for the limit.** `effective_limit()` is the `COALESCE` of the
 support override and the domain default; the create guard, the admin answer
 and `GET /me` all read it, so the three cannot disagree.
 
-**Counted under `lock_mentor`**, taken by `create_session_type` before it
-calls `refuse_if_full`. A `CHECK` sees one row, so the count is the writer's,
-and two creates at the edge must not both pass it.
+**Counted under a per-mentor advisory lock**, taken by `refuse_if_full`
+itself so the count cannot be read without it. A `CHECK` sees one row, so the
+count is the writer's, and two creates at the edge must not both pass it. An
+advisory lock rather than `lock_mentor`'s row lock: a keyed create has already
+claimed its `Idempotency-Key`, whose row holds `FOR KEY SHARE` on the user, and
+`FOR UPDATE` on that user would deadlock two keyed creates against each other.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import func, literal, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.core.errors import SessionTypeLimitReachedError
+from app.core.errors import NotFoundError, SessionTypeLimitReachedError
 from app.domain.session_type_limit import DEFAULT_SESSION_TYPE_LIMIT
-from app.infra.db.mentor_status_store import lock_mentor
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType
+from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 
-__all__ = ["effective_limit", "refuse_if_full", "set_session_type_limit"]
+__all__ = [
+    "SESSION_TYPE_LIMIT_LOCK_NAMESPACE",
+    "effective_limit",
+    "refuse_if_full",
+    "set_session_type_limit",
+]
+
+#: Namespace for this module's advisory lock: `'STYP'` as four ASCII bytes.
+SESSION_TYPE_LIMIT_LOCK_NAMESPACE = 0x53545950
 
 
 def effective_limit() -> ColumnElement[int]:
     """The mentor's limit: support's override, else the default."""
     return func.coalesce(MentorProfile.session_type_limit, literal(DEFAULT_SESSION_TYPE_LIMIT))
+
+
+async def _lock(session: AsyncSession, mentor_user_id: UUID) -> None:
+    """Serialise one mentor's creates and limit changes. Held to transaction end."""
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:ns, hashtext(:key))"),
+        {"ns": SESSION_TYPE_LIMIT_LOCK_NAMESPACE, "key": str(mentor_user_id)},
+    )
 
 
 def _held() -> ColumnElement[int]:
@@ -45,21 +65,28 @@ def _held() -> ColumnElement[int]:
     )
 
 
-async def refuse_if_full(session: AsyncSession, mentor_user_id: UUID) -> None:
-    """Refuse a new offering when the mentor holds their limit already.
+def _live_mentor(user_id: UUID) -> list[ColumnElement[bool]]:
+    """A live mentor profile on a live account."""
+    return [
+        MentorProfile.user_id == user_id,
+        MentorProfile.deleted_at.is_(None),
+        MentorProfile.user_id.in_(select(User.id).where(LIVE)),
+    ]
 
-    The caller holds `lock_mentor`; without it two creates both read one
-    below the limit and both land.
+
+async def refuse_if_full(session: AsyncSession, mentor_user_id: UUID) -> None:
+    """Lock the mentor's creates, then refuse a new offering at the limit.
+
+    The lock is taken here, not by the caller, so no path can count without it.
     """
+    await _lock(session, mentor_user_id)
     row = (
         await session.execute(
-            select(effective_limit(), _held()).where(
-                MentorProfile.user_id == mentor_user_id, MentorProfile.deleted_at.is_(None)
-            )
+            select(effective_limit(), _held()).where(*_live_mentor(mentor_user_id))
         )
     ).first()
-    if row is None:  # pragma: no cover - the caller has just locked the live profile
-        return
+    if row is None:  # pragma: no cover - the caller has just found the live profile
+        raise NotFoundError("this user has no mentor profile")
     limit, held = row
     if held >= limit:
         raise SessionTypeLimitReachedError(
@@ -75,21 +102,18 @@ async def set_session_type_limit(
 
     Returns the effective limit and whether it is the default, or `None` for a
     user with no live mentor profile. Deletes nothing: a limit below what the
-    mentor holds only refuses new creates. Does not commit.
-
-    `lock_mentor` first, the lock every create takes, so a create in flight
-    is judged against one limit or the other, never half of each.
+    mentor holds only refuses new creates. Under the create's lock, so a create
+    in flight is judged against one limit or the other. Does not commit.
     """
-    if not await lock_mentor(session, user_id):
-        return None
+    await _lock(session, user_id)
     row = (
         await session.execute(
             update(MentorProfile)
-            .where(MentorProfile.user_id == user_id, MentorProfile.deleted_at.is_(None))
+            .where(*_live_mentor(user_id))
             .values(session_type_limit=limit)
             .returning(effective_limit(), MentorProfile.session_type_limit.is_(None))
         )
     ).first()
-    if row is None:  # pragma: no cover - the live profile was just locked
+    if row is None:
         return None
     return int(row[0]), bool(row[1])
