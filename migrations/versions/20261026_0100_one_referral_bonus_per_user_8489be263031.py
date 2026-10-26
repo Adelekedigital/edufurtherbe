@@ -17,6 +17,7 @@ one `referral_unlock` lot per user, and nothing else writes that source.
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -37,9 +38,25 @@ def upgrade() -> None:
     so an inline build would take `SHARE` and stall them, and every statement
     queued behind it. `lock_timeout` fails fast instead of joining that queue;
     no `statement_timeout`, which would leave an `INVALID` index half-built.
+
+    **A retry rebuilds a failed build rather than skipping it.** A concurrent
+    build that dies (the lock timeout, an interrupted deploy) leaves an
+    `INVALID` index of this name, and `IF NOT EXISTS` alone would then report
+    success with nothing enforced. So an invalid leftover is dropped first.
+    Checked from here because `DROP INDEX CONCURRENTLY` cannot run in a `DO`
+    block.
     """
     with op.get_context().autocommit_block():
         op.execute("SET lock_timeout = '3s'")
+        invalid = op.get_bind().scalar(
+            sa.text(
+                "SELECT NOT i.indisvalid FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = :name"
+            ),
+            {"name": INDEX},
+        )
+        if invalid:
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX}")
         op.execute(
             f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {INDEX} ON credit_lots "
             "(user_id) WHERE source = 'referral_unlock'"
