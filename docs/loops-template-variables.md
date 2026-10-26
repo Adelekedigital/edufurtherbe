@@ -236,8 +236,9 @@ contract.
 | `session_suggestion_reminder` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
 | `mentee_request_reminder` | — | **NEEDED** | mentor | — (see *A mentee's reminder* below) |
 
-**A member marked NEEDED fails at the drain** (`template_for()` raises), and the
-outbox keeps the row, so nothing is lost and nothing is sent until an id is set.
+**A member marked NEEDED fails at the drain** (`template_for()` raises). What happens next depends on the message:
+- **Re-checked at send time** (the members of `STILL_DUE` in `infra/db/outbox.py`): the row stays `pending` with **no attempt counted** until an id is mapped. It's dropped as `skipped` once it stops being true, so it never goes out late.
+- **Everything else:** each sweep counts an attempt, and after 5 (about five hours) the row stays `failed` with the error. Map the id before the feature that sends it goes live.
 
 ### Paste-ready
 
@@ -299,7 +300,7 @@ lapsed, since it was queued. May use:
 - `reminderMessage`: what the mentee wrote, 1 to 500 characters, required
 - `sessionDate`, `sessionTime`, `sessionTimezone`: the requested time in the
   **mentor's** zone
-- `hours`: whole hours left before the request lapses (its `respond_by`)
+- `hours`: whole hours left before the request lapses (its `respond_by`, or its start when it has none)
 - `sessionTopic`
 - `pendingRequestUrl`: the request on the Bookings page,
   `/bookings?tab=pending&booking={id}`

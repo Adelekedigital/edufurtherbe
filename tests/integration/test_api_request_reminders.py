@@ -17,13 +17,14 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tests.integration.test_api_mentee_attendance_rate import a_pair
 from tests.integration.test_api_missed_reasons import a_stranger
 
+from app.core.errors import ConfigurationError
 from app.domain.notifications import Notification
 from app.domain.request_reminders import REMINDER_MESSAGE_MAX_LENGTH
-from app.infra.db.outbox import STILL_DUE
+from app.infra.db.outbox import MAX_ATTEMPTS, STILL_DUE, drain, enqueue
 from app.infra.db.pending_requests import request_reminder_state
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -351,3 +352,113 @@ async def test_the_email_is_still_due_only_while_the_request_awaits_an_answer(
         assert await request_reminder_state(session, answered, {}, now) == "stale"
         assert await request_reminder_state(session, lapsed, {}, now) == "stale"
         assert await request_reminder_state(session, uuid4(), {}, now) == "stale"
+
+
+class Unmapped:
+    """A notifier whose template for this message is not configured yet, as
+    `template_for` refuses it before anything is sent."""
+
+    def send(self, **kwargs: Any) -> None:
+        raise ConfigurationError(f"no email template configured for {kwargs['notification']}")
+
+
+class Recorder:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    def send(self, **kwargs: Any) -> None:
+        self.sent.append(kwargs)
+
+
+async def drain_one(engine: AsyncEngine, session_id: UUID, notifier: Any) -> dict[str, int]:
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        counts = await drain(
+            session, notifier=notifier, now=dt.datetime.now(dt.UTC), entity_id=session_id
+        )
+        await session.commit()
+    return counts
+
+
+async def row_state(engine: AsyncEngine, session_id: UUID) -> tuple[str, int]:
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT status, attempts FROM outbox_events "
+                    "WHERE entity_id = :s AND event_type = :n"
+                ),
+                {"s": session_id, "n": NOTIFICATION},
+            )
+        ).one()
+        return str(row.status), int(row.attempts)
+
+
+async def test_a_reminder_waits_for_its_template_instead_of_spending_its_attempts(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The mentee's one reminder is stamped the moment they send it, so it must
+    not be lost to a template the operator has not mapped yet: it waits, with
+    no attempt counted, and goes out once the template exists."""
+    pair = await a_pair(db_engine, "rr-unmapped")
+    session_id = await a_request(db_engine, pair)
+    await remind(api_client, session_id, pair["mentee_headers"])
+
+    for _ in range(MAX_ATTEMPTS + 2):
+        await drain_one(db_engine, session_id, Unmapped())
+
+    assert await row_state(db_engine, session_id) == ("pending", 0)
+    mapped = Recorder()
+    await drain_one(db_engine, session_id, mapped)
+    assert [m["notification"] for m in mapped.sent] == [Notification.MENTEE_REQUEST_REMINDER]
+    assert await row_state(db_engine, session_id) == ("sent", 1)
+
+
+async def test_a_waiting_reminder_is_dropped_once_the_request_is_answered(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Waiting is safe only because the freshness check runs first on every
+    sweep: an answer given while the template was missing ends the reminder."""
+    pair = await a_pair(db_engine, "rr-unmapped-answered")
+    session_id = await a_request(db_engine, pair)
+    await remind(api_client, session_id, pair["mentee_headers"])
+    await drain_one(db_engine, session_id, Unmapped())
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET status = 'confirmed' WHERE id = :s"), {"s": session_id}
+        )
+
+    mapped = Recorder()
+    await drain_one(db_engine, session_id, mapped)
+
+    assert mapped.sent == []
+    assert (await row_state(db_engine, session_id))[0] == "skipped"
+
+
+async def test_an_unmapped_message_with_no_freshness_check_keeps_its_bounded_retry(
+    db_engine: AsyncEngine,
+) -> None:
+    """Waiting is only for messages re-checked at send time. One that is not
+    (here the booking request itself) would go out late once mapped, so it
+    still counts the attempt."""
+    pair = await a_pair(db_engine, "rr-unmapped-other")
+    session_id = await a_request(db_engine, pair)
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
+        await enqueue(
+            session,
+            Notification.SESSION_REQUESTED,
+            entity_type="session",
+            entity_id=session_id,
+            recipient_ids=(pair["mentor"],),
+        )
+        await session.commit()
+
+    counts = await drain_one(db_engine, session_id, Unmapped())
+
+    assert counts["failed"] == 1
+    async with db_engine.connect() as conn:
+        attempts = (
+            await conn.execute(
+                text("SELECT attempts FROM outbox_events WHERE entity_id = :s"), {"s": session_id}
+            )
+        ).scalar_one()
+    assert attempts == 1

@@ -35,6 +35,7 @@ __all__ = [
 
 
 def _past_deadline(now: dt.datetime) -> Any:
+    # `domain.sessions.request_deadline` in SQL; pinned by `test_request_deadline`.
     return func.coalesce(Session.respond_by, Session.starts_at) <= now
 
 

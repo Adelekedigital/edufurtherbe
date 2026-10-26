@@ -467,3 +467,16 @@ def test_the_pending_request_link_opens_that_request_in_bookings() -> None:
         build_variables(["pendingRequestUrl"], context(app_base_url=""))
     with pytest.raises(UnresolvedVariableError, match="pendingRequestUrl"):
         build_variables(["pendingRequestUrl"], context(session_id=None))
+
+
+def test_hours_left_on_a_request_with_no_deadline_counts_to_its_start() -> None:
+    """A migrated request has no `respond_by` and lapses at `starts_at`
+    (decision 121), so a reminder about one still says how long is left."""
+    built = build_variables(
+        ["hours"],
+        context(
+            respond_by=None, starts_at=dt.datetime.now(dt.UTC) + dt.timedelta(hours=5, minutes=30)
+        ),
+    )
+
+    assert built == {"hours": "5"}

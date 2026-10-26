@@ -728,7 +728,8 @@ REMINDER_RESPONSES: dict[int | str, dict[str, str]] = {
     summary="Remind the mentor about your pending request",
     description=(
         "For the **mentee** of a request still awaiting the mentor's answer "
-        "(`pending_mentor_approval`, before `respond_by`). Emails the mentor "
+        "(`pending_mentor_approval`, before its deadline: `respond_by`, or "
+        "`starts_at` when there is none). Emails the mentor "
         "your `message`, the requested time in their zone, how long they have "
         "left to answer, and a link to the request.\n\n"
         "**Once per session.** A second send is a `409`, which is also what a "

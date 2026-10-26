@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.errors import AppError
 from app.domain.enums import SessionReasonCode
+from app.domain.sessions import request_deadline
 
 __all__ = [
     "ALIASES",
@@ -237,11 +238,10 @@ def _hours_left(context: MessageContext) -> str:
     Floored because "3 hours left" reading 3 when 3.9 remain is the safe
     direction — a mentor told less time than they have answers sooner.
     """
-    respond_by = context.respond_by
-    starts_at = context.starts_at
-    if respond_by is None or starts_at is None:
+    if context.starts_at is None:
         raise UnresolvedVariableError("this message has no response deadline")
-    remaining = respond_by - dt.datetime.now(dt.UTC)
+    # A request with no `respond_by` lapses at its start (`request_deadline`).
+    remaining = request_deadline(context.respond_by, context.starts_at) - dt.datetime.now(dt.UTC)
     return str(max(0, int(remaining.total_seconds() // 3600)))
 
 
