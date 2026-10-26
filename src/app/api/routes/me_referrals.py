@@ -83,8 +83,10 @@ async def create_own_referral(referral: CreatedReferralDep, response: Response) 
     summary="Invites you have sent",
     description=(
         "Newest first. `signed_up_at` is set when the invitee claims their "
-        "code, and `qualified_at` when they finish onboarding — the second is "
-        "what opens your recurring grant.\n\n"
+        "code, and `qualified_at` when they finish onboarding. The second pays "
+        "your bonus, and opens your recurring grant once you have also attended "
+        "a session as a mentee (decision 295): `/me` `credits.monthly.unlocked` "
+        "says when it has.\n\n"
         "There is no `status` field: it is derivable from those two timestamps, "
         "and a computed one here would put the same rule in a third place."
     ),
