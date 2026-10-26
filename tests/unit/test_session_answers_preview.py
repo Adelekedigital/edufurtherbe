@@ -44,6 +44,8 @@ def test_the_session_read_has_exactly_these_fields() -> None:
         "refund_until",
         # Whether the viewer said why they missed it (Session Join PRD).
         "missed_reason_sent",
+        # Who cancelled, mentor or mentee (FE bookings request #11).
+        "cancelled_by",
     }
 
 

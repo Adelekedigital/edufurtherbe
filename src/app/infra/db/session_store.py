@@ -44,7 +44,7 @@ from sqlalchemy import Select, and_, case, func, literal, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.domain.enums import SessionRole
+from app.domain.enums import SessionRole, SessionStatus
 from app.infra.db import keyset
 from app.infra.db.holds import active_hold
 from app.infra.db.models.missed_reasons import SessionMissedReason
@@ -55,9 +55,33 @@ from app.infra.db.predicates import live
 from app.infra.db.qualifications import top_qualification
 from app.infra.db.room_stays import in_room
 from app.infra.db.session_answer_rows import answer_previews
-from app.infra.db.session_stats import MENTEE, attendance_rate, attendance_sessions
+from app.infra.db.session_stats import MENTEE, attendance_rate, attendance_sessions, canceller
 
 __all__ = ["get_session", "is_a_party", "list_session_events", "list_sessions"]
+
+
+def _cancelled_by() -> Any:
+    """The party who cancelled, from the newest `cancelled` event, by the rule
+    the dashboard counts with (`canceller`); `NULL` for anybody else and for
+    any other status. The status is required too, so a row contradicting its
+    own event is read by the column it is about (decision 101). Correlated
+    rather than joined, so a page is not multiplied; served by
+    `ix_session_events_session`."""
+    newest = (
+        select(canceller(SessionEvent.actor_id, SessionEvent.actor_type, other=None))
+        .where(
+            SessionEvent.session_id == Session.id,
+            SessionEvent.to_status == SessionStatus.CANCELLED,
+        )
+        .order_by(SessionEvent.created_at.desc(), SessionEvent.id.desc())
+        .limit(1)
+        .correlate(Session)
+        .scalar_subquery()
+    )
+    return case((Session.status == SessionStatus.CANCELLED, newest), else_=None).label(
+        "cancelled_by"
+    )
+
 
 #: What both parties may read about a session. `created_by` is absent — it is
 #: null on every migrated row and is an internal attribution rather than
@@ -79,6 +103,7 @@ _SESSION_COLUMNS = (
     Session.meeting_url,
     Session.respond_by,
     Session.created_at,
+    _cancelled_by(),
     # **The mentee's reliability, on the row where a mentor decides.**
     #
     # Correlated on `Session.mentee_id` rather than fetched per row, so a page

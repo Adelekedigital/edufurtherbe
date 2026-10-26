@@ -374,6 +374,17 @@ class SessionRead(BaseModel):
         ),
     )
     created_at: dt.datetime = Field(description="When the session was booked.")
+    cancelled_by: Literal["mentor", "mentee"] | None = Field(
+        default=None,
+        description=(
+            "Which party called the session off: `mentor` or `mentee`, when "
+            "they cancelled as themselves.\n\n"
+            "**`null` on every status but `cancelled`**, and on a cancellation "
+            "nobody in the session made: an admin, the system, or a migrated "
+            "booking whose canceller is not recorded. Show those as plain "
+            '"Cancelled".'
+        ),
+    )
     suggestion: SuggestionRead | None = Field(
         default=None,
         description=(
@@ -485,6 +496,7 @@ class SessionRead(BaseModel):
             join_closes_at=closes,
             door_closes_at=door_closes if has_door else None,
             created_at=row["created_at"],  # type: ignore[arg-type]
+            cancelled_by=row.get("cancelled_by"),  # type: ignore[arg-type]
             suggestion=_suggestion(row),
             answers_preview=_answers_preview(row),
             mentee_attendance_rate=(

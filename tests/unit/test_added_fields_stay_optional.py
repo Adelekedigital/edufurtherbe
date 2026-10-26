@@ -18,7 +18,13 @@ ADDED = {
     "PartyRead": ("in_room_at", "in_room", "degree", "institution", "cover_color", "cover_art"),
     # The cover on every card that shows an avatar (owner, 2026-10-20).
     "MentorSummaryRead": ("cover_color", "cover_art"),
-    "SessionRead": ("mentee_attendance_sessions", "refund_until", "missed_reason_sent"),
+    "SessionRead": (
+        "mentee_attendance_sessions",
+        "refund_until",
+        "missed_reason_sent",
+        # Who cancelled (FE bookings request #11).
+        "cancelled_by",
+    ),
     "UserRead": (
         "mentee_cancel_refund_hours",
         "onboarding",
