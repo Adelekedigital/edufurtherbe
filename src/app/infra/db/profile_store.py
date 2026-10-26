@@ -248,15 +248,24 @@ async def list_awards(session: AsyncSession, user_id: UUID) -> list[dict[str, An
     return [dict(row) for row in (await session.execute(statement)).mappings()]
 
 
-def _latest_decline(column: Any) -> Any:
-    """`column` of this mentor's newest `declined` event, **only while declined**:
-    after a later approval the old note describes nothing (Mentor Onboarding B2)."""
+#: Each approval decision, and the state it leaves the mentor in.
+_DECIDES = {
+    MentorStatusType.APPROVED: ApprovalStatus.APPROVED,
+    MentorStatusType.DECLINED: ApprovalStatus.DECLINED,
+}
+
+
+def latest_decision(column: Any, decision: MentorStatusType) -> Any:
+    """`column` of this mentor's newest `decision` event, **only while it still
+    stands**: after a later approval the old decline note describes nothing
+    (Mentor Onboarding B2), and after a decline the old approval date is no
+    "listed since". Correlated on the outer `MentorProfile`."""
     return (
         select(column)
         .where(
             MentorStatusEvent.mentor_user_id == MentorProfile.user_id,
-            MentorStatusEvent.status_type == MentorStatusType.DECLINED,
-            MentorProfile.approval_status == ApprovalStatus.DECLINED,
+            MentorStatusEvent.status_type == decision,
+            MentorProfile.approval_status == _DECIDES[decision],
         )
         .order_by(MentorStatusEvent.created_at.desc(), MentorStatusEvent.id.desc())
         .limit(1)
@@ -309,8 +318,12 @@ async def get_mentor_profile(session: AsyncSession, user_id: UUID) -> dict[str, 
                     MentorProfile.submitted_at,
                     MentorProfile.approved_seen_at,
                     effective_limit().label("session_type_limit"),
-                    _latest_decline(MentorStatusEvent.reason).label("review_note"),
-                    _latest_decline(MentorStatusEvent.created_at).label("reviewed_at"),
+                    latest_decision(MentorStatusEvent.reason, MentorStatusType.DECLINED).label(
+                        "review_note"
+                    ),
+                    latest_decision(MentorStatusEvent.created_at, MentorStatusType.DECLINED).label(
+                        "reviewed_at"
+                    ),
                     MentorProfile.primary_study_program,
                     Country.code.label("primary_study_country_code"),
                     Country.display_name.label("primary_study_country_name"),

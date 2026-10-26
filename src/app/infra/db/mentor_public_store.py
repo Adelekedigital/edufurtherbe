@@ -33,13 +33,13 @@ from sqlalchemy import Select, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.availability import BookingWindow
-from app.domain.enums import CoverArt
+from app.domain.enums import CoverArt, MentorStatusType
 from app.infra.db.models.availability import MentorNextAvailability
-from app.infra.db.models.mentoring import MentorProfile
+from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.reference import Country
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.next_available_state import public_next_available_state
-from app.infra.db.profile_store import top_award
+from app.infra.db.profile_store import latest_decision, top_award
 from app.infra.db.public_visibility import (
     has_live_offering,
     has_weekly_hours,
@@ -123,6 +123,11 @@ def _public_profile(handle: str, viewer: UUID | None, window: BookingWindow) -> 
             MentorProfile.listing_status,
             # Owner only, like the two above (decision 267).
             UserProfile.about_me_drafted_at,
+            # Owner only: when the current approval was granted, by the rule
+            # `reviewed_at` dates the current decline with.
+            latest_decision(MentorStatusEvent.created_at, MentorStatusType.APPROVED).label(
+                "approved_at"
+            ),
             # Only the owner can reach a row that is not published, and only the
             # owner's row says `true` here — the schema reads it to decide
             # whether the two statuses above are published at all.

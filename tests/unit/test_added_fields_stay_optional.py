@@ -115,7 +115,13 @@ ADDED = {
     "MatchBasisRead": ("degree", "field", "country", "origin"),
     "DegreeBasisRead": ("id", "label", "raw"),
     # Where a mentor's bio came from, in their own view only (decision 267).
-    "MentorPublicRead": ("about_me_drafted_at", "guide_countries", "links"),
+    "MentorPublicRead": (
+        "about_me_drafted_at",
+        "guide_countries",
+        "links",
+        # When the current approval was granted, owner only (Mentor Home).
+        "approved_at",
+    ),
     # A mentor application's state, in the owner's view (Mentor Onboarding B2).
     "MentorProfileRead": (
         "submitted_at",
