@@ -17,7 +17,6 @@ one `referral_unlock` lot per user, and nothing else writes that source.
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -26,19 +25,31 @@ down_revision: str | Sequence[str] | None = "7c41e9b2a6d3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-LOTS = "credit_lots"
 INDEX = "uq_credit_lots_one_referral_bonus_per_user"
 
 
 def upgrade() -> None:
-    op.create_index(
-        INDEX,
-        LOTS,
-        ["user_id"],
-        unique=True,
-        postgresql_where=sa.text("source = 'referral_unlock'"),
-    )
+    """Build the index without blocking writes to `credit_lots`.
+
+    **`CONCURRENTLY`, like `a1c7e46b02d9`**, and unlike the ledger's first
+    indexes, which were built on tables created empty in the same migration.
+    `credit_lots` holds rows and is written by every booking, refund and grant,
+    so an inline build would take `SHARE` and stall them, and every statement
+    queued behind it. `lock_timeout` fails fast instead of joining that queue;
+    no `statement_timeout`, which would leave an `INVALID` index half-built.
+    """
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '3s'")
+        op.execute(
+            f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {INDEX} ON credit_lots "
+            "(user_id) WHERE source = 'referral_unlock'"
+        )
 
 
 def downgrade() -> None:
-    op.drop_index(INDEX, table_name=LOTS)
+    """Drop it, also concurrently. `IF EXISTS` because a failed concurrent
+    build leaves an `INVALID` index of this name behind, and a downgrade that
+    could not remove it would strand the chain."""
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '3s'")
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX}")
