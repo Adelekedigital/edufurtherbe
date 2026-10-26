@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.errors import AppError
 from app.domain.enums import SessionReasonCode
+from app.domain.sessions import request_deadline
 
 __all__ = [
     "ALIASES",
@@ -139,6 +140,9 @@ CALENDAR_PATH = "/calendar"
 EXPLORE_PATH = "/explore"
 #: Where an applicant follows their mentor application (Mentor Onboarding B3).
 MENTOR_APPLICATION_PATH = "/mentor-application"
+#: One pending request, open on the Bookings page's pending tab, where the
+#: mentor answers it (decision 294).
+PENDING_REQUEST_PATH = "/bookings?tab=pending&booking={session_id}"
 
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
@@ -197,6 +201,14 @@ def _session_url(context: MessageContext) -> str:
     return _needs(session_page_url(context.app_base_url, session_id), "sessionUrl")
 
 
+def _pending_request_url(context: MessageContext) -> str:
+    """The request on the Bookings page's pending tab, where the mentor answers it."""
+    session_id = quote(_needs(context.session_id, "pendingRequestUrl"), safe="")
+    return _app_link(
+        context, PENDING_REQUEST_PATH.format(session_id=session_id), "pendingRequestUrl"
+    )
+
+
 def _topic(context: MessageContext) -> str:
     """What the session is about: the topic written, else the offering's name."""
     return context.topic or context.session_type_name or SESSION_TOPIC_FALLBACK
@@ -226,11 +238,10 @@ def _hours_left(context: MessageContext) -> str:
     Floored because "3 hours left" reading 3 when 3.9 remain is the safe
     direction — a mentor told less time than they have answers sooner.
     """
-    respond_by = context.respond_by
-    starts_at = context.starts_at
-    if respond_by is None or starts_at is None:
+    if context.starts_at is None:
         raise UnresolvedVariableError("this message has no response deadline")
-    remaining = respond_by - dt.datetime.now(dt.UTC)
+    # A request with no `respond_by` lapses at its start (`request_deadline`).
+    remaining = request_deadline(context.respond_by, context.starts_at) - dt.datetime.now(dt.UTC)
     return str(max(0, int(remaining.total_seconds() // 3600)))
 
 
@@ -286,6 +297,10 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     ),
     "holdUntilTime": lambda c: _extra_moment(c, "held_until", "holdUntilTime").strftime("%H:%M"),
     "suggestedAfter": lambda c: _needs(c.extras.get("suggested_after"), "suggestedAfter"),
+    # A mentee's reminder about a pending request (decision 294): their words
+    # from the row, and a link to the request itself.
+    "reminderMessage": lambda c: _needs(c.extras.get("reminder_message"), "reminderMessage"),
+    "pendingRequestUrl": _pending_request_url,
 }
 
 

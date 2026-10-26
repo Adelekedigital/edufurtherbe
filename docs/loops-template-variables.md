@@ -234,9 +234,11 @@ contract.
 | `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |
 | `session_time_suggested` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
 | `session_suggestion_reminder` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
+| `mentee_request_reminder` | — | **NEEDED** | mentor | — (see *A mentee's reminder* below) |
 
-**A member marked NEEDED fails at the drain** (`template_for()` raises), and the
-outbox keeps the row, so nothing is lost and nothing is sent until an id is set.
+**A member marked NEEDED fails at the drain** (`template_for()` raises). What happens next depends on the message:
+- **Re-checked at send time** (the members of `STILL_DUE` in `infra/db/outbox.py`): the row stays `pending` with **no attempt counted** until an id is mapped. It's dropped as `skipped` once it stops being true, so it never goes out late.
+- **Everything else:** each sweep counts an attempt, and after 5 (about five hours) the row stays `failed` with the error. Map the id before the feature that sends it goes live.
 
 ### Paste-ready
 
@@ -283,6 +285,25 @@ suggestion can be delivered; until then the rows wait in the outbox.
 - **`session_suggestion_reminder`** goes thirty minutes before the two-hour
   hold lapses, only while the offer is still unbooked. Same names, without
   `suggestedAfter` and `reasonMessage`.
+
+### A mentee's reminder (decision 294)
+
+`mentee_request_reminder` (2026-10-25) needs its own template and an
+`EMAIL_TEMPLATES` entry before a reminder can be delivered; until then the rows
+wait in the outbox. It goes to the **mentor**, once per request, when the mentee
+presses "Remind" on a request still awaiting an answer. The copy is not designed
+yet (Mentee Bookings PRD open question), so a plain template that can be swapped
+later is fine. Skipped at send time if the mentor has answered, or the request
+lapsed, since it was queued. May use:
+
+- `recipientName`, `menteeName`, `mentorName`
+- `reminderMessage`: what the mentee wrote, 1 to 500 characters, required
+- `sessionDate`, `sessionTime`, `sessionTimezone`: the requested time in the
+  **mentor's** zone
+- `hours`: whole hours left before the request lapses (its `respond_by`, or its start when it has none)
+- `sessionTopic`
+- `pendingRequestUrl`: the request on the Bookings page,
+  `/bookings?tab=pending&booking={id}`
 
 ### Notes per message
 

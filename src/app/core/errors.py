@@ -50,6 +50,20 @@ class MissedReasonNotYoursError(ForbiddenError):
     caller has nothing to explain."""
 
 
+class ReminderMenteeOnlyError(ForbiddenError):
+    """Only the mentee who made a request may remind the mentor about it
+    (decision 294); the caller is the mentor."""
+
+
+class RequestNotPendingError(ConflictError):
+    """The request no longer awaits the mentor's answer: answered, withdrawn,
+    expired, or past its deadline. There is nothing to remind them about."""
+
+
+class ReminderAlreadySentError(ConflictError):
+    """The mentee already reminded the mentor about this request; once each."""
+
+
 class LinkPlatformTakenError(ConflictError):
     """The caller already has a link on this platform; one each, except
     websites (decision 275). Edit or delete the one they have."""

@@ -233,6 +233,13 @@ class Notification(StrEnum):
     #: before the two-hour hold lapses, only while it is still unbooked.
     SESSION_SUGGESTION_REMINDER = "session_suggestion_reminder"
 
+    #: **The mentee nudged the mentor about their pending request** (decision
+    #: 294), once per session, carrying what they wrote as `reminder_message`.
+    #: Not `MENTOR_RESPONSE_REMINDER`, which the platform schedules by itself;
+    #: this one a person sent, so it carries their words. Checked at the drain:
+    #: an answered or lapsed request is not nudged.
+    MENTEE_REQUEST_REMINDER = "mentee_request_reminder"
+
 
 class Audience(StrEnum):
     """Who hears a session message.
@@ -277,6 +284,8 @@ AUDIENCE: dict[Notification, Audience] = {
     #: Both about an offer made *to* the mentee; the mentor made it.
     Notification.SESSION_TIME_SUGGESTED: Audience.MENTEE,
     Notification.SESSION_SUGGESTION_REMINDER: Audience.MENTEE,
+    #: The mentee sent it; the mentor is the one who has not answered.
+    Notification.MENTEE_REQUEST_REMINDER: Audience.MENTOR,
 }
 
 

@@ -80,6 +80,8 @@ def test_an_acceptance_tells_only_the_mentee() -> None:
         (Notification.SESSION_REQUESTED, (MENTOR,)),
         (Notification.REQUEST_DECLINED, (MENTEE,)),
         (Notification.REQUEST_WITHDRAWN, (MENTOR,)),
+        # The mentee nudged; the mentor is the one who has not answered.
+        (Notification.MENTEE_REQUEST_REMINDER, (MENTOR,)),
     ],
 )
 def test_the_rest_follow_from_who_acted(

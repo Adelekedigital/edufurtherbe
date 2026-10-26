@@ -30,6 +30,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
+from app.core.errors import ConfigurationError
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.notifications import Channel, Notification
 from app.infra.db.credit_store import expiring_on
@@ -38,6 +39,7 @@ from app.infra.db.mentor_listing import return_reminder_state
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.models.user import User
+from app.infra.db.pending_requests import request_reminder_state
 from app.infra.db.predicates import LIVE
 
 __all__ = [
@@ -257,6 +259,19 @@ async def drain(
                 # otherwise be blamed for.
                 idempotency_key=str(row["id"]),
             )
+        except ConfigurationError as exc:
+            if check is None:
+                await _finish(session, row["id"], "failed", row["attempts"], str(exc)[:500])
+                counts["failed"] += 1
+                continue
+            # **No template mapped yet, on a message re-checked at send time**:
+            # left pending with no attempt counted, so it goes out once the
+            # operator maps one rather than failing for good meanwhile. Safe
+            # only because `STILL_DUE` runs first on every sweep and drops it
+            # once it stops being true; a message without that check would go
+            # out late, so it keeps the bounded retry above.
+            logger.warning("outbox row waits for configuration: %s", exc)
+            continue
         except Exception as exc:
             await _finish(session, row["id"], "failed", row["attempts"], str(exc)[:500])
             counts["failed"] += 1
@@ -272,7 +287,8 @@ async def drain(
 #: later: a return reminder for a mentor who has since resumed, set a new date
 #: or changed zone would be a false or early instruction. Every other message is
 #: about something that already happened and stays true. `stale` is skipped,
-#: not failed (nothing went wrong); `wait` stays pending.
+#: not failed (nothing went wrong); `wait` stays pending. A member here also
+#: waits, uncounted, for a template the operator has not mapped (`drain`).
 STILL_DUE = {
     Notification.MENTOR_RETURN_REMINDER: return_reminder_state,
     # The offer may be booked, or its hold lapsed, before the drain reaches it —
@@ -280,6 +296,8 @@ STILL_DUE = {
     # once there is nothing left to book.
     Notification.SESSION_TIME_SUGGESTED: suggestion_reminder_state,
     Notification.SESSION_SUGGESTION_REMINDER: suggestion_reminder_state,
+    # A mentee's nudge (decision 294): not once the mentor has answered.
+    Notification.MENTEE_REQUEST_REMINDER: request_reminder_state,
 }
 
 

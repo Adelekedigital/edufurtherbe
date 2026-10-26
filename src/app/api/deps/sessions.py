@@ -31,6 +31,7 @@ from app.api.schemas.common import (
 )
 from app.api.schemas.sessions import (
     MissedReasonWrite,
+    RequestReminderWrite,
     SessionBookingWrite,
     SessionCancellationWrite,
     SessionDeclineWrite,
@@ -57,6 +58,7 @@ from app.infra.clients.scheduler import SchedulerPort, scheduler_for
 from app.infra.db.idempotency import Replayed, record_response
 from app.infra.db.missed_reasons import send_missed_reason
 from app.infra.db.onboarding_store import require_finished_onboarding
+from app.infra.db.request_reminders import send_request_reminder
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -663,6 +665,27 @@ async def sent_missed_reason(
 
 
 SentMissedReasonDep = Annotated[dict[str, Any], Depends(sent_missed_reason)]
+
+
+async def reminded_session(
+    session_id: UUID, payload: RequestReminderWrite, user: CurrentUserDep, session: SessionDep
+) -> dict[str, Any]:
+    """The mentee's reminder sent and committed, then the session as they now read it.
+
+    The caller is the only sender: the store names them as the mentee in the
+    write itself, so a refusal has written nothing (decision 294).
+    """
+    await send_request_reminder(
+        session, session_id, user["id"], message=payload.message, now=dt.datetime.now(dt.UTC)
+    )
+    await session.commit()
+    row = await get_session_row(session, session_id, user["id"])
+    if row is None:  # pragma: no cover - the caller is its mentee, just written
+        raise NotFoundError("no such session")
+    return row
+
+
+RemindedSessionDep = Annotated[dict[str, Any], Depends(reminded_session)]
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
 SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events)]

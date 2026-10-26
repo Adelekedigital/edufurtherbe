@@ -42,6 +42,7 @@ __all__ = [
     "first_stage",
     "named_stages",
     "records_unavailability",
+    "request_deadline",
     "respond_by",
     "response_window",
     "response_window_hours",
@@ -120,6 +121,16 @@ def respond_by(
     unreachable through the API; the sweep expires such a request anyway.
     """
     return starts_at - window if requires_confirmation else None
+
+
+def request_deadline(respond_by: dt.datetime | None, starts_at: dt.datetime) -> dt.datetime:
+    """When an unanswered request lapses: its ``respond_by``, or its start when
+    it has none, as every migrated request does (decision 121).
+
+    `pending_requests._past_deadline` is the same rule in SQL, which the sweep,
+    accept, decline and the reminder decide on; a test pins the two together.
+    """
+    return respond_by if respond_by is not None else starts_at
 
 
 @dataclass(frozen=True, slots=True)
