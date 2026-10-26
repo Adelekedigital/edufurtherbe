@@ -102,6 +102,7 @@ _SESSION_COLUMNS = (
     Session.meeting_provider,
     Session.meeting_url,
     Session.respond_by,
+    Session.reminder_sent_at,
     Session.created_at,
     _cancelled_by(),
     # **The mentee's reliability, on the row where a mentor decides.**

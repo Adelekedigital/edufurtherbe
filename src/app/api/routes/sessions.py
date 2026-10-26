@@ -37,6 +37,7 @@ from app.api.deps import (
     JoinedSessionDep,
     JoinLeadDep,
     RefundPolicyDep,
+    RemindedSessionDep,
     SentMissedReasonDep,
     SessionAnswersDep,
     SessionDetailDep,
@@ -60,6 +61,7 @@ from app.api.schemas.sessions import (
 )
 from app.domain.enums import MissedReason, SessionReasonCode
 from app.domain.missed_reasons import NOTE_MAX_LENGTH
+from app.domain.request_reminders import REMINDER_MESSAGE_MAX_LENGTH
 from app.domain.sessions import TRANSITIONS
 
 router = APIRouter(prefix="/api/v1", tags=["sessions"])
@@ -689,3 +691,54 @@ async def send_missed_reason(
     # `missed_reason_sent`.
     response.headers["Location"] = f"/api/v1/sessions/{session_id}"
     return MissedReasonRead(**reason)
+
+
+REMINDER_RESPONSES: dict[int | str, dict[str, str]] = {
+    **READ_RESPONSES,
+    status.HTTP_403_FORBIDDEN: {
+        "description": (
+            "`/problems/reminder-mentee-only`: you are the mentor. Only the "
+            "mentee who made the request may remind. Only a party gets this, so "
+            "it discloses nothing."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "`/problems/request-not-pending`: the request no longer awaits the "
+            "mentor's answer (answered, withdrawn, expired, or past "
+            "`respond_by`, or past `starts_at` when there is no `respond_by`). "
+            "`/problems/reminder-already-sent`: you already reminded the mentor "
+            "about this request; once per session. When both apply, it is "
+            "`request-not-pending`."
+        )
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": (
+            f"`message` is missing, blank, over {REMINDER_MESSAGE_MAX_LENGTH} "
+            "characters after trimming, or the body has a field this endpoint "
+            "does not take."
+        )
+    },
+}
+
+
+@router.post(
+    "/sessions/{session_id}/reminder",
+    response_model=SessionRead,
+    summary="Remind the mentor about your pending request",
+    description=(
+        "For the **mentee** of a request still awaiting the mentor's answer "
+        "(`pending_mentor_approval`, before `respond_by`). Emails the mentor "
+        "your `message`, the requested time in their zone, how long they have "
+        "left to answer, and a link to the request.\n\n"
+        "**Once per session.** A second send is a `409`, which is also what a "
+        "retry of a send that succeeded gets, so no `Idempotency-Key` is "
+        "needed. Two at once send one email. Returns the session, with "
+        "`reminder_sent_at` set."
+    ),
+    responses=REMINDER_RESPONSES,
+)
+async def remind_mentor(
+    session: RemindedSessionDep, lead: JoinLeadDep, refunds: RefundPolicyDep
+) -> SessionRead:
+    return SessionRead.from_row(session, opens_before=lead, refunds=refunds)

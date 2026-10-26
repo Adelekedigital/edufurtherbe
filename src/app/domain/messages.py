@@ -139,6 +139,9 @@ CALENDAR_PATH = "/calendar"
 EXPLORE_PATH = "/explore"
 #: Where an applicant follows their mentor application (Mentor Onboarding B3).
 MENTOR_APPLICATION_PATH = "/mentor-application"
+#: One pending request, open on the Bookings page's pending tab, where the
+#: mentor answers it (decision 294).
+PENDING_REQUEST_PATH = "/bookings?tab=pending&booking={session_id}"
 
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
@@ -195,6 +198,14 @@ def _session_url(context: MessageContext) -> str:
     """
     session_id = _needs(context.session_id, "sessionUrl")
     return _needs(session_page_url(context.app_base_url, session_id), "sessionUrl")
+
+
+def _pending_request_url(context: MessageContext) -> str:
+    """The request on the Bookings page's pending tab, where the mentor answers it."""
+    session_id = quote(_needs(context.session_id, "pendingRequestUrl"), safe="")
+    return _app_link(
+        context, PENDING_REQUEST_PATH.format(session_id=session_id), "pendingRequestUrl"
+    )
 
 
 def _topic(context: MessageContext) -> str:
@@ -286,6 +297,10 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     ),
     "holdUntilTime": lambda c: _extra_moment(c, "held_until", "holdUntilTime").strftime("%H:%M"),
     "suggestedAfter": lambda c: _needs(c.extras.get("suggested_after"), "suggestedAfter"),
+    # A mentee's reminder about a pending request (decision 294): their words
+    # from the row, and a link to the request itself.
+    "reminderMessage": lambda c: _needs(c.extras.get("reminder_message"), "reminderMessage"),
+    "pendingRequestUrl": _pending_request_url,
 }
 
 

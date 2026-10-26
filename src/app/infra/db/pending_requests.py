@@ -16,7 +16,7 @@ awaiting forever, was never expired, and could still be accepted.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import and_, func, not_, or_, select, text
@@ -25,7 +25,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.enums import SessionStatus
 from app.infra.db.models.sessions import LIVE_STATUSES, Session
 
-__all__ = ["awaiting_mentor", "booking_counts", "lapsed_request", "upcoming_session"]
+__all__ = [
+    "awaiting_mentor",
+    "booking_counts",
+    "lapsed_request",
+    "request_reminder_state",
+    "upcoming_session",
+]
 
 
 def _past_deadline(now: dt.datetime) -> Any:
@@ -40,6 +46,21 @@ def lapsed_request(now: dt.datetime) -> list[Any]:
 def awaiting_mentor(now: dt.datetime) -> list[Any]:
     """A request the mentor can still answer."""
     return [Session.status == SessionStatus.PENDING_MENTOR_APPROVAL, not_(_past_deadline(now))]
+
+
+async def request_reminder_state(
+    session: AsyncSession, session_id: UUID, payload: dict[str, Any], now: dt.datetime
+) -> Literal["due", "stale"]:
+    """Whether a mentee's queued reminder is still worth sending, at the drain.
+
+    Due only while the request still awaits the mentor: one answered, withdrawn
+    or lapsed since it was queued would ask the mentor to answer nothing.
+    """
+    del payload
+    found = await session.scalar(
+        select(Session.id).where(Session.id == session_id, *awaiting_mentor(now))
+    )
+    return "due" if found is not None else "stale"
 
 
 def upcoming_session(now: dt.datetime) -> list[Any]:

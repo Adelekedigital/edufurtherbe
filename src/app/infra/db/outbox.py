@@ -38,6 +38,7 @@ from app.infra.db.mentor_listing import return_reminder_state
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.models.user import User
+from app.infra.db.pending_requests import request_reminder_state
 from app.infra.db.predicates import LIVE
 
 __all__ = [
@@ -280,6 +281,8 @@ STILL_DUE = {
     # once there is nothing left to book.
     Notification.SESSION_TIME_SUGGESTED: suggestion_reminder_state,
     Notification.SESSION_SUGGESTION_REMINDER: suggestion_reminder_state,
+    # A mentee's nudge (decision 294): not once the mentor has answered.
+    Notification.MENTEE_REQUEST_REMINDER: request_reminder_state,
 }
 
 

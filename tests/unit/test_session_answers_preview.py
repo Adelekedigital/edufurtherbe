@@ -46,6 +46,8 @@ def test_the_session_read_has_exactly_these_fields() -> None:
         "missed_reason_sent",
         # Who cancelled, mentor or mentee (FE bookings request #11).
         "cancelled_by",
+        # When the mentee reminded the mentor about the request (decision 294).
+        "reminder_sent_at",
     }
 
 

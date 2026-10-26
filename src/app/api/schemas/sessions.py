@@ -41,6 +41,7 @@ from app.domain.enums import (
 from app.domain.intake import MAX_ANSWER_LENGTH, MAX_OPTIONS, MAX_QUESTIONS
 from app.domain.missed_reasons import NOTE_MAX_LENGTH
 from app.domain.refunds import RefundPolicy
+from app.domain.request_reminders import REMINDER_MESSAGE_MAX_LENGTH
 
 
 class PartyRead(CoverRead):
@@ -442,6 +443,14 @@ class SessionRead(BaseModel):
             "that user's."
         ),
     )
+    reminder_sent_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "When the mentee reminded the mentor about this request "
+            "(`POST /sessions/{id}/reminder`), or `null` if they have not. At "
+            "most once per session, and visible to both parties."
+        ),
+    )
     refund_until: dt.datetime | None = Field(
         default=None,
         description=(
@@ -507,6 +516,7 @@ class SessionRead(BaseModel):
             mentee_attendance_sessions=int(str(row.get("mentee_attendance_sessions") or 0)),
             refund_until=(starts_at - refunds.mentee_cancel_notice if confirmed else None),
             missed_reason_sent=bool(row.get("missed_reason_sent")),
+            reminder_sent_at=row.get("reminder_sent_at"),  # type: ignore[arg-type]
         )
 
 
@@ -853,3 +863,18 @@ class AdminMissedReasonRead(MissedReasonRead):
 
     user_id: UUID
     role: Literal["mentor", "mentee"]
+
+
+class RequestReminderWrite(Normalised):
+    """A mentee's reminder to the mentor about a pending request. Trimmed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(
+        min_length=1,
+        max_length=REMINDER_MESSAGE_MAX_LENGTH,
+        description=(
+            "What you want to say to the mentor, in your words. Sent to them in "
+            f"the email. 1 to {REMINDER_MESSAGE_MAX_LENGTH} characters after trimming."
+        ),
+    )

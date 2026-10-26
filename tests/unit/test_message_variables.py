@@ -438,3 +438,32 @@ def test_a_decline_carries_its_note_and_reads_empty_without_one() -> None:
         "declineReason": "Add your LinkedIn"
     }
     assert build_variables(["declineReason"], context(extras={})) == {"declineReason": ""}
+
+
+def test_a_reminder_carries_the_mentees_words_from_the_row() -> None:
+    """Decision 294: what the mentee wrote is a fact about the reminder, carried
+    on the outbox row, and a reminder with no message is not sent blank."""
+    built = build_variables(
+        ["reminderMessage"], context(extras={"reminder_message": "Still keen, thanks!"})
+    )
+
+    assert built == {"reminderMessage": "Still keen, thanks!"}
+    with pytest.raises(UnresolvedVariableError, match="reminderMessage"):
+        build_variables(["reminderMessage"], context(extras={}))
+
+
+def test_the_pending_request_link_opens_that_request_in_bookings() -> None:
+    """The reminder links the mentor to the request itself, on the Bookings
+    page's pending tab, where they can answer it."""
+    built = build_variables(
+        ["pendingRequestUrl"],
+        context(app_base_url="https://app.example.test/", session_id="0190-abc"),
+    )
+
+    assert built == {
+        "pendingRequestUrl": "https://app.example.test/bookings?tab=pending&booking=0190-abc"
+    }
+    with pytest.raises(UnresolvedVariableError, match="pendingRequestUrl"):
+        build_variables(["pendingRequestUrl"], context(app_base_url=""))
+    with pytest.raises(UnresolvedVariableError, match="pendingRequestUrl"):
+        build_variables(["pendingRequestUrl"], context(session_id=None))

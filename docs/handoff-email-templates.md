@@ -86,6 +86,7 @@ Tracked as backend issue #348, deferred until the owner decides on Emailit.
 | `session_last_reminder` | Shortly before a session | both | core | Session Last Reminder |
 | `session_time_suggested` | The mentor declined or cancelled and suggested another time, held 2 hours for the mentee | mentee | core + the suggested time and when the hold ends. The exact names are in the reference doc once #341 merges. | **none** (new) |
 | `session_suggestion_reminder` | 30 min before that hold lapses, if not booked | mentee | as above | **none** (new) |
+| `mentee_request_reminder` | The mentee pressed "Remind" on a request the mentor has not answered, once per request (decision 294) | mentor | `menteeName`, `reminderMessage` (what the mentee wrote), `sessionDate`, `sessionTime`, `sessionTimezone`, `hours`, `pendingRequestUrl`. Copy not designed yet: a plain template that can be swapped is fine | **none** (new) |
 | `review_requested` | After a completed session (and a nudge a day later) | mentee | `reviewBy`, `reviewFor`, `reviewLink`, `sessionTopic`; `interval` is present only on the nudge | sessionReviewRequest |
 | `review_received` | A review was published about the mentor | mentor | `reviewBy`, `reviewFor`, `reviewLink`. **Link to the review, don't quote it** (the author can still edit it for ten minutes). | reviewUpdateToMentors |
 | `credits_granted` | Starter, invite or support credits granted | the user | `fName`, `bookLink` | Credit: New users update |
@@ -105,7 +106,7 @@ message" has more on the return reminder's two cases and the review nudge.
 | Tier | Emails | Why it matters |
 |---|---|---|
 | **1 — the booking can't work without it** | `session_requested`, `mentor_response_reminder`, `request_accepted`, `session_booked`, `request_declined`, `session_cancelled`, `session_time_suggested`, `session_suggestion_reminder`, `session_reminder`, `session_last_reminder`, `calendar_disconnected` | Time-bound; a late or missing email means a missed session or a lost request |
-| **2 — status the user should know** | `request_withdrawn`, `request_expired`, `mentor_application_received`, `mentor_approved`, `mentor_declined` | Important but not time-critical |
+| **2 — status the user should know** | `request_withdrawn`, `request_expired`, `mentee_request_reminder`, `mentor_application_received`, `mentor_approved`, `mentor_declined` | Important but not time-critical |
 | **3 — engagement** | `review_requested`, `review_received`, `credits_granted`, `credits_renewed`, `credits_expiring`, `mentor_return_reminder` | Lifecycle nudges; a delay costs little |
 
 Design tier 1 first. All tiers go in Loops for now; if the owner later splits

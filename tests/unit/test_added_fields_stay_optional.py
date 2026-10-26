@@ -24,6 +24,7 @@ ADDED = {
         "missed_reason_sent",
         # Who cancelled (FE bookings request #11).
         "cancelled_by",
+        "reminder_sent_at",
     ),
     "UserRead": (
         "mentee_cancel_refund_hours",
