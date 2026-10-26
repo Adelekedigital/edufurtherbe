@@ -167,6 +167,17 @@ class CreditLot(Base, TimestampMixin):
             unique=True,
             postgresql_where=text(f"source = '{CreditSource.OPENING_BALANCE.value}'"),
         ),
+        # **One invite bonus per user, ever** (decision 295). The bonus used to
+        # share the unlock row's `UNIQUE`; since the unlock waits for an
+        # attended session the two are written apart, and `qualify_invitee`'s
+        # referrer lock is what pays it once. This is the backstop for any
+        # writer that skips that lock.
+        Index(
+            "uq_credit_lots_one_referral_bonus_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text(f"source = '{CreditSource.REFERRAL_UNLOCK.value}'"),
+        ),
         # **One monthly grant per user per period.** A scheduled job runs
         # twice — a retry, a manual trigger beside the cron — and the second
         # run would hand every unlocked mentee another three credits, which

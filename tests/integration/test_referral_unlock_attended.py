@@ -32,7 +32,7 @@ from tests.integration.test_api_referrals import (
 )
 
 from app.domain.credits import CreditLadder
-from app.infra.db.referral_writer import qualify_invitee
+from app.infra.db.referral_writer import qualify_invitee, unlock_referrers
 from conftest import api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -251,27 +251,74 @@ async def test_the_stats_count_attended_sessions_for_the_invite_card(
     assert body["sessions_held"] == 0
 
 
-async def test_a_qualification_and_a_settlement_racing_still_unlock(
+async def a_claimed_invitee(client: httpx.AsyncClient, engine: AsyncEngine, referrer: UUID) -> UUID:
+    """An invitee of ``referrer`` who has claimed but not yet qualified."""
+    invitee = uuid4()
+    invitee_id = await seed(engine, invitee)
+    code = (await invite(client, referrer, f"{invitee}@example.com")).json()["code"]
+    await client.post(CLAIM, json={"code": code}, headers=bearer(api_token(invitee)))
+    return invitee_id
+
+
+async def attend_and_unlock(engine: AsyncEngine, referrer_id: UUID) -> None:
+    """The settling half, in its own transaction: the referrer's attendance
+    becomes `ATTENDED` (as `observe_presence` does inside the settlement run)
+    and `unlock_referrers` is asked, before anything commits."""
+    async with async_sessionmaker(engine, expire_on_commit=False)() as settling:
+        await settling.execute(
+            text(
+                "UPDATE session_participants SET attendance_status = 'attended' WHERE user_id = :u"
+            ),
+            {"u": referrer_id},
+        )
+        await unlock_referrers(settling, [referrer_id])
+        await settling.commit()
+
+
+async def test_a_qualification_and_an_attendance_racing_still_unlock(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """**The write skew the referrer's row lock exists for.** Each half reads the
-    other's fact: unlocked, the settlement would not see the uncommitted
-    qualification, the qualification has already looked for attendance, and
-    neither would write. Locked, the settlement waits and then sees it."""
+    """**The write skew the referrer's row lock exists for.** The qualification
+    looks for attendance and finds none (it is not committed); the settling
+    transaction, unlocked, would not see the uncommitted qualification, and
+    neither would write. Locked, the settling side waits, then sees it."""
     referrer = uuid4()
     referrer_id = await seed(db_engine, referrer)
-    invitee = uuid4()
-    invitee_id = await seed(db_engine, invitee)
-    code = (await invite(api_client, referrer, "race@example.com")).json()["code"]
-    await api_client.post(CLAIM, json={"code": code}, headers=bearer(api_token(invitee)))
-    await a_session_attended_by(db_engine, referrer_id, status="confirmed", mentor_came=True)
+    invitee_id = await a_claimed_invitee(api_client, db_engine, referrer)
+    await a_session_attended_by(
+        db_engine, referrer_id, status="confirmed", mentor_came=True, mentee_came=False
+    )
 
-    maker = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with maker() as qualifying:
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as qualifying:
         await qualify_invitee(qualifying, invitee_id, ladder=LADDER)
-        settling = asyncio.create_task(settle(db_engine))
+        settling = asyncio.create_task(attend_and_unlock(db_engine, referrer_id))
         await until_blocked(db_engine)
         await qualifying.commit()
     await settling
 
     assert await unlocks_of(db_engine, referrer_id) == 1
+
+
+async def test_two_invitees_qualifying_at_once_pay_one_bonus(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """Both read "first" before either commits unless the second waits on the
+    referrer's lock; then it sees the first's qualified invite and pays nothing."""
+    referrer = uuid4()
+    referrer_id = await seed(db_engine, referrer)
+    first = await a_claimed_invitee(api_client, db_engine, referrer)
+    second = await a_claimed_invitee(api_client, db_engine, referrer)
+
+    async def qualify(invitee_id: UUID) -> None:
+        async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
+            await qualify_invitee(session, invitee_id, ladder=LADDER)
+            await session.commit()
+
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as qualifying:
+        await qualify_invitee(qualifying, first, ladder=LADDER)
+        racing = asyncio.create_task(qualify(second))
+        await until_blocked(db_engine)
+        await qualifying.commit()
+    await racing
+
+    assert await balance_of(db_engine, referrer_id) == BONUS

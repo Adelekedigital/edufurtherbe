@@ -303,9 +303,10 @@ async def test_a_second_qualifying_invitee_pays_nothing_more(
     """**The case that costs money if it is wrong.**
 
     The gate is once-only: it opens a floor, and opening a floor that is already
-    open must not pay again. Enforced by `uq_referral_unlocks_user_id` rather
-    than by reading first, because two invitees finishing at once is exactly the
-    race a read-then-write loses.
+    open must not pay again. Since decision 295 the bonus is paid under the
+    referrer's row lock and backstopped by
+    `uq_credit_lots_one_referral_bonus_per_user`; the concurrent case is
+    `test_two_invitees_qualifying_at_once_pay_one_bonus`.
     """
     referrer, first, second = uuid4(), uuid4(), uuid4()
     referrer_id = await seed(db_engine, referrer)

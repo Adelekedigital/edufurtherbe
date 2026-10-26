@@ -399,7 +399,16 @@ async def unlock_referrers(session: AsyncSession, user_ids: Collection[UUID]) ->
 
 async def _lock_referrers(session: AsyncSession, user_ids: Collection[UUID]) -> None:
     """The referrers' `users` rows, locked in id order so two writers locking
-    overlapping sets cannot deadlock on each other."""
+    overlapping sets cannot deadlock on each other.
+
+    **`FOR NO KEY UPDATE`, not `FOR UPDATE`**: it serialises the unlock writers
+    with each other (and with account deletion's `FOR UPDATE`) but not with the
+    `FOR KEY SHARE` every foreign-key insert takes on a user, so a credit lot or
+    a booking for the same user neither waits on it nor closes a deadlock cycle.
+    """
     await session.execute(
-        select(User.id).where(User.id.in_(list(user_ids))).order_by(User.id).with_for_update()
+        select(User.id)
+        .where(User.id.in_(list(user_ids)))
+        .order_by(User.id)
+        .with_for_update(key_share=True)
     )

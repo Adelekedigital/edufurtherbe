@@ -501,3 +501,21 @@ async def test_the_period_guard_does_not_constrain_other_sources(ledger: Ledger)
 
     assert await ledger.lot(source="refund", granted=1, expires=when)
     assert await ledger.lot(source="referral_unlock", granted=2, expires=when)
+
+
+async def test_one_referral_bonus_per_user(ledger: Ledger) -> None:
+    """**The invite bonus is once-ever** (decision 295). Paid under the
+    referrer's row lock since the unlock waits for attendance; this is the
+    backstop for a writer that skips the lock."""
+    await ledger.lot(source="referral_unlock", granted=2)
+
+    with pytest.raises(IntegrityError, match="one_referral_bonus_per_user"):
+        await ledger.lot(source="referral_unlock", granted=2)
+
+
+async def test_the_bonus_guard_does_not_constrain_other_sources(ledger: Ledger) -> None:
+    """The accepting half: other lots beside the bonus still insert."""
+    await ledger.lot(source="referral_unlock", granted=2)
+
+    assert await ledger.lot(source="refund", granted=1)
+    assert await ledger.lot(source="monthly_free")
