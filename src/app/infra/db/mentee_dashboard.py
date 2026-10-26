@@ -46,6 +46,7 @@ async def mentee_dashboard(
         "missed_sessions": row["missed"],
         "current": {**windows.current._asdict(), **_block(row, "current")},
         "previous": {**windows.previous._asdict(), **_block(row, "previous")},
+        "this_month": {**windows.month._asdict(), **_block(row, "month")},
     }
 
 
@@ -57,6 +58,7 @@ def _statement(mentee: UUID, windows: DashboardWindows) -> Any:
     held, minutes, mentors = mentee_window_figures(mentee, None)
     current_held, current_minutes, _ = mentee_window_figures(mentee, windows.current)
     previous_held, previous_minutes, _ = mentee_window_figures(mentee, windows.previous)
+    month_held, month_minutes, _ = mentee_window_figures(mentee, windows.month)
     return (
         select(
             held.label("completed_sessions"),
@@ -68,6 +70,8 @@ def _statement(mentee: UUID, windows: DashboardWindows) -> Any:
             current_minutes.label("current_minutes"),
             previous_held.label("previous_sessions"),
             previous_minutes.label("previous_minutes"),
+            month_held.label("month_sessions"),
+            month_minutes.label("month_minutes"),
         )
         .select_from(Session)
         # The one scan: the caller's sessions as a mentee

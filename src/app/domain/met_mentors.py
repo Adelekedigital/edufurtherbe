@@ -15,8 +15,9 @@ can be booked now.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
-__all__ = ["Bookability", "bookability"]
+__all__ = ["Bookability", "UnavailableReason", "bookability", "unavailable_reason"]
 
 
 class Bookability(StrEnum):
@@ -41,3 +42,23 @@ def bookability(*, has_upcoming: bool, pending: bool, taking_bookings: bool) -> 
     if not taking_bookings:
         return Bookability.UNAVAILABLE
     return Bookability.OPEN
+
+
+#: Why a mentor cannot be booked right now, for a card's copy (Mentee Home).
+UnavailableReason = Literal["not_taking", "no_open_times"]
+
+
+def unavailable_reason(state: Bookability, *, next_available: str) -> UnavailableReason | None:
+    """``not_taking`` exactly when ``state`` is `UNAVAILABLE`; ``no_open_times``
+    for a mentor who is `OPEN` but whose card says nothing is free in their
+    window (``next_available`` is the profile's `none`); otherwise none.
+
+    **Not a new `Bookability` member**: `open` keeps meaning "bookable" (decision
+    248), so a client that does not read this field behaves as before. An
+    unknown time (`refreshing`) is not "no open times": the job has not looked.
+    """
+    if state is Bookability.UNAVAILABLE:
+        return "not_taking"
+    if state is Bookability.OPEN and next_available == "none":
+        return "no_open_times"
+    return None

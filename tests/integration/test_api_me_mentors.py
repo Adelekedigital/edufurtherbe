@@ -109,6 +109,8 @@ async def test_each_mentor_met_is_listed_with_their_card(
             "session_count": 2,
             "last_session_at": "2026-01-02T09:30:00Z",
             "bookability": "open",
+            "next_session_at": None,
+            "unavailable_reason": None,
         }
     ]
     assert cursor is None
@@ -405,3 +407,88 @@ async def test_a_session_in_progress_counts_as_upcoming(
     assert await bookability(api_client, await token_for(db_engine, mentee)) == {
         mentor: "has_upcoming"
     }
+
+
+# --------------------------------------------------------------------------
+# Mentee Home's "Next on Thu, Oct 15" and "No open times yet"
+# --------------------------------------------------------------------------
+
+
+async def cards(client: httpx.AsyncClient, token: str) -> dict[UUID, dict[str, Any]]:
+    rows, _ = await page(client, token)
+    return {UUID(row["id"]): row for row in rows}
+
+
+async def cache_next_time(engine: AsyncEngine, mentor: UUID, at: dt.datetime | None) -> None:
+    """A vouched refresh-job row: a free time at ``at``, or none in the window."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_next_availability "
+                "(mentor_user_id, next_available_at, bookable_until, computed_at) "
+                "VALUES (:u, :at, :until, now())"
+            ),
+            {"u": mentor, "at": at, "until": at - dt.timedelta(hours=1) if at else None},
+        )
+        await conn.execute(
+            text("DELETE FROM mentor_availability_changes WHERE mentor_user_id = :u"),
+            {"u": mentor},
+        )
+
+
+async def test_next_session_is_the_earliest_upcoming_or_pending_booking(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The caller's own: another mentee's earlier booking with the same mentor
+    is not theirs, and a finished session is not next."""
+    mentor = await make_bookable_mentor(db_engine, "met-next")
+    quiet = await make_bookable_mentor(db_engine, "met-next-quiet")
+    mentee = await met(db_engine, mentor, days_ago=5)
+    await met(db_engine, quiet, mentee, days_ago=6)
+    other = await met(db_engine, mentor, days_ago=7)
+    soon = dt.datetime.now(dt.UTC).replace(microsecond=0) + dt.timedelta(days=2)
+    await add_session(
+        db_engine, mentor, mentee=mentee, status="pending_mentor_approval", starts_at=soon
+    )
+    await add_session(
+        db_engine, mentor, mentee=mentee, status="confirmed", starts_at=soon + dt.timedelta(days=3)
+    )
+    await add_session(
+        db_engine, mentor, mentee=other, status="confirmed", starts_at=soon - dt.timedelta(days=1)
+    )
+
+    mine = await cards(api_client, await token_for(db_engine, mentee))
+
+    assert dt.datetime.fromisoformat(mine[mentor]["next_session_at"]) == soon
+    assert mine[quiet]["next_session_at"] is None
+
+
+async def test_why_a_mentor_cannot_be_booked(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """`not_taking` exactly when `unavailable`; `no_open_times` for a mentor
+    who takes bookings but has nothing free in their window; null otherwise,
+    including a mentor the refresh job has not reached yet."""
+    away = await make_bookable_mentor(db_engine, "met-why-away", listed=False)
+    full = await make_bookable_mentor(db_engine, "met-why-full")
+    free = await make_bookable_mentor(db_engine, "met-why-free")
+    unknown = await make_bookable_mentor(db_engine, "met-why-unknown")
+    booked = await make_bookable_mentor(db_engine, "met-why-booked")
+    mentee = await met(db_engine, away, days_ago=5)
+    for mentor in (full, free, unknown, booked):
+        await met(db_engine, mentor, mentee, days_ago=6)
+    await cache_next_time(db_engine, full, None)
+    await cache_next_time(db_engine, free, dt.datetime.now(dt.UTC) + dt.timedelta(days=3))
+    await cache_next_time(db_engine, booked, None)
+    await add_session(db_engine, booked, mentee=mentee, status="confirmed", days_ago=-2)
+
+    mine = await cards(api_client, await token_for(db_engine, mentee))
+
+    assert {m: mine[m]["unavailable_reason"] for m in mine} == {
+        away: "not_taking",
+        full: "no_open_times",
+        free: None,
+        unknown: None,
+        booked: None,
+    }
+    assert mine[full]["bookability"] == "open"

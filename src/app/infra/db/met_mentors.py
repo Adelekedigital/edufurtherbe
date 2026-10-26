@@ -29,14 +29,17 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, select, true
+from sqlalchemy import and_, case, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.availability import BookingWindow
 from app.domain.enums import SessionStatus
 from app.infra.db import keyset
+from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
+from app.infra.db.next_available_state import public_next_available_state
 from app.infra.db.pending_requests import awaiting_mentor
 from app.infra.db.predicates import session_ends
 from app.infra.db.public_visibility import mentor_exists, mentor_is_live, taking_bookings
@@ -59,6 +62,24 @@ def _not_over(now: dt.datetime) -> list[Any]:
     return [Session.status == SessionStatus.CONFIRMED, session_ends() > now]
 
 
+def _next_session(mentee: UUID, now: dt.datetime) -> Any:
+    """The start of this mentee's earliest booking with the row's mentor that
+    `has_upcoming` or `pending` counts: a confirmed session not yet over (one
+    in progress included), or a request still awaiting an answer. Null with
+    neither. The same two predicates as the two `EXISTS`, so the date and the
+    state cannot disagree."""
+    return (
+        select(func.min(Session.starts_at))
+        .where(
+            Session.mentee_id == mentee,
+            Session.mentor_id == User.id,
+            or_(and_(*_not_over(now)), and_(*awaiting_mentor(now))),
+        )
+        .correlate(User)
+        .scalar_subquery()
+    )
+
+
 def _with_mentor(mentee: UUID, *clauses: Any) -> Any:
     """`EXISTS`: a session between this mentee and the row's mentor matching
     ``clauses``. The mentee is named here, not inherited from the outer query."""
@@ -75,6 +96,7 @@ async def list_met_mentors(
     mentee: UUID,
     *,
     now: dt.datetime,
+    window: BookingWindow,
     limit: int,
     cursor: tuple[str, UUID] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -128,11 +150,17 @@ async def list_met_mentors(
             _with_mentor(mentee, *_not_over(now)).label("has_upcoming"),
             _with_mentor(mentee, *awaiting_mentor(now)).label("pending"),
             taking_bookings().label("taking_bookings"),
+            # The profile's own card state, so "no open times" is the time
+            # `/mentors/{handle}` would show as `none`.
+            public_next_available_state(window).label("next_available_state"),
+            _next_session(mentee, now).label("next_session_at"),
         )
         .select_from(met)
         .join(User, User.id == met.c.mentor_id)
         .outerjoin(MentorProfile, MentorProfile.user_id == User.id)
         .outerjoin(UserProfile, UserProfile.user_id == User.id)
+        # Unique on the mentor, so the page is not multiplied.
+        .outerjoin(MentorNextAvailability, MentorNextAvailability.mentor_user_id == User.id)
         # One row by construction (`limit 1`), so the page is not multiplied.
         .outerjoin(_QUALIFICATION, true())
         .order_by(met.c.last_session_at.desc(), User.id.desc())

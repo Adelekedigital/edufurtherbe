@@ -76,6 +76,8 @@ ADDED = {
         "window_days",
         # What the invite unlock waits for (decision 295).
         "sessions_attended",
+        # The calendar month (Mentee Home).
+        "this_month",
     ),
     "MenteeStatsWindowRead": ("completed_sessions", "minutes"),
     # New with the monthly chart (decision 247), on the same terms.
@@ -100,6 +102,9 @@ ADDED = {
         "session_count",
         "cover_color",
         "cover_art",
+        # Mentee Home's "Next on" and "No open times yet".
+        "next_session_at",
+        "unavailable_reason",
     ),
     # The mentor dashboard's review quote (decision 251).
     "OwnReviewRead": ("session_type",),

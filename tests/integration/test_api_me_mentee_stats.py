@@ -387,3 +387,45 @@ async def test_nobody_else_caches_it(api_client: httpx.AsyncClient, db_engine: A
     response = await api_client.get(URL, headers=bearer(await token_for(db_engine, mentor)))
 
     assert response.headers["Cache-Control"] == PRIVATE_NO_STORE
+
+
+# --------------------------------------------------------------------------
+# This calendar month (Mentee Home's "+2 this month")
+# --------------------------------------------------------------------------
+
+
+async def test_this_month_is_the_utc_calendar_month(db_engine: AsyncEngine) -> None:
+    """`[1 June, 1 July)` UTC for a `now` of 15 June, the month the mentor's
+    monthly chart and the credit reset use: the first instant is in, the last
+    instant of May is not, and a missed session is not held."""
+    mentor = await make_bookable_mentor(db_engine, "mdash-month")
+    june = dt.datetime(2026, 6, 1, tzinfo=dt.UTC)
+    mentee = await first_mentee(db_engine, mentor, minutes=30, starts_at=june)
+    await add_session(db_engine, mentor, mentee=mentee, minutes=45, starts_at=NOW)
+    await add_session(
+        db_engine, mentor, mentee=mentee, minutes=60, starts_at=june - dt.timedelta(microseconds=1)
+    )
+    await missed_at(db_engine, mentor, mentee, NOW - dt.timedelta(days=1))
+
+    row = await store(db_engine, mentee)
+
+    assert row["this_month"] == {
+        "since": june,
+        "until": dt.datetime(2026, 7, 1, tzinfo=dt.UTC),
+        "completed_sessions": 2,
+        "minutes": 75,
+    }
+
+
+async def test_the_response_carries_this_month(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor = await make_bookable_mentor(db_engine, "mdash-month-api")
+    mentee = await first_mentee(db_engine, mentor, minutes=30, days_ago=0)
+
+    body = await dashboard(api_client, await token_for(db_engine, mentee))
+
+    month = body["this_month"]
+    since = dt.datetime.fromisoformat(month["since"])
+    assert (since.day, since.hour, since.utcoffset()) == (1, 0, dt.timedelta(0))
+    assert block(body, "this_month") == {"completed_sessions": 1, "minutes": 30}

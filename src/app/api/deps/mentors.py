@@ -410,6 +410,7 @@ OwnMentorStatsDep = Annotated[dict[str, Any], Depends(own_mentor_stats)]
 async def met_mentors_page(
     user: CurrentUserDep,
     session: SessionDep,
+    window: BookingWindowDep,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
@@ -423,6 +424,7 @@ async def met_mentors_page(
         session,
         user["id"],
         now=dt.datetime.now(dt.UTC),
+        window=window,
         limit=clamp_limit(limit),
         cursor=decode_cursor(cursor),
     )
