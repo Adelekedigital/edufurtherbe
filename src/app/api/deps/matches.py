@@ -64,6 +64,16 @@ async def mentor_matches(
         StringConstraints(max_length=MAX_HANDLE_LENGTH),
         StorableText,
     ] = None,
+    exclude_met: Annotated[
+        bool,
+        Query(
+            description=(
+                "Leave out mentors you have met: had a completed session with as a "
+                "mentee, the mentors `/me/mentors` lists. `limit` then counts only "
+                "mentors you have not met. Never drops the mentor `for_mentor` names."
+            )
+        ),
+    ] = False,
 ) -> MentorMatchesRead:
     """Rank every mentor the caller could book against the caller's own answers."""
     viewer: UUID = user["id"]
@@ -77,6 +87,7 @@ async def mentor_matches(
         window=window,
         day=dt.datetime.now(dt.UTC).date(),
         for_mentor=handle,
+        exclude_met=exclude_met,
     )
     targets = (
         None
