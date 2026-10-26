@@ -79,6 +79,15 @@ class MenteeStatsRead(BaseModel):
     previous: MenteeStatsWindowRead = Field(
         description="The equal window immediately before `current`."
     )
+    this_month: MenteeStatsWindowRead | None = Field(
+        default=None,
+        description=(
+            "The UTC calendar month now is in, `[the 1st, the next 1st)`: "
+            '"+2 this month". The same month as the mentor\'s monthly chart and '
+            "the credit reset. Always sent; optional only so an older client's "
+            "fixtures stay valid."
+        ),
+    )
 
     @classmethod
     def of(cls, row: dict[str, Any]) -> MenteeStatsRead:
@@ -92,4 +101,5 @@ class MenteeStatsRead(BaseModel):
             window_days=TREND_DAYS,
             current=MenteeStatsWindowRead.of(row["current"]),
             previous=MenteeStatsWindowRead.of(row["previous"]),
+            this_month=MenteeStatsWindowRead.of(row["this_month"]),
         )

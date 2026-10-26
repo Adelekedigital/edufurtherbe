@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.met_mentors import bookability
+from app.domain.met_mentors import Bookability, bookability, unavailable_reason
 
 
 @pytest.mark.parametrize(
@@ -29,3 +29,23 @@ def test_the_most_specific_fact_wins(
         bookability(has_upcoming=has_upcoming, pending=pending, taking_bookings=taking_bookings)
         == state
     )
+
+
+@pytest.mark.parametrize(
+    ("state", "next_available", "reason"),
+    [
+        (Bookability.UNAVAILABLE, "none", "not_taking"),
+        (Bookability.UNAVAILABLE, "open", "not_taking"),
+        (Bookability.OPEN, "none", "no_open_times"),
+        (Bookability.OPEN, "open", None),
+        (Bookability.OPEN, "refreshing", None),
+        (Bookability.HAS_UPCOMING, "none", None),
+        (Bookability.PENDING, "none", None),
+    ],
+)
+def test_why_a_mentor_cannot_be_booked(
+    state: Bookability, next_available: str, reason: str | None
+) -> None:
+    """`not_taking` is exactly `unavailable`; `no_open_times` only for an `open`
+    mentor whose card says nothing is free; an unknown time is not "none"."""
+    assert unavailable_reason(state, next_available=next_available) == reason

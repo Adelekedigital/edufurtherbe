@@ -15,7 +15,12 @@ from typing import Any
 from pydantic import Field
 
 from app.api.schemas.common import AvatarFocusRead, CoverRead
-from app.domain.met_mentors import Bookability, bookability
+from app.domain.met_mentors import (
+    Bookability,
+    UnavailableReason,
+    bookability,
+    unavailable_reason,
+)
 
 
 class MetMentorRead(CoverRead):
@@ -73,8 +78,33 @@ class MetMentorRead(CoverRead):
         )
     )
 
+    next_session_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "When your earliest booking with this mentor that `has_upcoming` or "
+            '`pending` counts starts: "Next on Thu, Oct 15". `null` with '
+            "neither. A session in progress counts, so it can be in the past."
+        ),
+    )
+    unavailable_reason: UnavailableReason | None = Field(
+        default=None,
+        description=(
+            "Why you cannot book this mentor now. `not_taking` exactly when "
+            '`bookability` is `unavailable` ("Not taking bookings"). '
+            "`no_open_times` when `bookability` is `open` but nothing is free "
+            'in their booking window ("No open times yet"), the same fact as '
+            "`next_available_state: none` on their profile. Otherwise `null`, "
+            "including while the next free time is still being worked out."
+        ),
+    )
+
     @classmethod
     def of(cls, row: dict[str, Any]) -> MetMentorRead:
+        state = bookability(
+            has_upcoming=bool(row["has_upcoming"]),
+            pending=bool(row["pending"]),
+            taking_bookings=bool(row["taking_bookings"]),
+        )
         return cls(
             id=str(row["id"]),
             slug=row["slug"],
@@ -87,9 +117,9 @@ class MetMentorRead(CoverRead):
             institution=row["institution"],
             session_count=int(row["session_count"]),
             last_session_at=row["last_session_at"],
-            bookability=bookability(
-                has_upcoming=bool(row["has_upcoming"]),
-                pending=bool(row["pending"]),
-                taking_bookings=bool(row["taking_bookings"]),
+            bookability=state,
+            next_session_at=row["next_session_at"],
+            unavailable_reason=unavailable_reason(
+                state, next_available=str(row["next_available_state"])
             ),
         )
