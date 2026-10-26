@@ -651,7 +651,8 @@ async def test_one_qualifying_arrival_unlocks_the_link_owner(
     assert (await complete(api_client, arrival)).status_code in {200, 201}
 
     owner_id = await user_id_of(db_engine, owner)
-    assert await unlocks_of(db_engine, owner_id) == 1
+    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    assert await unlocks_of(db_engine, owner_id) == 0
     assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
 
 
@@ -666,7 +667,8 @@ async def test_a_second_qualifying_arrival_grants_nothing_more(
         await complete(api_client, arrival)
 
     owner_id = await user_id_of(db_engine, owner)
-    assert await unlocks_of(db_engine, owner_id) == 1
+    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    assert await unlocks_of(db_engine, owner_id) == 0
     assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
     qualified = await scalar(
         db_engine,
@@ -685,7 +687,10 @@ async def test_an_arrival_who_finished_first_qualifies_at_the_claim(
 
     await claim(api_client, arrival, code)
 
-    assert await unlocks_of(db_engine, await user_id_of(db_engine, owner)) == 1
+    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    owner_id = await user_id_of(db_engine, owner)
+    assert await unlocks_of(db_engine, owner_id) == 0
+    assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
 
 
 # --------------------------------------------------------------------------
@@ -993,7 +998,8 @@ async def test_an_arrival_before_the_revoke_still_qualifies_and_pays(
     await complete(api_client, arrival)
 
     owner_id = await user_id_of(db_engine, owner)
-    assert await unlocks_of(db_engine, owner_id) == 1
+    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    assert await unlocks_of(db_engine, owner_id) == 0
     assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
 
 

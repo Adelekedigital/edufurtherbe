@@ -278,7 +278,8 @@ async def test_finishing_onboarding_pays_the_referrer(
 
     assert await balance_of(db_engine, referrer_id) == 2
     assert await sources_of(db_engine, referrer_id) == ["referral_unlock"]
-    assert await unlocks_of(db_engine, referrer_id) == 1
+    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    assert await unlocks_of(db_engine, referrer_id) == 0
 
 
 async def test_claiming_alone_pays_nothing(
@@ -318,7 +319,8 @@ async def test_a_second_qualifying_invitee_pays_nothing_more(
         await api_client.post(COMPLETE, headers=token)
 
     assert await balance_of(db_engine, referrer_id) == 2
-    assert await unlocks_of(db_engine, referrer_id) == 1
+    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    assert await unlocks_of(db_engine, referrer_id) == 0
 
 
 async def test_the_second_invite_is_still_marked_qualified(
@@ -500,7 +502,8 @@ async def test_claiming_after_finishing_still_pays_the_referrer(
     await api_client.post(CLAIM, json={"code": code}, headers=token)
 
     assert await balance_of(db_engine, referrer_id) == 2
-    assert await unlocks_of(db_engine, referrer_id) == 1
+    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    assert await unlocks_of(db_engine, referrer_id) == 0
 
 
 async def test_claiming_before_finishing_is_unchanged(
@@ -518,4 +521,5 @@ async def test_claiming_before_finishing_is_unchanged(
     await api_client.post(COMPLETE, headers=token)
 
     assert await balance_of(db_engine, referrer_id) == 2
-    assert await unlocks_of(db_engine, referrer_id) == 1
+    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    assert await unlocks_of(db_engine, referrer_id) == 0

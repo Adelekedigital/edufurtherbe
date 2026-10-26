@@ -52,6 +52,7 @@ from app.infra.db.models.sessions import (
 )
 from app.infra.db.outbox import enqueue
 from app.infra.db.predicates import presence_decides_sql
+from app.infra.db.referral_writer import unlock_referrers
 from app.infra.db.review_eligibility import within_interval
 from app.infra.db.room_stays import close_stay, open_stay
 from app.infra.db.session_store import is_a_party
@@ -485,6 +486,15 @@ async def settle_attendance(
         [row["id"] for row in settled if row["status"] == SessionStatus.COMPLETED],
         now=now,
     )
+
+    # 5. **A mentee who came may now be unlocked** (decision 295): the unlock
+    #    waits for an attended session as well as a qualified invite, and this
+    #    is where attendance becomes final. Set-based, and a no-op for anyone
+    #    with no qualified invite or already unlocked.
+    #    Only the mentees who came are passed, though `unlock_referrers` checks
+    #    attendance itself (so the filter is an equivalent mutant): it keeps the
+    #    sweep from locking the row of everyone it settled.
+    await unlock_referrers(session, {row["mentee_id"] for row in settled if row["mentee_came"]})
 
     return len(settled)
 

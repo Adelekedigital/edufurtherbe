@@ -74,8 +74,9 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "opening balance): draw the bar as `monthly.balance` of "
         "`monthly.ceiling`, clamped, since a late refund can briefly exceed it. "
         "`monthly.ceiling` is the grant whether or not the account receives it; "
-        "`monthly.unlocked` says whether it does (a mentee goal and an unlock "
-        'from a qualifying invite), which tells "not unlocked yet" from '
+        "`monthly.unlocked` says whether it does (a mentee goal and an unlock, "
+        "which a qualifying invite opens once you have attended a session as a "
+        'mentee; decision 295), which tells "not unlocked yet" from '
         '"spent". '
         "`bonus` is every other credit (the starter, the invite bonus, support "
         "grants), grouped by when they expire, soonest first and never-expiring "

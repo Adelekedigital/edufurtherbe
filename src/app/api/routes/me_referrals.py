@@ -63,7 +63,9 @@ UNAUTHORISED: dict[int | str, dict[str, str]] = {
         "**The invite pays nothing on its own.** The referrer's two credits "
         "arrive when the invitee finishes their profile, which is the same "
         "signal as the starter credit — signing up and vanishing unlocks "
-        "nothing, and that separation is the abuse boundary."
+        "nothing, and that separation is the abuse boundary. The three free "
+        "sessions a month also wait for the referrer's own first attended "
+        "session as a mentee (decision 295)."
     ),
     responses={
         **UNAUTHORISED,

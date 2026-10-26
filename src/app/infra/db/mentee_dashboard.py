@@ -4,7 +4,8 @@
 `session_stats` builder the mentor dashboard also runs, from the other side.
 Held is `received()`, the predicate `/me`'s `mentee_completed_sessions` counts;
 minutes and distinct mentors are `_held()`, which the profile's figures read;
-missed is `missed_by()` on the mentee's participant row; every window is
+missed is `missed_by()` and attended `attended_by()` on the mentee's
+participant row; every window is
 `predicates.during`.
 
 **Scoped to the caller in the statement** (non-negotiable #5): the scan reads
@@ -23,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.mentee_stats import DashboardWindows
 from app.infra.db.models.sessions import Session
-from app.infra.db.session_stats import mentee_missed, mentee_window_figures
+from app.infra.db.session_stats import mentee_attended, mentee_missed, mentee_window_figures
 
 __all__ = ["mentee_dashboard"]
 
@@ -39,6 +40,7 @@ async def mentee_dashboard(
     row = (await session.execute(_statement(mentee, windows))).mappings().one()
     return {
         "sessions_held": row["completed_sessions"],
+        "sessions_attended": row["attended"],
         "mentors_met": row["mentors_met"],
         "minutes_of_guidance": row["minutes"],
         "missed_sessions": row["missed"],
@@ -61,6 +63,7 @@ def _statement(mentee: UUID, windows: DashboardWindows) -> Any:
             minutes.label("minutes"),
             mentors.label("mentors_met"),
             mentee_missed(mentee, windows.missed).label("missed"),
+            mentee_attended(mentee).label("attended"),
             current_held.label("current_sessions"),
             current_minutes.label("current_minutes"),
             previous_held.label("previous_sessions"),
