@@ -74,6 +74,8 @@ ADDED = {
         "missed_sessions",
         "missed_window_days",
         "window_days",
+        # What the invite unlock waits for (decision 295).
+        "sessions_attended",
     ),
     "MenteeStatsWindowRead": ("completed_sessions", "minutes"),
     # New with the monthly chart (decision 247), on the same terms.

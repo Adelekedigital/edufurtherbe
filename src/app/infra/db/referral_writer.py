@@ -29,10 +29,11 @@ before somebody reasons about signup funnels from it.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Collection
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,9 +45,11 @@ from app.domain.referrals import NO_INVITE, make_code, may_qualify
 from app.infra.db.credit_writer import grant
 from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
+from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserOnboarding
+from app.infra.db.session_stats import attended_by
 
-__all__ = ["claim_referral", "create_referral", "qualify_invitee"]
+__all__ = ["claim_referral", "create_referral", "qualify_invitee", "unlock_referrers"]
 
 OWN_INVITE = "you cannot claim your own invite"
 ALREADY_CLAIMED = "you have already claimed an invite"
@@ -291,16 +294,22 @@ async def _qualify_if_finished(
 
 
 async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: CreditLadder) -> bool:
-    """This user finished onboarding — qualify their invite and pay the referrer.
+    """This user finished onboarding: qualify their invite, pay the referrer's
+    bonus, and unlock the referrer if they have attended a session.
 
     Returns whether an unlock was created. Does not commit; the caller owns the
     transaction, and here that caller is ``complete_onboarding``.
 
-    **The unlock is once-ever and the database says so.** ``ON CONFLICT DO
-    NOTHING`` against ``uq_referral_unlocks_user_id`` rather than reading first:
-    a referrer's second qualifying invitee must produce no second unlock and no
-    second grant, and a read-then-write is a check-time-of-use race the moment
-    two invitees finish at once.
+    **Two facts since decision 295.** The bonus (`ladder.unlock`) is paid for the
+    referrer's first qualified invite, as before. The unlock, which is what the
+    monthly grant reads, also waits for the referrer to attend a session as a
+    mentee: whichever comes second writes it (:func:`unlock_referrers`).
+
+    **The bonus is once-ever, under the referrer's row lock.** Paid only when no
+    other referral of theirs is qualified and no unlock exists, so a second
+    invitee pays nothing and a grandfathered user (an unlock with no referral)
+    is not paid, exactly as when the unlock row was the bonus's gate. Two
+    invitees finishing at once queue on the lock, and the second sees the first.
 
     A referrer who is *already* unlocked still has the referral marked
     qualified — the invite genuinely qualified, and the ledger should say so
@@ -319,30 +328,87 @@ async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: Cr
     if not may_qualify(has_invitee=True, already_qualified=referral.qualified_at is not None):
         return False
 
+    await _lock_referrers(session, [referral.referrer_id])
+    first = not await session.scalar(
+        select(
+            exists().where(
+                Referral.referrer_id == referral.referrer_id,
+                Referral.qualified_at.is_not(None),
+            )
+            | exists().where(ReferralUnlock.user_id == referral.referrer_id)
+        )
+    )
     await session.execute(
         update(Referral).where(Referral.id == referral.id).values(qualified_at=func.now())
     )
-
-    unlock_id = (
-        await session.execute(
-            pg_insert(ReferralUnlock)
-            .values(user_id=referral.referrer_id, unlocked_by_referral_id=referral.id)
-            .on_conflict_do_nothing(index_elements=["user_id"])
-            .returning(ReferralUnlock.id)
+    if first:
+        await grant(
+            session,
+            referral.referrer_id,
+            source=CreditSource.REFERRAL_UNLOCK,
+            quantity=ladder.unlock,
+            # App clock, matching `credit_store`'s read. Mixing the two would put
+            # the boundary a lot expires on in a different frame from the filter
+            # that decides whether it is spendable.
+            now=dt.datetime.now(dt.UTC),
         )
-    ).scalar_one_or_none()
+    return bool(await unlock_referrers(session, [referral.referrer_id]))
 
-    if unlock_id is None:
-        return False
 
-    await grant(
-        session,
-        referral.referrer_id,
-        source=CreditSource.REFERRAL_UNLOCK,
-        quantity=ladder.unlock,
-        # App clock, matching `credit_store`'s read. Mixing the two would put
-        # the boundary a lot expires on in a different frame from the filter
-        # that decides whether it is spendable.
-        now=dt.datetime.now(dt.UTC),
+async def unlock_referrers(session: AsyncSession, user_ids: Collection[UUID]) -> int:
+    """Unlock each of ``user_ids`` who has a qualified invite **and** has
+    attended a session as a mentee (decision 295). Returns how many were
+    unlocked now. Does not commit.
+
+    Called from both halves, because either can come second: qualifying an
+    invite (:func:`qualify_invitee`) and settling sessions
+    (`settle_attendance`, for the mentees who came).
+
+    **Locked first, then read.** Each half reads the other's fact, so without
+    the referrer's row lock a qualification and a settlement committing
+    together would each miss the other and neither would write. Once-ever and
+    never revoked: ``ON CONFLICT DO NOTHING`` on ``uq_referral_unlocks_user_id``,
+    crediting the earliest qualified invite.
+    """
+    if not user_ids:
+        return 0
+    await _lock_referrers(session, user_ids)
+    attended = (
+        select(Session.id)
+        .where(Session.mentee_id == Referral.referrer_id, attended_by(Session.mentee_id))
+        .exists()
     )
-    return True
+    first_qualified = (
+        select(Referral.referrer_id, Referral.id)
+        .distinct(Referral.referrer_id)
+        .where(
+            Referral.referrer_id.in_(list(user_ids)),
+            Referral.qualified_at.is_not(None),
+            attended,
+        )
+        .order_by(Referral.referrer_id, Referral.qualified_at, Referral.id)
+    )
+    unlocked = await session.execute(
+        pg_insert(ReferralUnlock)
+        .from_select(["user_id", "unlocked_by_referral_id"], first_qualified)
+        .on_conflict_do_nothing(index_elements=["user_id"])
+        .returning(ReferralUnlock.id)
+    )
+    return len(unlocked.all())
+
+
+async def _lock_referrers(session: AsyncSession, user_ids: Collection[UUID]) -> None:
+    """The referrers' `users` rows, locked in id order so two writers locking
+    overlapping sets cannot deadlock on each other.
+
+    **`FOR NO KEY UPDATE`, not `FOR UPDATE`**: it serialises the unlock writers
+    with each other (and with account deletion's `FOR UPDATE`) but not with the
+    `FOR KEY SHARE` every foreign-key insert takes on a user, so a credit lot or
+    a booking for the same user neither waits on it nor closes a deadlock cycle.
+    """
+    await session.execute(
+        select(User.id)
+        .where(User.id.in_(list(user_ids)))
+        .order_by(User.id)
+        .with_for_update(key_share=True)
+    )

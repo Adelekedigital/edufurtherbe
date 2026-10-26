@@ -44,6 +44,15 @@ class MenteeStatsRead(BaseModel):
             "as `mentee_completed_sessions` on `/me`."
         ),
     )
+    sessions_attended: int = Field(
+        default=0,
+        description=(
+            "Sessions you attended as a mentee, all time: you joined, whether or "
+            "not your mentor did, so a session your mentor missed counts. What "
+            "the invite unlock waits for (decision 295), so the Invite card's "
+            '"attend a session" step reads this, not `sessions_held`.'
+        ),
+    )
     mentors_met: int = Field(
         default=0, description="Distinct mentors you have at least one completed session with."
     )
@@ -75,6 +84,7 @@ class MenteeStatsRead(BaseModel):
     def of(cls, row: dict[str, Any]) -> MenteeStatsRead:
         return cls(
             sessions_held=int(row["sessions_held"]),
+            sessions_attended=int(row["sessions_attended"]),
             mentors_met=int(row["mentors_met"]),
             minutes_of_guidance=int(row["minutes_of_guidance"]),
             missed_sessions=int(row["missed_sessions"]),

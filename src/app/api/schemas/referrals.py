@@ -68,8 +68,9 @@ class ReferralRead(BaseModel):
     #: service never sees a signup — `users` rows come from the provisioning CLI
     #: and the ETL — so this is the first moment it can witness.
     signed_up_at: datetime | None = None
-    #: Set when the invitee finishes onboarding, which is what opens the
-    #: referrer's recurring grant.
+    #: Set when the invitee finishes onboarding: it pays the referrer's bonus,
+    #: and opens their recurring grant once they have also attended a session
+    #: as a mentee (decision 295).
     qualified_at: datetime | None = None
 
 

@@ -100,12 +100,14 @@ __all__ = [
     "TERMINAL",
     "attendance_rate",
     "attendance_sessions",
+    "attended_by",
     "cancellations",
     "canceller",
     "current_streak",
     "delivered",
     "held",
     "held_count",
+    "mentee_attended",
     "mentee_completed_sessions",
     "mentee_missed",
     "mentee_window_figures",
@@ -384,6 +386,24 @@ def missed_by(party: Any) -> Any:
     `party` is a column of the enclosing `sessions` (`Session.mentor_id`).
     """
     return and_(Session.status.in_(TERMINAL), _recorded(party, MISSED))
+
+
+def attended_by(party: Any) -> Any:
+    """The predicate for a session ``party`` attended: their participant row is
+    `ATTENDED`, the credit rules' *attended* (decision 295).
+
+    **Not `held`**: a mentor no-show leaves the session `no_show`, but the mentee
+    who came attended it. Any status, because the row is only ever `ATTENDED`
+    once they came: a press, or the room seeing them. `party` is a column of the
+    enclosing `sessions` or a concrete id.
+    """
+    return _recorded(party, ATTENDED)
+
+
+def mentee_attended(mentee: Any) -> Any:
+    """How many sessions the mentee attended, all time, as an aggregate over the
+    dashboard's scan of their sessions."""
+    return func.count().filter(attended_by(mentee))
 
 
 def _recorded(party: Any, statuses: tuple[AttendanceStatus, ...]) -> Any:

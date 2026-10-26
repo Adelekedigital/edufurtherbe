@@ -604,10 +604,10 @@ class CreditSource(StrEnum):
     #: impossible rather than merely unlikely.
     PROFILE_COMPLETED = "profile_completed"
 
-    #: The first qualifying invite. Two, on top of the starter, and it is the
-    #: **once-only gate** — the same event writes `referral_unlocks`, which is
-    #: what opens the monthly grant. Granting it twice would open a floor that
-    #: is already open.
+    #: The first qualifying invite's bonus. Two, on top of the starter, and
+    #: **once-only** (`uq_credit_lots_one_referral_bonus_per_user`). Since
+    #: decision 295 it is paid apart from `referral_unlocks`, which opens the
+    #: monthly grant only once the inviter has also attended a session.
     REFERRAL_UNLOCK = "referral_unlock"
 
     #: The monthly grant, for users who have unlocked it. Three.

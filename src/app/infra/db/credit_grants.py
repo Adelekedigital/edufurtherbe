@@ -12,7 +12,8 @@ settled decision 15: authorization here is profile existence, so a dual-role
 user is both, and the negative form would silently stop somebody booking who
 can book.
 
-**An unlock**, because that is what a qualifying invite opens. Without it the
+**An unlock**, because that is what a qualifying invite opens once its inviter
+has attended a session as a mentee (decision 295). Without it the
 referral programme rewards nothing — the grant would arrive whether or not
 anybody ever invited a soul, and `referral_unlocks` would be a table nothing
 reads.
