@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ARRAY, Text, bindparam, case, false, func, literal, select
+from sqlalchemy import ARRAY, Text, bindparam, case, false, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,9 +38,11 @@ from app.infra.db.mentor_search_store import (
 from app.infra.db.models.education import DegreeLevel, EducationEntry
 from app.infra.db.models.mentoring import MenteeGoal, MenteeGoalCountry, MentorProfile
 from app.infra.db.models.reference import Country
+from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.next_available_state import OPEN
 from app.infra.db.offerings import live_goal_offering_ids, offerings_for
+from app.infra.db.session_stats import received
 
 __all__ = ["Candidate", "field_scores", "match_candidates", "mentee_answers", "mentee_of"]
 
@@ -159,19 +161,30 @@ async def match_candidates(
     window: BookingWindow,
     day: dt.date,
     for_mentor: str | None = None,
+    exclude_met: bool = False,
 ) -> list[Candidate]:
     """Every mentor `viewer` could book now, never `viewer`, with their facts.
 
     Each card is an Explore card (`offerings` attached as `/mentors` attaches
     them); `is_for_mentor` marks the mentor the handle names, resolved by
     `by_handle` as `/mentors/{handle}` resolves it.
+
+    ``exclude_met`` leaves out mentors `viewer` has met, by `/me/mentors`' rule
+    (`session_stats.received`: a completed session as the mentee), **except**
+    the mentor ``for_mentor`` names, which an explicit ask keeps. Filtered in
+    the statement, before ranking, so ``limit`` counts only mentors not met.
     """
-    statement = bookable_cards(viewer, window).add_columns(
+    named = by_handle(for_mentor) if for_mentor is not None else false()
+    statement = bookable_cards(viewer, window)
+    if exclude_met:
+        met = select(Session.id).where(received(viewer), Session.mentor_id == User.id).exists()
+        statement = statement.where(or_(named, ~met))
+    statement = statement.add_columns(
         daily_shuffle(viewer, day).label("shuffle"),
         _education_texts(EducationEntry.study_course).label("courses"),
         _education_texts(EducationEntry.study_program).label("programs"),
         MentorProfile.primary_study_program,
-        (by_handle(for_mentor) if for_mentor is not None else false()).label("is_for_mentor"),
+        named.label("is_for_mentor"),
     )
     rows = [dict(r) for r in (await session.execute(statement)).mappings()]
     grouped = await offerings_for(session, [row["user_id"] for row in rows])

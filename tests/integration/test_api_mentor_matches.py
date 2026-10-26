@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import (
     add_education,
+    add_session,
     make_bookable_mentor,
     make_public_mentor,
     mark_open,
@@ -491,3 +492,42 @@ async def test_the_help_overlap_agrees_with_explores_goal_ranking(
             ).scalar_one()
             assert shared[str(mentor)] == counted
     assert [shared[str(m)] for m in (two, one, none)] == [2, 1, 0]
+
+
+# --------------------------------------------------------------------------
+# exclude_met: Mentee Home's Recommended, mentors not yet met
+# --------------------------------------------------------------------------
+
+
+async def test_exclude_met_leaves_out_mentors_you_have_met(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Met is `/me/mentors`' rule: a completed session as the mentee. A session
+    that did not happen (cancelled, or a no-show) is not meeting someone, and
+    without the flag the list is unchanged."""
+    met = await make_bookable_mentor(db_engine, "xm-met")
+    missed = await make_bookable_mentor(db_engine, "xm-missed")
+    new = await make_bookable_mentor(db_engine, "xm-new")
+    caller, headers = await a_mentee(db_engine, "xm")
+    await add_session(db_engine, met, mentee=caller, status="completed")
+    await add_session(db_engine, missed, mentee=caller, status="no_show")
+    await add_session(db_engine, missed, mentee=caller, status="cancelled")
+
+    leaving_out = ids((await matches(api_client, headers, "?limit=10&exclude_met=true")).json())
+    everyone = ids((await matches(api_client, headers, "?limit=10")).json())
+
+    assert sorted(leaving_out) == sorted([str(missed), str(new)])
+    assert sorted(everyone) == sorted([str(met), str(missed), str(new)])
+
+
+async def test_exclude_met_never_drops_the_mentor_you_asked_for(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    met = await make_bookable_mentor(db_engine, "xm-asked", slug="xm-asked")
+    caller, headers = await a_mentee(db_engine, "xm-asked")
+    await add_session(db_engine, met, mentee=caller, status="completed")
+
+    body = (await matches(api_client, headers, "?for_mentor=xm-asked&exclude_met=true")).json()
+
+    assert ids(body) == [str(met)]
+    assert body["for_mentor_bookable"] is True
