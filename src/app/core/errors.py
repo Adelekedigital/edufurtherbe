@@ -164,22 +164,6 @@ class MentorApplicationIncompleteError(MissingItemsError):
     """
 
 
-class MentorApplicationInReviewError(ConflictError):
-    """A submitted application's reviewed fields hold still until the decision.
-
-    `fields` names what the request would have changed (a `FROZEN_FIELDS` name
-    or a `FrozenRecord`, in `domain.mentor_application`), so the client can say
-    which part is locked.
-    """
-
-    def __init__(self, message: str = "", *, fields: tuple[str, ...] = ()) -> None:
-        super().__init__(message)
-        self.fields = fields
-
-    def problem_members(self) -> dict[str, object]:
-        return {"fields": list(self.fields)}
-
-
 class MentorApplicationDeclinedError(ConflictError):
     """A declined mentor's booking setup is locked (owner, 2026-10-20).
 

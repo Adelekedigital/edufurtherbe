@@ -854,7 +854,7 @@ class LinkPlatform(StrEnum):
 
     One link per platform, except `website`, of which a user may hold up to
     three. **LinkedIn is not here**: it stays `user_profiles.social_linkedin`,
-    because the mentor application, its review freeze and onboarding read it.
+    because the mentor application and onboarding read it.
     Each platform's link rule is `domain.social_links`.
     """
 

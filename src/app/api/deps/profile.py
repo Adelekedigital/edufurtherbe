@@ -55,15 +55,11 @@ from app.core.errors import (
 )
 from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
-from app.domain.mentor_application import FrozenRecord
 from app.domain.referrals import claim_window
 from app.domain.writing_assist import provenance_problem
-from app.infra.db.application_freeze import (
-    language_rows_unless_frozen,
+from app.infra.db.application_guards import (
     refuse_clearing_help_areas,
     refuse_declined_booking_rules,
-    refuse_frozen_changes,
-    refuse_while_in_review,
 )
 from app.infra.db.asset_store import clear_image, release_image, store_image, stored_avatar_focus
 from app.infra.db.catalogue_store import LOOKUPS, list_lookup, search_institutions
@@ -102,7 +98,6 @@ from app.infra.db.profile_writer import (
     delete_award,
     delete_goal,
     refuse_invalid_mentor_profile,
-    refuse_invalid_profile,
     update_award,
     update_mentor_profile,
     upsert_goal,
@@ -431,7 +426,6 @@ CompletedOnboardingDep = Annotated[OnboardingResult, Depends(completed_onboardin
 async def created_education(
     payload: EducationWrite, user_id: OwnerDep, session: SessionDep
 ) -> tuple[UUID, bool]:
-    await refuse_while_in_review(session, user_id, FrozenRecord.EDUCATION)
     result = await create_education(session, user_id, payload.model_dump())
     await session.commit()
     return result
@@ -443,7 +437,6 @@ async def updated_education(
     # `exclude_unset` is what makes this a PATCH: a field the client did not
     # send is absent, not null. Without it every omitted field would be written
     # as its default and a one-field edit would blank the rest.
-    await refuse_while_in_review(session, user_id, FrozenRecord.EDUCATION)
     changed = await update_education(
         session, user_id, entry_id, payload.model_dump(exclude_unset=True)
     )
@@ -452,7 +445,6 @@ async def updated_education(
 
 
 async def deleted_education(entry_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
-    await refuse_while_in_review(session, user_id, FrozenRecord.EDUCATION)
     removed = await delete_education(session, user_id, entry_id)
     await session.commit()
     return removed
@@ -472,7 +464,6 @@ async def deleted_goal(user_id: OwnerDep, session: SessionDep) -> bool:
 
 
 async def created_award(payload: AwardWrite, user_id: OwnerDep, session: SessionDep) -> UUID:
-    await refuse_while_in_review(session, user_id, FrozenRecord.AWARDS)
     award_id = await create_award(session, user_id, payload.model_dump())
     await session.commit()
     return award_id
@@ -481,14 +472,12 @@ async def created_award(payload: AwardWrite, user_id: OwnerDep, session: Session
 async def updated_award(
     award_id: UUID, payload: AwardPatch, user_id: OwnerDep, session: SessionDep
 ) -> bool:
-    await refuse_while_in_review(session, user_id, FrozenRecord.AWARDS)
     changed = await update_award(session, user_id, award_id, payload.model_dump(exclude_unset=True))
     await session.commit()
     return changed
 
 
 async def deleted_award(award_id: UUID, user_id: OwnerDep, session: SessionDep) -> bool:
-    await refuse_while_in_review(session, user_id, FrozenRecord.AWARDS)
     removed = await delete_award(session, user_id, award_id)
     await session.commit()
     return removed
@@ -526,10 +515,9 @@ async def updated_mentor_profile(
         stored = await stored_booking_window_days(session, user_id)
     refuse_window_out_of_range(payload.booking_window_days, window, stored=stored)
     sent = payload.model_dump(exclude_unset=True)
-    # A bad value is a `422` whatever the review state, so it is asked first.
+    # A bad value is a `422` whatever the application state, so it is asked first.
     await refuse_invalid_mentor_profile(session, sent)
     await refuse_clearing_help_areas(session, user_id, sent)
-    await refuse_frozen_changes(session, user_id, sent)
     await refuse_declined_booking_rules(session, user_id, sent)
     changed = await update_mentor_profile(session, user_id, sent)
     await session.commit()
@@ -543,9 +531,6 @@ async def upserted_profile(
     # Where the bio came from (decision 267): checked whole, before anything is written.
     if (problem := provenance_problem(sent)) is not None:
         raise ValidationError(problem[1], field_errors=(problem,))
-    # A bad value is a `422` whatever the review state, so it is asked first.
-    await refuse_invalid_profile(session, user_id, sent)
-    await refuse_frozen_changes(session, user_id, sent)
     await upsert_profile(session, user_id, sent)
     await session.commit()
 
@@ -567,27 +552,17 @@ async def replaced_languages(
     payload: UserLanguagesWrite, user_id: OwnerDep, session: SessionDep
 ) -> None:
     entries = [entry.model_dump(exclude_unset=True) for entry in payload.languages]
-    rows = await language_rows_unless_frozen(session, user_id, entries)
-    await write_languages(session, user_id, rows)
+    await write_languages(session, user_id, entries)
     await session.commit()
 
 
 ReplacedLanguagesDep = Annotated[None, Depends(replaced_languages)]
 
 
-#: The reviewed field each image is, while a mentor application is in review.
-_FROZEN_IMAGE = {AssetKind.AVATAR: FrozenRecord.AVATAR, AssetKind.BANNER: FrozenRecord.BANNER}
-
-
 async def _store_image(
     kind: AssetKind, upload: UploadFile, user_id: UUID, session: SessionDep, request: Request
 ) -> str:
     """Validate, re-encode, store, point the profile at it, drop the old one.
-
-    **Refused while an application is in review** (decision 273): after the
-    bytes are stored, so the mentor lock is not held through a slow upload,
-    and before the profile points at them. A refused upload's object is
-    released by `store_image`.
 
     **The body was already read before this ran** — FastAPI parses the multipart
     form to resolve `UploadFile`, spooling it to disk first. So the limit that
@@ -606,14 +581,7 @@ async def _store_image(
     # endpoint; the storage client stays synchronous because the asset migration
     # script uses the same class outside any event loop.
     storage: SupabaseStorage = getattr(request.app.state, "storage", None) or get_storage()
-    url, previous = await store_image(
-        session,
-        storage,
-        kind,
-        user_id,
-        payload,
-        before_pointing=lambda: refuse_while_in_review(session, user_id, _FROZEN_IMAGE[kind]),
-    )
+    url, previous = await store_image(session, storage, kind, user_id, payload)
     await session.commit()
 
     # **After the commit, and never fatal** — `release_image`'s contract.
@@ -655,8 +623,6 @@ async def _removed_image(
     rather than failing a change that is already done. `drop_url` already never
     raises; a missing configuration is the same kind of skip.
     """
-    # Refused even with nothing stored, as every education write is (decision 273).
-    await refuse_while_in_review(session, user_id, _FROZEN_IMAGE[kind])
     previous = await clear_image(session, user_id, kind)
     await session.commit()
     if previous is None:

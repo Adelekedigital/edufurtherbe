@@ -29,7 +29,7 @@ from app.api.schemas.session_types import MentorSessionTypePatch, MentorSessionT
 from app.core.errors import (
     NotFoundError,
 )
-from app.infra.db.application_freeze import refuse_while_declined
+from app.infra.db.application_guards import refuse_while_declined
 from app.infra.db.idempotency import Replayed, record_response
 from app.infra.db.intake_store import (
     as_asked,

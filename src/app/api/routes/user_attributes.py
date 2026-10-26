@@ -182,26 +182,6 @@ PAUSE_CONFLICT: dict[int | str, dict[str, str]] = {
     }
 }
 
-IN_REVIEW_RESPONSE: dict[int | str, dict[str, str]] = {
-    status.HTTP_409_CONFLICT: {
-        "description": (
-            "`/problems/mentor-application-in-review`: your mentor application is "
-            "submitted and awaiting a decision, so what the reviewer judges is "
-            "frozen: the photo (`avatar`: an upload, a removal, or the crop "
-            "`avatar_focus`), the cover (`banner` uploads and removals, "
-            "`cover_color`, `cover_art`), `headline`, About (`about_me`), "
-            "`origin_country_id`, the study country and programme, `languages`, "
-            "help areas (`offering_ids`), `guide_country_ids`, `education` and "
-            "`awards`. `fields` names what this request would have changed. A "
-            "photo, banner, education or award write always counts as a change, "
-            "even a removal with nothing stored. Any other frozen field is refused "
-            "only when it changes: resent unchanged beside other edits, it saves. "
-            "`social_linkedin` may be corrected but not cleared. Approve or "
-            "decline unlocks."
-        )
-    }
-}
-
 CONFLICT_RESPONSE: dict[int | str, dict[str, str]] = {
     status.HTTP_409_CONFLICT: {"description": "This user already has a mentor profile."}
 }
@@ -222,7 +202,7 @@ CONFLICT_RESPONSE: dict[int | str, dict[str, str]] = {
         "country of study is derived from whichever one is chosen.\n\n"
         "`is_most_recent` clears the flag on the caller's other degrees."
     ),
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=WRITE_RESPONSES,
 )
 async def add_education(created: CreatedEducationDep, response: Response) -> EducationCreatedRead:
     entry_id, institution_created = created
@@ -238,7 +218,7 @@ async def add_education(created: CreatedEducationDep, response: Response) -> Edu
     response_model=UpdatedRead,
     summary="Change a degree",
     description="Only the fields sent are changed. Absent is not null.",
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=WRITE_RESPONSES,
 )
 async def edit_education(changed: UpdatedEducationDep) -> UpdatedRead:
     if not changed:
@@ -255,7 +235,7 @@ async def edit_education(changed: UpdatedEducationDep) -> UpdatedRead:
         "`school_name_raw` is what makes an unmatched school recoverable, and a "
         "real delete would take it."
     ),
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=WRITE_RESPONSES,
 )
 async def remove_education(removed: DeletedEducationDep) -> None:
     if not removed:
@@ -310,7 +290,7 @@ async def clear_goal(removed: DeletedGoalDep) -> None:
         "Self-reported. `verification_status` is set by the platform, not by the "
         "holder — **nothing verifies an award yet**, so every row is unverified."
     ),
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=WRITE_RESPONSES,
 )
 async def add_award(award_id: CreatedAwardDep, response: Response) -> CreatedRead:
     response.headers["Location"] = f"/api/v1/users/me/awards/{award_id}"
@@ -321,7 +301,7 @@ async def add_award(award_id: CreatedAwardDep, response: Response) -> CreatedRea
     "/awards/{award_id}",
     response_model=UpdatedRead,
     summary="Change an award",
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=WRITE_RESPONSES,
 )
 async def edit_award(changed: UpdatedAwardDep) -> UpdatedRead:
     if not changed:
@@ -334,7 +314,7 @@ async def edit_award(changed: UpdatedAwardDep) -> UpdatedRead:
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remove an award",
     description="**Soft** — `user_awards` carries `deleted_at`, unlike goals.",
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=WRITE_RESPONSES,
 )
 async def remove_award(removed: DeletedAwardDep) -> None:
     if not removed:
@@ -376,10 +356,11 @@ async def apply_as_mentor(profile_id: CreatedMentorProfileDep, response: Respons
     description=(
         "`approval_status`, `listing_status` and every audit field are not "
         "writable here — a mentor who could approve or relist themselves is not "
-        "being reviewed. An approved mentor keeps at least one help area: "
-        "`offering_ids: []` that would leave none is a `422` at `/offering_ids`."
+        "being reviewed. A mentor approved or in review keeps at least one help "
+        "area: `offering_ids: []` that would leave none is a `422` at "
+        "`/offering_ids`. Everything else stays editable while in review."
     ),
-    responses=with_declined(WRITE_RESPONSES | IN_REVIEW_RESPONSE),
+    responses=with_declined(WRITE_RESPONSES),
 )
 async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> UpdatedRead:
     if not changed:
@@ -407,7 +388,7 @@ async def edit_mentor_profile(changed: UpdatedMentorProfileDep) -> UpdatedRead:
         "`/catalog/countries` id; one that names no country is a `422` at that "
         "field and nothing is saved. `null` clears either."
     ),
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=WRITE_RESPONSES,
 )
 async def edit_profile(_: UpsertedProfileDep) -> None:
     return None
@@ -426,7 +407,7 @@ async def edit_profile(_: UpsertedProfileDep) -> None:
         "The same goes for listing one language twice.\n\n"
         "`proficiency` defaults to `fluent` when omitted."
     ),
-    responses=WRITE_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=WRITE_RESPONSES,
 )
 async def set_languages(_: ReplacedLanguagesDep) -> None:
     return None
@@ -512,7 +493,7 @@ UPLOAD_RESPONSES: dict[int | str, dict[str, str]] = {
     response_model=AvatarUploadRead,
     summary="Upload a profile picture",
     description=IMAGE_DESCRIPTION,
-    responses=UPLOAD_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=UPLOAD_RESPONSES,
 )
 async def upload_avatar(uploaded: UploadedAvatarDep) -> AvatarUploadRead:
     url, (x, y) = uploaded
@@ -524,7 +505,7 @@ async def upload_avatar(uploaded: UploadedAvatarDep) -> AvatarUploadRead:
     response_model=BannerUploadedRead,
     summary="Upload a profile banner",
     description=IMAGE_DESCRIPTION,
-    responses=UPLOAD_RESPONSES | IN_REVIEW_RESPONSE,
+    responses=UPLOAD_RESPONSES,
 )
 async def upload_banner(url: UploadedBannerDep) -> BannerUploadedRead:
     return BannerUploadedRead(banner_url=url)
@@ -536,10 +517,8 @@ async def upload_banner(url: UploadedBannerDep) -> BannerUploadedRead:
     summary="Remove the profile banner",
     description=(
         "Unsets the banner, so the cover shows `cover_color` and `cover_art` again, "
-        "and deletes the stored image. `204` whether or not there was one, "
-        "except while a mentor application is in review (`409`)."
+        "and deletes the stored image. `204` whether or not there was one."
     ),
-    responses=IN_REVIEW_RESPONSE,
 )
 async def remove_banner(_: RemovedBannerDep) -> None:
     return None
@@ -552,10 +531,8 @@ async def remove_banner(_: RemovedBannerDep) -> None:
     description=(
         "Unsets the photo and its `avatar_focus`, so the UI falls back to the "
         "initials avatar, and deletes the stored image. `204` whether or not there "
-        "was one, except while a mentor application is in review (`409`). Owner "
-        "only: anyone else gets `404`."
+        "was one. Owner only: anyone else gets `404`."
     ),
-    responses=IN_REVIEW_RESPONSE,
 )
 async def remove_avatar(_: RemovedAvatarDep) -> None:
     return None

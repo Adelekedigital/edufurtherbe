@@ -1,8 +1,9 @@
-"""A submitted application's reviewed fields hold still until the decision
-(owner, 2026-10-18).
+"""A mentor application in review locks nothing on the profile (owner, 2026-10-26;
+decision 296, superseding 273): the reviewer sees the profile as it is now.
 
-Refused with 409 `/problems/mentor-application-in-review` and `fields`; only a
-change counts, and approve or decline unlocks.
+Every write the freeze refused now saves while the application is in review.
+Only the help-area guard holds: an application in review keeps one, as an
+approved mentor does.
 """
 
 from __future__ import annotations
@@ -23,15 +24,6 @@ from conftest import FakeStorage, bearer, image_bytes, storage_for
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
-TYPE = "/problems/mentor-application-in-review"
-
-#: What reopens an application's fields: not yet submitted, or decided.
-OPENED = {
-    "unsubmitted": "UPDATE mentor_profiles SET submitted_at = NULL WHERE user_id = :u",
-    "approved": "UPDATE mentor_profiles SET approval_status = 'approved' WHERE user_id = :u",
-    "declined": "UPDATE mentor_profiles SET approval_status = 'declined' WHERE user_id = :u",
-}
-
 
 @pytest.fixture
 def fake_storage() -> FakeStorage:
@@ -40,7 +32,7 @@ def fake_storage() -> FakeStorage:
 
 @pytest.fixture
 def api_storage(fake_storage: FakeStorage) -> SupabaseStorage:
-    """A bucket for this module, so an upload let through can complete."""
+    """A bucket for this module, so an upload can complete."""
     return storage_for(fake_storage)
 
 
@@ -53,150 +45,9 @@ async def submitted(engine: AsyncEngine, tag: str) -> tuple[UUID, dict[str, str]
     return mentor, bearer(await token_for(engine, mentor))
 
 
-async def an_entry(engine: AsyncEngine, mentor: UUID) -> UUID:
-    async with engine.begin() as conn:
-        return UUID(
-            str(
-                (
-                    await conn.execute(
-                        text("SELECT id FROM education_entries WHERE user_id = :u"), {"u": mentor}
-                    )
-                ).scalar_one()
-            )
-        )
-
-
-def refused(response: httpx.Response, fields: list[str]) -> None:
-    assert response.status_code == 409, response.text
-    assert response.json()["type"] == TYPE
-    assert response.json()["fields"] == fields
-
-
-# --------------------------------------------------------------------------
-# Education: every write changes it
-# --------------------------------------------------------------------------
-
-
-async def test_education_cannot_be_added_changed_or_removed_while_in_review(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    mentor, auth = await submitted(db_engine, "frz-edu")
-    entry = await an_entry(db_engine, mentor)
-    base = f"/api/v1/users/{mentor}/education"
-
-    added = await api_client.post(base, headers=auth, json={"school_name_raw": "Lagos"})
-    changed = await api_client.patch(f"{base}/{entry}", headers=auth, json={"study_course": "Law"})
-    removed = await api_client.delete(f"{base}/{entry}", headers=auth)
-
-    for response in (added, changed, removed):
-        refused(response, ["education"])
-    async with db_engine.begin() as conn:
-        rows = await conn.execute(
-            text("SELECT count(*), max(study_course) FROM education_entries WHERE user_id = :u"),
-            {"u": mentor},
-        )
-        assert tuple(rows.one()) == (1, "Data Science")
-
-
-@pytest.mark.parametrize("state", ["unsubmitted", "approved", "declined"])
-async def test_education_is_writable_before_submitting_and_after_the_decision(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, state: str
-) -> None:
-    mentor, auth = await submitted(db_engine, f"frz-open-{state}")
-    await run_sql(db_engine, OPENED[state], {"u": mentor})
-
-    response = await api_client.post(
-        f"/api/v1/users/{mentor}/education", headers=auth, json={"school_name_raw": "Lagos"}
-    )
-
-    assert response.status_code == 201, response.text
-
-
-# --------------------------------------------------------------------------
-# Profile and mentor profile: only a change is refused
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("body", "fields"),
-    [
-        ({"social_linkedin": None}, ["social_linkedin"]),
-        ({"about_me": "A new bio"}, ["about_me"]),
-        (
-            {"about_me": "A new bio", "social_linkedin": "", "cover_art": "icons"},
-            ["social_linkedin", "about_me", "cover_art"],
-        ),
-    ],
-    ids=["linkedin-cleared", "about", "several"],
-)
-async def test_a_profile_write_changing_a_reviewed_field_is_refused(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, body: dict[str, str], fields: list[str]
-) -> None:
-    mentor, auth = await submitted(db_engine, f"frz-prof-{fields[-1]}-{len(fields)}")
-
-    response = await api_client.patch(f"/api/v1/users/{mentor}/profile", headers=auth, json=body)
-
-    refused(response, fields)
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        {"timezone": "Europe/London"},
-        {"primary_role": "mentee"},
-        # The stored link resent in another spelling is not a change.
-        {"social_linkedin": "linkedin.com/in/ada", "timezone": "Europe/London"},
-        # A corrected link is allowed in review (2026-10-19); only clearing is not.
-        {"social_linkedin": "linkedin.com/in/ada-lovelace"},
-        {"first_name": "Bo", "gender": "female"},
-    ],
-    ids=["timezone", "primary-role", "same-linkedin", "new-linkedin", "name"],
-)
-async def test_a_profile_write_that_leaves_reviewed_fields_alone_saves(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, body: dict[str, str]
-) -> None:
-    mentor, auth = await submitted(db_engine, f"frz-ok-{sorted(body)[0]}-{len(body)}")
-
-    response = await api_client.patch(f"/api/v1/users/{mentor}/profile", headers=auth, json=body)
-
-    assert response.status_code == 204, response.text
-
-
-async def test_a_mentor_profile_write_changing_a_reviewed_field_is_refused(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    mentor, auth = await submitted(db_engine, "frz-mp")
-    url = f"/api/v1/users/{mentor}/mentor-profile"
-    other = await _offering(db_engine, "document-preparation")
-
-    headline = await api_client.patch(url, headers=auth, json={"headline": "New"})
-    offerings = await api_client.patch(url, headers=auth, json={"offering_ids": [str(other)]})
-    country = await api_client.patch(
-        url, headers=auth, json={"primary_study_country_id": str(await _country(db_engine, "US"))}
-    )
-
-    refused(headline, ["headline"])
-    refused(offerings, ["offering_ids"])
-    refused(country, ["primary_study_country_id"])
-
-
-async def test_a_mentor_profile_write_that_leaves_reviewed_fields_alone_saves(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    mentor, auth = await submitted(db_engine, "frz-mp-ok")
-    same = await _offering(db_engine, "test-preparation")
-
-    response = await api_client.patch(
-        f"/api/v1/users/{mentor}/mentor-profile",
-        headers=auth,
-        json={
-            "requires_booking_confirmation": True,
-            "headline": "MSc Data Science · Oxford",
-            "offering_ids": [str(same)],
-        },
-    )
-
-    assert response.status_code == 200, response.text
+async def one(engine: AsyncEngine, sql: str, mentor: UUID) -> object:
+    async with engine.connect() as conn:
+        return (await conn.execute(text(sql), {"u": mentor})).scalar_one()
 
 
 async def _offering(engine: AsyncEngine, slug: str) -> UUID:
@@ -213,116 +64,114 @@ async def _country(engine: AsyncEngine, code: str) -> UUID:
         return UUID(str(found.scalar_one()))
 
 
-async def test_a_legacy_stored_link_may_be_corrected_but_not_cleared(
+# --------------------------------------------------------------------------
+# Education
+# --------------------------------------------------------------------------
+
+
+async def test_education_can_be_added_changed_and_removed_while_in_review(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Only clearing is refused (decision 273 as amended), whatever the stored
-    link's spelling: a correction of a legacy link saves, and a clear of it does not."""
-    mentor, auth = await submitted(db_engine, "frz-legacy")
-    await run_sql(
-        db_engine,
-        "UPDATE user_profiles SET social_linkedin = 'linkedin.com/in/ada/' WHERE user_id = :u",
-        {"u": mentor},
-    )
-    url = f"/api/v1/users/{mentor}/profile"
+    mentor, auth = await submitted(db_engine, "rev-edu")
+    entry = await one(db_engine, "SELECT id FROM education_entries WHERE user_id = :u", mentor)
+    base = f"/api/v1/users/{mentor}/education"
 
-    cleared = await api_client.patch(url, headers=auth, json={"social_linkedin": ""})
-    corrected = await api_client.patch(url, headers=auth, json={"social_linkedin": "ada-l"})
+    added = await api_client.post(base, headers=auth, json={"school_name_raw": "Lagos"})
+    changed = await api_client.patch(f"{base}/{entry}", headers=auth, json={"study_course": "Law"})
+    removed = await api_client.delete(f"{base}/{entry}", headers=auth)
 
-    refused(cleared, ["social_linkedin"])
-    assert corrected.status_code == 204, corrected.text
+    assert (added.status_code, changed.status_code, removed.status_code) == (201, 200, 204)
+    live = "SELECT count(*) FROM education_entries WHERE user_id = :u AND deleted_at IS NULL"
+    assert await one(db_engine, live, mentor) == 1
 
 
-@pytest.mark.parametrize("blank", ["", "   "])
-async def test_a_blank_stored_link_cleared_is_not_a_change(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, blank: str
+# --------------------------------------------------------------------------
+# Profile and mentor profile fields
+# --------------------------------------------------------------------------
+
+ABOUT = "SELECT about_me FROM user_profiles WHERE user_id = :u"
+LINKEDIN = "SELECT social_linkedin FROM user_profiles WHERE user_id = :u"
+
+
+@pytest.mark.parametrize(
+    ("body", "read", "stored"),
+    [
+        ({"headline": "New"}, "SELECT headline FROM mentor_profiles WHERE user_id = :u", "New"),
+        (
+            {"primary_study_program": "Law"},
+            "SELECT primary_study_program FROM mentor_profiles WHERE user_id = :u",
+            "Law",
+        ),
+    ],
+    ids=["headline", "programme"],
+)
+async def test_a_mentor_profile_field_saves_while_in_review(
+    request: pytest.FixtureRequest,
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    body: dict[str, str],
+    read: str,
+    stored: str,
 ) -> None:
-    """A legacy blank is no link, as a write would store it, so clearing it
-    removes nothing the reviewer has."""
-    mentor, auth = await submitted(db_engine, f"frz-blank-{len(blank)}")
-    await run_sql(
-        db_engine,
-        "UPDATE user_profiles SET social_linkedin = :b WHERE user_id = :u",
-        {"u": mentor, "b": blank},
-    )
+    mentor, auth = await submitted(db_engine, f"rev-mp-{request.node.callspec.id}")
 
     response = await api_client.patch(
-        f"/api/v1/users/{mentor}/profile", headers=auth, json={"social_linkedin": None}
-    )
-
-    assert response.status_code == 204, response.text
-
-
-async def test_a_programme_change_and_a_redraft_are_refused(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    mentor, auth = await submitted(db_engine, "frz-prog")
-
-    programme = await api_client.patch(
-        f"/api/v1/users/{mentor}/mentor-profile",
-        headers=auth,
-        json={"primary_study_program": "Law"},
-    )
-    redraft = await api_client.patch(
-        f"/api/v1/users/{mentor}/profile",
-        headers=auth,
-        json={
-            "about_me": "A drafted bio",
-            "about_me_drafted": True,
-            "about_me_prompt_version": "bio_draft-v1",
-        },
-    )
-
-    refused(programme, ["primary_study_program"])
-    refused(redraft, ["about_me"])
-
-
-async def test_stored_text_is_compared_the_way_a_write_cleans_it(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """A legacy headline with trailing space, resent trimmed, is not a change."""
-    mentor, auth = await submitted(db_engine, "frz-space")
-    await run_sql(
-        db_engine,
-        "UPDATE mentor_profiles SET headline = 'MSc Data Science · Oxford  ' WHERE user_id = :u",
-        {"u": mentor},
-    )
-
-    response = await api_client.patch(
-        f"/api/v1/users/{mentor}/mentor-profile",
-        headers=auth,
-        json={"headline": "MSc Data Science · Oxford", "requires_booking_confirmation": True},
+        f"/api/v1/users/{mentor}/mentor-profile", headers=auth, json=body
     )
 
     assert response.status_code == 200, response.text
+    assert await one(db_engine, read, mentor) == stored
 
 
-async def test_clearing_a_stored_link_that_is_not_canonical_is_still_a_change(
+async def test_help_areas_and_study_country_change_while_in_review(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """A legacy value the rule cannot read is kept as itself, so it cannot be
-    cleared out from under the reviewer."""
-    mentor, auth = await submitted(db_engine, "frz-oddlink")
-    await run_sql(
-        db_engine,
-        "UPDATE user_profiles SET social_linkedin = 'https://linkedin.test/ada' WHERE user_id = :u",
-        {"u": mentor},
-    )
+    mentor, auth = await submitted(db_engine, "rev-mp-ids")
+    other = await _offering(db_engine, "document-preparation")
+    country = await _country(db_engine, "US")
 
     response = await api_client.patch(
-        f"/api/v1/users/{mentor}/profile", headers=auth, json={"social_linkedin": None}
+        f"/api/v1/users/{mentor}/mentor-profile",
+        headers=auth,
+        json={"offering_ids": [str(other)], "primary_study_country_id": str(country)},
     )
 
-    refused(response, ["social_linkedin"])
+    assert response.status_code == 200, response.text
+    held = "SELECT service_offering_id FROM mentor_service_offerings WHERE mentor_user_id = :u"
+    assert await one(db_engine, held, mentor) == other
+    study = "SELECT primary_study_country_id FROM mentor_profiles WHERE user_id = :u"
+    assert await one(db_engine, study, mentor) == country
 
 
-async def test_an_edit_racing_a_submit_waits_for_it_and_is_refused(
+async def test_clearing_every_help_area_in_review_is_a_422_and_writes_nothing(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """**The race the lock order closes.** A submit holds the mentor row; an edit
-    started meanwhile waits on it, then sees the application submitted and is
-    refused, instead of reading "not yet submitted" and landing after."""
-    mentor, auth = await submitted(db_engine, "frz-race")
+    """Approval does not re-check the application, so the help area submit
+    asked for is kept, as an approved mentor keeps theirs (decision 292)."""
+    mentor, auth = await submitted(db_engine, "rev-mp-clear")
+    held = await _offering(db_engine, "test-preparation")
+
+    response = await api_client.patch(
+        f"/api/v1/users/{mentor}/mentor-profile",
+        headers=auth,
+        json={"offering_ids": [], "headline": "Changed"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "/offering_ids" in response.text
+    sql = "SELECT service_offering_id FROM mentor_service_offerings WHERE mentor_user_id = :u"
+    assert await one(db_engine, sql, mentor) == held
+    headline = "SELECT headline FROM mentor_profiles WHERE user_id = :u"
+    assert await one(db_engine, headline, mentor) != "Changed"
+
+
+async def test_a_clear_racing_a_submit_waits_for_it_and_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """**The race the lock order closes.** A submit holds the mentor row; a
+    clear started meanwhile waits on it, then sees the application in review,
+    instead of reading "draft" and landing after submit's help-area check."""
+    mentor, auth = await submitted(db_engine, "rev-mp-race")
     await run_sql(
         db_engine,
         "UPDATE mentor_profiles SET submitted_at = NULL WHERE user_id = :u",
@@ -333,9 +182,9 @@ async def test_an_edit_racing_a_submit_waits_for_it_and_is_refused(
         await submit.execute(
             text("SELECT 1 FROM mentor_profiles WHERE user_id = :u FOR UPDATE"), {"u": mentor}
         )
-        edit = asyncio.create_task(
+        clear = asyncio.create_task(
             api_client.patch(
-                f"/api/v1/users/{mentor}/mentor-profile", headers=auth, json={"headline": "New"}
+                f"/api/v1/users/{mentor}/mentor-profile", headers=auth, json={"offering_ids": []}
             )
         )
         await until_blocked(db_engine)
@@ -345,11 +194,113 @@ async def test_an_edit_racing_a_submit_waits_for_it_and_is_refused(
         )
         await transaction.commit()
 
-    refused(await edit, ["headline"])
+    response = await clear
+    assert response.status_code == 422, response.text
+    assert "/offering_ids" in response.text
+
+
+async def test_a_draft_may_still_clear_its_help_areas(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor, auth = await submitted(db_engine, "rev-mp-draft")
+    await run_sql(
+        db_engine,
+        "UPDATE mentor_profiles SET submitted_at = NULL WHERE user_id = :u",
+        {"u": mentor},
+    )
+
+    response = await api_client.patch(
+        f"/api/v1/users/{mentor}/mentor-profile", headers=auth, json={"offering_ids": []}
+    )
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    ("body", "read", "stored"),
+    [
+        ({"about_me": "A new bio"}, ABOUT, "A new bio"),
+        ({"social_linkedin": None}, LINKEDIN, None),
+        (
+            {"social_linkedin": "ada-lovelace"},
+            LINKEDIN,
+            "https://www.linkedin.com/in/ada-lovelace",
+        ),
+        (
+            {"cover_color": "mint"},
+            "SELECT cover_color FROM user_profiles WHERE user_id = :u",
+            "mint",
+        ),
+        ({"cover_art": "icons"}, "SELECT cover_art FROM user_profiles WHERE user_id = :u", "icons"),
+    ],
+    ids=["about", "linkedin-cleared", "linkedin-corrected", "cover-color", "cover-art"],
+)
+async def test_a_profile_field_saves_while_in_review(
+    request: pytest.FixtureRequest,
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    body: dict[str, str | None],
+    read: str,
+    stored: str | None,
+) -> None:
+    """LinkedIn included: the in-review rule that it could be corrected but not
+    removed went with the freeze."""
+    mentor, auth = await submitted(db_engine, f"rev-prof-{request.node.callspec.id}")
+
+    response = await api_client.patch(f"/api/v1/users/{mentor}/profile", headers=auth, json=body)
+
+    assert response.status_code == 204, response.text
+    assert await one(db_engine, read, mentor) == stored
+
+
+async def test_a_redrafted_bio_saves_with_its_provenance_while_in_review(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    mentor, auth = await submitted(db_engine, "rev-redraft")
+
+    response = await api_client.patch(
+        f"/api/v1/users/{mentor}/profile",
+        headers=auth,
+        json={
+            "about_me": "A drafted bio",
+            "about_me_drafted": True,
+            "about_me_prompt_version": "bio_draft-v1",
+        },
+    )
+
+    assert response.status_code == 204, response.text
+    sql = "SELECT about_me_prompt_version FROM user_profiles WHERE user_id = :u"
+    assert await one(db_engine, sql, mentor) == "bio_draft-v1"
+
+
+async def test_languages_change_while_in_review(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """An omitted proficiency still keeps what is stored; a sent one replaces it."""
+    mentor, auth = await submitted(db_engine, "rev-lang")
+    english = str(await _language(db_engine, "English"))
+    await run_sql(
+        db_engine,
+        "INSERT INTO user_languages (user_id, language_id, proficiency, is_primary) "
+        "VALUES (:u, :l, 'native', true)",
+        {"u": mentor, "l": english},
+    )
+    url = f"/api/v1/users/{mentor}/languages"
+    proficiency = "SELECT proficiency FROM user_languages WHERE user_id = :u"
+
+    kept = await api_client.put(url, headers=auth, json={"languages": [{"language_id": english}]})
+    assert kept.status_code == 204, kept.text
+    assert await one(db_engine, proficiency, mentor) == "native"
+
+    changed = await api_client.put(
+        url, headers=auth, json={"languages": [{"language_id": english, "proficiency": "fluent"}]}
+    )
+    assert changed.status_code == 204, changed.text
+    assert await one(db_engine, proficiency, mentor) == "fluent"
 
 
 # --------------------------------------------------------------------------
-# The settings page's fields (Mentor Settings PRD PR 2, owner 2026-10-19)
+# The settings page's writes (Mentor Settings PRD PR 2)
 # --------------------------------------------------------------------------
 
 Write = Callable[[httpx.AsyncClient, AsyncEngine, UUID, dict[str, str]], Awaitable[httpx.Response]]
@@ -391,19 +342,6 @@ async def _award(engine: AsyncEngine, mentor: UUID) -> UUID:
             {"u": mentor},
         )
         return UUID(str(found.scalar_one()))
-
-
-async def _guide(engine: AsyncEngine, mentor: UUID, codes: list[str]) -> list[str]:
-    """Store `codes` as the mentor's guide countries, in order; their ids as sent."""
-    ids = [str(await _country(engine, code)) for code in codes]
-    for position, country in enumerate(ids):
-        await run_sql(
-            engine,
-            "INSERT INTO mentor_guide_countries (mentor_user_id, country_id, position) "
-            "VALUES (:u, :c, :p)",
-            {"u": mentor, "c": country, "p": position},
-        )
-    return ids
 
 
 async def _upload_avatar(
@@ -486,193 +424,57 @@ async def _remove_award(
     return await client.delete(users(mentor, f"awards/{award}"), headers=auth)
 
 
-#: Every newly frozen write, and the one field its refusal names.
-FROZEN_WRITES: dict[str, tuple[Write, str]] = {
-    "avatar-upload": (_upload_avatar, "avatar"),
-    "avatar-removal": (_remove_avatar, "avatar"),
-    "avatar-focus": (_profile({"avatar_focus": {"x": 0.1, "y": 0.9}}), "avatar"),
-    "banner-upload": (_upload_banner, "banner"),
-    "banner-removal": (_remove_banner, "banner"),
-    "cover-color": (_profile({"cover_color": "mint"}), "cover_color"),
-    "cover-art": (_profile({"cover_art": "icons"}), "cover_art"),
-    "origin-country": (_origin, "origin_country_id"),
-    "languages": (_languages, "languages"),
-    "guide-countries": (_guide_countries, "guide_country_ids"),
-    "award-added": (_add_award, "awards"),
-    "award-changed": (_change_award, "awards"),
-    "award-removed": (_remove_award, "awards"),
+#: Every write the freeze refused from the settings page.
+SETTINGS_WRITES: dict[str, Write] = {
+    "avatar-upload": _upload_avatar,
+    "avatar-removal": _remove_avatar,
+    "avatar-focus": _profile({"avatar_focus": {"x": 0.1, "y": 0.9}}),
+    "banner-upload": _upload_banner,
+    "banner-removal": _remove_banner,
+    "origin-country": _origin,
+    "languages": _languages,
+    "guide-countries": _guide_countries,
+    "award-added": _add_award,
+    "award-changed": _change_award,
+    "award-removed": _remove_award,
 }
 
 
-@pytest.mark.parametrize("write", FROZEN_WRITES)
-async def test_each_settings_write_is_refused_while_in_review(
+@pytest.mark.parametrize("write", SETTINGS_WRITES)
+async def test_each_settings_write_saves_while_in_review(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, write: str
 ) -> None:
-    mentor, auth = await submitted(db_engine, f"frz-set-{write}")
-    send, field = FROZEN_WRITES[write]
+    mentor, auth = await submitted(db_engine, f"rev-set-{write}")
 
-    refused(await send(api_client, db_engine, mentor, auth), [field])
-
-
-@pytest.mark.parametrize("state", ["unsubmitted", "approved"])
-@pytest.mark.parametrize("write", FROZEN_WRITES)
-async def test_each_settings_write_saves_before_submitting_and_after_approval(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, write: str, state: str
-) -> None:
-    mentor, auth = await submitted(db_engine, f"frz-sok-{write}-{state}")
-    await run_sql(db_engine, OPENED[state], {"u": mentor})
-    send, _ = FROZEN_WRITES[write]
-
-    response = await send(api_client, db_engine, mentor, auth)
+    response = await SETTINGS_WRITES[write](api_client, db_engine, mentor, auth)
 
     assert response.is_success, response.text
 
 
 @pytest.mark.parametrize("kind", ["avatar", "banner"])
-async def test_an_upload_in_review_is_refused_and_leaves_nothing_behind(
+async def test_an_upload_in_review_is_what_the_profile_shows(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage, kind: str
 ) -> None:
-    """The bytes are stored before the check (no lock is held through storage),
-    so a refusal deletes what it stored and the profile never points at it."""
-    mentor, auth = await submitted(db_engine, f"frz-bytes-{kind}")
+    mentor, auth = await submitted(db_engine, f"rev-bytes-{kind}")
 
     response = await api_client.post(users(mentor, kind), headers=auth, files=a_photo())
 
-    refused(response, [kind])
-    assert len(fake_storage.uploads) == 1
-    assert fake_storage.objects == {}
-    assert await stored_images(db_engine, mentor) == ("https://cdn.example.test/a.png", None)
+    assert response.status_code == 200, response.text
+    avatar, banner = await stored_images(db_engine, mentor)
+    assert (avatar if kind == "avatar" else banner) == response.json()[f"{kind}_url"]
+    assert len(fake_storage.objects) == 1
 
 
-async def test_a_refused_upload_of_the_photo_already_shown_keeps_it(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
-) -> None:
-    """Objects are content-addressed, so the same file uploaded again is the
-    live photo's own object: the refusal's clean-up must not delete it."""
-    mentor, auth = await submitted(db_engine, "frz-same-photo")
-    await run_sql(db_engine, OPENED["unsubmitted"], {"u": mentor})
-    first = await api_client.post(users(mentor, "avatar"), headers=auth, files=a_photo())
-    assert first.status_code == 200, first.text
-    await run_sql(
-        db_engine,
-        "UPDATE mentor_profiles SET submitted_at = now() WHERE user_id = :u",
-        {"u": mentor},
-    )
-
-    again = await api_client.post(users(mentor, "avatar"), headers=auth, files=a_photo())
-
-    refused(again, ["avatar"])
-    assert list(fake_storage.objects) == [fake_storage.uploads[0]]
-    assert (await stored_images(db_engine, mentor))[0] == first.json()["avatar_url"]
-
-
-async def test_removing_an_image_in_review_keeps_it(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, fake_storage: FakeStorage
-) -> None:
-    mentor, auth = await submitted(db_engine, "frz-keep")
-
-    refused(await _remove_banner(api_client, db_engine, mentor, auth), ["banner"])
-    refused(await _remove_avatar(api_client, db_engine, mentor, auth), ["avatar"])
-
-    assert fake_storage.deletes == []
-    assert await stored_images(db_engine, mentor) == (
-        "https://cdn.example.test/a.png",
-        "https://cdn.example.test/b.png",
-    )
-
-
-async def test_a_cover_colour_resent_unchanged_beside_other_edits_saves(
+async def test_removing_images_in_review_clears_them(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    mentor, auth = await submitted(db_engine, "frz-cover-same")
-    await run_sql(
-        db_engine, "UPDATE user_profiles SET cover_color = 'sky' WHERE user_id = :u", {"u": mentor}
-    )
+    mentor, auth = await submitted(db_engine, "rev-clear")
 
-    response = await api_client.patch(
-        users(mentor, "profile"),
-        headers=auth,
-        json={"cover_color": "sky", "cover_art": "none", "timezone": "Europe/London"},
-    )
+    banner = await _remove_banner(api_client, db_engine, mentor, auth)
+    avatar = await _remove_avatar(api_client, db_engine, mentor, auth)
 
-    assert response.status_code == 204, response.text
-
-
-async def test_guide_countries_reordered_are_refused_and_resent_in_order_save(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    mentor, auth = await submitted(db_engine, "frz-guide-order")
-    stored = await _guide(db_engine, mentor, ["US", "CA"])
-    url = users(mentor, "mentor-profile")
-
-    reordered = await api_client.patch(url, headers=auth, json={"guide_country_ids": stored[::-1]})
-    same = await api_client.patch(
-        url,
-        headers=auth,
-        json={"guide_country_ids": stored, "requires_booking_confirmation": True},
-    )
-
-    refused(reordered, ["guide_country_ids"])
-    assert same.status_code == 200, same.text
-
-
-async def test_languages_resent_as_stored_save_and_a_new_proficiency_is_refused(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """Omitted proficiency and primary keep what is stored, so resending only the
-    ids is the same list; changing how well one is spoken is not."""
-    mentor, auth = await submitted(db_engine, "frz-lang-same")
-    english = str(await _language(db_engine, "English"))
-    await run_sql(
-        db_engine,
-        "INSERT INTO user_languages (user_id, language_id, proficiency, is_primary) "
-        "VALUES (:u, :l, 'native', true)",
-        {"u": mentor, "l": english},
-    )
-    url = users(mentor, "languages")
-
-    same = await api_client.put(url, headers=auth, json={"languages": [{"language_id": english}]})
-    changed = await api_client.put(
-        url, headers=auth, json={"languages": [{"language_id": english, "proficiency": "fluent"}]}
-    )
-
-    assert same.status_code == 204, same.text
-    refused(changed, ["languages"])
-
-
-async def test_a_corrected_linkedin_link_is_saved_in_review(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    mentor, auth = await submitted(db_engine, "frz-li-edit")
-
-    response = await api_client.patch(
-        users(mentor, "profile"), headers=auth, json={"social_linkedin": "ada-lovelace"}
-    )
-
-    assert response.status_code == 204, response.text
-    async with db_engine.connect() as conn:
-        stored = await conn.execute(
-            text("SELECT social_linkedin FROM user_profiles WHERE user_id = :u"), {"u": mentor}
-        )
-        assert stored.scalar_one() == "https://www.linkedin.com/in/ada-lovelace"
-
-
-async def test_every_link_stays_open_in_review(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine
-) -> None:
-    """`user_links` is not reviewed (decision 273 as amended): add, change and
-    delete all save while the application is in review."""
-    _, auth = await submitted(db_engine, "frz-links")
-
-    added = await api_client.post(
-        "/api/v1/me/links", headers=auth, json={"platform": "instagram", "value": "ada.l"}
-    )
-    changed = await api_client.patch(
-        f"/api/v1/me/links/{added.json()['id']}", headers=auth, json={"value": "ada.lovelace"}
-    )
-    deleted = await api_client.delete(f"/api/v1/me/links/{added.json()['id']}", headers=auth)
-
-    assert (added.status_code, changed.status_code, deleted.status_code) == (201, 200, 204)
+    assert (banner.status_code, avatar.status_code) == (204, 204)
+    assert await stored_images(db_engine, mentor) == (None, None)
 
 
 @pytest.mark.parametrize(
@@ -699,9 +501,7 @@ async def test_an_invalid_value_is_a_422_in_review_too(
     body: dict[str, object],
     pointer: str,
 ) -> None:
-    """The writer's own validation runs before the freeze, so the client gets
-    the same answer for a bad value whatever the review state."""
-    mentor, auth = await submitted(db_engine, f"frz-422-{pointer.split('/')[1]}")
+    mentor, auth = await submitted(db_engine, f"rev-422-{pointer.split('/')[1]}")
     await run_sql(
         db_engine, "UPDATE user_profiles SET avatar_url = NULL WHERE user_id = :u", {"u": mentor}
     )

@@ -21,6 +21,13 @@ released. A tag with no matching section here fails the release job.
 
 ### Changed
 
+- **A mentor can edit their whole profile while their application is in review
+  (decision 296, superseding 273).** Photo, cover, headline, About, origin,
+  study country and programme, languages, help areas, guide countries,
+  education, awards and LinkedIn (clearing it too) now save during review;
+  `409 /problems/mentor-application-in-review` is no longer returned. Clearing
+  every help area while in review is a `422` at `/offering_ids`, as it already
+  was for an approved mentor. The admin reviewer sees the profile as it is now.
 - **QStash now owns application-runtime scheduling.** The five recurring jobs
   share one `RuntimeJobs` dispatcher across signed HTTP delivery and manual CLI
   recovery. A versioned UTC manifest is reconciled by a manually dispatched
