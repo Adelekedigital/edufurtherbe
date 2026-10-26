@@ -491,6 +491,16 @@ class MentorPublicRead(BaseModel):
             "your own: when you saved `about_me` as a writing-assist suggestion."
         ),
     )
+    approved_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "**Owner only**, like `approval_status`: when your current approval "
+            "was granted, the newest approve decision. Absent too while pending "
+            "or declined, and for a mentor approved before decisions were "
+            "recorded: show *Listed* with no date."
+        ),
+    )
     setup_needed: list[Literal["session_type", "weekly_hours"]] | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -589,7 +599,7 @@ def _next_available(row: dict[str, Any]) -> dict[str, Any]:
 
 #: Published to the mentor reading their own profile, and absent — not null —
 #: for everybody else, so their presence alone means "this is you".
-OWNER_ONLY = ("approval_status", "listing_status", "about_me_drafted_at")
+OWNER_ONLY = ("approval_status", "listing_status", "about_me_drafted_at", "approved_at")
 
 
 def _owner_fields(
