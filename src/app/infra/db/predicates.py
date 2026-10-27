@@ -67,8 +67,8 @@ def has_mentor_profile(user_id: Any) -> Any:
 def application_in_review() -> list[Any]:
     """A mentor application submitted and awaiting a decision, on a live profile.
 
-    The one definition: the admin queue lists these and the freeze holds their
-    reviewed fields still (decisions 271, 273).
+    The one definition: the admin queue lists these, and they keep a help area
+    as an approved mentor does (decisions 271, 296).
     """
     return [
         MentorProfile.approval_status == ApprovalStatus.PENDING,

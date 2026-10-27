@@ -528,7 +528,7 @@ async def test_a_person_typing_during_the_call_wins(world: World) -> None:
 
 async def test_a_mentor_profile_made_during_the_call_gets_no_bio(world: World) -> None:
     """The draft is owed only to someone with no mentor profile, re-checked by
-    the save: a mentor's About is theirs, and frozen while in review."""
+    the save: a mentor's About is theirs."""
     person = await a_mentee(world.engine)
     loop = asyncio.get_running_loop()
 

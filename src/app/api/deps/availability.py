@@ -25,7 +25,7 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
-from app.infra.db.application_freeze import refuse_while_declined
+from app.infra.db.application_guards import refuse_while_declined
 from app.infra.db.availability_store import list_exceptions, list_rules
 from app.infra.db.availability_writer import (
     create_exception,

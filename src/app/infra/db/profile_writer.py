@@ -433,8 +433,8 @@ async def update_mentor_profile(
     """`approval_status`, `listing_status` and every audit column are absent from
     `MENTOR_COLUMNS`, so a mentor cannot approve or relist themselves.
 
-    **Every write takes `lock_mentor` first**, the row lock the freeze and every
-    transition take, so two replacements of one list (help areas or guide
+    **Every write takes `lock_mentor` first**, the row lock submit, the help-area
+    guard and every transition take, so two replacements of one list (help areas or guide
     countries) run one after the other rather than meeting on its unique
     constraint as a 500. It is also the existence check: no live mentor, no write.
     """
@@ -502,26 +502,10 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
 COUNTRY_FIELDS = ("origin_country_id", "current_country_id")
 
 
-async def refuse_invalid_profile(
-    session: AsyncSession, user_id: UUID, payload: dict[str, Any]
-) -> None:
-    """The profile write's own `422`s, without writing: run before the freeze,
-    so a bad value gets its `422` whatever the review state (decision 273).
-
-    The writer asks again, the crop atomically with its write; this only
-    answers first.
-    """
-    await _refuse_unknown_countries(session, payload)
-    if "avatar_focus" in payload:
-        photo = await session.scalar(
-            select(UserProfile.avatar_url).where(UserProfile.user_id == user_id)
-        )
-        if photo is None:
-            _refuse_crop_without_photo()
-
-
 async def refuse_invalid_mentor_profile(session: AsyncSession, payload: dict[str, Any]) -> None:
-    """The mentor-profile write's own `422`s, without writing; as `refuse_invalid_profile`."""
+    """The mentor-profile write's own `422`s, without writing: asked before the
+    declined and help-area guards, so a bad value is a `422` in any application
+    state. The writer asks again; this only answers first."""
     await _refuse_unknown_mentor_ids(session, payload)
 
 
@@ -646,7 +630,9 @@ def _refuse_crop_without_photo() -> NoReturn:
 # --------------------------------------------------------------------------
 
 
-async def write_languages(session: AsyncSession, user_id: UUID, rows: list[dict[str, Any]]) -> None:
+async def write_languages(
+    session: AsyncSession, user_id: UUID, entries: list[dict[str, Any]]
+) -> None:
     """Replace the user's languages wholesale.
 
     **Delete then insert, in that order and in one transaction.** Two unique
@@ -657,25 +643,22 @@ async def write_languages(session: AsyncSession, user_id: UUID, rows: list[dict[
     on education. Clearing first makes both constraints a backstop rather than
     the thing the user meets.
 
-    `rows` are already resolved (`resolved_languages` over `held_languages`):
-    the freeze reads and compares them first, so they are read and locked
-    once (decision 273).
+    An entry's omitted fields keep what is stored (`_resolved_languages`), read
+    under a row lock.
 
     Replace rather than merge, because the request carries the whole list and a
     merge could not express removal: a user unticking their last language would
     have no way to say so.
     """
+    rows = _resolved_languages(entries, await _held_languages(session, user_id))
     await session.execute(delete(UserLanguage).where(UserLanguage.user_id == user_id))
     if rows:
         await session.execute(insert(UserLanguage), [{"user_id": user_id, **row} for row in rows])
 
 
-async def held_languages(session: AsyncSession, user_id: UUID) -> dict[Any, dict[str, Any]]:
-    """The user's stored languages, locked: language id -> proficiency and primary.
-
-    What `resolved_languages` fills an omitted field from, and what the freeze
-    compares a replace against (decision 273).
-    """
+async def _held_languages(session: AsyncSession, user_id: UUID) -> dict[Any, dict[str, Any]]:
+    """The user's stored languages, locked: language id -> proficiency and primary,
+    what `_resolved_languages` fills an omitted field from."""
     return {
         row.language_id: {"proficiency": row.proficiency, "is_primary": row.is_primary}
         for row in await session.execute(
@@ -693,7 +676,7 @@ NEW_LANGUAGE: dict[str, Any] = {
 }
 
 
-def resolved_languages(
+def _resolved_languages(
     entries: list[dict[str, Any]], held: dict[Any, dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Each entry with its omitted fields filled: stored value, else the default.

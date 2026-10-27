@@ -139,8 +139,8 @@ async def test_bad_offerings_and_countries_are_named_in_one_422(
 async def test_a_mentor_in_review_holding_a_retired_offering_can_resend_their_list(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The read hides a retired offering, so the freeze compares the live ones:
-    resending what the mentor can see is not a change (decision 273)."""
+    """The read hides a retired offering, so the list shown is the live ones:
+    resending what the mentor can see saves while in review."""
     mentor = await make_applicant(db_engine, "off-review")
     async with db_engine.begin() as conn:
         held = (

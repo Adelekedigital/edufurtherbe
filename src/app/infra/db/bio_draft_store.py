@@ -44,8 +44,7 @@ async def save_bio_draft(session: AsyncSession, user_id: UUID, draft: AssistResu
 
     One statement. The row comes from `SELECT … FROM users WHERE id AND LIVE`
     and no mentor profile, so an account deleted, or turned mentor, during the
-    call writes nothing: a mentor's About is theirs, and while their application
-    is in review it is frozen (decision 273); a user with no
+    call writes nothing: a mentor's About is theirs; a user with no
     profile gets one, as the profile writer does; an existing row is updated
     only where `_unwritten` still holds. The server stamps the time.
     """

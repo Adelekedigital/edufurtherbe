@@ -24,7 +24,7 @@ from app.infra.clients.meetings import (
     require_calendar_scope,
 )
 from app.infra.clients.secrets import SealError, seal, sealed_value, unsealed_value
-from app.infra.db.application_freeze import refuse_while_declined
+from app.infra.db.application_guards import refuse_while_declined
 from app.infra.db.calendar_store import (
     active_connection,
     connect,
