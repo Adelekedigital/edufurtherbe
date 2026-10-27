@@ -212,3 +212,65 @@ async def test_replacements_arriving_together_each_land_whole(
 
     assert [a.status_code for a in answers] == [200] * len(lists), [a.text for a in answers]
     assert await _stored_countries(db_engine, user) in lists
+
+
+@pytest.mark.parametrize(
+    ("field", "table"),
+    [("country_ids", "countries"), ("need_ids", "service_offerings")],
+)
+async def test_a_fourth_is_a_422_at_the_list_and_writes_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, field: str, table: str
+) -> None:
+    """At most three of each (PRD "Frontend fixes (26 Oct)", fix 3)."""
+    user, headers = await _owner(db_engine)
+    four = await _ids(db_engine, table, 4)
+
+    refused = await _put(api_client, user, headers, {"notes": "A", field: four})
+
+    assert refused.status_code == 422, refused.text
+    assert _pointers(refused) == [f"/{field}"]
+    assert (await api_client.get(url(user, "goal"), headers=headers)).status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("field", "table"),
+    [("country_ids", "countries"), ("need_ids", "service_offerings")],
+)
+async def test_three_are_saved(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, field: str, table: str
+) -> None:
+    user, headers = await _owner(db_engine)
+    three = await _ids(db_engine, table, 3)
+
+    saved = await _put(api_client, user, headers, {field: three})
+
+    assert saved.status_code == 200, saved.text
+    if field == "country_ids":
+        assert await _stored_countries(db_engine, user) == three
+    else:
+        goal = await _goal(api_client, user, headers)
+        assert sorted(n["id"] for n in goal["needs"]) == sorted(three)
+
+
+async def test_more_than_three_already_stored_are_left_as_they_are(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The cap is on a write: saved goals with more are untouched, and a write
+    that leaves the lists alone still saves."""
+    user, headers = await _owner(db_engine)
+    five = await _ids(db_engine, "countries", 5)
+    await _put(api_client, user, headers, {"notes": "A"})
+    async with db_engine.begin() as conn:
+        for priority, country in enumerate(five, start=1):
+            await conn.execute(
+                text(
+                    "INSERT INTO mentee_goal_countries (user_id, country_id, priority) "
+                    "VALUES (:u, :c, :p)"
+                ),
+                {"u": user, "c": country, "p": priority},
+            )
+
+    saved = await _put(api_client, user, headers, {"notes": "B"})
+
+    assert saved.status_code == 200, saved.text
+    assert await _stored_countries(db_engine, user) == five

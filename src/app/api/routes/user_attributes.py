@@ -57,6 +57,7 @@ from app.api.schemas.profile import (
     MentorProfileRead,
 )
 from app.core.errors import NotFoundError
+from app.domain.goals import MAX_GOAL_COUNTRIES, MAX_GOAL_NEEDS
 
 router = APIRouter(prefix="/api/v1/users/{user_id}", tags=["users"])
 
@@ -249,7 +250,9 @@ async def remove_education(removed: DeletedEducationDep) -> None:
     description=(
         "Creates the goal or replaces it — a user has at most one, so this is a "
         "`PUT` rather than a `POST` that would append.\n\n"
-        "`country_ids` and `need_ids` are stored against the user. Omit a list "
+        "`country_ids` and `need_ids` are stored against the user, up to "
+        f"{MAX_GOAL_COUNTRIES} countries and {MAX_GOAL_NEEDS} needs: one more is a "
+        "`422` at the list and nothing is saved. Omit a list "
         "to leave it alone; send an empty one to clear it.\n\n"
         "`schools` belongs to the goal: up to ten, in your order, each "
         "`{institution_id?, school_name_raw}`. Sending it replaces the whole "

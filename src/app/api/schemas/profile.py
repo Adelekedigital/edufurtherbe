@@ -43,7 +43,13 @@ from app.domain.availability import (
     BookingWindow,
 )
 from app.domain.enums import AwardFunding, CoverArt, CoverColor, LanguageProficiency, PrimaryRole
-from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH, MAX_GOAL_SCHOOLS, SCHOOL_NAME_MAX_LENGTH
+from app.domain.goals import (
+    FIELD_OF_STUDY_MAX_LENGTH,
+    MAX_GOAL_COUNTRIES,
+    MAX_GOAL_NEEDS,
+    MAX_GOAL_SCHOOLS,
+    SCHOOL_NAME_MAX_LENGTH,
+)
 from app.domain.guide_countries import MAX_GUIDE_COUNTRIES
 from app.domain.names import split_full_name
 from app.domain.profile_text import ABOUT_ME_MAX_LENGTH, PROMPT_VERSION_MAX_LENGTH
@@ -509,17 +515,21 @@ class GoalWrite(Normalised):
     notes: str | None = Field(default=None, max_length=2000)
     country_ids: list[UUID] | None = Field(
         default=None,
+        max_length=MAX_GOAL_COUNTRIES,
         description=(
-            "`/catalog/countries` ids, highest priority first; the list replaces the saved "
-            "one. A country twice is a `422` at `/country_ids`; an id that names no "
+            f"Up to {MAX_GOAL_COUNTRIES} `/catalog/countries` ids, highest priority first; "
+            "the list replaces the saved one. One more or a country twice is a `422` at "
+            "`/country_ids`; an id that names no "
             "country is a `422` at `/country_ids/{index}`. Nothing is saved on a `422`."
         ),
     )
     need_ids: list[UUID] | None = Field(
         default=None,
+        max_length=MAX_GOAL_NEEDS,
         description=(
-            "`/catalog/service-offerings` ids; the list replaces the saved one. A need "
-            "twice is a `422` at `/need_ids`; an id that names no offering is a `422` "
+            f"Up to {MAX_GOAL_NEEDS} `/catalog/service-offerings` ids; the list replaces the "
+            "saved one. One more or a need twice is a `422` at `/need_ids`; an id that "
+            "names no offering is a `422` "
             "at `/need_ids/{index}`. Nothing is saved on a `422`."
         ),
     )
