@@ -391,7 +391,12 @@ async def moved_session(
 
     now = dt.datetime.now(dt.UTC)
     old = await end_for_move(
-        session, session_id, user["id"], now=now, refunds=_refund_policy(request)
+        session,
+        session_id,
+        user["id"],
+        now=now,
+        refunds=_refund_policy(request),
+        reason_text=payload.message,
     )
     # Booking's own gate, after the session was found to be the caller's, so
     # anyone else still gets the 404. A refusal rolls the whole move back.
@@ -403,7 +408,9 @@ async def moved_session(
             "session_type_id": old["session_type_id"],
             "starts_at": payload.starts_at,
             "topic": old["topic"],
-            "booking_message": old["booking_message"],
+            # The mentee's note about the move, which the mentor reads on the
+            # session and in its booking email; else the old note carries.
+            "booking_message": payload.message or old["booking_message"],
         },
         now=now,
         scheduler=_scheduler(request),

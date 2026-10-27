@@ -329,8 +329,10 @@ async def end_for_move(
     *,
     now: dt.datetime,
     refunds: RefundPolicy,
+    reason_text: str | None = None,
 ) -> RowMapping:
     """End the mentee's session being moved, and return it as it was (decision 300).
+    ``reason_text`` is the mentee's note about the move, kept on the event.
 
     The ending the mentee would choose themselves, read off :data:`TRANSITIONS`
     and checked as :func:`transition` checks it: a confirmed session is
@@ -397,7 +399,7 @@ async def end_for_move(
         role=SessionRole.MENTEE,
         action=action,
         reason_code=SessionReasonCode.RESCHEDULED,
-        reason_text=None,
+        reason_text=reason_text,
         release_slot=True,
         now=now,
         refunds=refunds,

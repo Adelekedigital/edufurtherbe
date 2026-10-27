@@ -417,6 +417,58 @@ async def test_an_attached_file_moves_to_the_new_session(
     assert str(attached) == moved.json()["id"]
 
 
+async def test_the_mentees_message_reaches_the_mentor_on_the_new_session(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """As the new session's note, and on the old session's event."""
+    booking = await a_booking(api_client, db_engine, "mv-note")
+
+    moved = await move(api_client, booking, booking["starts"][2], message="Clash at work, sorry")
+
+    assert moved.status_code == 201, moved.text
+    assert moved.json()["booking_message"] == "Clash at work, sorry"
+    async with db_engine.connect() as conn:
+        written = (
+            await conn.execute(
+                text(
+                    "SELECT reason_text FROM session_events WHERE session_id = :i "
+                    "AND reason_code = 'rescheduled'"
+                ),
+                {"i": booking["id"]},
+            )
+        ).scalar_one()
+    assert written == "Clash at work, sorry"
+
+
+async def test_a_blank_message_keeps_the_old_note(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    booking = await a_booking(api_client, db_engine, "mv-note-kept")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET booking_message = 'My essay draft' WHERE id = :i"),
+            {"i": booking["id"]},
+        )
+
+    moved = await move(api_client, booking, booking["starts"][2], message="   ")
+
+    assert moved.status_code == 201, moved.text
+    assert moved.json()["booking_message"] == "My essay draft"
+    assert moved.json()["topic"] == "Personal statement"
+    assert (await last_event(db_engine, booking["id"]))["reason_code"] == "rescheduled"
+    async with db_engine.connect() as conn:
+        written = (
+            await conn.execute(
+                text(
+                    "SELECT reason_text FROM session_events WHERE session_id = :i "
+                    "AND reason_code = 'rescheduled'"
+                ),
+                {"i": booking["id"]},
+            )
+        ).scalar_one()
+    assert written is None
+
+
 async def test_a_retried_move_replays_the_first_answer(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

@@ -707,10 +707,10 @@ class SessionBookingWrite(BaseModel):
     )
 
 
-class SessionMoveWrite(BaseModel):
-    """Where a mentee moves their session (decision 300). Nothing else: the
-    session type, the topic, the note and the intake all carry over from the
-    session moved. Another session type is a new booking, since its form asks
+class SessionMoveWrite(Normalised):
+    """Where a mentee moves their session (decision 300), and what they tell the
+    mentor. The session type, the topic and the intake carry over from the
+    session moved; another session type is a new booking, since its form asks
     different questions."""
 
     starts_at: AwareDatetime = Field(
@@ -718,6 +718,17 @@ class SessionMoveWrite(BaseModel):
             "The new start, a UTC instant that `/slots` currently offers for the "
             "session's own session type, exactly as for booking."
         )
+    )
+    message: str | None = Field(
+        default=None,
+        max_length=2000,
+        description=(
+            "A note to the mentor about the move. It becomes the new session's "
+            "`booking_message`, which the mentor sees on the session and in its "
+            "booking email, and the old session's `rescheduled` event's "
+            "`reason_text`. Trimmed; absent or blank keeps the old session's "
+            "`booking_message`."
+        ),
     )
 
 
