@@ -12,7 +12,7 @@ class for its timestamp columns can only see models that have been imported, so
 an omission here makes that test pass by looking at less.
 """
 
-from app.infra.db.models.admin import AdminUser
+from app.infra.db.models.admin import AdminUser, MentorAdminNote
 from app.infra.db.models.availability import (
     AvailabilityException,
     AvailabilityRule,
@@ -107,6 +107,7 @@ __all__ = [
     "MenteeGoalCountry",
     "MenteeGoalNeed",
     "MenteeGoalSchool",
+    "MentorAdminNote",
     "MentorAvailabilityChange",
     "MentorConferencingOption",
     "MentorGuideCountry",
