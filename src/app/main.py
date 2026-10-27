@@ -15,6 +15,7 @@ from app.api.request_id import HEADER as REQUEST_ID_HEADER
 from app.api.request_id import RequestIdMiddleware
 from app.api.routes import (
     admin,
+    admin_credits,
     availability,
     callbacks,
     catalogue,
@@ -548,6 +549,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(sessions.router)
     application.include_router(reviews.router)
     application.include_router(admin.router)
+    application.include_router(admin_credits.router)
     return application
 
 

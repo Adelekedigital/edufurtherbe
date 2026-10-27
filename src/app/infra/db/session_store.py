@@ -57,14 +57,15 @@ from app.infra.db.room_stays import in_room
 from app.infra.db.session_answer_rows import answer_previews
 from app.infra.db.session_stats import MENTEE, attendance_rate, attendance_sessions, canceller
 
-__all__ = ["get_session", "is_a_party", "list_session_events", "list_sessions"]
+__all__ = ["cancelled_by", "get_session", "is_a_party", "list_session_events", "list_sessions"]
 
 
-def _cancelled_by() -> Any:
+def cancelled_by() -> Any:
     """The party who cancelled, from the newest `cancelled` event, by the rule
     the dashboard counts with (`canceller`); `NULL` for anybody else and for
     any other status. The status is required too, so a row contradicting its
-    own event is read by the column it is about (decision 101). Correlated
+    own event is read by the column it is about (decision 101). The credit log
+    reads it too, to say who a refunded cancellation was by (decision 299). Correlated
     rather than joined, so a page is not multiplied; served by
     `ix_session_events_session`."""
     newest = (
@@ -104,7 +105,7 @@ _SESSION_COLUMNS = (
     Session.respond_by,
     Session.reminder_sent_at,
     Session.created_at,
-    _cancelled_by(),
+    cancelled_by(),
     # **The mentee's reliability, on the row where a mentor decides.**
     #
     # Correlated on `Session.mentee_id` rather than fetched per row, so a page

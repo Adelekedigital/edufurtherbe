@@ -15,8 +15,21 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.schemas.common import Normalised
+from app.api.schemas.user import CreditsRead
+from app.domain.credit_log import CreditEntryKind, RefundReason
+from app.domain.enums import CoverColor
 
-__all__ = ["AdminCreditGrantRead", "AdminCreditGrantWrite", "AdminGrantHistoryRead"]
+__all__ = [
+    "AdminCreditGrantRead",
+    "AdminCreditGrantWrite",
+    "AdminGrantHistoryRead",
+    "AdminMenteeCreditsRead",
+    "AdminMenteeRead",
+    "CreditEntryRead",
+    "CreditPartyRead",
+    "CreditRulesRead",
+    "EntryMenteeRead",
+]
 
 #: How many people one request may credit.
 #:
@@ -118,3 +131,105 @@ def _full_name(first: str | None, last: str | None) -> str:
     accounts, so a naive f-string renders a trailing space on every one of them.
     """
     return " ".join(part for part in (first, last) if part)
+
+
+class AdminMenteeRead(BaseModel):
+    """A mentee as the admin Credits page lists them, with the card's own credit
+    block: the same `CreditsRead` as `GET /me`, from the same reader."""
+
+    user_id: UUID
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str
+    avatar_url: str | None = None
+    cover_color: CoverColor | None = None
+    credits: CreditsRead
+
+
+class CreditPartyRead(BaseModel):
+    """A person an entry names. Both names are null when they deleted their
+    account (decision 212); the entry stays."""
+
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+class EntryMenteeRead(CreditPartyRead):
+    """Whose balance moved. The id is always there, so the log can open their panel."""
+
+    user_id: UUID
+
+
+class CreditEntryRead(BaseModel):
+    """One movement of one mentee's balance (decision 299)."""
+
+    id: UUID
+    at: datetime
+    #: Signed: `-1` spends, `+2` credits.
+    change: int
+    #: The mentee's ledger total after this entry.
+    balance_after: int
+    kind: CreditEntryKind
+    #: Why a refund was paid; null on every other kind.
+    refund_reason: RefundReason | None = None
+    mentee: EntryMenteeRead
+    #: The session's mentor, on a booking or a refund; null otherwise.
+    mentor: CreditPartyRead | None = None
+    #: Who granted it, on an `admin_grant`; null otherwise.
+    admin: CreditPartyRead | None = None
+    #: The admin's reason, on an `admin_grant`; null when they gave none.
+    note: str | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> CreditEntryRead:
+        return cls(
+            id=row["id"],
+            at=row["created_at"],
+            change=row["delta"],
+            balance_after=row["balance_after"],
+            kind=row["kind"],
+            refund_reason=row["refund_reason"],
+            mentee=EntryMenteeRead(
+                user_id=row["mentee_id"],
+                first_name=row["mentee_first_name"],
+                last_name=row["mentee_last_name"],
+            ),
+            mentor=(
+                CreditPartyRead(
+                    first_name=row["mentor_first_name"], last_name=row["mentor_last_name"]
+                )
+                if row["session_id"] is not None
+                else None
+            ),
+            admin=(
+                CreditPartyRead(
+                    first_name=row["admin_first_name"], last_name=row["admin_last_name"]
+                )
+                if row["admin_id"] is not None
+                else None
+            ),
+            note=row["note"],
+        )
+
+
+class AdminMenteeCreditsRead(BaseModel):
+    """One mentee's panel: who they are, their balance, and their newest entries."""
+
+    mentee: AdminMenteeRead
+    history: list[CreditEntryRead]
+    history_next_cursor: str | None = Field(
+        default=None,
+        description=(
+            "Pass as `cursor`, with `mentee_id`, to `GET /admin/credit-log` for older "
+            "entries. Opaque. `null` means `history` is the whole ledger."
+        ),
+    )
+
+
+class CreditRulesRead(BaseModel):
+    """The credit rules the server runs on, read-only."""
+
+    #: Credits every mentee gets once, when they finish onboarding.
+    starter: int
+    #: Credits unlocked mentees get on the 1st of each month.
+    monthly: int
