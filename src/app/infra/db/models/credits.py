@@ -312,6 +312,13 @@ class CreditTransaction(Base):
         ),
         # This user's ledger, newest first — the order a statement renders in.
         Index("ix_credit_transactions_user_created", "user_id", text("created_at DESC")),
+        # The platform-wide credit log, newest first, keyset on (created_at, id)
+        # (Admin PRD): without it every page scans and sorts the whole ledger.
+        Index(
+            "ix_credit_transactions_created",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
     )
 
 

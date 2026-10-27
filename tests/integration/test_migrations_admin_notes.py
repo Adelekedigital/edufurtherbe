@@ -110,3 +110,22 @@ def test_the_downgrade_removes_the_table(
     assert scalar(disposable_database, TABLE) is False
     command.upgrade(config, REVISION)
     assert scalar(disposable_database, TABLE) is True
+
+
+INDEX_REVISION = "4e8b2c6d1f93"
+LOG_INDEX = "SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_credit_transactions_created'"
+
+
+def test_the_credit_log_index_orders_the_whole_ledger_newest_first(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    """`4e8b2c6d1f93` (same PR): the admin credit log's keyset order, and a
+    downgrade that removes it."""
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, INDEX_REVISION)
+
+    index = scalar(disposable_database, LOG_INDEX)
+    assert index.endswith("ON public.credit_transactions USING btree (created_at DESC, id DESC)")
+
+    command.downgrade(config, REVISION)
+    assert scalar(disposable_database, LOG_INDEX) is None
