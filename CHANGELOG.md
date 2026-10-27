@@ -28,6 +28,10 @@ released. A tag with no matching section here fails the release job.
   `409 /problems/mentor-application-in-review` is no longer returned. Clearing
   every help area while in review is a `422` at `/offering_ids`, as it already
   was for an approved mentor. The admin reviewer sees the profile as it is now.
+- **A goal names at most 3 target countries and 3 help areas.** `PUT /goal`
+  with a fourth in `country_ids` or `need_ids` is a `422` at `/country_ids` or
+  `/need_ids`, and nothing is saved. Goals already holding more are left as
+  they are.
 - **QStash now owns application-runtime scheduling.** The five recurring jobs
   share one `RuntimeJobs` dispatcher across signed HTTP delivery and manual CLI
   recovery. A versioned UTC manifest is reconciled by a manually dispatched
