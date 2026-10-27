@@ -97,7 +97,8 @@ async def public_mentor(
     in the signature for that reason: FastAPI would refuse a slug at the door with
     a 422, which would tell a caller that the id they guessed was well-formed.
 
-    **`viewer` widens it to the owner and nobody else** — a mentor reads their
+    **`viewer` widens it to the owner and to a live admin** (decision 297) — a
+    mentor reads their
     own profile in any state (`mentor_is_visible_to`). The lists below are not
     widened: `session_types` is what a stranger can book, so a hidden profile
     shows none, and the mentor's own list is `/me/session-types`.

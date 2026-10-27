@@ -17,6 +17,7 @@ from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.api.schemas.user import BookingCountsRead, CreditsRead, UserProfileRead, UserRead
+from app.domain.admin_mentors import strongest_role
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
@@ -124,6 +125,7 @@ async def read_me(
     goal = attributes["goal"]
     return UserRead(
         **user,
+        admin_role=strongest_role(user["admin_roles"]),
         profile=profile,
         education=[EducationRead.from_row(row) for row in attributes["education"]],
         goal=(GoalRead.from_row(goal) if goal is not None else None),

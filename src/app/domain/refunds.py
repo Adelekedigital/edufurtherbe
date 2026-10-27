@@ -65,14 +65,14 @@ def refund_policy(settings: Settings) -> RefundPolicy:
 
 
 #: Terminal statuses for a request that never became a session.
-_NEVER_AGREED = frozenset({SessionStatus.DECLINED, SessionStatus.WITHDRAWN, SessionStatus.EXPIRED})
+NEVER_AGREED = frozenset({SessionStatus.DECLINED, SessionStatus.WITHDRAWN, SessionStatus.EXPIRED})
 
 
 def never_agreed_refund(to: SessionStatus) -> CreditReason | None:
     """The refund for a request that ended without becoming a session: always,
     whoever ended it and whenever. Needs no clock, which is why the expiry sweep
     asks this rather than :func:`transition_refund`."""
-    return CreditReason.REQUEST_UNFULFILLED if to in _NEVER_AGREED else None
+    return CreditReason.REQUEST_UNFULFILLED if to in NEVER_AGREED else None
 
 
 def transition_refund(

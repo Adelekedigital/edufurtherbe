@@ -26,14 +26,15 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, exists, or_, select
 
 from app.domain.enums import ListingStatus
+from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.availability import AvailabilityRule, SessionTypeSchedulingWindow
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE, mentor_approved
+from app.infra.db.predicates import LIVE, live_grant, mentor_approved
 
 __all__ = [
     "bookable_mentors",
@@ -112,7 +113,7 @@ def mentor_is_published() -> Any:
 
 
 def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
-    """`mentor_is_public()`, widened by one person: the mentor themself.
+    """`mentor_is_public()`, widened by the mentor themself, and by admins.
 
     **The owner sees their own profile in every state** — pending, declined,
     unlisted — because a mentor preparing a profile, or wondering why nobody
@@ -126,6 +127,12 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
     2026-09-29, amending #192). Whether they can be booked is `taking_bookings`,
     read beside the row — not a reason to hide it.
 
+    **And a live admin sees every mentor** (Admin PRD Q10, decision 297): the
+    review drawer's "View as mentee" opens an applicant's or a paused mentor's
+    profile. A live grant, read in the statement (non-negotiable #5); an admin
+    gets the public shape, never the owner's fields (`is_owner` stays the
+    mentor's alone).
+
     ``None`` is the anonymous viewer and returns `mentor_is_live()` itself, not
     an equivalent spelling, so the anonymous path cannot drift from it. Every
     caller must join `users`, for the reason `mentor_is_public` gives.
@@ -134,8 +141,13 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
         return mentor_is_live()
     return [
         *mentor_exists(),
-        or_(and_(*mentor_is_live()), User.id == viewer),
+        or_(and_(*mentor_is_live()), User.id == viewer, _is_live_admin(viewer)),
     ]
+
+
+def _is_live_admin(viewer: UUID) -> Any:
+    """``viewer`` holds an unrevoked admin grant, of any role."""
+    return exists().where(AdminUser.user_id == viewer, live_grant())
 
 
 def mentor_is_live() -> list[Any]:

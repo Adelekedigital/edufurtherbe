@@ -15,7 +15,7 @@ from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
 from app.api.schemas.profile import AwardRead, EducationRead, GoalRead, MentorProfileRead
 from app.domain.emails import normalise_email
-from app.domain.enums import CoverArt, CoverColor, CreditState, PrimaryRole
+from app.domain.enums import AdminRole, CoverArt, CoverColor, CreditState, PrimaryRole
 
 
 class NormalisedEmail(BaseModel):
@@ -237,6 +237,18 @@ class UserRead(NormalisedEmail):
     created_at: datetime
     profile: UserProfileRead | None = None
     is_admin: bool = False
+    admin_role: AdminRole | None = Field(
+        default=None,
+        description=(
+            "The caller's strongest live admin grant: `super_admin`, then "
+            "`mentor_approval`, then `limited_access`; null for everyone else. "
+            "`limited_access` reads the Mentors page, the application queue, a "
+            "mentor's history, the credit pages and the review queue, and adds "
+            "credits. It may not approve, decline, pause or resume a mentor, write "
+            "notes, choose a featured mentor, or curate institutions: those answer "
+            "`404`, as every admin route does to a grant it does not admit."
+        ),
+    )
 
     # The attributes a profile page renders, embedded so one call is enough.
     #

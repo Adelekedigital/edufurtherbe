@@ -610,3 +610,62 @@ async def cancelled(
     kind = "admin" if by == "admin" else None
     await ended_by(engine, session_id, actor, "cancelled", at=at, kind=kind)
     return session_id
+
+
+# The admin Mentors page (decision 297): a status transition, an applicant, an
+# approved mentor, and an admin token.
+
+
+async def admin_token(engine: AsyncEngine, role: str = "limited_access") -> str:
+    """A token for a fresh user holding a live ``role`` grant."""
+    auth_id = uuid4()
+    async with engine.begin() as conn:
+        user = await add_user(
+            conn, f"admin-{auth_id}@example.test", auth_id=auth_id, timezone="UTC"
+        )
+        await conn.execute(
+            text("INSERT INTO admin_users (user_id, admin_role) VALUES (:u, :r)"),
+            {"u": user, "r": role},
+        )
+    return api_token(auth_id)
+
+
+async def status_event(
+    engine: AsyncEngine,
+    mentor: UUID,
+    status_type: str,
+    *,
+    by: UUID | None,
+    reason: str | None = None,
+    days_ago: float = 0,
+) -> None:
+    """One status transition; the trigger projects it onto the profile."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_status_events "
+                "(mentor_user_id, status_type, reason, created_by, created_at) "
+                "VALUES (:m, :t, :r, :b, now() - make_interval(secs => :s))"
+            ),
+            {"m": mentor, "t": status_type, "r": reason, "b": by, "s": days_ago * 86400},
+        )
+
+
+async def applicant(engine: AsyncEngine, tag: str, *, days_waiting: float = 2) -> UUID:
+    mentor = await make_public_mentor(engine, tag, approved=False, listed=False)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE mentor_profiles SET submitted_at = now() - make_interval(secs => :s) "
+                "WHERE user_id = :m"
+            ),
+            {"m": mentor, "s": days_waiting * 86400},
+        )
+    return mentor
+
+
+async def approved(engine: AsyncEngine, tag: str) -> UUID:
+    mentor = await make_public_mentor(engine, tag, approved=False, listed=False)
+    await status_event(engine, mentor, "approved", by=None, days_ago=10)
+    await status_event(engine, mentor, "listed", by=None, days_ago=10)
+    return mentor
