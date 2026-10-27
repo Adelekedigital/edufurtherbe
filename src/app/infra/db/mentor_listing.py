@@ -44,6 +44,17 @@ def _newest_unlisting_id() -> Any:
     )
 
 
+def newest_unlisting(column: Any) -> Any:
+    """``column`` of this mentor's newest unlisting, correlated to `MentorProfile`:
+    when and why an approved mentor was taken off Explore (the admin Paused tab)."""
+    return (
+        select(column)
+        .where(MentorStatusEvent.id == _newest_unlisting_id())
+        .correlate(MentorProfile)
+        .scalar_subquery()
+    )
+
+
 def newest_unlisting_is_self() -> ColumnElement[bool]:
     """**The one definition of "the mentor took themselves off".**
 

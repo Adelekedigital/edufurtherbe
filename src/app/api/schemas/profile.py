@@ -70,6 +70,11 @@ class LookupRef(BaseModel):
     display_name: str
 
     @classmethod
+    def from_offering(cls, row: dict[str, Any]) -> LookupRef:
+        """A service offering as `offerings_for` and the goal's needs return it."""
+        return cls(id=row["id"], code=str(row["slug"]), display_name=str(row["display_name"]))
+
+    @classmethod
     def maybe(cls, id_: Any, code: Any, display_name: Any) -> LookupRef | None:
         """All three columns or none — an outer join gives nulls together."""
         if id_ is None or code is None or display_name is None:
@@ -209,10 +214,7 @@ class GoalRead(BaseModel):
                 )
                 for c in row.get("countries", [])
             ],
-            needs=[
-                LookupRef(id=n["id"], code=n["slug"], display_name=n["display_name"])
-                for n in row.get("needs", [])
-            ],
+            needs=[LookupRef.from_offering(n) for n in row.get("needs", [])],
             schools=[GoalSchoolRead.model_validate(s) for s in row.get("schools", [])],
         )
 
@@ -413,10 +415,7 @@ class MentorProfileRead(BaseModel):
             default_min_notice_minutes=row.get("default_min_notice_minutes"),
             primary_study_program=row.get("primary_study_program"),
             primary_study_country=country,
-            offerings=[
-                LookupRef(id=o["id"], code=o["slug"], display_name=o["display_name"])
-                for o in row.get("offerings", [])
-            ],
+            offerings=[LookupRef.from_offering(o) for o in row.get("offerings", [])],
             guide_countries=[LookupRef.model_validate(c) for c in row["guide_countries"]],
             paused_by_mentor=bool(row.get("paused_by_mentor")),
             return_on=row.get("return_on"),

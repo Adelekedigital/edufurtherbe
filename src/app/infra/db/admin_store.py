@@ -47,7 +47,7 @@ from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.education import EducationEntry, Institution
 from app.infra.db.models.mentoring import MenteeGoalSchool, MentorProfile
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE, application_in_review
+from app.infra.db.predicates import LIVE, application_in_review, live_grant
 
 
 def _rowcount(result: Any) -> int:
@@ -121,7 +121,7 @@ async def admins_who_can_decide(session: AsyncSession) -> tuple[UUID, ...]:
                 select(AdminUser.user_id)
                 .where(
                     AdminUser.admin_role.in_(DECIDING_ROLES),
-                    AdminUser.revoked_at.is_(None),
+                    live_grant(),
                 )
                 .distinct()
                 .order_by(AdminUser.user_id)

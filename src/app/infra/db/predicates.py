@@ -20,6 +20,7 @@ from sqlalchemy import and_, exists, func, true
 
 from app.domain.attendance import PRESENCE_REPORTING
 from app.domain.enums import ApprovalStatus
+from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
@@ -56,6 +57,14 @@ def live(user: Any) -> Any:
 #: statement that omits it is missing a *name* — something a reader and a test
 #: can both see — rather than missing a substring nobody notices.
 LIVE = live(User)
+
+
+def live_grant() -> Any:
+    """An admin grant that still stands: not revoked. The one statement of it,
+    read by the deciding-admins lookup and the profile's admin widening; the
+    `/me` lookup in `api/deps/core.CURRENT_USER` is raw SQL and spells the same
+    `revoked_at IS NULL` (pinned by a test in `test_admin_mentors.py`)."""
+    return AdminUser.revoked_at.is_(None)
 
 
 def has_mentor_profile(user_id: Any) -> Any:

@@ -18,12 +18,14 @@ from typing import Any
 from sqlalchemy import func, select
 
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
+from app.infra.db.models.reference import Country
 
 __all__ = ["top_qualification"]
 
 #: Aliased so a lateral can name its columns without colliding with any other
 #: join to the same catalogue in the outer query.
 _DEGREE_LEVEL = DegreeLevel.__table__.alias("degree_level")
+_INSTITUTION_COUNTRY = Country.__table__.alias("institution_country")
 
 
 def top_qualification(user: Any, name: str = "top_qualification") -> Any:
@@ -59,6 +61,8 @@ def top_qualification(user: Any, name: str = "top_qualification") -> Any:
             # ADR 0008 point 5: the registry is allowed to be incomplete, so what
             # the user typed is always kept and the link is opportunistic.
             func.coalesce(Institution.name, EducationEntry.school_name_raw).label("institution"),
+            # The matched institution's country; null for a school nothing matched.
+            _INSTITUTION_COUNTRY.c.display_name.label("institution_country"),
             # The entry's level itself, for mentor matching (decision 265): the
             # highest level first is exactly "the mentor's highest degree".
             _DEGREE_LEVEL.c.id.label("degree_level_id"),
@@ -67,6 +71,7 @@ def top_qualification(user: Any, name: str = "top_qualification") -> Any:
         )
         .select_from(EducationEntry)
         .outerjoin(Institution, Institution.id == EducationEntry.institution_id)
+        .outerjoin(_INSTITUTION_COUNTRY, _INSTITUTION_COUNTRY.c.id == Institution.country_id)
         .outerjoin(_DEGREE_LEVEL, _DEGREE_LEVEL.c.id == EducationEntry.degree_level_id)
         .where(
             EducationEntry.user_id == user,

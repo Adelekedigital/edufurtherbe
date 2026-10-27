@@ -19,7 +19,9 @@ their own profile and reviews in any state, which makes the profile and its
 reviews the first responses here that vary by caller — so both send
 `Vary: Authorization`, and `Cache-Control: private` whenever a token came with
 the request, errors included (`api/per_viewer.py`). `/mentors` itself is
-unchanged and still identical for everyone.
+unchanged and still identical for everyone. **And a live admin, 2026-10-26**
+(decision 297): the review drawer's "View as mentee" reads a hidden profile in
+the public shape.
 """
 
 from __future__ import annotations
@@ -156,6 +158,9 @@ async def find_mentors(page: MentorPageDep) -> MentorPage:
         "what stops them taking bookings. An unpublished profile's "
         "`session_types` is empty and its "
         "`next_available_state` is `none`: strangers can book none of it.\n\n"
+        "**And to admins.** A caller with a live admin grant also reads any "
+        "existing mentor's profile in any state, in the public shape (none of "
+        "the owner's fields), for the review screen's preview.\n\n"
         "**`handle` is an id or a slug.** The slug is the legacy public profile "
         "handle, carried so existing profile links keep working; it is nullable, "
         "and a mentor without one is reachable by id.\n\n"
@@ -222,7 +227,7 @@ async def read_public_mentor(mentor: PublicMentorDep) -> MentorPublicRead:
         "Withdrawn reviews are absent, which is the whole point of withdrawing "
         "one.\n\n"
         "A mentor reads their own reviews with a bearer token whatever state "
-        "their profile is in, as on the profile."
+        "their profile is in, as on the profile, and so does a live admin."
     ),
     responses={
         status.HTTP_404_NOT_FOUND: {

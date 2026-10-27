@@ -32,6 +32,11 @@ from app.api.deps.admin_credits import (
     MenteeCreditsDep,
     MenteeSearchDep,
 )
+from app.api.deps.admin_mentors import (
+    AdminMentorDep,
+    AdminMentorRowsDep,
+    AdminMentorsSummaryDep,
+)
 from app.api.deps.availability import (
     AvailabilityExceptionsDep,
     AvailabilityRulesDep,
@@ -178,6 +183,9 @@ __all__ = [
     "AcceptedSessionDep",
     "AdminCreditGrantDep",
     "AdminGrantHistoryDep",
+    "AdminMentorDep",
+    "AdminMentorRowsDep",
+    "AdminMentorsSummaryDep",
     "ApprovedInstitutionDep",
     "AssistedTextDep",
     "AuthoredReviewDep",

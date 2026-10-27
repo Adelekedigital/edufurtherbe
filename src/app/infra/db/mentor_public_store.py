@@ -4,18 +4,19 @@
 if the mentor is listed, *or* the viewer has a session with them, *or* the viewer
 is an admin. The middle clause is dropped by product decision: a mentee with a
 session sees *that session*, not the mentor's profile, and the sessions endpoints
-already carry the names they need. The admin clause is dropped because admins
-read the owner-facing endpoint, which names whose records they are reviewing.
+already carry the names they need. The admin clause was dropped, then came back
+on 2026-10-26 (decision 297, below).
 What remains is `mentor_is_live()` — approved and listed (#219), the set
 discovery lists — which is why this module writes no predicate of its own.
 Whether they can be booked is the `taking_bookings` column beside it.
 
 **One viewer is added back: the mentor themself** (product rule, 2026-09-27).
-`mentor_is_visible_to(viewer)` widens the public predicate by exactly the owner,
-so a pending, declined or unlisted mentor can read their own profile, and a
-`None` viewer is `mentor_is_live()` unchanged. The owner's row also carries
-`approval_status` and `listing_status`, which `is_owner` tells the schema to
-publish — to them and nobody else.
+`mentor_is_visible_to(viewer)` widens the public predicate by the owner, so a
+pending, declined or unlisted mentor can read their own profile, and a `None`
+viewer is `mentor_is_live()` unchanged. **And by a live admin** (decision 297),
+for the review drawer's preview. Only the owner's row carries `approval_status`
+and `listing_status`, which `is_owner` (`User.id == viewer`, never the admin)
+tells the schema to publish — to them and nobody else.
 
 **Reachable by id or by slug.** `users.slug` is the legacy public profile handle
 (settled decision #28), carried specifically so live profile links keep working.
@@ -128,7 +129,8 @@ def _public_profile(handle: str, viewer: UUID | None, window: BookingWindow) -> 
             latest_decision(MentorStatusEvent.created_at, MentorStatusType.APPROVED).label(
                 "approved_at"
             ),
-            # Only the owner can reach a row that is not published, and only the
+            # Only the owner and a live admin can reach a row that is not
+            # published (decision 297), and only the
             # owner's row says `true` here — the schema reads it to decide
             # whether the two statuses above are published at all.
             (User.id == viewer if viewer is not None else false()).label("is_owner"),
@@ -159,7 +161,7 @@ async def get_public_mentor(
 
     ``None`` covers every reason at once — no such user, not a mentor, unapproved,
     unlisted, a soft-deleted profile, a soft-deleted user, and a handle that is
-    nobody. ``viewer`` widens it by one person: the mentor, reading their own.
+    nobody. ``viewer`` widens it to the mentor reading their own, and to a live admin.
     Telling them apart would say which mentors exist and what state they
     are in, which is the thing a public endpoint most easily gives away.
     """
