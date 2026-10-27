@@ -15,6 +15,7 @@ from app.api.deps.calendar import _free_busy
 from app.api.deps.core import (
     CREATED,
     ENDPOINT_BOOKING,
+    ENDPOINT_MOVE,
     CurrentUserDep,
     IdempotencyKeyHeader,
     SessionDep,
@@ -35,6 +36,7 @@ from app.api.schemas.sessions import (
     SessionBookingWrite,
     SessionCancellationWrite,
     SessionDeclineWrite,
+    SessionMoveWrite,
     SessionRead,
     SessionTransitionWrite,
 )
@@ -77,6 +79,7 @@ from app.infra.db.session_writer import (
     add_meet_link,
     book_session,
     door_row,
+    end_for_move,
     on_confirmed,
     on_ended,
     record_arrival,
@@ -357,6 +360,81 @@ async def booked_session(
 
 
 BookedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(booked_session)]
+
+
+async def moved_session(
+    session_id: UUID,
+    payload: SessionMoveWrite,
+    user: CurrentUserDep,
+    session: SessionDep,
+    request: Request,
+    idempotency_key: Annotated[str, IdempotencyKeyHeader],
+) -> tuple[dict[str, Any], int, bool]:
+    """End the mentee's session and book its new time, in one transaction
+    (decision 300); a refusal from either rolls both back.
+
+    The new session is read back as booking reads it, and replayed by key as a
+    booking is. The session moved is part of the fingerprint, so one key cannot
+    replay a move of another session. The new venue is provisioned before the
+    old calendar event is released, so a failure while provisioning has
+    cancelled nobody's invite.
+    """
+    reservation = await claim_idempotency_key(
+        session,
+        key=idempotency_key,
+        user_id=user["id"],
+        endpoint=ENDPOINT_MOVE,
+        body={"session_id": str(session_id), **payload.model_dump(mode="json")},
+    )
+    if isinstance(reservation, Replayed):
+        return reservation.body, reservation.status_code, True
+
+    now = dt.datetime.now(dt.UTC)
+    old = await end_for_move(
+        session,
+        session_id,
+        user["id"],
+        now=now,
+        refunds=_refund_policy(request),
+        reason_text=payload.message,
+    )
+    # Booking's own gate, after the session was found to be the caller's, so
+    # anyone else still gets the 404. A refusal rolls the whole move back.
+    await require_finished_onboarding(session, user["id"])
+    new_id = await book_session(
+        session,
+        user["id"],
+        {
+            "session_type_id": old["session_type_id"],
+            "starts_at": payload.starts_at,
+            "topic": old["topic"],
+            # The mentee's note about the move, which the mentor reads on the
+            # session and in its booking email; else the old note carries.
+            "booking_message": payload.message or old["booking_message"],
+        },
+        now=now,
+        scheduler=_scheduler(request),
+        callback_url=_reminder_callback_url(request),
+        external_busy=_free_busy(request),
+        require_answers=False,
+        window=booking_window(_configured(request)),
+        response_window=response_window(_configured(request)),
+        moved_from={"id": session_id, "mentor_id": old["mentor_id"]},
+    )
+    await on_confirmed(session, new_id, _follow_ups(request), now=now)
+    await on_ended(session, session_id, calendar=_calendar(request))
+    row = await get_session_row(session, new_id, user["id"])
+    if row is None:  # pragma: no cover - the row was just written in this transaction
+        raise NotFoundError("no such session")
+    body = SessionRead.from_row(
+        row, opens_before=_join_lead(request), refunds=_refund_policy(request)
+    ).model_dump(mode="json")
+    await record_response(session, reservation, status_code=CREATED, body=body)
+    await session.commit()
+    return body, CREATED, False
+
+
+MovedSessionDep = Annotated[tuple[dict[str, Any], int, bool], Depends(moved_session)]
 
 
 def _scheduler(request: Request) -> SchedulerPort:

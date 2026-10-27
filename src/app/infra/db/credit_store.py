@@ -40,7 +40,7 @@ import datetime as dt
 from dataclasses import dataclass, replace
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, exists, func, or_, select
+from sqlalchemy import CTE, ColumnElement, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -57,6 +57,7 @@ from app.domain.credits import (
 from app.domain.enums import CreditReason, CreditSource, CreditState
 from app.infra.db.credit_eligibility import receives_monthly_grant
 from app.infra.db.models.credits import CreditLot, CreditTransaction
+from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
 
 __all__ = [
@@ -88,6 +89,28 @@ async def expiring_on(
         )
     )
     return int(total or 0)
+
+
+def paying_sessions(mentee_id: UUID) -> CTE:
+    """Each of this mentee's sessions, beside the session whose debit paid for it.
+
+    **The one statement of "which debit paid for a session"** (decision 300): a
+    session paid for itself, unless a move made it, in which case the first
+    session of the move chain did, since a move carries the credit rather than
+    charging again. Only a move writes `rescheduled_from_session_id`, so the
+    chain's first session holds its only debit. Columns `session_id`, `payer_id`.
+    """
+    moved = aliased(Session)
+    chain = (
+        select(Session.id.label("session_id"), Session.id.label("payer_id"))
+        .where(Session.mentee_id == mentee_id, Session.rescheduled_from_session_id.is_(None))
+        .cte("paying_sessions", recursive=True)
+    )
+    return chain.union_all(
+        select(moved.id, chain.c.payer_id).join(
+            chain, moved.rescheduled_from_session_id == chain.c.session_id
+        )
+    )
 
 
 def spendable_now(moment: dt.datetime) -> ColumnElement[bool]:
@@ -223,10 +246,14 @@ async def _buckets(
 
     grant = aliased(CreditTransaction)
     debit = aliased(CreditTransaction)
+    payers = paying_sessions(user_id)
     links = (
         await session.execute(
             select(grant.credit_lot_id, debit.credit_lot_id)
             .join(CreditLot, CreditLot.id == grant.credit_lot_id)
+            # A moved session's refund replaces the lot of the debit that paid
+            # for the move chain (decision 300).
+            .join(payers, payers.c.session_id == grant.session_id)
             .join(
                 debit,
                 and_(
@@ -235,7 +262,7 @@ async def _buckets(
                     # in depth: fk_credit_transactions_session_belongs_to_user
                     # already ties a session's ledger rows to its mentee.
                     debit.user_id == user_id,
-                    debit.session_id == grant.session_id,
+                    debit.session_id == payers.c.payer_id,
                     debit.reason == CreditReason.SESSION_BOOKED,
                 ),
             )

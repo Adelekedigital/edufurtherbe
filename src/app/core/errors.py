@@ -239,6 +239,11 @@ class BookingLimitReachedError(ConflictError):
     """The mentee already holds the most live sessions allowed at once (#342)."""
 
 
+class MoveTooLateError(ConflictError):
+    """A confirmed session is inside the mentee's refund window, so it can no
+    longer be moved, only cancelled (decision 300)."""
+
+
 class RateLimitedError(AppError):
     """The caller has done this too often recently (#281).
 

@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import InsufficientCreditError
 from app.domain.credits import CreditLadder, expiry_for, refund_expiry
 from app.domain.enums import CreditReason, CreditSource
-from app.infra.db.credit_store import spendable_now
+from app.infra.db.credit_store import paying_sessions, spendable_now
 from app.infra.db.models.credits import _REFUND_PREDICATE, CreditLot, CreditTransaction
 
 __all__ = ["grant", "grant_starter", "refund_credit", "spend_credit"]
@@ -286,19 +286,24 @@ async def refund_credit(
     as `None` rather than raising, since a second attempt is an ordinary
     outcome here rather than an error.
 
-    The original lot is found through the debit that paid for this session. If
-    there is no debit — a session booked before credits existed, or one an
-    admin created — there is nothing to refund and this is a no-op.
+    The original lot is found through the debit that paid for this session, or,
+    for a moved session, for the one it was moved from (decision 300): a move
+    carries the credit rather than refunding and charging again, so the debit
+    names the first session of the chain. If there is no debit — a session
+    booked before credits existed, or one an admin created — there is nothing
+    to refund and this is a no-op.
     """
+    payers = paying_sessions(user_id)
     original = (
         await session.execute(
-            text(
-                "SELECT l.expires_at FROM credit_transactions t "
-                "JOIN credit_lots l ON l.id = t.credit_lot_id "
-                "WHERE t.session_id = :session AND t.reason = :booked "
-                "LIMIT 1"
-            ),
-            {"session": session_id, "booked": CreditReason.SESSION_BOOKED.value},
+            select(CreditLot.expires_at)
+            .join(CreditTransaction, CreditTransaction.credit_lot_id == CreditLot.id)
+            .join(payers, payers.c.payer_id == CreditTransaction.session_id)
+            .where(
+                payers.c.session_id == session_id,
+                CreditTransaction.reason == CreditReason.SESSION_BOOKED,
+            )
+            .limit(1)
         )
     ).one_or_none()
 

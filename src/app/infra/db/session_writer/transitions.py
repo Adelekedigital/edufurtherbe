@@ -12,7 +12,12 @@ from uuid import UUID
 from sqlalchemy import RowMapping, and_, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import (
+    ConflictError,
+    MoveTooLateError,
+    NotFoundError,
+    ValidationError,
+)
 from app.domain.enums import (
     ActorType,
     SessionReasonCode,
@@ -107,68 +112,28 @@ async def transition(
     caller says which it is.
     """
     rule = TRANSITIONS[action]
-
-    row = (
-        (
-            await session.execute(
-                select(
-                    Session.status,
-                    Session.starts_at,
-                    Session.mentor_id,
-                    Session.mentee_id,
-                    Session.duration_minutes,
-                    # **The mentor's own zone, not the rule's.** This block
-                    # appears on their calendar beside the ones they wrote by
-                    # hand, so it is stored the way those are.
-                    User.timezone,
-                    # The deadline, from the one clause the sweep and `/me`
-                    # also read — so a request the badge no longer counts is
-                    # one the mentor can no longer answer.
-                    and_(*lapsed_request(now)).label("lapsed"),
-                )
-                .join(User, User.id == Session.mentor_id)
-                .where(Session.id == session_id)
-                # **Locked**, so a transition and an account deletion ending
-                # the same session run one after the other: the second reads
-                # the status the first wrote and is refused, rather than
-                # overwriting it (DELETE /me review).
-                .with_for_update(of=Session)
-                # **Scoped in the query on the write path**, not checked after
-                # fetching. The roles this action permits are spread into the
-                # `WHERE` rather than compared afterwards, so a mentee reaching
-                # a mentor's action selects nothing at all.
-                .where(
-                    or_(
-                        *(
-                            Session.mentor_id == actor_id
-                            if role is SessionRole.MENTOR
-                            else Session.mentee_id == actor_id
-                            for role in rule.by
-                        )
-                    )
-                )
+    # **Scoped in the query on the write path**, not checked after fetching.
+    # The roles this action permits are spread into the `WHERE` rather than
+    # compared afterwards, so a mentee reaching a mentor's action selects
+    # nothing at all.
+    row = await _locked_session(
+        session,
+        session_id,
+        or_(
+            *(
+                Session.mentor_id == actor_id
+                if role is SessionRole.MENTOR
+                else Session.mentee_id == actor_id
+                for role in rule.by
             )
-        )
-        .mappings()
-        .one_or_none()
+        ),
+        now=now,
     )
     if row is None:
         raise NotFoundError("no such session")
 
     role = role_of(mentor_id=row["mentor_id"], actor_id=actor_id)
-    if SessionStatus(row["status"]) not in rule.allowed_from:
-        raise ConflictError(f"a {row['status']} session cannot be {_past(action)}")
-    if role is SessionRole.MENTOR and row["lapsed"]:
-        # Past `respond_by` the request is expired in all but the stored word,
-        # which the deadline callback writes seconds later (decision 245, the
-        # hourly sweep as backstop); answering it now would confirm an hour the
-        # mentee was told had lapsed.
-        raise ConflictError(
-            f"this request passed its answer deadline and cannot be {_past(action)}"
-        )
-    if rule.honours_cutoff and too_late_to_cancel(row["starts_at"], now):
-        minutes = int(CANCELLATION_CUTOFF.total_seconds() // 60)
-        raise ConflictError(f"a session cannot be cancelled within {minutes} minutes of its start")
+    _refuse_out_of_turn(row, action, role, now=now, verb=_past(action))
 
     reason_code = payload.get("reason_code")
     if reason_code is None:
@@ -203,6 +168,67 @@ async def transition(
     )
 
 
+async def _locked_session(
+    session: AsyncSession, session_id: UUID, scope: Any, *, now: dt.datetime
+) -> RowMapping | None:
+    """The session as a transition reads it, locked, or ``None`` outside ``scope``.
+
+    **Locked**, so a transition and an account deletion ending the same session
+    run one after the other: the second reads the status the first wrote and is
+    refused, rather than overwriting it (DELETE /me review). ``scope`` names who
+    may act, in the query.
+    """
+    return (
+        (
+            await session.execute(
+                select(
+                    Session.status,
+                    Session.starts_at,
+                    Session.mentor_id,
+                    Session.mentee_id,
+                    Session.duration_minutes,
+                    Session.session_type_id,
+                    Session.topic,
+                    Session.booking_message,
+                    # **The mentor's own zone, not the rule's.** A kept block
+                    # appears on their calendar beside the ones they wrote by
+                    # hand, so it is stored the way those are.
+                    User.timezone,
+                    # The deadline, from the one clause the sweep and `/me`
+                    # also read — so a request the badge no longer counts is
+                    # one the mentor can no longer answer.
+                    and_(*lapsed_request(now)).label("lapsed"),
+                )
+                .join(User, User.id == Session.mentor_id)
+                .where(Session.id == session_id, scope)
+                .with_for_update(of=Session)
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+
+
+def _refuse_out_of_turn(
+    row: RowMapping, action: str, role: SessionRole, *, now: dt.datetime, verb: str
+) -> None:
+    """Raise :class:`ConflictError` when ``action`` may not be taken now: the
+    wrong state, a request past its deadline for the mentor, or inside the
+    cancellation cutoff. ``verb`` is how the refusal names what was refused."""
+    rule = TRANSITIONS[action]
+    if SessionStatus(row["status"]) not in rule.allowed_from:
+        raise ConflictError(f"a {row['status']} session cannot be {verb}")
+    if role is SessionRole.MENTOR and row["lapsed"]:
+        # Past `respond_by` the request is expired in all but the stored word,
+        # which the deadline callback writes seconds later (decision 245, the
+        # hourly sweep as backstop); answering it now would confirm an hour the
+        # mentee was told had lapsed.
+        raise ConflictError(f"this request passed its answer deadline and cannot be {verb}")
+    if rule.honours_cutoff and too_late_to_cancel(row["starts_at"], now):
+        minutes = int(CANCELLATION_CUTOFF.total_seconds() // 60)
+        raise ConflictError(f"a session cannot be {verb} within {minutes} minutes of its start")
+
+
 async def _end(
     session: AsyncSession,
     session_id: UUID,
@@ -217,6 +243,7 @@ async def _end(
     now: dt.datetime,
     refunds: RefundPolicy,
     notify: bool,
+    refund: bool = True,
 ) -> None:
     """**What every transition does once it is allowed**: the status, the
     mentor's kept hour, the event, the refund and the message. Shared by the
@@ -263,7 +290,8 @@ async def _end(
     owed = transition_refund(
         rule.to, actor=role, starts_at=row["starts_at"], now=now, policy=refunds
     )
-    if owed is not None:
+    # A move carries the credit to the new session instead (decision 300).
+    if refund and owed is not None:
         await refund_credit(session, row["mentee_id"], session_id, reason=owed, now=now)
 
     # **The party who did not act.** `cancel` is the only action either of them
@@ -292,6 +320,93 @@ async def _end(
             "cancel_initiator": str(role),
         },
     )
+
+
+async def end_for_move(
+    session: AsyncSession,
+    session_id: UUID,
+    mentee_id: UUID,
+    *,
+    now: dt.datetime,
+    refunds: RefundPolicy,
+    reason_text: str | None = None,
+) -> RowMapping:
+    """End the mentee's session being moved, and return it as it was (decision 300).
+    ``reason_text`` is the mentee's note about the move, kept on the event.
+
+    The ending the mentee would choose themselves, read off :data:`TRANSITIONS`
+    and checked as :func:`transition` checks it: a confirmed session is
+    cancelled, a request still waiting is withdrawn. **Only while that ending
+    would refund the credit**, which a withdrawal always does and a cancellation
+    does with the deployment's notice: the credit carries to the new session, so
+    a move must never turn a forfeited credit into a refundable one. Inside the
+    window it is :class:`MoveTooLateError`; cancelling is still open.
+
+    Coded `rescheduled`, with no refund and no message: the credit and the news
+    go to the new session, which the caller books in this same transaction. The
+    mentor's hour is freed as on a mentee cancel.
+
+    **The parties are key-share locked before the session row**, the order
+    account deletion's `FOR UPDATE` on the account meets, so the two queue
+    rather than deadlock. Scoped to the mentee in the query: anyone else, the
+    mentor included, finds no session. Does not commit.
+    """
+    mine = Session.mentee_id == mentee_id
+    mentor_id = await session.scalar(
+        select(Session.mentor_id).where(Session.id == session_id, mine)
+    )
+    if mentor_id is None:
+        raise NotFoundError("no such session")
+    await session.execute(
+        select(User.id)
+        .where(User.id.in_((mentor_id, mentee_id)))
+        .order_by(User.id)
+        .with_for_update(read=True, key_share=True)
+    )
+    row = await _locked_session(session, session_id, mine, now=now)
+    if row is None:  # pragma: no cover - read above, and sessions are never deleted
+        raise NotFoundError("no such session")
+    try:
+        action = ending_for(SessionStatus(row["status"]), SessionRole.MENTEE)
+    except LookupError:
+        raise ConflictError(f"a {row['status']} session cannot be moved") from None
+    # `transition`'s other checks cannot refuse here: `ending_for` already
+    # picked an action allowed from this status, the deadline binds only the
+    # mentor, and the refund window below (at least an hour, by configuration)
+    # always covers the ten-minute cutoff.
+    if row["session_type_id"] is None:
+        # A migrated session names no offering, so there is no grid to move on.
+        raise ConflictError("this session has no session type to move within; book a new time")
+    if (
+        transition_refund(
+            TRANSITIONS[action].to,
+            actor=SessionRole.MENTEE,
+            starts_at=row["starts_at"],
+            now=now,
+            policy=refunds,
+        )
+        is None
+    ):
+        hours = int(refunds.mentee_cancel_notice.total_seconds() // 3600)
+        raise MoveTooLateError(
+            f"a session cannot be moved within {hours} hours of its start; cancel it instead"
+        )
+    await _end(
+        session,
+        session_id,
+        row,
+        actor_id=mentee_id,
+        role=SessionRole.MENTEE,
+        action=action,
+        reason_code=SessionReasonCode.RESCHEDULED,
+        reason_text=reason_text,
+        release_slot=True,
+        now=now,
+        refunds=refunds,
+        notify=False,
+        refund=False,
+    )
+    return row
 
 
 def _past(action: str) -> str:

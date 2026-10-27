@@ -17,7 +17,17 @@ from __future__ import annotations
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Select, delete, exists, func, insert, select, update
+from sqlalchemy import (
+    CursorResult,
+    Select,
+    delete,
+    exists,
+    func,
+    insert,
+    literal,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, ValidationError
@@ -25,6 +35,7 @@ from app.domain.enums import IntakeStatus, QuestionOptionsSource, QuestionType
 from app.domain.intake import MAX_QUESTIONS, is_required_now
 from app.infra.db.models.intake import (
     IntakeAnswer,
+    IntakeFile,
     IntakeFormQuestion,
     IntakeSubmission,
     SessionTypeQuestion,
@@ -558,3 +569,72 @@ async def record_answers(
         else:
             rows.append({**base, "answer_text": answer["text"]})
     await session.execute(insert(IntakeAnswer), rows)
+
+
+async def carry_intake(
+    session: AsyncSession, *, from_session_id: UUID, to_session_id: UUID
+) -> None:
+    """Copy a moved session's form and answers onto the session it became, and
+    attach its files there (decision 300). Does not commit.
+
+    **Copied, not re-checked**: the answers are what the mentee gave, each row
+    keeping its own wording, so a form edited since does not ask them again.
+    The old session keeps its rows, so its history still reads whole; each file
+    moves to the new session, whose mentor is the same person.
+    """
+    old = (
+        await session.execute(
+            select(IntakeSubmission.id, IntakeSubmission.mentee_id, IntakeSubmission.status).where(
+                IntakeSubmission.session_id == from_session_id
+            )
+        )
+    ).one_or_none()
+    if old is None:
+        return
+    new_id = (
+        await session.execute(
+            insert(IntakeSubmission)
+            .from_select(
+                ["session_id", "mentee_id", "status", "submitted_at"],
+                select(
+                    literal(to_session_id),
+                    IntakeSubmission.mentee_id,
+                    IntakeSubmission.status,
+                    IntakeSubmission.submitted_at,
+                ).where(IntakeSubmission.id == old.id),
+            )
+            .returning(IntakeSubmission.id)
+        )
+    ).scalar_one()
+    asked = ["question_id", "question_text", "question_type", "is_required", "sort_order"]
+    await session.execute(
+        insert(IntakeFormQuestion).from_select(
+            ["submission_id", *asked],
+            select(literal(new_id), *(getattr(IntakeFormQuestion, c) for c in asked)).where(
+                IntakeFormQuestion.submission_id == old.id
+            ),
+        )
+    )
+    given = [
+        "question_id",
+        "answer_text",
+        "file_storage_key",
+        "selected_option_id",
+        "selected_offering_id",
+        "question_text",
+        "option_text",
+        "answered_at",
+    ]
+    await session.execute(
+        insert(IntakeAnswer).from_select(
+            ["submission_id", *given],
+            select(literal(new_id), *(getattr(IntakeAnswer, c) for c in given)).where(
+                IntakeAnswer.submission_id == old.id
+            ),
+        )
+    )
+    await session.execute(
+        update(IntakeFile)
+        .where(IntakeFile.session_id == from_session_id)
+        .values(session_id=to_session_id)
+    )

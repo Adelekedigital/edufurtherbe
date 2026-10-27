@@ -448,6 +448,9 @@ def get_storage() -> SupabaseStorage:
 
 ENDPOINT_BOOKING = "POST /api/v1/sessions"
 
+#: Moving a session books one too, so it has its own fingerprint (decision 300).
+ENDPOINT_MOVE = "POST /api/v1/sessions/{session_id}/move"
+
 #: The second endpoint with an idempotency key, and the second that moves
 #: something like money. Kept beside the first so the two fingerprints are
 #: obviously distinct — a shared endpoint string would let a booking key replay

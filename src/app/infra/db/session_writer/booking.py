@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -72,7 +73,7 @@ from app.infra.db.booking_rules import (
 from app.infra.db.credit_writer import spend_credit
 from app.infra.db.holds import holds_against, lock_mentor_slots, open_offer, takeable
 from app.infra.db.intake_file_store import link_files, usable_file_ids
-from app.infra.db.intake_store import questions_by_type, record_answers
+from app.infra.db.intake_store import carry_intake, questions_by_type, record_answers
 from app.infra.db.mentee_limits import check_mentee_limits
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import (
@@ -182,57 +183,17 @@ async def _offering(
     return dict(row) if row else None
 
 
-async def book_session(
+async def _checked_answers(
     session: AsyncSession,
     mentee_id: UUID,
     payload: dict[str, Any],
     *,
-    now: dt.datetime,
-    scheduler: SchedulerPort | None = None,
-    callback_url: str | None = None,
-    external_busy: Any = None,
     require_answers: bool,
-    window: BookingWindow,
-    response_window: dt.timedelta,
-) -> UUID:
-    """Book ``starts_at`` on an offering, and return the new session's id.
-
-    Raises :class:`NotFoundError` when the offering is not publicly bookable —
-    six reasons, one answer, the same conflation ``/slots`` makes.
-    :class:`ValidationError` when the instant is not one the mentor offers, or
-    when the mentee is the mentor. :class:`ConflictError` when the mentor was
-    booked into that hour between the check and the write.
-
-    **Does not commit.** The caller owns the transaction, because the
-    idempotency reservation and this row are one unit — see the module
-    docstring.
-
-    ``external_busy`` is handed straight to :func:`list_slots` and is why the
-    mentor's own calendar is checked **inside the booking transaction** rather
-    than only when the grid was rendered. Google free/busy is eventually
-    consistent, so a slot list built seconds ago can miss a conflict; asking
-    again here is the last look before the write. It costs one request on a path
-    that already makes several, and it needs no second code path because
-    legality was already asked of `list_slots` rather than re-derived.
-    """
-    starts_at: dt.datetime = payload["starts_at"]
-    mentor_id = await _whose(session, payload["session_type_id"])
-    offering = (
-        await _offering(session, payload["session_type_id"], mentor_id) if mentor_id else None
-    )
-    if offering is None or mentor_id is None:
-        raise NotFoundError("no such bookable session type")
-
-    if mentor_id == mentee_id:
-        # `no_self_booking` would catch this, and a CHECK violation is a 500.
-        # Refused here so the mentor who is also a mentee gets told why — dual
-        # roles are free by design, so this is a reachable mistake rather than a
-        # malformed request.
-        raise ValidationError("you cannot book your own session type")
-
-    # **The answers, checked before anything is written** (#207), against this
-    # offering's own live form — which is what keeps a question or option id
-    # from another offering out of this booking.
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[UUID]]:
+    """The booking's answers, its offering's live form and the files answered
+    with, or :class:`ValidationError` naming each problem (#207). Checked
+    against this offering's own form, which keeps a question or option id from
+    another offering out of the booking."""
     answers: list[dict[str, Any]] = payload.get("answers") or []
     form = (await questions_by_type(session, [payload["session_type_id"]])).get(
         payload["session_type_id"], []
@@ -265,6 +226,79 @@ async def book_session(
         raise ValidationError(
             "; ".join(message for _, message in problems), field_errors=tuple(problems)
         )
+    return answers, form, file_ids
+
+
+async def book_session(
+    session: AsyncSession,
+    mentee_id: UUID,
+    payload: dict[str, Any],
+    *,
+    now: dt.datetime,
+    scheduler: SchedulerPort | None = None,
+    callback_url: str | None = None,
+    external_busy: Any = None,
+    require_answers: bool,
+    window: BookingWindow,
+    response_window: dt.timedelta,
+    moved_from: Mapping[str, Any] | None = None,
+) -> UUID:
+    """Book ``starts_at`` on an offering, and return the new session's id.
+
+    Raises :class:`NotFoundError` when the offering is not publicly bookable —
+    six reasons, one answer, the same conflation ``/slots`` makes.
+    :class:`ValidationError` when the instant is not one the mentor offers, or
+    when the mentee is the mentor. :class:`ConflictError` when the mentor was
+    booked into that hour between the check and the write.
+
+    **Does not commit.** The caller owns the transaction, because the
+    idempotency reservation and this row are one unit — see the module
+    docstring.
+
+    ``external_busy`` is handed straight to :func:`list_slots` and is why the
+    mentor's own calendar is checked **inside the booking transaction** rather
+    than only when the grid was rendered. Google free/busy is eventually
+    consistent, so a slot list built seconds ago can miss a conflict; asking
+    again here is the last look before the write. It costs one request on a path
+    that already makes several, and it needs no second code path because
+    legality was already asked of `list_slots` rather than re-derived.
+
+    ``moved_from`` is the session a move just ended in this transaction
+    (decision 300): its ``id`` and ``mentor_id``. The new session
+    must be with the same mentor; it takes no credit, since the one that paid
+    for the old session carries over; its intake is the old one's, copied
+    rather than asked again; and the news is the one booked or requested message.
+    """
+    starts_at: dt.datetime = payload["starts_at"]
+    mentor_id = await _whose(session, payload["session_type_id"])
+    offering = (
+        await _offering(session, payload["session_type_id"], mentor_id) if mentor_id else None
+    )
+    if offering is None or mentor_id is None:
+        raise NotFoundError("no such bookable session type")
+    # After the 404, so an offering nobody may book is not told apart by this.
+    if moved_from is not None and mentor_id != moved_from["mentor_id"]:
+        raise ValidationError(
+            "a session moves to another time with the same mentor",
+            field_errors=(("/session_type_id", "Choose one of this mentor's session types."),),
+        )
+
+    if mentor_id == mentee_id:
+        # `no_self_booking` would catch this, and a CHECK violation is a 500.
+        # Refused here so the mentor who is also a mentee gets told why — dual
+        # roles are free by design, so this is a reachable mistake rather than a
+        # malformed request.
+        raise ValidationError("you cannot book your own session type")
+
+    # **The answers, checked before anything is written** (#207), against this
+    # offering's own live form — which is what keeps a question or option id
+    # from another offering out of this booking.
+    # A move asks nothing: its intake is the old session's (decision 300).
+    answers, form, file_ids = (
+        ([], [], [])
+        if moved_from is not None
+        else await _checked_answers(session, mentee_id, payload, require_answers=require_answers)
+    )
 
     # **A time offered to this mentee** (#339), read before the grid so its notice
     # floor is measured from when it was offered: a slot valid then stays
@@ -416,6 +450,7 @@ async def book_session(
                     duration_minutes=duration,
                     topic=payload.get("topic"),
                     booking_message=payload.get("booking_message"),
+                    rescheduled_from_session_id=moved_from["id"] if moved_from else None,
                 )
                 .returning(Session.id)
             )
@@ -445,7 +480,10 @@ async def book_session(
     # balance, so two bookings arriving together serialise rather than both
     # passing a check-time-of-use test. A double-click cannot buy two sessions
     # with one credit.
-    await spend_credit(session, mentee_id, session_id, now=now)
+    # A move spends nothing: the old session's credit pays for this one, and a
+    # refund finds it through `rescheduled_from_session_id` (decision 300).
+    if moved_from is None:
+        await spend_credit(session, mentee_id, session_id, now=now)
 
     # **A suggested time, taken up** (#339): every offer of it to this mentee is
     # spent by the booking it became, in the same transaction, so none can be
@@ -477,16 +515,19 @@ async def book_session(
     # both states nothing should be able to reach.
     # A file answer's upload is linked here, and the link is the guard: a file
     # another booking took since the check above refuses this one whole.
-    keys = await link_files(
-        session, session_id=session_id, uploader_id=mentee_id, file_ids=file_ids
-    )
-    answers = [
-        a | {"file_storage_key": keys[a["file_id"]]} if a.get("file_id") is not None else a
-        for a in answers
-    ]
-    await record_answers(
-        session, session_id=session_id, mentee_id=mentee_id, answers=answers, form=form
-    )
+    if moved_from is not None:
+        await carry_intake(session, from_session_id=moved_from["id"], to_session_id=session_id)
+    else:
+        keys = await link_files(
+            session, session_id=session_id, uploader_id=mentee_id, file_ids=file_ids
+        )
+        answers = [
+            a | {"file_storage_key": keys[a["file_id"]]} if a.get("file_id") is not None else a
+            for a in answers
+        ]
+        await record_answers(
+            session, session_id=session_id, mentee_id=mentee_id, answers=answers, form=form
+        )
 
     # **The participant rows, in the same transaction as the session**, which
     # is what `SessionParticipant`'s own docstring promises: written together,
@@ -511,6 +552,8 @@ async def book_session(
     # looking at a confirmation screen, so the mentor is the one learning
     # something — and a request that waits is the mentor's to answer. Both are
     # ADR 0025's rule rather than two decisions.
+    # A move sends this one message too, and nothing about the session it
+    # ended (decision 300).
     booked = (
         Notification.SESSION_REQUESTED
         if status is SessionStatus.PENDING_MENTOR_APPROVAL

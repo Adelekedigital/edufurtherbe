@@ -36,6 +36,7 @@ from app.api.deps import (
     DeclinedSessionDep,
     JoinedSessionDep,
     JoinLeadDep,
+    MovedSessionDep,
     RefundPolicyDep,
     RemindedSessionDep,
     SentMissedReasonDep,
@@ -284,6 +285,41 @@ BOOKING_RESPONSES: dict[int | str, dict[str, str]] = {
     },
 }
 
+#: The move's own responses (decision 300). **Not `BOOKING_RESPONSES`**: a move
+#: spends no credit, so it can never answer `/problems/insufficient-credit`, and
+#: its `404` is about the session moved rather than an offering.
+MOVE_RESPONSES: dict[int | str, dict[str, str]] = {
+    status.HTTP_401_UNAUTHORIZED: BOOKING_RESPONSES[status.HTTP_401_UNAUTHORIZED],
+    status.HTTP_404_NOT_FOUND: {
+        "description": (
+            "No such session, or you are not its mentee. The mentor gets this "
+            "too: moving is the mentee's action."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "Nothing changed; the old session is as it was.\n\n"
+            "- `/problems/move-too-late`: a confirmed session past its "
+            "`refund_until`. It can only be cancelled.\n"
+            "- The session is not live (already ended), has no session type (a "
+            "migrated session), the time was taken while you were moving, or a "
+            "request with this `Idempotency-Key` is still in flight.\n"
+            "- `/problems/booking-needs-onboarding`, `/problems/booking-overlap`, "
+            "`/problems/booking-with-mentor-exists` and "
+            "`/problems/booking-limit-reached`, as for booking.\n\n"
+            "Never `/problems/insufficient-credit`: the credit that paid for the "
+            "old session pays for the new one."
+        )
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": (
+            "The body failed validation (`message` over 2000 characters), the "
+            "instant is not one the session's offering offers now, or this "
+            "`Idempotency-Key` already stands for a different request."
+        )
+    },
+}
+
 #: Stripe's header, and the name is borrowed rather than invented so a client
 #: library that already understands one idempotent API understands this one.
 REPLAYED_HEADER = "Idempotent-Replayed"
@@ -355,6 +391,53 @@ async def book(booked: BookedSessionDep, response: Response) -> SessionRead:
     # **Set on a replay too.** The header names where the session is, and a retry
     # that replayed the original answer is pointing at the same one — withholding
     # it would make the second response less useful than the first for no reason.
+    response.headers["Location"] = f"/api/v1/sessions/{body['id']}"
+    return SessionRead.model_validate(body)
+
+
+@router.post(
+    "/sessions/{session_id}/move",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SessionRead,
+    summary="Move your session to another time",
+    description=(
+        "The mentee moves their session in one call (decision 300): the old one "
+        "ends and the new time is booked in **one transaction**, so any refusal "
+        "leaves the old session exactly as it was.\n\n"
+        "- A `confirmed` session ends `cancelled`, and moves **only until its "
+        "`refund_until`**, while cancelling would still refund the credit; after "
+        "that it is `409` `/problems/move-too-late` and can only be cancelled. "
+        "A `pending_mentor_approval` one ends `withdrawn` and can always move. "
+        "Its history says `rescheduled`.\n"
+        "- **The session type stays the session's own**; another type is a new "
+        "booking, since its form asks different questions.\n"
+        "- **The new time is booked as `POST /sessions` books it**: it must be a "
+        "slot `/slots` offers, and the mentor's confirmation setting decides "
+        "whether it is `confirmed` or `pending_mentor_approval`. The old time is "
+        "released either way, never held.\n"
+        "- **The credit moves**: no refund, no second charge, so a move works at "
+        "a zero balance. A later refund of the new session pays it back once.\n"
+        "- **The intake moves**: the answers and files carry over; send none.\n"
+        "- **One email**, the one booking sends: `session_booked`, or "
+        "`session_requested` when the mentor must answer. Nothing is sent about "
+        "the old session, and nothing about credits.\n\n"
+        "`Idempotency-Key` is required, as for booking; a retry replays the "
+        f"first answer with `{REPLAYED_HEADER}: true`.\n\n"
+        "Refusals: `404` not your session as its mentee; `409` it is not live, "
+        "it has no session type (a migrated session), or the time was taken "
+        "while moving; `409` `/problems/move-too-late` as above; `422` the time "
+        "is not offered; `/problems/booking-overlap`, "
+        "`/problems/booking-with-mentor-exists` and "
+        "`/problems/booking-limit-reached` as for booking."
+    ),
+    responses=MOVE_RESPONSES,
+)
+async def move_session(moved: MovedSessionDep, response: Response) -> SessionRead:
+    """The new session, with the status code the reservation stored."""
+    body, status_code, replayed = moved
+    response.status_code = status_code
+    if replayed:
+        response.headers[REPLAYED_HEADER] = "true"
     response.headers["Location"] = f"/api/v1/sessions/{body['id']}"
     return SessionRead.model_validate(body)
 
