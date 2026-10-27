@@ -285,6 +285,41 @@ BOOKING_RESPONSES: dict[int | str, dict[str, str]] = {
     },
 }
 
+#: The move's own responses (decision 300). **Not `BOOKING_RESPONSES`**: a move
+#: spends no credit, so it can never answer `/problems/insufficient-credit`, and
+#: its `404` is about the session moved rather than an offering.
+MOVE_RESPONSES: dict[int | str, dict[str, str]] = {
+    status.HTTP_401_UNAUTHORIZED: BOOKING_RESPONSES[status.HTTP_401_UNAUTHORIZED],
+    status.HTTP_404_NOT_FOUND: {
+        "description": (
+            "No such session, or you are not its mentee. The mentor gets this "
+            "too: moving is the mentee's action."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "Nothing changed; the old session is as it was.\n\n"
+            "- `/problems/move-too-late`: a confirmed session past its "
+            "`refund_until`. It can only be cancelled.\n"
+            "- The session is not live (already ended), has no session type (a "
+            "migrated session), the time was taken while you were moving, or a "
+            "request with this `Idempotency-Key` is still in flight.\n"
+            "- `/problems/booking-needs-onboarding`, `/problems/booking-overlap`, "
+            "`/problems/booking-with-mentor-exists` and "
+            "`/problems/booking-limit-reached`, as for booking.\n\n"
+            "Never `/problems/insufficient-credit`: the credit that paid for the "
+            "old session pays for the new one."
+        )
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": (
+            "The body failed validation (`message` over 2000 characters), the "
+            "instant is not one the session's offering offers now, or this "
+            "`Idempotency-Key` already stands for a different request."
+        )
+    },
+}
+
 #: Stripe's header, and the name is borrowed rather than invented so a client
 #: library that already understands one idempotent API understands this one.
 REPLAYED_HEADER = "Idempotent-Replayed"
@@ -395,7 +430,7 @@ async def book(booked: BookedSessionDep, response: Response) -> SessionRead:
         "`/problems/booking-with-mentor-exists` and "
         "`/problems/booking-limit-reached` as for booking."
     ),
-    responses=BOOKING_RESPONSES,
+    responses=MOVE_RESPONSES,
 )
 async def move_session(moved: MovedSessionDep, response: Response) -> SessionRead:
     """The new session, with the status code the reservation stored."""

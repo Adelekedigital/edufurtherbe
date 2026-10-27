@@ -640,3 +640,14 @@ async def test_an_ended_session_cannot_be_moved(
     moved = await move(api_client, booking, booking["starts"][2])
 
     assert moved.status_code == 409, moved.text
+
+
+async def test_the_published_contract_never_promises_a_credit_refusal(
+    api_client: httpx.AsyncClient,
+) -> None:
+    """A move spends no credit, so its 409 must not list one."""
+    spec = (await api_client.get("/openapi.json")).json()
+    conflict = spec["paths"]["/api/v1/sessions/{session_id}/move"]["post"]["responses"]["409"]
+
+    assert "/problems/move-too-late" in conflict["description"]
+    assert "Never `/problems/insufficient-credit`" in conflict["description"]
