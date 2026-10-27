@@ -27,7 +27,11 @@ from app.core.errors import (
     ValidationError,
 )
 from app.domain.intake_files import clean_filename, content_disposition, file_type
-from app.infra.db.intake_file_store import readable_file, store_intake_file
+from app.infra.db.intake_file_store import (
+    delete_pending_upload,
+    readable_file,
+    store_intake_file,
+)
 from app.infra.db.session_answers_store import session_answers
 
 # `get_session` is aliased: this module already has one, and it is the **database
@@ -113,6 +117,15 @@ async def uploaded_intake_file(
 
 
 UploadedIntakeFileDep = Annotated[dict[str, Any], Depends(uploaded_intake_file)]
+
+
+async def deleted_intake_file(file_id: UUID, user: CurrentUserDep, session: SessionDep) -> None:
+    """The caller's unused upload, deleted and committed. Scoped to them in the write."""
+    await delete_pending_upload(session, file_id=file_id, uploader_id=user["id"])
+    await session.commit()
+
+
+DeletedIntakeFileDep = Annotated[None, Depends(deleted_intake_file)]
 
 
 async def intake_file_download(
