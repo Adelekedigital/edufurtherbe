@@ -204,6 +204,13 @@ class Notification(StrEnum):
     #: And declined, carrying whatever reason the reviewer gave.
     MENTOR_DECLINED = "mentor_declined"
 
+    #: **An admin paused an approved mentor** (Admin PRD, 2026-10-26): hidden on
+    #: Explore, booked sessions kept. Only when it is news: not when a mentor
+    #: pauses themselves, nor when an admin's pause already stands. No
+    #: variables beyond the name, and **never the reason**, which is for admins
+    #: only. Resuming sends nothing (Q8).
+    MENTOR_PAUSED_BY_ADMIN = "mentor_paused_by_admin"
+
     #: Up to two nudges per pending request, 24 and 12 hours before `respond_by`
     #: where the lead allows each (`reminders_for`), as QStash callbacks; the
     #: on-booking message is `SESSION_REQUESTED`.

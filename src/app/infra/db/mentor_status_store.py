@@ -26,13 +26,14 @@ from sqlalchemy import (
     func,
     insert,
     not_,
+    or_,
     select,
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.errors import ValidationError
+from app.core.errors import MentorPausedThemselvesError, ValidationError
 from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
 from app.domain.listing import (
     RETURN_ON_POINTER,
@@ -53,7 +54,8 @@ from app.infra.db.mentor_listing import (
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
-from app.infra.db.predicates import LIVE, mentor_approved
+from app.infra.db.predicates import LIVE, application_in_review, mentor_approved
+from app.infra.db.public_visibility import mentor_is_published
 
 
 async def _approval_before(session: AsyncSession, user_id: UUID) -> str | None:
@@ -220,6 +222,28 @@ async def decide(
     return True
 
 
+async def approve_application(session: AsyncSession, *, user_id: UUID, admin_id: UUID) -> bool:
+    """Approve one application that is still in review; ``False`` otherwise.
+
+    The bulk approve's unit (decision 298): `decide` itself approves any live
+    profile, but a bulk action over checked rows must not approve a draft, an
+    already-approved mentor or a declined one that a stale screen still showed.
+    Locked first, so the review state read is the one the decision lands on.
+    """
+    if not await lock_mentor(session, user_id):
+        return False
+    if not await _profile_flag(session, user_id, and_(*application_in_review())):
+        return False
+    return await decide(session, user_id=user_id, admin_id=admin_id, approved=True)
+
+
+def _pause_is_news() -> ColumnElement[bool]:
+    """An admin's unlisting would take an approved mentor off Explore, or over
+    their own pause: what the paused email reports. Not when an admin's pause
+    already stands, and never for a mentor who was not approved."""
+    return or_(mentor_is_published(), and_(mentor_approved(), paused_by_mentor()))
+
+
 async def set_listing(
     session: AsyncSession,
     *,
@@ -233,14 +257,36 @@ async def set_listing(
     This is the transition that made the log necessary: before it, listing only
     ever moved as a side effect of a decision, so "who unlisted this" was always
     derivable from the approval. It no longer is.
+
+    **Listing a mentor who paused themselves is refused** (decision 298): only
+    they resume their own pause (#75), and an admin relisting them would put
+    somebody on Explore who asked to be off it. An admin's pause over theirs
+    replaces it, and resuming that relists them: the admin's is the standing
+    decision, and refusing it would leave nobody able to resume them. **Unlisting tells the mentor**
+    with `MENTOR_PAUSED_BY_ADMIN` when it is news (`_pause_is_news`), in the
+    same transaction as the event (#158); the reason stays with admins.
     """
-    return await record(
+    if not await lock_mentor(session, user_id):
+        return False
+    if listed and await _profile_flag(session, user_id, paused_by_mentor()):
+        raise MentorPausedThemselvesError("this mentor paused themselves; only they can resume")
+    news = not listed and bool(await _profile_flag(session, user_id, _pause_is_news()))
+    await record(
         session,
         user_id=user_id,
         status_type=MentorStatusType.LISTED if listed else MentorStatusType.UNLISTED,
         created_by=admin_id,
         reason=reason if not listed else None,
     )
+    if news:
+        await enqueue(
+            session,
+            Notification.MENTOR_PAUSED_BY_ADMIN,
+            entity_type="mentor_profile",
+            entity_id=user_id,
+            recipient_ids=(user_id,),
+        )
+    return True
 
 
 def _unlisted_by_someone_else() -> ColumnElement[bool]:

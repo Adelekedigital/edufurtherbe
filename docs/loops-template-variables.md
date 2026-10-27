@@ -230,6 +230,7 @@ contract.
 | `credits_expiring` | Unused credit | `cmbk13nzg0iv4xw0i90uq1j5s` | the user | `bookLink`, `creditCount`, `fName` |
 | `mentor_application_received` | — | **NEEDED** | admins who can decide it, never the applicant | — |
 | `mentor_declined` | — | **NEEDED** | the applicant | — (to build with `recipientName`, `declineReason`, `applicationUrl`) |
+| `mentor_paused_by_admin` | — | **NEEDED** | the paused mentor | — (to build with `recipientName`; never the reason, which is for admins) |
 | `mentor_response_reminder` | Session Request Reminder | `cmbxjqtne3nt1wu0i5sk5kr2h` | mentor | `discuss`, `hours`, `location`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
 | `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |
 | `session_time_suggested` | — | **NEEDED** | mentee | — (see *A suggested time* below) |

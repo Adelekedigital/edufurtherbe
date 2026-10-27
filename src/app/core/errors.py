@@ -180,6 +180,11 @@ class MentorApplicationDeclinedError(ConflictError):
         return {"fields": list(self.fields)}
 
 
+class MentorPausedThemselvesError(ConflictError):
+    """An admin tried to relist a mentor who paused themselves: only the mentor
+    resumes their own pause (decision 75; Admin PRD, 2026-10-26)."""
+
+
 class MentorApplicationDecidedError(ConflictError):
     """The application was already approved or declined, so there is nothing to
     submit. A type of its own: the client shows the outcome, not the form."""
