@@ -197,6 +197,8 @@ EXPECTED_TABLES = [
     "session_type_next_availability",
     # Why a party missed a session (Session Join PRD).
     "session_missed_reasons",
+    # Internal notes admins leave on a mentor (Admin PRD).
+    "mentor_admin_notes",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

@@ -60,6 +60,8 @@ EXPECTED_MODELS = {
     # A user's own links (decision 275) and a mentor's guide-to countries (276).
     "UserLink",
     "MentorGuideCountry",
+    # An admin's internal note on a mentor (Admin PRD).
+    "MentorAdminNote",
     "Review",
     "ReviewReport",
     "ScholarshipProgram",
@@ -164,6 +166,8 @@ APPEND_ONLY = frozenset(
         "WritingAssistRequest",
         # A reason a party gave for missing a session is what they said then.
         "SessionMissedReason",
+        # An admin's note is what they wrote then.
+        "MentorAdminNote",
     }
 )
 
