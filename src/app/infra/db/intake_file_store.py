@@ -26,7 +26,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, delete, exists, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, RateLimitedError, ValidationError
+from app.core.errors import ConflictError, NotFoundError, RateLimitedError, ValidationError
 from app.domain.enums import IntakeFileType
 from app.domain.intake_files import (
     MAX_PENDING_UPLOADS,
@@ -45,6 +45,7 @@ from app.infra.storage.supabase import StorageError, SupabaseStorage
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "delete_pending_upload",
     "link_files",
     "readable_file",
     "store_intake_file",
@@ -68,9 +69,14 @@ def _live_unlinked() -> Any:
     return and_(IntakeFile.session_id.is_(None), IntakeFile.deleted_at.is_(None))
 
 
+def _owned(uploader_id: UUID) -> Any:
+    """An upload of this person's that is not deleted, used or not."""
+    return and_(IntakeFile.uploader_id == uploader_id, IntakeFile.deleted_at.is_(None))
+
+
 def _unlinked(uploader_id: UUID) -> Any:
     """An upload its owner may still answer with: theirs, live, answering nothing."""
-    return and_(IntakeFile.uploader_id == uploader_id, _live_unlinked())
+    return and_(_owned(uploader_id), _live_unlinked())
 
 
 def sweep_counts(
@@ -91,8 +97,9 @@ async def _within_upload_rate(session: AsyncSession, uploader_id: UUID, limit: i
 
     **Counted on the database's clock**, the one `created_at` was written with,
     so app and database clocks can't disagree about the window. Every upload in
-    the window still has its row: only unlinked uploads are ever deleted, and
-    not until a day has passed. `ix_intake_files_uploader` serves the count.
+    the window still has its row: the sweep removes an unlinked upload's row
+    only once it is past this window, unless its uploader's account is gone.
+    `ix_intake_files_uploader` serves the count.
 
     **`Retry-After` waits for enough uploads to leave the window, not just the
     oldest.** The count can exceed the limit (a concurrent burst, or a lowered
@@ -147,7 +154,8 @@ async def store_intake_file(
     if pending >= MAX_PENDING_UPLOADS:
         raise ConflictError(
             f"you have {MAX_PENDING_UPLOADS} uploads not yet used in a booking; "
-            "book with them, or wait a day for them to expire"
+            "book with them, delete ones you no longer need, or wait a day for "
+            "them to expire"
         )
     await _within_upload_rate(session, uploader_id, uploads_per_hour)
     # A random object name, never the row id — ids are the database's to
@@ -216,6 +224,32 @@ async def link_files(
     return linked
 
 
+async def delete_pending_upload(session: AsyncSession, *, file_id: UUID, uploader_id: UUID) -> None:
+    """Mark the caller's unused upload deleted, so it stops counting toward the
+    pending cap; the daily sweep removes the object. Does not commit.
+
+    One locked read scoped to the caller decides it: not theirs, or already
+    deleted, is :class:`NotFoundError`; theirs and answering a booking is
+    :class:`ConflictError`, since the mentor relies on it and it leaves with the
+    session's retention. The row stays inside the hour (the sweep keeps it), so
+    the upload still counts toward the hourly rate.
+    """
+    row = (
+        await session.execute(
+            select(IntakeFile.session_id)
+            .where(IntakeFile.id == file_id, _owned(uploader_id))
+            .with_for_update()
+        )
+    ).one_or_none()
+    if row is None:
+        raise NotFoundError("no such file")
+    if row.session_id is not None:
+        raise ConflictError("this file answers a booking and cannot be deleted")
+    await session.execute(
+        update(IntakeFile).where(IntakeFile.id == file_id).values(deleted_at=func.now())
+    )
+
+
 async def readable_file(
     session: AsyncSession, *, file_id: UUID, caller_id: UUID, caller_is_admin: bool
 ) -> dict[str, Any] | None:
@@ -281,10 +315,8 @@ async def sweep_intake_files(
         if cutoff is not None
         else None
     )
-    departed = and_(
-        IntakeFile.deleted_at.is_(None),
-        ~exists(select(User.id).where(User.id == IntakeFile.uploader_id, LIVE)),
-    )
+    uploader_gone = ~exists(select(User.id).where(User.id == IntakeFile.uploader_id, LIVE))
+    departed = and_(IntakeFile.deleted_at.is_(None), uploader_gone)
     if dry_run:
         unused = (await session.execute(select(func.count()).where(abandoned))).scalar_one()
         expired = 0
@@ -331,7 +363,18 @@ async def sweep_intake_files(
     marked = (
         await session.execute(
             select(IntakeFile.id, IntakeFile.storage_key, IntakeFile.session_id)
-            .where(IntakeFile.deleted_at.is_not(None), IntakeFile.purged_at.is_(None))
+            .where(
+                IntakeFile.deleted_at.is_not(None),
+                IntakeFile.purged_at.is_(None),
+                # An upload its owner deleted keeps its row, which the hourly
+                # rate counts, until it leaves the window; a departed
+                # uploader's files go at once (#280).
+                or_(
+                    IntakeFile.session_id.is_not(None),
+                    IntakeFile.created_at <= func.now() - literal(UPLOAD_RATE_WINDOW),
+                    uploader_gone,
+                ),
+            )
             .order_by(IntakeFile.deleted_at)
             .limit(PURGE_BATCH)
         )

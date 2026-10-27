@@ -70,6 +70,7 @@ from app.api.deps.core import (
 )
 from app.api.deps.intake import (
     MAX_FILE_MB,
+    DeletedIntakeFileDep,
     IntakeFileDownloadDep,
     SessionAnswersDep,
     UploadedIntakeFileDep,
@@ -228,6 +229,7 @@ __all__ = [
     "DeletedAwardDep",
     "DeletedEducationDep",
     "DeletedGoalDep",
+    "DeletedIntakeFileDep",
     "DeletedOwnQuestionDep",
     "DeletedOwnSessionTypeDep",
     "DeletedSessionTypeWindowDep",

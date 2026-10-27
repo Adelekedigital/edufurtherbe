@@ -10,6 +10,14 @@ released. A tag with no matching section here fails the release job.
 
 ## [Unreleased]
 
+### Added
+
+- **A mentee can delete an upload they did not use.** `DELETE /me/intake-files/{id}`
+  (`204`) removes one of your uploads that answers no booking, so it stops
+  counting toward the pending-upload cap. A file that answers a booking is a
+  `409`; anyone else's file is a `404`. It still counts toward the hourly
+  upload limit until the daily cleanup.
+
 ### Removed
 
 - **BREAKING: the single `service_offering` field on session types (#274).**

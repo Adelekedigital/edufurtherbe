@@ -11,7 +11,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Response, status
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import MAX_FILE_MB, IntakeFileDownloadDep, UploadedIntakeFileDep
+from app.api.deps import (
+    MAX_FILE_MB,
+    DeletedIntakeFileDep,
+    IntakeFileDownloadDep,
+    UploadedIntakeFileDep,
+)
 from app.api.limits import MAX_BODY_MB
 from app.api.schemas.intake import IntakeFileRead
 from app.core.config import Settings
@@ -118,3 +123,27 @@ async def upload_intake_file(uploaded: UploadedIntakeFileDep, response: Response
 )
 async def download_intake_file(download: IntakeFileDownloadDep) -> StreamingResponse:
     return download
+
+
+@router.delete(
+    "/me/intake-files/{file_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an upload you did not use",
+    description=(
+        "Deletes one of your uploads that answers no booking, so it stops "
+        f"counting toward the {MAX_PENDING_UPLOADS} pending uploads you may hold. "
+        "It still counts toward the hourly upload limit, so deleting is not a "
+        "way round it. The stored object is removed by the daily cleanup."
+    ),
+    responses={
+        **UNAUTHENTICATED,
+        status.HTTP_404_NOT_FOUND: {
+            "description": "No such file, not yours, or already deleted. Indistinguishable."
+        },
+        status.HTTP_409_CONFLICT: {
+            "description": "The file answers one of your bookings; it stays with that session."
+        },
+    },
+)
+async def delete_intake_file(_: DeletedIntakeFileDep) -> Response:
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
