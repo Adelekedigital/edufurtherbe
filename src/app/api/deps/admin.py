@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import Body, Depends, Query
 from pydantic import AwareDatetime
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps.core import (
     ENDPOINT_ADMIN_CREDITS,
@@ -25,8 +26,11 @@ from app.api.deps.core import (
     claim_idempotency_key,
 )
 from app.api.schemas.admin import (
+    AdminNoteWrite,
+    BulkDecisionWrite,
     DeclineRequest,
     FeaturedWrite,
+    ListingRequest,
     MergeRequest,
     SessionTypeLimitWrite,
 )
@@ -47,6 +51,7 @@ from app.domain.enums import MentorStatusType
 from app.domain.featured import week_start as week_of
 from app.infra.db.account_purge import restore_account
 from app.infra.db.admin_credits import grant_credits, list_admin_grants
+from app.infra.db.admin_notes import add_note, list_notes
 from app.infra.db.admin_store import (
     approve_institution,
     merge_institution,
@@ -60,6 +65,7 @@ from app.infra.db.featured_store import (
 )
 from app.infra.db.idempotency import Replayed, record_response
 from app.infra.db.mentor_status_store import (
+    approve_application,
     decide,
     history,
     may_self_resume,
@@ -279,12 +285,20 @@ FeaturedWeeksDep = Annotated[list[dict[str, Any]], Depends(featured_weeks)]
 
 async def listed_mentor(
     user_id: UUID,
-    payload: DeclineRequest,
+    payload: ListingRequest,
     admin_id: MentorAdminDep,
     session: SessionDep,
     listed: Annotated[bool, Query(description="True to list, false to unlist.")] = True,
 ) -> bool:
-    """An admin moving a mentor's listing without touching their approval."""
+    """An admin moving a mentor's listing without touching their approval.
+
+    **A reason is required to unlist** (decision 298): other admins read it in
+    the drawer, and a pause with no reason is one nobody can review. Asked here,
+    at the edge, because `listed` is a query parameter the body cannot see.
+    """
+    if not listed and payload.reason is None:
+        message = "say why, for the other admins"
+        raise ValidationError(message, field_errors=(("/reason", message),))
     changed = await set_listing(
         session, user_id=user_id, admin_id=admin_id, listed=listed, reason=payload.reason
     )
@@ -409,6 +423,52 @@ async def session_missed_reasons(
     return rows
 
 
+async def mentor_notes(
+    user_id: UUID, _: QueueViewerDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    """One mentor's internal notes, oldest first. Every live grant may read."""
+    rows = await list_notes(session, user_id)
+    if rows is None:
+        raise NotFoundError("no such mentor")
+    return rows
+
+
+async def added_note(
+    user_id: UUID, payload: AdminNoteWrite, admin_id: MentorAdminDep, session: SessionDep
+) -> dict[str, Any]:
+    """An admin's note on a mentor. **`mentor_approval` and super admins**, as
+    the decisions it sits beside: `limited_access` looks and does not act."""
+    row = await add_note(session, mentor=user_id, author=admin_id, body=payload.body)
+    if row is None:
+        raise NotFoundError("no such mentor")
+    await session.commit()
+    return row
+
+
+async def bulk_decided(
+    payload: BulkDecisionWrite, admin_id: MentorAdminDep, session: SessionDep
+) -> tuple[list[UUID], list[UUID]]:
+    """Approve each checked application, **each in its own transaction**.
+
+    One failure must not undo the others, so each mentor commits alone, and a
+    database error on one is rolled back, logged and reported in `failed`.
+    Repeated ids count once. A second run finds nothing in review and approves
+    nobody twice, so no key is needed to make a retry safe.
+    """
+    approved: list[UUID] = []
+    failed: list[UUID] = []
+    for user_id in dict.fromkeys(payload.user_ids):
+        try:
+            done = await approve_application(session, user_id=user_id, admin_id=admin_id)
+            await session.commit()
+        except SQLAlchemyError:
+            await session.rollback()
+            logger.exception("bulk approve failed for mentor %s", user_id)
+            done = False
+        (approved if done else failed).append(user_id)
+    return approved, failed
+
+
 PendingInstitutionsDep = Annotated[list[dict[str, Any]], Depends(pending_institution_rows)]
 ApprovedInstitutionDep = Annotated[bool, Depends(approved_institution)]
 MergedInstitutionDep = Annotated[int, Depends(merged_institution)]
@@ -421,5 +481,9 @@ ResumedSelfDep = Annotated[bool, Depends(resumed_self)]
 RestoredAccountDep = Annotated[bool, Depends(restored_account)]
 SessionTypeLimitSetDep = Annotated[tuple[int, bool], Depends(set_mentor_session_type_limit)]
 SessionMissedReasonsDep = Annotated[list[dict[str, Any]], Depends(session_missed_reasons)]
+
+MentorNotesDep = Annotated[list[dict[str, Any]], Depends(mentor_notes)]
+AddedNoteDep = Annotated[dict[str, Any], Depends(added_note)]
+BulkDecidedDep = Annotated[tuple[list[UUID], list[UUID]], Depends(bulk_decided)]
 
 AdminCreditGrantDep = Annotated[tuple[dict[str, Any], int, bool], Depends(granted_admin_credits)]

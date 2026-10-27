@@ -20,13 +20,16 @@ admitted everywhere without being named at each one.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
+    AddedNoteDep,
     AdminCreditGrantDep,
     AdminGrantHistoryDep,
     ApprovedInstitutionDep,
+    BulkDecidedDep,
     DecidedMentorDep,
     DecidedReportDep,
     FeaturedWeekRemovedDep,
@@ -34,6 +37,7 @@ from app.api.deps import (
     FeaturedWeekSetDep,
     ListedMentorDep,
     MentorHistoryDep,
+    MentorNotesDep,
     MergedInstitutionDep,
     ModerationQueueDep,
     PendingInstitutionsDep,
@@ -44,6 +48,8 @@ from app.api.deps import (
 )
 from app.api.routes.sessions import REPLAYED_HEADER
 from app.api.schemas.admin import (
+    AdminNoteRead,
+    BulkDecisionRead,
     FeaturedWeekRead,
     FeaturedWeekSetRead,
     InstitutionApprovedRead,
@@ -194,14 +200,92 @@ async def decide(changed: DecidedMentorDep) -> MentorDecidedRead:
         "out of the directory and leaves the approval intact; listing puts them "
         "back.\n\n"
         "Recorded as its own event, so who unlisted somebody is answerable even "
-        "though it no longer follows from the approval decision."
+        "though it no longer follows from the approval decision.\n\n"
+        "**Unlisting needs a `reason`**, which other admins read and the mentor "
+        "never does: without one it is a `422` at `/reason` and nothing changes. "
+        "When it pauses an approved mentor who is listed or paused by "
+        "themselves, the mentor gets the `mentor_paused_by_admin` email, without "
+        "the reason. Listing again sends nothing.\n\n"
+        "**A mentor who paused themselves is theirs to resume**: listing them is "
+        "`409` `/problems/mentor-paused-themselves`."
     ),
-    responses=ADMIN_RESPONSES,
+    responses=ADMIN_RESPONSES
+    | {
+        status.HTTP_409_CONFLICT: {
+            "description": (
+                "`/problems/mentor-paused-themselves`: the mentor paused "
+                "themselves, and only they can resume."
+            )
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "Unlisting without a `reason`, or a reason over 1000 characters."
+        },
+    },
 )
 async def set_mentor_listing(changed: ListedMentorDep) -> MentorListingChangedRead:
     if not changed:
         raise NotFoundError("no mentor profile for that user")
     return MentorListingChangedRead(changed=True)
+
+
+@router.post(
+    "/mentors/approvals",
+    response_model=BulkDecisionRead,
+    summary="Approve several applications",
+    description=(
+        "Approves each of `user_ids` (1 to 50) as `POST /mentors/{user_id}/decision` "
+        "approves one: listed on Explore at once, and the approved email sent. "
+        "**Each mentor in its own transaction**, so one failure undoes nothing "
+        "else.\n\n"
+        "Only an application still in review is approved; any other id comes "
+        "back in `failed` (no such mentor, a profile not yet submitted, one "
+        "already approved or declined). A repeated id counts once. A retry is "
+        "safe: an approved mentor is no longer in review, so nobody is approved "
+        "or emailed twice. Answers `200` whatever the split. Approval only: an "
+        "unknown field is a `422`.\n\n"
+        "Mentor-approval admins and super admins."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def bulk_decide(decided: BulkDecidedDep) -> BulkDecisionRead:
+    approved, failed = decided
+    return BulkDecisionRead(approved=approved, failed=failed)
+
+
+@router.get(
+    "/mentors/{user_id}/notes",
+    response_model=Page[AdminNoteRead],
+    summary="A mentor's internal notes",
+    description=(
+        "Every note admins left on this mentor, oldest first, with who wrote it. "
+        "**Only admins ever read these**: no endpoint shows them to the mentor. "
+        "One page, `next_cursor` always null. `404` for a user who is not a "
+        "mentor, or whose profile or account was deleted.\n\n"
+        "Every live admin grant may look."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def mentor_notes(rows: MentorNotesDep) -> Page[AdminNoteRead]:
+    return Page(data=[AdminNoteRead.from_row(row) for row in rows])
+
+
+@router.post(
+    "/mentors/{user_id}/notes",
+    status_code=status.HTTP_201_CREATED,
+    response_model=AdminNoteRead,
+    summary="Add an internal note on a mentor",
+    description=(
+        "Adds a note other admins see in the drawer: `body` is 1 to 2000 "
+        "characters, trimmed. Notes cannot be edited or removed. `Location` "
+        "names the mentor's notes. `404` for a user who is not a mentor, or "
+        "whose profile or account was deleted.\n\n"
+        "Mentor-approval admins and super admins."
+    ),
+    responses=ADMIN_RESPONSES,
+)
+async def add_mentor_note(user_id: UUID, note: AddedNoteDep, response: Response) -> AdminNoteRead:
+    response.headers["Location"] = f"{router.prefix}/mentors/{user_id}/notes"
+    return AdminNoteRead.from_row(note)
 
 
 @router.get(

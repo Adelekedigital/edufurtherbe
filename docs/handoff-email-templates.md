@@ -95,6 +95,7 @@ Tracked as backend issue #348, deferred until the owner decides on Emailit.
 | `mentor_application_received` | A mentor submitted a complete application (`POST /me/mentor-application/submit`), once; saving a mentor profile sends nothing | **admins** who decide it, never the applicant | `recipientName`, `mentorName` (the applicant) | **none** |
 | `mentor_approved` | An application was approved | the applicant | `recipientName`, `applicationUrl` (the app's `/mentor-application`, where the approved screen shows once) | **none** |
 | `mentor_declined` | An application was declined | the applicant | `recipientName`, `declineReason` (the reviewer's note; empty when none was left), `applicationUrl` | **none** |
+| `mentor_paused_by_admin` | An admin paused an approved mentor (hidden on Explore, booked sessions kept); not a mentor's own pause, and nothing on resume | the mentor | `recipientName` only, never the admin's reason. Copy: subject "Your mentor profile is paused", preview "You're hidden on Explore for now. Sessions already booked stay on." (Admin PRD, Mentor Status Email design) | **none** (new) |
 | `mentor_return_reminder` | A self-paused mentor's return approaching (dated), or a check-in (undated). One template words both. | the mentor | `recipientName`, `daysUntilReturn`, `returnOn`, `daysPaused`, `calendarUrl` | Return reminder |
 | `calendar_disconnected` | The mentor's Google Calendar link broke | the mentor | `recipientName`, `calendarUrl` | **none** |
 
@@ -106,7 +107,7 @@ message" has more on the return reminder's two cases and the review nudge.
 | Tier | Emails | Why it matters |
 |---|---|---|
 | **1 — the booking can't work without it** | `session_requested`, `mentor_response_reminder`, `request_accepted`, `session_booked`, `request_declined`, `session_cancelled`, `session_time_suggested`, `session_suggestion_reminder`, `session_reminder`, `session_last_reminder`, `calendar_disconnected` | Time-bound; a late or missing email means a missed session or a lost request |
-| **2 — status the user should know** | `request_withdrawn`, `request_expired`, `mentee_request_reminder`, `mentor_application_received`, `mentor_approved`, `mentor_declined` | Important but not time-critical |
+| **2 — status the user should know** | `request_withdrawn`, `request_expired`, `mentee_request_reminder`, `mentor_application_received`, `mentor_approved`, `mentor_declined`, `mentor_paused_by_admin` | Important but not time-critical |
 | **3 — engagement** | `review_requested`, `review_received`, `credits_granted`, `credits_renewed`, `credits_expiring`, `mentor_return_reminder` | Lifecycle nudges; a delay costs little |
 
 Design tier 1 first. All tiers go in Loops for now; if the owner later splits

@@ -14,7 +14,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.api.schemas.common import Normalised
-from app.domain.enums import FeaturedSource
+from app.domain.admin_notes import NOTE_BODY_MAX_LENGTH
+from app.domain.enums import CoverColor, FeaturedSource
 from app.domain.session_type_limit import SESSION_TYPE_LIMIT_CEILING
 
 
@@ -69,6 +70,13 @@ class DeclineRequest(Normalised):
     fight with, and an admin typing "no" to satisfy a validator has told nobody
     anything.
     """
+
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class ListingRequest(Normalised):
+    """Why a mentor is being unlisted: **required to unlist** (decision 298),
+    read by other admins and never shown to the mentor. Ignored when listing."""
 
     reason: str | None = Field(default=None, max_length=1000)
 
@@ -170,3 +178,70 @@ class SessionTypeLimitRead(BaseModel):
 
     limit: int = Field(description="The limit now in force: the override, or the default.")
     is_default: bool = Field(description="Whether `limit` is the platform default (no override).")
+
+
+class AdminNoteWrite(Normalised):
+    """An internal note on a mentor: what an admin wants the others to know."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(min_length=1, max_length=NOTE_BODY_MAX_LENGTH)
+
+
+class AdminNoteAuthorRead(BaseModel):
+    """Who wrote a note. Names and photo are null once that admin's account is gone."""
+
+    user_id: UUID
+    first_name: str | None
+    last_name: str | None
+    avatar_url: str | None
+    cover_color: CoverColor | None
+
+
+class AdminNoteRead(BaseModel):
+    """One internal note; only admins ever read these."""
+
+    id: UUID
+    body: str
+    created_at: datetime
+    author: AdminNoteAuthorRead
+
+    @classmethod
+    def from_row(cls, row: dict[str, object]) -> AdminNoteRead:
+        return cls(
+            id=row["id"],  # type: ignore[arg-type]
+            body=str(row["body"]),
+            created_at=row["created_at"],  # type: ignore[arg-type]
+            author=AdminNoteAuthorRead(
+                user_id=row["author_id"],  # type: ignore[arg-type]
+                first_name=row["author_first_name"],  # type: ignore[arg-type]
+                last_name=row["author_last_name"],  # type: ignore[arg-type]
+                avatar_url=row["author_avatar_url"],  # type: ignore[arg-type]
+                cover_color=row["author_cover_color"],  # type: ignore[arg-type]
+            ),
+        )
+
+
+#: The most applications one bulk approve may carry.
+MAX_BULK_DECISIONS = 50
+
+
+class BulkDecisionWrite(BaseModel):
+    """The checked applications to approve. Approval only: there is no bulk
+    decline, and an unknown field such as `approve` is refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_ids: list[UUID] = Field(min_length=1, max_length=MAX_BULK_DECISIONS)
+
+
+class BulkDecisionRead(BaseModel):
+    """What a bulk approve came to, each id once, in the order sent."""
+
+    approved: list[UUID] = Field(description="Approved, listed and emailed now.")
+    failed: list[UUID] = Field(
+        description=(
+            "Not approved: no such mentor, no application still in review "
+            "(a draft, or one already decided), or an error on that mentor alone."
+        )
+    )

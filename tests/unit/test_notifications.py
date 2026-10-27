@@ -137,6 +137,7 @@ def test_every_session_message_has_an_audience() -> None:
             # listing four, which is the shape of a list nobody re-reads.
             Notification.MENTOR_APPROVED,
             Notification.MENTOR_DECLINED,
+            Notification.MENTOR_PAUSED_BY_ADMIN,
             Notification.CALENDAR_DISCONNECTED,
             Notification.MENTOR_APPLICATION_RECEIVED,
             Notification.MENTOR_RETURN_REMINDER,
