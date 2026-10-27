@@ -14,8 +14,8 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import event, text
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.test_api_admin_credits import a_user, grant
 from tests.integration.test_api_attendance import a_confirmed_session
 from tests.integration.test_api_cancellation_refunds import cancel
@@ -24,6 +24,7 @@ from tests.integration.test_api_sessions import make_session
 from app.core.config import Settings
 from app.domain.credit_log import ENTRY_KINDS, FILTER_KINDS
 from app.domain.credits import credit_ladder
+from app.infra.db.credit_log import credit_entries
 from conftest import TEST_CREDITS, add_user, api_token, bearer, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -445,10 +446,19 @@ async def test_each_chip_shows_only_its_kinds(
     )
     headers = await an_admin(db_engine)
 
-    for chip, kinds in FILTER_KINDS.items():
+    # Spelled out rather than read from `FILTER_KINDS`: the chips are the PRD's,
+    # and an assertion built from the table under test could not catch it.
+    expected = {
+        "all": sorted(ENTRY_KINDS),
+        "admin": ["admin_grant"],
+        "bookings": ["booking"],
+        "refunds": ["refund"],
+        "monthly": ["monthly_free", "opening_balance", "profile_completed", "referral_unlock"],
+    }
+    assert set(expected) == set(FILTER_KINDS)
+    for chip, kinds in expected.items():
         page = await log(api_client, headers, type=chip, mentee_id=str(mentee))
-        assert sorted(e["kind"] for e in page["data"]) == sorted(kinds), chip
-    assert set(FILTER_KINDS["all"]) == set(ENTRY_KINDS)
+        assert sorted(e["kind"] for e in page["data"]) == kinds, chip
 
 
 async def test_an_unknown_chip_is_refused(
@@ -482,6 +492,21 @@ async def test_the_log_pages_newest_first_and_the_history_agrees(
     assert panel["history_next_cursor"] == first["next_cursor"]
 
 
+async def test_a_history_holds_only_that_mentee(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The panel and the log narrowed by `mentee_id` read one person's ledger."""
+    mine = await a_mentee(db_engine, "mine@example.test", funded=1)
+    await a_mentee(db_engine, "theirs@example.test", funded=2)
+    headers = await an_admin(db_engine)
+
+    panel = await history_of(api_client, headers, mine)
+    narrowed = await log(api_client, headers, mentee_id=str(mine))
+
+    for entries in (panel, narrowed["data"]):
+        assert [e["mentee"]["user_id"] for e in entries] == [str(mine)]
+
+
 async def test_the_log_spans_every_mentee(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -502,6 +527,65 @@ async def test_a_bad_cursor_is_a_422(api_client: httpx.AsyncClient, db_engine: A
         LOG, params={"cursor": "not-a-cursor"}, headers=await an_admin(db_engine)
     )
     assert response.status_code == 422
+
+
+async def plan_of(engine: AsyncEngine, **kwargs: Any) -> str:
+    """The plan of the statement `credit_entries` really runs: captured, then
+    EXPLAINed with its own parameters."""
+    captured: list[tuple[str, Any]] = []
+
+    def capture(_conn: Any, _cursor: Any, statement: str, parameters: Any, *_: Any) -> None:
+        if "credit_transactions" in statement:
+            captured.append((statement, parameters))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        async with async_sessionmaker(engine)() as session:
+            await credit_entries(session, limit=50, **kwargs)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    statement, parameters = captured[0]
+    async with engine.connect() as conn:
+        rows = (await conn.exec_driver_sql(f"EXPLAIN {statement}", parameters)).all()
+    return "\n".join(row[0] for row in rows)
+
+
+async def test_the_log_and_a_history_read_an_index(db_engine: AsyncEngine) -> None:
+    """The guardrail, at 48,000 ledger rows (1,200 mentees with 40 each): the
+    log walks `ix_credit_transactions_created` newest first, and one mentee's
+    history `ix_credit_transactions_user_created`, never a scan and a sort."""
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO users (email, first_name, primary_role, timezone) "
+                "SELECT 'bulk' || n || '@example.test', 'Bulk', 'mentee', 'UTC' "
+                "FROM generate_series(1, 1200) n"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO credit_lots (user_id, source, quantity_granted, "
+                "quantity_remaining) SELECT id, 'admin_grant', 1, 1 FROM users"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO credit_transactions (user_id, credit_lot_id, delta, reason, "
+                "created_at) SELECT l.user_id, l.id, 1, 'grant', "
+                "now() - n * interval '1 hour' - random() * interval '1 hour' "
+                "FROM credit_lots l, generate_series(1, 40) n"
+            )
+        )
+        await conn.execute(text("ANALYZE"))
+        someone = (await conn.execute(text("SELECT id FROM users LIMIT 1"))).scalar_one()
+
+    log_plan = await plan_of(db_engine)
+    history_plan = await plan_of(db_engine, mentee_id=someone)
+
+    assert "ix_credit_transactions_created" in log_plan, log_plan
+    assert "Seq Scan on credit_transactions" not in log_plan, log_plan
+    assert "ix_credit_transactions_user_created" in history_plan, history_plan
+    assert "Seq Scan on credit_transactions" not in history_plan, history_plan
 
 
 # --------------------------------------------------------------------------
