@@ -64,6 +64,19 @@ async def _stored_countries(engine: AsyncEngine, user: UUID) -> list[str]:
         return [str(r) for r in rows.scalars()]
 
 
+async def _stored_needs(engine: AsyncEngine, user: UUID) -> list[str]:
+    """The user's needs by id, sorted: needs carry no order."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT service_offering_id FROM mentee_goal_needs WHERE user_id = :u "
+                "ORDER BY service_offering_id"
+            ),
+            {"u": user},
+        )
+        return [str(r) for r in rows.scalars()]
+
+
 def _pointers(response: httpx.Response) -> list[str]:
     return [e["pointer"] for e in response.json()["errors"]]
 
@@ -232,24 +245,26 @@ async def test_a_fourth_is_a_422_at_the_list_and_writes_nothing(
     assert (await api_client.get(url(user, "goal"), headers=headers)).status_code == 404
 
 
-@pytest.mark.parametrize(
-    ("field", "table"),
-    [("country_ids", "countries"), ("need_ids", "service_offerings")],
-)
-async def test_three_are_saved(
-    api_client: httpx.AsyncClient, db_engine: AsyncEngine, field: str, table: str
+async def test_three_countries_are_saved_in_order(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     user, headers = await _owner(db_engine)
-    three = await _ids(db_engine, table, 3)
+    three = await _ids(db_engine, "countries", 3)
 
-    saved = await _put(api_client, user, headers, {field: three})
+    saved = await _put(api_client, user, headers, {"country_ids": three})
 
     assert saved.status_code == 200, saved.text
-    if field == "country_ids":
-        assert await _stored_countries(db_engine, user) == three
-    else:
-        goal = await _goal(api_client, user, headers)
-        assert sorted(n["id"] for n in goal["needs"]) == sorted(three)
+    assert await _stored_countries(db_engine, user) == three
+
+
+async def test_three_needs_are_saved(api_client: httpx.AsyncClient, db_engine: AsyncEngine) -> None:
+    user, headers = await _owner(db_engine)
+    three = await _ids(db_engine, "service_offerings", 3)
+
+    saved = await _put(api_client, user, headers, {"need_ids": three})
+
+    assert saved.status_code == 200, saved.text
+    assert await _stored_needs(db_engine, user) == sorted(three)
 
 
 async def test_more_than_three_already_stored_are_left_as_they_are(
@@ -258,10 +273,11 @@ async def test_more_than_three_already_stored_are_left_as_they_are(
     """The cap is on a write: saved goals with more are untouched, and a write
     that leaves the lists alone still saves."""
     user, headers = await _owner(db_engine)
-    five = await _ids(db_engine, "countries", 5)
+    countries = await _ids(db_engine, "countries", 5)
+    needs = await _ids(db_engine, "service_offerings", 4)
     await _put(api_client, user, headers, {"notes": "A"})
     async with db_engine.begin() as conn:
-        for priority, country in enumerate(five, start=1):
+        for priority, country in enumerate(countries, start=1):
             await conn.execute(
                 text(
                     "INSERT INTO mentee_goal_countries (user_id, country_id, priority) "
@@ -269,8 +285,16 @@ async def test_more_than_three_already_stored_are_left_as_they_are(
                 ),
                 {"u": user, "c": country, "p": priority},
             )
+        for need in needs:
+            await conn.execute(
+                text(
+                    "INSERT INTO mentee_goal_needs (user_id, service_offering_id) VALUES (:u, :n)"
+                ),
+                {"u": user, "n": need},
+            )
 
     saved = await _put(api_client, user, headers, {"notes": "B"})
 
     assert saved.status_code == 200, saved.text
-    assert await _stored_countries(db_engine, user) == five
+    assert await _stored_countries(db_engine, user) == countries
+    assert await _stored_needs(db_engine, user) == sorted(needs)
