@@ -184,8 +184,8 @@ _MENTEE_REASONS = frozenset(
 
 #: `EXPIRED_NO_RESPONSE`, `RESCHEDULED`, `ADMIN_ACTION` and `ACCOUNT_DELETED`
 #: appear in no set here, deliberately. The first is written by the expiry
-#: producer, which is a system actor and not a person; the second needs a
-#: reschedule flow that does not exist; the third belongs to an admin surface;
+#: producer, which is a system actor and not a person; the second is written
+#: by the move (decision 300) on the session it ends; the third belongs to an admin surface;
 #: the fourth is written by `DELETE /me` for each session it ends. Each is a
 #: value a party could otherwise assert about themselves.
 

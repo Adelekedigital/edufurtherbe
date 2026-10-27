@@ -707,6 +707,20 @@ class SessionBookingWrite(BaseModel):
     )
 
 
+class SessionMoveWrite(BaseModel):
+    """Where a mentee moves their session (decision 300). Nothing else: the
+    session type, the topic, the note and the intake all carry over from the
+    session moved. Another session type is a new booking, since its form asks
+    different questions."""
+
+    starts_at: AwareDatetime = Field(
+        description=(
+            "The new start, a UTC instant that `/slots` currently offers for the "
+            "session's own session type, exactly as for booking."
+        )
+    )
+
+
 class SessionTransitionWrite(BaseModel):
     """Why a session was declined, withdrawn or cancelled.
 

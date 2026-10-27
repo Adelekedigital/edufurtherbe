@@ -18,6 +18,13 @@ released. A tag with no matching section here fails the release job.
   `409`; anyone else's file is a `404`. It still counts toward the hourly
   upload limit until the daily cleanup.
 
+- **A mentee can move a session to another time in one call (decision 300).**
+  `POST /sessions/{id}/move` with `starts_at` ends the old session and books the
+  new time together, so a refused time leaves the old session untouched. The
+  credit, session type, intake and topic carry over, and one booking email is
+  sent. A confirmed session moves until its `refund_until`; after that it is
+  `409 /problems/move-too-late`. Needs an `Idempotency-Key`, like booking.
+
 ### Removed
 
 - **BREAKING: the single `service_offering` field on session types (#274).**

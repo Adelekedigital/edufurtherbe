@@ -38,6 +38,7 @@ from app.infra.db.session_writer.suggestions import (
     suggest_time,
 )
 from app.infra.db.session_writer.transitions import (
+    end_for_move,
     expire_requests,
     transition,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "book_session",
     "confirm_presence",
     "door_row",
+    "end_for_move",
     "expire_requests",
     "measure_minutes",
     "observe_departure",
