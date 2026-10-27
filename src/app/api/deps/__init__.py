@@ -26,6 +26,12 @@ from app.api.deps.admin import (
     SessionMissedReasonsDep,
     SessionTypeLimitSetDep,
 )
+from app.api.deps.admin_credits import (
+    CreditLogDep,
+    CreditRulesDep,
+    MenteeCreditsDep,
+    MenteeSearchDep,
+)
 from app.api.deps.availability import (
     AvailabilityExceptionsDep,
     AvailabilityRulesDep,
@@ -196,6 +202,8 @@ __all__ = [
     "CreatedOwnSessionTypeDep",
     "CreatedReferralDep",
     "CreatedSessionTypeWindowDep",
+    "CreditLogDep",
+    "CreditRulesDep",
     "CurrentUserDep",
     "DailyPresenceDep",
     "DecidedMentorDep",
@@ -225,6 +233,8 @@ __all__ = [
     "JoinedSessionDep",
     "ListedMentorDep",
     "LookupPageDep",
+    "MenteeCreditsDep",
+    "MenteeSearchDep",
     "MentorHistoryDep",
     "MentorMatchesDep",
     "MentorPageDep",
