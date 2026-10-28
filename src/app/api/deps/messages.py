@@ -10,10 +10,11 @@ import datetime as dt
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Query
+from fastapi import Depends, Query, Request
 from pydantic import StringConstraints
 
 from app.api.deps.core import CurrentUserDep, SessionDep
+from app.api.deps.message_emails import schedule_unread_email
 from app.api.schemas.common import StorableText
 from app.api.schemas.messages import (
     ChatPage,
@@ -26,6 +27,7 @@ from app.api.schemas.messages import (
 )
 from app.core.errors import ValidationError
 from app.domain.chats import DEFAULT_PAGE, MAX_PAGE
+from app.domain.message_emails import UNREAD_EMAIL_DELAY
 from app.infra.db.chat_store import (
     chat_of,
     chat_rows,
@@ -35,6 +37,7 @@ from app.infra.db.chat_store import (
     unread_total,
 )
 from app.infra.db.chat_writer import mark_read, send_message
+from app.infra.db.message_emails import queue_instant_email
 
 #: The longest name search the picker takes.
 PEOPLE_QUERY_MAX_LENGTH = 100
@@ -95,14 +98,28 @@ async def own_thread(
 
 
 async def sent_message(
-    user_id: UUID, payload: MessageWrite, user: CurrentUserDep, session: SessionDep
+    user_id: UUID,
+    payload: MessageWrite,
+    user: CurrentUserDep,
+    session: SessionDep,
+    request: Request,
 ) -> tuple[MessageRead, bool]:
-    """The message, written and committed, and whether it is new."""
+    """The message, written and committed, and whether it is new.
+
+    A new message around a session between the two is emailed at once, in the
+    send's transaction (decision 303). Any other new message queues the unread
+    email's job for 15 minutes later, once the send has committed. A replay
+    emails nothing again.
+    """
     me: UUID = user["id"]
+    now = _now()
     row, created = await send_message(
-        session, me, user_id, client_id=payload.client_id, body=payload.body, now=_now()
+        session, me, user_id, client_id=payload.client_id, body=payload.body, now=now
     )
+    instant = created and await queue_instant_email(session, row["id"], me, user_id, now)
     await session.commit()
+    if created and not instant:
+        await schedule_unread_email(request, user_id, row["sent_at"] + UNREAD_EMAIL_DELAY)
     return MessageRead.of(row, me), created
 
 

@@ -247,6 +247,22 @@ class Notification(StrEnum):
     #: an answered or lapsed request is not nudged.
     MENTEE_REQUEST_REMINDER = "mentee_request_reminder"
 
+    #: **Messages the recipient has not read** (Messages PRD, decision 303):
+    #: one or two, 15 minutes after the send, at most one an hour, and only
+    #: while their "Email me about unread messages" switch is on. A card per
+    #: message, cut to 140 characters. Not in `AUDIENCE`: about a chat, and
+    #: the recipient is the person the messages were sent to.
+    MESSAGE_UNREAD_FEW = "message_unread_few"
+
+    #: The same, for three or more: senders and counts, never the text.
+    MESSAGE_UNREAD_MANY = "message_unread_many"
+
+    #: **A message sent around a session between the two** (decision 303):
+    #: from 15 minutes before it starts to 15 minutes after, emailed at once in
+    #: full with the session. Always on, never held by the hour, and never
+    #: emailed again as unread.
+    MESSAGE_IN_SESSION_WINDOW = "message_in_session_window"
+
 
 class Audience(StrEnum):
     """Who hears a session message.

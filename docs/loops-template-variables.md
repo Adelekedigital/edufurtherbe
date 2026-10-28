@@ -236,6 +236,9 @@ contract.
 | `session_time_suggested` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
 | `session_suggestion_reminder` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
 | `mentee_request_reminder` | — | **NEEDED** | mentor | — (see *A mentee's reminder* below) |
+| `message_unread_few` | — | **NEEDED** | the person the messages were sent to | — (see *The message emails* below) |
+| `message_unread_many` | — | **NEEDED** | the person the messages were sent to | — (see *The message emails* below) |
+| `message_in_session_window` | — | **NEEDED** | the person the message was sent to | — (see *The message emails* below) |
 
 **A member marked NEEDED fails at the drain** (`template_for()` raises). What happens next depends on the message:
 - **Re-checked at send time** (the members of `STILL_DUE` in `infra/db/outbox.py`): the row stays `pending` with **no attempt counted** until an id is mapped. It's dropped as `skipped` once it stops being true, so it never goes out late.
@@ -305,6 +308,44 @@ lapsed, since it was queued. May use:
 - `sessionTopic`
 - `pendingRequestUrl`: the request on the Bookings page,
   `/bookings?tab=pending&booking={id}`
+
+### The message emails (decision 303)
+
+Three templates for two emails (Messages PRD, "Message emails"), as drawn in
+*Message Email.dc.html*, copy through the ux-writer. Until each has an id in
+`EMAIL_TEMPLATES`, its rows fail at the drain and stop after 5 hourly attempts;
+the messages stay marked emailed, so none is emailed twice. The
+content is read when the email is sent, so one whose messages were all read, or
+any deleted, since it was queued is skipped, and an unread email is skipped
+once the recipient has switched them off. Times are `HH:MM` in the
+**recipient's** zone. All three may use `recipientFirstName`, `messagesUrl`
+(`/messages`) and `buttonUrl`.
+
+- **`message_unread_few`**: one or two unread messages, 15 minutes after the
+  send, at most one an hour; only messages sent within the last day are
+  gathered. Because Loops has no branches, the lines that
+  differ come as values: `emailSubject` and `emailHeading` ("Ada sent you a
+  message", "2 new messages from Ada" / "Ada sent you 2 messages", or for two
+  people "You have 2 unread messages on EduFurther" / "You have 2 unread
+  messages"), `buttonLabel` ("Reply in Messages", or "Open Messages" for two
+  people) with `buttonUrl` (`/messages?with={sender id}`, or `/messages`),
+  `repliesName` (the first name, or "them"), and `previewText` (the first
+  message cut to 140 characters at a word, or its file's name). One card per
+  message: `message1Name`, `message1Initials`, `message1Time`, `message1Text`
+  (cut to 140 characters, empty for a file alone), `message1FileName` (empty
+  without a file), and the same `message2…`, all empty with one message. The
+  why line's link is `settingsUrl` (`/messages?settings=1`).
+- **`message_unread_many`**: three or more, senders and counts, never the text.
+  `unreadCount`, `senderFirstNames` ("Ada and Ben", "Ada, Ben and Chi"), one row
+  per sender, the most messages first: `sender1Name`, `sender1Initials`,
+  `sender1Count` ("1 message", "3 messages"), up to `sender5…` (empty past the
+  senders), then `otherSenders` ("and 2 more", or empty). `settingsUrl`.
+- **`message_in_session_window`**: a message sent from 15 minutes before to 15
+  minutes after a session between the two starts, at once and in full. Always
+  on. `senderFirstName`, `previewText`, the card as `message1…` with the whole
+  text, `buttonUrl` (their chat), and the session: `sessionName` (the session
+  type's name), `sessionDuration` ("45 min"), `sessionTime`, `sessionDate`,
+  `sessionTimezone` and `sessionUrl` (`/sessions/{id}`).
 
 ### Notes per message
 

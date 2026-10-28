@@ -60,10 +60,12 @@ __all__ = [
     "chat_of",
     "chat_rows",
     "connections",
+    "in_session_window",
     "not_connected",
     "pair",
     "people",
     "thread_page",
+    "unread",
     "unread_count",
     "unread_total",
 ]
@@ -135,21 +137,38 @@ def pair(me: Any, other: Any) -> Any:
     )
 
 
+def unread(me: Any, last_read_at: Any) -> tuple[Any, ...]:
+    """**The one statement of unread**: a message from the other person after
+    ``last_read_at`` (every one while it is null), not deleted. The badge, the
+    inbox and the unread email all read it."""
+    return (
+        Message.sender_id != me,
+        Message.deleted_at.is_(None),
+        or_(last_read_at.is_(None), Message.sent_at > last_read_at),
+    )
+
+
 def unread_count(me: UUID, conversation_id: Any, last_read_at: Any) -> Any:
-    """**The one statement of unread**: the other person's messages in this chat
-    after ``last_read_at`` (all of them while it is null), not deleted. Served
-    by `ix_messages_conversation_sent`."""
+    """How many messages in this chat are `unread` for ``me``. Served by
+    `ix_messages_conversation_sent`."""
     return (
         select(func.count())
         .select_from(Message)
-        .where(
-            Message.conversation_id == conversation_id,
-            Message.sender_id != me,
-            Message.deleted_at.is_(None),
-            or_(last_read_at.is_(None), Message.sent_at > last_read_at),
-        )
+        .where(Message.conversation_id == conversation_id, *unread(me, last_read_at))
         .correlate_except(Message)
         .scalar_subquery()
+    )
+
+
+def in_session_window(a: Any, b: Any, now: dt.datetime) -> tuple[Any, ...]:
+    """**The one statement of the session window**: a session between these
+    two in `SESSION_WINDOW_STATUSES` starting within `SESSION_WINDOW` either
+    side of ``now``. The thread's `session_window` and the instant email."""
+    return (
+        between(a, b),
+        Session.status.in_(SESSION_WINDOW_STATUSES),
+        Session.starts_at >= now - SESSION_WINDOW,
+        Session.starts_at <= now + SESSION_WINDOW,
     )
 
 
@@ -188,12 +207,7 @@ def _statement(me: UUID, now: dt.datetime, other: UUID | None = None) -> Select[
         .limit(1)
         .lateral("next_booking")
     )
-    in_window = exists().where(
-        between(me, link.c.other_id),
-        Session.status.in_(SESSION_WINDOW_STATUSES),
-        Session.starts_at >= now - SESSION_WINDOW,
-        Session.starts_at <= now + SESSION_WINDOW,
-    )
+    in_window = exists().where(*in_session_window(me, link.c.other_id, now))
     is_mentor = role == ChatRole.MENTOR.value
     return (
         select(

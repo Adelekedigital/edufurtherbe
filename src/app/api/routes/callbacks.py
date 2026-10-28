@@ -24,11 +24,18 @@ from fastapi import APIRouter, Request, status
 
 from app.api.deps import (
     BIO_DRAFT_CALLBACK_PATH,
+    MESSAGE_EMAIL_CALLBACK_PATH,
     BioDraftCallbackDep,
     DailyPresenceDep,
+    MessageEmailCallbackDep,
     ReminderCallbackDep,
 )
-from app.api.schemas.jobs import BioDraftRead, PresenceRecordedRead, ReminderQueuedRead
+from app.api.schemas.jobs import (
+    BioDraftRead,
+    MessageEmailRead,
+    PresenceRecordedRead,
+    ReminderQueuedRead,
+)
 
 router = APIRouter(prefix="/api/v1/callbacks", tags=["callbacks"])
 
@@ -144,3 +151,29 @@ async def record_daily_presence(recorded: DailyPresenceDep) -> PresenceRecordedR
 )
 async def draft_mentee_bio(drafted: BioDraftCallbackDep) -> BioDraftRead:
     return BioDraftRead(drafted=drafted)
+
+
+@router.post(
+    MESSAGE_EMAIL_CALLBACK_PATH.removeprefix(router.prefix),
+    response_model=MessageEmailRead,
+    summary="Email a person their unread messages",
+    description=(
+        "**Called by QStash, never by a person** (decision 303), queued by each "
+        "new send outside a session's window for 15 minutes later. "
+        "Authenticated by `Upstash-Signature`, "
+        "verified against this endpoint and a hash of this exact body; the body "
+        'is `{"recipient_id"}`.\n\n'
+        "It re-reads everything: the recipient's messages still unread, not "
+        "deleted, not yet emailed and sent within the last day. Nothing left, "
+        "the recipient switched these emails off, or their account is closed: "
+        "nothing is queued. If a message email went to them in "
+        "the last hour, it queues itself again for when the hour ends. Otherwise "
+        "one or two messages queue the few email and three or more the many "
+        "email, and those messages are marked emailed in the same transaction. "
+        "**Safe to deliver twice**: a second delivery finds them marked.\n\n"
+        "**Every handled outcome is `200`**, `queued: false` included."
+    ),
+    responses=CALLBACK_RESPONSES,
+)
+async def send_unread_message_email(queued: MessageEmailCallbackDep) -> MessageEmailRead:
+    return MessageEmailRead(queued=queued)

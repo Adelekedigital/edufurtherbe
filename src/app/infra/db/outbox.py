@@ -31,11 +31,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
+from app.domain.message_emails import MESSAGE_EMAILS
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.notifications import Channel, Notification
 from app.infra.db.credit_store import expiring_on
 from app.infra.db.holds import suggestion_reminder_state
 from app.infra.db.mentor_listing import return_reminder_state
+from app.infra.db.message_email_content import message_email_values
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.models.user import User
@@ -337,6 +339,10 @@ async def _finish(
     )
 
 
+#: Payload keys that name rows rather than carry words for the template.
+CARRIED_IDS = frozenset({"recipient_id", "message_ids"})
+
+
 async def _context_for(
     session: AsyncSession, row: Any, recipient: UUID, settings: Settings
 ) -> MessageContext:
@@ -349,9 +355,18 @@ async def _context_for(
     """
     people = await _names_for(session, (recipient,))
     nobody = ("", "UTC", None)
-    extras = {
-        str(key): str(value) for key, value in dict(row["payload"]).items() if key != "recipient_id"
-    }
+    payload = dict(row["payload"])
+    extras = {str(key): str(value) for key, value in payload.items() if key not in CARRIED_IDS}
+    notification = Notification(str(row["event_type"]))
+    if notification in MESSAGE_EMAILS:
+        # Read from the messages at send time, and not sent once they are all
+        # read, or any deleted, since it was queued (decision 303).
+        values = await message_email_values(
+            session, notification, recipient, payload.get("message_ids") or ()
+        )
+        if values is None:
+            raise Superseded
+        extras |= values
     base = {
         "recipient_name": people.get(recipient, nobody)[0],
         "recipient_timezone": people.get(recipient, nobody)[1],
@@ -396,6 +411,7 @@ async def _context_for(
                     Session.booking_message,
                     Session.meeting_provider,
                     Session.respond_by,
+                    Session.duration_minutes,
                     # The offering's current name, retired or not, as #185 and
                     # the session read do: the subject when no topic was written.
                     SessionType.name.label("session_type_name"),
@@ -423,6 +439,7 @@ async def _context_for(
         detail=found["booking_message"],
         venue=VENUE_LABELS.get(str(found["meeting_provider"] or "")),
         respond_by=found["respond_by"],
+        duration_minutes=found["duration_minutes"],
         session_id=str(found["id"]),
         app_base_url=settings.app_base_url or "",
         extras=extras,
