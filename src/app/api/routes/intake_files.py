@@ -17,6 +17,7 @@ from app.api.deps import (
     IntakeFileDownloadDep,
     UploadedIntakeFileDep,
 )
+from app.api.deps.files import FILE_REFUSED
 from app.api.limits import MAX_BODY_MB
 from app.api.schemas.intake import IntakeFileRead
 from app.core.config import Settings
@@ -70,12 +71,7 @@ UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
         status.HTTP_413_CONTENT_TOO_LARGE: {
             "description": f"The request body exceeds {MAX_BODY_MB} MB."
         },
-        status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": (
-                "The file is empty, is not a PDF or Word document, or is over the "
-                "size limit. `errors[0].pointer` is `/file`."
-            )
-        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": FILE_REFUSED},
         status.HTTP_429_TOO_MANY_REQUESTS: {
             "description": (
                 f"More than {UPLOADS_PER_HOUR} uploads in the last hour. `Retry-After` "

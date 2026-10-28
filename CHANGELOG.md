@@ -21,6 +21,15 @@ released. A tag with no matching section here fails the release job.
   email stays on. A read or deleted message is never emailed, and no message is
   emailed twice. The three Loops templates are still to be built.
 
+- **Files in messages, and who may message a mentor (decision 302).**
+  `POST /me/message-files` uploads a PDF or Word file with the intake checks
+  and `GET /message-files/{id}` downloads it: yours until you send it, then
+  the two people in that chat. `POST /me/messages/{user_id}` takes an optional
+  `file_id` beside `body`; a message's `file` and the inbox's `last.file_name`
+  are filled in. Unsent files are deleted after 24 hours. Upload refusals
+  carry `/problems/file-too-large` or `/problems/file-type-not-allowed`, on
+  intake uploads too. `GET /mentors/{handle}` adds `can_message`.
+
 - **Messages between a mentor and a mentee (decision 301, ADR 0010).** One chat
   per pair, open to two people with a confirmed, completed, missed or canceled
   booking between them. `GET /me/messages` (the inbox, with `total_unread`),

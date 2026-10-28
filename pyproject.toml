@@ -243,6 +243,7 @@ exempt = [
     "api/deps/bio_draft.py",
     "api/deps/calendar.py",
     "api/deps/core.py",
+    "api/deps/files.py",
     "api/deps/intake.py",
     "api/deps/interest.py",
     "api/deps/jobs.py",
