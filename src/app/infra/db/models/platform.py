@@ -15,11 +15,23 @@ Named for `08_features_platform.sql`, which is where the package puts all three.
 import datetime
 import uuid
 
-from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import (
+    TIMESTAMP,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.domain.enums import NotificationPreferenceType
 from app.infra.db.base import Base, TimestampMixin
+from app.infra.db.types import check_is_known, str_enum
 
 #: How long a stored answer stays replayable, as SQL.
 #:
@@ -294,5 +306,44 @@ class FeatureInterest(TimestampMixin, Base):
         CheckConstraint(
             "feature ~ '^[a-z][a-z0-9_]{1,39}$'",
             name="feature_is_a_slug",
+        ),
+    )
+
+
+class NotificationChannelPreference(TimestampMixin, Base):
+    """Which channels one person wants one kind of email on (Messages PRD,
+    decision 303), in the package's shape (`07_communications.sql`).
+
+    **A missing row is the default**, so only somebody who flipped a switch has
+    one. The package's composite key is `UNIQUE (user_id, notification_type)`
+    with the generated `id` (ADR 0015). Only `email` is read today, for the
+    unread message emails; the other channels keep the package's defaults so a
+    later switch is a write, not a migration. Cascades with the person: a
+    preference is meaningless without them.
+    """
+
+    __tablename__ = "notification_channel_preferences"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    notification_type: Mapped[NotificationPreferenceType] = mapped_column(
+        str_enum(NotificationPreferenceType), nullable=False
+    )
+    in_app: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    email: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    push: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    whatsapp: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "notification_type", name="uq_notification_channel_preferences_user_type"
+        ),
+        CheckConstraint(
+            check_is_known("notification_type", NotificationPreferenceType),
+            name="notification_type_is_known",
         ),
     )

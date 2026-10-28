@@ -141,6 +141,8 @@ EXPECTED_MODELS = {
     "ConversationParticipant",
     "Message",
     "MessageAttachment",
+    # Who switched which email off (decision 303), from `07_communications.sql`.
+    "NotificationChannelPreference",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")

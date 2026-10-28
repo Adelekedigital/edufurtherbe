@@ -163,6 +163,10 @@ class Message(TimestampMixin, Base):
     #: Only imported messages carry it in v1: deleting is later.
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
+    #: When an email about this message was queued (decision 303): the unread
+    #: email or the session-window one. Set once, in the transaction that
+    #: queues it, so a message is never emailed twice.
+    emailed_at: Mapped[datetime.datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("sender_id", "client_id", name="uq_messages_sender_client"),
@@ -178,6 +182,13 @@ class Message(TimestampMixin, Base):
         ),
         # The thread's keyset, and the unread count after a read mark.
         Index("ix_messages_conversation_sent", "conversation_id", "sent_at", "id"),
+        # The unread email's hourly limit: when a chat last had one emailed.
+        Index(
+            "ix_messages_conversation_emailed",
+            "conversation_id",
+            "emailed_at",
+            postgresql_where=text("emailed_at IS NOT NULL"),
+        ),
     )
 
 
