@@ -12,6 +12,12 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **The legacy chat import (decision 302).** `scripts/load_messages.py` loads
+  Bubble's chats and messages: two chats between the same two people become
+  one, read marks carry over, edits and deletes are kept, and nothing is
+  emailed about them. A re-run changes nothing. Only a connected pair sees its
+  history.
+
 - **Files in messages, and who may message a mentor (decision 302).**
   `POST /me/message-files` uploads a PDF or Word file with the intake checks
   and `GET /message-files/{id}` downloads it: yours until you send it, then
