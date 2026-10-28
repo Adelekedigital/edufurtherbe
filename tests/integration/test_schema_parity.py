@@ -465,6 +465,8 @@ def test_the_natural_keys_survive_as_unique_constraints(migrated_database: str) 
         ("session_type_next_availability", "(session_type_id)"),
         # One missed reason per party per session (Session Join PRD).
         ("session_missed_reasons", "(session_id, user_id)"),
+        # The package's composite key: one preference per person per email.
+        ("notification_channel_preferences", "(user_id, notification_type)"),
     }
 
     for table, columns in required:

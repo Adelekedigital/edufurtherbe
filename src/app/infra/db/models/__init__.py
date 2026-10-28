@@ -54,7 +54,12 @@ from app.infra.db.models.messaging import (
     MessageAttachment,
 )
 from app.infra.db.models.missed_reasons import SessionMissedReason
-from app.infra.db.models.platform import FeatureInterest, IdempotencyKey, OutboxEvent
+from app.infra.db.models.platform import (
+    FeatureInterest,
+    IdempotencyKey,
+    NotificationChannelPreference,
+    OutboxEvent,
+)
 from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.referrals import (
     InviteLink,
@@ -125,6 +130,7 @@ __all__ = [
     "MentorStatusEvent",
     "Message",
     "MessageAttachment",
+    "NotificationChannelPreference",
     "OutboxEvent",
     "Referral",
     "ReferralUnlock",

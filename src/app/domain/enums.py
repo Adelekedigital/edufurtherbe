@@ -912,3 +912,14 @@ class AttachmentScanStatus(StrEnum):
     own values arrive with the scan, as a CHECK swap."""
 
     SKIPPED = "skipped"
+
+
+class NotificationPreferenceType(StrEnum):
+    """What a person may switch an email on or off for, keyed in
+    ``notification_channel_preferences`` (the package's shape, Messages PRD).
+
+    Only what has a switch: the unread message emails (M2). The session-window
+    email (M3) is always on, so it has no member (#21).
+    """
+
+    UNREAD_MESSAGES = "unread_messages"
