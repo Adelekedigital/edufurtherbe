@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
@@ -132,6 +133,69 @@ class CoverRead(BaseModel):
         return {
             "cover_color": CoverColor(str(color)) if color is not None else None,
             "cover_art": CoverArt(str(art)) if art is not None else CoverArt.NONE,
+        }
+
+
+class PersonBaseRead(CoverRead):
+    """The fields every view of another person shares: a session's party
+    (`PartyRead`) and somebody you can message (`PersonRead`). Never published
+    on its own; each extends it with what it is about.
+
+    **Every name here is nullable, and that is the data rather than caution**:
+    a migrated user may have none. A person who deleted their account keeps
+    their place and loses their name, avatar, focus, cover and school.
+    """
+
+    id: str
+    #: The person deleted their account (#93, amended 2026-09-29). Their place
+    #: stays; their name, avatar and focus are null. Render it as a deleted
+    #: account rather than as a missing name, which migrated rows have too.
+    deleted: bool = False
+    first_name: str | None = None
+    last_name: str | None = None
+    avatar_url: str | None = None
+    #: Where to centre `avatar_url`; `null` means the client's default crop.
+    avatar_focus: AvatarFocusRead | None = None
+    degree: str | None = Field(
+        default=None,
+        description=(
+            "The degree that best describes this party, as the discovery card "
+            "and a review's byline describe a person: their highest, then most "
+            'recent ("BSc"). With `institution`, the pending card\'s '
+            '"BSc Student at FUTA"; the wording is the client\'s. `null` with no '
+            "education entry, or when they deleted their account."
+        ),
+    )
+    institution: str | None = Field(
+        default=None,
+        description=(
+            "Where that degree is from: the registry's name, else what the person "
+            "typed. `null` as for `degree`."
+        ),
+    )
+
+    @staticmethod
+    def fields_of(row: Mapping[str, object], prefix: str = "") -> dict[str, Any]:
+        """The shared fields from a flat row, its columns named ``{prefix}id``,
+        ``{prefix}first_name`` and so on. One builder, so a session's party and a
+        chat's person cannot drift apart."""
+
+        def text(name: str) -> str | None:
+            value = row.get(f"{prefix}{name}")
+            return str(value) if value is not None else None
+
+        return {
+            "id": str(row[f"{prefix}id"]),
+            "deleted": bool(row.get(f"{prefix}deleted")),
+            "first_name": text("first_name"),
+            "last_name": text("last_name"),
+            "avatar_url": text("avatar_url"),
+            "avatar_focus": AvatarFocusRead.of(
+                row.get(f"{prefix}avatar_focus_x"), row.get(f"{prefix}avatar_focus_y")
+            ),
+            **CoverRead.cover_of(row.get(f"{prefix}cover_color"), row.get(f"{prefix}cover_art")),
+            "degree": text("degree"),
+            "institution": text("institution"),
         }
 
 

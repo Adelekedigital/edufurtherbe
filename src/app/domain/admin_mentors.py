@@ -13,7 +13,6 @@ from collections.abc import Iterable
 from enum import StrEnum
 
 from app.domain.enums import AdminRole, SessionStatus
-from app.domain.refunds import NEVER_AGREED
 
 __all__ = [
     "AT_RISK_BELOW",
@@ -84,16 +83,6 @@ class BookingOutcome(StrEnum):
     MISSED_BY_MENTOR = "missed_by_mentor"
     MISSED_BY_MENTEE = "missed_by_mentee"
     CANCELED = "canceled"
-
-
-#: Sessions that were booked: every status but a request still waiting and one
-#: that ended without being agreed (`refunds.NEVER_AGREED`), so a new status
-#: lands on one side of both rules at once.
-BOOKED_STATUSES = tuple(
-    status
-    for status in SessionStatus
-    if status not in NEVER_AGREED and status != SessionStatus.PENDING_MENTOR_APPROVAL
-)
 
 
 def booking_outcome(

@@ -31,7 +31,7 @@ from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTrans
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.predicates import LIVE, live
+from app.infra.db.predicates import LIVE, live, name_like
 from app.infra.db.session_stats import BY_MENTEE, BY_MENTOR
 from app.infra.db.session_store import cancelled_by
 
@@ -119,13 +119,7 @@ async def find_mentees(session: AsyncSession, query: str | None) -> list[dict[st
             match: Any = User.id == user_id
         else:
             pattern = "%" + escape_like(query) + "%"
-            full_name = func.concat_ws(" ", User.first_name, User.last_name)
-            match = or_(
-                *(
-                    column.ilike(pattern, escape=LIKE_ESCAPE)
-                    for column in (User.email, User.first_name, User.last_name, full_name)
-                )
-            )
+            match = or_(User.email.ilike(pattern, escape=LIKE_ESCAPE), name_like(User, query))
         statement = (
             _mentees()
             .where(match)

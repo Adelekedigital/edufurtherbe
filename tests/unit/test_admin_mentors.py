@@ -9,7 +9,6 @@ import pytest
 
 from app.api.deps.core import CURRENT_USER
 from app.domain.admin_mentors import (
-    BOOKED_STATUSES,
     BookingOutcome,
     ShowUpTier,
     booking_outcome,
@@ -18,7 +17,7 @@ from app.domain.admin_mentors import (
     waiting_days,
 )
 from app.domain.enums import AdminRole, SessionStatus
-from app.domain.refunds import NEVER_AGREED
+from app.domain.refunds import BOOKED_STATUSES, NEVER_AGREED
 from app.infra.db.predicates import live_grant
 
 NOW = dt.datetime(2026, 10, 26, 12, tzinfo=dt.UTC)
