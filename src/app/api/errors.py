@@ -47,9 +47,12 @@ from app.core.errors import (
     MissedReasonAlreadySentError,
     MissedReasonNotYoursError,
     MoveTooLateError,
+    NotConnectedError,
     NotFoundError,
     OnboardingIncompleteError,
     RateLimitedError,
+    RecipientClosedError,
+    RecipientPausedError,
     ReminderAlreadySentError,
     ReminderMenteeOnlyError,
     RequestNotPendingError,
@@ -154,6 +157,9 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     RequestNotPendingError: "/problems/request-not-pending",
     ReminderAlreadySentError: "/problems/reminder-already-sent",
     RateLimitedError: "/problems/rate-limited",
+    NotConnectedError: "/problems/not-connected",
+    RecipientPausedError: "/problems/recipient-paused",
+    RecipientClosedError: "/problems/recipient-closed",
     WritingAssistUnavailableError: "/problems/writing-assist-unavailable",
 }
 

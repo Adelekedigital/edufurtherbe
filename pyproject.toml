@@ -249,6 +249,7 @@ exempt = [
     "api/deps/links.py",
     "api/deps/matches.py",
     "api/deps/mentors.py",
+    "api/deps/messages.py",
     "api/deps/offerings.py",
     "api/deps/profile.py",
     "api/deps/reviews.py",

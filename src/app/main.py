@@ -35,6 +35,7 @@ from app.api.routes import (
     me_mentor_matches,
     me_mentor_stats,
     me_mentors,
+    me_messages,
     me_onboarding,
     me_referrals,
     me_reviews,
@@ -206,6 +207,15 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "— writing one, correcting a typo inside ten minutes, and finding "
             "sessions still owed. The two have opposite ideas of whose text is "
             "whose, and settled decision #64 gives a domain its own name."
+        ),
+    },
+    {
+        "name": "messages",
+        "description": (
+            "Chats between a mentor and a mentee: one chat per pair, open while "
+            "the two have a booked session between them (confirmed, completed, "
+            "missed or canceled). Keyed by the other person's user id. A paused "
+            "mentor or a closed account makes a chat read only (ADR 0010)."
         ),
     },
     {
@@ -538,6 +548,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_mentors.router)
     application.include_router(me_mentor_matches.router)
     application.include_router(me_mentee_stats.router)
+    application.include_router(me_messages.router)
     application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)
     application.include_router(me_mentor_application.router)

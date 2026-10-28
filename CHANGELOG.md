@@ -12,6 +12,16 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Messages between a mentor and a mentee (decision 301, ADR 0010).** One chat
+  per pair, open to two people with a confirmed, completed, missed or canceled
+  booking between them. `GET /me/messages` (the inbox, with `total_unread`),
+  `GET /me/messages/unread`, `GET /me/messages/people?q=`,
+  `GET /me/messages/{user_id}` (paged with `before`, `after`, `limit`),
+  `POST /me/messages/{user_id}` (idempotent on `client_id`) and
+  `POST /me/messages/{user_id}/read`. Sending to a paused mentor or a closed
+  account is a `409`; anyone you are not connected with is a `404` to read and
+  a `403` to send to. Text only for now; files come next.
+
 - **A mentee can delete an upload they did not use.** `DELETE /me/intake-files/{id}`
   (`204`) removes one of your uploads that answers no booking, so it stops
   counting toward the pending-upload cap. A file that answers a booking is a
