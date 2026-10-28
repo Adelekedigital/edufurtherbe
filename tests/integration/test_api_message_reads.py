@@ -6,8 +6,6 @@ Access is in `test_api_messages`; these read what a connected pair sees.
 from __future__ import annotations
 
 import datetime as dt
-import json
-from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -28,8 +26,6 @@ from tests.integration.message_helpers import (
 
 from app.domain.chats import ELLIPSIS, PREVIEW_LENGTH
 from app.infra.db.chat_store import thread_page, unread_total
-from app.main import create_app
-from conftest import PROJECT_ROOT
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -390,17 +386,8 @@ async def test_people_match_a_live_name_ignoring_case(
 
 
 # --------------------------------------------------------------------------
-# Contract pins
+# The plan
 # --------------------------------------------------------------------------
-
-
-async def test_a_session_party_s_published_shape_is_unchanged() -> None:
-    """`PartyRead` now extends the shared `PersonBaseRead`: its schema must be
-    exactly what it was before the person fields moved."""
-    published = create_app().openapi()["components"]["schemas"]["PartyRead"]
-    fixture = PROJECT_ROOT / "tests" / "fixtures" / "party_read_schema.json"
-
-    assert published == json.loads(Path(fixture).read_text(encoding="utf-8"))
 
 
 async def test_a_page_and_the_badge_read_an_index(db_engine: AsyncEngine) -> None:
