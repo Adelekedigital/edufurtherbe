@@ -279,6 +279,29 @@ async def test_imported_messages_are_never_emailed_and_a_new_earliest_starter_re
     )
 
 
+async def test_a_former_mentor_without_a_booking_is_still_the_mentor(
+    db_engine: AsyncEngine,
+) -> None:
+    """With no booking, a mentor profile names the mentor, soft-deleted or not
+    (`predicates.has_mentor_profile`): the chat is history."""
+    former = await person(db_engine, "etl-former-a", mentor="listed")
+    mentee = await person(db_engine, "etl-former-b")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE mentor_profiles SET deleted_at = now() WHERE user_id = :u"),
+            {"u": former.id},
+        )
+    a, b = await legacy(db_engine, former), await legacy(db_engine, mentee)
+
+    result = await load(db_engine, [starter("s1", b, a)], [])
+
+    assert result.ok, result.report()
+    roles = await scalar(
+        db_engine, "SELECT array[mentor_user_id, mentee_user_id] FROM conversations"
+    )
+    assert roles == [former.id, mentee.id]
+
+
 async def test_a_chat_whose_mentor_nothing_names_stops_the_load(db_engine: AsyncEngine) -> None:
     one = await person(db_engine, "etl-amb-a")
     two = await person(db_engine, "etl-amb-b")

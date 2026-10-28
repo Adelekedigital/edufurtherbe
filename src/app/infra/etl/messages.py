@@ -30,6 +30,7 @@ from sqlalchemy import select, text
 from app.domain.chats import ChatRole
 from app.domain.transform.messages import ChatRow, MessagePlan, chat_roles
 from app.infra.db.chat_store import connections
+from app.infra.db.predicates import has_mentor_profile
 from app.infra.db.triggers import timestamps_from_source_across
 
 if TYPE_CHECKING:
@@ -39,8 +40,6 @@ __all__ = ["STAMPED_TABLES", "MessageLoader"]
 
 #: The tables whose `updated_at` comes from the source.
 STAMPED_TABLES = ("conversations", "messages")
-
-PROFILE_HOLDERS = "SELECT user_id FROM mentor_profiles WHERE user_id IN (:a, :b)"
 
 UPSERT_CHAT = """
 INSERT INTO conversations (
@@ -103,9 +102,13 @@ class MessageLoader:
             await self._connection.execute(select(link.c.session_role).select_from(link))
         ).scalar()
         booked = None if their_role is None else (b if their_role == ChatRole.MENTOR.value else a)
-        holders = set(
-            (await self._connection.execute(text(PROFILE_HOLDERS), {"a": a, "b": b})).scalars()
-        )
+        # Soft-deleted profiles count (`has_mentor_profile`): the chat is history,
+        # and someone who has since closed their mentor profile was its mentor.
+        holders = {
+            who
+            for who in (a, b)
+            if (await self._connection.execute(select(has_mentor_profile(who)))).scalar()
+        }
         roles = chat_roles((a, b), booked_mentor=booked, profile_holders=holders)
         if roles is None:
             message = (
