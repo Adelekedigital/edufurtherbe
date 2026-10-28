@@ -47,6 +47,12 @@ from app.infra.db.models.mentoring import (
     ServiceOffering,
     SessionTypeOffering,
 )
+from app.infra.db.models.messaging import (
+    Conversation,
+    ConversationParticipant,
+    Message,
+    MessageAttachment,
+)
 from app.infra.db.models.missed_reasons import SessionMissedReason
 from app.infra.db.models.platform import FeatureInterest, IdempotencyKey, OutboxEvent
 from app.infra.db.models.reference import Country, Language
@@ -86,6 +92,8 @@ __all__ = [
     "AvailabilityException",
     "AvailabilityRule",
     "CalendarConnection",
+    "Conversation",
+    "ConversationParticipant",
     "Country",
     "CreditLot",
     "CreditTransaction",
@@ -115,6 +123,8 @@ __all__ = [
     "MentorProfile",
     "MentorServiceOffering",
     "MentorStatusEvent",
+    "Message",
+    "MessageAttachment",
     "OutboxEvent",
     "Referral",
     "ReferralUnlock",

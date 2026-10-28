@@ -883,3 +883,32 @@ class MissedReason(StrEnum):
     EMERGENCY = "emergency"
     WRONG_TIME_ZONE = "wrong_time_zone"
     OTHER = "other"
+
+
+class ConversationStatus(StrEnum):
+    """Whether a chat is open (ADR 0010). Every chat v1 creates is ``accepted``.
+
+    ``pending`` is kept for message requests to a mentor nobody has booked
+    (founder, 2026-10-26: later), and the legacy import writes it for a
+    ``messageRequestAccept`` that never said yes. v1 reads no status: who may
+    read a chat is the M0 connection alone. The package's ``declined`` and
+    ``blocked`` have no producer, so they are not here (#21).
+    """
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+
+
+class MessageType(StrEnum):
+    """What a message carries: text alone, or a file (with or without text)."""
+
+    TEXT = "text"
+    ATTACHMENT = "attachment"
+
+
+class AttachmentScanStatus(StrEnum):
+    """Whether a message file was virus-scanned. v1 does not scan (founder,
+    2026-10-26: the scan is planned), so every file is ``skipped``. The scan's
+    own values arrive with the scan, as a CHECK swap."""
+
+    SKIPPED = "skipped"

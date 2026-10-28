@@ -199,6 +199,11 @@ EXPECTED_TABLES = [
     "session_missed_reasons",
     # Internal notes admins leave on a mentor (Admin PRD).
     "mentor_admin_notes",
+    # Chats between a mentor and a mentee (ADR 0010).
+    "conversations",
+    "conversation_participants",
+    "messages",
+    "message_attachments",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**
