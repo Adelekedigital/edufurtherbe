@@ -24,9 +24,16 @@ from app.api.schemas.messages import (
     ReadWrite,
     ThreadRead,
 )
-from app.core.errors import NotFoundError, ValidationError
+from app.core.errors import ValidationError
 from app.domain.chats import DEFAULT_PAGE, MAX_PAGE
-from app.infra.db.chat_store import chat_of, chat_rows, people, thread_page, unread_total
+from app.infra.db.chat_store import (
+    chat_of,
+    chat_rows,
+    not_connected,
+    people,
+    thread_page,
+    unread_total,
+)
 from app.infra.db.chat_writer import mark_read, send_message
 
 #: The longest name search the picker takes.
@@ -76,14 +83,11 @@ async def own_thread(
     ] = DEFAULT_PAGE,
 ) -> ThreadRead:
     if before is not None and after is not None:
-        raise ValidationError(
-            "send before or after, not both",
-            field_errors=(("/after", "cannot be sent with before"),),
-        )
+        raise ValidationError("send before or after, not both")
     me: UUID = user["id"]
     chat = await chat_of(session, me, user_id, _now())
     if chat is None:
-        raise NotFoundError("no such chat")
+        raise not_connected()
     items, has_more = await thread_page(
         session, chat["conversation_id"], before=before, after=after, limit=limit
     )

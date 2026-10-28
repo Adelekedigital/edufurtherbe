@@ -60,6 +60,8 @@ __all__ = [
     "chat_of",
     "chat_rows",
     "connections",
+    "not_connected",
+    "pair",
     "people",
     "thread_page",
     "unread_count",
@@ -122,9 +124,9 @@ def connections(me: UUID, other: UUID | None = None) -> Any:
     )
 
 
-def _pair(me: UUID, other: Any) -> Any:
+def pair(me: Any, other: Any) -> Any:
     """The chat of ``me`` and ``other``, matched as `uq_conversations_pair` is
-    declared, so the lookup rides that index."""
+    declared, so the lookup rides that index. Symmetric in its arguments."""
     return and_(
         func.least(Conversation.mentor_user_id, Conversation.mentee_user_id)
         == func.least(other, me),
@@ -229,7 +231,7 @@ def _statement(me: UUID, now: dt.datetime, other: UUID | None = None) -> Select[
         .outerjoin(UserProfile, UserProfile.user_id == User.id)
         .outerjoin(MentorProfile, MentorProfile.user_id == User.id)
         .outerjoin(school, true())
-        .outerjoin(Conversation, _pair(me, link.c.other_id))
+        .outerjoin(Conversation, pair(me, link.c.other_id))
         .outerjoin(_MINE, and_(_MINE.conversation_id == Conversation.id, _MINE.user_id == me))
         .outerjoin(
             _THEIRS,
@@ -288,7 +290,7 @@ async def unread_total(session: AsyncSession, me: UUID) -> int:
     statement = (
         select(func.coalesce(func.sum(unread_count(me, Conversation.id, _MINE.last_read_at)), 0))
         .select_from(link)
-        .join(Conversation, _pair(me, link.c.other_id))
+        .join(Conversation, pair(me, link.c.other_id))
         .outerjoin(_MINE, and_(_MINE.conversation_id == Conversation.id, _MINE.user_id == me))
     )
     return int((await session.execute(statement)).scalar_one())

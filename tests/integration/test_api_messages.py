@@ -15,7 +15,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from tests.integration.message_helpers import (
     ROOT,
     book,
@@ -29,6 +29,7 @@ from tests.integration.message_helpers import (
 
 from app.domain.chats import BODY_MAX_LENGTH
 from app.domain.enums import SessionStatus
+from app.infra.db.chat_writer import send_message
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -109,6 +110,25 @@ async def test_a_third_person_can_never_read_or_write_a_pair_s_chat(
     assert (await thread(api_client, other_mentee, mentee)).status_code == 404
     assert (await send(api_client, other_mentee, mentee)).status_code == 403
 
+    (pair_message,) = (await thread(api_client, mentor, mentee)).json()["items"]
+    for reader in (nobody, other_mentee):
+        for target in (mentor, mentee):
+            if reader is other_mentee and target is mentor:
+                continue
+            marked = await api_client.post(
+                f"{ROOT}/{target.id}/read",
+                json={"up_to": pair_message["id"]},
+                headers=reader.headers,
+            )
+            assert marked.status_code == 404
+    assert (
+        await scalar(
+            db_engine,
+            "SELECT count(*) FROM conversation_participants WHERE last_read_at IS NOT NULL",
+        )
+        == 0
+    )
+
     assert theirs.status_code == 200
     assert theirs.json()["items"] == []
     assert unread.json() == {"total": 0}
@@ -124,7 +144,11 @@ async def test_nobody_and_yourself_look_like_strangers(
     for target in (mentee.id, uuid4()):
         read = await thread(api_client, mentee, target)
         sent = await send(api_client, mentee, target)
+        marked = await api_client.post(
+            f"{ROOT}/{target}/read", json={"up_to": str(uuid4())}, headers=mentee.headers
+        )
         assert read.status_code == 404
+        assert marked.status_code == 404
         assert sent.status_code == 403
         assert sent.json()["type"] == "/problems/not-connected"
     assert (await thread(api_client, mentee, mentor)).status_code == 200
@@ -257,6 +281,37 @@ async def test_a_retry_racing_its_original_stores_one_message(
     assert sorted(r.status_code for r in results) == [200, 200, 201]
     assert len({r.json()["id"] for r in results}) == 1
     assert await scalar(db_engine, "SELECT count(*) FROM messages") == 2
+
+
+async def test_a_send_that_loses_the_race_returns_the_winner(db_engine: AsyncEngine) -> None:
+    """The race held open on purpose: the first send's transaction is still
+    open when the second one checks for a stored message and finds none. The
+    second waits on the pair index and then the chat's lock, and once the
+    first commits it lands on both unique keys and returns the first's
+    message. Requests over the test client rarely overlap this exactly."""
+    mentor, mentee = await pair(db_engine, "race-held")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    now = dt.datetime.now(dt.UTC)
+    client_id = uuid4()
+
+    async with factory() as first, factory() as second:
+        won, created = await send_message(
+            first, mentee.id, mentor.id, client_id=client_id, body="Hi", now=now
+        )
+        racing = asyncio.create_task(
+            send_message(second, mentee.id, mentor.id, client_id=client_id, body="Hi", now=now)
+        )
+        await asyncio.sleep(1)
+        assert not racing.done(), "the second send did not wait for the first"
+        await first.commit()
+        lost, created_again = await racing
+        await second.commit()
+
+    assert created is True
+    assert created_again is False
+    assert lost["id"] == won["id"]
+    assert await scalar(db_engine, "SELECT count(*) FROM conversations") == 1
+    assert await scalar(db_engine, "SELECT count(*) FROM messages") == 1
 
 
 @pytest.mark.parametrize(

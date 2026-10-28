@@ -17,23 +17,29 @@ import datetime as dt
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import (
     NotConnectedError,
-    NotFoundError,
     RecipientClosedError,
     RecipientPausedError,
     ValidationError,
 )
 from app.domain.chats import ChatLock, ChatRole, chat_lock
 from app.domain.enums import ConversationStatus, MessageType
-from app.infra.db.chat_store import MESSAGE_COLUMNS, chat_of
+from app.infra.db.chat_store import MESSAGE_COLUMNS, chat_of, not_connected, pair
 from app.infra.db.models.messaging import Conversation, ConversationParticipant, Message
 
 __all__ = ["mark_read", "send_message"]
+
+#: `uq_conversations_pair`'s expressions, so a first send's `ON CONFLICT`
+#: catches only the pair and any other unique violation still raises.
+PAIR_INDEX = [
+    text("LEAST(mentor_user_id, mentee_user_id)"),
+    text("GREATEST(mentor_user_id, mentee_user_id)"),
+]
 
 
 async def _stored(session: AsyncSession, me: UUID, client_id: UUID) -> dict[str, Any] | None:
@@ -76,20 +82,13 @@ async def _open_chat(session: AsyncSession, me: UUID, other: UUID, their_role: s
                 mentee_user_id=mentee,
                 created_by=me,
             )
-            .on_conflict_do_nothing()
+            .on_conflict_do_nothing(index_elements=PAIR_INDEX)
             .returning(Conversation.id)
         )
     ).scalar_one_or_none()
     if created is None:
         created = (
-            await session.execute(
-                select(Conversation.id).where(
-                    func.least(Conversation.mentor_user_id, Conversation.mentee_user_id)
-                    == func.least(mentor, mentee),
-                    func.greatest(Conversation.mentor_user_id, Conversation.mentee_user_id)
-                    == func.greatest(mentor, mentee),
-                )
-            )
+            await session.execute(select(Conversation.id).where(pair(mentor, mentee)))
         ).scalar_one()
     await session.execute(
         insert(ConversationParticipant)
@@ -135,7 +134,9 @@ async def send_message(
     # The order of `sent_at` is the order of visibility: stamped under the
     # chat's lock, after any send ahead of this one has committed.
     await session.execute(
-        select(Conversation.id).where(Conversation.id == conversation_id).with_for_update()
+        select(Conversation.id)
+        .where(Conversation.id == conversation_id)
+        .with_for_update(key_share=True)
     )
     written = (
         (
@@ -181,7 +182,7 @@ async def mark_read(
     """
     chat = await chat_of(session, me, other, now)
     if chat is None:
-        raise NotFoundError("no such chat")
+        raise not_connected()
     sent_at = (
         await session.execute(
             select(Message.sent_at).where(
