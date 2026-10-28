@@ -13,11 +13,11 @@ answer is a new record that supersedes the old one, not an edit.
 | [0003](0003-read-only-freeze-cutover.md) | Cut over behind a read-only freeze | Accepted |
 | [0004](0004-calendar-integration.md) | Own the OAuth client, write events, read availability on demand | Accepted |
 | [0005](0005-data-platform.md) | Use Supabase for Postgres, auth and storage — as Postgres, not as a backend | Accepted |
-| [0006](0006-messaging-build-vs-buy.md) | Build booking-scoped messaging; keep mentor–mentee conversation on-platform | Accepted |
+| [0006](0006-messaging-build-vs-buy.md) | Build booking-scoped messaging; keep mentor–mentee conversation on-platform | Accepted — booking scope superseded by 0010 |
 | [0007](0007-adopt-the-migration-package-as-the-target-data-model.md) | Adopt the migration package as the target data model | Accepted |
 | [0008](0008-institutions-hipolabs-registry.md) | Institutions — the hipolabs registry, populated on demand | Accepted — storage and autocomplete superseded by 0020 |
 | [0009](0009-first-login-authentication.md) | First-login authentication — Supabase Auth, email code by default, link as a choice | Accepted — point 9 superseded by 0014 |
-| 0010 | Message thread scope — booking-scoped vs standalone | Reserved by 0007 |
+| [0010](0010-one-chat-per-mentor-and-mentee-pair.md) | One chat per mentor and mentee pair, reached only through a booking | Accepted — supersedes 0006's booking scope |
 | [0011](0011-alembic-is-the-migration-chain.md) | Alembic is the migration chain; the package DDL is its specification | Accepted |
 | [0012](0012-google-oauth-scopes-and-client-split.md) | Google OAuth — non-sensitive scopes, and one Cloud project per purpose | Proposed |
 | [0013](0013-foreign-key-deletion-policy-for-user-owned-rows.md) | Foreign-key deletion policy for user-owned rows | Accepted |

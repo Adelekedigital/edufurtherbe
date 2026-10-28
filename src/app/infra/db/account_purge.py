@@ -17,7 +17,9 @@ personal meeting links.
 session (without the note they wrote), the credit ledger and the audit logs, as
 the privacy policy keeps them for 12 months. Admins' internal notes on a mentor
 (`mentor_admin_notes`) are part of that record and stay as written: admins
-wrote them, not the person. They are anonymised by the account
+wrote them, not the person. Their messages and files stay in the other
+person's chat (ADR 0010: "You can still read your past messages"). They are
+anonymised by the account
 row losing its name, email, slug and sign-in: every read already shows a deleted
 party as unnamed. A mentor profile and offerings stay too, because sessions and
 the status log point at them, so what the mentor wrote there is cleared.

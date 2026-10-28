@@ -4,7 +4,9 @@ Date: 2026-08-03
 
 ## Status
 
-Accepted
+Accepted. **Superseded in part by [ADR 0010](0010-one-chat-per-mentor-and-mentee-pair.md)**
+(2026-10-27): a chat belongs to the mentor and mentee pair, not to a booking.
+Building in house and the WhatsApp boundary stand.
 
 ## Context
 

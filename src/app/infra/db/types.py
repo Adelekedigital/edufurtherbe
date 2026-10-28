@@ -36,11 +36,13 @@ from app.domain.enums import (
     AdminRole,
     ApplicationStage,
     ApprovalStatus,
+    AttachmentScanStatus,
     AttendanceStatus,
     AuthProvider,
     AvailabilityExceptionType,
     AwardFunding,
     ConferencingProvider,
+    ConversationStatus,
     CoverArt,
     CoverColor,
     CreditReason,
@@ -57,6 +59,7 @@ from app.domain.enums import (
     LookupStatus,
     MeetingProvider,
     MentorStatusType,
+    MessageType,
     MissedReason,
     OptionSource,
     PrimaryRole,
@@ -162,7 +165,14 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     # Where a choice question's options come from; null is the mentor's own (amends #203).
     QuestionOptionsSource: frozenset({"ck_session_type_questions_options_source_is_known"}),
     IntakeStatus: frozenset({"ck_intake_submissions_status_is_known"}),
-    IntakeFileType: frozenset({"ck_intake_files_content_type_is_known"}),
+    # The two file types, decided from the bytes: an intake answer's, and a
+    # message's (Messages PRD), so both read one vocabulary.
+    IntakeFileType: frozenset(
+        {
+            "ck_intake_files_content_type_is_known",
+            "ck_message_attachments_mime_type_is_known",
+        }
+    ),
     # The second table to carry this vocabulary. `reviews.reviewed_for_role` is
     # the capacity a user was reviewed in, which `reviewed_for` cannot say on its
     # own and the migrated rows have no session to derive.
@@ -217,6 +227,10 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     LinkKind: frozenset({"ck_user_links_kind_is_known"}),
     # Why a party missed a session (Session Join PRD); internal, admins only.
     MissedReason: frozenset({"ck_session_missed_reasons_reason_is_known"}),
+    # Messages (ADR 0010): a chat's status, a message's kind, a file's scan.
+    ConversationStatus: frozenset({"ck_conversations_status_is_known"}),
+    MessageType: frozenset({"ck_messages_message_type_is_known"}),
+    AttachmentScanStatus: frozenset({"ck_message_attachments_virus_scan_status_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.

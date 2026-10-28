@@ -136,6 +136,11 @@ EXPECTED_MODELS = {
     "FeatureInterest",
     # One call the writing assistant made, for its daily limit (decision 266).
     "WritingAssistRequest",
+    # Chats between a mentor and a mentee (ADR 0010), from `07_communications.sql`.
+    "Conversation",
+    "ConversationParticipant",
+    "Message",
+    "MessageAttachment",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
