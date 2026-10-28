@@ -53,7 +53,10 @@ __all__ = [
     "QuarantinedReview",
     "ReviewPlan",
     "ReviewRow",
+    "either",
     "plan_reviews",
+    "stamp",
+    "trimmed",
 ]
 
 #: Bubble's rendering of the three-point scale, and the ordinal behind each.
@@ -89,7 +92,7 @@ RATING_COLUMNS: dict[str, str] = {
 }
 
 
-def _text(value: Any) -> str | None:
+def trimmed(value: Any) -> str | None:
     """A trimmed value, or ``None`` for anything the export renders as empty.
 
     `blank_to_none` is the shared rule — the export writes `""` where the API
@@ -223,7 +226,7 @@ def _point(
     return value, None
 
 
-def _either(record: dict[str, Any], canonical: str, raw: str) -> Any:
+def either(record: dict[str, Any], canonical: str, raw: str) -> Any:
     """A field under whichever name this record happens to carry.
 
     **Both names, for the reason `legacy_anchor` takes both.** A record read
@@ -237,7 +240,7 @@ def _either(record: dict[str, Any], canonical: str, raw: str) -> Any:
     return value if value is not None else record.get(raw)
 
 
-def _stamp(value: Any, *, timezone: dt.tzinfo) -> tuple[dt.datetime | None, str | None]:
+def stamp(value: Any, *, timezone: dt.tzinfo) -> tuple[dt.datetime | None, str | None]:
     """One export timestamp, and which of the two ways it can be missing.
 
     **Absent and unreadable are different facts.** Collapsing them let an
@@ -251,7 +254,7 @@ def _stamp(value: Any, *, timezone: dt.tzinfo) -> tuple[dt.datetime | None, str 
     `America/New_York`, so a silent default would shift every migrated review by
     hours.
     """
-    raw = _text(value)
+    raw = trimmed(value)
     if raw is None:
         return None, "is absent"
     try:
@@ -277,9 +280,9 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
     for record in records:
         anchor = legacy_anchor(record)
         source_anchors.append(anchor or "<no id>")
-        author = _text(record.get("reviewedBy"))
-        subject = _text(record.get("reviewedFor"))
-        public = _text(record.get("publicReview"))
+        author = trimmed(record.get("reviewedBy"))
+        subject = trimmed(record.get("reviewedFor"))
+        public = trimmed(record.get("publicReview"))
 
         if not anchor:
             quarantined.append(QuarantinedReview("<no id>", "the row carries no unique id"))
@@ -307,7 +310,7 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
         values: dict[str, int] = {}
         reason: str | None = None
         for source, column in RATING_COLUMNS.items():
-            ordinal, reason = _ordinal(_text(record.get(source)), field=source)
+            ordinal, reason = _ordinal(trimmed(record.get(source)), field=source)
             if ordinal is None:
                 break
             values[column] = ordinal
@@ -316,7 +319,7 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
             continue
 
         for source, (column, bounds) in POINT_COLUMNS.items():
-            point, reason = _point(_text(record.get(source)), field=source, bounds=bounds)
+            point, reason = _point(trimmed(record.get(source)), field=source, bounds=bounds)
             if point is None:
                 break
             values[column] = point
@@ -324,13 +327,11 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
             quarantined.append(QuarantinedReview(anchor, reason))
             continue
 
-        created, reason = _stamp(_either(record, "created_at", "Creation Date"), timezone=timezone)
+        created, reason = stamp(either(record, "created_at", "Creation Date"), timezone=timezone)
         if created is None:
             quarantined.append(QuarantinedReview(anchor, f"Creation Date {reason}"))
             continue
-        modified, reason = _stamp(
-            _either(record, "modified_at", "Modified Date"), timezone=timezone
-        )
+        modified, reason = stamp(either(record, "modified_at", "Modified Date"), timezone=timezone)
         if modified is None and reason != "is absent":
             # **Absent may fall back; unreadable may not.** A row Bubble never
             # stamped can honestly take its creation time. A row Bubble stamped
@@ -344,7 +345,7 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
         # counted a disagreement on a row that was then quarantined, so two
         # identical rows were accounted for differently — and a mismatch forces
         # a non-zero exit, so it also changed the run's verdict.
-        creator = _text(record.get("Creator"))
+        creator = trimmed(record.get("Creator"))
         if creator is not None and creator != author:
             mismatches.append(
                 Disagreement(anchor, f"Creator is {creator}, kept reviewedBy {author}")
@@ -356,7 +357,7 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
                 reviewed_by=author,
                 reviewed_for=subject,
                 public_review=public,
-                private_review=_text(record.get("privateReview")),
+                private_review=trimmed(record.get("privateReview")),
                 created_at=created,
                 updated_at=modified or created,
                 **values,
