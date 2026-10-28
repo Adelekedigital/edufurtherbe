@@ -38,6 +38,7 @@ from app.domain.intake_files import clean_filename, content_disposition, file_ty
 from app.infra.storage.supabase import StorageError, SupabaseStorage, intake_storage_for
 
 __all__ = [
+    "FILE_REFUSED",
     "MAX_FILE_MB",
     "CheckedFile",
     "UploadField",
@@ -48,6 +49,13 @@ __all__ = [
 
 #: The default upload limit in MB, as the published spec quotes it.
 MAX_FILE_MB = Settings.model_fields["intake_file_max_bytes"].default // (1024 * 1024)
+
+#: What `checked_file`'s refusals publish, for every upload route's `422`.
+FILE_REFUSED = (
+    "`/problems/file-too-large`: over the size limit. "
+    "`/problems/file-type-not-allowed`: empty, or not a PDF or Word document. "
+    "`errors[0].pointer` is `/file`."
+)
 
 #: The multipart field every upload takes, described once.
 UploadField = Annotated[

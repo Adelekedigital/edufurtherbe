@@ -48,10 +48,21 @@ SWEEP_BATCH = 500
 
 
 def _unsent() -> Any:
-    """**The one statement of "not sent yet"**, which the attach, the pending
-    cap and the sweep all read: the sweep removes exactly what a send could
-    still attach once it is old enough, never a sent file."""
+    """Not sent yet: no message carries it."""
     return MessageAttachment.message_id.is_(None)
+
+
+def _usable(now: dt.datetime, unused_hours: int) -> Any:
+    """**The one statement of "still sendable"**: unsent and younger than
+    ``unused_hours``. The attach and the pending cap read it, and the sweep
+    removes exactly the rest of the unsent (`_expired`), so an upload past its
+    hours neither blocks a new one nor sends while it waits for the sweep."""
+    return and_(_unsent(), MessageAttachment.created_at >= unused_cutoff(now, unused_hours))
+
+
+def _expired(now: dt.datetime, unused_hours: int) -> Any:
+    """Unsent and past its hours: `_usable`'s complement among the unsent."""
+    return and_(_unsent(), MessageAttachment.created_at < unused_cutoff(now, unused_hours))
 
 
 async def store_message_file(
@@ -63,20 +74,22 @@ async def store_message_file(
     payload: bytes,
     kind: IntakeFileType,
     uploads_per_hour: int,
+    unused_hours: int,
+    now: dt.datetime,
 ) -> dict[str, Any]:
     """Write the row, then the object, then commit; the new file's description.
 
     The intake bounds on this table's own rows (`uploads`): at most
-    `MAX_PENDING_UPLOADS` unsent, then the hourly count, which
+    `MAX_PENDING_UPLOADS` still sendable (`_usable`), then the hourly count, which
     `ix_message_attachments_uploader` serves. A chat file does not spend the
     intake budget, nor intake the chat's.
     """
     mine = MessageAttachment.uploaded_by == uploader_id
     await refuse_pending(
         session,
-        and_(mine, _unsent()),
+        and_(mine, _usable(now, unused_hours)),
         f"you have {MAX_PENDING_UPLOADS} files not yet sent in a message; send "
-        "them or wait a day for them to expire",
+        f"them or wait for them to expire, {unused_hours} hours after upload",
     )
     await within_upload_rate(
         session, mine=mine, created_at=MessageAttachment.created_at, limit=uploads_per_hour
@@ -101,13 +114,20 @@ async def store_message_file(
 
 
 async def attach_file(
-    session: AsyncSession, *, file_id: UUID, sender_id: UUID, message_id: UUID
+    session: AsyncSession,
+    *,
+    file_id: UUID,
+    sender_id: UUID,
+    message_id: UUID,
+    unused_hours: int,
+    now: dt.datetime,
 ) -> dict[str, Any]:
     """Attach the sender's unsent upload to their new message; its fields.
 
-    **The guard is the `WHERE`**: somebody else's file, one already sent and
-    one swept all match nothing, and :class:`FileUnavailableError` (a `422`
-    at `/file_id`) rolls the whole send back. Does not commit.
+    **The guard is the `WHERE`**: somebody else's file, one already sent, one
+    past its hours (`_usable`) and one swept all match nothing, and
+    :class:`FileUnavailableError` (a `422` at `/file_id`) rolls the whole send
+    back. Does not commit.
     """
     attached = (
         (
@@ -116,7 +136,7 @@ async def attach_file(
                 .where(
                     MessageAttachment.id == file_id,
                     MessageAttachment.uploaded_by == sender_id,
-                    _unsent(),
+                    _usable(now, unused_hours),
                 )
                 .values(message_id=message_id)
                 .returning(*FILE_COLUMNS)
@@ -201,7 +221,7 @@ async def sweep_message_files(
     carries a file whose object is gone. A failed object delete rolls back and
     leaves the row for the next run. A dry run counts and changes nothing.
     """
-    abandoned = and_(_unsent(), MessageAttachment.created_at < unused_cutoff(now, unused_hours))
+    abandoned = _expired(now, unused_hours)
     if dry_run:
         count = (await session.execute(select(func.count()).where(abandoned))).scalar_one()
         await session.rollback()

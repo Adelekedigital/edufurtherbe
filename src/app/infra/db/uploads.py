@@ -7,6 +7,10 @@ upload and a chat file are different tables, so each passes its own
 uploader's rows in; the bound (`MAX_PENDING_UPLOADS`, the hourly
 `INTAKE_UPLOADS_PER_HOUR`) and the refusal are one.
 
+**Both counts race**, as intake's always have: a burst of simultaneous
+uploads can pass them by a few. They bound abuse, not a number anybody relies
+on, and the unused-upload sweep removes what is never used.
+
 **The object and the row are not one transaction**, because Storage is not the
 database. The row is written first, then the object, then the commit, so a
 failed object write leaves no row; a failed commit takes the object back.

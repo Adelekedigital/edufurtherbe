@@ -98,7 +98,11 @@ async def own_thread(
 
 
 async def sent_message(
-    user_id: UUID, payload: MessageWrite, user: CurrentUserDep, session: SessionDep
+    user_id: UUID,
+    payload: MessageWrite,
+    request: Request,
+    user: CurrentUserDep,
+    session: SessionDep,
 ) -> tuple[MessageRead, bool]:
     """The message, written and committed, and whether it is new."""
     if payload.body is None and payload.file_id is None:
@@ -114,6 +118,7 @@ async def sent_message(
         client_id=payload.client_id,
         body=payload.body,
         file_id=payload.file_id,
+        unused_hours=_configured(request).intake_file_unused_hours,
         now=_now(),
     )
     await session.commit()
@@ -142,6 +147,8 @@ async def uploaded_message_file(
         payload=checked.payload,
         kind=checked.kind,
         uploads_per_hour=settings.intake_uploads_per_hour,
+        unused_hours=settings.intake_file_unused_hours,
+        now=_now(),
     )
 
 

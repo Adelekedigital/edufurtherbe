@@ -78,6 +78,13 @@ def _replayed(stored: dict[str, Any], conversation_id: UUID | None) -> dict[str,
     return stored
 
 
+def _required(unused_hours: int | None) -> int:
+    """A file's send needs the hours an upload stays sendable."""
+    if unused_hours is None:
+        raise TypeError("unused_hours is required to send a file")
+    return unused_hours
+
+
 def lock_refusal(chat: dict[str, Any]) -> ConflictError | None:
     """Why a send into this chat is refused by its lock (`chat_lock`), or
     ``None``. The send raises it; `can_message` asks it."""
@@ -135,6 +142,7 @@ async def send_message(
     body: str | None,
     now: dt.datetime,
     file_id: UUID | None = None,
+    unused_hours: int | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Send ``body``, ``file_id`` or both from ``me`` to ``other``: the message,
     and whether it is new (``False`` for a replay of ``client_id``). Does not
@@ -194,7 +202,14 @@ async def send_message(
     file = (
         NO_FILE
         if file_id is None
-        else await attach_file(session, file_id=file_id, sender_id=me, message_id=written["id"])
+        else await attach_file(
+            session,
+            file_id=file_id,
+            sender_id=me,
+            message_id=written["id"],
+            unused_hours=_required(unused_hours),
+            now=now,
+        )
     )
     await session.execute(
         update(Conversation)

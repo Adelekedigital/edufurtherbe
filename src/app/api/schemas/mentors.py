@@ -471,10 +471,12 @@ class MentorPublicRead(BaseModel):
     can_message: bool = Field(
         default=False,
         description=(
-            "You may message this mentor now: you are signed in, you are their "
-            "mentee in a booked session (confirmed, completed, missed or "
-            "cancelled), and they are not paused. The same rule as sending. "
-            "`false` for everyone else, signed out or the mentor themself."
+            "You may message this mentor now as their mentee: you are signed in, "
+            "connected by a booked session (confirmed, completed, missed or "
+            "cancelled), they are the mentor in your chat with them (before your "
+            "first message, in your newest booking with them), and they are not "
+            "paused or closed. `false` for everyone else, signed out or the "
+            "mentor themself."
         ),
     )
 

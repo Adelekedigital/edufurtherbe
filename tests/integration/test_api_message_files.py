@@ -407,11 +407,25 @@ async def test_two_sends_racing_for_one_file_attach_it_once(
 
     async with factory() as first, factory() as second:
         won, _ = await send_message(
-            first, mentee.id, mentor.id, client_id=uuid4(), body=None, file_id=file_id, now=now
+            first,
+            mentee.id,
+            mentor.id,
+            client_id=uuid4(),
+            body=None,
+            file_id=file_id,
+            unused_hours=24,
+            now=now,
         )
         racing = asyncio.create_task(
             send_message(
-                second, mentee.id, mentor.id, client_id=uuid4(), body=None, file_id=file_id, now=now
+                second,
+                mentee.id,
+                mentor.id,
+                client_id=uuid4(),
+                body=None,
+                file_id=file_id,
+                unused_hours=24,
+                now=now,
             )
         )
         await asyncio.sleep(1)
@@ -639,3 +653,22 @@ async def test_the_daily_retention_job_sweeps_message_files_too(
         == 0
     )
     assert fake.objects == {}
+
+
+async def test_an_upload_past_its_hours_neither_sends_nor_counts_before_the_sweep(
+    db_engine: AsyncEngine, fake: FakeStorage
+) -> None:
+    """The cap, the attach and the sweep read one rule: an upload past
+    `INTAKE_FILE_UNUSED_HOURS` is done with, whether or not the sweep ran."""
+    mentor, me = await pair(db_engine, "expired")
+    async for each in files_app(db_engine, fake, file_settings(intake_uploads_per_hour=50)):
+        stale = [await uploaded(each, me) for _ in range(10)]
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE message_attachments SET created_at = now() - interval '25 hours'")
+            )
+        fresh = await upload(each, me)
+        sent = await send_file(each, me, mentor, stale[0])
+
+    assert fresh.status_code == 201, fresh.text
+    await _unavailable(sent, db_engine, 0)
