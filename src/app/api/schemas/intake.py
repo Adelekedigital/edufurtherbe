@@ -219,9 +219,15 @@ class QuestionOrderWrite(BaseModel):
 
 
 class IntakeFileRead(BaseModel):
-    """A file you uploaded, ready to answer a `file_upload` question with."""
+    """A file you uploaded: to answer a `file_upload` question with
+    (`POST /me/intake-files`), or to send in a message (`POST /me/message-files`)."""
 
-    file_id: UUID = Field(description="Send as `answers[].file_id` when booking.")
+    file_id: UUID = Field(
+        description=(
+            "Send as `answers[].file_id` when booking (an intake upload), or as "
+            "`file_id` on a message (a message file)."
+        )
+    )
     filename: str = Field(
         description=(
             "The name it will download as: your file's name without any path, "

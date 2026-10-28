@@ -47,7 +47,12 @@ from app.domain.chats import (
     ChatRole,
 )
 from app.infra.db.models.mentoring import MentorProfile
-from app.infra.db.models.messaging import Conversation, ConversationParticipant, Message
+from app.infra.db.models.messaging import (
+    Conversation,
+    ConversationParticipant,
+    Message,
+    MessageAttachment,
+)
 from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.models.user import User, UserProfile
 from app.infra.db.pending_requests import upcoming_session
@@ -56,10 +61,12 @@ from app.infra.db.public_visibility import mentor_is_live
 from app.infra.db.qualifications import top_qualification
 
 __all__ = [
+    "FILE_COLUMNS",
     "MESSAGE_COLUMNS",
     "chat_of",
     "chat_rows",
     "connections",
+    "message_select",
     "not_connected",
     "pair",
     "people",
@@ -83,6 +90,25 @@ MESSAGE_COLUMNS = (
     Message.edited_at,
     Message.deleted_at,
 )
+
+#: The file a message carries, read beside it; all null for text alone.
+FILE_COLUMNS = (
+    MessageAttachment.id.label("file_id"),
+    MessageAttachment.file_name.label("file_name"),
+    MessageAttachment.size_bytes.label("file_size"),
+    MessageAttachment.mime_type.label("file_content_type"),
+)
+
+
+def message_select() -> Select[Any]:
+    """**Messages as every read sees them**: the message and its file. One file
+    per message at most (`uq_message_attachments_message_id`), so the join
+    never multiplies a row."""
+    return (
+        select(*MESSAGE_COLUMNS, *FILE_COLUMNS)
+        .select_from(Message)
+        .outerjoin(MessageAttachment, MessageAttachment.message_id == Message.id)
+    )
 
 
 def between(a: Any, b: Any) -> Any:
@@ -169,7 +195,7 @@ def _statement(me: UUID, now: dt.datetime, other: UUID | None = None) -> Select[
     )
     school = top_qualification(User.id, name="chat_school")
     last = (
-        select(*MESSAGE_COLUMNS)
+        message_select()
         .where(Message.conversation_id == Conversation.id)
         .order_by(Message.sent_at.desc(), Message.id.desc())
         .limit(1)
@@ -340,7 +366,7 @@ async def thread_page(
         return [], False
 
     key = tuple_(Message.sent_at, Message.id)
-    statement = select(*MESSAGE_COLUMNS).where(Message.conversation_id == conversation_id)
+    statement = message_select().where(Message.conversation_id == conversation_id)
     if after is not None and cursor is not None:
         statement = statement.where(key > tuple_(literal(cursor[0]), literal(cursor[1])))
         statement = statement.order_by(Message.sent_at, Message.id)

@@ -173,6 +173,8 @@ async def test_anything_but_pdf_or_word_is_refused(
     assert response.status_code == 422, response.text
     assert response.headers["content-type"] == PROBLEM_JSON
     assert [e["pointer"] for e in response.json()["errors"]] == ["/file"]
+    # The shared check's type (decision 302): status and errors as before.
+    assert response.json()["type"] == "/problems/file-type-not-allowed"
     assert intake_fake.uploads == []
 
 
@@ -188,6 +190,7 @@ async def test_a_file_over_the_configured_limit_is_refused(
     assert exact.status_code == 201, exact.text
     assert over.status_code == 422
     assert [e["pointer"] for e in over.json()["errors"]] == ["/file"]
+    assert over.json()["type"] == "/problems/file-too-large"
     assert len(intake_fake.uploads) == 1
 
 

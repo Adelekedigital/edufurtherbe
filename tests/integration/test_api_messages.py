@@ -347,7 +347,7 @@ async def test_a_body_this_endpoint_does_not_take_is_refused(
     for payload in (
         {"client_id": str(uuid4())},
         {"body": "Hi"},
-        {"client_id": str(uuid4()), "body": "Hi", "file_id": str(uuid4())},
+        {"client_id": str(uuid4()), "body": "Hi", "files": [str(uuid4())]},
     ):
         response = await api_client.post(
             f"{ROOT}/{mentor.id}", json=payload, headers=mentee.headers

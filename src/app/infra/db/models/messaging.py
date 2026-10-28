@@ -195,7 +195,7 @@ class Message(TimestampMixin, Base):
 class MessageAttachment(TimestampMixin, Base):
     """A file in a message. **Uploaded first, attached on send**: `message_id`
     is null until the message that carries it is written, and an upload never
-    sent is swept (Messages PRD; the upload and the sweep are the next PR).
+    sent is swept (Messages PRD; decision 302).
 
     One file per message (`uq_message_attachments_message_id`; nulls do not
     collide, so unsent uploads are free). `storage_key` is built from ids only,

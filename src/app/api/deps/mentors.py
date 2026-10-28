@@ -40,6 +40,8 @@ from app.domain.mentor_stats import (
     trend_windows,
     year_windows,
 )
+from app.infra.db.chat_store import chat_of
+from app.infra.db.chat_writer import can_message
 from app.infra.db.featured_store import (
     current_featured,
 )
@@ -130,6 +132,9 @@ async def public_mentor(
         "links": await links_of(session, user_id, published=True),
         "stats": await mentor_stats(session, user_id),
         "reviews": await mentor_review_stats(session, user_id),
+        # The send's own rule (decision 302): never for a signed-out visitor.
+        "can_message": viewer is not None
+        and can_message(await chat_of(session, viewer, user_id, dt.datetime.now(dt.UTC))),
     }
 
 

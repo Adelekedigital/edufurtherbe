@@ -137,12 +137,15 @@ async def get_thread(thread: OwnThreadDep, response: Response) -> ThreadRead:
     status_code=status.HTTP_201_CREATED,
     summary="Send a message",
     description=(
-        f"`body` is trimmed and must be 1 to {BODY_MAX_LENGTH} characters; line "
-        "breaks inside it are kept. The first message creates the chat.\n\n"
+        "Text (`body`), a file (`file_id`) or both. `body` is trimmed and may hold "
+        f"up to {BODY_MAX_LENGTH} characters; line breaks inside it are kept. "
+        "`file_id` is a file you uploaded with `POST /me/message-files` and have "
+        "not sent: it is attached with the message, in one step. The first "
+        "message creates the chat.\n\n"
         "**Idempotent on `client_id`**: sending the same `client_id` again "
-        "returns the stored message with `200` and stores nothing, even if the "
-        "first attempt's answer was lost. Files are not taken yet. `Location` "
-        "names the chat: a message has no URL of its own."
+        "returns the stored message (with its file) with `200` and stores "
+        "nothing, even if the first attempt's answer was lost. `Location` names "
+        "the chat: a message has no URL of its own."
     ),
     responses={
         **UNAUTHORISED,
@@ -165,8 +168,10 @@ async def get_thread(thread: OwnThreadDep, response: Response) -> ThreadRead:
         },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "description": (
-                f"`body` is missing, blank or over {BODY_MAX_LENGTH} characters "
-                "(pointer `/body`); `client_id` was already used for a message in "
+                f"Neither text nor a file, or text over {BODY_MAX_LENGTH} characters "
+                "(pointer `/body`); `/problems/file-unavailable`: `file_id` is not "
+                "your unsent upload (somebody else's, already sent, or expired; "
+                "pointer `/file_id`); `client_id` was already used for a message in "
                 "another chat (pointer `/client_id`); or the body has a field this "
                 "endpoint does not take."
             )
