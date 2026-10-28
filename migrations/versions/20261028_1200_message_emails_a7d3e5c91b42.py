@@ -13,7 +13,8 @@
 
 Expand only, and merged alone (project-conventions, *Migration ordering*):
 nothing reads or writes either until the next PR. Adding a nullable column is a
-catalogue change; the index is built on a table nothing writes yet.
+catalogue change. The index is built `CONCURRENTLY`, as `4e8b2c6d1f93` explains:
+live code writes `messages` (#563), so an inline build would block every send.
 """
 
 from collections.abc import Sequence
@@ -28,6 +29,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 TABLE = "notification_channel_preferences"
+INDEX = "ix_messages_conversation_emailed"
 #: Whether the table holds any row.
 ANY_ROW = "SELECT EXISTS (SELECT 1 FROM {})"
 
@@ -35,13 +37,6 @@ ANY_ROW = "SELECT EXISTS (SELECT 1 FROM {})"
 def upgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
     op.add_column("messages", sa.Column("emailed_at", sa.TIMESTAMP(timezone=True), nullable=True))
-    op.create_index(
-        "ix_messages_conversation_emailed",
-        "messages",
-        ["conversation_id", "emailed_at"],
-        postgresql_where=sa.text("emailed_at IS NOT NULL"),
-    )
-
     op.create_table(
         TABLE,
         sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
@@ -79,6 +74,14 @@ def upgrade() -> None:
         f"CREATE TRIGGER trg_set_updated_at BEFORE UPDATE ON {TABLE} "
         "FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
     )
+    # `lock_timeout` fails fast; no `statement_timeout`, which would leave an
+    # `INVALID` index half built.
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '3s'")
+        op.execute(
+            f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {INDEX} "
+            "ON messages (conversation_id, emailed_at) WHERE emailed_at IS NOT NULL"
+        )
 
 
 def downgrade() -> None:
@@ -93,6 +96,11 @@ def downgrade() -> None:
         sa.text("SELECT EXISTS (SELECT 1 FROM messages WHERE emailed_at IS NOT NULL)")
     ).scalar():
         raise RuntimeError("messages.emailed_at is set: downgrading would email them again")
+    # Concurrently, and `IF EXISTS` so a failed build's `INVALID` index cannot
+    # strand the chain.
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '3s'")
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX}")
+    op.execute("SET lock_timeout = '3s'")
     op.drop_table(TABLE)
-    op.drop_index("ix_messages_conversation_emailed", table_name="messages")
     op.drop_column("messages", "emailed_at")
