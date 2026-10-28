@@ -92,6 +92,12 @@ from app.api.deps.mentors import (
     PublicMentorDep,
     SimilarMentorsDep,
 )
+from app.api.deps.message_emails import (
+    MESSAGE_EMAIL_CALLBACK_PATH,
+    MessageEmailCallbackDep,
+    OwnMessageSettingsDep,
+    UpdatedMessageSettingsDep,
+)
 from app.api.deps.messages import (
     MessageFileDownloadDep,
     OwnChatsDep,
@@ -194,6 +200,7 @@ from app.api.deps.writing_assist import AssistedTextDep
 __all__ = [
     "BIO_DRAFT_CALLBACK_PATH",
     "MAX_FILE_MB",
+    "MESSAGE_EMAIL_CALLBACK_PATH",
     "PRIVATE_NO_STORE",
     "AcceptedSessionDep",
     "AddedNoteDep",
@@ -269,6 +276,7 @@ __all__ = [
     "MentorRelationshipDep",
     "MentorReviewsDep",
     "MergedInstitutionDep",
+    "MessageEmailCallbackDep",
     "MessageFileDownloadDep",
     "MetMentorsDep",
     "ModerationQueueDep",
@@ -282,6 +290,7 @@ __all__ = [
     "OwnMenteeStatsDep",
     "OwnMentorMonthlyStatsDep",
     "OwnMentorStatsDep",
+    "OwnMessageSettingsDep",
     "OwnOnboardingDep",
     "OwnPeopleDep",
     "OwnQuestionsDep",
@@ -334,6 +343,7 @@ __all__ = [
     "UpdatedConferencingDep",
     "UpdatedEducationDep",
     "UpdatedMentorProfileDep",
+    "UpdatedMessageSettingsDep",
     "UpdatedOwnQuestionDep",
     "UpdatedOwnSessionTypeDep",
     "UpdatedSessionTypeWindowDep",

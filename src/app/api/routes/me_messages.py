@@ -8,7 +8,7 @@ checked in every statement, so a chat with anyone else is a `404` to read and
 a `403` to send into.
 
 **The static paths are declared before `/{user_id}`**, which would otherwise
-read `unread` and `people` as an id.
+read `unread`, `people` and `settings` as an id.
 """
 
 from uuid import UUID
@@ -18,13 +18,16 @@ from fastapi import APIRouter, Response, status
 from app.api.deps import (
     PRIVATE_NO_STORE,
     OwnChatsDep,
+    OwnMessageSettingsDep,
     OwnPeopleDep,
     OwnThreadDep,
     OwnUnreadDep,
     ReadMarkedDep,
     SentMessageDep,
+    UpdatedMessageSettingsDep,
 )
 from app.api.schemas.common import Page
+from app.api.schemas.message_settings import MessageSettingsRead
 from app.api.schemas.messages import ChatPage, MessageRead, PersonRead, ThreadRead, UnreadRead
 from app.domain.chats import BODY_MAX_LENGTH, MAX_PAGE, PREVIEW_LENGTH
 
@@ -98,6 +101,45 @@ async def unread(total: OwnUnreadDep, response: Response) -> UnreadRead:
 async def list_people(found: OwnPeopleDep, response: Response) -> Page[PersonRead]:
     response.headers["Cache-Control"] = PRIVATE_NO_STORE
     return Page[PersonRead](data=found)
+
+
+@router.get(
+    "/settings",
+    response_model=MessageSettingsRead,
+    summary="Your message emails",
+    description=(
+        "Whether you get the unread message emails: `true` unless you switched "
+        "them off. The session-window email is always on and has no switch."
+    ),
+    responses=UNAUTHORISED,
+)
+async def message_settings(
+    settings: OwnMessageSettingsDep, response: Response
+) -> MessageSettingsRead:
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
+    return settings
+
+
+@router.patch(
+    "/settings",
+    response_model=MessageSettingsRead,
+    summary="Switch your unread message emails",
+    description=(
+        "Saves `unread_emails` and returns your settings. Saving the same value "
+        "again changes nothing. An unread email already queued is not sent once "
+        "it is off."
+    ),
+    responses={
+        **UNAUTHORISED,
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": (
+                "`unread_emails` is missing or not a boolean, or the body has another field."
+            )
+        },
+    },
+)
+async def update_message_settings(settings: UpdatedMessageSettingsDep) -> MessageSettingsRead:
+    return settings
 
 
 @router.get(

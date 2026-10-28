@@ -12,6 +12,15 @@ released. A tag with no matching section here fails the release job.
 
 ### Added
 
+- **Message emails (decision 303).** A message still unread 15 minutes after it
+  was sent is emailed, at most one email an hour per person: one or two
+  messages show their text, three or more show who wrote and how many. A
+  message sent from 15 minutes before to 15 minutes after a session between the
+  two starts is emailed at once, in full. `GET`/`PATCH /me/messages/settings`
+  (`{unread_emails}`, on by default) turns the unread email off; the session
+  email stays on. A read or deleted message is never emailed, and no message is
+  emailed twice. The three Loops templates are still to be built.
+
 - **The legacy chat import (decision 302).** `scripts/load_messages.py` loads
   Bubble's chats and messages: two chats between the same two people become
   one, read marks carry over, edits and deletes are kept, and nothing is

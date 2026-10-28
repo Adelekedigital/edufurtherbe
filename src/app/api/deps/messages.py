@@ -16,6 +16,7 @@ from pydantic import StringConstraints
 
 from app.api.deps.core import CurrentUserDep, SessionDep, _configured
 from app.api.deps.files import UploadField, checked_file, private_storage, streamed_file
+from app.api.deps.message_emails import schedule_unread_email
 from app.api.schemas.common import StorableText
 from app.api.schemas.messages import (
     ChatPage,
@@ -28,6 +29,7 @@ from app.api.schemas.messages import (
 )
 from app.core.errors import NotFoundError, ValidationError
 from app.domain.chats import DEFAULT_PAGE, MAX_PAGE
+from app.domain.message_emails import UNREAD_EMAIL_DELAY
 from app.infra.db.chat_store import (
     chat_of,
     chat_rows,
@@ -37,6 +39,7 @@ from app.infra.db.chat_store import (
     unread_total,
 )
 from app.infra.db.chat_writer import mark_read, send_message
+from app.infra.db.message_emails import queue_instant_email
 from app.infra.db.message_file_store import readable_message_file, store_message_file
 
 #: The longest name search the picker takes.
@@ -104,13 +107,20 @@ async def sent_message(
     user: CurrentUserDep,
     session: SessionDep,
 ) -> tuple[MessageRead, bool]:
-    """The message, written and committed, and whether it is new."""
+    """The message, written and committed, and whether it is new.
+
+    A new message around a session between the two is emailed at once, in the
+    send's transaction (decision 303). Any other new message queues the unread
+    email's job for 15 minutes later, once the send has committed. A replay
+    emails nothing again.
+    """
     if payload.body is None and payload.file_id is None:
         # A blank body is `None` by now (`Normalised`): text, a file or both.
         raise ValidationError(
             "send text, a file or both", field_errors=(("/body", "text or a file is required"),)
         )
     me: UUID = user["id"]
+    now = _now()
     row, created = await send_message(
         session,
         me,
@@ -119,9 +129,12 @@ async def sent_message(
         body=payload.body,
         file_id=payload.file_id,
         unused_hours=_configured(request).intake_file_unused_hours,
-        now=_now(),
+        now=now,
     )
+    instant = created and await queue_instant_email(session, row["id"], me, user_id, now)
     await session.commit()
+    if created and not instant:
+        await schedule_unread_email(request, user_id, row["sent_at"] + UNREAD_EMAIL_DELAY)
     return MessageRead.of(row, me), created
 
 

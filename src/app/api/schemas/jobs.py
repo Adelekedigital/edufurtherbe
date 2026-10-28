@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-__all__ = ["PresenceRecordedRead", "ReminderQueuedRead", "RuntimeJobRead"]
+__all__ = ["MessageEmailRead", "PresenceRecordedRead", "ReminderQueuedRead", "RuntimeJobRead"]
 
 
 class ReminderQueuedRead(BaseModel):
@@ -22,6 +22,18 @@ class BioDraftRead(BaseModel):
         description=(
             "True when a draft was saved as the bio. False when none was owed, "
             "none came back, or the person wrote their own first; still a success."
+        )
+    )
+
+
+class MessageEmailRead(BaseModel):
+    """An unread message email job was handled (decision 303)."""
+
+    queued: bool = Field(
+        description=(
+            "True when an email was queued. False when none is owed (read, already "
+            "emailed, switched off, account closed) or it is held until the hour "
+            "ends and queued again for then; still a success."
         )
     )
 

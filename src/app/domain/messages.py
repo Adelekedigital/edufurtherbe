@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.errors import AppError
 from app.domain.enums import SessionReasonCode
+from app.domain.message_emails import FEW_MAX, SENDER_ROWS
 from app.domain.sessions import request_deadline
 
 __all__ = [
@@ -117,6 +118,7 @@ class MessageContext:
     detail: str | None = None
     venue: str | None = None
     respond_by: dt.datetime | None = None
+    duration_minutes: int | None = None
 
     session_id: str | None = None
     app_base_url: str = ""
@@ -143,6 +145,11 @@ MENTOR_APPLICATION_PATH = "/mentor-application"
 #: One pending request, open on the Bookings page's pending tab, where the
 #: mentor answers it (decision 294).
 PENDING_REQUEST_PATH = "/bookings?tab=pending&booking={session_id}"
+#: Messages (decision 303): the inbox, one chat by the other person's id, and
+#: the settings modal (Messages PRD, "Links").
+MESSAGES_PATH = "/messages"
+CHAT_PATH = "/messages?with={user_id}"
+MESSAGE_SETTINGS_PATH = "/messages?settings=1"
 
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
@@ -301,7 +308,81 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     # from the row, and a link to the request itself.
     "reminderMessage": lambda c: _needs(c.extras.get("reminder_message"), "reminderMessage"),
     "pendingRequestUrl": _pending_request_url,
+    # The message emails (decision 303).
+    "buttonUrl": lambda c: _button_url(c),
+    "messagesUrl": lambda c: _app_link(c, MESSAGES_PATH, "messagesUrl"),
+    "settingsUrl": lambda c: _app_link(c, MESSAGE_SETTINGS_PATH, "settingsUrl"),
+    "sessionName": lambda c: c.session_type_name or SESSION_TOPIC_FALLBACK,
+    "sessionDuration": lambda c: f"{_needs(c.duration_minutes, 'sessionDuration')} min",
 }
+
+
+def _button_url(context: MessageContext) -> str:
+    """One person's chat when the email is about one person, else Messages."""
+    other = context.extras.get("reply_to")
+    path = CHAT_PATH.format(user_id=quote(other, safe="")) if other else MESSAGES_PATH
+    return _app_link(context, path, "buttonUrl")
+
+
+#: A message email's values, carried on its row by `domain.message_emails`:
+#: these always have one, so a template asking for one on another email fails.
+_MESSAGE_EMAIL_VALUES = {
+    "emailSubject": "email_subject",
+    "emailHeading": "email_heading",
+    "buttonLabel": "button_label",
+    "repliesName": "replies_name",
+    "previewText": "preview_text",
+    "senderFirstName": "sender_first_name",
+    "unreadCount": "unread_count",
+    "senderFirstNames": "sender_first_names",
+}
+
+#: A card or a row that may be empty: the second card of a one-message email,
+#: a sender row past the senders, a message that is a file alone.
+_MESSAGE_EMAIL_SLOTS = {
+    **{
+        f"message{n}{name}": f"message{n}_{key}"
+        for n in range(1, FEW_MAX + 1)
+        for name, key in (
+            ("Name", "name"),
+            ("Initials", "initials"),
+            ("Text", "text"),
+            ("FileName", "file_name"),
+        )
+    },
+    **{
+        f"sender{n}{name}": f"sender{n}_{key}"
+        for n in range(1, SENDER_ROWS + 1)
+        for name, key in (("Name", "name"), ("Initials", "initials"), ("Count", "count"))
+    },
+    "otherSenders": "other_senders",
+}
+
+
+def _message_time(context: MessageContext, key: str, name: str) -> str:
+    """A message card's time in the recipient's zone, empty with no card."""
+    if not context.extras.get(key):
+        return ""
+    return _extra_moment(context, key, name).strftime("%H:%M")
+
+
+def _carried(key: str, name: str) -> Callable[[MessageContext], str]:
+    """A value the message email's row carries, or a refusal naming it."""
+    return lambda c: _needs(c.extras.get(key), name)
+
+
+def _slot(key: str) -> Callable[[MessageContext], str]:
+    """A card or row value, empty when the email has no such card or row."""
+    return lambda c: c.extras.get(key, "")
+
+
+def _card_time(n: int) -> Callable[[MessageContext], str]:
+    return lambda c: _message_time(c, f"message{n}_sent_at", f"message{n}Time")
+
+
+RESOLVERS |= {name: _carried(key, name) for name, key in _MESSAGE_EMAIL_VALUES.items()}
+RESOLVERS |= {name: _slot(key) for name, key in _MESSAGE_EMAIL_SLOTS.items()}
+RESOLVERS |= {f"message{n}Time": _card_time(n) for n in range(1, FEW_MAX + 1)}
 
 
 def _extra_moment(context: MessageContext, key: str, name: str) -> dt.datetime:

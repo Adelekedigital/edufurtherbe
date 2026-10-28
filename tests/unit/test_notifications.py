@@ -147,6 +147,11 @@ def test_every_session_message_has_an_audience() -> None:
             Notification.CREDITS_GRANTED,
             Notification.CREDITS_RENEWED,
             Notification.CREDITS_EXPIRING,
+            # A message email goes to whom the message was sent to, named by
+            # the send (decision 303); the window email's session is context.
+            Notification.MESSAGE_UNREAD_FEW,
+            Notification.MESSAGE_UNREAD_MANY,
+            Notification.MESSAGE_IN_SESSION_WINDOW,
         }
     }
 
