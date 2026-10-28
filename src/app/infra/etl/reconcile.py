@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.domain.transform import UserRow
 from app.domain.transform.availability import AvailabilityPlan
 from app.domain.transform.credits import CreditPlan
+from app.domain.transform.messages import MessagePlan
 from app.domain.transform.profiles import ProfilePlan
 from app.domain.transform.reviews import ReviewPlan
 from app.domain.transform.sessions import SessionPlan
@@ -661,6 +662,68 @@ async def reconcile_reviews(connection: AsyncConnection, plan: ReviewPlan) -> Re
             ),
         ),
         unaccounted=_unaccounted_of(plan.source_anchors, tuple(accounted)),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MessageReconciliation(ReviewReconciliation):
+    """The legacy chats and messages: the review shape, two tables. A starter
+    merged into its pair's chat is accounted for by that chat."""
+
+
+async def reconcile_messages(
+    connection: AsyncConnection, plan: MessagePlan
+) -> MessageReconciliation:
+    """Compare conversations and messages against the plan (decision 302).
+
+    Chats are checked for presence only: one merged into a chat the pair
+    began on the new platform keeps that chat's timestamps. Messages are
+    compared to the microsecond, as `reconcile_reviews` explains.
+    """
+    loaded_chats = set(
+        (
+            await connection.execute(
+                text(
+                    "SELECT legacy_bubble_id FROM conversations WHERE legacy_bubble_id IS NOT NULL"
+                )
+            )
+        ).scalars()
+    )
+    # A chat is present when any of its starters is the stored anchor: the
+    # first anchor is kept, so a later export may name an earlier starter.
+    chats = {row.legacy_bubble_id: set(row.starters) for row in plan.chats}
+    missing_chats = sorted(anchor for anchor, ids in chats.items() if not ids & loaded_chats)
+    expected = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in plan.messages}
+    result = await connection.execute(text(STAMPED.format("messages")))
+    actual = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in result.mappings()}
+    accounted = [
+        *(starter for chat in plan.chats for starter in chat.starters),
+        *expected,
+        *(row.legacy_bubble_id for row in plan.quarantined),
+    ]
+    return MessageReconciliation(
+        checks=(
+            TableCheck(
+                table="conversations",
+                expected=len(chats),
+                loaded=len(chats) - len(missing_chats),
+                missing=tuple(missing_chats),
+            ),
+            TableCheck(
+                table="messages",
+                expected=len(expected),
+                loaded=len(actual),
+                missing=tuple(sorted(set(expected) - set(actual))),
+                wrong_timestamps=tuple(
+                    sorted(
+                        anchor
+                        for anchor, stamps in expected.items()
+                        if anchor in actual and actual[anchor] != stamps
+                    )
+                ),
+            ),
+        ),
+        unaccounted=_unaccounted_of(plan.source_anchors, accounted),
     )
 
 

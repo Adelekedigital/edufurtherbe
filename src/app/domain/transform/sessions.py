@@ -508,7 +508,7 @@ def _timestamp(
         raise TransformError(anchor, f"{field_name}: {exc}") from exc
 
 
-def _is_true(value: Any) -> bool:
+def is_true(value: Any) -> bool:
     """``blank_to_none`` turns ``""`` into ``None``, so this must be falsy-safe.
 
     ``bookingRequestAccepted`` is blank on 100 of 105 rows; ``== ""`` would
@@ -567,7 +567,7 @@ def _attendance(raw: Any) -> AttendanceStatus:
     ``LEFT_EARLY`` is unreachable from legacy: nothing in Bubble records a
     departure, so ``left_at`` is null on every migrated participant.
     """
-    return AttendanceStatus.ATTENDED if _is_true(raw) else AttendanceStatus.NO_SHOW
+    return AttendanceStatus.ATTENDED if is_true(raw) else AttendanceStatus.NO_SHOW
 
 
 def session_status(record: dict[str, Any], anchor: str) -> SessionStatus | None:
@@ -583,7 +583,7 @@ def session_status(record: dict[str, Any], anchor: str) -> SessionStatus | None:
     rows a sixth value is likelier than not, and mapping it to a plausible
     neighbour would produce sessions nobody could find again.
     """
-    if _is_true(record.get(BOOKING_CANCEL_FLAG_FIELD)):
+    if is_true(record.get(BOOKING_CANCEL_FLAG_FIELD)):
         return SessionStatus.CANCELLED
 
     raw = _text(record, BOOKING_STATUS_FIELD)
@@ -897,7 +897,7 @@ def plan_sessions(
         # Terminal, unless it never transitioned.
         if status is SessionStatus.PENDING_MENTOR_APPROVAL or modified_at is None:
             continue
-        accepted = _is_true(record.get(BOOKING_ACCEPTED_FIELD))
+        accepted = is_true(record.get(BOOKING_ACCEPTED_FIELD))
         if accepted and status is not SessionStatus.CONFIRMED:
             unplaceable.append(anchor)
         cancelled_by = _text(record, BOOKING_CANCELLED_BY_FIELD)
@@ -974,7 +974,7 @@ def plan_sessions(
         assert starts_at is not None and minutes is not None  # noqa: S101
         if mentor not in mentor_linked:
             mentors_without_link.append(mentor)
-        cancelled = _is_true(record.get(TRACKER_CANCELLED_FIELD))
+        cancelled = is_true(record.get(TRACKER_CANCELLED_FIELD))
         url = _text(record, TRACKER_LINK_FIELD)
         raw_room = record.get(ROOM_NAME_FIELD)
         if raw_room and room_id(raw_room) is None:
