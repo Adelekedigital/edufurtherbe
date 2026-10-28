@@ -35,6 +35,9 @@ from app.core.errors import (
     BookingWithMentorExistsError,
     ConfigurationError,
     ConflictError,
+    FileTooLargeError,
+    FileTypeNotAllowedError,
+    FileUnavailableError,
     ForbiddenError,
     InsufficientCreditError,
     InviteForNewAccountsError,
@@ -161,6 +164,9 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     RecipientPausedError: "/problems/recipient-paused",
     RecipientClosedError: "/problems/recipient-closed",
     WritingAssistUnavailableError: "/problems/writing-assist-unavailable",
+    FileTooLargeError: "/problems/file-too-large",
+    FileTypeNotAllowedError: "/problems/file-type-not-allowed",
+    FileUnavailableError: "/problems/file-unavailable",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx

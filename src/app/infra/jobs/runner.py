@@ -46,6 +46,7 @@ from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.idempotency import sweep_expired_keys
 from app.infra.db.intake_file_store import sweep_counts, sweep_intake_files
 from app.infra.db.mentor_status_store import remind_returning_mentors
+from app.infra.db.message_file_store import message_sweep_counts, sweep_message_files
 from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.outbox import drain
 from app.infra.db.session_type_store import finalise_scheduled_deletions
@@ -77,8 +78,8 @@ SETTLE_SESSIONS_BUDGET = dt.timedelta(seconds=120)
 def retention_counts(files: dict[str, int], *, idempotency_keys: int) -> dict[str, int]:
     """What the daily retention job reports — the one place its keys are named.
 
-    The file step's keys come from `sweep_counts`; this adds the key sweep's.
-    In a dry run both are what *would* be removed.
+    The file steps' keys come from `sweep_counts` and `message_sweep_counts`;
+    this adds the key sweep's. In a dry run each is what *would* be removed.
     """
     return {**files, "idempotency_keys_deleted": idempotency_keys}
 
@@ -347,7 +348,8 @@ class RuntimeJobs:
             await engine.dispose()
 
     async def _sweep_intake_files(self, *, dry_run: bool) -> dict[str, int]:
-        """The daily retention job: intake files, then expired idempotency keys.
+        """The daily retention job: intake files, message files never sent
+        (decision 302), then expired idempotency keys.
 
         The key sweep (#353) rides here rather than on a schedule of its own,
         because both steps exist for one reason — not keeping a person's words
@@ -367,7 +369,7 @@ class RuntimeJobs:
                     # No bucket means uploads are refused, so there are no files
                     # to sweep; a no-op rather than a failure QStash would retry.
                     logger.warning("intake file sweep skipped: intake storage is not configured")
-                    files = sweep_counts()
+                    files = sweep_counts() | message_sweep_counts()
                 else:
                     async with factory() as session:
                         files = await sweep_intake_files(
@@ -375,6 +377,15 @@ class RuntimeJobs:
                             storage,
                             now=now,
                             retention_days=settings.intake_file_retention_days,
+                            unused_hours=settings.intake_file_unused_hours,
+                            dry_run=dry_run,
+                        )
+                    # The same bucket and the same unused-hours setting.
+                    async with factory() as session:
+                        files |= await sweep_message_files(
+                            session,
+                            storage,
+                            now=now,
                             unused_hours=settings.intake_file_unused_hours,
                             dry_run=dry_run,
                         )

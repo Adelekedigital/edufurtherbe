@@ -86,6 +86,28 @@ class NextBookingRead(BaseModel):
         )
 
 
+class FileRead(BaseModel):
+    """A file in a message: `GET /message-files/{id}` downloads it."""
+
+    id: UUID
+    filename: str = Field(description="The name it downloads as.")
+    size: int = Field(description="Bytes.")
+    content_type: IntakeFileType = Field(description="Decided from the file's bytes.")
+
+    @classmethod
+    def of(cls, row: dict[str, Any], prefix: str = "") -> FileRead | None:
+        """The file in a message row (`chat_store.FILE_COLUMNS`, under
+        ``prefix`` in the inbox's `last_`), or ``None`` for text alone."""
+        if row[f"{prefix}file_id"] is None:
+            return None
+        return cls(
+            id=row[f"{prefix}file_id"],
+            filename=row[f"{prefix}file_name"],
+            size=int(row[f"{prefix}file_size"]),
+            content_type=row[f"{prefix}file_content_type"],
+        )
+
+
 class LastRead(BaseModel):
     """The newest message in a chat, as its inbox row previews it."""
 
@@ -111,13 +133,13 @@ class LastRead(BaseModel):
             return None
         deleted = row["last_deleted_at"] is not None
         body = row["last_body"]
+        file = FileRead.of(row, "last_")
         return cls(
             kind=LastKind.FILE
             if row["last_message_type"] == MessageType.ATTACHMENT
             else LastKind.TEXT,
             text=preview(str(body)) if body is not None and not deleted else None,
-            # Files arrive with the upload endpoints.
-            file_name=None,
+            file_name=file.filename if file is not None and not deleted else None,
             mine=row["last_sender_id"] == me,
             at=row["last_sent_at"],
             deleted=deleted,
@@ -154,15 +176,6 @@ class UnreadRead(BaseModel):
     total: int = Field(description="Equal to `total_unread` on `GET /me/messages`.")
 
 
-class FileRead(BaseModel):
-    """A file in a message. Arrives with the upload endpoints."""
-
-    id: UUID
-    filename: str
-    size: int = Field(description="Bytes.")
-    content_type: IntakeFileType
-
-
 class MessageRead(BaseModel):
     """One message in a chat."""
 
@@ -191,7 +204,7 @@ class MessageRead(BaseModel):
             sender_id=row["sender_id"],
             mine=row["sender_id"] == me,
             body=None if deleted else row["body"],
-            file=None,
+            file=None if deleted else FileRead.of(row),
             sent_at=row["sent_at"],
             edited_at=row["edited_at"],
             deleted=deleted,
@@ -248,8 +261,7 @@ class ThreadRead(BaseModel):
 
 
 class MessageWrite(Normalised):
-    """A message to send. **Text only for now**: files arrive with the upload
-    endpoints, as an optional `file_id` beside `body`."""
+    """A message to send: text, a file, or both."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -259,11 +271,20 @@ class MessageWrite(Normalised):
             "again returns the stored message (`200`) and never stores a second."
         )
     )
-    body: str = Field(
+    body: str | None = Field(
+        default=None,
         max_length=BODY_MAX_LENGTH,
         description=(
-            f"The text, 1 to {BODY_MAX_LENGTH} characters after trimming; line "
-            "breaks inside it are kept."
+            f"The text, up to {BODY_MAX_LENGTH} characters after trimming; line "
+            "breaks inside it are kept. Optional with a `file_id`, required "
+            "without one."
+        ),
+    )
+    file_id: UUID | None = Field(
+        default=None,
+        description=(
+            "A file you uploaded with `POST /me/message-files` and have not sent "
+            "yet. One file per message."
         ),
     )
 

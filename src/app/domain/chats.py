@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 from enum import StrEnum
+from uuid import UUID
 
 from app.domain.enums import SessionStatus
 from app.domain.refunds import BOOKED_STATUSES
@@ -19,6 +20,7 @@ __all__ = [
     "CONNECTING_STATUSES",
     "DEFAULT_PAGE",
     "ELLIPSIS",
+    "FILE_PREFIX",
     "MAX_PAGE",
     "PREVIEW_LENGTH",
     "SESSION_WINDOW",
@@ -27,6 +29,7 @@ __all__ = [
     "ChatRole",
     "LastKind",
     "chat_lock",
+    "file_storage_key",
     "preview",
 ]
 
@@ -114,3 +117,13 @@ def preview(text: str, length: int = PREVIEW_LENGTH) -> str:
     cut = room.rfind(" ")
     head = room[:cut] if cut > 0 else room[:-1]
     return head.rstrip() + ELLIPSIS
+
+
+#: Where message files sit in the private bucket, beside intake's
+#: `{uploader}/{uuid}`: a uuid never reads `messages`, so the two never meet.
+FILE_PREFIX = "messages"
+
+
+def file_storage_key(uploader_id: UUID, object_id: UUID) -> str:
+    """A message file's object key: ids, and only ids (decision 302)."""
+    return f"{FILE_PREFIX}/{uploader_id}/{object_id}"

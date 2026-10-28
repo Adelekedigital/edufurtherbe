@@ -131,6 +131,8 @@ ADDED = {
         "links",
         # When the current approval was granted, owner only (Mentor Home).
         "approved_at",
+        # Whether the viewer may message this mentor (decision 302).
+        "can_message",
     ),
     # A mentor application's state, in the owner's view (Mentor Onboarding B2).
     "MentorProfileRead": (

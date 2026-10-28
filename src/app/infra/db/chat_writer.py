@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import (
+    ConflictError,
     NotConnectedError,
     RecipientClosedError,
     RecipientPausedError,
@@ -29,10 +30,21 @@ from app.core.errors import (
 )
 from app.domain.chats import ChatLock, ChatRole, chat_lock
 from app.domain.enums import ConversationStatus, MessageType
-from app.infra.db.chat_store import MESSAGE_COLUMNS, chat_of, not_connected, pair
+from app.infra.db.chat_store import (
+    FILE_COLUMNS,
+    MESSAGE_COLUMNS,
+    chat_of,
+    message_select,
+    not_connected,
+    pair,
+)
+from app.infra.db.message_file_store import attach_file
 from app.infra.db.models.messaging import Conversation, ConversationParticipant, Message
 
-__all__ = ["mark_read", "send_message"]
+__all__ = ["can_message", "lock_refusal", "mark_read", "send_message"]
+
+#: A text-only message's file fields.
+NO_FILE: dict[str, Any] = {column.key: None for column in FILE_COLUMNS}
 
 #: `uq_conversations_pair`'s expressions, so a first send's `ON CONFLICT`
 #: catches only the pair and any other unique violation still raises.
@@ -47,9 +59,7 @@ async def _stored(session: AsyncSession, me: UUID, client_id: UUID) -> dict[str,
     row = (
         (
             await session.execute(
-                select(*MESSAGE_COLUMNS).where(
-                    Message.sender_id == me, Message.client_id == client_id
-                )
+                message_select().where(Message.sender_id == me, Message.client_id == client_id)
             )
         )
         .mappings()
@@ -66,6 +76,24 @@ def _replayed(stored: dict[str, Any], conversation_id: UUID | None) -> dict[str,
             field_errors=(("/client_id", "already used for a message in another chat"),),
         )
     return stored
+
+
+def lock_refusal(chat: dict[str, Any]) -> ConflictError | None:
+    """Why a send into this chat is refused by its lock (`chat_lock`), or
+    ``None``. The send raises it; `can_message` asks it."""
+    lock = chat_lock(closed=bool(chat["deleted"]), paused=bool(chat["paused"]))
+    if lock is ChatLock.CLOSED:
+        return RecipientClosedError("they closed their account")
+    if lock is ChatLock.PAUSED:
+        return RecipientPausedError("they are not taking messages right now")
+    return None
+
+
+def can_message(chat: dict[str, Any] | None) -> bool:
+    """**The send's own rule, asked ahead** (the profile's `can_message`): the
+    caller is connected (``chat`` is their `chat_of` row), the other person is
+    their mentor in it, and nothing locks it."""
+    return chat is not None and chat["role"] == ChatRole.MENTOR.value and lock_refusal(chat) is None
 
 
 async def _open_chat(session: AsyncSession, me: UUID, other: UUID, their_role: str) -> UUID:
@@ -104,17 +132,20 @@ async def send_message(
     other: UUID,
     *,
     client_id: UUID,
-    body: str,
+    body: str | None,
     now: dt.datetime,
+    file_id: UUID | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    """Send ``body`` from ``me`` to ``other``: the message, and whether it is
-    new (``False`` for a replay of ``client_id``). Does not commit.
+    """Send ``body``, ``file_id`` or both from ``me`` to ``other``: the message,
+    and whether it is new (``False`` for a replay of ``client_id``). Does not
+    commit.
 
     Raises, in this order: :class:`NotConnectedError` when the two are not
     connected (or ``other`` is nobody, or ``me``); a replay returns before the
     lock is read, so a retry after the other person paused still gets its
     message; :class:`RecipientClosedError` or :class:`RecipientPausedError`
-    from `chat_lock`.
+    from `lock_refusal`; :class:`FileUnavailableError` from `attach_file`,
+    which rolls the message back with the transaction.
     """
     chat = await chat_of(session, me, other, now)
     if chat is None:
@@ -122,11 +153,8 @@ async def send_message(
     stored = await _stored(session, me, client_id)
     if stored is not None:
         return _replayed(stored, chat["conversation_id"]), False
-    lock = chat_lock(closed=bool(chat["deleted"]), paused=bool(chat["paused"]))
-    if lock is ChatLock.CLOSED:
-        raise RecipientClosedError("they closed their account")
-    if lock is ChatLock.PAUSED:
-        raise RecipientPausedError("they are not taking messages right now")
+    if (refusal := lock_refusal(chat)) is not None:
+        raise refusal
 
     conversation_id = chat["conversation_id"] or await _open_chat(
         session, me, other, str(chat["role"])
@@ -146,7 +174,7 @@ async def send_message(
                     conversation_id=conversation_id,
                     sender_id=me,
                     client_id=client_id,
-                    message_type=MessageType.TEXT,
+                    message_type=MessageType.TEXT if file_id is None else MessageType.ATTACHMENT,
                     body=body,
                     sent_at=func.clock_timestamp(),
                 )
@@ -163,12 +191,17 @@ async def send_message(
         if stored is None:  # pragma: no cover - a conflict means the row exists
             raise RuntimeError("client_id conflicted with no stored message")
         return _replayed(stored, conversation_id), False
+    file = (
+        NO_FILE
+        if file_id is None
+        else await attach_file(session, file_id=file_id, sender_id=me, message_id=written["id"])
+    )
     await session.execute(
         update(Conversation)
         .where(Conversation.id == conversation_id)
         .values(last_message_at=written["sent_at"])
     )
-    return dict(written), True
+    return {**written, **file}, True
 
 
 async def mark_read(

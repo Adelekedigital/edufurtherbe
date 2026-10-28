@@ -468,6 +468,16 @@ class MentorPublicRead(BaseModel):
     # `exclude_if`, not a model serializer: a wrap serializer typed `dict`
     # replaces this model's whole serialization schema, and the published
     # OpenAPI loses every property of the profile.
+    can_message: bool = Field(
+        default=False,
+        description=(
+            "You may message this mentor now: you are signed in, you are their "
+            "mentee in a booked session (confirmed, completed, missed or "
+            "cancelled), and they are not paused. The same rule as sending. "
+            "`false` for everyone else, signed out or the mentor themself."
+        ),
+    )
+
     approval_status: ApprovalStatus | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -535,6 +545,7 @@ class MentorPublicRead(BaseModel):
         *,
         guide_countries: list[dict[str, object]],
         links: list[Link],
+        can_message: bool = False,
     ) -> MentorPublicRead:
         return cls(
             id=str(row["user_id"]),
@@ -569,6 +580,7 @@ class MentorPublicRead(BaseModel):
             ),
             reviews=ReviewSummaryRead.from_row(reviews),
             taking_bookings=bool(row["taking_bookings"]),
+            can_message=can_message,
             **_joined_and_award(row),
             **_next_available(row),
             **_owner_fields(
