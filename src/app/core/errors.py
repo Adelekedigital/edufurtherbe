@@ -55,6 +55,22 @@ class ReminderMenteeOnlyError(ForbiddenError):
     (decision 294); the caller is the mentor."""
 
 
+class NotConnectedError(ForbiddenError):
+    """The caller may message only people they have booked with (M0, ADR
+    0010). The same answer for a stranger, nobody, and the caller themselves,
+    so it discloses nothing about who exists."""
+
+
+class RecipientPausedError(ConflictError):
+    """The other person is a paused mentor: the chat is read only until they
+    resume (decision 301)."""
+
+
+class RecipientClosedError(ConflictError):
+    """The other person closed their account: the chat is read only for good
+    (decision 301)."""
+
+
 class RequestNotPendingError(ConflictError):
     """The request no longer awaits the mentor's answer: answered, withdrawn,
     expired, or past its deadline. There is nothing to remind them about."""
