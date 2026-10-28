@@ -637,3 +637,44 @@ async def test_an_email_never_carries_a_message_from_someone_elses_chat(
 
     assert counts["skipped"] == 1
     assert world.notifier.sent == []
+
+
+async def test_a_message_read_since_leaves_the_email_and_the_rest_still_go(
+    world: World, db_engine: AsyncEngine
+) -> None:
+    mentor, mentee = await pair(db_engine, "read-one")
+    first = await said(world, mentee, mentor, "First")
+    await said(world, mentee, mentor, "Second")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        await queue_unread_email(session, mentor.id, dt.datetime.now(dt.UTC))
+        await session.commit()
+    await read_up_to(world, mentor, mentee, first["id"])
+
+    async with factory() as session:
+        await drain(
+            session,
+            notifier=world.notifier,
+            now=dt.datetime.now(dt.UTC),
+            settings=world.client._transport.app.state.settings,  # type: ignore[attr-defined]
+        )
+        await session.commit()
+
+    [(notification, _, context)] = world.notifier.sent
+    assert notification is Notification.MESSAGE_UNREAD_FEW
+    assert context.extras["message1_text"] == "Second"
+    assert "message2_text" not in context.extras
+    assert "First" not in context.extras.values()
+
+
+async def test_a_sender_who_closed_their_account_is_still_emailed_about_named_nobody(
+    world: World,
+) -> None:
+    mentor, mentee = await pair(world.engine, "closed-sender")
+    await said(world, mentee, mentor, "Before I go")
+    await close_account(world.engine, mentee)
+
+    assert (await fire(world, mentor)).json() == {"queued": True}
+    [(_, _, context)] = world.notifier.sent
+    assert context.extras["message1_name"] == "Someone"
+    assert context.extras["message1_text"] == "Before I go"

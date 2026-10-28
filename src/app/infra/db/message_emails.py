@@ -25,7 +25,6 @@ from uuid import UUID
 
 from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.domain.message_emails import (
     UNREAD_EMAIL_INTERVAL,
@@ -40,7 +39,7 @@ from app.infra.db.models.messaging import Conversation, ConversationParticipant,
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
-from app.infra.db.predicates import LIVE, live
+from app.infra.db.predicates import LIVE
 
 __all__ = [
     "MESSAGE_EMAIL_LOCK_NAMESPACE",
@@ -124,13 +123,11 @@ async def queue_unread_email(
         return UnreadEmailOutcome(reason="recipient_gone")
     if not await unread_emails_on(session, recipient):
         return UnreadEmailOutcome(reason="switched_off")
-    sender = aliased(User, name="sender")
     waiting = (
         (
             await session.execute(
                 _to(recipient)
                 .add_columns(Message.id)
-                .join(sender, and_(sender.id == Message.sender_id, live(sender)))
                 .where(
                     *unread(recipient, ConversationParticipant.last_read_at),
                     Message.emailed_at.is_(None),

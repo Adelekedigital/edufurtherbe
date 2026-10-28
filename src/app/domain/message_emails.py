@@ -139,16 +139,22 @@ def unread_kind(count: int) -> Notification:
     return Notification.MESSAGE_UNREAD_FEW if count <= FEW_MAX else Notification.MESSAGE_UNREAD_MANY
 
 
-def unread_email(messages: Sequence[EmailedMessage]) -> dict[str, str]:
-    """The unread email's values for ``messages``, oldest first.
+def unread_email(
+    messages: Sequence[EmailedMessage], kind: Notification | None = None
+) -> dict[str, str]:
+    """The values of ``kind`` (by default the one ``messages`` make) for
+    ``messages``, oldest first.
 
-    One or two are the few email; Q14's default covers two from two people:
-    the subject counts them, one card each, and the button opens Messages.
+    ``kind`` is the template the email was queued for: a message read since
+    leaves the email, so the many email may end up with fewer than three and
+    still fills the many template. One or two are the few email; Q14's default
+    covers two from two people: the subject counts them, one card each, and
+    the button opens Messages.
     """
     if not messages:
         raise ValueError("an unread email needs a message")
     senders = {message.sender_id for message in messages}
-    if unread_kind(len(messages)) is Notification.MESSAGE_UNREAD_MANY:
+    if (kind or unread_kind(len(messages))) is Notification.MESSAGE_UNREAD_MANY:
         return _many(messages)
     first = messages[0]
     values: dict[str, str] = {"preview_text": _preview(first)}

@@ -81,11 +81,15 @@ async def message_email_values(
         .mappings()
         .all()
     )
-    # Never a deleted message, never one gone with its chat, and never an
-    # email about messages all read since it was queued.
+    # Never a deleted message, never one gone with its chat, and never one
+    # read since it was queued: a read one leaves the email, and an email
+    # with none left is not sent.
     if not wanted or len(rows) != len(wanted):
         return None
-    if any(row["deleted_at"] is not None for row in rows) or not any(row["unread"] for row in rows):
+    if any(row["deleted_at"] is not None for row in rows):
+        return None
+    rows = [row for row in rows if row["unread"]]
+    if not rows:
         return None
     if notification in UNREAD_EMAILS and not await unread_emails_on(session, recipient):
         return None
@@ -101,5 +105,5 @@ async def message_email_values(
         for row in rows
     ]
     if notification in UNREAD_EMAILS:
-        return unread_email(messages)
+        return unread_email(messages, notification)
     return instant_email(messages[0])
