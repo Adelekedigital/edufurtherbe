@@ -1,8 +1,9 @@
 """Manually recover or dry-run the QStash-owned daily retention sweep.
 
-Deletes uploads no booking used, files past the configured retention, and
-idempotency keys more than an hour past expiry (#353). `--dry-run` counts both
-steps and deletes nothing.
+Deletes intake uploads no booking used, intake files past the configured
+retention, message files never sent (decision 302), and idempotency keys more
+than an hour past expiry (#353). `--dry-run` counts every step and deletes
+nothing.
 """
 
 from __future__ import annotations

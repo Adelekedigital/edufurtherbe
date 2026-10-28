@@ -26,7 +26,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, delete, exists, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError, RateLimitedError, ValidationError
+from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.enums import IntakeFileType
 from app.domain.intake_files import (
     MAX_PENDING_UPLOADS,
@@ -34,12 +34,12 @@ from app.domain.intake_files import (
     retention_cutoff,
     storage_key,
     unused_cutoff,
-    upload_retry_after,
 )
 from app.infra.db.models.intake import IntakeFile
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
+from app.infra.db.uploads import commit_with_object, refuse_pending, within_upload_rate
 from app.infra.storage.supabase import StorageError, SupabaseStorage
 
 logger = logging.getLogger(__name__)
@@ -92,43 +92,6 @@ def sweep_counts(
     }
 
 
-async def _within_upload_rate(session: AsyncSession, uploader_id: UUID, limit: int) -> None:
-    """Refuse an upload past `limit` in the last hour, saying when to retry.
-
-    **Counted on the database's clock**, the one `created_at` was written with,
-    so app and database clocks can't disagree about the window. Every upload in
-    the window still has its row: the sweep removes an unlinked upload's row
-    only once it is past this window, unless its uploader's account is gone.
-    `ix_intake_files_uploader` serves the count.
-
-    **`Retry-After` waits for enough uploads to leave the window, not just the
-    oldest.** The count can exceed the limit (a concurrent burst, or a lowered
-    setting), and the next upload is allowed once it has fallen to `limit - 1`,
-    which is when the `count - limit + 1`-th oldest upload ages out.
-    """
-    in_window = and_(
-        IntakeFile.uploader_id == uploader_id,
-        IntakeFile.created_at > func.now() - literal(UPLOAD_RATE_WINDOW),
-    )
-    count, now = (await session.execute(select(func.count(), func.now()).where(in_window))).one()
-    if count < limit:
-        return
-    freeing = (
-        await session.execute(
-            select(IntakeFile.created_at)
-            .where(in_window)
-            .order_by(IntakeFile.created_at)
-            .offset(count - limit)
-            .limit(1)
-        )
-    ).scalar()
-    raise RateLimitedError(
-        f"you have uploaded {limit} files in the last hour; try again later",
-        # None only if rows left the window between the two reads: retry soon.
-        retry_after_seconds=1 if freeing is None else upload_retry_after(freeing, now),
-    )
-
-
 async def store_intake_file(
     session: AsyncSession,
     storage: SupabaseStorage,
@@ -148,16 +111,22 @@ async def store_intake_file(
     when. Both counts race, and a burst can pass them by a few: the bounds are
     on abuse, not on a number anybody relies on.
     """
-    pending = (
-        await session.execute(select(func.count()).where(_unlinked(uploader_id)))
-    ).scalar_one()
-    if pending >= MAX_PENDING_UPLOADS:
-        raise ConflictError(
-            f"you have {MAX_PENDING_UPLOADS} uploads not yet used in a booking; "
-            "book with them, delete ones you no longer need, or wait a day for "
-            "them to expire"
-        )
-    await _within_upload_rate(session, uploader_id, uploads_per_hour)
+    await refuse_pending(
+        session,
+        _unlinked(uploader_id),
+        f"you have {MAX_PENDING_UPLOADS} uploads not yet used in a booking; "
+        "book with them, delete ones you no longer need, or wait a day for "
+        "them to expire",
+    )
+    # Every upload in the window still has its row: the sweep removes an
+    # unlinked upload's row only once it is past the hour, unless its
+    # uploader's account is gone. `ix_intake_files_uploader` serves the count.
+    await within_upload_rate(
+        session,
+        mine=IntakeFile.uploader_id == uploader_id,
+        created_at=IntakeFile.created_at,
+        limit=uploads_per_hour,
+    )
     # A random object name, never the row id — ids are the database's to
     # assign (ADR 0015) — and never the uploader's filename.
     key = storage_key(uploader_id, uuid4())
@@ -174,18 +143,7 @@ async def store_intake_file(
             .returning(IntakeFile.id)
         )
     ).scalar_one()
-    await asyncio.to_thread(storage.upload, key, payload, kind.value)
-    try:
-        await session.commit()
-    except Exception:
-        # The object landed and its row did not: take the object back rather
-        # than leave personal data with nothing that would ever expire it.
-        await session.rollback()
-        try:
-            await asyncio.to_thread(storage.delete, key)
-        except StorageError:
-            logger.warning("intake file orphaned after a failed commit")
-        raise
+    await commit_with_object(session, storage, key=key, payload=payload, kind=kind)
     return {"file_id": file_id, "filename": filename, "size": len(payload), "content_type": kind}
 
 

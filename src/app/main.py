@@ -42,6 +42,7 @@ from app.api.routes import (
     me_session_types,
     me_writing_assist,
     mentors,
+    message_files,
     reviews,
     session_types,
     sessions,
@@ -549,6 +550,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_mentor_matches.router)
     application.include_router(me_mentee_stats.router)
     application.include_router(me_messages.router)
+    application.include_router(message_files.router)
     application.include_router(intake_files.router)
     application.include_router(me_onboarding.router)
     application.include_router(me_mentor_application.router)

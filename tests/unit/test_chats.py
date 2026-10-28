@@ -1,6 +1,7 @@
 """The chat rules that need no database (ADR 0010; decision 301)."""
 
 import datetime as dt
+from uuid import uuid4
 
 import pytest
 
@@ -12,9 +13,11 @@ from app.domain.chats import (
     SESSION_WINDOW_STATUSES,
     ChatLock,
     chat_lock,
+    file_storage_key,
     preview,
 )
 from app.domain.enums import SessionStatus
+from app.infra.db.chat_writer import can_message
 
 
 def test_m0_is_every_booked_session_and_nothing_never_agreed() -> None:
@@ -71,3 +74,23 @@ def test_one_long_word_is_cut_mid_word() -> None:
     cut = preview("x" * 500)
 
     assert cut == "x" * (PREVIEW_LENGTH - 1) + ELLIPSIS
+
+
+def test_a_message_files_key_is_ids_only_under_its_own_prefix() -> None:
+    uploader, name = uuid4(), uuid4()
+
+    assert file_storage_key(uploader, name) == f"messages/{uploader}/{name}"
+
+
+def _chat(
+    role: str = "mentor", *, deleted: bool = False, paused: bool = False
+) -> dict[str, object]:
+    return {"role": role, "deleted": deleted, "paused": paused}
+
+
+def test_can_message_is_the_send_s_rule_for_a_mentee() -> None:
+    assert can_message(_chat()) is True
+    assert can_message(None) is False
+    assert can_message(_chat("mentee")) is False
+    assert can_message(_chat(paused=True)) is False
+    assert can_message(_chat(deleted=True)) is False

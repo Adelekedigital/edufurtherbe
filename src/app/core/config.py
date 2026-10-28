@@ -743,6 +743,8 @@ class Settings(BaseSettings):
     # public, and a CV is personal data. Created once in the dashboard as a
     # private bucket. Unset means the upload endpoint refuses as misconfigured,
     # so the feature ships inert until an operator has made the bucket.
+    # **Message files share it** (decision 302), under `messages/`, with the
+    # same size limit, unused hours and hourly count (counted apart).
     supabase_intake_bucket: str | None = Field(
         default=None, validation_alias=env_key("supabase_intake_bucket")
     )
@@ -759,13 +761,15 @@ class Settings(BaseSettings):
         default=None, ge=1, validation_alias=env_key("intake_file_retention_days")
     )
     #: Hours an upload may wait unlinked to any booking before the sweep
-    #: deletes it — a mentee who uploaded and then never booked.
+    #: deletes it — a mentee who uploaded and then never booked. A message
+    #: file never sent waits the same.
     intake_file_unused_hours: int = Field(
         default=24, ge=1, le=720, validation_alias=env_key("intake_file_unused_hours")
     )
     #: Intake uploads one person may make in any hour (#281); the next is a
     #: `429` with `Retry-After`. Bounds request rate, which the cap on unused
-    #: uploads does not: upload, book, upload again.
+    #: uploads does not: upload, book, upload again. Message files have their
+    #: own count against the same number (decision 302).
     intake_uploads_per_hour: int = Field(
         default=10, ge=1, le=1000, validation_alias=env_key("intake_uploads_per_hour")
     )

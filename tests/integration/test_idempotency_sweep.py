@@ -225,5 +225,9 @@ async def test_the_daily_retention_job_reports_the_keys_it_deleted(
 
     assert counts["idempotency_keys_deleted"] >= 1
     assert counts["purged"] == 0
-    assert set(counts) == set(runner.retention_counts(runner.sweep_counts(), idempotency_keys=0))
+    assert set(counts) == set(
+        runner.retention_counts(
+            runner.sweep_counts() | runner.message_sweep_counts(), idempotency_keys=0
+        )
+    )
     assert not await present(db_engine, old)

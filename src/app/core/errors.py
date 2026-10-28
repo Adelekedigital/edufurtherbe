@@ -289,6 +289,21 @@ class ValidationError(AppError):
         self.field_errors = field_errors
 
 
+class FileTooLargeError(ValidationError):
+    """An uploaded file is over the configured size limit (intake and message
+    files alike, decision 302)."""
+
+
+class FileTypeNotAllowedError(ValidationError):
+    """An uploaded file is not a PDF or a Word `.docx`, judged from its bytes:
+    any other type, a macro-enabled document, a renamed zip or a zip bomb."""
+
+
+class FileUnavailableError(ValidationError):
+    """A message's `file_id` is not the sender's own unsent upload: somebody
+    else's, already sent, or swept (decision 302)."""
+
+
 class SessionNotMissedError(ValidationError):
     """Nobody is recorded as missing this session: it is not settled
     (`completed` or `no_show`) yet, or it is and neither party's attendance

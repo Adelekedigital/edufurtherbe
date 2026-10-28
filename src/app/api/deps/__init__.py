@@ -68,8 +68,8 @@ from app.api.deps.core import (
     _configured,
     get_storage,
 )
+from app.api.deps.files import MAX_FILE_MB
 from app.api.deps.intake import (
-    MAX_FILE_MB,
     DeletedIntakeFileDep,
     IntakeFileDownloadDep,
     SessionAnswersDep,
@@ -93,12 +93,14 @@ from app.api.deps.mentors import (
     SimilarMentorsDep,
 )
 from app.api.deps.messages import (
+    MessageFileDownloadDep,
     OwnChatsDep,
     OwnPeopleDep,
     OwnThreadDep,
     OwnUnreadDep,
     ReadMarkedDep,
     SentMessageDep,
+    UploadedMessageFileDep,
 )
 from app.api.deps.profile import (
     AwardsDep,
@@ -267,6 +269,7 @@ __all__ = [
     "MentorRelationshipDep",
     "MentorReviewsDep",
     "MergedInstitutionDep",
+    "MessageFileDownloadDep",
     "MetMentorsDep",
     "ModerationQueueDep",
     "MovedSessionDep",
@@ -337,6 +340,7 @@ __all__ = [
     "UploadedAvatarDep",
     "UploadedBannerDep",
     "UploadedIntakeFileDep",
+    "UploadedMessageFileDep",
     "UpsertedGoalDep",
     "UpsertedProfileDep",
     "WithdrawnInterestDep",
