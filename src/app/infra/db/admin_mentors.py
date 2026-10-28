@@ -21,13 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.domain.admin_mentors import (
-    BOOKED_STATUSES,
     AdminMentorTab,
     PausedBy,
     ShowUpTier,
     show_up_tier,
 )
 from app.domain.enums import ListingStatus, MentorStatusType
+from app.domain.refunds import BOOKED_STATUSES
 from app.infra.db.availability_store import list_rules
 from app.infra.db.catalogue_store import LIKE_ESCAPE, escape_like
 from app.infra.db.mentor_listing import newest_unlisting, paused_by_mentor
@@ -42,6 +42,8 @@ from app.infra.db.predicates import (
     application_declined,
     application_in_review,
     live,
+    mentor_paused,
+    name_like,
 )
 from app.infra.db.profile_store import latest_decision, list_education
 from app.infra.db.qualifications import top_qualification
@@ -57,10 +59,7 @@ TABS: dict[AdminMentorTab, list[Any]] = {
         *application_approved(),
         MentorProfile.listing_status == ListingStatus.LISTED,
     ],
-    AdminMentorTab.PAUSED: [
-        *application_approved(),
-        MentorProfile.listing_status == ListingStatus.UNLISTED,
-    ],
+    AdminMentorTab.PAUSED: mentor_paused(),
     AdminMentorTab.NOT_APPROVED: application_declined(),
 }
 
@@ -170,11 +169,7 @@ def _row_statement(now: dt.datetime) -> Any:
 def _matches(q: str) -> Any:
     """``q`` inside the mentor's name or email, ignoring case."""
     pattern = "%" + escape_like(q) + "%"
-    name = func.concat_ws(" ", User.first_name, User.last_name)
-    return or_(
-        name.ilike(pattern, escape=LIKE_ESCAPE),
-        User.email.ilike(pattern, escape=LIKE_ESCAPE),
-    )
+    return or_(name_like(User, q), User.email.ilike(pattern, escape=LIKE_ESCAPE))
 
 
 def tab_statement(tab: AdminMentorTab, *, now: dt.datetime, q: str | None = None) -> Any:

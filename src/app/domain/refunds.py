@@ -67,6 +67,16 @@ def refund_policy(settings: Settings) -> RefundPolicy:
 #: Terminal statuses for a request that never became a session.
 NEVER_AGREED = frozenset({SessionStatus.DECLINED, SessionStatus.WITHDRAWN, SessionStatus.EXPIRED})
 
+#: Sessions that were booked: every status but a request still waiting and one
+#: that ended without being agreed (`NEVER_AGREED`), so a new status lands on
+#: one side of both rules at once. The admin drawer counts these, and a chat's
+#: M0 connection is one of them (`domain.chats.CONNECTING_STATUSES`).
+BOOKED_STATUSES = tuple(
+    status
+    for status in SessionStatus
+    if status not in NEVER_AGREED and status != SessionStatus.PENDING_MENTOR_APPROVAL
+)
+
 
 def never_agreed_refund(to: SessionStatus) -> CreditReason | None:
     """The refund for a request that ended without becoming a session: always,

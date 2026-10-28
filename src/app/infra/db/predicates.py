@@ -19,7 +19,8 @@ from typing import Any, Protocol
 from sqlalchemy import and_, exists, func, true
 
 from app.domain.attendance import PRESENCE_REPORTING
-from app.domain.enums import ApprovalStatus
+from app.domain.enums import ApprovalStatus, ListingStatus
+from app.infra.db.catalogue_store import LIKE_ESCAPE, escape_like
 from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session
@@ -95,6 +96,22 @@ def mentor_approved() -> Any:
 def application_approved() -> list[Any]:
     """An approved mentor, on a live profile, listed or not."""
     return [mentor_approved(), MentorProfile.deleted_at.is_(None)]
+
+
+def mentor_paused() -> list[Any]:
+    """**The one statement of a paused mentor**: approved, on a live profile,
+    and unlisted, whether they paused themselves or an admin did. The admin
+    Paused tab lists these (decision 297), and a chat with one is read only
+    (decision 301)."""
+    return [*application_approved(), MentorProfile.listing_status == ListingStatus.UNLISTED]
+
+
+def name_like(user: Any, term: str) -> Any:
+    """``term`` anywhere in ``user``'s full name, ignoring case, with `LIKE`
+    wildcards escaped: the one name match the admin searches and the people
+    picker share. The full name covers the first and last names on their own."""
+    pattern = "%" + escape_like(term) + "%"
+    return func.concat_ws(" ", user.first_name, user.last_name).ilike(pattern, escape=LIKE_ESCAPE)
 
 
 def application_declined() -> list[Any]:
