@@ -135,9 +135,10 @@ def chat_roles(
 ) -> tuple[Any, Any] | None:
     """``(mentor, mentee)`` for a legacy chat, or ``None`` when nothing says.
 
-    The newest booking between the two decides, as it decides a chat's roles
-    before its first message (`chat_store`); without one, the only one of the
-    two with a mentor profile is the mentor. Anything else is not a guess.
+    ``booked_mentor`` is the mentor of the newest booking that connects the
+    two (M0), which is what decides a new chat's roles before its first
+    message (`chat_store`); without one, the only one of the two with a mentor
+    profile is the mentor. Anything else is not a guess.
     """
     first, second = people
     if booked_mentor in people:

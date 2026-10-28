@@ -680,7 +680,6 @@ async def reconcile_messages(
     began on the new platform keeps that chat's timestamps. Messages are
     compared to the microsecond, as `reconcile_reviews` explains.
     """
-    chats = {row.legacy_bubble_id for row in plan.chats}
     loaded_chats = set(
         (
             await connection.execute(
@@ -690,6 +689,10 @@ async def reconcile_messages(
             )
         ).scalars()
     )
+    # A chat is present when any of its starters is the stored anchor: the
+    # first anchor is kept, so a later export may name an earlier starter.
+    chats = {row.legacy_bubble_id: set(row.starters) for row in plan.chats}
+    missing_chats = sorted(anchor for anchor, ids in chats.items() if not ids & loaded_chats)
     expected = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in plan.messages}
     result = await connection.execute(text(STAMPED.format("messages")))
     actual = {row.legacy_bubble_id: (row.created_at, row.updated_at) for row in result.mappings()}
@@ -703,8 +706,8 @@ async def reconcile_messages(
             TableCheck(
                 table="conversations",
                 expected=len(chats),
-                loaded=len(loaded_chats),
-                missing=tuple(sorted(chats - loaded_chats)),
+                loaded=len(chats) - len(missing_chats),
+                missing=tuple(missing_chats),
             ),
             TableCheck(
                 table="messages",

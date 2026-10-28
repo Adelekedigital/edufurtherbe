@@ -228,6 +228,57 @@ async def test_the_booking_names_the_mentor_between_two_mentors(db_engine: Async
     assert roles == [mentor.id, mentored.id]
 
 
+async def test_a_newer_request_never_agreed_does_not_name_the_mentor(
+    db_engine: AsyncEngine,
+) -> None:
+    """M0's own statuses: a declined request with the roles reversed, newer
+    than the confirmed booking, is not a connection and decides nothing."""
+    mentor = await person(db_engine, "etl-m0-a", mentor="listed")
+    mentee = await person(db_engine, "etl-m0-b", mentor="listed")
+    await book(db_engine, mentor, mentee, booked_ago=dt.timedelta(days=30))
+    await book(
+        db_engine,
+        mentee,
+        mentor,
+        status="declined",
+        booked_ago=dt.timedelta(days=1),
+        starts_in=dt.timedelta(days=9),
+    )
+    a, b = await legacy(db_engine, mentor), await legacy(db_engine, mentee)
+
+    result = await load(db_engine, [starter("s1", b, a)], [])
+
+    assert result.ok, result.report()
+    roles = await scalar(
+        db_engine, "SELECT array[mentor_user_id, mentee_user_id] FROM conversations"
+    )
+    assert roles == [mentor.id, mentee.id]
+
+
+async def test_imported_messages_are_never_emailed_and_a_new_earliest_starter_reconciles(
+    db_engine: AsyncEngine,
+) -> None:
+    mentor = await person(db_engine, "etl-mail-a", mentor="listed")
+    mentee = await person(db_engine, "etl-mail-b")
+    ada, mo = await legacy(db_engine, mentor), await legacy(db_engine, mentee)
+    late = starter("late", mo, ada, **{"Creation Date": "Feb 1, 2025 9:00 am"})
+    threads = [message("m1", "late", mo, "Feb 1, 2025 9:01 am")]
+    assert (await load(db_engine, [late], threads)).ok
+
+    # A later export holds an earlier starter of the same pair: the stored
+    # anchor stays, and the run still reconciles.
+    again = await load(db_engine, [late, starter("early", ada, mo)], threads)
+
+    assert again.ok, again.report()
+    assert await scalar(db_engine, "SELECT legacy_bubble_id FROM conversations") == "late"
+    assert (
+        await scalar(
+            db_engine, "SELECT count(*) FROM messages WHERE emailed_at IS DISTINCT FROM sent_at"
+        )
+        == 0
+    )
+
+
 async def test_a_chat_whose_mentor_nothing_names_stops_the_load(db_engine: AsyncEngine) -> None:
     one = await person(db_engine, "etl-amb-a")
     two = await person(db_engine, "etl-amb-b")

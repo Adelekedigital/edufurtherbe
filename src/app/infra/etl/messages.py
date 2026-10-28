@@ -5,12 +5,15 @@ and read marks, with Bubble's timestamps intact (decision 302).
 pair (`uq_conversations_pair`), so two starters of one pair, a re-run, and a
 chat the two already began on the new platform all land on one row; its
 `legacy_bubble_id` is set once and kept. A message upserts on its own
-`legacy_bubble_id`. A read mark only moves forward. The updated-at trigger is
+`legacy_bubble_id`. A read mark only moves forward. **An imported message is
+stamped `emailed_at = sent_at`**: Bubble's chats are history, and no unread
+email (decision 303) may ever go out about one. The updated-at trigger is
 held off (`timestamps_from_source_across`), as `ReviewLoader` explains.
 
 **Who is the mentor is read here**, since the export does not say:
-`transform.messages.chat_roles` decides from the newest booking between the
-two, else the one mentor profile. Neither, or a person the users table does
+`transform.messages.chat_roles` decides from the newest booking that
+connects the two (M0, `chat_store.connections`, so the role a chat would take
+before its first message), else the one mentor profile. Neither, or a person the users table does
 not know, raises: the whole load rolls back with the chat named, rather than
 guessing a role the M0 reads rely on.
 
@@ -22,9 +25,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
+from app.domain.chats import ChatRole
 from app.domain.transform.messages import ChatRow, MessagePlan, chat_roles
+from app.infra.db.chat_store import connections
 from app.infra.db.triggers import timestamps_from_source_across
 
 if TYPE_CHECKING:
@@ -34,13 +39,6 @@ __all__ = ["STAMPED_TABLES", "MessageLoader"]
 
 #: The tables whose `updated_at` comes from the source.
 STAMPED_TABLES = ("conversations", "messages")
-
-NEWEST_BOOKED_MENTOR = """
-SELECT mentor_id FROM sessions
-WHERE (mentor_id = :a AND mentee_id = :b) OR (mentor_id = :b AND mentee_id = :a)
-ORDER BY created_at DESC, id DESC
-LIMIT 1
-"""
 
 PROFILE_HOLDERS = "SELECT user_id FROM mentor_profiles WHERE user_id IN (:a, :b)"
 
@@ -72,11 +70,11 @@ ON CONFLICT (conversation_id, user_id) DO UPDATE SET
 UPSERT_MESSAGE = """
 INSERT INTO messages (
     conversation_id, sender_id, message_type, body, client_id, sent_at,
-    edited_at, deleted_at, legacy_bubble_id, created_at, updated_at
+    edited_at, deleted_at, emailed_at, legacy_bubble_id, created_at, updated_at
 )
 VALUES (
     :conversation_id, :sender_id, 'text', :body, NULL, :sent_at,
-    :edited_at, :deleted_at, :legacy_bubble_id, :created_at, :updated_at
+    :edited_at, :deleted_at, :sent_at, :legacy_bubble_id, :created_at, :updated_at
 )
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     conversation_id = EXCLUDED.conversation_id,
@@ -85,6 +83,7 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     sent_at = EXCLUDED.sent_at,
     edited_at = EXCLUDED.edited_at,
     deleted_at = EXCLUDED.deleted_at,
+    emailed_at = EXCLUDED.emailed_at,
     created_at = EXCLUDED.created_at,
     updated_at = EXCLUDED.updated_at
 """
@@ -97,9 +96,13 @@ class MessageLoader:
         self._connection = connection
 
     async def _roles(self, chat: ChatRow, a: UUID, b: UUID) -> tuple[UUID, UUID]:
-        booked = (
-            await self._connection.execute(text(NEWEST_BOOKED_MENTOR), {"a": a, "b": b})
+        # M0 itself (`connections`): b's role to a in their newest booking
+        # that connects them, so a request never agreed names nobody.
+        link = connections(a, b)
+        their_role = (
+            await self._connection.execute(select(link.c.session_role).select_from(link))
         ).scalar()
+        booked = None if their_role is None else (b if their_role == ChatRole.MENTOR.value else a)
         holders = set(
             (await self._connection.execute(text(PROFILE_HOLDERS), {"a": a, "b": b})).scalars()
         )
