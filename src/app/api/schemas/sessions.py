@@ -28,7 +28,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from app.api.schemas.common import AvatarFocusRead, CoverRead, Normalised, SessionTypeRefRead
+from app.api.schemas.common import Normalised, PersonBaseRead, SessionTypeRefRead
 from app.domain.attendance import DOOR_STATUSES, door_window, join_window
 from app.domain.enums import (
     ActorType,
@@ -44,7 +44,7 @@ from app.domain.refunds import RefundPolicy
 from app.domain.request_reminders import REMINDER_MESSAGE_MAX_LENGTH
 
 
-class PartyRead(CoverRead):
+class PartyRead(PersonBaseRead):
     """One of the two people in a session, as the other one sees them.
 
     **Every name here is nullable, and that is the data rather than caution.**
@@ -63,38 +63,11 @@ class PartyRead(CoverRead):
     does not make the rest of each other's account their business.
     """
 
-    id: str
-    #: The person deleted their account (#93, amended 2026-09-29). Their place in
-    #: the session stays; their name, avatar and focus are null. Render it as a
-    #: deleted account rather than as a missing name, which migrated rows have too.
-    deleted: bool = False
-    first_name: str | None = None
-    last_name: str | None = None
-    avatar_url: str | None = None
-    #: Where to centre `avatar_url`; `null` means the client's default crop.
-    avatar_focus: AvatarFocusRead | None = None
     timezone: str | None = Field(
         default=None,
         description=(
             "This party's IANA time zone, for showing the other side what the "
             "hour is for them. `null` when they deleted their account."
-        ),
-    )
-    degree: str | None = Field(
-        default=None,
-        description=(
-            "The degree that best describes this party, as the discovery card "
-            "and a review's byline describe a person: their highest, then most "
-            'recent ("BSc"). With `institution`, the pending card\'s '
-            '"BSc Student at FUTA"; the wording is the client\'s. `null` with no '
-            "education entry, or when they deleted their account."
-        ),
-    )
-    institution: str | None = Field(
-        default=None,
-        description=(
-            "Where that degree is from: the registry's name, else what the person "
-            "typed. `null` as for `degree`."
         ),
     )
     joined_at: dt.datetime | None = Field(
@@ -544,22 +517,13 @@ def _party(row: dict[str, object], side: str) -> PartyRead:
 
     One function rather than the same four lines twice: a mentor and a mentee
     differ only by prefix, and two copies is where the mentee quietly stops
-    getting the avatar somebody added to the mentor.
+    getting the avatar somebody added to the mentor. The person fields come
+    from `PersonBaseRead.fields_of`, which a chat's person reads too.
     """
     status = row.get(f"{side}_attendance_status")
     return PartyRead(
-        id=str(row[f"{side}_id"]),
-        deleted=bool(row.get(f"{side}_deleted")),
-        first_name=_text(row.get(f"{side}_first_name")),
-        last_name=_text(row.get(f"{side}_last_name")),
-        avatar_url=_text(row.get(f"{side}_avatar_url")),
-        avatar_focus=AvatarFocusRead.of(
-            row.get(f"{side}_avatar_focus_x"), row.get(f"{side}_avatar_focus_y")
-        ),
-        **CoverRead.cover_of(row.get(f"{side}_cover_color"), row.get(f"{side}_cover_art")),
+        **PersonBaseRead.fields_of(row, f"{side}_"),
         timezone=_text(row.get(f"{side}_timezone")),
-        degree=_text(row.get(f"{side}_degree")),
-        institution=_text(row.get(f"{side}_institution")),
         joined_at=row.get(f"{side}_joined_at"),  # type: ignore[arg-type]
         in_room_at=row.get(f"{side}_in_room_at"),  # type: ignore[arg-type]
         in_room=_flag(row.get(f"{side}_in_room")),
