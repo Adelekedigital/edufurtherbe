@@ -61,6 +61,7 @@ from app.domain.enums import (
     MentorStatusType,
     MessageType,
     MissedReason,
+    NotificationPreferenceType,
     OptionSource,
     PrimaryRole,
     QuestionOptionsSource,
@@ -231,6 +232,10 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     ConversationStatus: frozenset({"ck_conversations_status_is_known"}),
     MessageType: frozenset({"ck_messages_message_type_is_known"}),
     AttachmentScanStatus: frozenset({"ck_message_attachments_virus_scan_status_is_known"}),
+    # Which email a person switched on or off (Messages PRD, decision 303).
+    NotificationPreferenceType: frozenset(
+        {"ck_notification_channel_preferences_notification_type_is_known"}
+    ),
 }
 
 # Vocabularies with no single database column to constrain, and why.
