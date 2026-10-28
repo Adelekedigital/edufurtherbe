@@ -16,8 +16,10 @@ per two people rather than per booking.
 - ``messages`` gains ``client_id`` with ``UNIQUE (sender_id, client_id)``, so a
   retried send lands once. ``body`` is at most 2000 characters
   (``domain.chats.BODY_MAX_LENGTH``, pinned by a test) and a text message has
-  one. ``ix_messages_conversation_sent`` serves the thread's keyset and the
-  unread count.
+  one, except on an imported message, which carries what Bubble held (no
+  length limit there, and blank content is possible).
+  ``ix_messages_conversation_sent`` serves the thread's keyset and the unread
+  count.
 - ``message_attachments.message_id`` is nullable and unique: a file is
   uploaded first and attached on send, one per message. Its type is the intake
   vocabulary; ``virus_scan_status`` is ``skipped`` (no scan in v1).
@@ -168,10 +170,11 @@ def upgrade() -> None:
             name=op.f("ck_messages_message_type_is_known"),
         ),
         sa.CheckConstraint(
-            "char_length(body) BETWEEN 1 AND 2000", name=op.f("ck_messages_body_length")
+            "legacy_bubble_id IS NOT NULL OR char_length(body) BETWEEN 1 AND 2000",
+            name=op.f("ck_messages_body_length"),
         ),
         sa.CheckConstraint(
-            "message_type <> 'text' OR body IS NOT NULL",
+            "legacy_bubble_id IS NOT NULL OR message_type <> 'text' OR body IS NOT NULL",
             name=op.f("ck_messages_text_has_body"),
         ),
         sa.ForeignKeyConstraint(

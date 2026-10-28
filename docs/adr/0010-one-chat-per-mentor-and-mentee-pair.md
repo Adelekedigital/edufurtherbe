@@ -78,7 +78,9 @@ every transition and could disagree with it.
 ## Consequences
 
 The inbox lists people rather than bookings, and a chat outlives any one
-session. Legacy chats (13 conversations, 44 messages) import as they are, and
+session. Legacy chats (13 conversations, 44 messages) import as they are (an
+imported message is exempt from the body's length CHECKs, and two legacy
+chats for the same two people merge into one), and
 an unconnected pair's chat stays stored and hidden until they book.
 
 A person who closes their account keeps their messages in the other person's

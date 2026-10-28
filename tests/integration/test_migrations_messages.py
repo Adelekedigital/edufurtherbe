@@ -47,6 +47,10 @@ PARTICIPANT_ROW = (
     "INSERT INTO conversation_participants (conversation_id, user_id) VALUES ('{}', '{}')"
 )
 DELETE_USER = "DELETE FROM users WHERE id = '{}'"
+IMPORTED = (
+    "INSERT INTO messages (conversation_id, sender_id, message_type, body, legacy_bubble_id) "
+    "VALUES ('{}', '{}', 'text', {}, gen_random_uuid()::text)"
+)
 COUNT = "SELECT count(*) FROM {}"
 AGE = "UPDATE {} SET updated_at = now() - interval '1 day'"
 TOUCH = "UPDATE {} SET created_at = created_at"
@@ -148,8 +152,11 @@ def test_a_message_body_is_bounded_and_text_has_one(
         execute(disposable_database, message(kind="system", client=None))
     # A file alone has no text.
     execute(disposable_database, message(None, kind="attachment", client=None))
+    # An imported message carries what Bubble held: no bound, possibly blank.
+    for body in (f"repeat('x', {BODY_MAX_LENGTH + 1})", "''", None):
+        execute(disposable_database, IMPORTED.format(CHAT, MENTEE, body or "NULL"))
 
-    assert scalar(disposable_database, "SELECT count(*) FROM messages") == 2
+    assert scalar(disposable_database, "SELECT count(*) FROM messages") == 5
 
 
 def test_an_attachment_waits_unsent_and_a_message_holds_one(
@@ -249,7 +256,8 @@ def test_the_constraints_name_the_bounds_the_code_reads(
     )
 
     assert body == (
-        f"CHECK (((char_length(body) >= 1) AND (char_length(body) <= {BODY_MAX_LENGTH})))"
+        "CHECK (((legacy_bubble_id IS NOT NULL) OR ((char_length(body) >= 1) AND "
+        f"(char_length(body) <= {BODY_MAX_LENGTH}))))"
     )
     assert pair.startswith("CREATE UNIQUE INDEX")
     assert pair.endswith(

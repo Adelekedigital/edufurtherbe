@@ -126,9 +126,14 @@ class Message(TimestampMixin, Base):
     messages, which had none, and nulls never collide.
 
     **`sent_at` orders the chat**, with `id` breaking a tie, and the send
-    stamps it after locking the chat's row, so within one chat the order of
+    stamps it with `clock_timestamp()` after locking the chat's row (never
+    the `now()` default, which is the transaction's start), so within one chat the order of
     `sent_at` is the order messages became visible: a reader polling with
     `after` never misses one that committed late.
+
+    **An imported message is exempt from the two body CHECKs**: it carries
+    what Bubble held, which had no length limit and may be blank. Every
+    message written here is bounded.
 
     The sender **restricts**: what someone said stays in the other person's
     chat when they close their account, which is what the closed-chat line
@@ -162,9 +167,13 @@ class Message(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("sender_id", "client_id", name="uq_messages_sender_client"),
         CheckConstraint(check_is_known("message_type", MessageType), name="message_type_is_known"),
-        CheckConstraint(f"char_length(body) BETWEEN 1 AND {BODY_MAX_LENGTH}", name="body_length"),
         CheckConstraint(
-            f"message_type <> '{MessageType.TEXT.value}' OR body IS NOT NULL",
+            f"legacy_bubble_id IS NOT NULL OR char_length(body) BETWEEN 1 AND {BODY_MAX_LENGTH}",
+            name="body_length",
+        ),
+        CheckConstraint(
+            f"legacy_bubble_id IS NOT NULL OR message_type <> '{MessageType.TEXT.value}' "
+            "OR body IS NOT NULL",
             name="text_has_body",
         ),
         # The thread's keyset, and the unread count after a read mark.
