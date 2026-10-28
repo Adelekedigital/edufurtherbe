@@ -53,7 +53,12 @@ SOFT_DELETABLE = {table.name for table in Base.metadata.tables.values() if "dele
 #: retention", read only by `intake_file_store`, and
 #: `test_retention_removes_the_object_and_keeps_the_answer` asserts a deleted
 #: file is neither downloadable nor swept twice.
-EXEMPT = {"users", "intake_files"}
+#:
+#: `messages` is no profile record either, and its deleted rows are **shown,
+#: not hidden**: a chat keeps a deleted message's place and says it was
+#: deleted, with its text withheld (Messages PRD, Q9). The thread and the
+#: inbox read it that way, asserted with the endpoints that read it.
+EXEMPT = {"users", "intake_files", "messages"}
 
 #: Emptied once already, in the pull request that added the availability
 #: endpoints — which is what `test_the_unread_exemption_expires_when_a_reader_
