@@ -9,6 +9,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api import errors
 from app.api.deps.core import get_session_factory
+from app.api.edge_proxy import EdgeProxyMiddleware
 from app.api.limits import BodyLimitMiddleware
 from app.api.per_viewer import PerViewerHeadersMiddleware
 from app.api.request_id import HEADER as REQUEST_ID_HEADER
@@ -58,6 +59,12 @@ from app.infra.clients.ai_router import load_signing_key
 from app.infra.clients.notifications import live_notifier
 from app.infra.db.outbox import collect_queued, deliver, stop_collecting
 from app.infra.observability import configure_logging, configure_sentry
+
+#: Routes called by machines, never through the front end's proxy, so the
+#: origin lock passes them: each checks a signature or a sealed state itself.
+#: Google's OAuth redirect (`me_calendar.callback_router`) shares the callbacks
+#: prefix, so it is exempt by the first entry.
+EDGE_PROXY_EXEMPT = (callbacks.router.prefix, internal_jobs.router.prefix)
 
 # Tag metadata, so /docs explains each group rather than listing bare paths.
 # A reader arriving at the schema cold should learn what a group is for and what
@@ -478,6 +485,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # reverse). That is the order we want: a 413 still leaves with its CORS
     # headers, so a browser sees the refusal instead of an opaque network error.
     application.add_middleware(BodyLimitMiddleware)
+
+    # The origin lock (#426, decision 304), only while a secret is configured.
+    # Outside the body limit, so a refused request reads no body; inside the
+    # per-viewer headers, the request id and CORS, so its 403 carries all three.
+    if secrets := resolved.edge_proxy_secrets():
+        application.add_middleware(EdgeProxyMiddleware, secrets=secrets, exempt=EDGE_PROXY_EXEMPT)
 
     # Inside CORS for the same reason as the body limit: every response under
     # the per-viewer prefixes, a `404` included, leaves with its cache headers.

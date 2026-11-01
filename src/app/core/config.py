@@ -132,6 +132,11 @@ SUGGESTION_HOLD_HOURS = 2
 #: kept for the mentor, so no permitted request is born expired or nearly so.
 RESPONSE_WINDOW_CEILING_HOURS = NOTICE_FLOOR_MINUTES // 60 - SUGGESTION_HOLD_HOURS - 4
 
+#: The shortest front-end proxy secret accepted (#426): `openssl rand -hex 32`
+#: gives 64 characters, and anything a person might type is far below this.
+EDGE_PROXY_SECRET_MIN_LENGTH = 32
+_PROXY_SECRET = re.compile(rf"[!-~]{{{EDGE_PROXY_SECRET_MIN_LENGTH},}}")
+
 
 def env_key(field: str) -> str:
     """The environment variable a field is read from.
@@ -660,6 +665,42 @@ class Settings(BaseSettings):
         default=None, validation_alias=env_key("qstash_next_signing_key")
     )
 
+    #: **The front end's proxy secret** (#426, decision 304). Set, every request
+    #: under `/api/` must carry it in `X-EduFurther-Proxy-Secret` or is `403`,
+    #: except the signature-checked callbacks and jobs. Unset, nothing is locked:
+    #: set it on Vercel first, then here. The next value is accepted too, so a
+    #: rotation never refuses the proxy.
+    edge_proxy_secret: SecretStr | None = Field(
+        default=None, validation_alias=env_key("edge_proxy_secret")
+    )
+    edge_proxy_next_secret: SecretStr | None = Field(
+        default=None, validation_alias=env_key("edge_proxy_next_secret")
+    )
+
+    @field_validator("edge_proxy_secret", "edge_proxy_next_secret")
+    @classmethod
+    def a_strong_proxy_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        """Blank is unset. Otherwise the value stops the app at start-up unless it
+        is at least 32 visible ASCII characters: a short secret is a lock anyone
+        can open, and a pasted space, newline or non-ASCII letter would never
+        equal the header the proxy sends, refusing every request."""
+        if value is None or not value.get_secret_value().strip():
+            return None
+        if not _PROXY_SECRET.fullmatch(value.get_secret_value()):
+            raise ValueError(
+                f"an edge proxy secret must be at least {EDGE_PROXY_SECRET_MIN_LENGTH} "
+                "visible ASCII characters, with no spaces"
+            )
+        return value
+
+    def edge_proxy_secrets(self) -> tuple[str, ...]:
+        """Every proxy secret accepted now, current first; empty means unlocked."""
+        return tuple(
+            s.get_secret_value()
+            for s in (self.edge_proxy_secret, self.edge_proxy_next_secret)
+            if s is not None
+        )
+
     #: Environment-scoped operational changes. Only ``cron`` and ``enabled``
     #: are accepted later by the manifest resolver; delivery policy stays in git.
     qstash_schedule_overrides: Annotated[dict[str, dict[str, object]], NoDecode] = Field(
@@ -964,6 +1005,8 @@ PRODUCTION_REQUIRED = (
     "supabase_intake_bucket",
     # Production reports its errors (owner, 2026-10-12; ADR 0030).
     "sentry_dsn",
+    # Unset, anyone can call Railway directly and skip the edge limits (#426).
+    "edge_proxy_secret",
 )
 
 

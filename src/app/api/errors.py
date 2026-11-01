@@ -22,6 +22,7 @@ import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.types import Send
 
 from app.api.request_id import HEADER as REQUEST_ID_HEADER
 from app.core.errors import (
@@ -69,6 +70,26 @@ from app.core.errors import (
 from app.core.errors import ValidationError as DomainValidationError
 
 CONTENT_TYPE = "application/problem+json"
+
+
+async def send_problem(send: Send, status_code: int, body: bytes) -> None:
+    """Send a ready-made problem document from raw ASGI middleware.
+
+    For a refusal made before the application runs (the body limit, the origin
+    lock), where the handlers registered below cannot reach.
+    """
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status_code,
+            "headers": [
+                (b"content-type", CONTENT_TYPE.encode()),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
 
 # Every deliberate error, mapped once.
 #

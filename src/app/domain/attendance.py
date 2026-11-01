@@ -316,6 +316,10 @@ def outcome(*, mentor_attended: bool, mentee_attended: bool) -> SessionStatus:
     `test_the_settlement_agrees_with_the_rule` drove only sessions created
     through booking, which always have both rows, so it never reached the case
     the two disagreed on. It now drives the missing-row cases too.
+
+    **The migration transform calls this directly** for a legacy `completed`
+    session with a tracker (settled decision 306), so migrated and post-cutover
+    sessions follow one rule.
     """
     return SessionStatus.COMPLETED if mentor_attended and mentee_attended else SessionStatus.NO_SHOW
 
