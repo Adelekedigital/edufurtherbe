@@ -34,6 +34,7 @@ def complete(**overrides: object) -> Settings:
         "database_url": SecretStr("postgresql://u:p@localhost:5432/db"),
         "daily_webhook_secret": SecretStr("MDEyMzQ1Njc4OWFiY2RlZg=="),
         "sentry_dsn": SecretStr("https://public@o0.ingest.sentry.io/1"),
+        "edge_proxy_secret": SecretStr("e" * 64),
         "supabase_url": PROJECT,
         "public_base_url": "https://api.example.test",
         "app_base_url": "https://app.example.test",
@@ -82,6 +83,7 @@ def test_an_empty_production_names_everything_it_needs() -> None:
         "CALENDAR_TOKEN_KEY is not set",
         "SUPABASE_INTAKE_BUCKET is not set",
         "SENTRY_DSN is not set",
+        "EDGE_PROXY_SECRET is not set",
         "neither SUPABASE_JWKS_URL nor SUPABASE_JWT_SECRET is set",
         "CORS_ORIGINS is empty",
     ]
