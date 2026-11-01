@@ -236,9 +236,9 @@ async def test_a_completed_session_whose_mentor_was_absent_is_defined_behaviour(
     `completed` is supposed to mean both parties turned up, and across all 103
     linked pairs in the dev export it does. **Nothing enforces it** — status
     arrives from legacy `sessionStatus`, attendance from a separate `TrackStatus`,
-    and a `CHECK` cannot tie two tables. So a row like this one is constructible
-    today and will be constructible until the session lifecycle derives status
-    from attendance.
+    and a `CHECK` cannot tie two tables. Settlement and the load (settled
+    decision 306) now derive status from attendance, but a row like this one is
+    still constructible by hand and exists in loads from before 306.
 
     It must not crash, and it must not silently pick one source over the other.
     Each stat answers from the column it is about: the session says delivered, so

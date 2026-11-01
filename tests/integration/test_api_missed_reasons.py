@@ -164,8 +164,8 @@ async def test_both_parties_may_send_when_both_missed(
 async def test_a_mentor_who_missed_a_completed_status_session_may_send(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """`completed` is settled too: a migrated row can say completed with the
-    mentor's own row absent, and their row is what counts."""
+    """`completed` is settled too: a row loaded before settled decision 306 can
+    say completed with the mentor's own row absent, and their row is what counts."""
     pair = await a_pair(db_engine, "mr-completed")
     session_id = await a_session(
         db_engine, pair, status="completed", mentor="no_show", mentee="attended"
