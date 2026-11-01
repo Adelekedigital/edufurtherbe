@@ -87,6 +87,7 @@ from operator import attrgetter
 from typing import Any
 from urllib.parse import urlparse
 
+from app.domain.attendance import outcome
 from app.domain.bubble import CREATED_AT, MODIFIED_AT, legacy_anchor, parse_timestamp
 from app.domain.enums import (
     ActorType,
@@ -204,6 +205,9 @@ DEFAULT_DURATION_MINUTES = 45
 #: it matters here because dev holds 105 rows against production's 1,073: a sixth
 #: value is likelier than not, and mapping it to a plausible neighbour would
 #: produce sessions nobody could find again.
+#:
+#: ``completed`` is then judged by the tracker, when there is one: a party
+#: absent loads ``no_show`` (`_settle_completed`, settled decision 306).
 STATUS_MAP: dict[str, SessionStatus] = {
     "canceled": SessionStatus.CANCELLED,
     "cancelled": SessionStatus.CANCELLED,
@@ -359,6 +363,9 @@ class SessionPlan:
     #: `SessionCancel` said yes while `sessionStatus` said something else.
     #: Cancellation wins — a cancelled session is never also missed.
     cancellation_overrode_status: tuple[Disagreement, ...] = ()
+    #: Completed (or an orphan not cancelled) while the tracker has a party
+    #: absent. Attendance wins and it loads `no_show` (settled decision 306).
+    attendance_overrode_status: tuple[Disagreement, ...] = ()
     #: Cancellations whose only available timestamp post-dates the session,
     #: because the sweep modified the row after the cancel. Right state, wrong
     #: clock, said out loud rather than smoothed over.
@@ -463,6 +470,7 @@ class SessionPlan:
             ("dropped", self.dropped),
             ("quarantined orphan trackers", self.quarantined),
             ("cancellation overrode status", self.cancellation_overrode_status),
+            ("attendance overrode status", self.attendance_overrode_status),
             ("cancel timestamp post-dates the session", self.cancel_time_after_session),
             ("start-time disagreements (booking wins)", self.starts_at_disagreements),
             ("creator disagrees with the link", self.creator_mismatches),
@@ -661,6 +669,31 @@ def _participants(
     ]
 
 
+def _settle_completed(
+    status: SessionStatus, rows: list[ParticipantRow], anchor: str
+) -> tuple[SessionStatus, Disagreement | None]:
+    """A ``completed`` session judged by its tracker (settled decision 306, #474).
+
+    Legacy marked a session completed once its time passed, whoever attended;
+    the tracker recorded attendance apart. `attendance.outcome` is the rule
+    settlement applies to a session booked after cutover, so old and new data
+    follow one rule: anybody absent is ``NO_SHOW``. Called only with a tracker's
+    two rows; a booking with no tracker has no attendance fact and keeps its
+    status. Only ``COMPLETED`` is judged, as #474 scopes it: a cancellation wins
+    (`session_status`), and a legacy ``Missed`` is not promoted.
+    """
+    if status is not SessionStatus.COMPLETED:
+        return status, None
+    came = {row.role: row.attendance_status is AttendanceStatus.ATTENDED for row in rows}
+    settled = outcome(
+        mentor_attended=came[SessionRole.MENTOR], mentee_attended=came[SessionRole.MENTEE]
+    )
+    if settled is status:
+        return status, None
+    parties = ", ".join(f"{row.role.value} {row.attendance_status.value}" for row in rows)
+    return settled, Disagreement(anchor, f"would load completed; the tracker has {parties}")
+
+
 def _terminal_actor(
     status: SessionStatus, cancelled_by: str | None
 ) -> tuple[str | None, ActorType]:
@@ -773,6 +806,7 @@ def plan_sessions(
     creator_mismatches: list[Disagreement] = []
     starts_disagreements: list[Disagreement] = []
     cancel_overrode: list[Disagreement] = []
+    attendance_overrode: list[Disagreement] = []
     cancel_late: list[Disagreement] = []
     unplaceable: list[str] = []
     junk_rooms: list[Disagreement] = []
@@ -856,9 +890,11 @@ def plan_sessions(
                         anchor, f"tracker says {tracker_start:%Y-%m-%d %H:%M}Z; booking wins"
                     )
                 )
-            participants.extend(
-                _participants(tracker, anchor, mentor, mentee, assume=export_timezone)
-            )
+            rows = _participants(tracker, anchor, mentor, mentee, assume=export_timezone)
+            participants.extend(rows)
+            status, overrode = _settle_completed(status, rows, anchor)
+            if overrode is not None:
+                attendance_overrode.append(overrode)
 
         sessions.append(
             SessionRow(
@@ -982,12 +1018,21 @@ def plan_sessions(
                 Disagreement(anchor, f"room name {str(raw_room)[:24]!r} is a display string")
             )
 
+        # "Not cancelled" is no evidence the session happened, so it is judged
+        # by its attendance exactly as a completed booking is (decision 306).
+        rows = _participants(record, anchor, mentor, mentee, assume=export_timezone)
+        status, overrode = _settle_completed(
+            SessionStatus.CANCELLED if cancelled else SessionStatus.COMPLETED, rows, anchor
+        )
+        if overrode is not None:
+            attendance_overrode.append(overrode)
+
         sessions.append(
             SessionRow(
                 legacy_bubble_id=anchor,
                 mentor_bubble_id=mentor,
                 mentee_bubble_id=mentee,
-                status=SessionStatus.CANCELLED if cancelled else SessionStatus.COMPLETED,
+                status=status,
                 starts_at=starts_at,
                 duration_minutes=minutes,
                 topic=None,
@@ -1001,7 +1046,7 @@ def plan_sessions(
                 from_orphan_tracker=True,
             )
         )
-        participants.extend(_participants(record, anchor, mentor, mentee, assume=export_timezone))
+        participants.extend(rows)
 
         # A cancel is a known transition; `Canceled = 'no'` means nothing
         # definite and gets no event. There is no creation event either — an
@@ -1061,6 +1106,7 @@ def plan_sessions(
         creator_mismatches=tuple(creator_mismatches),
         starts_at_disagreements=tuple(starts_disagreements),
         cancellation_overrode_status=tuple(cancel_overrode),
+        attendance_overrode_status=tuple(attendance_overrode),
         cancel_time_after_session=tuple(cancel_late),
         unplaceable_confirmations=tuple(unplaceable),
         junk_room_names=tuple(junk_rooms),

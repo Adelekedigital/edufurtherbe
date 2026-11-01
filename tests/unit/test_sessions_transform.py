@@ -241,6 +241,133 @@ def test_a_cancelled_session_is_never_also_missed() -> None:
 
 
 # --------------------------------------------------------------------------
+# Attendance settles a completed session (#474, settled decision 306)
+# --------------------------------------------------------------------------
+
+#: (mentor TrackStatus, mentee TrackStatus) -> the status the session loads as:
+#: `attendance.outcome`'s table, which post-cutover settlement also follows.
+TRACKER_OUTCOMES = [
+    pytest.param("yes", "yes", SessionStatus.COMPLETED, id="both-attended"),
+    pytest.param("no", "yes", SessionStatus.NO_SHOW, id="mentor-absent"),
+    pytest.param("yes", "no", SessionStatus.NO_SHOW, id="mentee-absent"),
+    pytest.param("no", "no", SessionStatus.NO_SHOW, id="both-absent"),
+]
+
+
+def attendance(mentor: str, mentee: str) -> dict[str, Any]:
+    return {"TrackStatus(Mentor)": mentor, "TrackStatus(mentee)": mentee}
+
+
+def completed_booking(**overrides: Any) -> dict[str, Any]:
+    record = booking(
+        sessionStatus="Completed",
+        SessionTracker="st-1",
+        **{"SessionCancel (Y/N)❌": "no", "Canceled By": None},
+    )
+    record.update(overrides)
+    return record
+
+
+@pytest.mark.parametrize(("mentor", "mentee", "expected"), TRACKER_OUTCOMES)
+def test_a_completed_booking_is_settled_from_its_tracker(
+    mentor: str, mentee: str, expected: SessionStatus
+) -> None:
+    """Legacy said `Completed` once the time passed, whoever attended."""
+    result = plan([completed_booking()], [tracker(SessionID="sb-1", **attendance(mentor, mentee))])
+
+    assert result.sessions[0].status is expected
+    assert result.events[-1].to_status is expected
+
+
+@pytest.mark.parametrize(("mentor", "mentee", "expected"), TRACKER_OUTCOMES)
+def test_an_orphan_not_cancelled_is_settled_from_its_attendance(
+    mentor: str, mentee: str, expected: SessionStatus
+) -> None:
+    """Both #474 rows (dev and staging) are orphans: "not cancelled" is no
+    evidence the session happened, so it is judged by the booking's rule."""
+    result = plan([], [tracker(**attendance(mentor, mentee))])
+
+    assert result.sessions[0].status is expected
+    assert result.events == ()
+
+
+def test_a_completed_booking_with_no_tracker_stays_completed() -> None:
+    """No attendance fact, so nothing contradicts the legacy status."""
+    result = plan([completed_booking(SessionTracker=None)])
+
+    assert result.sessions[0].status is SessionStatus.COMPLETED
+    assert result.participants == ()
+    assert result.attendance_overrode_status == ()
+
+
+@pytest.mark.parametrize(
+    ("legacy", "cancel", "expected"),
+    [
+        ("Missed", "no", SessionStatus.NO_SHOW),
+        ("Canceled", "yes", SessionStatus.CANCELLED),
+        ("Declined", "no", SessionStatus.DECLINED),
+        ("Pending", "no", SessionStatus.PENDING_MENTOR_APPROVAL),
+    ],
+)
+def test_only_a_completed_status_is_settled_from_the_tracker(
+    legacy: str, cancel: str, expected: SessionStatus
+) -> None:
+    """Both attended must not promote a `Missed` or a cancelled row to completed."""
+    result = plan(
+        [booking(sessionStatus=legacy, SessionTracker="st-1", **{"SessionCancel (Y/N)❌": cancel})],
+        [tracker(SessionID="sb-1", **attendance("yes", "yes"))],
+    )
+
+    assert result.sessions[0].status is expected
+    assert result.attendance_overrode_status == ()
+
+
+def test_a_cancelled_orphan_is_not_settled_from_its_attendance() -> None:
+    result = plan([], [tracker(Canceled="yes", **attendance("no", "no"))])
+
+    assert result.sessions[0].status is SessionStatus.CANCELLED
+    assert result.attendance_overrode_status == ()
+
+
+def test_an_attendance_override_is_reported_with_its_anchor() -> None:
+    """Following `cancellation_overrode_status`: one Disagreement per session,
+    a section in the report, and nothing for a session both parties attended."""
+    result = plan(
+        [
+            completed_booking(bubble_id="sb-1"),
+            completed_booking(bubble_id="sb-2", SessionTracker="st-9"),
+        ],
+        [
+            tracker(bubble_id="st-1", SessionID="sb-1", **attendance("no", "yes")),
+            tracker(bubble_id="st-9", SessionID="sb-2", **attendance("yes", "yes")),
+            tracker(bubble_id="st-2", **attendance("yes", "no")),
+        ],
+    )
+
+    overrides = {row.legacy_bubble_id: row.detail for row in result.attendance_overrode_status}
+    assert set(overrides) == {"sb-1", "st-2"}
+    assert "mentor no_show" in overrides["sb-1"]
+    assert "mentee no_show" in overrides["st-2"]
+    report = result.report()
+    assert "attendance overrode status (2):" in report
+    assert f"  {result.attendance_overrode_status[0]}" in report
+
+
+def test_an_attendance_no_show_is_the_system_and_carries_no_actor() -> None:
+    """The terminal actor is `NO_SHOW`'s, as for a legacy `Missed` row."""
+    result = plan(
+        [completed_booking(bookingRequestAccepted="yes")],
+        [tracker(SessionID="sb-1", **attendance("no", "yes"))],
+    )
+
+    terminal = result.events[-1]
+    assert terminal.to_status is SessionStatus.NO_SHOW
+    assert terminal.from_status is SessionStatus.CONFIRMED
+    assert terminal.actor_bubble_id is None
+    assert terminal.actor_type is ActorType.SYSTEM
+
+
+# --------------------------------------------------------------------------
 # Events
 # --------------------------------------------------------------------------
 
