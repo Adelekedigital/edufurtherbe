@@ -229,14 +229,24 @@ async def test_a_refusal_on_a_per_viewer_path_carries_its_cache_headers() -> Non
 
 
 @pytest.mark.asyncio
-async def test_a_locked_app_lets_a_signed_callback_reach_its_own_check() -> None:
-    app = create_app(settings(edge_proxy_secret=CURRENT))
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/api/v1/callbacks/daily", content=b"{}")
+@pytest.mark.parametrize(
+    "path", ["/api/v1/callbacks/daily", "/api/v1/internal/jobs/settle-sessions"]
+)
+async def test_a_locked_app_answers_a_machine_route_as_an_unlocked_one_does(path: str) -> None:
+    """Whatever the route itself answers in this environment (its own signature
+    check, or a dependency it cannot reach), the lock changes none of it."""
 
-    # Refused by its own signature check (401), never by the lock (403).
-    assert response.status_code == 401
+    async def post(app: Any) -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(path, content=b"{}")
+
+    locked = await post(create_app(settings(edge_proxy_secret=CURRENT)))
+    unlocked = await post(create_app(settings()))
+
+    assert locked.status_code == unlocked.status_code
+    assert locked.headers.get("content-type") == unlocked.headers.get("content-type")
+    assert DETAIL not in locked.text
 
 
 def test_every_route_is_locked_unless_it_is_a_named_machine_route() -> None:
