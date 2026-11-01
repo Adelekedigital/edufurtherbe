@@ -42,7 +42,7 @@ and names every gap at once until all of these are set (decision 238,
 | Required | Variables |
 |---|---|
 | Database, auth | `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_JWKS_URL` **or** `SUPABASE_JWT_SECRET` |
-| Email | `LOOPS_API_KEY` (plus `EMAIL_TEMPLATES`, see step 7) |
+| Email | `LOOPS_API_KEY` (plus `EMAIL_TEMPLATES`, see step 8) |
 | Video | `DAILY_API_KEY`, `DAILY_WEBHOOK_SECRET` (step 6) |
 | Scheduler | `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` |
 | URLs | `PUBLIC_BASE_URL` (this API's origin), `APP_BASE_URL` (the front end) |
@@ -50,6 +50,7 @@ and names every gap at once until all of these are set (decision 238,
 | Mentor calendar | `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET`, `CALENDAR_TOKEN_KEY` |
 | Storage | `SUPABASE_INTAKE_BUCKET` |
 | Errors | `SENTRY_DSN` (ADR 0030) |
+| Origin lock | `EDGE_PROXY_SECRET` (step 7) |
 | Also checked | `CORS_ORIGINS` non-empty; `EDUFURTHER_DEBUG` off |
 
 `DAILY_WEBHOOK_SECRET` is in the list, so the app will not start in production
@@ -125,7 +126,29 @@ never changes QStash.
 3. Close #405. The Daily account is shared with the legacy app (#405), so this
    is a cutover step, not earlier.
 
-## 7. Loops
+## 7. Lock the origin to the front end (#426)
+
+The backend half is built (decision 304); this step switches it on. **Order
+matters**: the backend refuses `/api/` without the secret the moment it is set,
+so the front end must already be sending it.
+
+1. Generate a secret: `openssl rand -hex 32` (at least 32 characters).
+2. On Vercel, set the same secret for the front end and deploy. The front end
+   sends it as `X-EduFurther-Proxy-Secret` on **every** call to the backend: the
+   `/api/v1/*` rewrite in `src/proxy.ts`, and every server-side fetch (`GET /me`,
+   the invite link preview), which go straight to `BACKEND_URL`. **No browser
+   call may go straight to the Railway origin** (an upload included): a browser
+   cannot hold the secret, so a direct call is refused. Search the front end for
+   every use of `BACKEND_URL` and the API origin before this step.
+3. Set `EDGE_PROXY_SECRET` on Railway. Check: `curl {PUBLIC_BASE_URL}/api/v1/catalog/countries`
+   answers `403`; the app through the front end still works; `/health` is `200`.
+4. In Vercel Firewall, add one rate-limit rule on `/api/v1/*`, keyed by IP
+   (available on Hobby and Pro). Start it with the **Log** action, then switch
+   to the default `429` once the numbers look right.
+5. Rotation: new value in `EDGE_PROXY_NEXT_SECRET` on Railway, switch Vercel to
+   it, then move it to `EDGE_PROXY_SECRET` and clear the next one.
+
+## 8. Loops
 
 1. Set `EMAIL_TEMPLATES` (Railway and the GitHub `production` variable) to the
    production map. The variable reference and the current ids are in
@@ -136,22 +159,23 @@ never changes QStash.
    production maps `session_reminder` to the legacy template
    (`clyao8wx60024h2stw3o2ejh8`) or a new one, which decides if #400 still applies.
 
-## 8. Smoke checks after deploy
+## 9. Smoke checks after deploy
 
 | Check | Expect |
 |---|---|
 | `GET /health` | `200 {"status":"ok"}` |
 | `GET /ready` | `200 {"status":"ready","checks":{"database":"ok"}}` |
 | `GET /api/v1/me` with a real signed-in token | `200` |
+| `GET /api/v1/me` straight to Railway, no proxy secret | `403` (step 7) |
 | Any response | carries `X-Request-ID` (`src/app/api/request_id.py`, decision 241) |
 | Railway logs | JSON lines with `request_id` (ADR 0030) |
 | Sentry (optional) | a test event arrives. **Owner to confirm:** how to raise one; the repo has no test route |
 
-## 9. Open launch items
+## 10. Open launch items
 
 | Issue | One line |
 |---|---|
-| #426 | Per-caller rate limits at the Vercel edge, and lock the Railway origin to a proxy secret |
+| #426 | Backend lock built (decision 304); front end header, secrets and the Vercel rule are step 7 |
 | #403 | Meet guests whose account email is not their Google sign-in wait with nobody to admit them |
 | #363 | Monthly credits top up to 3 minus bonus held; bonus never expires, caps at 3 |
 | #9 | Branch protection on `main`. **Owner to confirm:** the repo is now public (GitHub API, 2026-10-12), which #9 named as one way to unlock it |

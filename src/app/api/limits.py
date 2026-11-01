@@ -49,7 +49,7 @@ import json
 from starlette import status
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.api.errors import CONTENT_TYPE
+from app.api.errors import send_problem
 
 #: The largest body this API will read, for any route.
 #:
@@ -106,17 +106,7 @@ def _declared_length(scope: Scope) -> int | None:
 
 
 async def _refuse(send: Send) -> None:
-    await send(
-        {
-            "type": "http.response.start",
-            "status": status.HTTP_413_CONTENT_TOO_LARGE,
-            "headers": [
-                (b"content-type", CONTENT_TYPE.encode()),
-                (b"content-length", str(len(_REFUSAL)).encode()),
-            ],
-        }
-    )
-    await send({"type": "http.response.body", "body": _REFUSAL})
+    await send_problem(send, status.HTTP_413_CONTENT_TOO_LARGE, _REFUSAL)
 
 
 class BodyLimitMiddleware:
