@@ -293,14 +293,13 @@ async def settle_attendance(
     **This is the producer `session_stats` has been waiting for.** That module
     records the problem plainly: `sessions.status` and
     `session_participants.attendance_status` are independent columns, a `CHECK`
-    cannot tie them because it spans two tables, and *the migrated data already
-    violates the invariant* — three sessions are `completed` with somebody
-    absent. This settles sessions **booked after cutover** from their attendance,
-    so from here forward there is one place the outcome is decided.
+    cannot tie them because it spans two tables. This settles sessions **booked
+    after cutover** from their attendance, by the rule `attendance.outcome`
+    states.
 
-    It does not retrofit the migrated rows, and must not: those record what the
-    legacy app believed, and rewriting them would destroy the evidence that the
-    two figures disagree.
+    It does not retrofit loaded rows. The migration transform applies the same
+    rule at load instead (settled decision 306), listing each session it moves
+    from `completed` to `no_show` in its report.
 
     **Set-based, in three statements plus the log.** The whole population is
     about a thousand sessions, so a per-session loop would buy nothing and cost

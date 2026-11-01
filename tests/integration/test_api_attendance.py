@@ -481,11 +481,10 @@ async def test_migrated_contradictions_are_left_exactly_as_they_are(
 ) -> None:
     """**A session already `completed` with somebody absent is not corrected.**
 
-    Three such rows exist in the loaded database, and `session_stats` documents
-    them: the orphan trackers took a path that never consulted attendance, so
-    "not cancelled" became "completed". They are the record of what the legacy
-    app believed, and rewriting them would destroy the evidence that the two
-    figures disagree.
+    Two such rows exist in a load from before settled decision 306 (staging):
+    the orphan trackers took a path that never consulted attendance, so "not
+    cancelled" became "completed". The load now settles them by attendance;
+    settlement must still never rewrite a loaded row.
 
     The `confirmed` filter is what leaves them alone, and it is asserted here
     rather than assumed because the obvious "fix the invariant everywhere" sweep
