@@ -11,6 +11,7 @@ from datetime import timedelta
 import pytest
 
 from app.core.config import Settings
+from app.domain.accounts import RESTORE_WINDOW
 from app.domain.referrals import (
     CODE_LENGTH,
     DEFAULT_SUFFIX_LENGTH,
@@ -219,3 +220,10 @@ def test_the_claim_window_is_the_deployment_s_hours(monkeypatch: pytest.MonkeyPa
     assert claim_window(Settings(_env_file=None)) == timedelta(days=7)  # type: ignore[call-arg]
     short = Settings(_env_file=None, invite_claim_window_hours=2)  # type: ignore[call-arg]
     assert claim_window(short) == timedelta(hours=2)
+
+
+def test_a_purged_handle_was_dead_at_least_as_long_as_the_hold() -> None:
+    """The purge frees a link's handles with no hold (decision 305) because the
+    link resolved for nobody through the restore window. That is only true while
+    the window is at least the hold."""
+    assert RESTORE_WINDOW >= RETIRED_CODE_HOLD

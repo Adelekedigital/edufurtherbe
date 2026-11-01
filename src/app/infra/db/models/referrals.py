@@ -241,7 +241,8 @@ class InviteLink(Base, TimestampMixin):
     until its owner picks a handle of their own. **Only the current code of an active link is
     claimable**: a code the link used to carry is recorded in
     `invite_link_retired_codes` and held there, and a revoked link
-    (`revoked_at` set) resolves for nobody while its code stays its own.
+    (`revoked_at` set) resolves for nobody while its code stays its own. A
+    purged owner's link keeps its row with a random code (decision 305).
     """
 
     __tablename__ = "invite_links"
@@ -291,7 +292,9 @@ class InviteLinkRetiredCode(Base):
 
     **Append-only**, so `created_at` alone from the timestamp pair (`APPEND_ONLY`
     in `tests/unit/test_models.py`), and it is the moment of retirement the hold
-    is measured from. A separate `retired_at` would only ever equal it.
+    is measured from. A separate `retired_at` would only ever equal it. Rows are
+    never updated; the one delete is an account purge's, of that account's
+    link's rows (decision 305).
     """
 
     __tablename__ = "invite_link_retired_codes"

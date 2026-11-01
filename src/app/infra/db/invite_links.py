@@ -25,6 +25,14 @@ link's current code (revoked or not), not a single-use referral code, and not a
 code another link retired inside the hold. A default code and a picked handle
 both pass through it, under the same advisory lock.
 
+AFTER A PURGE
+=============
+:func:`forget_invite_link` is the account purge's step (decision 305). The row
+stays, because referrals made through it point at its owner, but every handle it
+carried goes: the current code becomes a random :func:`make_code` and the
+retired codes are deleted, so none is stored or held. A purged owner's code is
+therefore random rather than a handle.
+
 NOTHING HERE COMMITS
 ====================
 The caller does, as in `referral_writer`.
@@ -36,7 +44,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, func, select, text, update
+from sqlalchemy import delete, exists, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +54,7 @@ from app.domain.referrals import (
     RETIRED_CODE_HOLD,
     default_code,
     is_plausible_code,
+    make_code,
     normalise_handle,
 )
 from app.infra.db.models.referrals import InviteLink, InviteLinkRetiredCode, Referral
@@ -57,6 +66,7 @@ __all__ = [
     "LinkState",
     "ResolvedCode",
     "ensure_invite_link",
+    "forget_invite_link",
     "inviter_of",
     "pick_handle",
     "resolve_code",
@@ -106,10 +116,11 @@ async def resolve_code(session: AsyncSession, code: str) -> ResolvedCode | None:
     always runs both statements. A code no code could be (``is_plausible_code``)
     resolves to nothing without the database, for claim and lookup alike.
 
-    **A link code matches as a handle.** Every link code (default or picked) is
-    a lowercase handle, so `Ada-Smith` (typed, or capitalised by a phone) finds
-    `ada-smith`. The plausibility check comes first because ``lower()`` folds
-    some non-ASCII letters into ASCII ones: the Kelvin sign would become `k`.
+    **A link code matches as a handle.** Every link code but a purged owner's
+    (default or picked) is a lowercase handle, so `Ada-Smith` (typed, or
+    capitalised by a phone) finds `ada-smith`. The plausibility check comes
+    first because ``lower()`` folds some non-ASCII letters into ASCII ones: the
+    Kelvin sign would become `k`.
     """
     if not is_plausible_code(code):
         return None
@@ -324,3 +335,27 @@ async def set_link_active(session: AsyncSession, user_id: UUID, *, active: bool)
         )
     ).one()
     return LinkState(code=row.code, active=row.revoked_at is None)
+
+
+async def forget_invite_link(session: AsyncSession, user_id: UUID) -> None:
+    """Drop every handle ``user_id``'s link has carried: the purge's step (decision 305).
+
+    The current code becomes a random :func:`make_code`, never one built from a
+    name the purge has just erased, and the link's retired codes are deleted, so
+    the handles are neither stored nor held. No hold is owed: the link resolved
+    for nobody through the 30-day restore window. The row stays, as referrals
+    made through it name its owner. Not idempotent (each call draws a fresh
+    code), and need not be: the purge calls it once, in the transaction that
+    ends the account's due state. Nothing to do when there is no link. Does not
+    commit.
+    """
+    await session.execute(
+        update(InviteLink).where(InviteLink.user_id == user_id).values(code=make_code())
+    )
+    await session.execute(
+        delete(InviteLinkRetiredCode).where(
+            InviteLinkRetiredCode.invite_link_id.in_(
+                select(InviteLink.id).where(InviteLink.user_id == user_id)
+            )
+        )
+    )
