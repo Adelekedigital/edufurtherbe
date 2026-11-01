@@ -11,7 +11,8 @@ the Supabase account), the contact a migrated account has at Loops, and the rest
 that is only theirs and that nothing kept points at: sign-in identities, calendar
 tokens, social links, awards, onboarding, interest, writing-assist counts,
 idempotency keys, a mentor's availability, listings, guide countries and
-personal meeting links.
+personal meeting links. Every handle their invite link carried goes too, and
+the address of the invite they arrived through (decision 305).
 
 **Stays, unnamed**: sessions, reviews, the reasons a party gave for missing a
 session (without the note they wrote), the credit ledger and the audit logs, as
@@ -43,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.errors import ConflictError
 from app.infra.auth.admin import AdminApiError
 from app.infra.clients.loops_contacts import ContactsError
+from app.infra.db.invite_links import forget_invite_link
 from app.infra.db.models.availability import (
     AvailabilityException,
     AvailabilityRule,
@@ -61,6 +63,7 @@ from app.infra.db.models.mentoring import (
 )
 from app.infra.db.models.missed_reasons import SessionMissedReason
 from app.infra.db.models.platform import FeatureInterest, IdempotencyKey
+from app.infra.db.models.referrals import Referral
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.sessions import SessionType
 from app.infra.db.models.user import (
@@ -195,6 +198,12 @@ async def purge_account(
     # Consent stays as evidence of what was agreed; where from does not.
     await session.execute(
         update(UserLegalConsent).where(UserLegalConsent.user_id == user_id).values(ip_address=None)
+    )
+    # The link stays for the referrals made through it; its handles do not.
+    await forget_invite_link(session, user_id)
+    # The invite they arrived through stays for its referrer; their address goes.
+    await session.execute(
+        update(Referral).where(Referral.invitee_user_id == user_id).values(invitee_email=None)
     )
     await session.execute(
         update(MentorProfile)
