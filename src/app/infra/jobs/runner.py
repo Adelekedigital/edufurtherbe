@@ -36,7 +36,7 @@ from app.infra.clients.notifications import LoopsNotifier, NullNotifier, notifie
 from app.infra.db.account_purge import purge_counts, purge_due_accounts
 from app.infra.db.calendar_store import check_connections, free_busy_reader
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
-from app.infra.db.credit_grants import grant_monthly_credits, unlocked_mentee_count
+from app.infra.db.credit_grants import grant_monthly_credits, owed_count
 from app.infra.db.credit_reminders import (
     CREDIT_REMINDERS,
     expiring_soon,
@@ -443,7 +443,13 @@ class RuntimeJobs:
             factory = create_session_factory(engine)
             async with factory() as session:
                 if dry_run:
-                    return {"grants": await unlocked_mentee_count(session)}
+                    return {
+                        "grants": await owed_count(
+                            session,
+                            now=dt.datetime.now(dt.UTC),
+                            ladder=credit_ladder(self.settings),
+                        )
+                    }
                 # The ladder from *these* settings rather than the process cache.
                 # `RuntimeJobs` is the composition root the script used to be, so
                 # the choice belongs here (settled decision #44).

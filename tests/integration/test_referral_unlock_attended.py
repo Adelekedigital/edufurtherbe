@@ -39,7 +39,7 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 #: The bonus on the first qualified invite (`CREDIT_REFERRAL_UNLOCK_GRANT`).
 BONUS = 2
-LADDER = CreditLadder(starter=1, unlock=BONUS, monthly=3)
+LADDER = CreditLadder(starter=1, invited=BONUS, monthly=3)
 
 
 async def qualify_an_invitee(

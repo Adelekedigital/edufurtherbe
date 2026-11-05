@@ -152,7 +152,8 @@ class Notification(StrEnum):
     #: unmapped member is a send that fails at the drain rather than a message
     #: that goes out sounding like a first ask.
 
-    #: **The starter credit landed.** One credit, and it never expires.
+    #: **The starter credit landed**: one credit, the month's level-1 credit
+    #: (decision 308).
     #:
     #: **Fired on profile completion, not on signup**, and that is the whole
     #: point rather than a scheduling detail: the credit is *granted* on
@@ -169,11 +170,11 @@ class Notification(StrEnum):
     #: recipient rather than deriving one.
     CREDITS_GRANTED = "credits_granted"
 
-    #: **The month turned and three more arrived.** Enqueued by
-    #: `grant_monthly_credits` for the users it actually paid, derived from the
-    #: same `RETURNING` the ledger rows come from — so a run that granted
-    #: nothing tells nobody, and the period guard refusing a second run in one
-    #: month refuses the second email with it.
+    #: **The month turned and the level was paid again** (decision 308). Enqueued
+    #: by `grant_monthly_credits` for the users it actually paid, with
+    #: `credit_count` — what they received, 1 to 3 — so a run that paid nothing
+    #: tells nobody, and a second run in one month, which owes nothing, sends
+    #: nothing.
     #:
     #: Not in `AUDIENCE`: about a *user* rather than a party to a session.
     CREDITS_RENEWED = "credits_renewed"
@@ -182,9 +183,9 @@ class Notification(StrEnum):
     #: about something that already happened — it exists to change what somebody
     #: does before the month ends.
     #:
-    #: Sent only to people who hold credits that are actually expiring. A user
-    #: whose only lot is the never-expiring starter has nothing running out, and
-    #: telling them otherwise is the false urgency people mute a sender over.
+    #: Sent only to people who hold credits that are actually expiring: a lot
+    #: with no end date has nothing running out, and telling them otherwise is
+    #: the false urgency people mute a sender over.
     #:
     #: **Its `kind` carries the period**, unlike every other reminder here. The
     #: rest fire once for one session and their dedup key needs no date; this

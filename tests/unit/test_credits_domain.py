@@ -20,13 +20,21 @@ from pydantic import ValidationError
 
 from app.core.config import CREDIT_CEILING, Settings, get_settings
 from app.domain.credits import (
+    LEVEL_SOURCES,
+    NON_EXPIRING,
+    SOURCE_BUCKET,
+    CreditLadder,
     CreditReason,
     CreditSource,
     CreditState,
+    LevelFacts,
     allowance_for,
+    card_level,
     credit_ladder,
     end_of_month,
     expiry_for,
+    level_allowance,
+    level_owed,
     refund_expiry,
     state_for,
 )
@@ -49,9 +57,7 @@ class TestVocabularies:
             # Deferred at PR 1 under #21 because nothing wrote one; ships with
             # the admin endpoint that does.
             "admin_grant",
-            # Decision 307's mid-month top-up. Its migration merges alone,
-            # before the code that writes it (project-conventions, *Migration
-            # ordering*); the producer is the stacked PR on top of this one.
+            # Decision 308's mid-month top-up, written by `credit_grants`.
             "level_top_up",
         }
 
@@ -103,30 +109,89 @@ class TestVocabularies:
 
 
 class TestQuantities:
-    def test_the_earning_ladder(self) -> None:
-        """Three independent quantities, asserted independently **on purpose**.
-
-        They happen to satisfy ``starter + unlock == monthly`` today, and
-        chaining them that way would assert a
-        relationship the design does not claim: the unlock is a one-off on top
-        of the starter, the allowance is what arrives every month, and nothing
-        holds them equal. Raise the allowance to four and a chained assertion
-        goes red for a reason that is not the bug.
-        """
+    def test_the_level_ladder(self) -> None:
+        """What each level's month pays (decision 308), asserted independently:
+        nothing holds them in a fixed relation beyond never decreasing."""
         ladder = LADDER
         assert ladder.starter == 1
-        assert ladder.unlock == 2
+        assert ladder.invited == 2
         assert ladder.monthly == 3
 
-    def test_steady_state_is_four_not_three(self) -> None:
-        """The non-expiring starter plus the monthly three.
 
-        This is why the read publishes ``max(allowance, balance)`` rather than
-        the allowance alone — the card would otherwise show "4 credits left"
-        beside a bar that cannot draw four.
-        """
-        ladder = LADDER
-        assert ladder.starter + ladder.monthly == ladder.steady_state == 4
+class TestLevels:
+    """Decision 308: a mentee's month pays their level, and the facts decide it."""
+
+    @pytest.mark.parametrize(
+        ("onboarded", "invited", "unlocked", "level"),
+        [
+            (False, False, False, 0),
+            (True, False, False, 1),
+            (True, True, False, 2),
+            (True, True, True, 3),
+            # An invite before its inviter has onboarded pays nothing yet.
+            (False, True, False, 0),
+            # The unlock alone is level 3: ~1,200 grandfathered migrated mentees
+            # hold one with no invite and no onboarding row the API wrote.
+            (False, False, True, 3),
+            (True, False, True, 3),
+            (False, True, True, 3),
+        ],
+    )
+    def test_every_combination_of_facts(
+        self, *, onboarded: bool, invited: bool, unlocked: bool, level: int
+    ) -> None:
+        """Every combination enumerated, because a predicate written with `or`
+        where it meant `and` passes the three happy rows."""
+        facts = LevelFacts(onboarded=onboarded, invited=invited, unlocked=unlocked)
+        assert level_allowance(facts, LADDER) == level
+
+    def test_the_levels_follow_the_ladder_not_literals(self) -> None:
+        ladder = CreditLadder(starter=2, invited=4, monthly=7)
+        assert level_allowance(LevelFacts(True, False, False), ladder) == 2
+        assert level_allowance(LevelFacts(True, True, False), ladder) == 4
+        assert level_allowance(LevelFacts(True, True, True), ladder) == 7
+
+    @pytest.mark.parametrize(("level", "drawn"), [(0, 1), (1, 1), (2, 2), (3, 3)])
+    def test_the_card_never_draws_below_level_one(self, level: int, drawn: int) -> None:
+        """A level-0 card at 0 would publish a zero denominator."""
+        assert card_level(level, LADDER) == drawn
+
+    @pytest.mark.parametrize(
+        ("level", "granted", "owed"),
+        [
+            (3, 0, 3),  # the 1st
+            (3, 3, 0),  # a re-run, spent or not
+            (2, 1, 1),  # a rise from 1 to 2 pays the difference, not a refill
+            (3, 2, 1),
+            (1, 3, 0),  # never negative: the deploy month's older lots
+            (0, 0, 0),
+        ],
+    )
+    def test_what_a_period_still_owes(self, level: int, granted: int, owed: int) -> None:
+        assert level_owed(level, granted) == owed
+
+
+class TestTheLevelSources:
+    def test_the_level_counts_exactly_the_monthly_bucket(self) -> None:
+        """Derived, so the bar and the count cannot disagree about a source."""
+        assert {s for s, bucket in SOURCE_BUCKET.items() if bucket == "monthly"} == LEVEL_SOURCES
+
+    def test_a_refund_and_an_admin_grant_are_outside_the_level(self) -> None:
+        """Both may lift a balance above the level until the reset (owner,
+        2026-11-05); counting either would shrink the next top-up."""
+        assert CreditSource.REFUND not in LEVEL_SOURCES
+        assert CreditSource.ADMIN_GRANT not in LEVEL_SOURCES
+
+    def test_the_starter_and_the_invite_lots_count_as_level_credits(self) -> None:
+        """A starter or invite lot is a level credit, so a top-up in its month
+        does not pay that level a second time."""
+        assert {
+            CreditSource.MONTHLY_FREE,
+            CreditSource.LEVEL_TOP_UP,
+            CreditSource.PROFILE_COMPLETED,
+            CreditSource.REFERRAL_UNLOCK,
+            CreditSource.OPENING_BALANCE,
+        } <= LEVEL_SOURCES
 
 
 class TestEndOfMonth:
@@ -155,20 +220,16 @@ class TestEndOfMonth:
 
 
 class TestExpiryFor:
-    def test_the_starter_never_expires(self) -> None:
-        """It exists so a user gets a feel for the platform.
-
-        Expiring it makes the reward depend on the day somebody happened to
-        finish onboarding — complete on the 28th and it lives three days.
-        """
-        assert (
-            expiry_for(CreditSource.PROFILE_COMPLETED, now=datetime(2026, 8, 28, tzinfo=UTC))
-            is None
-        )
+    def test_nothing_outlives_the_reset_any_more(self) -> None:
+        """Decision 308: every credit dies at the month end, the starter
+        included. The set stays for purchased lots, which must never expire."""
+        assert frozenset() == NON_EXPIRING
 
     @pytest.mark.parametrize(
         "source",
         [
+            CreditSource.PROFILE_COMPLETED,
+            CreditSource.ADMIN_GRANT,
             CreditSource.REFERRAL_UNLOCK,
             CreditSource.MONTHLY_FREE,
             CreditSource.OPENING_BALANCE,
@@ -204,7 +265,8 @@ class TestRefundExpiry:
         )
 
     def test_a_refund_of_a_never_expiring_credit_never_expires(self) -> None:
-        """The starter, today. Every purchased credit, once payments land.
+        """Every purchased credit, once payments land (no source is
+        non-expiring since decision 308, but the rule is kept for them).
 
         D7 is blunt about the second: expiring something somebody bought is a
         chargeback and, in several jurisdictions, unlawful. Inheriting the
@@ -310,7 +372,7 @@ class TestTheLadderIsConfigured:
 
         ladder = credit_ladder(Settings(_env_file=None))
 
-        assert (ladder.starter, ladder.unlock, ladder.monthly) == (1, 2, 3)
+        assert (ladder.starter, ladder.invited, ladder.monthly) == (1, 2, 3)
 
     def test_an_override_moves_the_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The whole reason for the change, and it exercises the `CREDIT_*`
@@ -322,35 +384,44 @@ class TestTheLadderIsConfigured:
 
         assert (ladder.starter, ladder.monthly) == (2, 5)
 
-    def test_the_steady_state_and_the_bands_follow_the_override(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """**The relationship, not the number**, and both derived values together.
-
-        The card shows an allowance and a state for one balance. With the bands
-        hardcoded at `<= 3` they agreed only while the monthly grant was three:
-        at a grant of two the steady state is three, `allowance_for(3)` returns a
-        full card, and `state_for(3)` said `moderate` — the same balance
-        described as full and as middling.
-        """
+    def test_the_bands_follow_the_level(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """**The relationship, not the number**, and both derived values together:
+        the card's allowance and state describe one balance against one level."""
         monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "5")
         ladder = credit_ladder(Settings(_env_file=None))
+        level = level_allowance(LevelFacts(True, True, True), ladder)
 
-        assert ladder.steady_state == 1 + 5
-        assert allowance_for(4, ladder) == 6
-        # Four is below the steady state of six, so it is no longer the top band.
-        assert state_for(4, ladder) is CreditState.MODERATE
-        assert state_for(6, ladder) is CreditState.ON_TRACK
+        assert level == 5
+        assert allowance_for(4, level) == 5
+        assert state_for(4, level) is CreditState.MODERATE
+        assert state_for(5, level) is CreditState.ON_TRACK
 
-    def test_zero_and_one_stay_absolute(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_zero_and_one_stay_absolute(self) -> None:
         """They are not proportions. *Nothing left* and *one left* mean the same
-        thing whatever the grant is, and a `low` band that scaled would call
-        three credits low on a generous ladder."""
-        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "10")
-        ladder = credit_ladder(Settings(_env_file=None))
+        thing whatever the level is — so a level-1 mentee holding their one
+        credit reads `low`."""
+        assert state_for(0, 10) is CreditState.EXHAUSTED
+        assert state_for(1, 10) is CreditState.LOW
+        assert state_for(1, 1) is CreditState.LOW
 
-        assert state_for(0, ladder) is CreditState.EXHAUSTED
-        assert state_for(1, ladder) is CreditState.LOW
+    def test_levels_that_decrease_are_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A higher level paying less would make inviting a friend cost credits."""
+        monkeypatch.setenv("CREDIT_REFERRAL_UNLOCK_GRANT", "4")
+        monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "3")
+
+        with pytest.raises(ValidationError, match="credit levels must not decrease"):
+            Settings(_env_file=None)
+
+    def test_equal_levels_are_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The accepting edge: `<=`, not `<`."""
+        for key in (
+            "CREDIT_STARTER_GRANT",
+            "CREDIT_REFERRAL_UNLOCK_GRANT",
+            "CREDIT_MONTHLY_ALLOWANCE",
+        ):
+            monkeypatch.setenv(key, "3")
+
+        assert credit_ladder(Settings(_env_file=None)) == CreditLadder(3, 3, 3)
 
     def test_a_grant_of_zero_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`ck_credit_lots_quantity_granted_positive` would refuse the lot at the

@@ -206,11 +206,11 @@ async def expirable_credit_count(session: AsyncSession, *, now: dt.datetime) -> 
 
     The same ``_dead`` the sweep uses rather than a second predicate that could
     drift — a dry run answering a different question from the real run is worse
-    than no dry run, which is the note `unlocked_mentee_count` already carries.
+    than no dry run, which is the note `owed_count` already carries.
 
     **Lots, not credits**, which is what the name says and what the script
     prints. An aggregate ``count()`` with no ``GROUP BY`` always returns a row,
-    so there is no ``None`` to coalesce — `unlocked_mentee_count` guards against
+    so there is no ``None`` to coalesce — `owed_count` guards against
     one anyway, and copying that would be a guard against nothing.
     """
     return int(await session.scalar(select(func.count()).select_from(CreditLot).where(*_dead(now))))

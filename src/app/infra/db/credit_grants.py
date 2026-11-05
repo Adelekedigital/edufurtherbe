@@ -1,169 +1,192 @@
-"""The monthly grant: three credits, on the 1st, to every unlocked mentee.
+"""The level grants: the 1st's reset, and the mid-month top-up (decision 308).
 
-**The rung that makes the ladder recur.** Without it a balance only ever
-decreases — earn a starter, earn an unlock, spend both, and there is no way
-back. Everything else in the credit model is a one-off.
-
-WHO GETS IT, AND WHY EACH HALF OF THE PREDICATE IS THERE
-========================================================
-**A mentee goal**, because credits buy sessions and somebody who is not a mentee
-books none. Written as *has a goal* rather than *is not a mentor*, which is
-settled decision 15: authorization here is profile existence, so a dual-role
-user is both, and the negative form would silently stop somebody booking who
-can book.
-
-**An unlock**, because that is what a qualifying invite opens once its inviter
-has attended a session as a mentee (decision 295). Without it the
-referral programme rewards nothing — the grant would arrive whether or not
-anybody ever invited a soul, and `referral_unlocks` would be a table nothing
-reads.
-
-**Alive.** The ledger keeps a deleted user's rows because it is evidence; the
-grant does not follow them out.
+**One mechanism for both.** A mentee's month pays their level
+(``domain.credits.level_allowance``); what is still owed is the level less what
+the level sources already granted this period (``level_owed``). The 1st asks it
+for everybody, and a rise in level — finishing onboarding, an invite qualifying,
+the unlock — asks it for the people it touched. The difference is only which
+source the lot is written under.
 
 RUNNING TWICE IS THE CASE THIS IS BUILT AROUND
 ==============================================
 A scheduled job runs twice — a retry, a manual trigger beside the cron, an
-operator checking it works. Granting again would hand every unlocked mentee six
-credits, and **nothing downstream would notice**: the balance is a ``SUM`` and
-it would simply be right about the wrong number.
+operator checking it works — and a completion is retried by its client.
+**Owed is counted from what the period granted, never from what is held**, so a
+second run pays nothing even after the first run's credits were spent; a
+balance-based refill would pay them again.
 
-The guard is ``uq_credit_lots_one_monthly_grant_per_period``, a partial unique
-index on ``(user_id, expires_at)``. Every monthly lot granted in one month
-shares an expiry — the 1st of the next month — so that pair *is* "once this
-month", without the expression-immutability problem ``date_trunc`` on a
-``timestamptz`` would bring. It also means a job that fires late, on the 3rd,
-still collides with the one that fired on the 1st: the guard keys on the period,
-not on the day the job happened to run.
-
-``ON CONFLICT DO NOTHING`` rather than a read-then-write, for the reason every
-other grant here gives: two runs starting together both see nothing and both
-insert, and the database is the only thing positioned to arbitrate.
+**Every writer holds the users' row locks** (``user_locks``) from before it
+reads the period's grants until it commits, so the 1st and a top-up for the
+same mentee — or two top-ups — queue rather than both seeing nothing granted.
+``uq_credit_lots_one_monthly_grant_per_period`` stays as the database's
+backstop for the 1st: a second ``monthly_free`` lot in one period is refused,
+and the job writes a ``level_top_up`` instead whenever one already exists.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Collection
+from uuid import UUID
 
-from sqlalchemy import func, insert, literal, select, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.credits import CreditLadder, expiry_for
-from app.domain.enums import CreditReason, CreditSource
+from app.domain.credits import (
+    LEVEL_SOURCES,
+    CreditLadder,
+    end_of_month,
+    level_allowance,
+    level_owed,
+)
+from app.domain.enums import CreditSource
 from app.domain.notifications import Notification
-from app.infra.db.credit_eligibility import receives_monthly_grant
-from app.infra.db.models.credits import CreditLot, CreditTransaction
+from app.infra.db.credit_eligibility import NO_FACTS, level_candidates, level_facts
+from app.infra.db.credit_writer import grant_many
+from app.infra.db.models.credits import CreditLot
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
+from app.infra.db.user_locks import lock_users
 
-__all__ = ["grant_monthly_credits"]
+__all__ = ["grant_monthly_credits", "owed_count", "top_up_levels"]
+
+
+async def _period_grants(
+    session: AsyncSession, user_ids: Collection[UUID], period_end: dt.datetime
+) -> dict[UUID, tuple[int, bool]]:
+    """Per user: what the level sources granted this period, and whether the
+    1st's ``monthly_free`` lot is among them.
+
+    ``quantity_granted``, not ``quantity_remaining``: what was paid, spent or
+    not. A period is its expiry — every level lot dies at the month end.
+    """
+    rows = await session.execute(
+        select(
+            CreditLot.user_id,
+            func.sum(CreditLot.quantity_granted),
+            func.bool_or(CreditLot.source == CreditSource.MONTHLY_FREE),
+        )
+        .where(
+            CreditLot.user_id.in_(list(user_ids)),
+            CreditLot.source.in_(LEVEL_SOURCES),
+            CreditLot.expires_at == period_end,
+        )
+        .group_by(CreditLot.user_id)
+    )
+    return {row[0]: (int(row[1]), bool(row[2])) for row in rows}
+
+
+async def _owed(
+    session: AsyncSession,
+    user_ids: Collection[UUID],
+    *,
+    monthly: bool,
+    ladder: CreditLadder,
+    now: dt.datetime,
+) -> dict[CreditSource, dict[UUID, int]]:
+    """What each user's level still owes this period, by the source it is
+    written under, omitting anybody owed nothing. Reads only.
+
+    ``monthly`` writes the 1st's ``monthly_free`` lot, unless the period
+    already has one — then the difference is a ``level_top_up``, so the
+    one-per-period index is never what refuses a legitimate payment.
+    """
+    facts = await level_facts(session, user_ids)
+    granted = await _period_grants(session, user_ids, end_of_month(now))
+
+    owed: dict[CreditSource, dict[UUID, int]] = {}
+    for user_id in user_ids:
+        already, has_monthly = granted.get(user_id, (0, False))
+        amount = level_owed(level_allowance(facts.get(user_id, NO_FACTS), ladder), already)
+        if amount:
+            source = (
+                CreditSource.MONTHLY_FREE
+                if monthly and not has_monthly
+                else CreditSource.LEVEL_TOP_UP
+            )
+            owed.setdefault(source, {})[user_id] = amount
+    return owed
+
+
+async def _pay_levels(
+    session: AsyncSession,
+    user_ids: Collection[UUID],
+    *,
+    monthly: bool,
+    ladder: CreditLadder,
+    now: dt.datetime,
+) -> dict[UUID, int]:
+    """Grant each user what their level still owes this period. Returns what
+    was paid, by user, omitting anybody owed nothing. Does not commit.
+
+    The users' rows are locked before anything is read, and every lot is
+    written in bulk (`grant_many`), so the locks are held for a few statements
+    rather than a round trip per user.
+    """
+    if not user_ids:
+        return {}
+    await lock_users(session, user_ids)
+    paid: dict[UUID, int] = {}
+    for source, quantities in (
+        await _owed(session, user_ids, monthly=monthly, ladder=ladder, now=now)
+    ).items():
+        await grant_many(session, quantities, source=source, now=now)
+        paid.update(quantities)
+    return paid
+
+
+async def top_up_levels(
+    session: AsyncSession,
+    user_ids: Collection[UUID],
+    *,
+    ladder: CreditLadder,
+    now: dt.datetime,
+) -> dict[UUID, int]:
+    """Top this period up to each user's level, after something raised it.
+    Returns what was paid, by user. Does not commit.
+
+    Safe to call whenever a level *may* have risen: a user whose period already
+    paid their level is owed nothing and gets no lot.
+    """
+    return await _pay_levels(session, user_ids, monthly=False, ladder=ladder, now=now)
 
 
 async def grant_monthly_credits(
     session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder
 ) -> int:
-    """Grant this month's credits. Returns how many users were paid.
+    """The 1st: pay every mentee their level. Returns how many were paid.
 
-    Does not commit — the caller owns the transaction, which is what lets the
-    script offer a dry run that rolls back and reports on the same query the
-    real run uses.
-
-    **One statement, not a loop.** ~1,200 mentees is one `INSERT … SELECT`
-    rather than 1,200 round trips, and more importantly it is one snapshot: a
-    loop reading eligibility per user would let a mentee who unlocked mid-run be
-    granted or skipped depending on where the cursor was.
+    Does not commit — the caller owns the transaction. One snapshot of who is
+    eligible, every row locked in id order, so a mentee who levels up while the
+    job runs is paid once, either here or by their own top-up after it.
     """
-    monthly = ladder.monthly
-    expires_at = expiry_for(CreditSource.MONTHLY_FREE, now=now)
+    candidates = (await session.scalars(select(User.id).where(*level_candidates()))).all()
+    paid = await _pay_levels(session, candidates, monthly=True, ladder=ladder, now=now)
 
-    eligible = select(
-        User.id,
-        literal(CreditSource.MONTHLY_FREE.value).label("source"),
-        literal(monthly).label("quantity_granted"),
-        literal(monthly).label("quantity_remaining"),
-        literal(expires_at).label("expires_at"),
-    ).where(*receives_monthly_grant())
-
-    granted = (
-        (
-            await session.execute(
-                pg_insert(CreditLot)
-                .from_select(
-                    ["user_id", "source", "quantity_granted", "quantity_remaining", "expires_at"],
-                    eligible,
-                )
-                # The period guard — see the module docstring.
-                .on_conflict_do_nothing(
-                    index_elements=["user_id", "expires_at"],
-                    index_where=text(f"source = '{CreditSource.MONTHLY_FREE.value}'"),
-                )
-                .returning(CreditLot.id, CreditLot.user_id)
-            )
-        )
-        .mappings()
-        .all()
-    )
-
-    if not granted:
-        return 0
-
-    # **The ledger rows, from the lots that were actually created.** Derived from
-    # `RETURNING` rather than from the eligible set: the two differ by exactly
-    # the users the conflict clause skipped, and writing a row for a lot that
-    # was not inserted is a balance claiming to have moved when it did not.
-    await session.execute(
-        insert(CreditTransaction),
-        [
-            {
-                "user_id": row["user_id"],
-                "credit_lot_id": row["id"],
-                "delta": monthly,
-                "reason": CreditReason.GRANT,
-                "session_id": None,
-            }
-            for row in granted
-        ],
-    )
-
-    # **Told in the same transaction, and only the people actually paid.**
-    # Derived from the same `RETURNING` as the ledger rows for the same reason:
-    # the eligible set and the granted set differ by exactly whoever the period
-    # guard skipped, and telling them their credits renewed when no lot was
-    # created is a message about something that did not happen.
-    #
-    # It follows that a second run in one month sends nothing — the guard
-    # refuses the lots, `granted` is empty, and the email is refused with them.
-    #
-    # **A call per user rather than one carrying every recipient**, because
-    # `entity_id` differs per row and `enqueue` takes one. Passing the whole set
-    # with a single entity would write ~1,200 rows all claiming to be about one
-    # arbitrary user. `_context_for` never reads `entity_id` for a non-session
-    # message, so nothing would render wrong today — which is exactly why it
-    # would go unnoticed until somebody read the outbox to answer a question
-    # about who was told what.
-    for row in granted:
+    # **Told in the same transaction, and only the people actually paid**, with
+    # the amount: a level-1 mentee renews one credit, not three. A second run
+    # in one month pays nothing, so it sends nothing.
+    for user_id, amount in paid.items():
         await enqueue(
             session,
             Notification.CREDITS_RENEWED,
             entity_type="user",
-            entity_id=row["user_id"],
-            recipient_ids=(row["user_id"],),
+            entity_id=user_id,
+            recipient_ids=(user_id,),
+            variables={"credit_count": amount},
         )
+    return len(paid)
 
-    return len(granted)
 
+async def owed_count(session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder) -> int:
+    """How many users the 1st's grant would pay now, for the job's dry run.
 
-async def unlocked_mentee_count(session: AsyncSession) -> int:
-    """How many users the grant would reach, for the script's dry run.
-
-    Deliberately the same predicate as the grant rather than a second one that
-    could drift — a dry run reporting on a different query from the real run is
-    worse than no dry run.
+    The same candidates and the same arithmetic as the real run (`_owed`), so
+    a dry run after the month was paid reports 0, as the real run would pay
+    nobody (found by code review: it used to count candidates). Reads only.
     """
-    return int(
-        await session.scalar(
-            select(func.count()).select_from(User).where(*receives_monthly_grant())
-        )
-        or 0
-    )
+    candidates = (await session.scalars(select(User.id).where(*level_candidates()))).all()
+    if not candidates:
+        return 0
+    owed = await _owed(session, candidates, monthly=True, ladder=ladder, now=now)
+    return sum(len(quantities) for quantities in owed.values())

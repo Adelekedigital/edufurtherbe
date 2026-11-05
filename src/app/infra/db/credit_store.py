@@ -40,7 +40,7 @@ import datetime as dt
 from dataclasses import dataclass, replace
 from uuid import UUID
 
-from sqlalchemy import CTE, ColumnElement, and_, exists, func, or_, select
+from sqlalchemy import CTE, ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -50,15 +50,16 @@ from app.domain.credits import (
     HeldLot,
     MonthlyCredits,
     allowance_for,
+    card_level,
     end_of_month,
+    level_allowance,
     split_buckets,
     state_for,
 )
 from app.domain.enums import CreditReason, CreditSource, CreditState
-from app.infra.db.credit_eligibility import receives_monthly_grant
+from app.infra.db.credit_eligibility import NO_FACTS, level_facts
 from app.infra.db.models.credits import CreditLot, CreditTransaction
 from app.infra.db.models.sessions import Session
-from app.infra.db.models.user import User
 
 __all__ = [
     "CreditSummary",
@@ -167,15 +168,16 @@ class CreditSummary:
         *,
         balance: int,
         next_reset_at: dt.datetime,
-        ladder: CreditLadder,
+        level: int,
         monthly: MonthlyCredits,
         bonus: BonusCredits,
     ) -> CreditSummary:
-        """Derive the three published values from the one measured one."""
+        """Derive the published values from the measured balance and the
+        user's level allowance (decision 308)."""
         return cls(
             balance=balance,
-            allowance=allowance_for(balance, ladder),
-            state=state_for(balance, ladder),
+            allowance=allowance_for(balance, level),
+            state=state_for(balance, level),
             next_reset_at=next_reset_at,
             monthly=monthly,
             bonus=bonus,
@@ -196,28 +198,27 @@ async def get_credit_summary(
     """
     moment = now or dt.datetime.now(dt.UTC)
 
+    # The facts the grants pay on, judged by the same rule, so the card never
+    # shows a level the 1st does not pay (decision 308).
+    facts = (await level_facts(session, [user_id])).get(user_id, NO_FACTS)
+    level = card_level(level_allowance(facts, ladder), ladder)
     # The total and its split are summed from the same lot rows, so they cannot
     # disagree: a booking between two separate reads would make them add up
     # wrong. (The refund links are a second query; they decide only which part
     # a refund sits in, never how much is held.)
-    balance, monthly, bonus = await _buckets(session, user_id, moment=moment, ladder=ladder)
-    # The grant job's own rule, so the card never says "unlocked" to somebody
-    # the 1st skips.
-    unlocked = bool(
-        await session.scalar(select(exists().where(User.id == user_id, *receives_monthly_grant())))
-    )
-    monthly = replace(monthly, unlocked=unlocked)
+    balance, monthly, bonus = await _buckets(session, user_id, moment=moment, ceiling=level)
+    monthly = replace(monthly, unlocked=facts.unlocked)
     return CreditSummary.of(
         balance=balance,
         next_reset_at=end_of_month(moment),
-        ladder=ladder,
+        level=level,
         monthly=monthly,
         bonus=bonus,
     )
 
 
 async def _buckets(
-    session: AsyncSession, user_id: UUID, *, moment: dt.datetime, ladder: CreditLadder
+    session: AsyncSession, user_id: UUID, *, moment: dt.datetime, ceiling: int
 ) -> tuple[int, MonthlyCredits, BonusCredits]:
     """The balance, and its split into monthly and bonus credits, in two queries.
 
@@ -288,6 +289,6 @@ async def _buckets(
         held_lots,
         sources={row.id: row.source for row in lots},
         replaces={row[0]: row[1] for row in links},
-        ceiling=ladder.monthly,
+        ceiling=ceiling,
     )
     return sum(lot.remaining for lot in held_lots), monthly, bonus
