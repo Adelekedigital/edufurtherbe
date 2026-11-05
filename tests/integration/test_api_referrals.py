@@ -46,6 +46,17 @@ async def seed(engine: AsyncEngine, auth_id: UUID, *, complete: bool = True) -> 
         return UUID(str(user_id))
 
 
+async def onboarded(engine: AsyncEngine, client: httpx.AsyncClient, auth_id: UUID) -> UUID:
+    """A user who finished onboarding through the API: credit level 1, paid.
+
+    A referrer must be onboarded for an invite to pay (decision 307: level 2 is
+    level 1 plus an invite), so the tests that expect a payment start here.
+    """
+    user_id = await seed(engine, auth_id)
+    assert (await client.post(COMPLETE, headers=bearer(api_token(auth_id)))).status_code == 201
+    return user_id
+
+
 async def balance_of(engine: AsyncEngine, user_id: UUID) -> int:
     async with engine.begin() as conn:
         return int(
@@ -260,25 +271,26 @@ async def test_an_unknown_code_is_a_404(
 async def test_finishing_onboarding_pays_the_referrer(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """**The earning model's second rung.**
+    """**Level 2** (decision 307).
 
     Claiming pays nothing; finishing the profile does. That separation is the
-    abuse boundary — signing up and vanishing unlocks nothing.
+    abuse boundary — signing up and vanishing unlocks nothing. The referrer's
+    month is topped up from level 1 to 2: one more credit, a `level_top_up`.
     """
     referrer, invitee = uuid4(), uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer_id = await onboarded(db_engine, api_client, referrer)
     await seed(db_engine, invitee)
     code = (await invite(api_client, referrer, "friend@example.com")).json()["code"]
     token = bearer(api_token(invitee))
     await api_client.post(CLAIM, json={"code": code}, headers=token)
 
-    assert await balance_of(db_engine, referrer_id) == 0
+    assert await balance_of(db_engine, referrer_id) == 1
 
     await api_client.post(COMPLETE, headers=token)
 
     assert await balance_of(db_engine, referrer_id) == 2
-    assert await sources_of(db_engine, referrer_id) == ["referral_unlock"]
-    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    assert await sources_of(db_engine, referrer_id) == ["level_top_up", "level_top_up"]
+    # Level 2 is paid now; the unlock waits for an attended session (decision 295).
     assert await unlocks_of(db_engine, referrer_id) == 0
 
 
@@ -302,14 +314,12 @@ async def test_a_second_qualifying_invitee_pays_nothing_more(
 ) -> None:
     """**The case that costs money if it is wrong.**
 
-    The gate is once-only: it opens a floor, and opening a floor that is already
-    open must not pay again. Since decision 295 the bonus is paid under the
-    referrer's row lock and backstopped by
-    `uq_credit_lots_one_referral_bonus_per_user`; the concurrent case is
-    `test_two_invitees_qualifying_at_once_pay_one_bonus`.
+    A second invite changes no level, so the month already paid level 2 owes
+    nothing (decision 307). The concurrent case is
+    `test_two_invitees_qualifying_at_once_pay_one_top_up`.
     """
     referrer, first, second = uuid4(), uuid4(), uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer_id = await onboarded(db_engine, api_client, referrer)
     await seed(db_engine, first)
     await seed(db_engine, second)
 
@@ -320,7 +330,7 @@ async def test_a_second_qualifying_invitee_pays_nothing_more(
         await api_client.post(COMPLETE, headers=token)
 
     assert await balance_of(db_engine, referrer_id) == 2
-    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    # Level 2 is paid now; the unlock waits for an attended session (decision 295).
     assert await unlocks_of(db_engine, referrer_id) == 0
 
 
@@ -362,7 +372,7 @@ async def test_the_invitee_finishing_twice_does_not_move_qualified_at(
     the moment anything keys off it, and invisible to every balance assertion.
     """
     referrer, invitee = uuid4(), uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer_id = await onboarded(db_engine, api_client, referrer)
     await seed(db_engine, invitee)
     code = (await invite(api_client, referrer, "friend@example.com")).json()["code"]
     token = bearer(api_token(invitee))
@@ -388,16 +398,16 @@ async def test_finishing_without_a_claim_pays_nobody(
     response = await api_client.post(COMPLETE, headers=bearer(api_token(invitee)))
 
     assert response.status_code == 201
-    assert await sources_of(db_engine, invitee_id) == ["profile_completed"]
+    assert await sources_of(db_engine, invitee_id) == ["level_top_up"]
 
 
-async def test_the_unlock_grant_expires_at_the_reset(
+async def test_the_invite_top_up_expires_at_the_reset(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Unlike the starter, these two are perishable — the ladder is one
-    non-expiring credit plus everything else dying at the reset."""
+    """Every credit dies at the reset (decision 307), the level-2 top-up and
+    the level-1 credit before it alike."""
     referrer, invitee = uuid4(), uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer_id = await onboarded(db_engine, api_client, referrer)
     await seed(db_engine, invitee)
     code = (await invite(api_client, referrer, "friend@example.com")).json()["code"]
     token = bearer(api_token(invitee))
@@ -405,18 +415,19 @@ async def test_the_unlock_grant_expires_at_the_reset(
     await api_client.post(COMPLETE, headers=token)
 
     async with db_engine.begin() as conn:
-        expires = (
-            await conn.execute(
-                text(
-                    "SELECT expires_at FROM credit_lots "
-                    "WHERE user_id = :u AND source = 'referral_unlock'"
-                ),
-                {"u": referrer_id},
+        expiries = (
+            (
+                await conn.execute(
+                    text("SELECT expires_at FROM credit_lots WHERE user_id = :u"),
+                    {"u": referrer_id},
+                )
             )
-        ).scalar_one()
+            .scalars()
+            .all()
+        )
 
-    assert expires is not None
-    assert expires.day == 1
+    assert len(expiries) == 2
+    assert all(expires is not None and expires.day == 1 for expires in expiries)
 
 
 async def test_no_token_is_refused(api_client: httpx.AsyncClient) -> None:
@@ -462,7 +473,7 @@ async def test_the_lockout_case_can_still_finish_onboarding(
     unreachable.
     """
     first, second, invitee = uuid4(), uuid4(), uuid4()
-    first_id = await seed(db_engine, first)
+    first_id = await onboarded(db_engine, api_client, first)
     await seed(db_engine, second)
     invitee_id = await seed(db_engine, invitee)
     token = bearer(api_token(invitee))
@@ -491,19 +502,19 @@ async def test_claiming_after_finishing_still_pays_the_referrer(
     and no second completion was coming to fix it. Found by code review.
     """
     referrer, invitee = uuid4(), uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer_id = await onboarded(db_engine, api_client, referrer)
     await seed(db_engine, invitee)
     code = (await invite(api_client, referrer, "friend@example.com")).json()["code"]
     token = bearer(api_token(invitee))
 
     # Completion first — the reversed order.
     await api_client.post(COMPLETE, headers=token)
-    assert await balance_of(db_engine, referrer_id) == 0
+    assert await balance_of(db_engine, referrer_id) == 1
 
     await api_client.post(CLAIM, json={"code": code}, headers=token)
 
     assert await balance_of(db_engine, referrer_id) == 2
-    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    # Level 2 is paid now; the unlock waits for an attended session (decision 295).
     assert await unlocks_of(db_engine, referrer_id) == 0
 
 
@@ -513,7 +524,7 @@ async def test_claiming_before_finishing_is_unchanged(
     """The accepting half: the ordinary order must still pay exactly once, not
     twice now that both paths can qualify."""
     referrer, invitee = uuid4(), uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer_id = await onboarded(db_engine, api_client, referrer)
     await seed(db_engine, invitee)
     code = (await invite(api_client, referrer, "friend@example.com")).json()["code"]
     token = bearer(api_token(invitee))
@@ -522,5 +533,5 @@ async def test_claiming_before_finishing_is_unchanged(
     await api_client.post(COMPLETE, headers=token)
 
     assert await balance_of(db_engine, referrer_id) == 2
-    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    # Level 2 is paid now; the unlock waits for an attended session (decision 295).
     assert await unlocks_of(db_engine, referrer_id) == 0

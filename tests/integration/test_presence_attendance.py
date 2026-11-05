@@ -34,6 +34,7 @@ from app.infra.clients.meetings import VenueUnavailableError
 from app.infra.db.session_writer import confirm_presence, observe_presence, settle_attendance
 from app.infra.jobs import runner
 from app.infra.jobs.runner import RuntimeJobs
+from conftest import default_ladder
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -350,7 +351,13 @@ async def confirm_then_settle(engine: AsyncEngine, records: Records) -> None:
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
         now = dt.datetime.now(dt.UTC)
         check = await confirm_presence(session, now=now, rooms=guarded("meeting_rooms", records))
-        await settle_attendance(session, now=now, unverified=check.waiting, unread=check.unread)
+        await settle_attendance(
+            session,
+            now=now,
+            ladder=default_ladder(),
+            unverified=check.waiting,
+            unread=check.unread,
+        )
         await session.commit()
 
 
@@ -659,7 +666,13 @@ async def test_once_the_read_budget_is_spent_the_rest_wait_for_the_next_run(
         check = await confirm_presence(
             session, now=now, rooms=guarded("meeting_rooms", records), budget=dt.timedelta(0)
         )
-        await settle_attendance(session, now=now, unverified=check.waiting, unread=check.unread)
+        await settle_attendance(
+            session,
+            now=now,
+            ladder=default_ladder(),
+            unverified=check.waiting,
+            unread=check.unread,
+        )
         await session.commit()
 
     assert records.asked == []
@@ -684,7 +697,13 @@ async def test_a_stale_session_skipped_for_time_still_waits_for_a_real_read(
         check = await confirm_presence(
             session_, now=now, rooms=guarded("meeting_rooms", records), budget=dt.timedelta(0)
         )
-        await settle_attendance(session_, now=now, unverified=check.waiting, unread=check.unread)
+        await settle_attendance(
+            session_,
+            now=now,
+            ladder=default_ladder(),
+            unverified=check.waiting,
+            unread=check.unread,
+        )
         await session_.commit()
 
     assert records.asked == []
@@ -706,7 +725,13 @@ async def test_records_are_not_read_until_daily_has_had_time_to_write_them(
         venue = await room_and_users(db_engine, session["id"])
         now = venue["starts_at"] + dt.timedelta(minutes=15, seconds=30)
         check = await confirm_presence(session_, now=now, rooms=guarded("meeting_rooms", records))
-        await settle_attendance(session_, now=now, unverified=check.waiting, unread=check.unread)
+        await settle_attendance(
+            session_,
+            now=now,
+            ladder=default_ladder(),
+            unverified=check.waiting,
+            unread=check.unread,
+        )
         await session_.commit()
 
     assert records.asked == []

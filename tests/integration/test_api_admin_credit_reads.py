@@ -612,4 +612,9 @@ async def test_the_rules_are_the_settings_the_ladder_reads(
 
     response = await api_client.get(RULES, headers=await an_admin(db_engine))
 
-    assert response.json() == {"starter": ladder.starter, "monthly": ladder.monthly}
+    # The three levels' monthly sizes (decision 307): `invited` is level 2.
+    assert response.json() == {
+        "starter": ladder.starter,
+        "invited": ladder.invited,
+        "monthly": ladder.monthly,
+    }

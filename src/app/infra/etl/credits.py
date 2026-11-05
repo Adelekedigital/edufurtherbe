@@ -60,7 +60,7 @@ __all__ = ["CreditLoader", "finished_onboarding", "recently_seen"]
 
 #: **The starter's own condition, read from the table its producer keys on.**
 #:
-#: `grant_starter` fires when somebody completes onboarding, and
+#: Completing onboarding is what reaches level 1 (decision 307), and
 #: `user_onboarding.completed_at` is the record of that. A migrated user who
 #: finished in Bubble has the column set by `satellites.py`, so this is the same
 #: question asked of the same fact — not a second rule derived from the raw
@@ -137,10 +137,11 @@ ON CONFLICT (user_id) WHERE source = 'opening_balance' DO NOTHING
 """
 
 #: The quantity is bound rather than written, so the ladder stays the one
-#: place the starter's size is decided.
+#: place the starter's size is decided. The expiry is the plan's — the end of
+#: the cutover month, like every migrated lot (decision 307).
 INSERT_STARTER_LOT = """
 INSERT INTO credit_lots (user_id, source, quantity_granted, quantity_remaining, expires_at)
-SELECT u.id, 'profile_completed', :quantity, :quantity, NULL
+SELECT u.id, 'profile_completed', :quantity, :quantity, :expires_at
 FROM users u
 WHERE u.legacy_bubble_id = :anchor
 ON CONFLICT (user_id) WHERE source = 'profile_completed' DO NOTHING
@@ -239,7 +240,11 @@ class CreditLoader:
             await self._connection.execute(
                 text(INSERT_STARTER_LOT),
                 [
-                    {"anchor": row.user_bubble_id, "quantity": self._ladder.starter}
+                    {
+                        "anchor": row.user_bubble_id,
+                        "quantity": self._ladder.starter,
+                        "expires_at": row.expires_at,
+                    }
                     for row in plan.starters
                 ],
             )

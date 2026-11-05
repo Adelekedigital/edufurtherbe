@@ -1,10 +1,29 @@
 """What a credit is, where one comes from, and when it dies.
 
-Pure, and in ``domain`` because every line is a product rule. Four things grant
-credits — onboarding, a qualifying invite, the monthly job and the migration —
-and if each decided its own expiry the four would drift. The rule is written
-once here and read from there, which is non-negotiable #8 applied before the
-second copy exists rather than after.
+Pure, and in ``domain`` because every line is a product rule. Several things
+grant credits — the level grants, refunds, admin grants and the migration — and
+if each decided its own expiry they would drift. The rule is written once here
+and read from there, which is non-negotiable #8 applied before the second copy
+exists rather than after.
+
+CREDIT LEVELS (decision 307)
+============================
+**A mentee's month pays their level, and the 1st resets everyone to it** (owner,
+2026-11-05, replacing the #363 top-up plan). The level is what they have done:
+
+    not onboarded, or not a mentee              0
+    finished onboarding                         1   (ladder.starter)
+    + an invite of theirs qualified             2   (ladder.invited)
+    + attended a session too (the unlock, #295) 3   (ladder.monthly)
+
+Every level credit dies at the month end, so nothing carries over and the 1st
+needs no arithmetic beyond granting the level. Reaching a higher level mid-month
+through one of its events — finishing onboarding, an invite qualifying, the
+unlock — tops the month up to it; any other change counts from the next 1st.
+**The level is a monthly allowance, not a balance to refill**: what a month
+pays is ``level - already granted this period``, so a rise after spending pays
+the difference and a re-run pays nothing. Refunds and admin grants are outside
+the allowance and may lift a balance above it until the next reset.
 
 WHERE THE VOCABULARIES LIVE
 ===========================
@@ -56,6 +75,8 @@ from app.core.config import Settings
 from app.domain.enums import CreditReason, CreditSource, CreditState
 
 __all__ = [
+    "HISTORICAL_SOURCES",
+    "LEVEL_SOURCES",
     "NON_EXPIRING",
     "SOURCE_BUCKET",
     "BonusCredits",
@@ -66,64 +87,62 @@ __all__ = [
     "CreditSource",
     "CreditState",
     "HeldLot",
+    "LevelFacts",
     "MonthlyCredits",
     "allowance_for",
     "bucket_of",
+    "card_level",
     "credit_ladder",
     "end_of_month",
     "expiry_for",
+    "level_allowance",
+    "level_owed",
     "refund_expiry",
     "split_buckets",
     "state_for",
 ]
 
 
-#: Sources whose lots outlive the monthly reset. One today; every purchased lot
-#: joins it when payments land, which is why this is a set rather than an
-#: ``is PROFILE_COMPLETED`` comparison at the two call sites.
-NON_EXPIRING: frozenset[CreditSource] = frozenset({CreditSource.PROFILE_COMPLETED})
+#: Sources whose lots outlive the monthly reset. **Empty since decision 307**:
+#: every credit dies at the month end, the starter included. Kept as a set
+#: because purchased lots join it when payments land — expiring something
+#: somebody bought is a chargeback (D7) — and `refund_expiry` already carries a
+#: never-expiring original through.
+NON_EXPIRING: frozenset[CreditSource] = frozenset()
+
+#: Sources rows still carry but nothing writes any more (decision 307): the
+#: one-off invite bonus, replaced by level 2. Read as a level credit
+#: (`SOURCE_BUCKET`), so a lot written before the change still counts toward
+#: its month's level and is not paid a second time. (The starter is not here:
+#: the migration still writes it, as the cutover month's level-1 credit.)
+HISTORICAL_SOURCES: frozenset[CreditSource] = frozenset({CreditSource.REFERRAL_UNLOCK})
 
 
 @dataclass(frozen=True, slots=True)
 class CreditLadder:
-    """How much each rung of the earning ladder is worth.
+    """What each level is worth per month (decision 307).
 
     **One object rather than three loose numbers**, because the three are only
-    meaningful together: `steady_state` is a relationship between two of them,
-    and a caller holding one without the others cannot compute it.
+    meaningful together: a level never pays less than the one below it, which
+    `core.config` enforces at startup.
     """
 
-    #: Finishing onboarding.
+    #: Level 1: finished onboarding.
     starter: int
-    #: Added by the first qualifying invite, on top of the starter.
-    unlock: int
-    #: Granted on the 1st to every unlocked mentee, and the cap on what a
-    #: migrated user may carry in.
+    #: Level 2: an invite of theirs qualified, before they have attended.
+    invited: int
+    #: Level 3: invited and attended (the unlock, decision 295). Also the cap on
+    #: what a migrated user may carry in and on one admin grant.
     monthly: int
-
-    @property
-    def steady_state(self) -> int:
-        """What the card's progress bar divides by — **the ceiling, not the grant**.
-
-        The non-expiring starter plus the monthly grant, which is where a
-        settled, unlocked mentee sits on the 1st. The bar is a position marker
-        whose filled segment is the balance, so the denominator has to be a
-        *fixed* ceiling: with `max(monthly, balance)` the denominator tracked the
-        numerator and `balance == allowance` for every balance at or above the
-        monthly grant — a four-segment bar full at four, then a three-segment bar
-        still full at three. **The bar did not move when a credit was spent.**
-        Found by code review.
-        """
-        return self.starter + self.monthly
 
 
 def credit_ladder(settings: Settings) -> CreditLadder:
     """The configured ladder, from settings the caller already holds.
 
     Configuration because the economics are still moving, not because the rules
-    are: what each grant *means* — the starter never expiring, the unlock being
-    once-only, the monthly one needing a referral — stays here in `domain`, and
-    only the sizes come from it.
+    are: what each level *means* — which facts reach it, that it resets on the
+    1st — stays here in `domain` (:func:`level_allowance`), and only the sizes
+    come from it.
 
     **``settings`` is required, and an earlier version called `get_settings()`
     itself.** That was wrong twice over. `deps._configured` states the rule:
@@ -143,7 +162,9 @@ def credit_ladder(settings: Settings) -> CreditLadder:
     """
     return CreditLadder(
         starter=settings.credit_starter_grant,
-        unlock=settings.credit_referral_unlock_grant,
+        # The variable keeps its name so no deployment has to change; since
+        # decision 307 it sizes level 2 rather than a one-off bonus.
+        invited=settings.credit_referral_unlock_grant,
         monthly=settings.credit_monthly_allowance,
     )
 
@@ -196,6 +217,65 @@ def expiry_for(source: CreditSource, *, now: dt.datetime) -> dt.datetime | None:
     return None if source in NON_EXPIRING else end_of_month(now)
 
 
+# --------------------------------------------------------------------------
+# Levels (decision 307)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class LevelFacts:
+    """What a user has done, as the level reads it. Measured in ``infra``
+    (``credit_eligibility``), once; judged here, once."""
+
+    #: A mentee who finished onboarding.
+    onboarded: bool
+    #: An invite of theirs qualified (its invitee finished onboarding).
+    invited: bool
+    #: A mentee holding the unlock: a qualified invite and an attended session
+    #: (decision 295), or grandfathered from the migration.
+    unlocked: bool
+
+
+def level_allowance(facts: LevelFacts, ladder: CreditLadder) -> int:
+    """What this user's month pays.
+
+    **The unlock reaches level 3 on its own.** ~1,200 migrated mentees hold a
+    grandfathered unlock with no invite behind it and no onboarding row the API
+    wrote; they received the monthly grant before this decision and still do.
+
+    **An invite counts only once its inviter has onboarded.** Level 2 is level 1
+    plus an invite, so an invite alone, from somebody who never finished their
+    own profile, pays nothing until they do — and then pays level 2 at once.
+    """
+    if facts.unlocked:
+        return ladder.monthly
+    if not facts.onboarded:
+        return 0
+    return ladder.invited if facts.invited else ladder.starter
+
+
+def card_level(level: int, ladder: CreditLadder) -> int:
+    """The level the card draws: the user's, but **never below level 1's**.
+
+    A caller at level 0 — not onboarded, or a mentor with no mentee goal —
+    sees the bar for the first level they can earn. Drawn at 0 the card would
+    publish ``allowance: 0`` and ``ceiling: 0``, and a client dividing balance
+    by them gets nothing to draw (found by code review); every caller has the
+    card, so every caller needs a bar with at least one position.
+    """
+    return max(level, ladder.starter)
+
+
+def level_owed(level: int, granted_this_period: int) -> int:
+    """How much to grant now so this period has paid ``level`` in all.
+
+    **Never negative, and never a refill.** ``granted_this_period`` counts what
+    the level already paid this month, spent or not: a re-run of the 1st pays
+    nothing even after the credits were used, and a rise from 1 to 2 pays one.
+    """
+    return max(0, level - granted_this_period)
+
+
 def refund_expiry(original: dt.datetime | None, *, now: dt.datetime) -> dt.datetime | None:
     """When a refunded credit dies, given the expiry of the lot that paid.
 
@@ -213,25 +293,22 @@ def refund_expiry(original: dt.datetime | None, *, now: dt.datetime) -> dt.datet
     return None if original is None else end_of_month(now)
 
 
-def state_for(balance: int, ladder: CreditLadder) -> CreditState:
-    """Which band a balance falls in.
+def state_for(balance: int, level: int) -> CreditState:
+    """Which band a balance falls in, against the user's ``level`` allowance.
 
-    **The top band is open-ended** — at or above the steady state. A late refund
-    can land a credit after the monthly grant, so a table written as ``4..5``
-    leaves six unclassified, and an unclassified balance renders as an empty card
-    rather than a full one.
+    **The top band is open-ended** — at or above the level. A refund or an admin
+    grant can lift a balance past it, so a table written as ``3..4`` leaves five
+    unclassified, and an unclassified balance renders as an empty card rather
+    than a full one.
 
-    **The bands follow the ladder, and an earlier version hardcoded them.** With
-    ``0 / 1 / <= 3 / > 3`` written as literals they were exactly right while the
-    monthly grant was three and the steady state four — and silently wrong the
-    moment either moved. At a monthly grant of two the steady state is three,
-    `allowance_for` returns a full card at three, and `ON_TRACK` became
-    unreachable in normal operation: the two derived values on the same card
-    disagreed about the same balance.
+    **The bands follow the level, never literals.** Literals were right for one
+    ladder and silently wrong the moment it moved, leaving the two derived
+    values on one card disagreeing about one balance.
 
     Zero and one stay absolute. They are not proportions — *nothing left* and
-    *one left* mean the same thing whatever the grant is, and a "low" band that
-    scaled would call three credits low on a generous ladder.
+    *one left* mean the same thing whatever the level is — so a level-1 mentee
+    holding their one credit reads ``LOW``: one is all that stands between them
+    and a refused booking.
 
     A negative balance is refused rather than banded. The database makes it
     unrepresentable — ``quantity_remaining >= 0`` — so reaching here means a
@@ -244,40 +321,37 @@ def state_for(balance: int, ladder: CreditLadder) -> CreditState:
         return CreditState.EXHAUSTED
     if balance == 1:
         return CreditState.LOW
-    if balance < ladder.steady_state:
+    if balance < level:
         return CreditState.MODERATE
     return CreditState.ON_TRACK
 
 
-def allowance_for(balance: int, ladder: CreditLadder) -> int:
+def allowance_for(balance: int, level: int) -> int:
     """What the card divides by — the denominator its progress bar draws.
 
-    ``max(ladder.steady_state, balance)`` — the **ceiling**, not the monthly grant.
+    ``max(level, balance)``: the user's level allowance, a **fixed** ceiling, so
+    the bar moves when a credit is spent. A denominator that tracked the balance
+    drew a full bar at every balance — the number changed and the picture did
+    not.
 
-    A fixed denominator is what makes the bar move. Dividing by
-    the monthly grant made ``balance == allowance`` for every balance at or
-    above three, so a mentee at the steady state of four saw a full four-segment
-    bar, spent a credit, and saw a full *three*-segment bar. The number changed
-    and the picture did not.
-
-    It still raises rather than clamps, because **the bar cannot draw more
-    segments than it has**: migrated users arrive at five, and a refund landing
-    after the monthly grant can push a balance past four. Clamping would read
-    "5 credits left" beside a bar with four positions.
+    It still rises past the level rather than clamping, because **the bar cannot
+    draw more segments than it has**: a migrated user may arrive above their
+    level, and a refund or an admin grant can lift a balance past it. Clamping
+    would read "4 credits left" beside a bar with three positions.
 
     The server publishes ``balance`` and ``allowance`` and never a percentage —
     the client draws, and a third representation of one fact is the first to
     drift.
     """
-    return max(ladder.steady_state, balance)
+    return max(level, balance)
 
 
 # --------------------------------------------------------------------------
 # Monthly and bonus credits (decision 232)
 # --------------------------------------------------------------------------
 
-#: The two parts of the card. The bar draws only the monthly part, so a full
-#: month reads "3 of 3" rather than "3 of 4" (#344).
+#: The two parts of the card. The bar draws only the monthly part — the level's
+#: credits — against the level, so a full month reads "3 of 3" (#344).
 Bucket = Literal["monthly", "bonus"]
 
 #: Which part a lot of each source sits in. **One mapping**; a test pins every
@@ -287,17 +361,31 @@ Bucket = Literal["monthly", "bonus"]
 #: goes back to the bucket of the credit it replaces (owner, 2026-10-03), found
 #: by :func:`bucket_of`. ``OPENING_BALANCE`` is monthly because it stands in for
 #: the cutover month's grant, which is why it is capped at the grant.
+#:
+#: **Since decision 307 every level grant is monthly**: the 1st's grant, a
+#: mid-month top-up, and the starter and invite lots written before it, which
+#: were the first two levels' credits under their old names. Only an admin
+#: grant is bonus — outside the allowance, and the one credit the level does not
+#: count.
 SOURCE_BUCKET: Mapping[CreditSource, Bucket | None] = MappingProxyType(
     {
         CreditSource.MONTHLY_FREE: "monthly",
-        # The level's own credit, beside the 1st's grant (decision 307).
         CreditSource.LEVEL_TOP_UP: "monthly",
         CreditSource.OPENING_BALANCE: "monthly",
-        CreditSource.PROFILE_COMPLETED: "bonus",
-        CreditSource.REFERRAL_UNLOCK: "bonus",
+        CreditSource.PROFILE_COMPLETED: "monthly",
+        CreditSource.REFERRAL_UNLOCK: "monthly",
         CreditSource.ADMIN_GRANT: "bonus",
         CreditSource.REFUND: None,
     }
+)
+
+#: The sources whose lots count toward a period's level allowance: exactly the
+#: monthly bucket. **Derived, not listed**, so a source cannot be on the card's
+#: monthly bar and missing from what the level counts (non-negotiable #8).
+#: Refunds are excluded because their bucket is ``None``: a refund returns what
+#: was paid, and counting it would let a refund shrink the next top-up.
+LEVEL_SOURCES: frozenset[CreditSource] = frozenset(
+    source for source, bucket in SOURCE_BUCKET.items() if bucket == "monthly"
 )
 
 
@@ -316,13 +404,14 @@ class MonthlyCredits:
     """The monthly part of the card."""
 
     balance: int
-    #: The monthly grant. A late refund can briefly put ``balance`` above it.
+    #: The user's level allowance (decision 307): what their month pays. A
+    #: refund can briefly put ``balance`` above it.
     ceiling: int
     #: The soonest instant a held monthly credit stops being spendable. Null when
     #: there are none, or none of them expire.
     expires_at: dt.datetime | None
-    #: Whether the account receives the monthly grant. The store sets it from
-    #: the same rule the grant job pays on.
+    #: Whether the account holds the unlock — level 3, the full monthly grant.
+    #: The store sets it from the same fact the level reads.
     unlocked: bool = False
 
 

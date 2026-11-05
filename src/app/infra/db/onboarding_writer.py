@@ -1,9 +1,7 @@
 """Marking onboarding finished and paying its credit, and saving the last step.
 
-**This is the producer `profile_completed` did not have.** Before it,
-`user_onboarding.completed_at` was written by exactly one thing — the ETL — so
-the starter credit had nothing to fire it and the earning model's first rung was
-unreachable from the API.
+**Finishing onboarding is level 1** (decision 307): the completion tops the
+mentee's month up to it. Before decision 307 this paid a once-ever starter lot.
 
 ONE TRANSACTION, TWO FACTS
 ==========================
@@ -12,10 +10,11 @@ Split across two transactions there is a state where a user is marked complete
 and holds no credit, and nothing would ever revisit it: completion is recorded,
 so a retry is a no-op, and the credit is simply missing forever.
 
-Idempotence comes from two different mechanisms, deliberately. The completion is
-idempotent because it keeps the *first* timestamp — re-finishing does not move
-the date somebody finished. The grant is idempotent because of a partial unique
-index. Neither reads-then-writes.
+Idempotence: the completion keeps the *first* timestamp, so re-finishing does
+not move the date somebody finished, and the top-up pays only what the period
+still owes their level, so a retry pays nothing. Both run under the user's row
+lock, which is also what makes "the first completion" a fact two concurrent
+calls cannot both see.
 """
 
 from __future__ import annotations
@@ -25,25 +24,25 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import OnboardingIncompleteError
 from app.domain.credits import CreditLadder
-from app.domain.enums import CreditSource
 from app.domain.notifications import Notification
 from app.domain.onboarding import (
     finishes_as_mentee,
     may_complete_onboarding,
     missing_codes,
 )
-from app.infra.db.credit_writer import grant_starter
-from app.infra.db.models.credits import CreditLot
+from app.infra.db.credit_grants import top_up_levels
+from app.infra.db.models.referrals import Referral
 from app.infra.db.models.user import UserOnboarding
 from app.infra.db.onboarding_store import onboarding_state
 from app.infra.db.outbox import enqueue
 from app.infra.db.referral_writer import qualify_invitee
+from app.infra.db.user_locks import lock_users
 
 __all__ = ["OnboardingResult", "complete_onboarding", "record_last_step"]
 
@@ -58,27 +57,20 @@ class OnboardingResult:
 
     completed_at: dt.datetime
     last_step: str | None
-    #: True only on the call that actually created the lot. A retry reports
-    #: False, which is how the route distinguishes 201 from 200 without
-    #: counting rows.
+    #: True only on the call that actually paid credits. A retry reports False,
+    #: which is how the route distinguishes 201 from 200 without counting rows.
     granted: bool
-    #: True only on a mentee's first completion that granted the starter
-    #: (`completed_at` was unset): the one that queues the bio draft (decision 269).
+    #: True only on a mentee's first completion (`completed_at` was unset): the
+    #: one that queues the bio draft (decision 269).
     drafts_bio: bool = False
 
 
-async def _finished_and_paid(session: AsyncSession, user_id: UUID) -> Any | None:
-    """The caller's onboarding row when it is finished and they hold the
-    starter lot, else `None`. Both halves name the caller."""
+async def _finished(session: AsyncSession, user_id: UUID) -> Any | None:
+    """The caller's onboarding row when it is already finished, else `None`."""
     return (
         await session.execute(
             select(UserOnboarding.completed_at, UserOnboarding.last_step).where(
-                UserOnboarding.user_id == user_id,
-                UserOnboarding.completed_at.is_not(None),
-                exists().where(
-                    CreditLot.user_id == user_id,
-                    CreditLot.source == CreditSource.PROFILE_COMPLETED,
-                ),
+                UserOnboarding.user_id == user_id, UserOnboarding.completed_at.is_not(None)
             )
         )
     ).one_or_none()
@@ -87,24 +79,37 @@ async def _finished_and_paid(session: AsyncSession, user_id: UUID) -> Any | None
 async def complete_onboarding(
     session: AsyncSession, user_id: UUID, *, ladder: CreditLadder
 ) -> OnboardingResult:
-    """Mark onboarding finished and grant the starter. Does not commit.
+    """Mark onboarding finished and top the month up to the user's level. Does
+    not commit.
 
     Raises :class:`OnboardingIncompleteError` when the profile does not meet the
     bar — a refusal the caller must answer by sending the user back to finish,
     never by retrying, which is why it carries its own problem type.
 
-    **A user already finished and paid is answered `200` without the check**,
-    as the route publishes: the bar can tighten after someone finished (every
-    migrated mentee lacks a field of study, decision 261) and a retry must not
-    refuse an account that is done. Only a user holding the starter skips it,
-    so a finished account with no credit still earns it by the current rule.
+    **A user already finished is answered `200` without the check, and paid
+    nothing**, as the route publishes: the bar can tighten after someone
+    finished (every migrated mentee lacks a field of study, decision 261) and a
+    retry must not refuse an account that is done. Their level is paid by the
+    1st and by the events that raise it; paying here as well would make a retry
+    on the 1st, before the job ran, answer `201` and send the first-credits
+    email a second time.
+
+    **The invitee and their referrer are locked together, in id order, first.**
+    Completion tops up the invitee and then qualifies the referrer; taking the
+    two locks one after the other could deadlock with a settlement locking the
+    same pair in id order.
     """
-    settled = await _finished_and_paid(session, user_id)
+    referrer = await session.scalar(
+        select(Referral.referrer_id).where(Referral.invitee_user_id == user_id)
+    )
+    await lock_users(session, [user_id] if referrer is None else [user_id, referrer])
+
+    settled = await _finished(session, user_id)
     if settled is not None:
         return OnboardingResult(
             completed_at=settled.completed_at, last_step=settled.last_step, granted=False
         )
-    evidence, finished_before, _ = await onboarding_state(session, user_id)
+    evidence, _, _ = await onboarding_state(session, user_id)
     if not may_complete_onboarding(evidence):
         raise OnboardingIncompleteError(
             "Finish your profile before completing onboarding.",
@@ -113,8 +118,7 @@ async def complete_onboarding(
 
     # **Keeps the first timestamp.** `COALESCE` on the existing value rather
     # than `EXCLUDED`, so re-finishing does not move the date somebody actually
-    # finished — which the starter's "never expires" makes harmless today and a
-    # dated grant would make wrong.
+    # finished.
     row = (
         await session.execute(
             pg_insert(UserOnboarding)
@@ -127,7 +131,10 @@ async def complete_onboarding(
         )
     ).one()
 
-    granted = await grant_starter(session, user_id, ladder=ladder) is not None
+    # Level 1 now, or higher if an invite of theirs already qualified. App
+    # clock, matching `credit_store`'s read.
+    paid = await top_up_levels(session, [user_id], ladder=ladder, now=dt.datetime.now(dt.UTC))
+    granted = bool(paid)
 
     if granted:
         # **In the granting transaction**, so a message about a credit that
@@ -135,7 +142,7 @@ async def complete_onboarding(
         # the mentor's notice.
         #
         # Guarded on `granted` rather than sent unconditionally: a retried
-        # completion creates no lot, and telling somebody twice that their first
+        # completion pays nothing, and telling somebody twice that their first
         # credit arrived is worse than a slightly late first telling.
         await enqueue(
             session,
@@ -146,8 +153,8 @@ async def complete_onboarding(
         )
 
     # **The referrer's half, in this transaction.** Finishing a profile is what
-    # qualifies the invite that named this user — the same signal as the starter
-    # credit, and the target settled decision 20 always pointed at.
+    # qualifies the invite that named this user — the same signal as their own
+    # level 1, and the target settled decision 20 always pointed at.
     #
     # Not a separate call after the commit: that leaves a state where the
     # invitee is complete, so a retry is a no-op, and the referrer's credits are
@@ -158,7 +165,10 @@ async def complete_onboarding(
         completed_at=row.completed_at,
         last_step=row.last_step,
         granted=granted,
-        drafts_bio=granted and not finished_before and finishes_as_mentee(evidence),
+        # Only the first completion reaches here (a finished user returned
+        # above, read under the lock), so two concurrent calls cannot both
+        # queue a draft.
+        drafts_bio=finishes_as_mentee(evidence),
     )
 
 

@@ -39,25 +39,28 @@ def test_a_level_top_up_is_monthly() -> None:
     assert SOURCE_BUCKET[CreditSource.LEVEL_TOP_UP] == "monthly"
 
 
-def test_starter_invite_and_support_grants_are_bonus() -> None:
-    for source in (
-        CreditSource.PROFILE_COMPLETED,
-        CreditSource.REFERRAL_UNLOCK,
-        CreditSource.ADMIN_GRANT,
-    ):
-        assert SOURCE_BUCKET[source] == "bonus"
+def test_only_a_support_grant_is_bonus() -> None:
+    """Decision 307: the starter and invite lots were the first two levels'
+    credits, so they sit on the monthly bar with every level grant. Only an
+    admin grant is outside the level."""
+    for source in (CreditSource.PROFILE_COMPLETED, CreditSource.REFERRAL_UNLOCK):
+        assert SOURCE_BUCKET[source] == "monthly"
+    assert SOURCE_BUCKET[CreditSource.ADMIN_GRANT] == "bonus"
+    assert [s for s, bucket in SOURCE_BUCKET.items() if bucket == "bonus"] == [
+        CreditSource.ADMIN_GRANT
+    ]
 
 
 def test_a_refund_follows_the_credit_it_replaces() -> None:
     monthly = lot(CreditSource.MONTHLY_FREE, remaining=0)
-    starter = lot(CreditSource.PROFILE_COMPLETED, remaining=0, expires_at=None)
+    support = lot(CreditSource.ADMIN_GRANT, remaining=0)
     back_monthly = lot(CreditSource.REFUND)
-    back_starter = lot(CreditSource.REFUND, expires_at=None)
-    sources = {item.lot_id: item.source for item in (monthly, starter, back_monthly, back_starter)}
-    replaces = {back_monthly.lot_id: monthly.lot_id, back_starter.lot_id: starter.lot_id}
+    back_support = lot(CreditSource.REFUND)
+    sources = {item.lot_id: item.source for item in (monthly, support, back_monthly, back_support)}
+    replaces = {back_monthly.lot_id: monthly.lot_id, back_support.lot_id: support.lot_id}
 
     assert bucket_of(back_monthly.lot_id, sources, replaces) == "monthly"
-    assert bucket_of(back_starter.lot_id, sources, replaces) == "bonus"
+    assert bucket_of(back_support.lot_id, sources, replaces) == "bonus"
 
 
 def test_a_refund_of_a_refund_follows_the_chain() -> None:
@@ -83,19 +86,19 @@ def test_a_looping_chain_ends_as_bonus_rather_than_hanging() -> None:
     assert bucket_of(a.lot_id, sources, {a.lot_id: b.lot_id, b.lot_id: a.lot_id}) == "bonus"
 
 
-def test_a_starter_only_user_has_one_never_expiring_bonus_credit() -> None:
-    monthly, bonus = split([lot(CreditSource.PROFILE_COMPLETED, expires_at=None)])
+def test_a_level_one_month_reads_one_of_its_ceiling() -> None:
+    """The starter lot is a level credit now: on the monthly bar, not bonus."""
+    monthly, bonus = split([lot(CreditSource.PROFILE_COMPLETED)])
 
-    assert (monthly.balance, monthly.ceiling, monthly.expires_at) == (0, 3, None)
-    assert bonus.balance == 1
-    assert bonus.groups == (BonusGroup(count=1, expires_at=None),)
+    assert (monthly.balance, monthly.ceiling, monthly.expires_at) == (1, 3, OCT_END)
+    assert bonus.balance == 0
 
 
-def test_a_full_month_and_the_starter_read_three_of_three_plus_one() -> None:
+def test_a_full_month_and_a_support_grant_read_three_of_three_plus_one() -> None:
     monthly, bonus = split(
         [
             lot(CreditSource.MONTHLY_FREE, remaining=3),
-            lot(CreditSource.PROFILE_COMPLETED, expires_at=None),
+            lot(CreditSource.ADMIN_GRANT),
         ]
     )
 
@@ -104,14 +107,17 @@ def test_a_full_month_and_the_starter_read_three_of_three_plus_one() -> None:
 
 
 def test_bonus_groups_run_soonest_first_and_never_last() -> None:
-    _, bonus = split(
-        [
-            lot(CreditSource.PROFILE_COMPLETED, expires_at=None),
-            lot(CreditSource.ADMIN_GRANT, remaining=2, expires_at=NOV_END),
-            lot(CreditSource.REFERRAL_UNLOCK, expires_at=OCT_END),
-            lot(CreditSource.ADMIN_GRANT, expires_at=OCT_END),
-        ]
-    )
+    """A never-expiring bonus lot cannot be granted today, but a refund of a
+    lot that carried none inherits that; it still sorts last."""
+    support = lot(CreditSource.ADMIN_GRANT, remaining=0, expires_at=None)
+    back = lot(CreditSource.REFUND, expires_at=None)
+    held = [
+        back,
+        lot(CreditSource.ADMIN_GRANT, remaining=2, expires_at=NOV_END),
+        lot(CreditSource.ADMIN_GRANT, expires_at=OCT_END),
+        lot(CreditSource.ADMIN_GRANT, expires_at=OCT_END),
+    ]
+    _, bonus = split(held, replaces={back.lot_id: support.lot_id}, extra=[support])
 
     assert bonus.groups == (
         BonusGroup(count=2, expires_at=OCT_END),

@@ -1,5 +1,13 @@
 # Handoff: monthly credits top up to 3, and bonus credits cap at 3
 
+> **Superseded 2026-11-05 by settled decision 307 (credit levels), and never
+> built.** The owner replaced this plan with a simpler one: a mentee's month
+> pays their level (1 onboarded, 2 invited, 3 unlocked), the 1st resets every
+> balance to it, every credit dies at the month end, and refunds and support
+> grants sit outside the level. No bonus cap and no top-up-by-bonus-count. Read
+> decision 307 in `project-conventions`; this file is kept as the record of
+> what was considered.
+
 For a dedicated credits session. Decided by the owner on 2026-10-04 and **not
 built yet**; tracked as backend issue #363.
 Tier 1: it moves credits.

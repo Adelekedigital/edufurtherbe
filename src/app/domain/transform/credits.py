@@ -145,13 +145,18 @@ class StarterRow:
     """A user who never entered the credit system and has finished onboarding.
 
     **Not an opening balance.** They arrive with the credit a new user earns, on
-    the source that says so — `profile_completed`, quantity one, never expiring.
-    Writing them an `opening_balance` lot of 1 would claim Bubble held a balance
-    it did not, and the reconciliation that compares the lot sum against the
-    legacy sum would then be wrong by exactly the number of them.
+    the source that says so — `profile_completed`, the starter's size. Writing
+    them an `opening_balance` lot of 1 would claim Bubble held a balance it did
+    not, and the reconciliation that compares the lot sum against the legacy sum
+    would then be wrong by exactly the number of them.
+
+    **It dies with the cutover month, like an opening lot** (decision 307: every
+    credit dies at the month end). It is that month's level-1 credit, so the
+    level grants count it and do not pay level 1 again; the 1st takes over.
     """
 
     user_bubble_id: str
+    expires_at: dt.datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,7 +370,7 @@ def plan_opening_balances(
             # finished onboarding; if not, they earn it the ordinary way when
             # they do, and granting it now would pay for work not yet done.
             if anchor in finished:
-                starters.append(StarterRow(anchor))
+                starters.append(StarterRow(anchor, expires_at))
             else:
                 unfinished.append(anchor)
             continue

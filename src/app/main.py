@@ -252,7 +252,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "**Its own tag rather than `users`**, per settled decision #64: this "
             "is a transition in a user's lifecycle that pays a credit, not a "
             "field on their record.\n\n"
-            "The starter is granted for **finishing a profile**, never for "
+            "Credit is earned for **finishing a profile**, never for "
             "signing up — signing up is free and finishing one is work, which is "
             "the whole of the anti-farming property. Completion is therefore "
             "refused with `409` and the problem type "
@@ -261,8 +261,10 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "with every answer given (a help area, an origin country, a degree "
             "goal and a field of study). The problem's `missing` member names "
             "what is owed, as `GET /api/v1/me` → `onboarding` does.\n\n"
-            "The credit itself is one, it never expires, and it appears under "
-            "`credits` on `GET /api/v1/me`."
+            "Finishing is credit level 1: a mentee's month is topped up to their "
+            "level at once, and every month after it pays the level again, "
+            "expiring at the month end. It appears under `credits` on "
+            "`GET /api/v1/me`."
         ),
     },
     {

@@ -260,7 +260,7 @@ async def test_the_dry_run_counts_what_the_sweep_would_take(db_engine: AsyncEngi
     """The script reports before it acts, and the two must ask one question.
 
     A dry run answering something different from the real run is worse than no
-    dry run — the note `unlocked_mentee_count` already carries.
+    dry run — the note `owed_count` already carries.
 
     **An exact count, because `db_engine` is one database per test.**
     `migrated_database` builds `test_<uuid>` from a template and drops it after,

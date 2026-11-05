@@ -17,7 +17,7 @@ from tests.integration.test_api_booking import a_bookable_offering, a_mentee
 from tests.integration.test_api_credit_refunds import drain, mentor_token
 
 from app.core.config import Settings
-from app.domain.credits import credit_ladder
+from app.domain.credits import credit_ladder, end_of_month
 from app.infra.db.credit_store import CreditSummary, get_credit_summary
 from app.infra.db.engine import create_session_factory
 from conftest import A_REASON
@@ -27,6 +27,12 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 LADDER = credit_ladder(Settings(_env_file=None))
 SESSIONS = "/api/v1/sessions"
 MONTH_END = dt.datetime(2099, 1, 1, tzinfo=dt.UTC)
+#: Where a refund of a perishable lot lands: this month's end (`refund_expiry`).
+THIS_MONTH_END = end_of_month(dt.datetime.now(dt.UTC))
+#: Two expiries before `THIS_MONTH_END`, in order, wherever in the month this runs.
+_LEFT = THIS_MONTH_END - dt.datetime.now(dt.UTC)
+FIRST = THIS_MONTH_END - _LEFT * 2 / 3
+SECOND = THIS_MONTH_END - _LEFT / 3
 
 
 async def paid_from(
@@ -93,16 +99,18 @@ async def test_a_refunded_monthly_credit_comes_back_as_monthly(
     assert (result.monthly.balance, result.bonus.balance) == (1, 0)
 
 
-async def test_a_refunded_starter_credit_comes_back_as_bonus(
+async def test_a_refunded_support_credit_comes_back_as_bonus(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    mentee = await book_then_decline(db_engine, api_client, "bk-starter", "profile_completed", None)
+    """Only a support grant is bonus since decision 307; its refund goes back
+    there, dying at this month's end like every refund of a perishable lot."""
+    mentee = await book_then_decline(db_engine, api_client, "bk-support", "admin_grant", MONTH_END)
 
     result = await summary(db_engine, mentee)
 
     assert result.balance == 1
     assert (result.monthly.balance, result.bonus.balance) == (0, 1)
-    assert [(g.count, g.expires_at) for g in result.bonus.groups] == [(1, None)]
+    assert [(g.count, g.expires_at) for g in result.bonus.groups] == [(1, THIS_MONTH_END)]
 
 
 async def test_two_refunds_each_go_back_to_their_own_part(
@@ -123,7 +131,7 @@ async def test_two_refunds_each_go_back_to_their_own_part(
             text(
                 "UPDATE credit_lots SET source = 'monthly_free', expires_at = :e WHERE user_id = :u"
             ),
-            {"e": MONTH_END, "u": mentee},
+            {"e": FIRST, "u": mentee},
         )
         await conn.execute(
             text(
@@ -135,14 +143,18 @@ async def test_two_refunds_each_go_back_to_their_own_part(
         await conn.execute(
             text(
                 "INSERT INTO credit_lots (user_id, source, quantity_granted, quantity_remaining, "
-                "expires_at) VALUES (:u, 'profile_completed', 1, 1, NULL)"
+                "expires_at) VALUES (:u, 'admin_grant', 1, 1, :later)"
             ),
-            {"u": mentee},
+            {"u": mentee, "later": SECOND},
         )
     _, other_token = await a_mentee(db_engine, "bk-both-other")
 
-    # The monthly credit expires first, so it pays for the first booking and
-    # the never-expiring starter pays for the second.
+    # Spending takes the soonest expiry. The monthly credit (FIRST) pays the
+    # first booking; its refund dies at this month's end, after the support
+    # grant (SECOND), so the support grant pays the second — and each refund
+    # goes back to its own part. Both expire before the month does, which is
+    # what makes the second booking reach the support grant rather than the
+    # first refund.
     # Each request a different hour from the rest: the other mentee's two stay
     # live, and a mentee may not hold overlapping sessions.
     for index, tag in ((-1, "bk-both-a"), (-3, "bk-both-b")):
@@ -159,7 +171,7 @@ async def test_two_refunds_each_go_back_to_their_own_part(
 
     assert result.balance == 2
     assert (result.monthly.balance, result.bonus.balance) == (1, 1)
-    assert [(g.count, g.expires_at) for g in result.bonus.groups] == [(1, None)]
+    assert [(g.count, g.expires_at) for g in result.bonus.groups] == [(1, THIS_MONTH_END)]
 
 
 async def request_one(

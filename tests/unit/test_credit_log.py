@@ -22,6 +22,14 @@ def test_a_level_top_up_is_named_and_on_the_monthly_chip() -> None:
     assert "level_top_up" in FILTER_KINDS["monthly"]
 
 
+def test_the_monthly_chip_is_exactly_the_level_sources() -> None:
+    """The whole list, not one member: a source added to the monthly bucket
+    must reach the chip (non-negotiable #8)."""
+    from app.domain.credits import LEVEL_SOURCES
+
+    assert set(FILTER_KINDS["monthly"]) == {GRANT_KINDS[source] for source in LEVEL_SOURCES}
+
+
 def test_every_named_kind_is_published_and_every_published_kind_is_reachable() -> None:
     named = set(REASON_KINDS.values()) | set(GRANT_KINDS.values())
 

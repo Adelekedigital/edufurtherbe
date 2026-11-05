@@ -579,17 +579,22 @@ class ActorType(StrEnum):
 class CreditSource(StrEnum):
     """Where a lot came from. One origin, one expiry — that is what a lot is.
 
-    **Six members, and every one has a producer.** The canonical DDL declares
-    seven; settled decision #21 names this exact enum as its cautionary example,
-    because `credit_source` "contains `purchase` while payments are out of scope
-    by decision #8". A vocabulary is not a wish list — a shipped member invites a
-    writer, and the reason to defer `purchase` and `promotional` is that nothing
-    writes one.
+    **Seven members: six with a producer and one historical** (decision 307).
+    The canonical DDL declares seven; settled decision #21 names this exact enum
+    as its cautionary example, because `credit_source` "contains `purchase`
+    while payments are out of scope by decision #8". A vocabulary is not a wish
+    list — a shipped member invites a writer, and the reason to defer `purchase`
+    and `promotional` is that nothing writes one.
 
     `admin_grant` was deferred on that same argument at PR 1 and ships here,
     in the change that adds the endpoint writing it. That is #21 working rather
     than being set aside: the rule is *no member without a producer*, not *never
     add a member*.
+
+    **`domain.credits.HISTORICAL_SOURCES` lost its producer to decision 307
+    and stays**, because rows already carry it and a `CHECK` cannot drop a
+    value a row holds. It is read, never written; a test pins that nothing
+    writes one.
 
     Declared here rather than beside `domain/credits.py`'s rules because
     `test_every_domain_enum_is_registered_exactly_once` partitions *this
@@ -597,27 +602,26 @@ class CreditSource(StrEnum):
     elsewhere is registered-but-not-declared, and the assertion is two-way.
     """
 
-    #: Onboarding finished. **One, and it never expires**, because it exists so
-    #: somebody gets a feel for the platform and an expiring one makes that
-    #: reward depend on the day they happened to finish: complete on the 28th
-    #: and it lives three days. A partial unique index makes a second one
-    #: impossible rather than merely unlikely.
+    #: The starter. **Written only by the migration since decision 307**: a
+    #: migrated user who finished onboarding with no legacy balance arrives with
+    #: one, dying with the cutover month as that month's level-1 credit. Finishing
+    #: onboarding through the API tops the month up as a `level_top_up` instead.
+    #: Once per user (`uq_credit_lots_one_starter_per_user`).
     PROFILE_COMPLETED = "profile_completed"
 
-    #: The first qualifying invite's bonus. Two, on top of the starter, and
-    #: **once-only** (`uq_credit_lots_one_referral_bonus_per_user`). Since
-    #: decision 295 it is paid apart from `referral_unlocks`, which opens the
-    #: monthly grant only once the inviter has also attended a session.
+    #: **Historical** (decision 307). The first qualifying invite's one-off
+    #: bonus, until level 2 replaced it: an invite qualifying now tops the month
+    #: up to the inviter's level as a `level_top_up`. Rows keep the name.
     REFERRAL_UNLOCK = "referral_unlock"
 
-    #: The monthly grant, for users who have unlocked it. Three.
+    #: The 1st's grant: each mentee's level, reset every month (decision 307).
+    #: One per user per period (`uq_credit_lots_one_monthly_grant_per_period`).
     MONTHLY_FREE = "monthly_free"
 
-    #: A mid-month rise in a mentee's credit level, topping the month up to the
-    #: new level (decision 307). **Shipped before its producer, deliberately**:
-    #: the `CHECK` that admits it must be applied before any code writes it
-    #: (project-conventions, *Migration ordering*), and the stacked PR on top of
-    #: this one is the writer.
+    #: A mid-month rise in level, topping the month up to the new level:
+    #: finishing onboarding, an invite qualifying, or the unlock (decision 307).
+    #: Pays only what the period has not already granted, so a repeat pays
+    #: nothing.
     LEVEL_TOP_UP = "level_top_up"
 
     #: A credit handed back because a mentor missed the session or called it off
@@ -633,9 +637,9 @@ class CreditSource(StrEnum):
     #: Deferred at PR 1 under settled decision #21 because nothing wrote one.
     #: This is the writer, so the member ships with it rather than before it.
     #:
-    #: **It expires like every other grant.** Not in `NON_EXPIRING`: only the
-    #: starter is, and that is because it exists to give somebody a first taste
-    #: of the platform rather than because grants are permanent.
+    #: **It expires like every other grant**, at the month end, and sits
+    #: outside the level allowance: support can always make somebody whole,
+    #: even above their level (decision 307).
     ADMIN_GRANT = "admin_grant"
 
     #: What a user carried out of Bubble. Not `monthly_free`: the legacy renewal
@@ -705,9 +709,9 @@ class CreditState(StrEnum):
     and it would go stale the instant a lot expired without anything writing.
     """
 
-    #: Four or more, and **open-ended at the top**. A late refund can push a
-    #: balance past the steady state of four; a band written as `4..5` would
-    #: leave six unclassified.
+    #: At or above the mentee's credit level, and **open-ended at the top**. A
+    #: refund or a support grant can push a balance past the level; a band
+    #: written as `3..4` would leave five unclassified.
     ON_TRACK = "on_track"
     MODERATE = "moderate"
     LOW = "low"

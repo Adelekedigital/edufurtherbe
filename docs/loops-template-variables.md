@@ -226,7 +226,7 @@ contract.
 | `review_requested` | sessionReviewRequest | `cmf1qlt600bjiut0iu5i7yycj` | mentee | `reviewBy`, `reviewFor`, `reviewLink`, `sessTopic` |
 | `review_received` | reviewUpdateToMentors | `cmf1rd22ty7dcxz0iffc6jymd` | mentor | `reviewBy`, `reviewFor`, `reviewLink` |
 | `credits_granted` | Credit: New users update | `cmbn678u30iwz4x0ixz20yfod` | the user | `bookLink`, `fName` |
-| `credits_renewed` | Credit renewal | `cmbk0mv700e4yzn0i6ho1h75s` | the user | `bookLink`, `fName` |
+| `credits_renewed` | Credit renewal | `cmbk0mv700e4yzn0i6ho1h75s` | the user | `bookLink`, `creditCount`, `fName` |
 | `credits_expiring` | Unused credit | `cmbk13nzg0iv4xw0i90uq1j5s` | the user | `bookLink`, `creditCount`, `fName` |
 | `mentor_application_received` | — | **NEEDED** | admins who can decide it, never the applicant | — |
 | `mentor_declined` | — | **NEEDED** | the applicant | — (to build with `recipientName`, `declineReason`, `applicationUrl`) |
@@ -421,10 +421,11 @@ If the intent is instead to prompt a new signup to finish their profile, that is
 a second, different message and it has no producer.
 
 **`Credit renewal` → `credits_renewed`. Built.** Enqueued by
-`grant_monthly_credits` for the users it actually paid, derived from the same
-`RETURNING` as the ledger rows — so the period guard refusing a second run in one
-month refuses the second email with it, and a run that grants nothing tells
-nobody.
+`grant_monthly_credits` for the users it actually paid — so a second run in one
+month, which owes nothing, sends nothing, and a run that grants nothing tells
+nobody. **Since decision 307 it carries `creditCount`**: what the month paid,
+the mentee's credit level (1 to 3), so the copy can say how many arrived rather
+than assume three. The Loops template must add the variable to use it.
 
 **`Unused credit` → `credits_expiring`. Built**, as a daily sweep at fourteen and
 seven days before an expiry.

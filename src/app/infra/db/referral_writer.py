@@ -6,11 +6,11 @@ NOTHING HERE COMMITS
 ====================
 The caller does. :func:`qualify_invitee` in particular runs inside the
 transaction that completes onboarding, and that is the whole point: the
-invitee's completion, the referral's qualification, and the referrer's grant are
-one fact or none. Split across transactions there is a state where the invitee
-is complete, the referral is qualified, and the referrer's two credits are
-simply missing — with nothing that would ever revisit it, because the completion
-is recorded and a retry is a no-op.
+invitee's completion, the referral's qualification, and the referrer's level
+top-up (decision 307) are one fact or none. Split across transactions there is a
+state where the invitee is complete, the referral is qualified, and the
+referrer's credits are simply missing — with nothing that would ever revisit it,
+because the completion is recorded and a retry is a no-op.
 
 ``signed_up_at`` IS SET AT CLAIM TIME, NOT AT SIGNUP
 ====================================================
@@ -33,21 +33,21 @@ from collections.abc import Collection
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, InviteForNewAccountsError, NotFoundError
 from app.domain.credits import CreditLadder
-from app.domain.enums import CreditSource
 from app.domain.referrals import NO_INVITE, make_code, may_qualify
-from app.infra.db.credit_writer import grant
+from app.infra.db.credit_grants import top_up_levels
 from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserOnboarding
 from app.infra.db.session_stats import attended_by
+from app.infra.db.user_locks import lock_users
 
 __all__ = ["claim_referral", "create_referral", "qualify_invitee", "unlock_referrers"]
 
@@ -294,22 +294,17 @@ async def _qualify_if_finished(
 
 
 async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: CreditLadder) -> bool:
-    """This user finished onboarding: qualify their invite, pay the referrer's
-    bonus, and unlock the referrer if they have attended a session.
+    """This user finished onboarding: qualify their invite, unlock the referrer
+    if they have attended a session, and top the referrer's month up to their
+    new level.
 
     Returns whether an unlock was created. Does not commit; the caller owns the
     transaction, and here that caller is ``complete_onboarding``.
 
-    **Two facts since decision 295.** The bonus (`ladder.unlock`) is paid for the
-    referrer's first qualified invite, as before. The unlock, which is what the
-    monthly grant reads, also waits for the referrer to attend a session as a
-    mentee: whichever comes second writes it (:func:`unlock_referrers`).
-
-    **The bonus is once-ever, under the referrer's row lock.** Paid only when no
-    other referral of theirs is qualified and no unlock exists, so a second
-    invitee pays nothing and a grandfathered user (an unlock with no referral)
-    is not paid, exactly as when the unlock row was the bonus's gate. Two
-    invitees finishing at once queue on the lock, and the second sees the first.
+    **The one-off invite bonus is gone** (decision 307): an invite qualifying
+    lifts its referrer to level 2, or to 3 with the unlock (decision 295), and
+    :func:`unlock_referrers` tops the month up to it. A second invitee changes
+    no level and so pays nothing; a grandfathered user is already at 3.
 
     A referrer who is *already* unlocked still has the referral marked
     qualified — the invite genuinely qualified, and the ledger should say so
@@ -328,37 +323,31 @@ async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: Cr
     if not may_qualify(has_invitee=True, already_qualified=referral.qualified_at is not None):
         return False
 
-    await _lock_referrers(session, [referral.referrer_id])
-    first = not await session.scalar(
-        select(
-            exists().where(
-                Referral.referrer_id == referral.referrer_id,
-                Referral.qualified_at.is_not(None),
-            )
-            | exists().where(ReferralUnlock.user_id == referral.referrer_id)
-        )
-    )
+    await lock_users(session, [referral.referrer_id])
     await session.execute(
         update(Referral).where(Referral.id == referral.id).values(qualified_at=func.now())
     )
-    if first:
-        await grant(
-            session,
-            referral.referrer_id,
-            source=CreditSource.REFERRAL_UNLOCK,
-            quantity=ladder.unlock,
-            # App clock, matching `credit_store`'s read. Mixing the two would put
-            # the boundary a lot expires on in a different frame from the filter
-            # that decides whether it is spendable.
-            now=dt.datetime.now(dt.UTC),
+    # App clock, matching `credit_store`'s read. Mixing the two would put the
+    # boundary a lot expires on in a different frame from the filter that
+    # decides whether it is spendable.
+    return bool(
+        await unlock_referrers(
+            session, [referral.referrer_id], ladder=ladder, now=dt.datetime.now(dt.UTC)
         )
-    return bool(await unlock_referrers(session, [referral.referrer_id]))
+    )
 
 
-async def unlock_referrers(session: AsyncSession, user_ids: Collection[UUID]) -> int:
+async def unlock_referrers(
+    session: AsyncSession,
+    user_ids: Collection[UUID],
+    *,
+    ladder: CreditLadder,
+    now: dt.datetime,
+) -> int:
     """Unlock each of ``user_ids`` who has a qualified invite **and** has
-    attended a session as a mentee (decision 295). Returns how many were
-    unlocked now. Does not commit.
+    attended a session as a mentee (decision 295), then top each one's month up
+    to their level (decision 307). Returns how many were unlocked now. Does not
+    commit.
 
     Called from both halves, because either can come second: qualifying an
     invite (:func:`qualify_invitee`) and settling sessions
@@ -369,10 +358,14 @@ async def unlock_referrers(session: AsyncSession, user_ids: Collection[UUID]) ->
     together would each miss the other and neither would write. Once-ever and
     never revoked: ``ON CONFLICT DO NOTHING`` on ``uq_referral_unlocks_user_id``,
     crediting the earliest qualified invite.
+
+    **Every user named is topped up, unlocked now or not**: a qualification
+    alone lifts its referrer to level 2. A user whose level did not move is
+    owed nothing and gets no lot.
     """
     if not user_ids:
         return 0
-    await _lock_referrers(session, user_ids)
+    await lock_users(session, user_ids)
     attended = (
         select(Session.id)
         .where(Session.mentee_id == Referral.referrer_id, attended_by(Session.mentee_id))
@@ -394,21 +387,6 @@ async def unlock_referrers(session: AsyncSession, user_ids: Collection[UUID]) ->
         .on_conflict_do_nothing(index_elements=["user_id"])
         .returning(ReferralUnlock.id)
     )
-    return len(unlocked.all())
-
-
-async def _lock_referrers(session: AsyncSession, user_ids: Collection[UUID]) -> None:
-    """The referrers' `users` rows, locked in id order so two writers locking
-    overlapping sets cannot deadlock on each other.
-
-    **`FOR NO KEY UPDATE`, not `FOR UPDATE`**: it serialises the unlock writers
-    with each other (and with account deletion's `FOR UPDATE`) but not with the
-    `FOR KEY SHARE` every foreign-key insert takes on a user, so a credit lot or
-    a booking for the same user neither waits on it nor closes a deadlock cycle.
-    """
-    await session.execute(
-        select(User.id)
-        .where(User.id.in_(list(user_ids)))
-        .order_by(User.id)
-        .with_for_update(key_share=True)
-    )
+    count = len(unlocked.all())
+    await top_up_levels(session, user_ids, ladder=ladder, now=now)
+    return count

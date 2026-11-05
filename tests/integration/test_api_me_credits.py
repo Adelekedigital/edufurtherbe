@@ -75,6 +75,26 @@ async def credits_of(client: httpx.AsyncClient, auth_id: UUID) -> Any:
     return body["credits"]
 
 
+async def onboard(engine: AsyncEngine, user_id: UUID) -> None:
+    """Finished onboarding: credit level 1 (decision 307)."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO user_onboarding (user_id, completed_at) VALUES (:u, now())"),
+            {"u": user_id},
+        )
+
+
+async def unlock(engine: AsyncEngine, user_id: UUID) -> None:
+    """The unlock: credit level 3."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO referral_unlocks (user_id, unlocked_by_referral_id) VALUES (:u, NULL)"
+            ),
+            {"u": user_id},
+        )
+
+
 async def test_a_mentee_with_no_lots_reads_zero(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -84,13 +104,15 @@ async def test_a_mentee_with_no_lots_reads_zero(
     the band function raises while a null reaching the card renders nothing.
     """
     auth_id = uuid4()
-    await seed_mentee(db_engine, auth_id)
+    user_id = await seed_mentee(db_engine, auth_id)
+    await onboard(db_engine, user_id)
 
     block = await credits_of(api_client, auth_id)
 
     assert block["balance"] == 0
     assert block["state"] == "exhausted"
-    assert block["allowance"] == 4
+    # The bar is the caller's level: level 1.
+    assert block["allowance"] == 1
 
 
 async def test_a_funded_mentee_reads_their_balance(
@@ -98,13 +120,29 @@ async def test_a_funded_mentee_reads_their_balance(
 ) -> None:
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id)
-    await grant(db_engine, user_id, quantity=3)
+    await unlock(db_engine, user_id)
+    await grant(db_engine, user_id, quantity=2)
 
     block = await credits_of(api_client, auth_id)
 
-    assert block["balance"] == 3
+    assert block["balance"] == 2
     assert block["state"] == "moderate"
-    assert block["allowance"] == 4
+    assert block["allowance"] == 3
+
+
+async def test_a_level_zero_mentee_reads_the_bar_of_level_one(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """Not onboarded is level 0 (decision 307), but the card draws level 1's
+    bar — the first thing they can earn — so `allowance` and `ceiling` are never
+    a zero denominator (found by code review)."""
+    auth_id = uuid4()
+    await seed_mentee(db_engine, auth_id)
+
+    block = await credits_of(api_client, auth_id)
+
+    assert (block["balance"], block["allowance"], block["state"]) == (0, 1, "exhausted")
+    assert block["monthly"]["ceiling"] == 1
 
 
 async def test_a_partly_spent_lot_counts_only_what_is_left(
@@ -159,21 +197,20 @@ async def test_a_never_expiring_lot_is_always_spendable(
     assert block["balance"] == 1
 
 
-async def test_the_steady_state_is_four(
+async def test_a_full_level_three_month_is_on_track(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """The non-expiring starter plus the monthly three — what a settled,
-    unlocked mentee sees on the 1st."""
+    """What an unlocked mentee sees on the 1st (decision 307): three of three."""
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id)
-    await grant(db_engine, user_id, quantity=1, source="profile_completed", expires=None)
+    await unlock(db_engine, user_id)
     await grant(db_engine, user_id, quantity=3)
 
     block = await credits_of(api_client, auth_id)
 
-    assert block["balance"] == 4
+    assert block["balance"] == 3
     assert block["state"] == "on_track"
-    assert block["allowance"] == 4
+    assert block["allowance"] == 3
 
 
 async def test_a_balance_above_the_allowance_raises_the_allowance(
@@ -268,8 +305,9 @@ async def test_a_migrated_balance_renders_on_the_card(
     migration working.
 
     Five is the legacy maximum and 29 of 43 dev users hold it, so it is also the
-    case that decides whether `allowance_for` raises: the steady state is four, and
-    a migrated user arrives *above* it.
+    case that decides whether `allowance_for` raises: a migrated user can arrive
+    *above* their level. (The ETL caps at the monthly grant now; five here is
+    the unclamped shape the card must still draw.)
     """
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id)
@@ -288,9 +326,9 @@ async def test_a_migrated_balance_renders_on_the_card(
     block = await credits_of(api_client, auth_id)
 
     assert block["balance"] == 5
-    # **The bar has to be able to draw five.** Clamping to the steady state of
-    # four would render "5 credits left" beside four positions — which is why
-    # `allowance_for` publishes `max(ladder.steady_state, balance)`.
+    # **The bar has to be able to draw five.** Clamping to the level would
+    # render "5 credits left" beside fewer positions — which is why
+    # `allowance_for` publishes `max(level, balance)`.
     assert block["allowance"] == 5
     assert block["state"] == "on_track"
 
@@ -321,26 +359,33 @@ async def test_a_migrated_balance_disappears_when_its_month_ends(
 # --------------------------------------------------------------------------
 
 
-async def test_a_starter_only_mentee_reads_one_never_expiring_bonus_credit(
+async def test_a_starter_lot_is_a_level_credit(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
+    """Decision 307: the starter is level 1's credit, on the monthly bar."""
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id)
-    await grant(db_engine, user_id, quantity=1, source="profile_completed", expires=None)
+    await onboard(db_engine, user_id)
+    await grant(db_engine, user_id, quantity=1, source="profile_completed")
 
     block = await credits_of(api_client, auth_id)
 
-    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None, "unlocked": False}
-    assert block["bonus"] == {"balance": 1, "groups": [{"count": 1, "expires_at": None}]}
+    assert block["monthly"]["balance"] == 1
+    assert block["monthly"]["ceiling"] == 1
+    assert block["monthly"]["unlocked"] is False
+    assert block["bonus"] == {"balance": 0, "groups": []}
 
 
-async def test_a_full_month_and_the_starter_read_three_of_three_plus_one(
+async def test_a_full_month_and_a_support_grant_read_three_of_three_plus_one(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
+    """A support grant is outside the level: the bar reads full, and the extra
+    sits in `bonus`."""
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id)
+    await unlock(db_engine, user_id)
     await grant(db_engine, user_id, quantity=3, source="monthly_free")
-    await grant(db_engine, user_id, quantity=1, source="profile_completed", expires=None)
+    await grant(db_engine, user_id, quantity=1, source="admin_grant")
 
     block = await credits_of(api_client, auth_id)
 
@@ -348,21 +393,24 @@ async def test_a_full_month_and_the_starter_read_three_of_three_plus_one(
     assert (block["monthly"]["balance"], block["monthly"]["ceiling"]) == (3, 3)
     assert block["monthly"]["expires_at"] is not None
     assert block["bonus"]["balance"] == 1
+    assert block["allowance"] == 4
 
 
-async def test_an_expiring_support_grant_groups_before_the_starter(
+async def test_support_grants_group_by_expiry_soonest_first(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id)
-    await grant(db_engine, user_id, quantity=1, source="profile_completed", expires=None)
-    await grant(db_engine, user_id, quantity=2, source="admin_grant", expires=FAR_FUTURE)
+    sooner = datetime.now(UTC) + timedelta(days=10)
+    await grant(db_engine, user_id, quantity=1, source="admin_grant", expires=FAR_FUTURE)
+    await grant(db_engine, user_id, quantity=2, source="admin_grant", expires=sooner)
 
     groups = (await credits_of(api_client, auth_id))["bonus"]["groups"]
 
     assert [g["count"] for g in groups] == [2, 1]
-    assert groups[0]["expires_at"] is not None
-    assert groups[1]["expires_at"] is None
+    assert datetime.fromisoformat(groups[0]["expires_at"]) < datetime.fromisoformat(
+        groups[1]["expires_at"]
+    )
 
 
 async def test_a_migrated_opening_balance_is_monthly(
@@ -382,13 +430,14 @@ async def test_expired_credits_are_in_neither_part(
 ) -> None:
     auth_id = uuid4()
     user_id = await seed_mentee(db_engine, auth_id)
+    await unlock(db_engine, user_id)
     await grant(db_engine, user_id, quantity=3, source="monthly_free", expires=LONG_PAST)
     await grant(db_engine, user_id, quantity=1, source="admin_grant", expires=LONG_PAST)
 
     block = await credits_of(api_client, auth_id)
 
     assert block["balance"] == 0
-    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None, "unlocked": False}
+    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None, "unlocked": True}
     assert block["bonus"] == {"balance": 0, "groups": []}
 
 
@@ -413,16 +462,6 @@ async def test_the_two_parts_always_add_up_to_the_balance(
 # --------------------------------------------------------------------------
 
 
-async def unlock(engine: AsyncEngine, user_id: UUID) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO referral_unlocks (user_id, unlocked_by_referral_id) VALUES (:u, NULL)"
-            ),
-            {"u": user_id},
-        )
-
-
 async def test_a_mentee_with_a_goal_and_an_unlock_reads_unlocked(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -436,15 +475,16 @@ async def test_a_mentee_with_a_goal_and_an_unlock_reads_unlocked(
 async def test_a_mentee_with_a_goal_but_no_unlock_reads_locked(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """The case the card needs: `ceiling` is still the grant, so only this flag
-    tells "not unlocked yet" from "spent"."""
+    """An onboarded mentee without the unlock is at level 1 (decision 307):
+    `ceiling` is their level, and `unlocked` says they have not reached 3."""
     auth_id = uuid4()
-    await seed_mentee(db_engine, auth_id)
+    user_id = await seed_mentee(db_engine, auth_id)
+    await onboard(db_engine, user_id)
 
     monthly = (await credits_of(api_client, auth_id))["monthly"]
 
     assert monthly["unlocked"] is False
-    assert monthly["ceiling"] == 3
+    assert monthly["ceiling"] == 1
 
 
 async def test_an_unlock_without_a_goal_reads_locked(

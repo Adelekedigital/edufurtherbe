@@ -60,12 +60,12 @@ UNAUTHORISED: dict[int | str, dict[str, str]] = {
         "address twice is refused with `409`; two *different* referrers may "
         "invite the same person, because scoping uniqueness to the address "
         "alone would make the programme a race to invite.\n\n"
-        "**The invite pays nothing on its own.** The referrer's two credits "
-        "arrive when the invitee finishes their profile, which is the same "
-        "signal as the starter credit — signing up and vanishing unlocks "
-        "nothing, and that separation is the abuse boundary. The three free "
-        "sessions a month also wait for the referrer's own first attended "
-        "session as a mentee (decision 295)."
+        "**The invite pays nothing on its own.** When the invitee finishes "
+        "their profile — the same signal as your own level 1 — you reach credit "
+        "level 2 (two credits a month), or 3 once you have also attended a "
+        "session as a mentee (decision 295), and this month is topped up to it "
+        "at once (decision 307). Signing up and vanishing earns nothing, and "
+        "that separation is the abuse boundary."
     ),
     responses={
         **UNAUTHORISED,
@@ -83,10 +83,10 @@ async def create_own_referral(referral: CreatedReferralDep, response: Response) 
     summary="Invites you have sent",
     description=(
         "Newest first. `signed_up_at` is set when the invitee claims their "
-        "code, and `qualified_at` when they finish onboarding. The second pays "
-        "your bonus, and opens your recurring grant once you have also attended "
-        "a session as a mentee (decision 295): `/me` `credits.monthly.unlocked` "
-        "says when it has.\n\n"
+        "code, and `qualified_at` when they finish onboarding. The second lifts "
+        "you to credit level 2, and to 3 once you have also attended a session "
+        "as a mentee (decision 295): `/me` `credits.monthly.ceiling` is your "
+        "level and `credits.monthly.unlocked` says when you reached 3.\n\n"
         "There is no `status` field: it is derivable from those two timestamps, "
         "and a computed one here would put the same rule in a third place."
     ),
@@ -163,8 +163,8 @@ HOLD_DAYS = RETIRED_CODE_HOLD.days
         "hyphen; `friend-…` when the name has no "
         "letters a-z to use).\n\n"
         "Anyone may sign up through it, and each arrival becomes its own invite "
-        "with the same reward rules as any other: your two credits arrive once, "
-        "when the first person you invited finishes their profile.\n\n"
+        "with the same reward rules as any other: the first person you invited "
+        "to finish their profile lifts you to credit level 2.\n\n"
         "You may pick a handle instead (`PUT`) and revoke or reactivate the "
         "link (`PATCH`). The client builds the link itself, as `/invite/{code}`."
     ),
@@ -225,7 +225,7 @@ async def pick_invite_handle(link: PickedInviteHandleDep) -> InviteLinkRead:
         "nobody else may pick it, you still read it here, and you may rename it "
         "(it stays revoked). Reactivating makes the same code work again.\n\n"
         "People who already arrived through the link are unaffected, including "
-        "the credits their finishing earns you."
+        "the credit level their finishing earns you."
     ),
     responses=UNAUTHORISED,
 )

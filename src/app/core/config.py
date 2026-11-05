@@ -227,19 +227,20 @@ class Settings(BaseSettings):
     # in one action, so an unbounded value is unbounded authority too.
     # ------------------------------------------------------------------
 
-    #: What finishing onboarding earns. **Never expires** — that is a rule, in
-    #: `NON_EXPIRING`, and is deliberately not configurable here.
+    #: Level 1's month (decision 307): a mentee who finished onboarding.
     credit_starter_grant: int = Field(
         default=1, gt=0, le=CREDIT_CEILING, validation_alias=env_key("credit_starter_grant")
     )
 
-    #: Added by the first qualifying invite, on top of the starter.
+    #: Level 2's month: an invite of theirs qualified. The name predates the
+    #: levels, when this was a one-off bonus; it is kept so no deployment has
+    #: to change a variable.
     credit_referral_unlock_grant: int = Field(
         default=2, gt=0, le=CREDIT_CEILING, validation_alias=env_key("credit_referral_unlock_grant")
     )
 
-    #: Granted on the 1st to every unlocked mentee, and the cap on what a
-    #: migrated user may carry in.
+    #: Level 3's month: invited and attended (the unlock). Also the cap on what
+    #: a migrated user may carry in and on one admin grant.
     credit_monthly_allowance: int = Field(
         default=3, gt=0, le=CREDIT_CEILING, validation_alias=env_key("credit_monthly_allowance")
     )
@@ -881,6 +882,25 @@ class Settings(BaseSettings):
         if value is None:
             return None
         return SecretStr(value.get_secret_value().replace(r"\n", "\n"))
+
+    @model_validator(mode="after")
+    def credit_levels_never_decrease(self) -> Settings:
+        """Each credit level pays at least the one below it (decision 307).
+
+        A higher level that paid less would make inviting a friend, or
+        attending, *cost* credits, and the mid-month top-up would owe nothing at
+        the moment somebody earned more.
+        """
+        if not (
+            self.credit_starter_grant
+            <= self.credit_referral_unlock_grant
+            <= self.credit_monthly_allowance
+        ):
+            raise ValueError(
+                "credit levels must not decrease: CREDIT_STARTER_GRANT <= "
+                "CREDIT_REFERRAL_UNLOCK_GRANT <= CREDIT_MONTHLY_ALLOWANCE"
+            )
+        return self
 
     @model_validator(mode="after")
     def default_window_within_max(self) -> Settings:

@@ -110,14 +110,17 @@ async def test_a_mentee_with_every_answer_is_granted_the_credit(
 async def test_a_mentor_finishes_without_the_mentee_answers(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Mentor completion is unchanged (PRD H7)."""
+    """Mentor completion's bar is unchanged (PRD H7). Since decision 307 it
+    pays nothing — a mentor with no mentee goal is at credit level 0 — so it
+    answers `200`."""
     auth_id = uuid4()
     user_id = await seed(db_engine, auth_id, goal=False, mentor=True, answers=False)
 
     response = await api_client.post(PATH, headers=bearer(api_token(auth_id)))
 
-    assert response.status_code == 201
-    assert await balance_of(db_engine, user_id) == 1
+    assert response.status_code == 200
+    assert response.json()["completed_at"] is not None
+    assert await balance_of(db_engine, user_id) == 0
 
 
 async def test_me_names_what_a_new_account_owes(
@@ -213,8 +216,10 @@ async def test_a_retry_stays_200_after_an_answer_is_cleared(
 async def test_a_migrated_user_holding_the_starter_retries_to_200(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """The ETL writes `completed_at` and the starter lot, and no migrated goal
-    has a field of study, so the current bar must not refuse their retry."""
+    """The ETL writes `completed_at` and the starter lot — dying with the
+    cutover month, as the loader writes it since decision 307 — and no migrated
+    goal has a field of study, so the current bar must not refuse their retry,
+    and the month, already paid level 1, owes nothing."""
     auth_id = uuid4()
     user_id = await seed(db_engine, auth_id, answers=False)
     await run(
@@ -224,8 +229,10 @@ async def test_a_migrated_user_holding_the_starter_retries_to_200(
     )
     await run(
         db_engine,
-        "INSERT INTO credit_lots (user_id, source, quantity_granted, quantity_remaining) "
-        "VALUES (:u, 'profile_completed', 1, 1)",
+        "INSERT INTO credit_lots "
+        "(user_id, source, quantity_granted, quantity_remaining, expires_at) "
+        "VALUES (:u, 'profile_completed', 1, 1, "
+        "(date_trunc('month', now() AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC')",
         user_id,
     )
 
@@ -235,11 +242,14 @@ async def test_a_migrated_user_holding_the_starter_retries_to_200(
     assert await balance_of(db_engine, user_id) == 1
 
 
-async def test_a_finished_user_without_the_starter_still_meets_the_bar(
+async def test_a_finished_user_is_answered_without_the_check_and_paid_nothing(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """The anti-farming half: only a user already paid skips the check. One the
-    ETL marked finished with no credit earns it by the current rule."""
+    """**Changed by decision 307.** `completed_at` alone is credit level 1, and
+    the 1st pays it; completion pays only the first time it records a finish.
+    So a user the ETL marked finished is not refused (the bar tightened after
+    them) and not paid here — a retry on the 1st, before the job, would
+    otherwise answer `201` and send the first-credits email again."""
     auth_id = uuid4()
     user_id = await seed(db_engine, auth_id, answers=False)
     await run(
@@ -247,6 +257,20 @@ async def test_a_finished_user_without_the_starter_still_meets_the_bar(
         "INSERT INTO user_onboarding (user_id, completed_at) VALUES (:u, now())",
         user_id,
     )
+
+    response = await api_client.post(PATH, headers=bearer(api_token(auth_id)))
+
+    assert response.status_code == 200
+    assert await balance_of(db_engine, user_id) == 0
+
+
+async def test_an_unfinished_user_still_meets_the_bar(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The anti-farming half that remains: with no `completed_at`, an empty
+    profile is refused and paid nothing."""
+    auth_id = uuid4()
+    user_id = await seed(db_engine, auth_id, answers=False)
 
     response = await api_client.post(PATH, headers=bearer(api_token(auth_id)))
 

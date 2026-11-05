@@ -347,6 +347,18 @@ bought is a chargeback and in several jurisdictions unlawful.
 > *before* the session, which changes nothing above: the fresh lot inherits the
 > original's expiry semantics either way.
 
+> **Amended 2026-11-05 (settled decision 307, credit levels).** The earning
+> ladder above is replaced. A mentee's month pays their **level** — 1 once
+> onboarded, 2 once an invite of theirs qualified, 3 with the unlock — and the
+> 1st resets every balance to it. **Every credit now dies at the month end**:
+> the starter no longer never expires (`NON_EXPIRING` is empty, kept for
+> purchased lots), and a refund's "never-expiring in, never-expiring out" now
+> applies only to lots written before the change. The one-off 2-credit invite
+> bonus is gone (level 2 replaces it), so `referral_unlock` is historical; a
+> rise in level writes the new `level_top_up` source, paying `level − already
+> granted this period` so a repeat pays nothing. §11's starter and §12's unlock
+> gate still decide *when* a level is reached; only what each pays changed.
+
 **What this record does not decide.** Whether the expiry job's first run sweeps
 migrated lots or grandfathers them is open and belongs to PR 9. Whether the
 opening lots carry the legacy date is decided — they do not, uniformly end of the
