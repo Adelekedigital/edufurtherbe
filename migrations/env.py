@@ -33,7 +33,12 @@ from app.infra.db.engine import apply_on_connect, resolve_async_dsn, to_async_ds
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False`: the default switches off every logger
+    # that already exists, which run in-process (every `db` test migrates a
+    # template) silenced the application's own — `app.api.errors` lost its 500
+    # line depending on test order. A CLI run creates no app loggers first, so
+    # deploys are unaffected. Pinned by `test_migrations_logging.py`.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Importing `models` is what puts the tables on Base.metadata — a model that is
 # never imported is invisible here, and autogenerate then proposes DROPPING the

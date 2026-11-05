@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import logging
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -160,14 +159,10 @@ async def test_a_failed_sign_out_still_deletes(
     api_client: httpx.AsyncClient,
     db_engine: AsyncEngine,
     caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The deletion is committed before Supabase is asked, and a refresh token
     that survives reaches no account here: the request still succeeds, and the
     failure is logged without the token."""
-    # Alembic's `fileConfig` disables every logger that existed when the schema
-    # migrated; switch this one back on (the `logs` fixture's pattern).
-    monkeypatch.setattr(logging.getLogger("app.api.deps.account"), "disabled", False)
     wire(api_client, FakeAuthAdmin(fail=True))
     _, headers = await a_mentee(db_engine, "signout-fails")
     token = headers["Authorization"].removeprefix("Bearer ")

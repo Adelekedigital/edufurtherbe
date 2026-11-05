@@ -104,10 +104,8 @@ def world(db_engine: AsyncEngine, api_client: httpx.AsyncClient) -> World:
 
 
 @pytest.fixture
-def logs(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """`caplog`, with the logger read here switched back on: Alembic's
-    `fileConfig` disables every logger that existed when the schema migrated."""
-    monkeypatch.setattr(logging.getLogger("app.api.deps.core"), "disabled", False)
+def logs(caplog: pytest.LogCaptureFixture) -> Any:
+    """`caplog`, kept as the name the tests below read."""
     return caplog
 
 

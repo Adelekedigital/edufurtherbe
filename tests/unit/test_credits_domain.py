@@ -49,6 +49,10 @@ class TestVocabularies:
             # Deferred at PR 1 under #21 because nothing wrote one; ships with
             # the admin endpoint that does.
             "admin_grant",
+            # Decision 307's mid-month top-up. Its migration merges alone,
+            # before the code that writes it (project-conventions, *Migration
+            # ordering*); the producer is the stacked PR on top of this one.
+            "level_top_up",
         }
 
     def test_purchase_and_promotional_are_absent(self) -> None:
@@ -164,7 +168,12 @@ class TestExpiryFor:
 
     @pytest.mark.parametrize(
         "source",
-        [CreditSource.REFERRAL_UNLOCK, CreditSource.MONTHLY_FREE, CreditSource.OPENING_BALANCE],
+        [
+            CreditSource.REFERRAL_UNLOCK,
+            CreditSource.MONTHLY_FREE,
+            CreditSource.OPENING_BALANCE,
+            CreditSource.LEVEL_TOP_UP,
+        ],
     )
     def test_every_other_grant_dies_at_the_reset(self, source: CreditSource) -> None:
         now = datetime(2026, 8, 20, 10, 0, tzinfo=UTC)
