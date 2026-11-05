@@ -24,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from app.domain.enums import CreditSource
 from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -193,14 +194,10 @@ async def test_the_source_vocabulary_is_closed(ledger: Ledger) -> None:
 
 async def test_every_shipped_source_is_accepted(ledger: Ledger) -> None:
     """The accepting half. A CHECK that refuses everything also refuses garbage."""
-    for source in (
-        "profile_completed",
-        "referral_unlock",
-        "monthly_free",
-        "opening_balance",
-        "level_top_up",
-    ):
-        assert await ledger.lot(source=source, granted=1, expires=None)
+    # Every member, from the class rather than a hand-kept list, so the check
+    # cannot drop one and keep this green (non-negotiable #8).
+    for source in CreditSource:
+        assert await ledger.lot(source=source.value, granted=1, expires=None)
 
 
 async def test_a_user_gets_one_starter_ever(ledger: Ledger) -> None:

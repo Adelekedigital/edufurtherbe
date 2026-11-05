@@ -15,6 +15,13 @@ def test_every_lot_source_names_a_grant_kind() -> None:
     assert set(GRANT_KINDS) == set(CreditSource)
 
 
+def test_a_level_top_up_is_named_and_on_the_monthly_chip() -> None:
+    """A mid-month top-up is a level grant (decision 307): it reads as its own
+    kind and sits under `monthly` beside the 1st's grant."""
+    assert GRANT_KINDS[CreditSource.LEVEL_TOP_UP] == "level_top_up"
+    assert "level_top_up" in FILTER_KINDS["monthly"]
+
+
 def test_every_named_kind_is_published_and_every_published_kind_is_reachable() -> None:
     named = set(REASON_KINDS.values()) | set(GRANT_KINDS.values())
 

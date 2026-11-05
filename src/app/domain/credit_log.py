@@ -39,6 +39,7 @@ CreditEntryKind = Literal[
     "admin_grant",
     "referral_unlock",
     "opening_balance",
+    "level_top_up",
 ]
 ENTRY_KINDS: tuple[CreditEntryKind, ...] = get_args(CreditEntryKind)
 
@@ -71,6 +72,7 @@ GRANT_KINDS: dict[CreditSource, CreditEntryKind] = {
     CreditSource.ADMIN_GRANT: "admin_grant",
     CreditSource.REFERRAL_UNLOCK: "referral_unlock",
     CreditSource.OPENING_BALANCE: "opening_balance",
+    CreditSource.LEVEL_TOP_UP: "level_top_up",
     CreditSource.REFUND: "refund",
 }
 
@@ -83,5 +85,11 @@ FILTER_KINDS: dict[CreditLogFilter, tuple[CreditEntryKind, ...]] = {
     "admin": ("admin_grant",),
     "bookings": ("booking",),
     "refunds": ("refund",),
-    "monthly": ("monthly_free", "profile_completed", "referral_unlock", "opening_balance"),
+    "monthly": (
+        "monthly_free",
+        "level_top_up",
+        "profile_completed",
+        "referral_unlock",
+        "opening_balance",
+    ),
 }

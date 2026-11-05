@@ -431,7 +431,13 @@ async def test_each_chip_shows_only_its_kinds(
     mentor = await a_mentee(db_engine, "chips-mentor@example.test", mentor=True)
     mentee = await a_mentee(db_engine, "chips@example.test")
     session_id = await make_session(db_engine, mentor, mentee, status="cancelled")
-    for source in ("monthly_free", "profile_completed", "referral_unlock", "opening_balance"):
+    for source in (
+        "monthly_free",
+        "level_top_up",
+        "profile_completed",
+        "referral_unlock",
+        "opening_balance",
+    ):
         await ledger_row(db_engine, mentee, reason="grant", delta=1, source=source)
     lot = await ledger_row(db_engine, mentee, reason="grant", delta=1, source="admin_grant")
     await ledger_row(db_engine, mentee, reason="lot_expired", delta=-1, lot_id=lot)
@@ -453,7 +459,13 @@ async def test_each_chip_shows_only_its_kinds(
         "admin": ["admin_grant"],
         "bookings": ["booking"],
         "refunds": ["refund"],
-        "monthly": ["monthly_free", "opening_balance", "profile_completed", "referral_unlock"],
+        "monthly": [
+            "level_top_up",
+            "monthly_free",
+            "opening_balance",
+            "profile_completed",
+            "referral_unlock",
+        ],
     }
     assert set(expected) == set(FILTER_KINDS)
     for chip, kinds in expected.items():

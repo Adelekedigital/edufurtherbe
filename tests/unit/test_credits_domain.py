@@ -168,7 +168,12 @@ class TestExpiryFor:
 
     @pytest.mark.parametrize(
         "source",
-        [CreditSource.REFERRAL_UNLOCK, CreditSource.MONTHLY_FREE, CreditSource.OPENING_BALANCE],
+        [
+            CreditSource.REFERRAL_UNLOCK,
+            CreditSource.MONTHLY_FREE,
+            CreditSource.OPENING_BALANCE,
+            CreditSource.LEVEL_TOP_UP,
+        ],
     )
     def test_every_other_grant_dies_at_the_reset(self, source: CreditSource) -> None:
         now = datetime(2026, 8, 20, 10, 0, tzinfo=UTC)

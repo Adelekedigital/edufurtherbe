@@ -29,6 +29,7 @@ _ENTRY = (
     "`mentor_canceled`, `mentee_canceled`, `canceled` by anybody else, "
     "`mentor_no_show`, or `request_unfulfilled` for a request declined, withdrawn "
     "or expired), `expired`, or a grant by where it came from: `monthly_free`, "
+    "`level_top_up` (a mid-month rise in the mentee's credit level), "
     "`profile_completed` (the starter), `admin_grant` (with `admin` and `note`), "
     "`referral_unlock` (the invite bonus) or `opening_balance` (carried from the "
     "old app). `mentor` is the session's mentor on a booking or a refund, else "
@@ -82,8 +83,9 @@ async def mentee_credits(panel: MenteeCreditsDep) -> AdminMenteeCreditsRead:
     description=(
         "Every movement of every mentee's balance, newest first, 50 a page. `type` "
         "is the log's chips: `admin` (`admin_grant`), `bookings` (`booking`), "
-        "`refunds` (`refund`), `monthly` (`monthly_free`, `profile_completed`, "
-        "`referral_unlock` and `opening_balance`), or `all`, the default, which is "
+        "`refunds` (`refund`), `monthly` (`monthly_free`, `level_top_up`, "
+        "`profile_completed`, `referral_unlock` and `opening_balance`), or `all`, "
+        "the default, which is "
         "the only one showing `expired`. `mentee_id` narrows it to one person's "
         "ledger, whoever they are now.\n\n" + _ENTRY
     ),

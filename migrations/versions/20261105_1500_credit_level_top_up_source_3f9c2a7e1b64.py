@@ -12,10 +12,18 @@ as ``c4e8b1a72f95`` did for ``admin_grant``.
 
 Additive. The new CHECK is strictly wider than the one it replaces, so no
 existing row can fail it.
+
+**A plain swap, not ``NOT VALID`` then ``VALIDATE``**, the shape
+``e5a71c9b382d`` and ``e4b9d2a7c1f3`` chose for small tables: ``credit_lots``
+holds a few lots per mentee a month, so the validating scan is milliseconds,
+and a constraint left unvalidated looks enforced and is not. ``lock_timeout``
+fails fast behind a booking and ``statement_timeout`` bounds the scan, as
+``d3a6f81b52c7`` sets both on a constraint change.
 """
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -40,23 +48,30 @@ SOURCES_AFTER = (
 
 
 def _replace_check(sources: str) -> None:
+    op.execute("SET lock_timeout = '3s'")
+    op.execute("SET statement_timeout = '30s'")
     op.drop_constraint(op.f(CONSTRAINT), "credit_lots", type_="check")
     op.create_check_constraint(op.f(CONSTRAINT), "credit_lots", f"source IN ({sources})")
 
 
 def upgrade() -> None:
-    """Widen the vocabulary. A short lock wait: `credit_lots` is written by
-    every booking, so a long queue behind this would stall them."""
-    op.execute("SET lock_timeout = '3s'")
+    """Widen the vocabulary."""
     _replace_check(SOURCES_AFTER)
 
 
 def downgrade() -> None:
-    """Narrow it back.
-
-    **Fails loudly while any ``level_top_up`` lot exists**, deliberately: those
-    lots are somebody's credits, and rewriting their source to let a downgrade
-    pass is the quiet data change the ledger exists to prevent.
-    """
-    op.execute("SET lock_timeout = '3s'")
+    """Narrow it back. **Refuses while any ``level_top_up`` lot exists**, and
+    says so: those lots are somebody's credits, and rewriting their source to
+    let a downgrade pass is the quiet data change the ledger exists to prevent.
+    Checked first, so the operator reads the reason rather than a bare
+    constraint violation."""
+    if (
+        op.get_bind()
+        .execute(sa.text("SELECT EXISTS (SELECT 1 FROM credit_lots WHERE source = 'level_top_up')"))
+        .scalar()
+    ):
+        raise RuntimeError(
+            "credit_lots holds level_top_up lots: they are mentees' credits, so "
+            "downgrading would have to rewrite them; move them deliberately first"
+        )
     _replace_check(SOURCES_BEFORE)
