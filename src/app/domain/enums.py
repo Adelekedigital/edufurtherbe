@@ -613,6 +613,13 @@ class CreditSource(StrEnum):
     #: The monthly grant, for users who have unlocked it. Three.
     MONTHLY_FREE = "monthly_free"
 
+    #: A mid-month rise in a mentee's credit level, topping the month up to the
+    #: new level (decision 307). **Shipped before its producer, deliberately**:
+    #: the `CHECK` that admits it must be applied before any code writes it
+    #: (project-conventions, *Migration ordering*), and the stacked PR on top of
+    #: this one is the writer.
+    LEVEL_TOP_UP = "level_top_up"
+
     #: A credit handed back because a mentor missed the session or called it off
     #: as unavailable. **A fresh lot, not a return to the original** — both
     #: triggers are settled after the session, so the lot that paid for it may

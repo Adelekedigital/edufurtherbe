@@ -33,6 +33,12 @@ def test_the_monthly_grant_and_a_migrated_balance_are_monthly() -> None:
     assert SOURCE_BUCKET[CreditSource.OPENING_BALANCE] == "monthly"
 
 
+def test_a_level_top_up_is_monthly() -> None:
+    """A mid-month top-up is the level's own credit (decision 307), so it sits
+    on the monthly bar beside the 1st's grant."""
+    assert SOURCE_BUCKET[CreditSource.LEVEL_TOP_UP] == "monthly"
+
+
 def test_starter_invite_and_support_grants_are_bonus() -> None:
     for source in (
         CreditSource.PROFILE_COMPLETED,

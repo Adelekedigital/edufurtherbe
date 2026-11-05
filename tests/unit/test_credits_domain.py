@@ -49,6 +49,10 @@ class TestVocabularies:
             # Deferred at PR 1 under #21 because nothing wrote one; ships with
             # the admin endpoint that does.
             "admin_grant",
+            # Decision 307's mid-month top-up. Its migration merges alone,
+            # before the code that writes it (project-conventions, *Migration
+            # ordering*); the producer is the stacked PR on top of this one.
+            "level_top_up",
         }
 
     def test_purchase_and_promotional_are_absent(self) -> None:

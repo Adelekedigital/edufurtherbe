@@ -193,7 +193,13 @@ async def test_the_source_vocabulary_is_closed(ledger: Ledger) -> None:
 
 async def test_every_shipped_source_is_accepted(ledger: Ledger) -> None:
     """The accepting half. A CHECK that refuses everything also refuses garbage."""
-    for source in ("profile_completed", "referral_unlock", "monthly_free", "opening_balance"):
+    for source in (
+        "profile_completed",
+        "referral_unlock",
+        "monthly_free",
+        "opening_balance",
+        "level_top_up",
+    ):
         assert await ledger.lot(source=source, granted=1, expires=None)
 
 

@@ -290,6 +290,8 @@ Bucket = Literal["monthly", "bonus"]
 SOURCE_BUCKET: Mapping[CreditSource, Bucket | None] = MappingProxyType(
     {
         CreditSource.MONTHLY_FREE: "monthly",
+        # The level's own credit, beside the 1st's grant (decision 307).
+        CreditSource.LEVEL_TOP_UP: "monthly",
         CreditSource.OPENING_BALANCE: "monthly",
         CreditSource.PROFILE_COMPLETED: "bonus",
         CreditSource.REFERRAL_UNLOCK: "bonus",
