@@ -199,6 +199,13 @@ class SimilarMentorRead(MentorSummaryRead):
         )
 
 
+class MentorSchoolRead(BaseModel):
+    """One school mentors you can book come from (decision 307). The name only:
+    the strip is a social-proof line, and the count orders it."""
+
+    name: str = Field(description="The school's catalogue name, as the mentor card shows it.")
+
+
 class MentorPage(Page[MentorSummaryRead]):
     """A discovery page, and on the first page, how many mentors there are.
 

@@ -42,6 +42,7 @@ from app.api.routes import (
     me_reviews,
     me_session_types,
     me_writing_assist,
+    mentor_schools,
     mentors,
     message_files,
     reviews,
@@ -546,6 +547,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(users.router)
     application.include_router(catalogue.router)
     application.include_router(featured.router)
+    application.include_router(mentor_schools.router)
     application.include_router(mentors.router)
     application.include_router(user_attributes.router)
     application.include_router(availability.router)

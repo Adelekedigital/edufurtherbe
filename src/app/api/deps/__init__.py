@@ -85,6 +85,7 @@ from app.api.deps.matches import MentorMatchesDep
 from app.api.deps.mentors import (
     FeaturedMentorDep,
     MentorPageDep,
+    MentorSchoolsDep,
     MetMentorsDep,
     OwnMenteeStatsDep,
     OwnMentorMonthlyStatsDep,
@@ -275,6 +276,7 @@ __all__ = [
     "MentorProfileDep",
     "MentorRelationshipDep",
     "MentorReviewsDep",
+    "MentorSchoolsDep",
     "MergedInstitutionDep",
     "MessageEmailCallbackDep",
     "MessageFileDownloadDep",

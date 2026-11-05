@@ -240,6 +240,21 @@ async def make_bookable_mentor(engine: AsyncEngine, tag: str, **knobs: object) -
     return mentor
 
 
+async def make_institution(engine: AsyncEngine, name: str, *, status: str = "approved") -> UUID:
+    """A catalogue school from the registry; `pending_review` is the state of a
+    school a user typed that nobody has curated."""
+    async with engine.begin() as conn:
+        return (
+            await conn.execute(
+                text(
+                    "INSERT INTO institutions (name, domain, source, status) "
+                    "VALUES (:n, :d, 'hipolabs', :s) RETURNING id"
+                ),
+                {"n": name, "d": f"{uuid4().hex[:8]}.example", "s": status},
+            )
+        ).scalar_one()
+
+
 async def add_education(
     engine: AsyncEngine,
     user: UUID,
@@ -258,6 +273,8 @@ async def add_education(
     school: str = "Washington University",
     abbreviation: str | None = None,
     institution: bool = True,
+    #: An existing catalogue row to link, so several entries share one school.
+    institution_id: UUID | None = None,
     date_end: str = "2026-01-01",
     deleted: bool = False,
 ) -> UUID:
@@ -267,18 +284,9 @@ async def add_education(
     to `school_name_raw` — the pair ADR 0008 point 5 exists for, where an
     unmatched school still displays what the user typed.
     """
+    if institution and institution_id is None:
+        institution_id = await make_institution(engine, school)
     async with engine.begin() as conn:
-        institution_id = None
-        if institution:
-            institution_id = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO institutions (name, domain, source) "
-                        "VALUES (:n, :d, 'hipolabs') RETURNING id"
-                    ),
-                    {"n": school, "d": f"{uuid4().hex[:8]}.example"},
-                )
-            ).scalar_one()
         return (
             await conn.execute(
                 text(
