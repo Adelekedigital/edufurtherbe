@@ -227,13 +227,9 @@ class AdminMenteeCreditsRead(BaseModel):
 
 
 class CreditRulesRead(BaseModel):
-    """The credit rules the server runs on, read-only: what each credit level
-    pays a month (decision 308)."""
+    """The credit rules the server runs on, read-only."""
 
-    #: Level 1: a mentee who finished onboarding, each month.
+    #: Credits every mentee gets once, when they finish onboarding.
     starter: int
-    #: Level 2: plus an invite of theirs qualified, each month. Optional in the
-    #: spec because it was added after the other two; always sent.
-    invited: int | None = None
-    #: Level 3: invited and attended a session (the unlock), each month.
+    #: Credits unlocked mentees get on the 1st of each month.
     monthly: int
