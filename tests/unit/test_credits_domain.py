@@ -14,12 +14,14 @@ explicit.
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from app.core.config import CREDIT_CEILING, Settings, get_settings
 from app.domain.credits import (
+    HISTORICAL_SOURCES,
     LEVEL_SOURCES,
     NON_EXPIRING,
     SOURCE_BUCKET,
@@ -60,6 +62,29 @@ class TestVocabularies:
             # Decision 308's mid-month top-up, written by `credit_grants`.
             "level_top_up",
         }
+
+    def test_nothing_writes_a_historical_source(self) -> None:
+        """**The member decision 308 retired stays only to be read.** Rows carry
+        it and a `CHECK` cannot drop a value a row holds; a writer naming it
+        again would bring back the one-off bonus level 2 replaced.
+
+        Both spellings a writer could use are searched: the ORM's
+        ``source=CreditSource.<member>`` and the ETL's raw SQL, which names the
+        value as a quoted literal in an ``INSERT`` (the migration's starter did
+        exactly that, so a search for the first alone would have missed it)."""
+        src = Path(__file__).parents[2] / "src" / "app"
+        for path in src.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for source in HISTORICAL_SOURCES:
+                assert f"source=CreditSource.{source.name}" not in text, path
+                if "INSERT INTO credit_lots" in text:
+                    assert f"'{source.value}'" not in text, path
+
+    def test_the_starter_still_has_its_migration_producer(self) -> None:
+        """The accepting half: `profile_completed` is not historical, because
+        the cutover still writes it."""
+        assert CreditSource.PROFILE_COMPLETED not in HISTORICAL_SOURCES
+        assert CreditSource.REFERRAL_UNLOCK in HISTORICAL_SOURCES
 
     def test_purchase_and_promotional_are_absent(self) -> None:
         """Payments are out of scope (#8) and nothing grants promotionally.
@@ -182,14 +207,14 @@ class TestTheLevelSources:
         assert CreditSource.REFUND not in LEVEL_SOURCES
         assert CreditSource.ADMIN_GRANT not in LEVEL_SOURCES
 
-    def test_the_starter_and_the_invite_lots_count_as_level_credits(self) -> None:
+    def test_the_starter_and_the_old_bonus_still_count(self) -> None:
         """A starter or invite lot is a level credit, so a top-up in its month
         does not pay that level a second time."""
+        assert HISTORICAL_SOURCES <= LEVEL_SOURCES
         assert {
             CreditSource.MONTHLY_FREE,
             CreditSource.LEVEL_TOP_UP,
             CreditSource.PROFILE_COMPLETED,
-            CreditSource.REFERRAL_UNLOCK,
             CreditSource.OPENING_BALANCE,
         } <= LEVEL_SOURCES
 

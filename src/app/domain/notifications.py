@@ -152,8 +152,8 @@ class Notification(StrEnum):
     #: unmapped member is a send that fails at the drain rather than a message
     #: that goes out sounding like a first ask.
 
-    #: **The starter credit landed**: one credit, the month's level-1 credit
-    #: (decision 308).
+    #: **The first credits landed**: finishing onboarding topped the month up to
+    #: the mentee's credit level (decision 308).
     #:
     #: **Fired on profile completion, not on signup**, and that is the whole
     #: point rather than a scheduling detail: the credit is *granted* on
@@ -161,9 +161,9 @@ class Notification(StrEnum):
     #: credit before the lot exists. Signing up is free and finishing a profile
     #: is work — the message has to arrive where the work did.
     #:
-    #: Only on the call that actually created the lot. A retried completion
-    #: grants nothing, so it says nothing: `grant_starter` returning `None` is
-    #: what the producer branches on.
+    #: Only on the call that actually paid. A retried completion pays nothing,
+    #: so it says nothing: an empty `top_up_levels` result is what the producer
+    #: branches on.
     #:
     #: Not in `AUDIENCE` — like the mentor decisions below, this is about a
     #: *user* rather than a party to a session, so the producer names its

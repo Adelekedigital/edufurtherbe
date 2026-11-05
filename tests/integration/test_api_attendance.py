@@ -32,7 +32,7 @@ from tests.integration.factories import (
 from app.domain.attendance import JOIN_CLOSES, outcome
 from app.domain.enums import SessionStatus
 from app.infra.db.session_writer import settle_attendance
-from conftest import A_REASON, add_user, api_token, bearer, fund
+from conftest import A_REASON, add_user, api_token, bearer, default_ladder, fund
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -130,7 +130,9 @@ async def status_of(engine: AsyncEngine, session_id: str) -> str:
 async def settle(engine: AsyncEngine) -> int:
     """Run the sweep the way the script does — its own session, then commit."""
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-        settled = await settle_attendance(session, now=dt.datetime.now(dt.UTC))
+        settled = await settle_attendance(
+            session, now=dt.datetime.now(dt.UTC), ladder=default_ladder()
+        )
         await session.commit()
     return settled
 

@@ -11,8 +11,8 @@ Bubble anchor and the starter's condition is read from ``user_onboarding``, so
 out of order it resolves nothing and reports every anchor missing.
 
 **This dry run reads the database, where its siblings do not.** Whether somebody
-gets a starter depends on ``user_onboarding.completed_at`` — the same fact
-`grant_starter` keys on — and that lives in the table rather than in the export.
+gets a starter depends on ``user_onboarding.completed_at`` — the fact
+level 1 reads — and that lives in the table rather than in the export.
 Deriving it from the raw field here would be a second answer to "has this person
 finished", free to disagree with the first. Nothing is written either way: the
 dry run opens a connection, reads two columns, and rolls back.

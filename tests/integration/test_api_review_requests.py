@@ -34,7 +34,7 @@ from app.domain.notifications import (
     Notification,
 )
 from app.infra.db.session_writer import remind_unreviewed, settle_attendance
-from conftest import add_user
+from conftest import add_user, default_ladder
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -95,7 +95,7 @@ class World:
         factory = async_sessionmaker(self.engine, expire_on_commit=False)
         async with factory() as db:
             settled = await settle_attendance(
-                db, now=dt.datetime.now(dt.UTC) + JOIN_CLOSES, **kwargs
+                db, now=dt.datetime.now(dt.UTC) + JOIN_CLOSES, ladder=default_ladder(), **kwargs
             )
             await db.commit()
         return settled
@@ -367,7 +367,9 @@ async def test_the_request_and_the_settlement_share_a_transaction(
     )
 
     async with factory() as db:
-        await settle_attendance(db, now=dt.datetime.now(dt.UTC) + JOIN_CLOSES)
+        await settle_attendance(
+            db, now=dt.datetime.now(dt.UTC) + JOIN_CLOSES, ladder=default_ladder()
+        )
         await db.rollback()
 
     assert await world.queued(Notification.REVIEW_REQUESTED) == []
