@@ -52,6 +52,7 @@ from app.infra.db.mentor_public_store import (
     get_existing_mentor_id,
     get_public_mentor,
 )
+from app.infra.db.mentor_schools import mentor_schools
 from app.infra.db.mentor_search_store import (
     count_mentors,
     mentor_card,
@@ -352,6 +353,22 @@ async def similar_to_mentor(
 
 
 SimilarMentorsDep = Annotated[list[dict[str, Any]], Depends(similar_to_mentor)]
+
+
+#: The schools strip's bounds (decision 307).
+DEFAULT_SCHOOLS = 5
+MAX_SCHOOLS = 20
+
+
+async def schools_of_mentors(
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_SCHOOLS)] = DEFAULT_SCHOOLS,
+) -> list[dict[str, Any]]:
+    """The schools bookable mentors come from, most mentors first."""
+    return await mentor_schools(session, limit=limit)
+
+
+MentorSchoolsDep = Annotated[list[dict[str, Any]], Depends(schools_of_mentors)]
 
 
 # --------------------------------------------------------------------------

@@ -63,6 +63,9 @@ def top_qualification(user: Any, name: str = "top_qualification") -> Any:
             func.coalesce(Institution.name, EducationEntry.school_name_raw).label("institution"),
             # The matched institution's country; null for a school nothing matched.
             _INSTITUTION_COUNTRY.c.display_name.label("institution_country"),
+            # The catalogue row itself, null for a typed name: the schools strip
+            # (decision 307) counts only catalogue schools, never a raw name.
+            Institution.id.label("institution_id"),
             # The entry's level itself, for mentor matching (decision 265): the
             # highest level first is exactly "the mentor's highest degree".
             _DEGREE_LEVEL.c.id.label("degree_level_id"),
