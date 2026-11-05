@@ -38,11 +38,8 @@ PAUSED = "calendar releases paused"
 
 
 @pytest.fixture
-def logs(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """`caplog`, with the two loggers read here switched back on: Alembic's
-    `fileConfig` disables every logger that existed when the schema migrated."""
-    for name in ("app.infra.db.session_writer.meetings", "app.infra.db.session_writer.follow_ups"):
-        monkeypatch.setattr(logging.getLogger(name), "disabled", False)
+def logs(caplog: pytest.LogCaptureFixture) -> Any:
+    """`caplog`, at the level the lines read here are logged at."""
     caplog.set_level(logging.INFO)
     return caplog
 
