@@ -176,3 +176,14 @@ async def test_a_signed_in_request_reads_the_shared_answer(
     assert response.status_code == 200
     assert response.headers["cache-control"] == "public, max-age=600"
     assert "authorization" not in response.headers.get("vary", "").lower()
+
+
+async def test_a_school_with_no_name_is_left_out(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Only catalogue schools with a display name: a blank one would render as
+    an empty chip."""
+    await mentor_at(db_engine, "blank", await make_institution(db_engine, "   "))
+    await mentor_at(db_engine, "lag", await make_institution(db_engine, "University of Lagos"))
+
+    assert await names(api_client) == ["University of Lagos"]
