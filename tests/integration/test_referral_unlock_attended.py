@@ -1,18 +1,24 @@
-"""The invite unlock waits for the inviter's first attended session (decision 295).
+"""The invite unlock, and the level top-ups it pays (decisions 295 and 308).
 
-Owner, 2026-10-25, "stop gaming": the 3-a-month unlock is written once both
-hold, in either order — a qualified invite, and an attended session as a mentee.
+Owner, 2026-10-25, "stop gaming": the unlock is written once both hold, in
+either order — a qualified invite, and an attended session as a mentee.
 Attended, not completed: a session the mentor missed still counts for the mentee
-who came. The 2-credit bonus is unchanged, paid at the first qualified invite.
+who came.
 
-Each order is driven through the real writer: the invite qualifies through
-onboarding, and the attendance through the settlement sweep (or a session
-already attended before the invite qualified).
+Owner, 2026-11-05 (decision 308): the unlock is level 3 and an invite alone is
+level 2. Whichever event raises a level tops the month up to it, paying only
+what the month has not already paid, so a referrer who onboarded (1) and whose
+friend then joined (2) and who then attended (3) holds 1, 2, then 3.
+
+Each order is driven through the real writers: the referrer's own onboarding
+and the invite's qualification through the API, the attendance through the
+settlement sweep (or a session already attended before the invite qualified).
 """
 
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -31,15 +37,28 @@ from tests.integration.test_api_referrals import (
     unlocks_of,
 )
 
-from app.domain.credits import CreditLadder
+from app.domain.credits import LevelFacts, level_allowance
 from app.infra.db.referral_writer import qualify_invitee, unlock_referrers
-from conftest import api_token, bearer
+from conftest import api_token, bearer, default_ladder
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
-#: The bonus on the first qualified invite (`CREDIT_REFERRAL_UNLOCK_GRANT`).
-BONUS = 2
-LADDER = CreditLadder(starter=1, invited=BONUS, monthly=3)
+LADDER = default_ladder()
+#: Level 1, 2 and 3 on the default ladder, from the rule rather than literals.
+ONBOARDED = level_allowance(LevelFacts(onboarded=True, invited=False, unlocked=False), LADDER)
+INVITED = level_allowance(LevelFacts(onboarded=True, invited=True, unlocked=False), LADDER)
+UNLOCKED = level_allowance(LevelFacts(onboarded=True, invited=True, unlocked=True), LADDER)
+
+
+async def an_onboarded_referrer(
+    client: httpx.AsyncClient, engine: AsyncEngine
+) -> tuple[UUID, UUID]:
+    """A mentee who finished onboarding through the API: level 1, paid."""
+    referrer = uuid4()
+    referrer_id = await seed(engine, referrer)
+    assert (await client.post(COMPLETE, headers=bearer(api_token(referrer)))).status_code == 201
+    assert await balance_of(engine, referrer_id) == ONBOARDED
+    return referrer, referrer_id
 
 
 async def qualify_an_invitee(
@@ -76,13 +95,12 @@ async def unlocked(client: httpx.AsyncClient, auth_id: UUID) -> Any:
 async def test_qualified_first_then_attended_unlocks_at_the_settlement(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """The bonus is paid at once; the unlock waits for the session. The mentor
+    """Level 2 at once; the unlock and level 3 wait for the session. The mentor
     never came, and the mentee who did still attended."""
-    referrer = uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     await qualify_an_invitee(api_client, db_engine, referrer)
 
-    assert await balance_of(db_engine, referrer_id) == BONUS
+    assert await balance_of(db_engine, referrer_id) == INVITED
     assert await unlocks_of(db_engine, referrer_id) == 0
     assert await unlocked(api_client, referrer) is False
 
@@ -91,27 +109,25 @@ async def test_qualified_first_then_attended_unlocks_at_the_settlement(
 
     assert await unlocks_of(db_engine, referrer_id) == 1
     assert await unlocked(api_client, referrer) is True
-    assert await balance_of(db_engine, referrer_id) >= BONUS
+    assert await balance_of(db_engine, referrer_id) == UNLOCKED
 
 
 async def test_attended_first_then_qualified_unlocks_at_the_qualification(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    referrer = uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     await a_session_attended_by(db_engine, referrer_id, status="completed", mentor_came=True)
 
     await qualify_an_invitee(api_client, db_engine, referrer)
 
     assert await unlocks_of(db_engine, referrer_id) == 1
-    assert await balance_of(db_engine, referrer_id) == BONUS
+    assert await balance_of(db_engine, referrer_id) == UNLOCKED
 
 
 async def test_a_session_the_mentee_missed_unlocks_nothing(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    referrer = uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     await qualify_an_invitee(api_client, db_engine, referrer)
 
     await a_session_attended_by(
@@ -120,6 +136,7 @@ async def test_a_session_the_mentee_missed_unlocks_nothing(
     await settle(db_engine)
 
     assert await unlocks_of(db_engine, referrer_id) == 0
+    assert await balance_of(db_engine, referrer_id) == INVITED
 
 
 async def test_a_missed_session_then_a_qualified_invite_unlocks_nothing(
@@ -127,8 +144,7 @@ async def test_a_missed_session_then_a_qualified_invite_unlocks_nothing(
 ) -> None:
     """Through the qualification, which reads attendance itself: a session the
     mentee was expected at and missed (`no_show`) is not attended."""
-    referrer = uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     await a_session_attended_by(
         db_engine, referrer_id, status="no_show", mentor_came=True, mentee_came=False
     )
@@ -143,14 +159,14 @@ async def test_a_missed_session_then_a_qualified_invite_unlocks_nothing(
     await qualify_an_invitee(api_client, db_engine, referrer)
 
     assert await unlocks_of(db_engine, referrer_id) == 0
-    assert await balance_of(db_engine, referrer_id) == BONUS
+    assert await balance_of(db_engine, referrer_id) == INVITED
 
 
 async def test_attending_without_a_qualified_invite_unlocks_nothing(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    referrer = uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    """Attending alone moves no level, so the settlement pays nothing more."""
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     # An invite sent and claimed, but the invitee never finishes.
     invitee = uuid4()
     await seed(db_engine, invitee, complete=False)
@@ -161,31 +177,63 @@ async def test_attending_without_a_qualified_invite_unlocks_nothing(
     await settle(db_engine)
 
     assert await unlocks_of(db_engine, referrer_id) == 0
-    assert await balance_of(db_engine, referrer_id) == 0
+    assert await balance_of(db_engine, referrer_id) == ONBOARDED
 
 
-async def test_a_second_invitee_pays_no_second_bonus_and_no_second_unlock(
+async def test_an_invite_before_the_referrer_onboards_pays_at_their_onboarding(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
+    """Level 2 is level 1 plus an invite: a referrer who never finished their
+    own profile is at 0 when the friend joins, and at 2 the moment they finish."""
     referrer = uuid4()
     referrer_id = await seed(db_engine, referrer)
     await qualify_an_invitee(api_client, db_engine, referrer)
+    assert await balance_of(db_engine, referrer_id) == 0
+
+    assert (await api_client.post(COMPLETE, headers=bearer(api_token(referrer)))).status_code == 201
+
+    assert await balance_of(db_engine, referrer_id) == INVITED
+
+
+async def test_a_second_invitee_pays_nothing_more_and_unlocks_once(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     await qualify_an_invitee(api_client, db_engine, referrer)
-    assert await balance_of(db_engine, referrer_id) == BONUS
+    await qualify_an_invitee(api_client, db_engine, referrer)
+    assert await balance_of(db_engine, referrer_id) == INVITED
 
     await a_session_attended_by(db_engine, referrer_id, status="confirmed", mentor_came=True)
     await settle(db_engine)
     await qualify_an_invitee(api_client, db_engine, referrer)
 
     assert await unlocks_of(db_engine, referrer_id) == 1
-    assert await balance_of(db_engine, referrer_id) == BONUS
+    assert await balance_of(db_engine, referrer_id) == UNLOCKED
+
+
+async def test_a_rise_after_spending_pays_the_difference_not_a_refill(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**The allowance rule (owner, 2026-11-05).** A referrer who spent their
+    level-1 credit and then reaches level 2 gets one more, not two: the month
+    pays the level, and a refill would let spending before each rise collect
+    more than it."""
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET quantity_remaining = 0 WHERE user_id = :u"),
+            {"u": referrer_id},
+        )
+
+    await qualify_an_invitee(api_client, db_engine, referrer)
+
+    assert await balance_of(db_engine, referrer_id) == INVITED - ONBOARDED
 
 
 async def test_the_unlock_credits_the_earliest_qualified_invite(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    referrer = uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     await qualify_an_invitee(api_client, db_engine, referrer)
     await qualify_an_invitee(api_client, db_engine, referrer)
 
@@ -207,11 +255,12 @@ async def test_the_unlock_credits_the_earliest_qualified_invite(
     assert credited == earliest
 
 
-async def test_a_grandfathered_user_keeps_their_unlock_and_gets_no_bonus(
+async def test_a_grandfathered_user_is_at_level_three_and_paid_it_once(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Migrated users were unlocked with no invite; as before, a first invite
-    of theirs pays nothing, and the unlock they have is never taken away."""
+    """Migrated users were unlocked with no invite and no onboarding the API
+    wrote. The unlock alone is level 3; an invite and a session of theirs
+    top their month up to it once, and the unlock is never taken away."""
     referrer = uuid4()
     referrer_id = await seed(db_engine, referrer)
     async with db_engine.begin() as conn:
@@ -226,7 +275,7 @@ async def test_a_grandfathered_user_keeps_their_unlock_and_gets_no_bonus(
     await a_session_attended_by(db_engine, referrer_id, status="confirmed", mentor_came=True)
     await settle(db_engine)
 
-    assert await balance_of(db_engine, referrer_id) == 0
+    assert await balance_of(db_engine, referrer_id) == UNLOCKED
     assert await unlocks_of(db_engine, referrer_id) == 1
     assert await unlocked(api_client, referrer) is True
 
@@ -271,19 +320,19 @@ async def attend_and_unlock(engine: AsyncEngine, referrer_id: UUID) -> None:
             ),
             {"u": referrer_id},
         )
-        await unlock_referrers(settling, [referrer_id])
+        await unlock_referrers(settling, [referrer_id], ladder=LADDER, now=dt.datetime.now(dt.UTC))
         await settling.commit()
 
 
-async def test_a_qualification_and_an_attendance_racing_still_unlock(
+async def test_a_qualification_and_an_attendance_racing_still_unlock_and_pay_once(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     """**The write skew the referrer's row lock exists for.** The qualification
     looks for attendance and finds none (it is not committed); the settling
     transaction, unlocked, would not see the uncommitted qualification, and
-    neither would write. Locked, the settling side waits, then sees it."""
-    referrer = uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    neither would write. Locked, the settling side waits, then sees it — and
+    tops the month up to level 3 once, not on top of the qualification's 2."""
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     invitee_id = await a_claimed_invitee(api_client, db_engine, referrer)
     await a_session_attended_by(
         db_engine, referrer_id, status="confirmed", mentor_came=True, mentee_came=False
@@ -297,15 +346,16 @@ async def test_a_qualification_and_an_attendance_racing_still_unlock(
     await settling
 
     assert await unlocks_of(db_engine, referrer_id) == 1
+    assert await balance_of(db_engine, referrer_id) == UNLOCKED
 
 
-async def test_two_invitees_qualifying_at_once_pay_one_bonus(
+async def test_two_invitees_qualifying_at_once_pay_one_top_up(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Both read "first" before either commits unless the second waits on the
-    referrer's lock; then it sees the first's qualified invite and pays nothing."""
-    referrer = uuid4()
-    referrer_id = await seed(db_engine, referrer)
+    """Both would read "nothing paid for level 2" before either commits unless
+    the second waits on the referrer's lock; then it sees the first's top-up
+    and owes nothing."""
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     first = await a_claimed_invitee(api_client, db_engine, referrer)
     second = await a_claimed_invitee(api_client, db_engine, referrer)
 
@@ -321,4 +371,4 @@ async def test_two_invitees_qualifying_at_once_pay_one_bonus(
         await qualifying.commit()
     await racing
 
-    assert await balance_of(db_engine, referrer_id) == BONUS
+    assert await balance_of(db_engine, referrer_id) == INVITED

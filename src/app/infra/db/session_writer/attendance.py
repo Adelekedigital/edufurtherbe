@@ -31,6 +31,7 @@ from app.domain.attendance import (
     within_door_window,
     within_join_window,
 )
+from app.domain.credits import CreditLadder
 from app.domain.enums import (
     ActorType,
     AttendanceStatus,
@@ -285,10 +286,16 @@ async def settle_attendance(
     session: AsyncSession,
     *,
     now: dt.datetime,
+    ladder: CreditLadder,
     unverified: frozenset[UUID] = frozenset(),
     unread: frozenset[UUID] = frozenset(),
 ) -> int:
     """Decide every confirmed session whose join window has shut. Returns the count.
+
+    ``ladder`` is required, with no default: an attended session can complete a
+    mentee's unlock, and the unlock tops their month up to level 3 (decision
+    308). A caller that forgets it fails to type-check rather than paying on a
+    ladder the deployment did not configure.
 
     **This is the producer `session_stats` has been waiting for.** That module
     records the problem plainly: `sessions.status` and
@@ -489,11 +496,18 @@ async def settle_attendance(
     # 5. **A mentee who came may now be unlocked** (decision 295): the unlock
     #    waits for an attended session as well as a qualified invite, and this
     #    is where attendance becomes final. Set-based, and a no-op for anyone
-    #    with no qualified invite or already unlocked.
+    #    with no qualified invite or already unlocked. An unlock lifts them to
+    #    level 3, and `unlock_referrers` tops their month up to it (decision
+    #    308); anybody whose level did not move is owed nothing.
     #    Only the mentees who came are passed, though `unlock_referrers` checks
-    #    attendance itself (so the filter is an equivalent mutant): it keeps the
-    #    sweep from locking the row of everyone it settled.
-    await unlock_referrers(session, {row["mentee_id"] for row in settled if row["mentee_came"]})
+    #    attendance itself: it keeps the sweep from locking the row of everyone
+    #    it settled.
+    await unlock_referrers(
+        session,
+        {row["mentee_id"] for row in settled if row["mentee_came"]},
+        ladder=ladder,
+        now=now,
+    )
 
     return len(settled)
 

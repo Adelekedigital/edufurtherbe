@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
+from app.domain.credits import LEVEL_SOURCES
 from app.domain.enums import CreditReason, CreditSource
 
 __all__ = [
@@ -85,11 +86,9 @@ FILTER_KINDS: dict[CreditLogFilter, tuple[CreditEntryKind, ...]] = {
     "admin": ("admin_grant",),
     "bookings": ("booking",),
     "refunds": ("refund",),
-    "monthly": (
-        "monthly_free",
-        "level_top_up",
-        "profile_completed",
-        "referral_unlock",
-        "opening_balance",
-    ),
+    # **Derived from the level's sources** (decision 308), in declaration
+    # order: a source added to the monthly bucket lands on this chip with it,
+    # where a hand-kept list could miss it with every test green (found by code
+    # review; non-negotiable #8).
+    "monthly": tuple(GRANT_KINDS[source] for source in CreditSource if source in LEVEL_SOURCES),
 }

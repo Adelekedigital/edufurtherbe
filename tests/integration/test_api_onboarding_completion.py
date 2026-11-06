@@ -165,14 +165,19 @@ async def test_a_mentor_qualifies_too(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     """**Role-appropriate, not mentee-only.** Gating on a mentee goal alone
-    would refuse a mentor who finished the mentor half first."""
+    would refuse a mentor who finished the mentor half first.
+
+    **Finished, but paid nothing** (decision 308): credits buy sessions, so a
+    mentor with no mentee goal is at level 0, and the completion answers `200`
+    — it created nothing."""
     auth_id = uuid4()
     user_id = await seed(db_engine, auth_id, goal=False, mentor=True)
 
     response = await api_client.post(PATH, headers=bearer(api_token(auth_id)))
 
-    assert response.status_code == 201
-    assert await balance_of(db_engine, user_id) == 1
+    assert response.status_code == 200
+    assert response.json()["completed_at"] is not None
+    assert await balance_of(db_engine, user_id) == 0
 
 
 async def test_the_grant_writes_a_ledger_row(
@@ -192,23 +197,25 @@ async def test_the_grant_writes_a_ledger_row(
     assert await ledger_of(db_engine, user_id) == [(1, "grant")]
 
 
-async def test_the_starter_dies_at_the_reset(
+async def test_finishing_pays_level_one_as_a_top_up_dying_at_the_reset(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Decision 308: the starter is the month's level-1 credit, so it dies at
-    the month end like every credit and the 1st pays the level again."""
+    """Decision 308: finishing is level 1, paid as a `level_top_up` that dies
+    at the month end like every credit; the 1st pays the level again."""
     auth_id = uuid4()
     user_id = await seed(db_engine, auth_id)
 
     await api_client.post(PATH, headers=bearer(api_token(auth_id)))
 
     async with db_engine.begin() as conn:
-        expires = (
+        source, expires = (
             await conn.execute(
-                text("SELECT expires_at FROM credit_lots WHERE user_id = :u"), {"u": user_id}
+                text("SELECT source, expires_at FROM credit_lots WHERE user_id = :u"),
+                {"u": user_id},
             )
-        ).scalar_one()
+        ).one()
 
+    assert source == "level_top_up"
     assert expires == end_of_month(dt.datetime.now(dt.UTC))
 
 
@@ -239,6 +246,39 @@ async def test_a_second_call_grants_nothing(
     assert await ledger_of(db_engine, user_id) == [(1, "grant")]
 
 
+async def test_a_retry_in_a_new_month_before_the_first_pays_nothing(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """**Found by code review.** A finished user retrying once their month has
+    turned — the 1st's job not yet run — must not be paid here: the job pays
+    their level, and paying it from completion would answer `201` and send the
+    first-credits email a second time."""
+    auth_id = uuid4()
+    user_id = await seed(db_engine, auth_id)
+    token = bearer(api_token(auth_id))
+    assert (await api_client.post(PATH, headers=token)).status_code == 201
+    # The month turned: last month's level credit has died.
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET expires_at = now() - interval '1 day' WHERE user_id = :u"),
+            {"u": user_id},
+        )
+
+    retry = await api_client.post(PATH, headers=token)
+
+    assert retry.status_code == 200
+    assert await ledger_of(db_engine, user_id) == [(1, "grant")]
+    async with db_engine.begin() as conn:
+        emails = await conn.scalar(
+            text(
+                "SELECT count(*) FROM outbox_events "
+                "WHERE event_type = 'credits_granted' AND entity_id = :u"
+            ),
+            {"u": user_id},
+        )
+    assert emails == 1
+
+
 async def test_a_repeat_does_not_move_the_completion_date(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -261,13 +301,11 @@ async def test_a_repeat_does_not_move_the_completion_date(
 async def test_a_user_the_etl_completed_still_gets_their_credit(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """**201, and the credit, for a migrated user who never had one.**
-
-    Completion and the grant were written by different things at different
-    times. Drawing 201/200 from whether the *row* already existed would answer
-    200 here and silently skip the credit — so it is drawn from whether a lot
-    was created.
-    """
+    """**Changed by decision 308: 200, and nothing paid here.** A migrated
+    user the ETL marked finished is already level 1 by `completed_at`, so the
+    1st pays them; completion pays only the first time it records a finish (a
+    retry on the 1st would otherwise pay twice and re-send the first-credits
+    email). The row's `last_step` comes back untouched."""
     auth_id = uuid4()
     user_id = await seed(db_engine, auth_id)
     async with db_engine.begin() as conn:
@@ -281,9 +319,9 @@ async def test_a_user_the_etl_completed_still_gets_their_credit(
 
     response = await api_client.post(PATH, headers=bearer(api_token(auth_id)))
 
-    assert response.status_code == 201
+    assert response.status_code == 200
     assert response.json()["last_step"] == "6"
-    assert await balance_of(db_engine, user_id) == 1
+    assert await balance_of(db_engine, user_id) == 0
 
 
 async def test_the_credit_appears_on_me(

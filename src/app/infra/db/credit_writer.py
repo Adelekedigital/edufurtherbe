@@ -27,12 +27,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InsufficientCreditError
-from app.domain.credits import CreditLadder, expiry_for, refund_expiry
+from app.domain.credits import expiry_for, refund_expiry
 from app.domain.enums import CreditReason, CreditSource
 from app.infra.db.credit_store import paying_sessions, spendable_now
 from app.infra.db.models.credits import _REFUND_PREDICATE, CreditLot, CreditTransaction
 
-__all__ = ["grant", "grant_many", "grant_starter", "refund_credit", "spend_credit"]
+__all__ = ["grant", "grant_many", "refund_credit", "spend_credit"]
 
 
 async def grant_many(
@@ -106,65 +106,6 @@ async def grant(
     """Create a lot of ``source`` for one user and record it. Returns the lot
     id. :func:`grant_many` for one, so the pairing is written once."""
     return (await grant_many(session, {user_id: quantity}, source=source, now=now))[user_id]
-
-
-async def grant_starter(
-    session: AsyncSession, user_id: UUID, *, ladder: CreditLadder
-) -> UUID | None:
-    """The onboarding credit. ``None`` when the user already had one.
-
-    **Idempotent by construction, not by checking.** The guarantee is
-    ``uq_credit_lots_one_starter_per_user``, a partial unique index, and this
-    inserts against it with ``ON CONFLICT DO NOTHING`` rather than reading first.
-
-    A read-then-write would be a check-time-of-use race — two concurrent
-    completions both see no starter, both insert, and one raises where the point
-    was that neither should. Letting the database arbitrate means the loser
-    learns it lost, which is what the ``None`` says.
-
-    **It dies at the month end, like every credit** (decision 308): it is the
-    month's level-1 credit, so the level grants count it rather than paying
-    level 1 beside it. :func:`expiry_for` decides, on the app clock that
-    `credit_store` reads with.
-    """
-    starter = ladder.starter
-    lot_id = (
-        await session.execute(
-            pg_insert(CreditLot)
-            .values(
-                user_id=user_id,
-                source=CreditSource.PROFILE_COMPLETED,
-                quantity_granted=starter,
-                quantity_remaining=starter,
-                expires_at=expiry_for(CreditSource.PROFILE_COMPLETED, now=dt.datetime.now(dt.UTC)),
-            )
-            .on_conflict_do_nothing(
-                # The partial index, named by its columns and its predicate.
-                # Inferring it this way rather than by constraint name means a
-                # *different* unique violation still raises, which is what keeps
-                # this from swallowing a defect it was not written for.
-                index_elements=["user_id"],
-                index_where=text(f"source = '{CreditSource.PROFILE_COMPLETED.value}'"),
-            )
-            .returning(CreditLot.id)
-        )
-    ).scalar_one_or_none()
-
-    if lot_id is None:
-        return None
-
-    # The ledger entry that says it appeared, as `grant_many` writes for every
-    # other lot.
-    await session.execute(
-        insert(CreditTransaction).values(
-            user_id=user_id,
-            credit_lot_id=lot_id,
-            delta=starter,
-            reason=CreditReason.GRANT,
-            session_id=None,
-        )
-    )
-    return UUID(str(lot_id))
 
 
 #: Namespace for every advisory lock this module takes, so a credit lock can

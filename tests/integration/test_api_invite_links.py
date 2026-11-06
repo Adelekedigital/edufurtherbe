@@ -23,9 +23,9 @@ from tests.integration.test_api_referrals import (
     CLAIM,
     COMPLETE,
     REFERRALS,
+    balance_of,
     invite,
     seed,
-    sources_of,
     unlocks_of,
 )
 
@@ -645,31 +645,35 @@ async def test_one_qualifying_arrival_unlocks_the_link_owner(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     owner, arrival = await users(db_engine, 2)
+    await complete(api_client, owner)
     code = await link_code(api_client, owner)
     await claim(api_client, arrival, code)
 
     assert (await complete(api_client, arrival)).status_code in {200, 201}
 
     owner_id = await user_id_of(db_engine, owner)
-    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    # Level 2 is paid now; the unlock waits for an attended session (decision 295).
     assert await unlocks_of(db_engine, owner_id) == 0
-    assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
+    # Level 2 (decision 308): the owner's month topped up from 1 to 2, once.
+    assert await balance_of(db_engine, owner_id) == 2
 
 
 async def test_a_second_qualifying_arrival_grants_nothing_more(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Many arrivals cannot farm the unlock: it is once per referrer, ever."""
+    """Many arrivals cannot farm the level: a second changes nothing."""
     owner, one, two = await users(db_engine, 3)
+    await complete(api_client, owner)
     code = await link_code(api_client, owner)
     for arrival in (one, two):
         await claim(api_client, arrival, code)
         await complete(api_client, arrival)
 
     owner_id = await user_id_of(db_engine, owner)
-    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    # Level 2 is paid now; the unlock waits for an attended session (decision 295).
     assert await unlocks_of(db_engine, owner_id) == 0
-    assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
+    # Level 2 (decision 308): the owner's month topped up from 1 to 2, once.
+    assert await balance_of(db_engine, owner_id) == 2
     qualified = await scalar(
         db_engine,
         "SELECT count(*) FROM referrals WHERE referrer_id = :u AND qualified_at IS NOT NULL",
@@ -682,15 +686,17 @@ async def test_an_arrival_who_finished_first_qualifies_at_the_claim(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     owner, arrival = await users(db_engine, 2)
+    await complete(api_client, owner)
     await complete(api_client, arrival)
     code = await link_code(api_client, owner)
 
     await claim(api_client, arrival, code)
 
-    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    # Level 2 is paid now; the unlock waits for an attended session (decision 295).
     owner_id = await user_id_of(db_engine, owner)
     assert await unlocks_of(db_engine, owner_id) == 0
-    assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
+    # Level 2 (decision 308): the owner's month topped up from 1 to 2, once.
+    assert await balance_of(db_engine, owner_id) == 2
 
 
 # --------------------------------------------------------------------------
@@ -991,6 +997,7 @@ async def test_an_arrival_before_the_revoke_still_qualifies_and_pays(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
     owner, arrival = await users(db_engine, 2)
+    await complete(api_client, owner)
     code = await link_code(api_client, owner)
     await claim(api_client, arrival, code)
     await toggle(api_client, owner, False)
@@ -998,9 +1005,10 @@ async def test_an_arrival_before_the_revoke_still_qualifies_and_pays(
     await complete(api_client, arrival)
 
     owner_id = await user_id_of(db_engine, owner)
-    # The bonus is paid now; the unlock waits for an attended session (decision 295).
+    # Level 2 is paid now; the unlock waits for an attended session (decision 295).
     assert await unlocks_of(db_engine, owner_id) == 0
-    assert (await sources_of(db_engine, owner_id)).count("referral_unlock") == 1
+    # Level 2 (decision 308): the owner's month topped up from 1 to 2, once.
+    assert await balance_of(db_engine, owner_id) == 2
 
 
 async def test_patch_creates_the_link_when_there_is_none(

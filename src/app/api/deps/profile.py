@@ -399,7 +399,8 @@ SeenApprovalDep = Annotated[dt.datetime, Depends(seen_approval)]
 async def completed_onboarding(
     user: CurrentUserDep, session: SessionDep, ladder: LadderDep, request: Request
 ) -> OnboardingResult:
-    """Mark the caller's onboarding finished and pay the starter credit.
+    """Mark the caller's onboarding finished and top their month up to their
+    credit level (decision 308).
 
     **One transaction, and the commit is here.** The completion and the grant
     are two facts that must not be separable: split across two transactions

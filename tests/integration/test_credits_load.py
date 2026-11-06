@@ -141,14 +141,15 @@ async def test_a_balance_becomes_a_lot_and_the_row_that_explains_it(
 async def test_a_user_who_never_entered_credits_gets_the_starter(
     db_engine: AsyncEngine,
 ) -> None:
-    """`profile_completed`, quantity one, **never expiring** — not an
+    """`profile_completed`, quantity one, dying with the cutover month like an
+    opening balance (decision 308: every credit dies at the month end) — not an
     `opening_balance` lot of 1, which would claim Bubble held a balance it did
     not and put the reconciliation's two sums permanently out by one."""
     await a_migrated_user(db_engine, "never")
 
     result = await run_load(db_engine, [record("never", "")])
 
-    assert await lots_of(db_engine, "never") == [("profile_completed", 1, 1, None)]
+    assert await lots_of(db_engine, "never") == [("profile_completed", 1, 1, EXPIRY)]
     assert await ledger_of(db_engine, "never") == [(1, "grant")]
     assert result.legacy_credit_total == 0
     assert result.ok
@@ -197,7 +198,7 @@ async def test_a_second_run_produces_identical_rows(db_engine: AsyncEngine) -> N
     result = await run_load(db_engine, records)
 
     assert (await lots_of(db_engine, "holder"), await ledger_of(db_engine, "holder")) == before
-    assert await lots_of(db_engine, "never") == [("profile_completed", 1, 1, None)]
+    assert await lots_of(db_engine, "never") == [("profile_completed", 1, 1, EXPIRY)]
     assert result.ok
 
 
@@ -608,7 +609,7 @@ async def test_somebody_who_never_entered_credits_is_still_unlocked(
     result = await run_load(db_engine, [record("never", "")])
 
     assert await unlocks_for(db_engine, "never") == [None]
-    assert await lots_of(db_engine, "never") == [("profile_completed", 1, 1, None)]
+    assert await lots_of(db_engine, "never") == [("profile_completed", 1, 1, EXPIRY)]
     assert result.ok
 
 

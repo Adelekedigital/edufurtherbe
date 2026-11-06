@@ -217,23 +217,23 @@ async def test_a_retried_completion_queues_nothing_more(world: World) -> None:
     assert len(world.scheduler.published) == 1
 
 
-async def test_a_completion_that_grants_nothing_queues_nothing(world: World) -> None:
-    """Already holding the starter, never marked complete: a `200`, not a first."""
+async def test_a_retried_completion_queues_no_second_draft(world: World) -> None:
+    """The draft belongs to the first completion, read under the user's row
+    lock (decision 308), so a retry — which pays nothing and answers `200` —
+    queues nothing more."""
     person = await a_mentee(world.engine)
-    await run_sql(
-        world.engine,
-        "INSERT INTO credit_lots (user_id, source, quantity_granted, quantity_remaining, "
-        "expires_at) VALUES (:u, 'profile_completed', 1, 1, NULL)",
-        u=person.id,
-    )
 
+    assert (await world.client.post(COMPLETION, headers=person.headers)).status_code == 201
+    queued = len(world.scheduler.published)
     assert (await world.client.post(COMPLETION, headers=person.headers)).status_code == 200
-    assert world.scheduler.published == []
+
+    assert queued == 1
+    assert len(world.scheduler.published) == queued
 
 
 async def test_an_account_finished_before_queues_nothing(world: World) -> None:
-    """Marked complete by the ETL with no starter: the credit is paid now
-    (`201`), but this is not their first completion, so no bio appears."""
+    """Marked complete by the ETL: not their first completion, so it pays
+    nothing (the 1st pays their level) and no bio appears."""
     person = await a_mentee(world.engine)
     await run_sql(
         world.engine,
@@ -242,14 +242,16 @@ async def test_an_account_finished_before_queues_nothing(world: World) -> None:
         u=person.id,
     )
 
-    assert (await world.client.post(COMPLETION, headers=person.headers)).status_code == 201
+    assert (await world.client.post(COMPLETION, headers=person.headers)).status_code == 200
     assert world.scheduler.published == []
 
 
 async def test_a_mentor_only_completion_queues_nothing(world: World) -> None:
+    """A mentor with no goal is at credit level 0, so the completion pays
+    nothing (`200`) and drafts nothing."""
     person = await a_mentee(world.engine, mentor=True, goal=False)
 
-    assert (await world.client.post(COMPLETION, headers=person.headers)).status_code == 201
+    assert (await world.client.post(COMPLETION, headers=person.headers)).status_code == 200
     assert world.scheduler.published == []
 
 

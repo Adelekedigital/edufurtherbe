@@ -232,7 +232,11 @@ class RuntimeJobs:
                 rooms = self._rooms()
                 check = await confirm_presence(session, now=now, rooms=rooms)
                 settled = await settle_attendance(
-                    session, now=now, unverified=check.waiting, unread=check.unread
+                    session,
+                    now=now,
+                    ladder=credit_ladder(self.settings),
+                    unverified=check.waiting,
+                    unread=check.unread,
                 )
                 # After attendance, so a session that ended this hour no longer
                 # holds its scheduled offering open (#218).

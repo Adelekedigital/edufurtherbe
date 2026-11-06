@@ -31,8 +31,9 @@ _ENTRY = (
     "or expired), `expired`, or a grant by where it came from: `monthly_free`, "
     "`level_top_up` (a mid-month rise in the mentee's credit level), "
     "`profile_completed` (the starter), `admin_grant` (with `admin` and `note`), "
-    "`referral_unlock` (the invite bonus) or `opening_balance` (carried from the "
-    "old app). `mentor` is the session's mentor on a booking or a refund, else "
+    "`referral_unlock` (the invite bonus, before decision 308) or "
+    "`opening_balance` (carried from the old app). `mentor` is the session's "
+    "mentor on a booking or a refund, else "
     "null. A person who deleted their account keeps their entries, with both "
     "names null."
 )
@@ -101,12 +102,13 @@ async def read_credit_log(page: CreditLogDep) -> Page[CreditEntryRead]:
     response_model=CreditRulesRead,
     summary="The credit rules",
     description=(
-        "What the server grants, from its settings: `starter`, the credits every "
-        "mentee gets once on finishing onboarding, and `monthly`, what unlocked "
-        "mentees get on the 1st of each month. Read-only: they change with the "
-        "deployment's settings, not here."
+        "What each credit level pays a month (decision 308), from the server's "
+        "settings: `starter` for level 1 (finished onboarding), `invited` for "
+        "level 2 (an invite of theirs qualified) and `monthly` for level 3 (the "
+        "unlock). The 1st resets every mentee to their level. Read-only: they "
+        "change with the deployment's settings, not here."
     ),
     responses=ADMIN_RESPONSES,
 )
 async def read_credit_rules(ladder: CreditRulesDep) -> CreditRulesRead:
-    return CreditRulesRead(starter=ladder.starter, monthly=ladder.monthly)
+    return CreditRulesRead(starter=ladder.starter, invited=ladder.invited, monthly=ladder.monthly)

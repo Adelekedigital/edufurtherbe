@@ -75,6 +75,7 @@ from app.core.config import Settings
 from app.domain.enums import CreditReason, CreditSource, CreditState
 
 __all__ = [
+    "HISTORICAL_SOURCES",
     "LEVEL_SOURCES",
     "NON_EXPIRING",
     "SOURCE_BUCKET",
@@ -108,6 +109,13 @@ __all__ = [
 #: somebody bought is a chargeback (D7) — and `refund_expiry` already carries a
 #: never-expiring original through.
 NON_EXPIRING: frozenset[CreditSource] = frozenset()
+
+#: Sources rows still carry but nothing writes any more (decision 308): the
+#: one-off invite bonus, replaced by level 2. Read as a level credit
+#: (`SOURCE_BUCKET`), so a lot written before the change still counts toward
+#: its month's level and is not paid a second time. (The starter is not here:
+#: the migration still writes it, as the cutover month's level-1 credit.)
+HISTORICAL_SOURCES: frozenset[CreditSource] = frozenset({CreditSource.REFERRAL_UNLOCK})
 
 
 @dataclass(frozen=True, slots=True)

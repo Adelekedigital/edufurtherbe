@@ -1112,15 +1112,22 @@ def fresh_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
-@pytest.fixture
-def ladder() -> CreditLadder:
-    """The default ladder, for the many tests that just need one to pass along.
+def default_ladder() -> CreditLadder:
+    """The default ladder, for helpers outside a fixture's reach (settlement
+    pays level top-ups and needs one passed along). The one construction; the
+    `ladder` fixture returns it too.
 
     Built from explicit `Settings(_env_file=None)` rather than through
     `fresh_settings`: it never touches the process cache, so there is nothing to
     isolate. `fresh_settings` is for tests that deliberately override.
     """
     return credit_ladder(Settings(_env_file=None))
+
+
+@pytest.fixture
+def ladder() -> CreditLadder:
+    """The default ladder, for the many tests that just need one to pass along."""
+    return default_ladder()
 
 
 @pytest.fixture
