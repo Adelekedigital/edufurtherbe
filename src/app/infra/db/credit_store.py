@@ -201,13 +201,14 @@ async def get_credit_summary(
     # The facts the grants pay on, judged by the same rule, so the card never
     # shows a level the 1st does not pay (decision 308).
     facts = (await level_facts(session, [user_id])).get(user_id, NO_FACTS)
-    level = card_level(level_allowance(facts, ladder), ladder)
+    raw_level = level_allowance(facts, ladder)
+    level = card_level(raw_level, ladder)
     # The total and its split are summed from the same lot rows, so they cannot
     # disagree: a booking between two separate reads would make them add up
     # wrong. (The refund links are a second query; they decide only which part
     # a refund sits in, never how much is held.)
     balance, monthly, bonus = await _buckets(session, user_id, moment=moment, ceiling=level)
-    monthly = replace(monthly, unlocked=facts.unlocked)
+    monthly = replace(monthly, unlocked=facts.unlocked, level=raw_level)
     return CreditSummary.of(
         balance=balance,
         next_reset_at=end_of_month(moment),

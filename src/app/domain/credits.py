@@ -413,6 +413,10 @@ class MonthlyCredits:
     #: Whether the account holds the unlock — level 3, the full monthly grant.
     #: The store sets it from the same fact the level reads.
     unlocked: bool = False
+    #: The user's level as :func:`level_allowance` computes it — **not floored**,
+    #: unlike ``ceiling`` (:func:`card_level`), so 0 ("not onboarded") is told
+    #: apart from 1. The store sets it.
+    level: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -115,6 +115,17 @@ class MonthlyCreditsRead(BaseModel):
     #: Whether this account holds the unlock — level 3: a qualified invite and
     #: an attended session (decision 295), or grandfathered from the migration.
     unlocked: bool
+    #: Optional in the spec because it was added after the others; always sent.
+    level: int | None = Field(
+        default=None,
+        ge=0,
+        le=3,
+        description=(
+            "The caller's credit level (decision 308): 0 not onboarded, 1 profile "
+            "finished, 2 + first invited friend qualified, 3 + attended a session. "
+            "`ceiling` is this, at least 1."
+        ),
+    )
 
 
 class BonusCreditGroupRead(BaseModel):
