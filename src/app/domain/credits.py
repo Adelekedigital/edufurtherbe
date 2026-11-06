@@ -96,6 +96,7 @@ __all__ = [
     "end_of_month",
     "expiry_for",
     "level_allowance",
+    "level_of",
     "level_owed",
     "refund_expiry",
     "split_buckets",
@@ -236,8 +237,8 @@ class LevelFacts:
     unlocked: bool
 
 
-def level_allowance(facts: LevelFacts, ladder: CreditLadder) -> int:
-    """What this user's month pays.
+def level_of(facts: LevelFacts) -> int:
+    """Which level the facts reach, 0 to 3 — the number, not what it pays.
 
     **The unlock reaches level 3 on its own.** ~1,200 migrated mentees hold a
     grandfathered unlock with no invite behind it and no onboarding row the API
@@ -245,13 +246,24 @@ def level_allowance(facts: LevelFacts, ladder: CreditLadder) -> int:
 
     **An invite counts only once its inviter has onboarded.** Level 2 is level 1
     plus an invite, so an invite alone, from somebody who never finished their
-    own profile, pays nothing until they do — and then pays level 2 at once.
+    own profile, is level 0 until they do — and then level 2 at once.
     """
     if facts.unlocked:
-        return ladder.monthly
+        return 3
     if not facts.onboarded:
         return 0
-    return ladder.invited if facts.invited else ladder.starter
+    return 2 if facts.invited else 1
+
+
+def level_allowance(facts: LevelFacts, ladder: CreditLadder) -> int:
+    """What this user's month pays: the ladder's amount for :func:`level_of`.
+
+    **Derived from the level number, never a second copy of the rule**
+    (non-negotiable #8). The two differ as soon as the ladder leaves its
+    defaults: at a monthly allowance of 5, level 3 pays 5 (found by GitHub
+    review on #576).
+    """
+    return (0, ladder.starter, ladder.invited, ladder.monthly)[level_of(facts)]
 
 
 def card_level(level: int, ladder: CreditLadder) -> int:
@@ -413,6 +425,10 @@ class MonthlyCredits:
     #: Whether the account holds the unlock — level 3, the full monthly grant.
     #: The store sets it from the same fact the level reads.
     unlocked: bool = False
+    #: The user's level number, 0 to 3 (:func:`level_of`) — **not floored**,
+    #: unlike ``ceiling`` (:func:`card_level`), so 0 ("not onboarded") is told
+    #: apart from 1. The store sets it.
+    level: int = 0
 
 
 @dataclass(frozen=True, slots=True)

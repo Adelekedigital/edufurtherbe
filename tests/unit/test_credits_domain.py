@@ -36,6 +36,7 @@ from app.domain.credits import (
     end_of_month,
     expiry_for,
     level_allowance,
+    level_of,
     level_owed,
     refund_expiry,
     state_for,
@@ -169,6 +170,27 @@ class TestLevels:
         where it meant `and` passes the three happy rows."""
         facts = LevelFacts(onboarded=onboarded, invited=invited, unlocked=unlocked)
         assert level_allowance(facts, LADDER) == level
+
+    @pytest.mark.parametrize(
+        ("facts", "number"),
+        [
+            (LevelFacts(onboarded=False, invited=False, unlocked=False), 0),
+            (LevelFacts(onboarded=True, invited=False, unlocked=False), 1),
+            (LevelFacts(onboarded=True, invited=True, unlocked=False), 2),
+            (LevelFacts(onboarded=True, invited=True, unlocked=True), 3),
+            (LevelFacts(onboarded=False, invited=True, unlocked=False), 0),
+            (LevelFacts(onboarded=False, invited=False, unlocked=True), 3),
+        ],
+    )
+    def test_the_level_number_is_the_rung_not_the_amount(
+        self, facts: LevelFacts, number: int
+    ) -> None:
+        """**Found by GitHub review on #576.** The level is 0 to 3 whatever the
+        ladder pays: on a ladder of 2/4/7 credits an unlocked mentee is level 3
+        and paid 7, never "level 7"."""
+        ladder = CreditLadder(starter=2, invited=4, monthly=7)
+        assert level_of(facts) == number
+        assert level_allowance(facts, ladder) == (0, 2, 4, 7)[number]
 
     def test_the_levels_follow_the_ladder_not_literals(self) -> None:
         ladder = CreditLadder(starter=2, invited=4, monthly=7)

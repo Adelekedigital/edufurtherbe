@@ -252,6 +252,9 @@ async def test_a_row_carries_the_card_credit_block(
 
     assert row["credits"] == me["credits"]
     assert row["credits"]["balance"] == 3
+    # The raw level reaches admin too (decision 308): never onboarded is 0,
+    # where `ceiling` would read 1.
+    assert row["credits"]["monthly"]["level"] == 0
     assert set(row) == {
         "user_id",
         "first_name",

@@ -19,7 +19,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import add_user, api_token, bearer
+from app.core.config import Settings
+from app.infra.storage.supabase import SupabaseStorage
+from conftest import add_user, api_token, bearer, build_api_app, client_for
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -284,7 +286,7 @@ async def test_the_block_carries_exactly_its_fields(
         "monthly",
         "bonus",
     }
-    assert set(block["monthly"]) == {"balance", "ceiling", "expires_at", "unlocked"}
+    assert set(block["monthly"]) == {"balance", "ceiling", "expires_at", "unlocked", "level"}
     assert set(block["bonus"]) == {"balance", "groups"}
 
 
@@ -437,7 +439,13 @@ async def test_expired_credits_are_in_neither_part(
     block = await credits_of(api_client, auth_id)
 
     assert block["balance"] == 0
-    assert block["monthly"] == {"balance": 0, "ceiling": 3, "expires_at": None, "unlocked": True}
+    assert block["monthly"] == {
+        "balance": 0,
+        "ceiling": 3,
+        "expires_at": None,
+        "unlocked": True,
+        "level": 3,
+    }
     assert block["bonus"] == {"balance": 0, "groups": []}
 
 
@@ -526,3 +534,83 @@ async def test_unlocked_is_exactly_who_the_monthly_grant_pays(
 
     assert monthly["unlocked"] is (monthly["balance"] > 0)
     assert monthly["unlocked"] is (with_goal and unlocked)
+
+
+# --------------------------------------------------------------------------
+# The raw level (decision 308): `ceiling` is floored at 1, `level` is not
+# --------------------------------------------------------------------------
+
+
+async def invite_qualified(engine: AsyncEngine, user_id: UUID) -> None:
+    """An invite of theirs that qualified: their invitee finished onboarding."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO referrals (referrer_id, code, signed_up_at, qualified_at) "
+                "VALUES (:u, :c, now(), now())"
+            ),
+            {"u": user_id, "c": uuid4().hex},
+        )
+
+
+@pytest.mark.parametrize(
+    ("goal", "onboarded", "invited", "unlocked", "level"),
+    [
+        # Not onboarded: the card draws ceiling 1, but the level is 0.
+        (True, False, False, False, 0),
+        # A mentor-only account: no mentee goal, so level 0 whatever else holds.
+        (False, True, True, False, 0),
+        (True, True, False, False, 1),
+        (True, True, True, False, 2),
+        (True, True, True, True, 3),
+        # Grandfathered from the migration: an unlock with no onboarding row.
+        (True, False, False, True, 3),
+    ],
+)
+async def test_the_level_is_published_unfloored(
+    db_engine: AsyncEngine,
+    api_client: httpx.AsyncClient,
+    *,
+    goal: bool,
+    onboarded: bool,
+    invited: bool,
+    unlocked: bool,
+    level: int,
+) -> None:
+    """`monthly.level` is `level_allowance` as the grants pay it, so a client
+    can tell level 0 from level 1; `ceiling` keeps its floor of 1."""
+    auth_id = uuid4()
+    user_id = await seed_mentee(db_engine, auth_id, with_goal=goal)
+    if onboarded:
+        await onboard(db_engine, user_id)
+    if invited:
+        await invite_qualified(db_engine, user_id)
+    if unlocked:
+        await unlock(db_engine, user_id)
+
+    monthly = (await credits_of(api_client, auth_id))["monthly"]
+
+    assert monthly["level"] == level
+    assert monthly["ceiling"] == max(level, 1)
+
+
+async def test_the_level_is_the_rung_on_a_non_default_ladder(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """**Found by GitHub review on #576.** With `CREDIT_MONTHLY_ALLOWANCE=5`
+    an unlocked mentee is paid 5 — `ceiling` 5 — and is still level 3. Built
+    from the amount, `level` read 5, broke its own 0 to 3 bound and `/me`
+    answered 500."""
+    app = build_api_app(
+        db_engine, api_storage, Settings(_env_file=None, credit_monthly_allowance=5)
+    )
+    async with client_for(app) as client:
+        auth_id = uuid4()
+        user_id = await seed_mentee(db_engine, auth_id)
+        await unlock(db_engine, user_id)
+
+        response = await client.get("/api/v1/me", headers=bearer(api_token(auth_id)))
+
+        assert response.status_code == 200, response.text
+        monthly = response.json()["credits"]["monthly"]
+        assert (monthly["level"], monthly["ceiling"]) == (3, 5)
