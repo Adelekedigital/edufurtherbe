@@ -48,6 +48,7 @@ from app.infra.db.models.referrals import Referral, ReferralUnlock
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserOnboarding
 from app.infra.db.session_stats import attended_by
+from app.infra.db.user_locks import lock_users
 
 __all__ = ["claim_referral", "create_referral", "qualify_invitee", "unlock_referrers"]
 
@@ -300,7 +301,7 @@ async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: Cr
     Returns whether an unlock was created. Does not commit; the caller owns the
     transaction, and here that caller is ``complete_onboarding``.
 
-    **Two facts since decision 295.** The bonus (`ladder.unlock`) is paid for the
+    **Two facts since decision 295.** The bonus (`ladder.invited`) is paid for the
     referrer's first qualified invite, as before. The unlock, which is what the
     monthly grant reads, also waits for the referrer to attend a session as a
     mentee: whichever comes second writes it (:func:`unlock_referrers`).
@@ -328,7 +329,7 @@ async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: Cr
     if not may_qualify(has_invitee=True, already_qualified=referral.qualified_at is not None):
         return False
 
-    await _lock_referrers(session, [referral.referrer_id])
+    await lock_users(session, [referral.referrer_id])
     first = not await session.scalar(
         select(
             exists().where(
@@ -346,7 +347,7 @@ async def qualify_invitee(session: AsyncSession, invitee_id: UUID, *, ladder: Cr
             session,
             referral.referrer_id,
             source=CreditSource.REFERRAL_UNLOCK,
-            quantity=ladder.unlock,
+            quantity=ladder.invited,
             # App clock, matching `credit_store`'s read. Mixing the two would put
             # the boundary a lot expires on in a different frame from the filter
             # that decides whether it is spendable.
@@ -372,7 +373,7 @@ async def unlock_referrers(session: AsyncSession, user_ids: Collection[UUID]) ->
     """
     if not user_ids:
         return 0
-    await _lock_referrers(session, user_ids)
+    await lock_users(session, user_ids)
     attended = (
         select(Session.id)
         .where(Session.mentee_id == Referral.referrer_id, attended_by(Session.mentee_id))
@@ -395,20 +396,3 @@ async def unlock_referrers(session: AsyncSession, user_ids: Collection[UUID]) ->
         .returning(ReferralUnlock.id)
     )
     return len(unlocked.all())
-
-
-async def _lock_referrers(session: AsyncSession, user_ids: Collection[UUID]) -> None:
-    """The referrers' `users` rows, locked in id order so two writers locking
-    overlapping sets cannot deadlock on each other.
-
-    **`FOR NO KEY UPDATE`, not `FOR UPDATE`**: it serialises the unlock writers
-    with each other (and with account deletion's `FOR UPDATE`) but not with the
-    `FOR KEY SHARE` every foreign-key insert takes on a user, so a credit lot or
-    a booking for the same user neither waits on it nor closes a deadlock cycle.
-    """
-    await session.execute(
-        select(User.id)
-        .where(User.id.in_(list(user_ids)))
-        .order_by(User.id)
-        .with_for_update(key_share=True)
-    )

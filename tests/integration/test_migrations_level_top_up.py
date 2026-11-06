@@ -1,4 +1,4 @@
-"""What `3f9c2a7e1b64` does (decision 307): `level_top_up` joins the source
+"""What `3f9c2a7e1b64` does (decision 308): `level_top_up` joins the source
 check, and the downgrade refuses while a lot carries it.
 
 Split from `test_migrations.py` by area, as the file-size limit asks

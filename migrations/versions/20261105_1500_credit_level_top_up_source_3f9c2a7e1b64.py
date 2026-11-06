@@ -1,4 +1,4 @@
-"""``level_top_up`` joins the credit source vocabulary (decision 307, expand step).
+"""``level_top_up`` joins the credit source vocabulary (decision 308, expand step).
 
 **Merged alone, before the code that writes it** (project-conventions,
 *Migration ordering*): the level top-up writes ``credit_lots.source =

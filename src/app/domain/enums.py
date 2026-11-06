@@ -597,11 +597,9 @@ class CreditSource(StrEnum):
     elsewhere is registered-but-not-declared, and the assertion is two-way.
     """
 
-    #: Onboarding finished. **One, and it never expires**, because it exists so
-    #: somebody gets a feel for the platform and an expiring one makes that
-    #: reward depend on the day they happened to finish: complete on the 28th
-    #: and it lives three days. A partial unique index makes a second one
-    #: impossible rather than merely unlikely.
+    #: Onboarding finished. **One, once** — a partial unique index makes a second
+    #: impossible rather than merely unlikely. Since decision 308 it is the
+    #: month's level-1 credit and dies at the month end like every credit.
     PROFILE_COMPLETED = "profile_completed"
 
     #: The first qualifying invite's bonus. Two, on top of the starter, and
@@ -610,14 +608,13 @@ class CreditSource(StrEnum):
     #: monthly grant only once the inviter has also attended a session.
     REFERRAL_UNLOCK = "referral_unlock"
 
-    #: The monthly grant, for users who have unlocked it. Three.
+    #: The 1st's grant: each mentee's level, reset every month (decision 308).
+    #: One per user per period (`uq_credit_lots_one_monthly_grant_per_period`).
     MONTHLY_FREE = "monthly_free"
 
-    #: A mid-month rise in a mentee's credit level, topping the month up to the
-    #: new level (decision 307). **Shipped before its producer, deliberately**:
-    #: the `CHECK` that admits it must be applied before any code writes it
-    #: (project-conventions, *Migration ordering*), and the stacked PR on top of
-    #: this one is the writer.
+    #: A rise in level after the period was paid, topping the month up to the
+    #: new level (decision 308), written by `credit_grants`. Pays only what the
+    #: period has not already granted, so a repeat pays nothing.
     LEVEL_TOP_UP = "level_top_up"
 
     #: A credit handed back because a mentor missed the session or called it off
@@ -633,9 +630,9 @@ class CreditSource(StrEnum):
     #: Deferred at PR 1 under settled decision #21 because nothing wrote one.
     #: This is the writer, so the member ships with it rather than before it.
     #:
-    #: **It expires like every other grant.** Not in `NON_EXPIRING`: only the
-    #: starter is, and that is because it exists to give somebody a first taste
-    #: of the platform rather than because grants are permanent.
+    #: **It expires like every other grant**, at the month end, and sits
+    #: outside the level allowance: support can always make somebody whole,
+    #: even above their level (decision 308).
     ADMIN_GRANT = "admin_grant"
 
     #: What a user carried out of Bubble. Not `monthly_free`: the legacy renewal

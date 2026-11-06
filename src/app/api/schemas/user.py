@@ -97,23 +97,23 @@ class UserProfileRead(BaseModel):
 
 
 class MonthlyCreditsRead(BaseModel):
-    """The monthly grant's part of the balance. The card's bar draws this."""
+    """The level's part of the balance (decision 308). The card's bar draws this."""
 
     model_config = ConfigDict(from_attributes=True)
 
-    #: Monthly credits held now: the 1st-of-month grant, a migrated opening
-    #: balance, and refunds of either.
+    #: Level credits held now: the 1st's grant, mid-month top-ups, a migrated
+    #: opening balance or starter, and refunds of any of them.
     balance: int
-    #: The monthly grant. Draw the bar as `balance` of `ceiling`, clamped: a late
-    #: refund can briefly put `balance` above it.
+    #: The caller's credit level — what their month pays — drawn at least at
+    #: level 1, so it is never a zero denominator. Draw the bar as
+    #: `balance` of `ceiling`, clamped: a refund can briefly put `balance` above it.
     ceiling: int
     #: The soonest instant a held monthly credit stops being spendable (the 1st
     #: of next month, midnight UTC, exclusive). Null when `balance` is 0, or
     #: when none of the held monthly credits expire (a migrated opening balance).
     expires_at: datetime | None
-    #: Whether this account receives the monthly grant on the 1st: a mentee goal
-    #: and an unlock from a qualifying invite. `ceiling` is the grant either way,
-    #: so `false` tells "not unlocked yet" apart from "spent".
+    #: Whether this account holds the unlock — level 3: a qualified invite and
+    #: an attended session (decision 295), or grandfathered from the migration.
     unlocked: bool
 
 
@@ -128,8 +128,7 @@ class BonusCreditGroupRead(BaseModel):
 
 
 class BonusCreditsRead(BaseModel):
-    """Every credit that is not the monthly grant: the starter, the invite
-    bonus, support grants, and refunds of any of them."""
+    """Every credit outside the level: support grants, and refunds of them."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -146,10 +145,10 @@ class CreditsRead(BaseModel):
     and the client draws. A percentage computed here would be a third
     representation of the same fact.
 
-    ``allowance`` is ``max(ladder.steady_state, balance)`` rather than the
-    allowance alone — a refund landing after the monthly grant leaves a balance
-    above it, and the card would otherwise read "4 credits left" beside a bar
-    with three positions.
+    ``allowance`` is ``max(level, balance)``: the caller's level, a fixed ceiling,
+    raised when a refund or a support grant lifts the balance above it — the
+    card would otherwise read "4 credits left" beside a bar with three
+    positions.
 
     ``state`` is a name, never a colour or a sentence: the copy and the palette
     belong to the front end, which knows the viewer's language.

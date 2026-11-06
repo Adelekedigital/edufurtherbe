@@ -15,18 +15,20 @@ around the offset:
     spendable_now(moment)                 an already-dead lot is not "about to"
     target - WINDOW <= expires_at < target + WINDOW
 
-**The starter is excluded by the window being bounded on both sides**, and that
-is worth stating because the obvious defence against it — an explicit
-``expires_at IS NOT NULL`` — turns out to be unconditionally redundant. A lot
+**A never-expiring lot is excluded by the window being bounded on both sides.**
+None is granted since decision 308, but a refund of one written before it
+inherits `NULL` (`refund_expiry`). That is worth stating because the obvious
+defence against it — an explicit ``expires_at IS NOT NULL`` — turns out to be
+unconditionally redundant. A lot
 that never expires has no date to fall between two others; not by `NULL`
 comparison semantics, which a rewrite could undo, but because there is no value
 to place. Both rewrites were tried: widening the range with
 ``coalesce(expires_at, 'infinity')`` still excludes it, since a sentinel far
 future is outside any window an offset produces.
 
-That matters. A user whose only credit is the never-expiring starter has nothing
-running out, and a filter written as "has any balance" would warn them every
-fortnight for the life of the account.
+That matters. A user whose only credit never expires has nothing running out,
+and a filter written as "has any balance" would warn them every fortnight for
+the life of the account.
 
 **Mentees, implicitly.** No role predicate: a mentor holds no credits, so the
 balance condition already excludes them. Adding one would be settled decision 15's
@@ -101,7 +103,7 @@ async def expiring_soon(
             .join(User, User.id == CreditLot.user_id)
             .where(
                 LIVE,
-                # `spendable_now` admits the never-expiring starter, deliberately
+                # `spendable_now` admits a never-expiring lot, deliberately
                 # — it *is* spendable. What excludes it here is the two-sided
                 # window below: a lot with no expiry has no date to fall in one.
                 # See the module docstring for why an explicit `IS NOT NULL`

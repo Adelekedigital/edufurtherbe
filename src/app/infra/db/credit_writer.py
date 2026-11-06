@@ -1,34 +1,25 @@
-"""Granting credits. Every source that creates a lot comes through here.
+"""Granting, spending and refunding credits. Every lot is created here.
 
-Four things grant credits — onboarding, a qualifying invite, the monthly job and
-the migration — and each writes **two rows**: the lot, and the ledger entry
-saying it appeared. Four call sites each remembering to write the second is the
-duplication non-negotiable #8 names, and the failure mode is the quiet one: a
-balance that moved with nothing recording why, which is precisely what D8 chose
-a ledger over a counter to prevent.
+The level grants (``credit_grants``, decision 308), admin grants and refunds
+each write **two rows**: the lot, and the ledger entry saying it appeared. Each
+call site remembering to write the second is the duplication non-negotiable #8
+names, and the failure mode is the quiet one: a balance that moved with nothing
+recording why, which is precisely what D8 chose a ledger over a counter to
+prevent. So the pairing lives in :func:`grant`, once.
 
-So the pairing lives here, once, and nothing else inserts a `credit_lots` row.
-
-NEITHER FUNCTION COMMITS
+NO FUNCTION HERE COMMITS
 ========================
 The caller does. A grant is almost never alone in its transaction — onboarding
 completes *and* grants, an invite qualifies *and* grants — and a commit here
 would split those into two, leaving a state where the producer fired and the
 credit did not exist. The dependency that calls this is where the commit sits,
 which is this project's settled shape for writes.
-
-WHY THE STARTER HAS ITS OWN FUNCTION
-====================================
-It is the only grant with a once-ever guarantee, and that guarantee is a partial
-unique index rather than a check. :func:`grant_starter` therefore swallows a
-conflict and reports what happened; :func:`grant` cannot conflict and does not
-pretend it might. Collapsing them into one function with a flag would put a
-branch in the middle of the only code that creates money.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Mapping
 from uuid import UUID
 
 from sqlalchemy import insert, nulls_last, select, text
@@ -41,25 +32,67 @@ from app.domain.enums import CreditReason, CreditSource
 from app.infra.db.credit_store import paying_sessions, spendable_now
 from app.infra.db.models.credits import _REFUND_PREDICATE, CreditLot, CreditTransaction
 
-__all__ = ["grant", "grant_starter", "refund_credit", "spend_credit"]
+__all__ = ["grant", "grant_many", "grant_starter", "refund_credit", "spend_credit"]
 
 
-async def _record(session: AsyncSession, user_id: UUID, lot_id: UUID, quantity: int) -> None:
-    """The ledger entry that says a lot appeared.
+async def grant_many(
+    session: AsyncSession,
+    quantities: Mapping[UUID, int],
+    *,
+    source: CreditSource,
+    now: dt.datetime,
+) -> dict[UUID, UUID]:
+    """Create one lot of ``source`` per user, each with the ledger entry that
+    says it appeared. Returns each user's new lot id.
 
-    Positive delta, reason ``grant``. Written for every source without
-    exception — a balance that rose with no row saying why is the state the
-    ledger exists to make impossible.
+    **Two statements however many users**: the 1st's grant pays every mentee
+    while holding their row locks, so a round trip per user would hold them
+    for thousands of trips (found by code review).
+
+    Expiry is not a parameter, deliberately: it comes from
+    :func:`app.domain.credits.expiry_for`, so the producers cannot drift on
+    when a credit dies. ``REFUND`` is refused there rather than answered, since a
+    refund inherits from the lot it replaces — :func:`refund_credit` is its path.
+
+    The ledger entry — positive delta, reason ``grant`` — is written for every
+    lot without exception: a balance that rose with no row saying why is the
+    state the ledger exists to make impossible.
     """
-    await session.execute(
-        insert(CreditTransaction).values(
-            user_id=user_id,
-            credit_lot_id=lot_id,
-            delta=quantity,
-            reason=CreditReason.GRANT,
-            session_id=None,
+    if not quantities:
+        return {}
+    expires_at = expiry_for(source, now=now)
+
+    created = (
+        await session.execute(
+            insert(CreditLot).returning(CreditLot.id, CreditLot.user_id),
+            [
+                {
+                    "user_id": user_id,
+                    "source": source,
+                    "quantity_granted": quantity,
+                    "quantity_remaining": quantity,
+                    "expires_at": expires_at,
+                }
+                for user_id, quantity in quantities.items()
+            ],
         )
+    ).all()
+    lots = {UUID(str(user_id)): UUID(str(lot_id)) for lot_id, user_id in created}
+
+    await session.execute(
+        insert(CreditTransaction),
+        [
+            {
+                "user_id": user_id,
+                "credit_lot_id": lot_id,
+                "delta": quantities[user_id],
+                "reason": CreditReason.GRANT,
+                "session_id": None,
+            }
+            for user_id, lot_id in lots.items()
+        ],
     )
+    return lots
 
 
 async def grant(
@@ -70,31 +103,9 @@ async def grant(
     quantity: int,
     now: dt.datetime,
 ) -> UUID:
-    """Create a lot of ``source`` and record it. Returns the lot id.
-
-    Expiry is not a parameter, deliberately: it comes from
-    :func:`app.domain.credits.expiry_for`, so the four producers cannot drift on
-    when a credit dies. ``REFUND`` is refused there rather than answered, since a
-    refund inherits from the lot it replaces — PR 7 uses its own path.
-    """
-    expires_at = expiry_for(source, now=now)
-
-    lot_id = (
-        await session.execute(
-            insert(CreditLot)
-            .values(
-                user_id=user_id,
-                source=source,
-                quantity_granted=quantity,
-                quantity_remaining=quantity,
-                expires_at=expires_at,
-            )
-            .returning(CreditLot.id)
-        )
-    ).scalar_one()
-
-    await _record(session, user_id, lot_id, quantity)
-    return UUID(str(lot_id))
+    """Create a lot of ``source`` for one user and record it. Returns the lot
+    id. :func:`grant_many` for one, so the pairing is written once."""
+    return (await grant_many(session, {user_id: quantity}, source=source, now=now))[user_id]
 
 
 async def grant_starter(
@@ -111,10 +122,10 @@ async def grant_starter(
     was that neither should. Letting the database arbitrate means the loser
     learns it lost, which is what the ``None`` says.
 
-    ``now`` is not a parameter because the starter never expires; there is no
-    moment for it to be relative to. That is :func:`expiry_for`'s answer for
-    ``PROFILE_COMPLETED`` and it is asserted there, so this passes ``None``
-    rather than restating the rule.
+    **It dies at the month end, like every credit** (decision 308): it is the
+    month's level-1 credit, so the level grants count it rather than paying
+    level 1 beside it. :func:`expiry_for` decides, on the app clock that
+    `credit_store` reads with.
     """
     starter = ladder.starter
     lot_id = (
@@ -125,7 +136,7 @@ async def grant_starter(
                 source=CreditSource.PROFILE_COMPLETED,
                 quantity_granted=starter,
                 quantity_remaining=starter,
-                expires_at=None,
+                expires_at=expiry_for(CreditSource.PROFILE_COMPLETED, now=dt.datetime.now(dt.UTC)),
             )
             .on_conflict_do_nothing(
                 # The partial index, named by its columns and its predicate.
@@ -142,7 +153,17 @@ async def grant_starter(
     if lot_id is None:
         return None
 
-    await _record(session, user_id, UUID(str(lot_id)), starter)
+    # The ledger entry that says it appeared, as `grant_many` writes for every
+    # other lot.
+    await session.execute(
+        insert(CreditTransaction).values(
+            user_id=user_id,
+            credit_lot_id=lot_id,
+            delta=starter,
+            reason=CreditReason.GRANT,
+            session_id=None,
+        )
+    )
     return UUID(str(lot_id))
 
 

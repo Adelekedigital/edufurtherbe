@@ -9,16 +9,20 @@ would simply be right about the wrong number.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.factories import until_blocked
 
 from app.core.config import Settings
 from app.domain.credits import credit_ladder
-from app.infra.db.credit_grants import grant_monthly_credits
+from app.domain.enums import CreditSource
+from app.infra.db.credit_grants import grant_monthly_credits, top_up_levels
+from app.infra.db.credit_writer import grant
 from app.infra.db.engine import create_session_factory
 from conftest import add_user
 
@@ -40,7 +44,10 @@ async def a_user(
     goal: bool = True,
     unlocked: bool = True,
     deleted: bool = False,
+    onboarded: bool = False,
+    invited: bool = False,
 ) -> UUID:
+    """A user holding exactly the facts named (decision 308's level reads them)."""
     tag = uuid4()
     async with engine.begin() as conn:
         user_id = await add_user(
@@ -61,6 +68,19 @@ async def a_user(
                     "VALUES (:u, NULL)"
                 ),
                 {"u": user_id},
+            )
+        if onboarded:
+            await conn.execute(
+                text("INSERT INTO user_onboarding (user_id, completed_at) VALUES (:u, now())"),
+                {"u": user_id},
+            )
+        if invited:
+            await conn.execute(
+                text(
+                    "INSERT INTO referrals (referrer_id, code, signed_up_at, qualified_at) "
+                    "VALUES (:u, :c, now(), now())"
+                ),
+                {"u": user_id, "c": uuid4().hex},
             )
         return UUID(str(user_id))
 
@@ -241,3 +261,151 @@ async def test_every_grant_writes_its_ledger_row(db_engine: AsyncEngine) -> None
 
     for user in users:
         assert await ledger_of(db_engine, user) == [(3, "grant")]
+
+
+# --------------------------------------------------------------------------
+# Credit levels (decision 308)
+# --------------------------------------------------------------------------
+
+
+async def test_the_first_pays_every_mentee_their_level(db_engine: AsyncEngine) -> None:
+    """Levels 0, 1, 2 and 3 are paid 0, 1, 2 and 3, each with a ledger row and
+    a renewal email carrying what it paid."""
+    nobody = await a_user(db_engine, unlocked=False)
+    onboarded = await a_user(db_engine, unlocked=False, onboarded=True)
+    invited = await a_user(db_engine, unlocked=False, onboarded=True, invited=True)
+    unlocked = await a_user(db_engine, onboarded=True, invited=True)
+
+    granted = await run_grant(db_engine, now=SEPTEMBER)
+
+    assert granted == 3
+    expected = {nobody: 0, onboarded: 1, invited: 2, unlocked: 3}
+    for user, level in expected.items():
+        assert await balance_of(db_engine, user) == level
+    assert await ledger_of(db_engine, invited) == [(2, "grant")]
+    assert await renewal_counts(db_engine, [nobody, onboarded, invited, unlocked]) == {
+        onboarded: "1",
+        invited: "2",
+        unlocked: "3",
+    }
+
+
+async def test_an_invite_before_onboarding_pays_nothing(db_engine: AsyncEngine) -> None:
+    """Level 2 is level 1 plus an invite: an invite alone is level 0."""
+    user = await a_user(db_engine, unlocked=False, invited=True)
+
+    assert await run_grant(db_engine, now=SEPTEMBER) == 0
+    assert await balance_of(db_engine, user) == 0
+
+
+async def test_a_rerun_after_spending_pays_nothing(db_engine: AsyncEngine) -> None:
+    """**The allowance rule.** Owed is counted from what the period *granted*,
+    not from what is held — so spending the month and re-running the job does
+    not refill it."""
+    user = await a_user(db_engine)
+    await run_grant(db_engine, now=SEPTEMBER)
+    await spend_all(db_engine, user)
+
+    second = await run_grant(db_engine, now=SEPTEMBER)
+
+    assert second == 0
+    assert await balance_of(db_engine, user) == 0
+
+
+async def test_a_period_already_topped_up_pays_only_what_is_left(db_engine: AsyncEngine) -> None:
+    """A level-1 credit paid mid-month by a top-up counts: the 1st's run in
+    that period pays the rest of the level as a `level_top_up`, never a second
+    `monthly_free` — so the one-per-period index is never what refuses it."""
+    user = await a_user(db_engine)
+    async with create_session_factory(db_engine)() as db:
+        await grant(db, user, source=CreditSource.LEVEL_TOP_UP, quantity=1, now=SEPTEMBER)
+        await db.commit()
+
+    await run_grant(db_engine, now=SEPTEMBER)
+
+    assert await balance_of(db_engine, user) == 3
+    assert await sources_of(db_engine, user) == ["level_top_up", "monthly_free"]
+
+
+async def test_a_rerun_after_a_rise_with_no_event_pays_the_rest_as_a_top_up(
+    db_engine: AsyncEngine,
+) -> None:
+    """**The catch-up the deploy relies on.** A level can rise with no top-up
+    event (a fact written directly, or existing mentees on deploy day); running
+    the job again pays the rest. The period already holds the 1st's
+    `monthly_free` lot, so the rest is a `level_top_up` — a second
+    `monthly_free` would hit the one-per-period index and fail the whole run."""
+    user = await a_user(db_engine, unlocked=False, onboarded=True)
+    await run_grant(db_engine, now=SEPTEMBER)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO referrals (referrer_id, code, signed_up_at, qualified_at) "
+                "VALUES (:u, :c, now(), now())"
+            ),
+            {"u": user, "c": uuid4().hex},
+        )
+
+    assert await run_grant(db_engine, now=SEPTEMBER) == 1
+
+    assert await balance_of(db_engine, user) == 2
+    assert await sources_of(db_engine, user) == ["monthly_free", "level_top_up"]
+
+
+async def test_refunds_and_support_grants_are_outside_the_level(db_engine: AsyncEngine) -> None:
+    """Both may lift a balance above the level (owner, 2026-11-05): neither
+    shrinks what the month pays."""
+    user = await a_user(db_engine)
+    async with create_session_factory(db_engine)() as db:
+        await grant(db, user, source=CreditSource.ADMIN_GRANT, quantity=2, now=SEPTEMBER)
+        await db.commit()
+
+    await run_grant(db_engine, now=SEPTEMBER)
+
+    assert await balance_of(db_engine, user) == 2 + 3
+
+
+async def test_the_first_and_a_top_up_racing_pay_the_level_once(db_engine: AsyncEngine) -> None:
+    """**The race the users' row lock exists for.** A top-up holding the lock
+    has paid level 1 but not committed; the 1st's run, unlocked, would read
+    nothing granted and pay all three. Locked, it waits, sees the top-up, and
+    pays only the rest."""
+    user = await a_user(db_engine)
+    async with create_session_factory(db_engine)() as topping:
+        await top_up_levels(topping, [user], ladder=LADDER, now=SEPTEMBER)
+        job = asyncio.create_task(run_grant(db_engine, now=SEPTEMBER))
+        await until_blocked(db_engine)
+        await topping.commit()
+    await job
+
+    assert await balance_of(db_engine, user) == 3
+
+
+async def spend_all(engine: AsyncEngine, user_id: UUID) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE credit_lots SET quantity_remaining = 0 WHERE user_id = :u"),
+            {"u": user_id},
+        )
+
+
+async def sources_of(engine: AsyncEngine, user_id: UUID) -> list[str]:
+    async with engine.begin() as conn:
+        rows = await conn.execute(
+            text("SELECT source FROM credit_lots WHERE user_id = :u ORDER BY created_at, source"),
+            {"u": user_id},
+        )
+        return [row[0] for row in rows]
+
+
+async def renewal_counts(engine: AsyncEngine, user_ids: list[UUID]) -> dict[UUID, str]:
+    """Who was sent a renewal, and the `credit_count` it carries."""
+    async with engine.begin() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT entity_id, payload ->> 'credit_count' FROM outbox_events "
+                "WHERE event_type = 'credits_renewed' AND entity_id = ANY(:ids)"
+            ),
+            {"ids": user_ids},
+        )
+        return {UUID(str(row[0])): row[1] for row in rows}

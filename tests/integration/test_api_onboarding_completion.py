@@ -6,6 +6,7 @@ API. The tests that matter here are the two that guard a spendable resource:
 **the bar is enforced server-side**, and **a retry pays nothing**.
 """
 
+import datetime as dt
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -14,6 +15,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.domain.credits import end_of_month
 from conftest import add_user, api_token, bearer, give_mentee_answers
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -190,11 +192,11 @@ async def test_the_grant_writes_a_ledger_row(
     assert await ledger_of(db_engine, user_id) == [(1, "grant")]
 
 
-async def test_the_starter_never_expires(
+async def test_the_starter_dies_at_the_reset(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """It exists so somebody gets a feel for the platform; an expiring one makes
-    that reward depend on the day they happened to finish."""
+    """Decision 308: the starter is the month's level-1 credit, so it dies at
+    the month end like every credit and the 1st pays the level again."""
     auth_id = uuid4()
     user_id = await seed(db_engine, auth_id)
 
@@ -207,7 +209,7 @@ async def test_the_starter_never_expires(
             )
         ).scalar_one()
 
-    assert expires is None
+    assert expires == end_of_month(dt.datetime.now(dt.UTC))
 
 
 # --------------------------------------------------------------------------
