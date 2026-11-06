@@ -53,6 +53,7 @@ from app.domain.credits import (
     card_level,
     end_of_month,
     level_allowance,
+    level_of,
     split_buckets,
     state_for,
 )
@@ -201,14 +202,14 @@ async def get_credit_summary(
     # The facts the grants pay on, judged by the same rule, so the card never
     # shows a level the 1st does not pay (decision 308).
     facts = (await level_facts(session, [user_id])).get(user_id, NO_FACTS)
-    raw_level = level_allowance(facts, ladder)
-    level = card_level(raw_level, ladder)
+    allowance = level_allowance(facts, ladder)
+    level = card_level(allowance, ladder)
     # The total and its split are summed from the same lot rows, so they cannot
     # disagree: a booking between two separate reads would make them add up
     # wrong. (The refund links are a second query; they decide only which part
     # a refund sits in, never how much is held.)
     balance, monthly, bonus = await _buckets(session, user_id, moment=moment, ceiling=level)
-    monthly = replace(monthly, unlocked=facts.unlocked, level=raw_level)
+    monthly = replace(monthly, unlocked=facts.unlocked, level=level_of(facts))
     return CreditSummary.of(
         balance=balance,
         next_reset_at=end_of_month(moment),

@@ -19,7 +19,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from conftest import add_user, api_token, bearer
+from app.core.config import Settings
+from app.infra.storage.supabase import SupabaseStorage
+from conftest import add_user, api_token, bearer, build_api_app, client_for
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -590,3 +592,25 @@ async def test_the_level_is_published_unfloored(
 
     assert monthly["level"] == level
     assert monthly["ceiling"] == max(level, 1)
+
+
+async def test_the_level_is_the_rung_on_a_non_default_ladder(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    """**Found by GitHub review on #576.** With `CREDIT_MONTHLY_ALLOWANCE=5`
+    an unlocked mentee is paid 5 — `ceiling` 5 — and is still level 3. Built
+    from the amount, `level` read 5, broke its own 0 to 3 bound and `/me`
+    answered 500."""
+    app = build_api_app(
+        db_engine, api_storage, Settings(_env_file=None, credit_monthly_allowance=5)
+    )
+    async with client_for(app) as client:
+        auth_id = uuid4()
+        user_id = await seed_mentee(db_engine, auth_id)
+        await unlock(db_engine, user_id)
+
+        response = await client.get("/api/v1/me", headers=bearer(api_token(auth_id)))
+
+        assert response.status_code == 200, response.text
+        monthly = response.json()["credits"]["monthly"]
+        assert (monthly["level"], monthly["ceiling"]) == (3, 5)
