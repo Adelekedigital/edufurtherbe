@@ -55,6 +55,11 @@ class TokenClaims:
 
     subject: UUID
     email: str | None
+    #: The sign-in this token belongs to (Supabase's `session_id` claim): what
+    #: an admin's preview is owned by beside the admin (decision 309). ``None``
+    #: when absent or not a uuid, which owns nothing rather than failing a
+    #: sign-in over a claim only previews read.
+    session_id: UUID | None = None
 
 
 class SupabaseTokenVerifier:
@@ -107,7 +112,11 @@ class SupabaseTokenVerifier:
             raise AuthenticationError("token carries no subject")
 
         try:
-            return TokenClaims(subject=UUID(str(subject)), email=payload.get("email"))
+            return TokenClaims(
+                subject=UUID(str(subject)),
+                email=payload.get("email"),
+                session_id=_uuid_or_none(payload.get("session_id")),
+            )
         except ValueError as exc:
             # A `sub` that is not a uuid cannot match `users.auth_id`, and
             # letting it through would turn an auth failure into a database
@@ -131,3 +140,11 @@ class SupabaseTokenVerifier:
 
         assert self._secret is not None  # noqa: S101 — guaranteed by __init__
         return dict(jwt.decode(token, self._secret, algorithms=[SYMMETRIC_ALGORITHM], **checks))
+
+
+def _uuid_or_none(value: object) -> UUID | None:
+    """A claim read as a uuid, or ``None`` when it is absent or is not one."""
+    try:
+        return UUID(str(value)) if value else None
+    except ValueError:
+        return None

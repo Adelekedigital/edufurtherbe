@@ -259,6 +259,14 @@ class UserRead(NormalisedEmail):
             "`404`, as every admin route does to a grant it does not admit."
         ),
     )
+    can_preview_as_user: bool = Field(
+        default=False,
+        description=(
+            "Whether you may preview the app as a user (decision 309): you hold the "
+            "PREVIEW permission (every live admin grant today) and previews are "
+            "switched on. Always sent."
+        ),
+    )
 
     # The attributes a profile page renders, embedded so one call is enough.
     #

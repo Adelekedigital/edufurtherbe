@@ -68,6 +68,12 @@ def live_grant() -> Any:
     return AdminUser.revoked_at.is_(None)
 
 
+def holds_live_grant(user_id: Any) -> Any:
+    """Whether `user_id` holds any live admin grant: an admin, whose own view is
+    never previewed (decision 309)."""
+    return exists().where(AdminUser.user_id == user_id, live_grant())
+
+
 def has_mentor_profile(user_id: Any) -> Any:
     """Whether `user_id` has a mentor profile at all, soft-deleted or not: the
     fact `finishes_as_mentee` reads, so onboarding and the bio draft agree."""

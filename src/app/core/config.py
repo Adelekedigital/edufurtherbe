@@ -816,6 +816,13 @@ class Settings(BaseSettings):
         default=10, ge=1, le=1000, validation_alias=env_key("intake_uploads_per_hour")
     )
 
+    #: Admins previewing the app as a user, read only (decision 309). **Off by
+    #: default**, and off every preview endpoint answers `404` and `/me` says
+    #: `can_preview_as_user: false`.
+    preview_as_user_enabled: bool = Field(
+        default=False, validation_alias=env_key("preview_as_user_enabled")
+    )
+
     #: The writing assistant (Onboarding v5 B7, decision 267): drafting or
     #: improving a bio through the EduFurther AI Router. **Off by default**, and
     #: off answers `503` without calling or counting anything. On needs the

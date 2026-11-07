@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import jwt
 
@@ -42,13 +42,15 @@ def mint_dev_token(
     audience, without keeping a second copy of the claim set in step — the
     rejection tests need exactly those shapes, and they are the tests that
     matter here. ``issuer`` is what a verifier checking `iss` expects
-    (`issuer_for`); left out, the token carries none.
+    (`issuer_for`); left out, the token carries none. Each token is its own
+    sign-in (a fresh `session_id`), as Supabase's are; override it to share one.
     """
     claims: dict[str, Any] = {
         "sub": str(subject),
         "aud": AUDIENCE,
         "exp": datetime.now(UTC) + ttl,
         "email": email,
+        "session_id": str(uuid4()),
     }
     if issuer is not None:
         claims["iss"] = issuer

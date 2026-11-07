@@ -6,6 +6,7 @@ from fastapi import APIRouter, status
 
 from app.api.deps import (
     BookingWindowDep,
+    CanPreviewDep,
     CurrentUserDep,
     DeletedAccountDep,
     OwnAttributesDep,
@@ -122,6 +123,7 @@ async def read_me(
     attributes: OwnAttributesDep,
     window: BookingWindowDep,
     refunds: RefundPolicyDep,
+    can_preview: CanPreviewDep,
     response_hours: ResponseWindowHoursDep,
 ) -> UserRead:
     links = attributes["links"]
@@ -131,6 +133,7 @@ async def read_me(
     return UserRead(
         **user,
         admin_role=strongest_role(user["admin_roles"]),
+        can_preview_as_user=can_preview,
         profile=profile,
         education=[EducationRead.from_row(row) for row in attributes["education"]],
         goal=(GoalRead.from_row(goal) if goal is not None else None),
