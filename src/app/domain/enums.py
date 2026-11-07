@@ -934,3 +934,40 @@ class NotificationPreferenceType(StrEnum):
     """
 
     UNREAD_MESSAGES = "unread_messages"
+
+
+class PreviewEndReason(StrEnum):
+    """Why an admin's preview session ended (decision 309).
+
+    ``exit`` the admin left it (or started another, which ends this one);
+    ``idle`` 30 minutes passed with no request; ``max_length`` two hours passed
+    since it started; ``sign_out`` the admin's sign-in ended, or the request
+    came from another one.
+    """
+
+    EXIT = "exit"
+    IDLE = "idle"
+    MAX_LENGTH = "max_length"
+    SIGN_OUT = "sign_out"
+
+
+class PreviewEventKind(StrEnum):
+    """What one row of the preview log records (decision 309).
+
+    Each kind carries its own detail columns, and only those: a ``page_view``
+    its path, a ``blocked_write`` the method and route, a ``reveal`` what was
+    revealed and why, an ``end`` its reason.
+    """
+
+    START = "start"
+    SWITCH = "switch"
+    PAGE_VIEW = "page_view"
+    BLOCKED_WRITE = "blocked_write"
+    REVEAL = "reveal"
+    END = "end"
+
+
+class PreviewRevealField(StrEnum):
+    """What an admin may reveal in a preview: today the messages alone."""
+
+    MESSAGES = "messages"
