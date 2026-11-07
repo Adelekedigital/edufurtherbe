@@ -59,8 +59,17 @@ before the first deploy, or set the secret first and register straight after.
 
 `DATABASE_URL`: statement and lock timeouts are applied as a plain `SET`, which
 works on a direct connection or a session-mode pooler, **not** the transaction
-pooler (ADR 0005, open question "Pooling mode"). **Owner to confirm:** the
-production DSN form.
+pooler (ADR 0005, open question "Pooling mode"). **Use the session pooler,
+port 5432.** On the transaction pooler (port 6543) every query fails with
+`prepared statement "__asyncpg_stmt_1__" already exists` and each deploy fails
+its `/ready` check; the app does not refuse that port (seen 2026-11-07).
+
+`GOOGLE_CALENDAR_ID` is not in the list because it defaults to `primary`, and
+that default does not work: the refresh token's `calendar.app.created` scope
+reaches only calendars this client created. Set the id of a calendar the
+platform client created, on Railway and as the GitHub `production` variable.
+The refresh token works only with the client that issued it, so a new
+`GOOGLE_OAUTH_CLIENT_ID` needs a new token.
 
 ## 3. Set the GitHub `production` environment
 
@@ -68,7 +77,7 @@ production DSN form.
 |---|---|
 | `migrate.yml` | secret `DATABASE_URL` |
 | `reconcile-qstash-schedules.yml` | secret `QSTASH_TOKEN`; vars `PUBLIC_BASE_URL`, `QSTASH_URL`, `QSTASH_SCHEDULE_OVERRIDES` |
-| `settle-sessions.yml` | secrets `DATABASE_URL`, `LOOPS_API_KEY`, `DAILY_API_KEY`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_CALENDAR_REFRESH_TOKEN`; vars `EMAIL_TEMPLATES`, `APP_BASE_URL`, `GOOGLE_OAUTH_CLIENT_ID` |
+| `settle-sessions.yml` | secrets `DATABASE_URL`, `LOOPS_API_KEY`, `DAILY_API_KEY`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_CALENDAR_REFRESH_TOKEN`; vars `EMAIL_TEMPLATES`, `APP_BASE_URL`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_CALENDAR_ID` |
 | `credit-reminders`, `expire-credits`, `monthly-credits`, `sync-institutions` | secret `DATABASE_URL` |
 
 Every recovery workflow takes an `environment` input (`staging` or
