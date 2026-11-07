@@ -143,6 +143,9 @@ EXPECTED_MODELS = {
     "MessageAttachment",
     # Who switched which email off (decision 303), from `07_communications.sql`.
     "NotificationChannelPreference",
+    # An admin's read-only preview as one user, and its log (decision 309).
+    "PreviewSession",
+    "PreviewEvent",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
@@ -175,6 +178,8 @@ APPEND_ONLY = frozenset(
         "SessionMissedReason",
         # An admin's note is what they wrote then.
         "MentorAdminNote",
+        # A preview log row is what an admin did in a preview, then.
+        "PreviewEvent",
     }
 )
 

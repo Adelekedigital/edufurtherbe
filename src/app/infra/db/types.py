@@ -63,6 +63,9 @@ from app.domain.enums import (
     MissedReason,
     NotificationPreferenceType,
     OptionSource,
+    PreviewEndReason,
+    PreviewEventKind,
+    PreviewRevealField,
     PrimaryRole,
     QuestionOptionsSource,
     QuestionType,
@@ -236,6 +239,16 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     NotificationPreferenceType: frozenset(
         {"ck_notification_channel_preferences_notification_type_is_known"}
     ),
+    # Preview as user (decision 309): why a preview ended, on the session and on
+    # its log's `end` row; what a log row records; what a reveal opened.
+    PreviewEndReason: frozenset(
+        {
+            "ck_preview_sessions_end_reason_is_known",
+            "ck_preview_events_end_reason_is_known",
+        }
+    ),
+    PreviewEventKind: frozenset({"ck_preview_events_kind_is_known"}),
+    PreviewRevealField: frozenset({"ck_preview_events_field_type_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.
