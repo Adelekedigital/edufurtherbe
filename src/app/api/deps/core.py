@@ -391,6 +391,18 @@ async def refuse_in_preview(request: Request, user: CurrentUserDep) -> None:
 RefuseInPreviewDep = Annotated[None, Depends(refuse_in_preview)]
 
 
+async def messages_hidden(request: Request, user: CurrentUserDep) -> bool:
+    """**The one rule for "message contents are hidden from this request"**
+    (decision 314): it is served in a preview whose user's messages the admin
+    has not revealed. Every message read and the message file download read
+    it. A switch clears a reveal, so a reveal holds for the user it was for."""
+    del user  # resolved first: it is what puts a preview on the request
+    return in_preview(request) and request.state.preview.revealed_at is None
+
+
+MessagesHiddenDep = Annotated[bool, Depends(messages_hidden)]
+
+
 async def optional_viewer(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],

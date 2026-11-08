@@ -40,8 +40,9 @@ ROUTES: list[tuple[str, str, dict[str, Any] | None]] = [
     ("GET", "/{id}", None),
     ("POST", "/{id}/end", {"reason": "exit"}),
     ("POST", "/{id}/page-views", {"path": "/mentor/home"}),
+    ("POST", "/{id}/reveals", {"reason": "Support ticket 42"}),
 ]
-ROUTE_IDS = ["start", "switch", "read", "end", "page-view"]
+ROUTE_IDS = ["start", "switch", "read", "end", "page-view", "reveal"]
 
 
 def app_client(engine: AsyncEngine, *, on: bool = True) -> httpx.AsyncClient:
@@ -480,12 +481,16 @@ async def test_a_preview_is_only_its_owners_in_their_sign_in(
     async with db_engine.connect() as conn:
         row = (
             await conn.execute(
-                text("SELECT target_user_id, ended_at FROM preview_sessions WHERE id = :p"),
+                text(
+                    "SELECT target_user_id, ended_at, revealed_at FROM preview_sessions "
+                    "WHERE id = :p"
+                ),
                 {"p": preview},
             )
         ).one()
     assert row.target_user_id == user
     assert row.ended_at is None
+    assert row.revealed_at is None
 
 
 # --------------------------------------------------------------------------

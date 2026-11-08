@@ -196,11 +196,13 @@ async def test_the_first_send_opens_the_chat_and_later_ones_reuse_it(
         "sent_at",
         "edited_at",
         "deleted",
+        "hidden_in_preview",
     }
     assert body["body"] == "Hi Ada,\nsee you soon."
     assert body["client_id"] == str(client_id)
     assert body["sender_id"] == str(mentee.id)
     assert body["mine"] is True
+    assert body["hidden_in_preview"] is False
     assert body["file"] is None
     assert body["deleted"] is False
     assert body["edited_at"] is None

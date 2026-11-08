@@ -3,6 +3,10 @@
 Everything here is the caller's own: their chats with the people they are
 connected with (M0). The person is `PersonRead`, which shares its fields with
 a session's party through `PersonBaseRead`.
+
+**In a preview whose messages are not revealed** (decision 314) a message
+keeps its shape and loses its contents: `hidden` is `deps.core.messages_hidden`,
+passed to every `of` that builds a message, so no read can leave it out.
 """
 
 from __future__ import annotations
@@ -27,6 +31,17 @@ from app.domain.chats import (
 from app.domain.enums import IntakeFileType, MessageType
 
 WINDOW_MINUTES = int(SESSION_WINDOW.total_seconds() // 60)
+
+
+def hidden_in_preview(withheld: str) -> str:
+    """`hidden_in_preview`'s description, one sentence for a message and the
+    inbox's newest one, naming the fields ``withheld``."""
+    return (
+        "`true` in an admin's preview of this account (decision 314) until the "
+        f"admin reveals its messages: {withheld} are then `null`, whatever the "
+        "message holds, and every other field is unchanged. Always `false` "
+        "outside a preview."
+    )
 
 
 class PersonRead(PersonBaseRead):
@@ -115,34 +130,44 @@ class LastRead(BaseModel):
     text: str | None = Field(
         description=(
             f"The text, on one line, cut to {PREVIEW_LENGTH} characters at a word "
-            "and ending `…` when cut. `null` for a file alone, and when `deleted`."
+            "and ending `…` when cut. `null` for a file alone, when `deleted`, and "
+            "when `hidden_in_preview`."
         )
     )
     file_name: str | None = Field(
-        description="The file's name for a `file`; `null` otherwise, and when `deleted`."
+        description=(
+            "The file's name for a `file`; `null` otherwise, when `deleted`, and when "
+            "`hidden_in_preview`."
+        )
     )
     mine: bool = Field(description="You sent it (show `You: `).")
     at: dt.datetime = Field(description="When it was sent.")
     deleted: bool = Field(
         description="It was deleted: show the deleted line, not its text (imported only in v1)."
     )
+    hidden_in_preview: bool = Field(
+        default=False,
+        description=hidden_in_preview("`text` and `file_name`"),
+    )
 
     @classmethod
-    def of(cls, row: dict[str, Any], me: UUID) -> LastRead | None:
+    def of(cls, row: dict[str, Any], me: UUID, *, hidden: bool) -> LastRead | None:
         if row["last_id"] is None:
             return None
         deleted = row["last_deleted_at"] is not None
+        shown = not (deleted or hidden)
         body = row["last_body"]
         file = FileRead.of(row, "last_")
         return cls(
             kind=LastKind.FILE
             if row["last_message_type"] == MessageType.ATTACHMENT
             else LastKind.TEXT,
-            text=preview(str(body)) if body is not None and not deleted else None,
-            file_name=file.filename if file is not None and not deleted else None,
+            text=preview(str(body)) if body is not None and shown else None,
+            file_name=file.filename if file is not None and shown else None,
             mine=row["last_sender_id"] == me,
             at=row["last_sent_at"],
             deleted=deleted,
+            hidden_in_preview=hidden,
         )
 
 
@@ -155,10 +180,10 @@ class ChatRead(BaseModel):
     next_booking: NextBookingRead | None
 
     @classmethod
-    def of(cls, row: dict[str, Any], me: UUID) -> ChatRead:
+    def of(cls, row: dict[str, Any], me: UUID, *, hidden: bool) -> ChatRead:
         return cls(
             person=PersonRead.of(row),
-            last=LastRead.of(row, me),
+            last=LastRead.of(row, me, hidden=hidden),
             unread=int(row["unread"]),
             next_booking=NextBookingRead.of(row),
         )
@@ -186,28 +211,39 @@ class MessageRead(BaseModel):
     sender_id: UUID
     mine: bool = Field(description="You sent it.")
     body: str | None = Field(
-        description="The text, line breaks kept; `null` for a file alone and when `deleted`."
+        description=(
+            "The text, line breaks kept; `null` for a file alone, when `deleted`, and "
+            "when `hidden_in_preview`."
+        )
     )
-    file: FileRead | None = Field(description="The file it carries; `null` when none or `deleted`.")
+    file: FileRead | None = Field(
+        description="The file it carries; `null` when none, `deleted` or `hidden_in_preview`."
+    )
     sent_at: dt.datetime
     edited_at: dt.datetime | None = Field(
         description="When it was last edited (imported messages only in v1)."
     )
     deleted: bool = Field(description="It was deleted (imported messages only in v1).")
+    hidden_in_preview: bool = Field(
+        default=False,
+        description=hidden_in_preview("`body` and `file`"),
+    )
 
     @classmethod
-    def of(cls, row: dict[str, Any], me: UUID) -> MessageRead:
+    def of(cls, row: dict[str, Any], me: UUID, *, hidden: bool) -> MessageRead:
         deleted = row["deleted_at"] is not None
+        shown = not (deleted or hidden)
         return cls(
             id=row["id"],
             client_id=row["client_id"],
             sender_id=row["sender_id"],
             mine=row["sender_id"] == me,
-            body=None if deleted else row["body"],
-            file=None if deleted else FileRead.of(row),
+            body=row["body"] if shown else None,
+            file=FileRead.of(row) if shown else None,
             sent_at=row["sent_at"],
             edited_at=row["edited_at"],
             deleted=deleted,
+            hidden_in_preview=hidden,
         )
 
 
@@ -246,14 +282,20 @@ class ThreadRead(BaseModel):
 
     @classmethod
     def of(
-        cls, row: dict[str, Any], items: list[dict[str, Any]], has_more: bool, me: UUID
+        cls,
+        row: dict[str, Any],
+        items: list[dict[str, Any]],
+        has_more: bool,
+        me: UUID,
+        *,
+        hidden: bool,
     ) -> ThreadRead:
         return cls(
             person=PersonRead.of(row),
             lock=chat_lock(closed=bool(row["deleted"]), paused=bool(row["paused"])),
             next_booking=NextBookingRead.of(row),
             session_window=bool(row["session_window"]),
-            items=[MessageRead.of(item, me) for item in items],
+            items=[MessageRead.of(item, me, hidden=hidden) for item in items],
             their_last_read_at=row["their_last_read_at"],
             my_last_read_at=row["my_last_read_at"],
             has_more=has_more,
