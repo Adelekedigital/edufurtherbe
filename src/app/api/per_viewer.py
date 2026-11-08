@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.api.deps.core import PREVIEW_HEADER
+
 __all__ = ["PER_VIEWER_ROOTS", "PerViewerHeadersMiddleware"]
 
 #: Paths whose answer depends on who is asking: each root and everything under
@@ -26,6 +28,10 @@ PER_VIEWER_ROOTS = ("/api/v1/mentors",)
 #: A mentor's slot grid, which a signed-in mentee sees with the time held for
 #: them open (#339). Matched as the user prefix plus this exact tail.
 PER_VIEWER_SLOTS = ("/api/v1/users/", "/availability/slots")
+
+
+#: What the answer depends on: the token, and the preview it is served in.
+VARY = f"Authorization, {PREVIEW_HEADER}".encode()
 
 
 def _is_per_viewer(path: str) -> bool:
@@ -40,7 +46,8 @@ def _has_authorization(scope: Scope) -> bool:
 
 
 class PerViewerHeadersMiddleware:
-    """`Vary: Authorization` on every matching response; `private` when a token came.
+    """`Vary: Authorization, X-EF-Preview` on every matching response; `private`
+    when a token came.
 
     Pure ASGI, like `BodyLimitMiddleware`: it only rewrites the start message.
     **`Cache-Control: private` replaces any value a handler set**, because a
@@ -68,7 +75,8 @@ class PerViewerHeadersMiddleware:
                     for name, value in message.get("headers", [])
                     if not (signed_in and name.lower() == b"cache-control")
                 ]
-                headers.append((b"vary", b"Authorization"))
+                # An admin's preview answers the same token differently (decision 313).
+                headers.append((b"vary", VARY))
                 if signed_in:
                     headers.append((b"cache-control", b"private"))
                 message = {**message, "headers": headers}

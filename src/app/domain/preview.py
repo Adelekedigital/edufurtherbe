@@ -24,6 +24,11 @@ IDLE_TIMEOUT = timedelta(minutes=30)
 #: A preview ends this long after it started, however busy (`max_length`).
 MAX_LENGTH = timedelta(hours=2)
 
+#: How finely a request in a preview moves its `last_active_at`: at most once
+#: this often, so a busy preview is not one `UPDATE` per request (decision 313).
+#: Idle is measured from it, so a preview may end up to this much early.
+ACTIVITY_RESOLUTION = timedelta(minutes=1)
+
 #: The two limits as the API's descriptions state them, derived so they cannot drift.
 IDLE_WORDS = f"{IDLE_TIMEOUT // timedelta(minutes=1)} minutes"
 MAX_LENGTH_WORDS = f"{MAX_LENGTH // timedelta(minutes=1)} minutes"

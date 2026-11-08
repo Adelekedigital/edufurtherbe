@@ -6,6 +6,9 @@ import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from typing import Annotated, Any
 from uuid import UUID
@@ -23,18 +26,22 @@ from app.core.errors import (
     ConfigurationError,
     ConflictError,
     NotFoundError,
+    PreviewEndedError,
+    ReadOnlyViewAsError,
     ValidationError,
 )
-from app.domain.admin_permissions import EVERY_GRANT, holds_any
+from app.domain.admin_permissions import EVERY_GRANT, PREVIEW, holds_any
 from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole
 from app.domain.idempotency import request_fingerprint
 from app.domain.sessions import response_window_hours
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims, issuer_for
+from app.infra.db import preview_store
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.first_sign_in import provision_first_sign_in
 from app.infra.db.idempotency import Held, Mismatched, Replayed, reserve
+from app.infra.db.preview_store import Owner
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -96,9 +103,26 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
     lets a test bind a factory to its own disposable database without touching
     the process-wide cache.
     """
-    factory = getattr(request.app.state, "session_factory", None) or get_session_factory()
-    async with factory() as session:
+    async with _session_factory(request)() as session:
         yield session
+
+
+def _session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
+    """This app's session factory: `app.state`'s when it carries one."""
+    factory: async_sessionmaker[AsyncSession] = (
+        getattr(request.app.state, "session_factory", None) or get_session_factory()
+    )
+    return factory
+
+
+@asynccontextmanager
+async def _own_transaction(request: Request) -> AsyncIterator[AsyncSession]:
+    """A session apart from the request's, committed on leaving cleanly: for a
+    record that must stand whatever the request does next, without committing
+    anything the request itself has started."""
+    async with _session_factory(request)() as session:
+        yield session
+        await session.commit()
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -161,6 +185,10 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # which is what `is_admin` is derived from: one subquery answering both, rather
 # than an `EXISTS` beside an aggregate that could disagree.
 #
+# **Keyed by exactly one of `:auth_id` (the token's subject) and `:user_id`**
+# (a preview's user, decision 313), the other `NULL`: one column list for the
+# caller and for the user a preview shows (`_user_row`).
+#
 # `oc` and `cc` are the caller's own origin and current countries, for `/me`
 # only: primary-key joins off the caller's own profile row, so they add no
 # query and widen no scope.
@@ -185,11 +213,152 @@ CURRENT_USER = text("""
         FROM admin_users g
         WHERE g.user_id = u.id AND g.revoked_at IS NULL
     ) a ON TRUE
-    WHERE u.auth_id = :auth_id AND u.deleted_at IS NULL
+    WHERE (u.auth_id = :auth_id OR u.id = :user_id) AND u.deleted_at IS NULL
 """)
 
 
-async def get_current_user(claims: ClaimsDep, session: SessionDep) -> dict[str, Any]:
+async def _user_row(
+    session: AsyncSession, *, auth_id: UUID | None = None, user_id: UUID | None = None
+) -> dict[str, Any] | None:
+    """`CURRENT_USER` by exactly one of a token's subject or our own user id."""
+    result = await session.execute(CURRENT_USER, {"auth_id": auth_id, "user_id": user_id})
+    row = result.mappings().first()
+    return None if row is None else dict(row)
+
+
+async def _signed_in_user(claims: TokenClaims, session: AsyncSession) -> dict[str, Any]:
+    """The token's own user, created on a first sign-in (decision 178)."""
+    row = await _user_row(session, auth_id=claims.subject)
+    if row is None and claims.email:
+        await provision_first_sign_in(session, auth_id=claims.subject, email=claims.email)
+        row = await _user_row(session, auth_id=claims.subject)
+    if row is None:
+        raise NotFoundError("no account is linked to this identity")
+    return row
+
+
+# --------------------------------------------------------------------------
+# Preview as user (decision 313)
+#
+# **The swap lives in the one step every authenticated route resolves**, so no
+# router can forget it: with `X-EF-Preview` the caller is the previewed user,
+# read only. What the preview records (its end, its activity, a refused write)
+# is committed in a transaction of its own, so it stands, and the request's own
+# work is never committed with it.
+# --------------------------------------------------------------------------
+
+#: The request header naming the caller's live preview.
+PREVIEW_HEADER = "X-EF-Preview"
+
+#: The methods a preview may use; every other one is refused.
+READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+PreviewHeaderDep = Annotated[
+    str | None,
+    Header(
+        alias=PREVIEW_HEADER,
+        description=(
+            "An admin's live preview session id (decision 313), sent beside the "
+            "admin's own bearer token: the request is answered as the previewed "
+            "user, read only. `404` when it names no preview of this admin, the "
+            "admin lacks the preview permission, or previews are off; `401` "
+            "`/problems/preview-ended` once the preview has ended."
+        ),
+    ),
+]
+
+
+@dataclass(frozen=True, slots=True)
+class LivePreview:
+    """The live preview a request is served in, on `request.state.preview`."""
+
+    id: UUID
+    owner: Owner
+    target_user_id: UUID
+    #: When the current user's messages were revealed; ``None`` until then.
+    revealed_at: datetime | None
+
+
+def preview_switched_on(request: Request) -> bool:
+    """Whether this app runs with previews on (`PREVIEW_AS_USER_ENABLED`)."""
+    return _configured(request).preview_as_user_enabled
+
+
+def in_preview(request: Request) -> bool:
+    """**The one test for "this request is served in a preview"**, read by the
+    write guard and by `refuse_in_preview`."""
+    return getattr(request.state, "preview", None) is not None
+
+
+async def _refuse(request: Request) -> None:
+    """Log the refused request as `blocked_write` (its method and route
+    template) in its own transaction, then answer `403 read-only-view-as`."""
+    preview: LivePreview = request.state.preview
+    async with _own_transaction(request) as own:
+        row = await preview_store.load(own, preview.owner, preview.id)
+        if row is not None and row.ended_at is None:
+            await preview_store.log_blocked_write(
+                own, row, request.method, request.scope["route"].path
+            )
+    raise ReadOnlyViewAsError("a preview is read only")
+
+
+async def _previewed_user(
+    request: Request,
+    claims: TokenClaims,
+    session: AsyncSession,
+    admin: dict[str, Any],
+    header: str,
+) -> dict[str, Any]:
+    """The user the admin's preview shows, or a refusal.
+
+    `404`, as any admin route answers, when previews are off, the admin lacks
+    the PREVIEW permission, or the header names no preview of theirs (a
+    malformed id names none). A preview that has lapsed, or that this admin
+    started in another sign-in, is ended and answered `401 preview-ended`;
+    one that had already ended answers the same, with the reason it ended.
+    """
+    if not preview_switched_on(request) or not holds_any(admin["admin_roles"], PREVIEW):
+        raise NotFoundError("no such endpoint")
+    try:
+        preview_id = UUID(header)
+    except ValueError as exc:
+        raise NotFoundError("no such preview") from exc
+    async with _own_transaction(request) as own:
+        row = await preview_store.for_header(own, admin["id"], preview_id, claims.session_id)
+        if row is not None and row.ended_at is None:
+            await preview_store.touch(own, Owner(admin["id"], row.auth_session_id), preview_id)
+    if row is None:
+        raise NotFoundError("no such preview")
+    if row.ended_at is not None:
+        raise PreviewEndedError(end_reason=str(row.end_reason), session_id=str(row.id))
+    request.state.preview = LivePreview(
+        id=preview_id,
+        owner=Owner(admin["id"], row.auth_session_id),
+        target_user_id=row.target_user_id,
+        revealed_at=row.revealed_at,
+    )
+    if request.method not in READ_ONLY_METHODS and in_preview(request):
+        await _refuse(request)
+    target = await _user_row(session, user_id=row.target_user_id)
+    if target is None:
+        raise NotFoundError("no account is linked to this identity")
+    # Previewable users hold no grant; one given since is not part of the view.
+    return target | {"is_admin": False, "admin_roles": []}
+
+
+async def _resolve(
+    request: Request, claims: TokenClaims, session: AsyncSession, header: str | None
+) -> dict[str, Any]:
+    user = await _signed_in_user(claims, session)
+    if header is None:
+        return user
+    return await _previewed_user(request, claims, session, user, header)
+
+
+async def get_current_user(
+    request: Request, claims: ClaimsDep, session: SessionDep, preview: PreviewHeaderDep = None
+) -> dict[str, Any]:
     """Resolve a verified token to the user it belongs to, creating it on first sign-in.
 
     **A first sign-in creates the account** (settled decision #178), from the
@@ -199,25 +368,34 @@ async def get_current_user(claims: ClaimsDep, session: SessionDep) -> dict[str, 
     **A valid token that still has no live account is a 404, not a 401**: one
     with no email to build an account from, or whose account was deleted. The
     token is genuine; no live account is linked to it.
+
+    **With `X-EF-Preview` the caller is the previewed user, read only**
+    (decision 313, `_previewed_user`): any method but GET, HEAD and OPTIONS is
+    refused here, before a route's own work runs.
     """
-    result = await session.execute(CURRENT_USER, {"auth_id": claims.subject})
-    row = result.mappings().first()
-    if row is None and claims.email:
-        await provision_first_sign_in(session, auth_id=claims.subject, email=claims.email)
-        result = await session.execute(CURRENT_USER, {"auth_id": claims.subject})
-        row = result.mappings().first()
-    if row is None:
-        raise NotFoundError("no account is linked to this identity")
-    return dict(row)
+    return await _resolve(request, claims, session, preview)
 
 
 CurrentUserDep = Annotated[dict[str, Any], Depends(get_current_user)]
+
+
+async def refuse_in_preview(request: Request, user: CurrentUserDep) -> None:
+    """Refuse this route in a preview whatever its method: for a read that
+    shows what a preview must not, or hands out the means to write (a sealed
+    consent link). The same `403` and `blocked_write` as any write."""
+    del user  # resolved first: it is what puts a preview on the request
+    if in_preview(request):
+        await _refuse(request)
+
+
+RefuseInPreviewDep = Annotated[None, Depends(refuse_in_preview)]
 
 
 async def optional_viewer(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     session: SessionDep,
+    preview: PreviewHeaderDep = None,
 ) -> UUID | None:
     """Who is asking, on an endpoint that answers anyone — or ``None``.
 
@@ -229,16 +407,23 @@ async def optional_viewer(
     all get exactly what a visitor with no token gets. A `401`, `404` or `409`
     here would break a page anyone may read, for a reason about the caller.
 
-    Resolved through `get_current_user` itself, so first sign-in and the
-    account rules are the same statement as everywhere else rather than a
-    second copy.
+    **Except in a preview** (decision 313): with `X-EF-Preview` the viewer is
+    the previewed user, resolved exactly as `get_current_user` resolves one,
+    refusals included. The admin asked for one person's view, and an anonymous
+    page in its place would show the wrong view without saying so; an ended
+    preview reaches the client as `401 preview-ended` here as everywhere.
+
+    Resolved through `_resolve`, so first sign-in, the account rules and the
+    preview are the same code as everywhere else rather than a second copy.
     """
-    if credentials is None or not credentials.credentials:
+    if preview is None and (credentials is None or not credentials.credentials):
         return None
     try:
         claims = await get_claims(request, credentials)
-        user = await get_current_user(claims, session)
+        user = await _resolve(request, claims, session, preview)
     except AuthenticationError, NotFoundError, AccountExistsError:
+        if preview is not None:
+            raise
         return None
     viewer: UUID = user["id"]
     return viewer
