@@ -38,6 +38,18 @@ class PreviewUserNotFoundError(NotFoundError):
     admin themselves (decision 309). Typed so the picker can say so."""
 
 
+class PreviewNotFoundError(NotFoundError):
+    """`X-EF-Preview` names no preview this caller may use (decision 313):
+    previews off, no PREVIEW permission, a malformed id, or no preview of this
+    admin. One message and one type for all, so no case is told from another."""
+
+    def __init__(self) -> None:
+        super().__init__("no such preview")
+
+    def problem_title(self) -> str | None:
+        return "Preview not found"
+
+
 class ConflictError(AppError):
     """The request cannot be applied to the current state of the resource."""
 

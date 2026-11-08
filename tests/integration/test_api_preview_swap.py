@@ -38,6 +38,7 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 ME = "/api/v1/me"
 ENDED = "/problems/preview-ended"
 READ_ONLY = "/problems/read-only-view-as"
+NOT_FOUND = "/problems/preview-not-found"
 
 #: Writes that resolve no caller, so a preview can never reach them: each
 #: authenticates as a machine (a signed callback or job), never as a user.
@@ -92,6 +93,19 @@ def assert_read_only(response: httpx.Response) -> None:
         READ_ONLY,
         "Read only",
         "read_only_view_as",
+    )
+
+
+def assert_preview_not_found(response: httpx.Response) -> None:
+    """The one answer for every header that names no usable preview: the same
+    type, title and detail whatever the reason, so none is told from another."""
+    assert response.status_code == 404, response.text
+    assert response.headers["content-type"].startswith(PROBLEM_JSON)
+    body = response.json()
+    assert (body["type"], body["title"], body["detail"]) == (
+        NOT_FOUND,
+        "Preview not found",
+        "no such preview",
     )
 
 
@@ -153,8 +167,10 @@ async def test_an_admin_route_with_the_header_is_404(db_engine: AsyncEngine) -> 
             f"/api/v1/admin/preview-sessions/{preview}", headers=previewing(admin, preview)
         )
 
-    assert queue.status_code == 404
-    assert own.status_code == 404
+    # The preview is valid, so these are the routes' own 404s, unchanged.
+    for response in (queue, own):
+        assert response.status_code == 404
+        assert response.json()["type"] == "about:blank"
 
 
 # --------------------------------------------------------------------------
@@ -168,7 +184,7 @@ async def test_a_header_with_previews_off_is_404(db_engine: AsyncEngine) -> None
     async with app_client(db_engine, on=False) as off:
         response = await off.get(ME, headers=previewing(admin, preview))
 
-    assert response.status_code == 404
+    assert_preview_not_found(response)
 
 
 async def test_an_admin_whose_grant_is_revoked_loses_their_own_preview(
@@ -184,7 +200,7 @@ async def test_an_admin_whose_grant_is_revoked_loses_their_own_preview(
 
         response = await client.get(ME, headers=previewing(admin, preview))
 
-    assert response.status_code == 404
+    assert_preview_not_found(response)
     assert (await preview_row(db_engine, preview))["ended_at"] is None
 
 
@@ -207,7 +223,7 @@ async def test_a_header_with_no_preview_permission_behind_it_is_404(
             ME, headers=bearer(api_token(auth_id)) | {PREVIEW_HEADER: preview}
         )
 
-    assert response.status_code == 404
+    assert_preview_not_found(response)
 
 
 @pytest.mark.parametrize("named", ["unknown", "malformed", "another-admins"])
@@ -221,10 +237,27 @@ async def test_a_header_naming_no_preview_of_this_admin_is_404(
 
         response = await client.get(ME, headers=previewing(admin, header[named]))
 
-    assert response.status_code == 404
-    assert response.json()["type"] == "about:blank"
+    assert_preview_not_found(response)
     assert (await preview_row(db_engine, theirs))["ended_at"] is None
     assert (await preview_row(db_engine, mine))["ended_at"] is None
+
+
+async def test_a_404_that_is_not_about_the_header_is_unchanged(db_engine: AsyncEngine) -> None:
+    async with app_client(db_engine) as client:
+        admin, user, preview = await live_preview(client, db_engine)
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": user}
+            )
+
+        gone = await client.get(ME, headers=previewing(admin, preview))
+        unlinked = await client.get(ME, headers=bearer(api_token(uuid4(), email=None)))
+
+    # A previewed user deleted since, and a token with no account: plain 404s.
+    for response in (gone, unlinked):
+        assert response.status_code == 404, response.text
+        assert response.json()["type"] == "about:blank"
+        assert response.json()["title"] == "NotFoundError"
 
 
 # --------------------------------------------------------------------------
@@ -482,7 +515,7 @@ async def test_a_public_route_does_not_read_a_bad_preview_as_anonymous(
         assert_ended(ended, preview, "idle")
     else:
         assert ended.status_code == 401
-    assert unknown.status_code == 404
+    assert_preview_not_found(unknown)
     assert anonymous.status_code == 200
 
 
@@ -522,6 +555,7 @@ async def test_the_spec_documents_the_header_and_its_refusals_where_it_is_honour
     for operation in (me, book, explore):
         assert PREVIEW_HEADER in headers(operation)
         assert ENDED in operation["responses"]["401"]["description"]
+        assert NOT_FOUND in operation["responses"]["404"]["description"]
     assert READ_ONLY in book["responses"]["403"]["description"]
     assert "403" not in me["responses"]
     assert (
