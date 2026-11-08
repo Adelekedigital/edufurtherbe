@@ -18,7 +18,7 @@ from app.api.schemas.admin_mentors import (
     AdminMentorRowRead,
     AdminMentorsSummaryRead,
 )
-from app.api.schemas.common import StorableText
+from app.api.schemas.common import MAX_QUERY_LENGTH, StorableText
 from app.core.errors import NotFoundError
 from app.domain.admin_mentors import AdminMentorTab
 from app.infra.db.admin_mentors import mentor_detail, mentor_rows, mentors_summary
@@ -34,7 +34,7 @@ async def admin_mentor_rows(
     tab: Annotated[AdminMentorTab, Query(description="Which tab to list.")],
     q: Annotated[
         str | None,
-        Query(max_length=200, description="Part of a name or email, ignoring case."),
+        Query(max_length=MAX_QUERY_LENGTH, description="Part of a name or email, ignoring case."),
         StorableText,
     ] = None,
 ) -> list[AdminMentorRowRead]:

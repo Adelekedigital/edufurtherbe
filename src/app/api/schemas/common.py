@@ -40,6 +40,10 @@ from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
 MAX_PAGE_SIZE = 50
 DEFAULT_PAGE_SIZE = 10
 
+#: The longest term an admin's person search accepts (mentees, mentors, the
+#: user picker); a name or an email is far shorter.
+MAX_QUERY_LENGTH = 200
+
 #: Lookup lists serve select boxes rather than autocomplete, and `countries` is
 #: 249 rows a client wants in one call — so their page is larger than a search's.
 LOOKUP_PAGE_SIZE = 300
@@ -303,6 +307,24 @@ def decode_cursor(cursor: str | None) -> tuple[str, UUID] | None:
         return sort_key, UUID(row_id)
     except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise ValidationError("cursor is not a cursor this endpoint issued") from exc
+
+
+def encode_id_cursor(row_id: UUID) -> str:
+    """A position by the last row's id alone, for a list that reads its sort key
+    back from that row: the key never travels. For a key that is personal data
+    (a name, an address), which a URL carries into access logs."""
+    return encode_cursor("", row_id)
+
+
+def decode_id_cursor(cursor: str | None) -> UUID | None:
+    """An id cursor back into the id, or a `422` for any other kind of token."""
+    decoded = decode_cursor(cursor)
+    if decoded is None:
+        return None
+    sort_key, row_id = decoded
+    if sort_key:
+        raise ValidationError("cursor is not a cursor this endpoint issued")
+    return row_id
 
 
 def encode_browse_cursor(taking_bookings: bool, row_id: UUID) -> str:
