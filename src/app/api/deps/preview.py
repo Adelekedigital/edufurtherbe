@@ -26,6 +26,7 @@ from app.api.deps.core import (
 from app.api.schemas.preview import (
     PreviewExit,
     PreviewPageView,
+    PreviewReveal,
     PreviewSessionRead,
     PreviewStart,
     PreviewSwitch,
@@ -85,6 +86,18 @@ def preview_caller(
 
 
 PreviewCallerDep = Annotated[PreviewCaller, Depends(preview_caller)]
+
+
+def reveal_caller(caller: PreviewCallerDep) -> PreviewCaller:
+    """A preview caller who may also reveal: `404` otherwise, as any admin
+    route answers, and before the body is read. The same `holds_any` over
+    REVEAL as `can_reveal`, so the gate and the flag cannot disagree."""
+    if not caller.can_reveal:
+        raise NotFoundError("no such endpoint")
+    return caller
+
+
+RevealCallerDep = Annotated[PreviewCaller, Depends(reveal_caller)]
 
 
 async def _target(session: SessionDep, caller: PreviewCaller, **match: Any) -> UUID:
@@ -161,8 +174,23 @@ async def logged_page_view(
     await session.commit()
 
 
+async def revealed_preview(
+    preview_id: UUID, payload: PreviewReveal, caller: RevealCallerDep, session: SessionDep
+) -> PreviewSessionRead:
+    """Reveal the previewed user's messages, for this user only (decision 314).
+    Revealing a revealed user changes nothing. `409` once the preview has ended."""
+    await _read(session, caller, preview_id)
+    if not await preview_store.reveal(session, caller.owner, preview_id, payload.reason):
+        raise ConflictError(NOT_LIVE)
+    await session.commit()
+    return PreviewSessionRead.of(
+        await _read(session, caller, preview_id), can_reveal=caller.can_reveal
+    )
+
+
 StartedPreviewDep = Annotated[PreviewSessionRead, Depends(started_preview)]
 SwitchedPreviewDep = Annotated[PreviewSessionRead, Depends(switched_preview)]
 PreviewDep = Annotated[PreviewSessionRead, Depends(read_preview)]
 EndedPreviewDep = Annotated[None, Depends(ended_preview)]
 LoggedPageViewDep = Annotated[None, Depends(logged_page_view)]
+RevealedPreviewDep = Annotated[PreviewSessionRead, Depends(revealed_preview)]

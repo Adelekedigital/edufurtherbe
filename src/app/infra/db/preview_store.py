@@ -20,7 +20,7 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.emails import normalise_email
-from app.domain.enums import PreviewEndReason, PreviewEventKind
+from app.domain.enums import PreviewEndReason, PreviewEventKind, PreviewRevealField
 from app.domain.preview import ACTIVITY_RESOLUTION, lapse
 from app.infra.db.models.preview import PreviewEvent, PreviewSession
 from app.infra.db.models.user import User
@@ -35,6 +35,7 @@ __all__ = [
     "load",
     "log_blocked_write",
     "log_page_view",
+    "reveal",
     "start",
     "switch",
     "touch",
@@ -118,13 +119,14 @@ _LOGGED = (_SESSION.id, _SESSION.admin_user_id, _SESSION.target_user_id)
 
 
 async def _write(
-    session: AsyncSession, owner: Owner, preview_id: UUID, **values: object
+    session: AsyncSession, owner: Owner, preview_id: UUID, *also: Any, **values: object
 ) -> Any | None:
-    """Change an owned preview **while it is live**; ``None`` when it is not
-    (ended, or ended by a racing request first, so the race logs once)."""
+    """Change an owned preview **while it is live** (and ``also`` holds);
+    ``None`` when it is not (ended, or ended by a racing request first, so the
+    race logs once)."""
     result = await session.execute(
         update(PreviewSession)
-        .where(*_owned(owner, preview_id), _SESSION.ended_at.is_(None))
+        .where(*_owned(owner, preview_id), _SESSION.ended_at.is_(None), *also)
         .values(**values)
         .returning(*_LOGGED)
     )
@@ -294,3 +296,25 @@ async def log_blocked_write(session: AsyncSession, row: Any, method: str, endpoi
     """Log a write refused in a preview: its method and route template
     (``endpoint``, never the filled-in path). ``row`` is the live preview."""
     await _log(session, row, PreviewEventKind.BLOCKED_WRITE, method=method, endpoint=endpoint)
+
+
+async def reveal(session: AsyncSession, owner: Owner, preview_id: UUID, reason: str) -> bool:
+    """Reveal the current user's messages in a live preview and log `reveal`
+    with ``reason`` (decision 314), as activity either way. **Once per user**: a
+    reveal of a revealed user keeps the first moment and logs nothing, and two
+    racing reveals log once (the conditional update is the guard). ``False``
+    when the preview is not live."""
+    row = await _write(
+        session,
+        owner,
+        preview_id,
+        _SESSION.revealed_at.is_(None),
+        revealed_at=func.now(),
+        last_active_at=func.now(),
+    )
+    if row is None:
+        return await _write(session, owner, preview_id, last_active_at=func.now()) is not None
+    await _log(
+        session, row, PreviewEventKind.REVEAL, field_type=PreviewRevealField.MESSAGES, reason=reason
+    )
+    return True

@@ -38,6 +38,9 @@ ADDED = {
         # Whether the caller may preview as a user (decision 309).
         "can_preview_as_user",
     ),
+    # Whether a preview withheld the message's contents (decision 314).
+    "MessageRead": ("hidden_in_preview",),
+    "LastRead": ("hidden_in_preview",),
     "GoalRead": ("field_of_study", "schools"),
     # New with the goal's schools (Mentee Settings PRD): the link is optional.
     "GoalSchoolRead": ("institution_id", "institution_name"),

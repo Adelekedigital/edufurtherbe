@@ -9,8 +9,15 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.schemas.admin_users import AdminUserRead
+from app.api.schemas.common import Normalised
 from app.domain.enums import PreviewEndReason
-from app.domain.preview import IDLE_WORDS, MAX_LENGTH_WORDS, PAGE_PATH_MAX_LENGTH, expires_at
+from app.domain.preview import (
+    IDLE_WORDS,
+    MAX_LENGTH_WORDS,
+    PAGE_PATH_MAX_LENGTH,
+    REVEAL_REASON_MAX_LENGTH,
+    expires_at,
+)
 
 
 class PreviewStart(BaseModel):
@@ -60,6 +67,21 @@ class PreviewPageView(BaseModel):
         return value
 
 
+class PreviewReveal(Normalised):
+    """Why the admin reveals the previewed user's messages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(
+        min_length=1,
+        max_length=REVEAL_REASON_MAX_LENGTH,
+        description=(
+            f"Why, in the admin's words: 1 to {REVEAL_REASON_MAX_LENGTH} characters "
+            "after trimming. Kept in the preview log."
+        ),
+    )
+
+
 class PreviewSessionRead(BaseModel):
     """One preview, live or ended."""
 
@@ -78,7 +100,10 @@ class PreviewSessionRead(BaseModel):
         )
     )
     revealed: bool = Field(
-        description="Whether the admin revealed this user's messages; a switch clears it."
+        description=(
+            "Whether the admin revealed this user's messages; a switch clears it. "
+            "Until then the user's message contents are hidden in the preview."
+        )
     )
     can_reveal: bool = Field(description="Whether the caller's grant may reveal messages.")
 
