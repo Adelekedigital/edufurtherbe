@@ -47,6 +47,7 @@ from app.api.routes import (
     mentor_schools,
     mentors,
     message_files,
+    push,
     reviews,
     session_types,
     sessions,
@@ -345,6 +346,14 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {
+        "name": "push",
+        "description": (
+            "Web Push: the server's public key, and subscribing, unsubscribing "
+            "and checking this browser. One row per browser; whoever signed in "
+            "there last is the one it notifies."
+        ),
+    },
+    {
         "name": "links",
         "description": (
             "Your own links: X, YouTube, Instagram, Facebook, TikTok and up to "
@@ -579,6 +588,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(invites.router)
     application.include_router(me_reviews.router)
     application.include_router(me_writing_assist.router)
+    application.include_router(push.router)
     application.include_router(callbacks.router)
     application.include_router(internal_jobs.router)
     application.include_router(sessions.router)

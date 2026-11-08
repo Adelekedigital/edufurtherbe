@@ -13,13 +13,19 @@ from app.api.deps import (
     EndedPreviewDep,
     LoggedPageViewDep,
     PreviewDep,
+    RevealedPreviewDep,
     StartedPreviewDep,
     SwitchedPreviewDep,
     require_preview_on,
 )
 from app.api.routes.admin import ADMIN_RESPONSES
 from app.api.schemas.preview import PreviewSessionRead
-from app.domain.preview import IDLE_WORDS, MAX_LENGTH_WORDS, PAGE_PATH_MAX_LENGTH
+from app.domain.preview import (
+    IDLE_WORDS,
+    MAX_LENGTH_WORDS,
+    PAGE_PATH_MAX_LENGTH,
+    REVEAL_REASON_MAX_LENGTH,
+)
 
 PREFIX = "/api/v1/admin/preview-sessions"
 
@@ -137,3 +143,25 @@ async def end_preview(_: EndedPreviewDep) -> None:
 )
 async def log_page_view(_: LoggedPageViewDep) -> None:
     return None
+
+
+@router.post(
+    "/{preview_id}/reveals",
+    response_model=PreviewSessionRead,
+    summary="Reveal the previewed user's messages",
+    description=(
+        "Shows the previewed user's message contents in this preview, for this "
+        "user only: until then their message reads in the preview withhold "
+        "`body` and `file` (the inbox `text` and `file_name`) and say "
+        "`hidden_in_preview`, and a message file download is `404`. A switch to "
+        "another user hides them again. Logs `reveal` with `reason` (1 to "
+        f"{REVEAL_REASON_MAX_LENGTH} characters after trimming, `422` otherwise) "
+        "and counts as activity. **Idempotent**: revealing a revealed user "
+        "answers `200` and changes and logs nothing.\n\n"
+        "Admins with the REVEAL permission (every live grant today; "
+        f"`can_reveal` says whether the caller has it): `404` otherwise.\n\n{_OWNED} {_LAPSE}"
+    ),
+    responses=ADMIN_RESPONSES | _NOT_LIVE,
+)
+async def reveal_messages(preview: RevealedPreviewDep) -> PreviewSessionRead:
+    return preview

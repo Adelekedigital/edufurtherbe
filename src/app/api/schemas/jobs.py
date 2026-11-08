@@ -38,6 +38,18 @@ class MessageEmailRead(BaseModel):
     )
 
 
+class PushMessageRead(BaseModel):
+    """A new message's push job was handled (decision 312)."""
+
+    delivered: int = Field(
+        description=(
+            "How many of the recipient's browsers' push services took the push. "
+            "0 when none is owed (read, a later message from the same sender, "
+            "account closed), the recipient has no browsers, or every service refused."
+        )
+    )
+
+
 class PresenceRecordedRead(BaseModel):
     """A Daily webhook delivery was handled."""
 

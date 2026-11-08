@@ -2,6 +2,10 @@
 
 Every dependency is the caller's own: the store reads and writes through M0
 with the caller's id from the token, never one from the request.
+
+**Every read that carries a message's contents takes `MessagesHiddenDep`**
+(decision 314): in a preview whose messages are not revealed, the contents
+never leave the server and a message file is `404`.
 """
 
 from __future__ import annotations
@@ -14,9 +18,10 @@ from fastapi import Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import StringConstraints
 
-from app.api.deps.core import CurrentUserDep, SessionDep, _configured
+from app.api.deps.core import CurrentUserDep, MessagesHiddenDep, SessionDep, _configured
 from app.api.deps.files import UploadField, checked_file, private_storage, streamed_file
 from app.api.deps.message_emails import schedule_unread_email
+from app.api.deps.push_messages import schedule_message_push
 from app.api.schemas.common import StorableText
 from app.api.schemas.messages import (
     ChatPage,
@@ -30,6 +35,7 @@ from app.api.schemas.messages import (
 from app.core.errors import NotFoundError, ValidationError
 from app.domain.chats import DEFAULT_PAGE, MAX_PAGE
 from app.domain.message_emails import UNREAD_EMAIL_DELAY
+from app.domain.push import MESSAGE_PUSH_DELAY
 from app.infra.db.chat_store import (
     chat_of,
     chat_rows,
@@ -50,9 +56,11 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
 
 
-async def own_chats(user: CurrentUserDep, session: SessionDep) -> ChatPage:
+async def own_chats(
+    user: CurrentUserDep, session: SessionDep, hidden: MessagesHiddenDep
+) -> ChatPage:
     me: UUID = user["id"]
-    rows = [ChatRead.of(row, me) for row in await chat_rows(session, me, _now())]
+    rows = [ChatRead.of(row, me, hidden=hidden) for row in await chat_rows(session, me, _now())]
     return ChatPage(data=rows, total_unread=sum(row.unread for row in rows))
 
 
@@ -78,6 +86,7 @@ async def own_thread(
     user_id: UUID,
     user: CurrentUserDep,
     session: SessionDep,
+    hidden: MessagesHiddenDep,
     before: Annotated[
         UUID | None, Query(description="A message id: the page just older than it.")
     ] = None,
@@ -97,7 +106,7 @@ async def own_thread(
     items, has_more = await thread_page(
         session, chat["conversation_id"], before=before, after=after, limit=limit
     )
-    return ThreadRead.of(chat, items, has_more, me)
+    return ThreadRead.of(chat, items, has_more, me, hidden=hidden)
 
 
 async def sent_message(
@@ -106,13 +115,15 @@ async def sent_message(
     request: Request,
     user: CurrentUserDep,
     session: SessionDep,
+    hidden: MessagesHiddenDep,
 ) -> tuple[MessageRead, bool]:
     """The message, written and committed, and whether it is new.
 
     A new message around a session between the two is emailed at once, in the
     send's transaction (decision 303). Any other new message queues the unread
-    email's job for 15 minutes later, once the send has committed. A replay
-    emails nothing again.
+    email's job for 15 minutes later, once the send has committed. Every new
+    message also queues its push job (decision 312) while push is configured.
+    A replay emails and pushes nothing again.
     """
     if payload.body is None and payload.file_id is None:
         # A blank body is `None` by now (`Normalised`): text, a file or both.
@@ -135,7 +146,9 @@ async def sent_message(
     await session.commit()
     if created and not instant:
         await schedule_unread_email(request, user_id, row["sent_at"] + UNREAD_EMAIL_DELAY)
-    return MessageRead.of(row, me), created
+    if created:
+        await schedule_message_push(request, row["id"], row["sent_at"] + MESSAGE_PUSH_DELAY)
+    return MessageRead.of(row, me, hidden=hidden), created
 
 
 async def read_marked(
@@ -166,9 +179,16 @@ async def uploaded_message_file(
 
 
 async def message_file_download(
-    file_id: UUID, request: Request, user: CurrentUserDep, session: SessionDep
+    file_id: UUID,
+    request: Request,
+    user: CurrentUserDep,
+    session: SessionDep,
+    hidden: MessagesHiddenDep,
 ) -> StreamingResponse:
-    """The file as an attachment, for its readers only (`readable_message_file`)."""
+    """The file as an attachment, for its readers only (`readable_message_file`);
+    none while a preview hides messages: a `404` as plain as anybody else's."""
+    if hidden:
+        raise NotFoundError("no such file")
     row = await readable_message_file(session, file_id=file_id, caller_id=user["id"])
     if row is None:
         raise NotFoundError("no such file")

@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.domain.chats import preview
+from app.domain.names import NAMELESS, addressed_by
 from app.domain.notifications import Notification
 
 __all__ = [
@@ -68,9 +69,6 @@ UNREAD_EMAILS = frozenset({Notification.MESSAGE_UNREAD_FEW, Notification.MESSAGE
 #: Every message email: the drain loads their content from the message ids.
 MESSAGE_EMAILS = UNREAD_EMAILS | {Notification.MESSAGE_IN_SESSION_WINDOW}
 
-#: A sender with no name on their account.
-NAMELESS = "Someone"
-
 
 @dataclass(frozen=True, slots=True)
 class EmailedMessage:
@@ -99,7 +97,7 @@ def held_until(last_emailed_at: dt.datetime | None, now: dt.datetime) -> dt.date
 
 
 def _first(message: EmailedMessage) -> str:
-    return message.first_name or message.last_name or NAMELESS
+    return addressed_by(message.first_name, message.last_name)
 
 
 def _full(message: EmailedMessage) -> str:

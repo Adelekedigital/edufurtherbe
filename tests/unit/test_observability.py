@@ -249,6 +249,12 @@ def test_credentials_in_a_query_string_are_masked() -> None:
     assert scrub(door) == f"https://edu.daily.co/room-1?t={REDACTED}"
 
 
+def test_a_push_endpoint_in_a_query_string_is_masked() -> None:
+    status = "/api/v1/me/push-subscriptions?endpoint=https%3A%2F%2Ffcm.googleapis.com%2Fx&a=1"
+
+    assert scrub(status) == f"/api/v1/me/push-subscriptions?endpoint={REDACTED}&a=1"
+
+
 def test_token_names_are_redacted_but_counts_of_them_are_not() -> None:
     assert scrub({"meeting_tokens": ["a"], "upstash-signature": "s", "token_count": 3}) == {
         "meeting_tokens": REDACTED,

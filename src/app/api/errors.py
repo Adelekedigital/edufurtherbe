@@ -57,6 +57,7 @@ from app.core.errors import (
     PreviewEndedError,
     PreviewNotFoundError,
     PreviewUserNotFoundError,
+    PushUnavailableError,
     RateLimitedError,
     ReadOnlyViewAsError,
     RecipientClosedError,
@@ -115,6 +116,8 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     UpstreamError: status.HTTP_502_BAD_GATEWAY,
     # 503: the assistant may be switched off here, which is ours (decision 267).
     WritingAssistUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # 503 likewise: push is unconfigured here, which is ours (decision 312).
+    PushUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 
 # The `type` slot, used for the first time here.
@@ -189,6 +192,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     RecipientPausedError: "/problems/recipient-paused",
     RecipientClosedError: "/problems/recipient-closed",
     WritingAssistUnavailableError: "/problems/writing-assist-unavailable",
+    PushUnavailableError: "/problems/push-unavailable",
     FileTooLargeError: "/problems/file-too-large",
     FileTypeNotAllowedError: "/problems/file-type-not-allowed",
     FileUnavailableError: "/problems/file-unavailable",

@@ -27,7 +27,14 @@ from typing import Any
 import pytest
 
 from app.domain.bubble import EXPORT_TIMEZONE
-from app.domain.enums import ActorType, AttendanceStatus, MeetingProvider, SessionStatus
+from app.domain.enums import (
+    ActorType,
+    AttendanceStatus,
+    MeetingProvider,
+    SessionReasonCode,
+    SessionRole,
+    SessionStatus,
+)
 from app.domain.transform.identity import TransformError
 from app.domain.transform.sessions import (
     DEFAULT_DURATION_MINUTES,
@@ -112,12 +119,18 @@ def calendar_row(**overrides: Any) -> dict[str, Any]:
     return record
 
 
+#: Before every fixture's session date, so no existing test is judged as past.
+#: Tests of the time rules (decision 315) pass `as_of` explicitly.
+EARLY = datetime(2025, 1, 1, tzinfo=UTC)
+
+
 def plan(
     bookings: list[dict[str, Any]] | None = None,
     trackers: list[dict[str, Any]] | None = None,
     calendar: list[dict[str, Any]] | None = None,
     users: list[dict[str, Any]] | None = None,
     mentors: list[dict[str, Any]] | None = None,
+    as_of: datetime = EARLY,
 ) -> SessionPlan:
     """``mentors`` defaults to empty, so every existing test exercises the
     fallback rather than the mapping — the venue and confirmation arrived with
@@ -129,6 +142,7 @@ def plan(
         [calendar_row()] if calendar is None else calendar,
         mentors or [],
         export_timezone=EXPORT_TIMEZONE,
+        as_of=as_of,
     )
 
 
@@ -220,8 +234,17 @@ def test_an_unmapped_status_raises_rather_than_defaulting() -> None:
 
 def test_an_absent_status_is_dropped_with_an_anchor() -> None:
     """Absent and unrecognised are different failures — `_resolve_timezone`'s
-    rule. A blank is missing data; a wrong value is a mapping gap."""
-    result = plan([booking(sessionStatus=None, **{"SessionCancel (Y/N)❌": "no"})])
+    rule. A blank is missing data; a wrong value is a mapping gap. Accepted, so
+    it is not an unanswered request (decision 315), which loads instead."""
+    result = plan(
+        [
+            booking(
+                sessionStatus=None,
+                bookingRequestAccepted="yes",
+                **{"SessionCancel (Y/N)❌": "no"},
+            )
+        ]
+    )
 
     assert not result.errors
     assert [row.legacy_bubble_id for row in result.dropped] == ["sb-1"]
@@ -285,7 +308,7 @@ def test_an_orphan_not_cancelled_is_settled_from_its_attendance(
 ) -> None:
     """Both #474 rows (dev and staging) are orphans: "not cancelled" is no
     evidence the session happened, so it is judged by the booking's rule."""
-    result = plan([], [tracker(**attendance(mentor, mentee))])
+    result = plan([], [tracker(**attendance(mentor, mentee))], as_of=AS_OF)
 
     assert result.sessions[0].status is expected
     assert result.events == ()
@@ -303,16 +326,16 @@ def test_a_completed_booking_with_no_tracker_stays_completed() -> None:
 @pytest.mark.parametrize(
     ("legacy", "cancel", "expected"),
     [
-        ("Missed", "no", SessionStatus.NO_SHOW),
         ("Canceled", "yes", SessionStatus.CANCELLED),
         ("Declined", "no", SessionStatus.DECLINED),
         ("Pending", "no", SessionStatus.PENDING_MENTOR_APPROVAL),
     ],
 )
-def test_only_a_completed_status_is_settled_from_the_tracker(
+def test_a_cancelled_declined_or_pending_row_is_not_settled_from_the_tracker(
     legacy: str, cancel: str, expected: SessionStatus
 ) -> None:
-    """Both attended must not promote a `Missed` or a cancelled row to completed."""
+    """Both attended must not promote a cancelled, declined or pending row to
+    completed. A `Missed` row is judged since decision 315 (below)."""
     result = plan(
         [booking(sessionStatus=legacy, SessionTracker="st-1", **{"SessionCancel (Y/N)❌": cancel})],
         [tracker(SessionID="sb-1", **attendance("yes", "yes"))],
@@ -342,6 +365,7 @@ def test_an_attendance_override_is_reported_with_its_anchor() -> None:
             tracker(bubble_id="st-9", SessionID="sb-2", **attendance("yes", "yes")),
             tracker(bubble_id="st-2", **attendance("yes", "no")),
         ],
+        as_of=AS_OF,
     )
 
     overrides = {row.legacy_bubble_id: row.detail for row in result.attendance_overrode_status}
@@ -966,3 +990,462 @@ def test_a_transform_error_names_the_row() -> None:
         raise TransformError("sb-9", "unmapped sessionStatus 'Wizard'")
 
     assert raised.value.bubble_id == "sb-9"
+
+
+# --------------------------------------------------------------------------
+# Production statuses and the time rules (owner, 2026-11-07, decision 315)
+# --------------------------------------------------------------------------
+
+#: The production export was taken 2026-11-08 03:00 UTC.
+AS_OF = datetime(2026, 11, 8, 3, 0, tzinfo=UTC)
+PAST = "Sep 8, 2025 1:00 am"
+FUTURE = "Nov 12, 2026 1:00 pm"
+NOT_CANCELLED = {"SessionCancel (Y/N)❌": "no", "Canceled By": None}
+
+
+def test_upcoming_loads_confirmed_and_the_mentor_confirmed_it() -> None:
+    result = plan(
+        [
+            booking(
+                sessionStatus="Upcoming",
+                # Accepted, as 4 of the 11 production rows are: the event is
+                # still pending → confirmed, never confirmed → confirmed.
+                bookingRequestAccepted="yes",
+                **{"SessionDateTime-UTC(Booked date)": FUTURE},
+                **NOT_CANCELLED,
+            )
+        ],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is SessionStatus.CONFIRMED
+    terminal = result.events[-1]
+    assert terminal.from_status is SessionStatus.PENDING_MENTOR_APPROVAL
+    assert terminal.to_status is SessionStatus.CONFIRMED
+    assert terminal.actor_bubble_id == MENTOR
+    assert terminal.actor_type is ActorType.USER
+
+
+def test_withdrawn_loads_withdrawn_by_the_mentee() -> None:
+    result = plan([booking(sessionStatus="Withdrawn", **NOT_CANCELLED)], as_of=AS_OF)
+
+    assert result.sessions[0].status is SessionStatus.WITHDRAWN
+    assert result.events[-1].actor_bubble_id == MENTEE
+    assert result.events[-1].actor_type is ActorType.USER
+
+
+def test_a_pending_request_whose_slot_passed_has_expired() -> None:
+    """81 production requests were never answered before their time."""
+    result = plan([booking(sessionStatus="Pending", **NOT_CANCELLED)], as_of=AS_OF)
+
+    assert result.sessions[0].status is SessionStatus.EXPIRED
+    terminal = result.events[-1]
+    assert terminal.from_status is SessionStatus.PENDING_MENTOR_APPROVAL
+    assert terminal.to_status is SessionStatus.EXPIRED
+    assert terminal.actor_bubble_id is None
+    assert terminal.actor_type is ActorType.SYSTEM
+    assert terminal.created_at == datetime(2025, 9, 8, 5, 0, tzinfo=UTC)
+
+
+def test_a_pending_request_still_ahead_stays_pending() -> None:
+    result = plan(
+        [
+            booking(
+                sessionStatus="Pending",
+                **{"SessionDateTime-UTC(Booked date)": FUTURE},
+                **NOT_CANCELLED,
+            )
+        ],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is SessionStatus.PENDING_MENTOR_APPROVAL
+    assert len(result.events) == 1
+
+
+def test_a_blank_status_never_accepted_and_past_has_expired() -> None:
+    """58 production rows: past, never accepted, no tracker."""
+    result = plan([booking(sessionStatus=None, **NOT_CANCELLED)], as_of=AS_OF)
+
+    assert not result.dropped
+    assert result.sessions[0].status is SessionStatus.EXPIRED
+
+
+def test_an_accepted_blank_status_is_still_dropped() -> None:
+    result = plan(
+        [booking(sessionStatus=None, bookingRequestAccepted="yes", **NOT_CANCELLED)],
+        as_of=AS_OF,
+    )
+
+    assert [row.legacy_bubble_id for row in result.dropped] == ["sb-1"]
+    assert not result.sessions
+
+
+def test_a_blank_unanswered_request_still_ahead_loads_pending() -> None:
+    """A live request: the live sweep expires it if nobody answers."""
+    result = plan(
+        [
+            booking(
+                sessionStatus=None,
+                **{"SessionDateTime-UTC(Booked date)": FUTURE},
+                **NOT_CANCELLED,
+            )
+        ],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is SessionStatus.PENDING_MENTOR_APPROVAL
+    assert participant_shape(result) == pending_pair()
+
+
+@pytest.mark.parametrize(("mentor", "mentee", "expected"), TRACKER_OUTCOMES)
+def test_a_missed_booking_is_judged_by_its_tracker(
+    mentor: str, mentee: str, expected: SessionStatus
+) -> None:
+    """70 production `Missed` rows have a tracker where both attended."""
+    result = plan(
+        [booking(sessionStatus="Missed", SessionTracker="st-1", **NOT_CANCELLED)],
+        [tracker(SessionID="sb-1", **attendance(mentor, mentee))],
+    )
+
+    assert result.sessions[0].status is expected
+    promoted = expected is SessionStatus.COMPLETED
+    assert [row.legacy_bubble_id for row in result.attendance_overrode_status] == (
+        ["sb-1"] if promoted else []
+    )
+    if promoted:
+        # Names what it would otherwise have been, not "completed".
+        assert "would load no_show" in result.attendance_overrode_status[0].detail
+
+
+@pytest.mark.parametrize(("mentor", "mentee", "expected"), TRACKER_OUTCOMES)
+def test_a_past_upcoming_booking_is_judged_by_its_tracker(
+    mentor: str, mentee: str, expected: SessionStatus
+) -> None:
+    result = plan(
+        [booking(sessionStatus="Upcoming", SessionTracker="st-1", **NOT_CANCELLED)],
+        [tracker(SessionID="sb-1", **attendance(mentor, mentee))],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is expected
+
+
+def test_an_upcoming_booking_still_ahead_is_not_judged() -> None:
+    result = plan(
+        [
+            booking(
+                sessionStatus="Upcoming",
+                SessionTracker="st-1",
+                **{"SessionDateTime-UTC(Booked date)": FUTURE},
+                **NOT_CANCELLED,
+            )
+        ],
+        [tracker(SessionID="sb-1", **attendance("no", "no"))],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is SessionStatus.CONFIRMED
+
+
+# --- review fixes for decision 315 -----------------------------------------
+
+
+def test_a_past_upcoming_with_no_tracker_loads_completed() -> None:
+    """Left confirmed, the live settlement would judge it on no evidence."""
+    result = plan([booking(sessionStatus="Upcoming", **NOT_CANCELLED)], as_of=AS_OF)
+
+    assert result.sessions[0].status is SessionStatus.COMPLETED
+
+
+def test_a_promoted_upcoming_is_reported_as_confirmed() -> None:
+    result = plan(
+        [booking(sessionStatus="Upcoming", SessionTracker="st-1", **NOT_CANCELLED)],
+        [tracker(SessionID="sb-1", **attendance("yes", "no"))],
+        as_of=AS_OF,
+    )
+
+    assert "would load confirmed" in result.attendance_overrode_status[0].detail
+
+
+@pytest.mark.parametrize(
+    ("legacy", "expected"),
+    [("Withdrawn", SessionStatus.WITHDRAWN), ("Pending", SessionStatus.EXPIRED)],
+)
+def test_an_accepted_request_still_ends_from_pending(legacy: str, expected: SessionStatus) -> None:
+    """The lifecycle has no confirmed → withdrawn or confirmed → expired."""
+    result = plan(
+        [booking(sessionStatus=legacy, bookingRequestAccepted="yes", **NOT_CANCELLED)],
+        as_of=AS_OF,
+    )
+
+    terminal = result.events[-1]
+    assert terminal.to_status is expected
+    assert terminal.from_status is SessionStatus.PENDING_MENTOR_APPROVAL
+    assert "sb-1" not in result.unplaceable_confirmations
+
+
+def test_an_expiry_needs_no_modified_date_and_carries_the_live_reason() -> None:
+    result = plan(
+        [booking(sessionStatus="Pending", modified_at=None, **NOT_CANCELLED)], as_of=AS_OF
+    )
+
+    terminal = result.events[-1]
+    assert terminal.to_status is SessionStatus.EXPIRED
+    assert terminal.reason_code is SessionReasonCode.EXPIRED_NO_RESPONSE
+
+
+def test_a_request_expires_at_its_start_inclusive() -> None:
+    """The live sweep's boundary (`pending_requests._past_deadline`, `<=`)."""
+    at_start = datetime(2025, 9, 8, 5, 0, tzinfo=UTC)
+    result = plan([booking(sessionStatus="Pending", **NOT_CANCELLED)], as_of=at_start)
+
+    assert result.sessions[0].status is SessionStatus.EXPIRED
+
+
+def test_a_future_orphan_tracker_is_confirmed_not_judged() -> None:
+    result = plan([], [tracker(**attendance("no", "no"), **{"session time": FUTURE})], as_of=AS_OF)
+
+    assert result.sessions[0].status is SessionStatus.CONFIRMED
+    assert result.attendance_overrode_status == ()
+
+
+# --- sessions still live after the load (decision 315) ---------------------
+
+
+def pending_pair() -> list[tuple[str, SessionRole, AttendanceStatus, None]]:
+    return [
+        (MENTOR, SessionRole.MENTOR, AttendanceStatus.PENDING, None),
+        (MENTEE, SessionRole.MENTEE, AttendanceStatus.PENDING, None),
+    ]
+
+
+def participant_shape(result: SessionPlan) -> list[tuple[str, SessionRole, AttendanceStatus, None]]:
+    return [
+        (p.user_bubble_id, p.role, p.attendance_status, p.joined_at) for p in result.participants
+    ]
+
+
+def test_a_future_upcoming_gets_pending_participants_not_its_trackers() -> None:
+    """All 10 production future rows have a tracker at no/no, Bubble's value
+    before the session. Loaded as is, settlement (which updates only `pending`)
+    would record a no-show however the call went."""
+    result = plan(
+        [
+            booking(
+                sessionStatus="Upcoming",
+                SessionTracker="st-1",
+                **{"SessionDateTime-UTC(Booked date)": FUTURE},
+                **NOT_CANCELLED,
+            )
+        ],
+        [tracker(SessionID="sb-1", **attendance("no", "no"))],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is SessionStatus.CONFIRMED
+    assert participant_shape(result) == pending_pair()
+
+
+@pytest.mark.parametrize("legacy", ["Upcoming", "Pending"])
+def test_a_live_session_with_no_tracker_still_gets_participants(legacy: str) -> None:
+    """Without them, Join answers 'no attendance record for you'."""
+    result = plan(
+        [
+            booking(
+                sessionStatus=legacy,
+                **{"SessionDateTime-UTC(Booked date)": FUTURE},
+                **NOT_CANCELLED,
+            )
+        ],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status in (
+        SessionStatus.CONFIRMED,
+        SessionStatus.PENDING_MENTOR_APPROVAL,
+    )
+    assert participant_shape(result) == pending_pair()
+
+
+def test_a_future_orphan_tracker_gets_pending_participants() -> None:
+    result = plan(
+        [], [tracker(**attendance("yes", "yes"), **{"session time": FUTURE})], as_of=AS_OF
+    )
+
+    assert [p.attendance_status for p in result.participants] == [AttendanceStatus.PENDING] * 2
+
+
+def test_a_finished_session_keeps_its_trackers_attendance() -> None:
+    result = plan(
+        [booking(sessionStatus="Missed", SessionTracker="st-1", **NOT_CANCELLED)],
+        [tracker(SessionID="sb-1", **attendance("yes", "no"))],
+        as_of=AS_OF,
+    )
+
+    assert {p.role: p.attendance_status for p in result.participants} == {
+        SessionRole.MENTOR: AttendanceStatus.ATTENDED,
+        SessionRole.MENTEE: AttendanceStatus.NO_SHOW,
+    }
+
+
+def test_a_blank_status_with_a_tracker_is_not_expired() -> None:
+    result = plan(
+        [booking(sessionStatus=None, SessionTracker="st-1", **NOT_CANCELLED)],
+        [tracker(SessionID="sb-1", **attendance("yes", "yes"))],
+        as_of=AS_OF,
+    )
+
+    assert [row.legacy_bubble_id for row in result.dropped] == ["sb-1"]
+
+
+def test_a_past_upcoming_with_no_tracker_is_reported() -> None:
+    result = plan([booking(sessionStatus="Upcoming", **NOT_CANCELLED)], as_of=AS_OF)
+
+    assert result.attendance_overrode_status[0].legacy_bubble_id == "sb-1"
+    assert "no tracker" in result.attendance_overrode_status[0].detail
+
+
+def test_a_session_starting_exactly_at_the_export_has_started() -> None:
+    """`_started_by` is inclusive, as the expiry boundary is."""
+    at_start = datetime(2025, 9, 8, 5, 0, tzinfo=UTC)
+    result = plan(
+        [booking(sessionStatus="Upcoming", SessionTracker="st-1", **NOT_CANCELLED)],
+        [tracker(SessionID="sb-1", **attendance("yes", "yes"))],
+        as_of=at_start,
+    )
+
+    assert result.sessions[0].status is SessionStatus.COMPLETED
+
+
+# --- migrated history reads like live history (decision 315) ---------------
+
+
+def test_a_promoted_upcoming_records_confirmed_to_terminal() -> None:
+    """Upcoming was confirmed in Bubble, whatever the accepted flag says."""
+    result = plan(
+        [booking(sessionStatus="Upcoming", bookingRequestAccepted=None, **NOT_CANCELLED)],
+        as_of=AS_OF,
+    )
+
+    assert result.events[-1].from_status is SessionStatus.CONFIRMED
+    assert result.events[-1].to_status is SessionStatus.COMPLETED
+    assert result.events[-1].actor_type is ActorType.SYSTEM
+    assert result.events[-1].actor_bubble_id is None
+
+
+def test_a_status_the_load_decided_is_the_systems() -> None:
+    result = plan(
+        [booking(sessionStatus="Missed", SessionTracker="st-1", **NOT_CANCELLED)],
+        [tracker(SessionID="sb-1", **attendance("yes", "yes"))],
+        as_of=AS_OF,
+    )
+
+    terminal = result.events[-1]
+    assert terminal.to_status is SessionStatus.COMPLETED
+    assert terminal.actor_bubble_id is None
+    assert terminal.actor_type is ActorType.SYSTEM
+
+
+def test_an_expired_request_with_a_tracker_has_pending_participants() -> None:
+    """A request that lapsed did not happen, whatever its tracker held."""
+    result = plan(
+        [booking(sessionStatus="Pending", SessionTracker="st-1", **NOT_CANCELLED)],
+        [tracker(SessionID="sb-1", **attendance("yes", "yes"))],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is SessionStatus.EXPIRED
+    assert participant_shape(result) == pending_pair()
+
+
+@pytest.mark.parametrize(
+    ("legacy", "when"), [("Pending", PAST), ("Upcoming", FUTURE)], ids=["expiry", "confirmation"]
+)
+def test_an_expiry_or_confirmation_carries_no_cancel_text(legacy: str, when: str) -> None:
+    result = plan(
+        [
+            booking(
+                sessionStatus=legacy,
+                **{
+                    "SessionDateTime-UTC(Booked date)": when,
+                    "SessionCancel (Y/N)❌": "no",
+                    "Canceled By": None,
+                    "Session Cancel/Decline Message": "stale text",
+                },
+            )
+        ],
+        as_of=AS_OF,
+    )
+
+    assert result.events[-1].reason_text is None
+
+
+def test_an_expiry_is_never_dated_before_its_request() -> None:
+    """A booking created after its own slot still expires after it began."""
+    result = plan(
+        [booking(sessionStatus="Pending", created_at="Sep 9, 2025 9:00 am", **NOT_CANCELLED)],
+        as_of=AS_OF,
+    )
+
+    creation, expiry = result.events
+    assert expiry.created_at >= creation.created_at
+
+
+def test_a_cancelled_upcoming_was_confirmed_before_it_was_cancelled() -> None:
+    """The cancel flag outranks the status column, but `Upcoming` still says the
+    session was confirmed first (GitHub review on #592)."""
+    result = plan(
+        [
+            booking(
+                sessionStatus="Upcoming",
+                bookingRequestAccepted=None,
+                **{"SessionCancel (Y/N)❌": "yes", "Canceled By": MENTOR},
+            )
+        ],
+        as_of=AS_OF,
+    )
+
+    terminal = result.events[-1]
+    assert terminal.to_status is SessionStatus.CANCELLED
+    assert terminal.from_status is SessionStatus.CONFIRMED
+    # When it was confirmed is unknown, and the cancel flag overrode a status.
+    assert "sb-1" in result.unplaceable_confirmations
+    assert [row.legacy_bubble_id for row in result.cancellation_overrode_status] == ["sb-1"]
+
+
+@pytest.mark.parametrize("when", [PAST, FUTURE], ids=["past", "future"])
+def test_a_cancelled_upcoming_with_a_tracker_stays_cancelled(when: str) -> None:
+    result = plan(
+        [
+            booking(
+                sessionStatus="Upcoming",
+                SessionTracker="st-1",
+                **{
+                    "SessionDateTime-UTC(Booked date)": when,
+                    "SessionCancel (Y/N)\u274c": "yes",
+                    "Canceled By": MENTEE,
+                },
+            )
+        ],
+        [tracker(SessionID="sb-1", **attendance("yes", "yes"))],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is SessionStatus.CANCELLED
+    assert result.events[-1].from_status is SessionStatus.CONFIRMED
+    assert result.attendance_overrode_status == ()
+
+
+def test_cancelled_spelled_with_two_ls_is_not_an_override() -> None:
+    result = plan([booking(sessionStatus="Cancelled")], as_of=AS_OF)
+
+    assert result.sessions[0].status is SessionStatus.CANCELLED
+    assert result.cancellation_overrode_status == ()
+
+
+def test_an_unmapped_status_refuses_even_when_cancelled() -> None:
+    result = plan([booking(sessionStatus="Rescheduled")], as_of=AS_OF)
+
+    assert "Rescheduled" in result.errors[0]
+    assert not result.sessions

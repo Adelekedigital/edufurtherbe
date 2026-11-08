@@ -44,6 +44,7 @@ from app.infra.db.predicates import LIVE
 __all__ = [
     "MESSAGE_EMAIL_LOCK_NAMESPACE",
     "UnreadEmailOutcome",
+    "messages_to",
     "queue_instant_email",
     "queue_unread_email",
 ]
@@ -72,9 +73,10 @@ async def _lock(session: AsyncSession, recipient: UUID) -> None:
     )
 
 
-def _to(recipient: UUID) -> Any:
+def messages_to(recipient: UUID) -> Any:
     """Messages to ``recipient`` in their chats through M0, joined to their
-    read mark as `mine`: the badge's own scope."""
+    read mark as `mine`: the badge's own scope. The unread email and the
+    message push both read through it."""
     link = connections(recipient)
     return (
         select()
@@ -96,7 +98,7 @@ async def _last_emailed(session: AsyncSession, recipient: UUID, now: dt.datetime
     """When a message to ``recipient`` was last emailed, within the hour."""
     return (
         await session.execute(
-            _to(recipient)
+            messages_to(recipient)
             .add_columns(func.max(Message.emailed_at))
             .where(Message.emailed_at > now - UNREAD_EMAIL_INTERVAL)
         )
@@ -126,7 +128,7 @@ async def queue_unread_email(
     waiting = (
         (
             await session.execute(
-                _to(recipient)
+                messages_to(recipient)
                 .add_columns(Message.id)
                 .where(
                     *unread(recipient, ConversationParticipant.last_read_at),

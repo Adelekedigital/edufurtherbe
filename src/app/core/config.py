@@ -32,6 +32,8 @@ from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -136,6 +138,35 @@ RESPONSE_WINDOW_CEILING_HOURS = NOTICE_FLOOR_MINUTES // 60 - SUGGESTION_HOLD_HOU
 #: gives 64 characters, and anything a person might type is far below this.
 EDGE_PROXY_SECRET_MIN_LENGTH = 32
 _PROXY_SECRET = re.compile(rf"[!-~]{{{EDGE_PROXY_SECRET_MIN_LENGTH},}}")
+
+
+#: VAPID key sizes (RFC 8292): an uncompressed P-256 point, a P-256 scalar.
+VAPID_PUBLIC_KEY_BYTES = 65
+VAPID_PRIVATE_KEY_BYTES = 32
+
+#: The base64url alphabet, optionally padded: the server's VAPID keys and a
+#: browser's push keys both come in it (`domain.push.KEY_PATTERN` is this).
+BASE64URL_PATTERN = "^[A-Za-z0-9_-]+={0,2}$"
+
+
+def base64url_bytes(value: str) -> bytes | None:
+    """`value` decoded as base64url, padded or not; `None` if it is not."""
+    if not re.fullmatch(BASE64URL_PATTERN, value):
+        return None
+    try:
+        return base64.urlsafe_b64decode(value.rstrip("=") + "=" * (-len(value.rstrip("=")) % 4))
+    except binascii.Error, ValueError:
+        return None
+
+
+def _vapid_public_half(private: bytes) -> bytes | None:
+    """The uncompressed public point of a raw P-256 private key, or `None` when
+    the bytes are not a valid key (zero, or not below the curve order)."""
+    try:
+        key = ec.derive_private_key(int.from_bytes(private, "big"), ec.SECP256R1())
+    except ValueError:
+        return None
+    return key.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
 
 
 def env_key(field: str) -> str:
@@ -855,6 +886,19 @@ class Settings(BaseSettings):
         default="edufurther-platform-2026", validation_alias=env_key("ai_router_key_id")
     )
 
+    #: Web Push's VAPID key pair (RFC 8292, #386): the public half as the
+    #: browser takes it (base64url, an uncompressed P-256 point), the private
+    #: half as the raw 32-byte scalar in base64url. **All three or none**: unset,
+    #: `GET /push/config` answers `503` and the app offers no opt-in. Rotating
+    #: the pair orphans every subscription, which browsers re-make on the next
+    #: opt-in.
+    vapid_public_key: str | None = Field(default=None, validation_alias=env_key("vapid_public_key"))
+    vapid_private_key: SecretStr | None = Field(
+        default=None, validation_alias=env_key("vapid_private_key")
+    )
+    #: Who a push service contacts about our pushes: `mailto:` or `https:`.
+    vapid_subject: str | None = Field(default=None, validation_alias=env_key("vapid_subject"))
+
     #: How many Google free/busy calls one worker process makes in any minute,
     #: for every caller together (decision 242). The public `/slots` read can
     #: call Google per request; past this, a read answers from declared hours as
@@ -871,6 +915,9 @@ class Settings(BaseSettings):
         "railway_git_commit_sha",
         "ai_router_url",
         "ai_router_private_key",
+        "vapid_public_key",
+        "vapid_private_key",
+        "vapid_subject",
         mode="before",
     )
     @classmethod
@@ -907,6 +954,40 @@ class Settings(BaseSettings):
                 "credit levels must not decrease: CREDIT_STARTER_GRANT <= "
                 "CREDIT_REFERRAL_UNLOCK_GRANT <= CREDIT_MONTHLY_ALLOWANCE"
             )
+        return self
+
+    @property
+    def push_configured(self) -> bool:
+        """Whether Web Push can be offered: the validator makes it all or none."""
+        return self.vapid_public_key is not None
+
+    @model_validator(mode="after")
+    def vapid_all_or_none(self) -> Settings:
+        """Web Push's three settings together, each in the shape it must have.
+
+        Half a configuration, or a public key from another pair, would publish
+        a key the server cannot sign for, and every subscription made against
+        it would be dead on arrival.
+        """
+        public_key, private_key, subject = (
+            self.vapid_public_key,
+            self.vapid_private_key,
+            self.vapid_subject,
+        )
+        if public_key is None and private_key is None and subject is None:
+            return self
+        if public_key is None or private_key is None or subject is None:
+            raise ValueError("VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT go together")
+        public = base64url_bytes(public_key)
+        if public is None or len(public) != VAPID_PUBLIC_KEY_BYTES or public[0] != 0x04:
+            raise ValueError("VAPID_PUBLIC_KEY must be an uncompressed P-256 point in base64url")
+        private = base64url_bytes(private_key.get_secret_value())
+        if private is None or len(private) != VAPID_PRIVATE_KEY_BYTES:
+            raise ValueError("VAPID_PRIVATE_KEY must be a raw 32-byte key in base64url")
+        if _vapid_public_half(private) != public:
+            raise ValueError("VAPID_PUBLIC_KEY is not the public half of VAPID_PRIVATE_KEY")
+        if not subject.startswith(("mailto:", "https://")):
+            raise ValueError("VAPID_SUBJECT must be a mailto: or https:// URL")
         return self
 
     @model_validator(mode="after")

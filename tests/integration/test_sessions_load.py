@@ -38,6 +38,7 @@ from app.domain.enums import (
     ActorType,
     AttendanceStatus,
     MeetingProvider,
+    SessionReasonCode,
     SessionRole,
     SessionStatus,
 )
@@ -118,6 +119,34 @@ def plan_of(**overrides: object) -> SessionPlan:
     }
     values.update(overrides)
     return SessionPlan(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_a_migrated_expiry_lands_with_the_live_reason_code(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """Decision 315: a migrated expiry carries `expired_no_response`, as the live
+    sweep writes it, and the column's CHECK accepts it."""
+    conn, users = seeded
+    expired = (
+        SessionEventRow(
+            "sb-1",
+            SessionStatus.PENDING_MENTOR_APPROVAL,
+            SessionStatus.EXPIRED,
+            None,
+            ActorType.SYSTEM,
+            None,
+            STARTS_AT,
+            reason_code=SessionReasonCode.EXPIRED_NO_RESPONSE,
+        ),
+    )
+    await SessionLoader(conn).load(
+        users=users,
+        plan=plan_of(sessions=(session_row(status=SessionStatus.EXPIRED),), events=expired),
+    )
+
+    row = await conn.execute(text("SELECT to_status, reason_code FROM session_events"))
+    assert row.one() == ("expired", "expired_no_response")
 
 
 @pytest_asyncio.fixture

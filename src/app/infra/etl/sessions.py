@@ -180,11 +180,12 @@ ON CONFLICT (session_id, user_id) DO UPDATE SET
 
 INSERT_EVENT = """
 INSERT INTO session_events
-    (session_id, from_status, to_status, actor_id, actor_type, reason_text, created_at)
+    (session_id, from_status, to_status, actor_id, actor_type, reason_text, reason_code,
+     created_at)
 VALUES
     (:session_id, :from_status,
      :to_status, :actor_id,
-     :actor_type, :reason_text, :created_at)
+     :actor_type, :reason_text, :reason_code, :created_at)
 """
 
 #: Scoped to the sessions this plan wrote. `expanding=True` is the documented
@@ -346,6 +347,7 @@ class SessionLoader:
                     "actor_id": users.get(row.actor_bubble_id or ""),
                     "actor_type": row.actor_type.value,
                     "reason_text": row.reason_text,
+                    "reason_code": row.reason_code.value if row.reason_code else None,
                     "created_at": row.created_at,
                 },
             )
