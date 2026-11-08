@@ -531,6 +531,10 @@ RETAINED_ON_USER_DELETE = frozenset(
         # Cascading it would delete the justification and leave the
         # soft-deleted review unexplained.
         "review_reports",
+        # The preview log and its sessions are the record of what an admin
+        # saw as someone else (decision 309); purging either party keeps them.
+        "preview_sessions",
+        "preview_events",
     }
 )
 

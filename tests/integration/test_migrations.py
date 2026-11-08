@@ -206,6 +206,8 @@ EXPECTED_TABLES = [
     "message_attachments",
     # Who switched which email off (Messages PRD, decision 303).
     "notification_channel_preferences",
+    "preview_sessions",
+    "preview_events",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**
