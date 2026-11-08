@@ -595,29 +595,35 @@ def _attendance(raw: Any) -> AttendanceStatus:
     return AttendanceStatus.ATTENDED if is_true(raw) else AttendanceStatus.NO_SHOW
 
 
-def session_status(record: dict[str, Any], anchor: str) -> SessionStatus | None:
-    """The lifecycle state, with cancellation outranking the status column.
+def session_status(
+    record: dict[str, Any], anchor: str
+) -> tuple[SessionStatus | None, SessionStatus | None]:
+    """The lifecycle state, with cancellation outranking the status column, and
+    the column as declared.
 
     **A cancelled session is never also missed.** Three dev rows carry
     ``sessionStatus = Missed`` alongside the cancel flag, a mentor canceller and
     a reason — the automated sweep overwrote a decision a human had already
     made. Legacy was inconsistent; this is where that stops.
 
-    Returns ``None`` for an absent status, which the caller drops with an
-    anchor. A **present but unrecognised** value raises: at 1,073 production
-    rows a sixth value is likelier than not, and mapping it to a plausible
-    neighbour would produce sessions nobody could find again.
+    Returns ``(effective, declared)``. ``None`` is an absent status, which the
+    caller drops with an anchor. A **present but unrecognised** value raises,
+    cancelled or not: at 1,073 production rows a sixth value is likelier than
+    not, and mapping it to a plausible neighbour would produce sessions nobody
+    could find again. **The declared status survives a cancel** because it
+    still says what happened first: a cancelled `Upcoming` was confirmed
+    (decision 315). Parsed once, here.
     """
-    if is_true(record.get(BOOKING_CANCEL_FLAG_FIELD)):
-        return SessionStatus.CANCELLED
-
     raw = _text(record, BOOKING_STATUS_FIELD)
-    if raw is None:
-        return None
-    try:
-        return STATUS_MAP[raw.lower()]
-    except KeyError as exc:
-        raise TransformError(anchor, f"unmapped sessionStatus {raw!r}") from exc
+    declared: SessionStatus | None = None
+    if raw is not None:
+        try:
+            declared = STATUS_MAP[raw.lower()]
+        except KeyError as exc:
+            raise TransformError(anchor, f"unmapped sessionStatus {raw!r}") from exc
+    if is_true(record.get(BOOKING_CANCEL_FLAG_FIELD)):
+        return SessionStatus.CANCELLED, declared
+    return declared, declared
 
 
 def durations_by_mentor(
@@ -865,7 +871,7 @@ def plan_sessions(
     for record in bookings:
         anchor = legacy_anchor(record)
         try:
-            status = session_status(record, anchor)
+            status, declared_status = session_status(record, anchor)
             starts_at = _timestamp(
                 record, BOOKING_START_FIELD, assume=export_timezone, anchor=anchor
             )
@@ -882,8 +888,10 @@ def plan_sessions(
         # Decision 315. Looked up once; a tracker is an attendance fact.
         tracker = trackers_by_anchor.get(str(record.get(BOOKING_TRACKER_FIELD) or ""))
         accepted = is_true(record.get(BOOKING_ACCEPTED_FIELD))
-        # A legacy `Upcoming` was confirmed in Bubble whatever the flag says.
-        was_confirmed = status is SessionStatus.CONFIRMED or accepted
+        # A legacy `Upcoming` was confirmed in Bubble whatever the flag says, and
+        # stays so when the cancel flag has overridden it. Only `Upcoming`: the
+        # sweep set `Completed` and `Missed` once the slot passed, accepted or not.
+        was_confirmed = accepted or declared_status is SessionStatus.CONFIRMED
         # A blank status never accepted and with no tracker is a request nobody
         # answered (58 production rows): pending, then expired like any other.
         if status is None and not accepted and tracker is None:
@@ -923,10 +931,13 @@ def plan_sessions(
         if record.get("datePicked"):
             reschedules.append(Disagreement(anchor, "carries a previously chosen slot"))
 
-        declared = _text(record, BOOKING_STATUS_FIELD)
-        if status is SessionStatus.CANCELLED and declared and declared.lower() != "canceled":
+        if (
+            status is SessionStatus.CANCELLED
+            and declared_status is not None
+            and declared_status is not SessionStatus.CANCELLED
+        ):
             cancel_overrode.append(
-                Disagreement(anchor, f"sessionStatus said {declared!r}; the cancel flag wins")
+                Disagreement(anchor, f"declared {declared_status.value}; the cancel flag wins")
             )
 
         rows: list[ParticipantRow] = []
