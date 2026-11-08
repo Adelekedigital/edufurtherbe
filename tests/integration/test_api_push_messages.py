@@ -165,7 +165,7 @@ async def test_every_browser_of_the_recipient_gets_who_sent_it_never_what(
         "type": "message",
         "title": "New message",
         "body": "New message from Mo",
-        "url": f"/messages/{mentee.id}",
+        "url": f"/messages?with={mentee.id}",
         "tag": f"message:{mentee.id}",
         "badge": 1,
     }

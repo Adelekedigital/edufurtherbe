@@ -33,22 +33,29 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
 from app.domain.message_emails import MESSAGE_EMAILS
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
+from app.domain.names import addressed_by
 from app.domain.notifications import Channel, Notification
+from app.domain.push import SESSION_PUSHES, session_push, session_push_spec
+from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out
+from app.infra.db.chat_store import unread_total
 from app.infra.db.credit_store import expiring_on
 from app.infra.db.holds import suggestion_reminder_state
 from app.infra.db.mentor_listing import return_reminder_state
 from app.infra.db.message_email_content import message_email_values
 from app.infra.db.models.platform import OutboxEvent
+from app.infra.db.models.push import PushSubscription
 from app.infra.db.models.sessions import Session, SessionType
 from app.infra.db.models.user import User
 from app.infra.db.pending_requests import request_reminder_state
 from app.infra.db.predicates import LIVE
+from app.infra.db.push_store import forget_gone, subscriptions_for
 
 __all__ = [
     "MAX_ATTEMPTS",
     "collect_queued",
     "deliver",
     "drain",
+    "drain_push",
     "enqueue",
     "stop_collecting",
 ]
@@ -116,18 +123,19 @@ async def enqueue(
     """
     if not recipient_ids:
         return
-    statement = insert(OutboxEvent).values(
-        [
-            {
-                "event_type": notification,
-                "entity_type": entity_type,
-                "entity_id": entity_id,
-                "destination": channel,
-                "payload": {"recipient_id": str(recipient_id), **(variables or {})},
-            }
-            for recipient_id in recipient_ids
-        ]
-    )
+    rows = [
+        {
+            "event_type": notification,
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "destination": channel,
+            "payload": {"recipient_id": str(recipient_id), **(variables or {})},
+        }
+        for recipient_id in recipient_ids
+    ]
+    if channel is Channel.EMAIL and notification in SESSION_PUSHES:
+        rows += await _push_rows(session, notification, entity_id, rows, recipient_ids)
+    statement = insert(OutboxEvent).values(rows)
     # **A reminder queued twice is an identical email a mentor did not need**,
     # and QStash retries by design — so a second enqueue for the same session
     # and kind is a no-op rather than an error. **No conflict target is named**
@@ -141,6 +149,44 @@ async def enqueue(
     collecting = _queued.get()
     if collecting is not None:
         collecting.extend(inserted.scalars().all())
+
+
+async def _push_rows(
+    session: AsyncSession,
+    notification: Notification,
+    session_id: UUID,
+    rows: list[dict[str, Any]],
+    recipient_ids: tuple[UUID, ...],
+) -> list[dict[str, Any]]:
+    """**A push row beside the email, for whoever it pushes and who has a
+    browser** (decision 312): same event, one row per channel so each is sent
+    and recorded on its own. Nobody subscribed, no row; nor for the party the
+    push skips (`session_push_spec`), such as the mentee who just booked."""
+    found = (
+        await session.execute(
+            select(Session.mentor_id, Session.rescheduled_from_session_id).where(
+                Session.id == session_id
+            )
+        )
+    ).one_or_none()
+    if found is None:  # pragma: no cover - the row is written with the session
+        return []
+    browsers = set(
+        await session.scalars(
+            select(PushSubscription.user_id).where(PushSubscription.user_id.in_(recipient_ids))
+        )
+    )
+    return [
+        row | {"destination": Channel.PUSH}
+        for row, recipient_id in zip(rows, recipient_ids, strict=True)
+        if recipient_id in browsers
+        and session_push_spec(
+            notification,
+            recipient_role="mentor" if recipient_id == found.mentor_id else "mentee",
+            moved=found.rescheduled_from_session_id is not None,
+        )
+        is not None
+    ]
 
 
 async def drain(
@@ -171,53 +217,14 @@ async def drain(
     — which matters right now, because WhatsApp can reach nobody until the
     `phone_*` columns exist.
     """
-    pending = (
-        (
-            await session.execute(
-                select(
-                    OutboxEvent.id,
-                    OutboxEvent.event_type,
-                    OutboxEvent.destination,
-                    OutboxEvent.payload,
-                    OutboxEvent.attempts,
-                    # **Needed to load the context the variables come from.**
-                    # A message is about something, and until now the drain did
-                    # not have to know what.
-                    OutboxEvent.entity_type,
-                    OutboxEvent.entity_id,
-                )
-                .where(
-                    OutboxEvent.status == "pending",
-                    OutboxEvent.attempts < MAX_ATTEMPTS,
-                    OutboxEvent.entity_id == entity_id if entity_id is not None else true(),
-                    OutboxEvent.payload["kind"].astext == kind if kind is not None else true(),
-                    OutboxEvent.id.in_(ids) if ids is not None else true(),
-                )
-                .order_by(OutboxEvent.created_at)
-                .limit(BATCH)
-                # **Skip-locked**, so two sweeps overlapping send each message
-                # once between them rather than both sending all of them. The
-                # schedule makes that unlikely and a retry after a slow run
-                # makes it possible, and a duplicate here is a duplicate in
-                # somebody's inbox.
-                .with_for_update(skip_locked=True)
-            )
-        )
-        .mappings()
-        .all()
-    )
-
+    pending = await _pending(session, push=False, entity_id=entity_id, kind=kind, ids=ids)
     settings = settings or get_settings()
 
     counts = {"sent": 0, "failed": 0, "skipped": 0}
     for row in pending:
         recipient = UUID(str(row["payload"]["recipient_id"]))
         check = STILL_DUE.get(Notification(str(row["event_type"])))
-        state = (
-            "due"
-            if check is None
-            else await check(session, row["entity_id"], dict(row["payload"]), now)
-        )
+        state = await _state(session, row, now)
         if state == "stale":
             await _finish(session, row["id"], "skipped", row["attempts"], "superseded")
             counts["skipped"] += 1
@@ -283,6 +290,163 @@ async def drain(
     return counts
 
 
+async def drain_push(
+    session: AsyncSession,
+    *,
+    web_push: WebPushPort,
+    now: dt.datetime,
+    entity_id: UUID | None = None,
+    kind: str | None = None,
+    ids: Sequence[UUID] | None = None,
+) -> dict[str, int]:
+    """Send the pending push rows (decision 312). Counts by outcome. Does not
+    commit. Narrowed like `drain`; every other channel's rows are `drain`'s.
+
+    **One attempt each**, never retried: a push is about now, and a retry an
+    hour later would alert again the browsers that already had it. `STILL_DUE`
+    applies as it does to the email. A row older than its push's `ttl` is
+    skipped as `expired`, so a "starting soon" never arrives after the start.
+    Sent if any browser took it; browsers whose service says gone are forgotten.
+    """
+    counts = {"sent": 0, "failed": 0, "skipped": 0}
+    for row in await _pending(session, push=True, entity_id=entity_id, kind=kind, ids=ids):
+        state = await _state(session, row, now)
+        if state == "wait":
+            continue
+        status, why = (
+            ("skipped", "superseded")
+            if state == "stale"
+            else await _push(session, row, web_push, now)
+        )
+        await _finish(
+            session,
+            row["id"],
+            status,
+            row["attempts"],
+            why,
+            sent_at=now if status == "sent" else None,
+            final=True,
+        )
+        counts[status] += 1
+    return counts
+
+
+async def _push(
+    session: AsyncSession, row: Any, web_push: WebPushPort, now: dt.datetime
+) -> tuple[str, str | None]:
+    """Push one row's event to its recipient's browsers: the outcome and why."""
+    recipient = UUID(str(row["payload"]["recipient_id"]))
+    found = (
+        await session.execute(
+            select(Session.mentor_id, Session.mentee_id, Session.rescheduled_from_session_id).where(
+                Session.id == row["entity_id"]
+            )
+        )
+    ).one_or_none()
+    if found is None:  # pragma: no cover - the row is written with the session
+        return "skipped", "no session"
+    role, other, other_role = (
+        ("mentor", found.mentee_id, "mentee")
+        if recipient == found.mentor_id
+        else ("mentee", found.mentor_id, "mentor")
+    )
+    spec = session_push_spec(
+        Notification(str(row["event_type"])),
+        recipient_role=role,
+        moved=found.rescheduled_from_session_id is not None,
+    )
+    if spec is None:  # pragma: no cover - `_push_rows` queues none
+        return "skipped", "not pushed"
+    # **What is left of its life**, checked before any other read and sent as
+    # the push's `TTL`, so a late send also expires on time at the service.
+    left = spec.ttl - (now - row["created_at"])
+    if left <= dt.timedelta(0):
+        return "skipped", "expired"
+    browsers = await subscriptions_for(session, recipient)
+    if not browsers:
+        return "skipped", "no browser"
+    named = (await _names_for(session, (other,))).get(other)
+    push = session_push(
+        spec,
+        session_id=row["entity_id"],
+        # A party who has since left is "your mentor", as in the email (#288).
+        other_name=(
+            addressed_by(named[2], named[0] or None)
+            if named is not None
+            else DELETED_PARTY_LABELS[other_role]
+        ),
+        unread=await unread_total(session, recipient),
+        ttl=left,
+    )
+    targets = [PushTarget(b.endpoint, b.p256dh, b.auth) for b in browsers]
+    outcomes = await asyncio.to_thread(fan_out, web_push, targets, push)
+    await forget_gone(session, [b.id for b in browsers], outcomes)
+    if PushOutcome.DELIVERED in outcomes:
+        return "sent", None
+    if all(outcome is PushOutcome.GONE for outcome in outcomes):
+        return "skipped", "gone"
+    return "failed", "no push service took it"
+
+
+async def _pending(
+    session: AsyncSession,
+    *,
+    push: bool,
+    entity_id: UUID | None,
+    kind: str | None,
+    ids: Sequence[UUID] | None,
+) -> Sequence[Any]:
+    """The pending rows of one drain: the push rows, or every other channel's."""
+    return (
+        (
+            await session.execute(
+                select(
+                    OutboxEvent.id,
+                    OutboxEvent.event_type,
+                    OutboxEvent.destination,
+                    OutboxEvent.payload,
+                    OutboxEvent.attempts,
+                    # **Needed to load the context the variables come from.**
+                    # A message is about something, and until now the drain did
+                    # not have to know what.
+                    OutboxEvent.entity_type,
+                    OutboxEvent.entity_id,
+                    # A push expires (`drain_push`).
+                    OutboxEvent.created_at,
+                )
+                .where(
+                    OutboxEvent.status == "pending",
+                    OutboxEvent.attempts < MAX_ATTEMPTS,
+                    (OutboxEvent.destination == Channel.PUSH)
+                    if push
+                    else (OutboxEvent.destination != Channel.PUSH),
+                    OutboxEvent.entity_id == entity_id if entity_id is not None else true(),
+                    OutboxEvent.payload["kind"].astext == kind if kind is not None else true(),
+                    OutboxEvent.id.in_(ids) if ids is not None else true(),
+                )
+                .order_by(OutboxEvent.created_at)
+                .limit(BATCH)
+                # **Skip-locked**, so two sweeps overlapping send each message
+                # once between them rather than both sending all of them. The
+                # schedule makes that unlikely and a retry after a slow run
+                # makes it possible, and a duplicate here is a duplicate in
+                # somebody's inbox.
+                .with_for_update(skip_locked=True)
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+
+async def _state(session: AsyncSession, row: Any, now: dt.datetime) -> str:
+    """`due`, or what `STILL_DUE` says of a message whose truth can lapse."""
+    check = STILL_DUE.get(Notification(str(row["event_type"])))
+    if check is None:
+        return "due"
+    return str(await check(session, row["entity_id"], dict(row["payload"]), now))
+
+
 #: Messages whose truth can lapse while they wait to be sent, and how to ask.
 #:
 #: **Checked at send time**, because a row queued now can be retried an hour
@@ -319,14 +483,16 @@ async def _finish(
     error: str | None,
     *,
     sent_at: dt.datetime | None = None,
+    final: bool = False,
 ) -> None:
     """Record the outcome and count the attempt.
 
     A `failed` row goes back to `pending` unless it has run out of attempts, so
     the next sweep picks it up — and stays `failed` when it has, which is what
-    makes the table answerable for what was never delivered.
+    makes the table answerable for what was never delivered. A `final` row (a
+    push) has one attempt.
     """
-    exhausted = status == "failed" and attempts + 1 >= MAX_ATTEMPTS
+    exhausted = status == "failed" and (final or attempts + 1 >= MAX_ATTEMPTS)
     await session.execute(
         update(OutboxEvent)
         .where(OutboxEvent.id == event_id)
@@ -514,12 +680,14 @@ async def _address_for(session: AsyncSession, user_id: UUID, channel: Channel) -
 async def deliver(
     factory: async_sessionmaker[AsyncSession],
     *,
-    notifier: Any,
+    notifier: Any | None,
+    web_push: WebPushPort | None,
     settings: Settings,
     ids: Sequence[UUID],
 ) -> None:
     """Send these rows now, in a session of their own, after the request that
-    queued them has committed and responded.
+    queued them has committed and responded: the emails through `notifier`,
+    the pushes through `web_push`, each only when there is one.
 
     **Only these rows**: anything else pending is the sweep's. A row whose
     request rolled back never existed, so there is nothing to send. A failure is
@@ -529,9 +697,11 @@ async def deliver(
         return
     try:
         async with factory() as session:
-            await drain(
-                session, notifier=notifier, now=dt.datetime.now(dt.UTC), settings=settings, ids=ids
-            )
+            now = dt.datetime.now(dt.UTC)
+            if notifier is not None:
+                await drain(session, notifier=notifier, now=now, settings=settings, ids=ids)
+            if web_push is not None:
+                await drain_push(session, web_push=web_push, now=now, ids=ids)
             await session.commit()
     except Exception:
         logger.exception("could not send %d queued message(s) now; the sweep will retry", len(ids))

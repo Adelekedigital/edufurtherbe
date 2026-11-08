@@ -145,6 +145,8 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     # An expiry's emails are not drained here: `SendWhatWasQueued` sends exactly
     # the rows this request queued once the response has gone, and a drain by
     # session would also send that session's other pending rows.
+    # So are its push rows ("starting soon" rides the last reminder, decision
+    # 312): that middleware sends every push row a request queued.
     if queued and notifier is not None and kind != EXPIRY_KIND:
         # **The callback is the moment, so it sends** (Codex on #397). The
         # outbox is otherwise drained only by the hourly settlement, which put a
