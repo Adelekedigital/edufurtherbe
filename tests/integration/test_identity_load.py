@@ -7,6 +7,7 @@ nothing at all: every row is present, every count agrees, and every
 ``updated_at`` is the moment the ETL ran.
 """
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.domain.transform import TransformError, to_user, transform_users
+from app.domain.transform.identity import UNCHOSEN_ROLE
 from app.infra.etl.loader import UserLoader
 from app.infra.etl.reconcile import reconcile_users
 
@@ -268,12 +270,33 @@ async def test_a_transformed_role_matches_the_database_enum(db_engine: AsyncEngi
     assert stored.scalar_one() == "mentee"
 
 
+@pytest.mark.asyncio
+async def test_the_unchosen_role_is_the_migrated_columns_default(db_engine: AsyncEngine) -> None:
+    """Decision 311, against the migrated schema rather than the model: an
+    empty legacy role must load as exactly what a new sign-up gets."""
+    async with db_engine.connect() as conn:
+        default = await conn.scalar(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_schema = current_schema() "
+                "AND table_name = 'users' AND column_name = 'primary_role'"
+            )
+        )
+
+    assert default is not None
+    # The quoted literal, whatever cast or parentheses Postgres renders around it.
+    literal = re.search(r"'([^']*)'", default)
+    assert literal is not None, default
+    assert literal.group(1) == UNCHOSEN_ROLE.value
+
+
 @pytest.mark.parametrize(
     ("field", "value", "expected"),
     [
         ("👥Role", "Coach", "unmapped role"),
         ("UserTimezonID", "Mars/Olympus", "not an IANA zone"),
-        ("Slug", "Not-URL-Safe", "not URL-safe"),
+        # Case and accents fold (decision 311); a space cannot.
+        ("Slug", "not url safe", "not URL-safe"),
         ("email", None, "no email"),
     ],
 )
@@ -293,9 +316,11 @@ def test_an_unmappable_value_raises_rather_than_defaulting(
 def test_duplicate_emails_are_found_before_the_load() -> None:
     """The partial unique index catches these too — halfway through a load, with
     rows already written. Finding them first is what the runbook asks for."""
-    report = transform_users([record(), record(bubble_id="2x2")])
+    # A distinct slug, so the shared email is the only reason `ok` is false.
+    report = transform_users([record(), record(bubble_id="2x2", Slug="other-slug")])
 
     assert not report.ok
+    assert not report.errors
     assert report.duplicate_emails == {
         "sadeleke2019@gmail.com": ("1701974206179x877854702892984200", "2x2")
     }

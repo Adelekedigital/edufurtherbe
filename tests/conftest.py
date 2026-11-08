@@ -35,6 +35,7 @@ from app.core.config import Settings, get_settings
 from app.domain.availability import booking_window
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.sessions import response_window
+from app.domain.transform.identity import ROLE_FIELD
 from app.infra.auth.admin import SupabaseAdminClient
 from app.infra.auth.dev_tokens import mint_dev_token
 from app.infra.auth.supabase import SupabaseTokenVerifier
@@ -514,7 +515,7 @@ def user(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "bubble_id": USER_ID,
         "email": "sakiratu@example.com",
-        "👥Role": "Mentor",
+        ROLE_FIELD: "Mentor",
         "UserTimezonID": "Africa/Lagos",
         "created_at": "2023-12-07T18:36:46.179Z",
         "modified_at": "2025-11-06T11:52:41.383Z",

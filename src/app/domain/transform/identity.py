@@ -15,6 +15,8 @@ decision.
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any
@@ -34,9 +36,39 @@ PRIMARY_ROLES: dict[str, PrimaryRole] = {
     "Mentor": PrimaryRole.MENTOR,
 }
 
+#: The hint for somebody who never chose a role: the one every new sign-up gets,
+#: `users.primary_role`'s server default (pinned by a unit test). Decision 311.
+UNCHOSEN_ROLE = PrimaryRole.MENTEE
+
+#: The legacy user's role field, for readers and tests to import rather than retype.
+ROLE_FIELD = "\U0001f465Role"
+
+
+def is_unchosen_role(value: object) -> bool:
+    """Whether a legacy role is empty, missing or blank: never chosen."""
+    return value is None or not str(value).strip()
+
+
 # `Slug` must satisfy the CHECK on `users`. Applied here so a bad value is
 # reported per record before the load starts, rather than aborting it midway.
 SLUG_PATTERN = re.compile(r"^[a-z0-9-]{1,60}$")
+
+
+def fold_slug(value: str) -> str | None:
+    """Accents and case folded out: ``Bánkólé-Wright`` becomes ``bankole-wright``.
+
+    Decision 311: three production slugs carried accents. **Only an accent is
+    dropped**, never a letter: ``ø``, ``ß`` or ``山`` have no ASCII form, and
+    dropping them would load ``sren`` or ``-taro`` as somebody's public handle,
+    so they give ``None`` and the record is refused. What folds may still fail
+    ``SLUG_PATTERN`` (a space, a slash); a fold that lands on another user's
+    slug is caught by ``transform_users``.
+    """
+    decomposed = unicodedata.normalize("NFD", value)
+    if any(not ch.isascii() and not unicodedata.combining(ch) for ch in decomposed):
+        return None
+    return decomposed.encode("ascii", "ignore").decode("ascii").lower()
+
 
 DEFAULT_TIMEZONE = "UTC"
 
@@ -129,8 +161,19 @@ def to_user(record: dict[str, Any], *, export_timezone: tzinfo | None = None) ->
     if not email:
         raise TransformError(bubble_id, "record has no email")
 
-    role_raw = record.get("👥Role")
-    if role_raw not in PRIMARY_ROLES:
+    # Empty (or blank) means never chosen: 210 of the 212 empty roles in the
+    # production export never finished onboarding. They load as a new sign-up
+    # does, and their missing completion sends them to onboarding (decision
+    # 311). The role only picks a dashboard and nothing in the ETL changes it;
+    # an empty-role user who owns a mentor record keeps the mentee hint, so the
+    # dry run counts them (`profiles.unchosen_mentor_owners`). A role that is set
+    # but unknown still refuses: an option nobody has mapped.
+    role_raw = record.get(ROLE_FIELD)
+    if is_unchosen_role(role_raw):
+        role = UNCHOSEN_ROLE
+    elif str(role_raw).strip() in PRIMARY_ROLES:
+        role = PRIMARY_ROLES[str(role_raw).strip()]
+    else:
         raise TransformError(bubble_id, f"unmapped role {role_raw!r}")
 
     created = _timestamp(record, CREATED_AT, assume=export_timezone, bubble_id=bubble_id)
@@ -140,9 +183,15 @@ def to_user(record: dict[str, Any], *, export_timezone: tzinfo | None = None) ->
         # used — `Creation Date` in the export, `Created Date` in the API.
         raise TransformError(bubble_id, "created_at and modified_at are both required")
 
-    slug = record.get("Slug")
-    if slug is not None and not SLUG_PATTERN.match(str(slug)):
-        raise TransformError(bubble_id, f"slug {slug!r} is not URL-safe")
+    # A blank slug is no slug, as a missing one is: no link to keep.
+    raw_slug = record.get("Slug")
+    if raw_slug is not None and not str(raw_slug).strip():
+        raw_slug = None
+    slug = fold_slug(str(raw_slug)) if raw_slug is not None else None
+    if raw_slug is not None and (slug is None or not SLUG_PATTERN.match(slug)):
+        # No value in the message: a slug is usually a name, and this report
+        # reaches a terminal or a CI log. The id is enough to find it.
+        raise TransformError(bubble_id, "slug is not URL-safe")
 
     return UserRow(
         legacy_bubble_id=bubble_id,
@@ -153,7 +202,7 @@ def to_user(record: dict[str, Any], *, export_timezone: tzinfo | None = None) ->
         # normalisation belongs at the boundary and the constraint proves the
         # boundary did its job.
         email=normalise_email(str(email)),
-        primary_role=PRIMARY_ROLES[str(role_raw)],
+        primary_role=role,
         timezone=_resolve_timezone(record.get("UserTimezonID"), bubble_id),
         created_at=created,
         updated_at=modified,
@@ -162,7 +211,7 @@ def to_user(record: dict[str, Any], *, export_timezone: tzinfo | None = None) ->
         ),
         first_name=record.get("First Name"),
         last_name=record.get("Last Name"),
-        slug=str(slug) if slug is not None else None,
+        slug=slug,
         last_active_at=_timestamp(
             record, "Last Active", assume=export_timezone, bubble_id=bubble_id
         ),
@@ -181,10 +230,13 @@ class TransformReport:
     rows: tuple[UserRow, ...]
     errors: tuple[str, ...]
     duplicate_emails: dict[str, tuple[str, ...]]
+    #: Ids of users whose slugs are equal, one group each. No refusal: the whole
+    #: load waits on it. The value is left out, being usually a name.
+    duplicate_slugs: tuple[tuple[str, ...], ...]
 
     @property
     def ok(self) -> bool:
-        return not self.errors and not self.duplicate_emails
+        return not self.errors and not self.duplicate_emails and not self.duplicate_slugs
 
 
 def transform_users(
@@ -209,21 +261,35 @@ def transform_users(
         except TransformError as exc:
             errors.append(str(exc))
 
-    # Folded before comparing. Every row here has already been lowercased by
-    # `to_user`, so this is belt-and-braces — but it costs nothing and it is the
-    # half that would still be right if a future caller built a UserRow directly
-    # rather than through the transform.
-    by_email: dict[str, list[str]] = {}
-    for row in rows:
-        by_email.setdefault(row.email.lower(), []).append(row.legacy_bubble_id)
+    # Emails are folded before comparing. Every row has already been lowercased
+    # by `to_user`, so this is belt-and-braces, and it is the half that stays
+    # right if a caller builds a UserRow directly.
+    duplicate_emails = _shared(rows, lambda row: row.email.lower())
+
+    # A slug is unique among live users (`ix_users_slug_live`), and folding can
+    # make two different raw slugs equal (decision 311). Same check, same reason.
+    duplicate_slugs = tuple(_shared(rows, lambda row: row.slug).values())
 
     return TransformReport(
         rows=tuple(rows),
         errors=tuple(errors),
-        duplicate_emails={
-            email: tuple(ids) for email, ids in sorted(by_email.items()) if len(ids) > 1
-        },
+        duplicate_emails=duplicate_emails,
+        duplicate_slugs=duplicate_slugs,
     )
+
+
+def _shared(
+    rows: list[UserRow], key: Callable[[UserRow], str | None]
+) -> dict[str, tuple[str, ...]]:
+    """Each value of ``key`` that two or more rows share, with their ids in
+    order. A ``None`` key is nobody's and never shared. The one grouping both
+    unique columns are checked with, so the two checks cannot drift apart."""
+    groups: dict[str, list[str]] = {}
+    for row in rows:
+        value = key(row)
+        if value is not None:
+            groups.setdefault(value, []).append(row.legacy_bubble_id)
+    return {value: tuple(ids) for value, ids in sorted(groups.items()) if len(ids) > 1}
 
 
 @dataclass(frozen=True, slots=True)
@@ -434,10 +500,11 @@ class IdentityPlan:
     duplicate_emails: dict[str, tuple[str, ...]]
     orphaned_profiles: tuple[str, ...]
     source_carries_identities: bool
+    duplicate_slugs: tuple[tuple[str, ...], ...]
 
     @property
     def ok(self) -> bool:
-        return not self.errors and not self.duplicate_emails
+        return not self.errors and not self.duplicate_emails and not self.duplicate_slugs
 
     def country_names(self) -> set[str]:
         return {p.origin_country_name for p in self.profiles if p.origin_country_name}
@@ -516,6 +583,7 @@ def plan_identity(
         admin_grants=tuple(admin_grants),
         errors=tuple(errors),
         duplicate_emails=report.duplicate_emails,
+        duplicate_slugs=report.duplicate_slugs,
         orphaned_profiles=tuple(sorted(set(profiles_by_id) - set(linked))),
         # Distinguishes "no OAuth users" from "wrong source". Only an API extract
         # carries `provider_identities`; the export has `Registration format` and
