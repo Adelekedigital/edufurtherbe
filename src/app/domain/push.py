@@ -19,7 +19,9 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from app.core.config import BASE64URL_PATTERN
+from app.domain.messages import CHAT_PATH, PENDING_REQUEST_PATH, SESSION_PATH
 from app.domain.names import addressed_by
+from app.domain.notifications import LAST_REMINDER_KIND, SESSION_REMINDER_KINDS, Notification
 
 #: The longest push-service endpoint accepted, in bytes. Real ones run to a few
 #: hundred; bytes, not characters, so it also keeps the unique index's entry
@@ -103,6 +105,24 @@ class PushType(StrEnum):
     """What a push is about; the service worker routes on it."""
 
     MESSAGE = "message"
+    #: Somebody booked, or asked to book, the mentor.
+    BOOKING_REQUEST = "booking_request"
+    #: The mentor answered the mentee's request, or offered another time.
+    BOOKING_RESPONSE = "booking_response"
+    #: A confirmed session starts in minutes.
+    SESSION_SOON = "session_soon"
+    #: The other party moved, cancelled or withdrew it.
+    SESSION_CHANGED = "session_changed"
+
+
+#: How long a "starting soon" push may wait: the last reminder's own lead, as
+#: it is queued that long before the start. Past it the session has started
+#: and the push would be wrong, not late.
+SESSION_SOON_TTL = SESSION_REMINDER_KINDS[LAST_REMINDER_KIND].before
+
+#: `Urgency` (RFC 8030 section 5.3): what a push service may delay for battery.
+NORMAL = "normal"
+HIGH = "high"
 
 
 @dataclass(frozen=True)
@@ -122,6 +142,9 @@ class PushMessage:
     tag: str
     #: The receiver's unread messages after the event, for the app icon.
     badge: int
+    #: How the push is sent, not what it says: never in the payload.
+    ttl: dt.timedelta = PUSH_TTL
+    urgency: str = NORMAL
 
     def payload(self) -> bytes:
         return json.dumps(
@@ -145,7 +168,104 @@ def message_push(
         type=PushType.MESSAGE,
         title="New message",
         body=f"New message from {addressed_by(first_name, last_name)}",
-        url=f"/messages/{sender_id}",
+        url=CHAT_PATH.format(user_id=sender_id),
         tag=f"message:{sender_id}",
         badge=unread,
+    )
+
+
+@dataclass(frozen=True)
+class SessionPush:
+    """What one session event pushes. `{name}` in `body` is the other party."""
+
+    type: PushType
+    title: str
+    body: str
+    #: `SESSION_PATH` or `PENDING_REQUEST_PATH`, formatted with the session id.
+    path: str = SESSION_PATH
+    ttl: dt.timedelta = PUSH_TTL
+    urgency: str = NORMAL
+    #: Who of the email's audience is pushed, when not all of them: the one
+    #: who did not cause the event (ADR 0025 without the email's exception).
+    only: str | None = None
+
+
+#: Every session event that pushes (owner, 2026-11-07), keyed by the email it
+#: rides with: the push is queued beside that email (`outbox.enqueue`).
+SESSION_PUSHES: dict[Notification, SessionPush] = {
+    Notification.SESSION_REQUESTED: SessionPush(
+        PushType.BOOKING_REQUEST,
+        "New booking request",
+        "{name} wants to book a session with you",
+        PENDING_REQUEST_PATH,
+    ),
+    # The email also goes to the mentee for its join link; they just booked it.
+    Notification.SESSION_BOOKED: SessionPush(
+        PushType.BOOKING_REQUEST, "New booking", "{name} booked a session with you", only="mentor"
+    ),
+    Notification.REQUEST_ACCEPTED: SessionPush(
+        PushType.BOOKING_RESPONSE, "Booking accepted", "{name} accepted your booking"
+    ),
+    Notification.REQUEST_DECLINED: SessionPush(
+        PushType.BOOKING_RESPONSE, "Booking declined", "{name} declined your booking"
+    ),
+    Notification.SESSION_TIME_SUGGESTED: SessionPush(
+        PushType.BOOKING_RESPONSE, "New time suggested", "{name} suggested a new time"
+    ),
+    Notification.SESSION_LAST_REMINDER: SessionPush(
+        PushType.SESSION_SOON,
+        "Session starting soon",
+        "Your session with {name} starts in 5 minutes",
+        ttl=SESSION_SOON_TTL,
+        urgency=HIGH,
+    ),
+    Notification.SESSION_CANCELLED: SessionPush(
+        PushType.SESSION_CHANGED, "Session cancelled", "{name} cancelled your session"
+    ),
+    Notification.REQUEST_WITHDRAWN: SessionPush(
+        PushType.SESSION_CHANGED, "Booking withdrawn", "{name} withdrew their booking request"
+    ),
+}
+
+#: A move (decision 300) sends the booking's own email, so its push is chosen
+#: here: the new session names the one it replaced. Only a mentee moves.
+MOVED_PUSHES: dict[Notification, SessionPush] = {
+    Notification.SESSION_REQUESTED: SessionPush(
+        PushType.SESSION_CHANGED,
+        "Reschedule request",
+        "{name} asked to move your session",
+        PENDING_REQUEST_PATH,
+    ),
+    Notification.SESSION_BOOKED: SessionPush(
+        PushType.SESSION_CHANGED, "Session rescheduled", "{name} moved your session", only="mentor"
+    ),
+}
+
+
+def session_push_spec(
+    notification: Notification, *, recipient_role: str, moved: bool
+) -> SessionPush | None:
+    """What a session event pushes to a party in this role, or `None`: the one
+    rule of who is pushed, read when the row is queued and when it is sent."""
+    spec = (MOVED_PUSHES if moved else {}).get(notification) or SESSION_PUSHES.get(notification)
+    if spec is None or (spec.only is not None and spec.only != recipient_role):
+        return None
+    return spec
+
+
+def session_push(
+    spec: SessionPush, *, session_id: UUID, other_name: str, unread: int, ttl: dt.timedelta
+) -> PushMessage:
+    """The push itself. `other_name` is the party who is not the recipient;
+    `ttl` is what is left of the spec's, so a late send expires on time."""
+    body = spec.body.format(name=other_name)
+    return PushMessage(
+        type=spec.type,
+        title=spec.title,
+        body=body[:1].upper() + body[1:],
+        url=spec.path.format(session_id=session_id),
+        tag=f"session:{session_id}",
+        badge=unread,
+        ttl=ttl,
+        urgency=spec.urgency,
     )

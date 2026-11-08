@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import http_ece
@@ -27,7 +28,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from app.core.config import Settings, base64url_bytes
-from app.domain.push import is_push_service
+from app.domain.push import PushMessage, is_push_service
 from app.infra.http.client import shared
 
 __all__ = [
@@ -36,6 +37,9 @@ __all__ = [
     "PushTarget",
     "WebPushPort",
     "WebPushSender",
+    "fan_out",
+    "live_web_push",
+    "sender_for",
     "web_push_for",
 ]
 
@@ -173,3 +177,24 @@ def web_push_for(settings: Settings) -> WebPushPort:
     if key is None:  # the settings validator has already refused this
         return NullWebPush()
     return WebPushSender(public_key=public, private_key=key, subject=subject)
+
+
+def fan_out(
+    sender: WebPushPort, targets: Sequence[PushTarget], push: PushMessage
+) -> list[PushOutcome]:
+    """One push to every browser in turn, as its own `ttl` and `urgency` say.
+    Blocking: callers run it on a worker thread."""
+    payload = push.payload()
+    return [sender.send(target, payload, ttl=push.ttl, urgency=push.urgency) for target in targets]
+
+
+def live_web_push(settings: Settings) -> WebPushPort | None:
+    """The sender, or ``None`` when push is off: nothing is pushed, and an
+    outbox push row stays pending, as `live_notifier` leaves an email."""
+    return web_push_for(settings) if settings.push_configured else None
+
+
+def sender_for(state: Any, settings: Settings) -> WebPushPort | None:
+    """The sender an app uses: its `web_push` seam, else `live_web_push`. The
+    one place a request, a callback or the middleware chooses it."""
+    return getattr(state, "web_push", None) or live_web_push(settings)
