@@ -27,6 +27,7 @@ from app.core.errors import (
     ConflictError,
     NotFoundError,
     PreviewEndedError,
+    PreviewNotFoundError,
     ReadOnlyViewAsError,
     ValidationError,
 )
@@ -260,8 +261,9 @@ PreviewHeaderDep = Annotated[
         description=(
             "An admin's live preview session id (decision 313), sent beside the "
             "admin's own bearer token: the request is answered as the previewed "
-            "user, read only. `404` when it names no preview of this admin, the "
-            "admin lacks the preview permission, or previews are off; `401` "
+            "user, read only. `404 /problems/preview-not-found` when it names no "
+            "preview of this admin, the admin lacks the preview permission, or "
+            "previews are off, alike for each; `401` "
             "`/problems/preview-ended` once the preview has ended."
         ),
     ),
@@ -312,24 +314,25 @@ async def _previewed_user(
 ) -> dict[str, Any]:
     """The user the admin's preview shows, or a refusal.
 
-    `404`, as any admin route answers, when previews are off, the admin lacks
-    the PREVIEW permission, or the header names no preview of theirs (a
-    malformed id names none). A preview that has lapsed, or that this admin
-    started in another sign-in, is ended and answered `401 preview-ended`;
+    `404 /problems/preview-not-found`, one answer for every case so none is
+    told from another, when previews are off, the admin lacks the PREVIEW
+    permission, or the header names no preview of theirs (a malformed id names
+    none). A preview that has lapsed, or that this admin started in another
+    sign-in, is ended and answered `401 preview-ended`;
     one that had already ended answers the same, with the reason it ended.
     """
     if not preview_switched_on(request) or not holds_any(admin["admin_roles"], PREVIEW):
-        raise NotFoundError("no such endpoint")
+        raise PreviewNotFoundError
     try:
         preview_id = UUID(header)
     except ValueError as exc:
-        raise NotFoundError("no such preview") from exc
+        raise PreviewNotFoundError from exc
     async with _own_transaction(request) as own:
         row = await preview_store.for_header(own, admin["id"], preview_id, claims.session_id)
         if row is not None and row.ended_at is None:
             await preview_store.touch(own, Owner(admin["id"], row.auth_session_id), preview_id)
     if row is None:
-        raise NotFoundError("no such preview")
+        raise PreviewNotFoundError
     if row.ended_at is not None:
         raise PreviewEndedError(end_reason=str(row.end_reason), session_id=str(row.id))
     request.state.preview = LivePreview(

@@ -55,6 +55,7 @@ from app.core.errors import (
     NotFoundError,
     OnboardingIncompleteError,
     PreviewEndedError,
+    PreviewNotFoundError,
     PreviewUserNotFoundError,
     RateLimitedError,
     ReadOnlyViewAsError,
@@ -193,6 +194,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     FileUnavailableError: "/problems/file-unavailable",
     PreviewUserNotFoundError: "/problems/preview-user-not-found",
     PreviewEndedError: "/problems/preview-ended",
+    PreviewNotFoundError: "/problems/preview-not-found",
     ReadOnlyViewAsError: "/problems/read-only-view-as",
 }
 
@@ -476,6 +478,15 @@ PREVIEW_ENDED = (
     "it, otherwise the reason it ended with; `session_id`: which preview)."
 )
 
+#: The `404` a preview header that names no usable preview adds (decision 313).
+PREVIEW_NOT_FOUND = (
+    '`/problems/preview-not-found` (title "Preview not found"): `X-EF-Preview` '
+    "names no preview this caller may use: previews are off, the caller lacks the "
+    "preview permission, the id is malformed, or it names no preview of this admin. "
+    'Every case gets the same answer, so it never tells "not an admin" from '
+    '"no such preview".'
+)
+
 #: The `403` every write answers in a preview, and a read refused there too.
 READ_ONLY_VIEW_AS = (
     "`/problems/read-only-view-as` (`code: read_only_view_as`): sent with "
@@ -497,7 +508,7 @@ def document_preview(
 
     Keyed on the header parameter itself, which the one dependency resolving a
     caller declares, so the documented set is exactly the honouring set: a
-    `401` on each, and a `403` on each method a preview may not use. A read
+    `401` and a `404` on each, and a `403` on each method a preview may not use. A read
     refused in a preview documents its own `403` (`READ_ONLY_VIEW_AS`).
     """
     generate = application.openapi
@@ -513,6 +524,7 @@ def document_preview(
                     continue
                 responses = operation.setdefault("responses", {})
                 _described(responses, "401", PREVIEW_ENDED)
+                _described(responses, "404", PREVIEW_NOT_FOUND)
                 if method.upper() not in read_only_methods:
                     _described(responses, "403", READ_ONLY_VIEW_AS)
         return schema
