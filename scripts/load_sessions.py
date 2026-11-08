@@ -2,9 +2,14 @@
 
     # transform and report, touching no database
     uv run python scripts/load_sessions.py --from-export script-data-dev --dry-run
+        --as-of 2026-11-08T03:00+00:00
 
     # load
     uv run python scripts/load_sessions.py --from-export script-data-dev
+        --as-of 2026-11-08T03:00+00:00
+
+``--as-of`` is required: when the export was taken, with an offset. Past
+requests expire and started sessions are judged against it (decision 315).
 
 **Run this after ``load_identity.py``, ``load_profiles.py`` and
 ``load_availability.py``.** Every session references two users, and every session
@@ -26,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -47,7 +53,11 @@ from app.infra.etl.satellites import user_id_map
 from app.infra.etl.sessions import SessionLoader
 
 
-def build_plan(directory: Path, mentors_thing: str = "mentorsearch") -> SessionPlan:
+def build_plan(
+    directory: Path, as_of: dt.datetime, mentors_thing: str = "mentorsearch"
+) -> SessionPlan:
+    """``as_of`` is when the export was taken (decision 315): Bubble is frozen
+    from then on, so a dry run and the real load judge every row alike."""
     source = open_export(directory)
     users = list(source.read("allusers"))
     bookings = list(source.read("sessionbookings"))
@@ -73,7 +83,13 @@ def build_plan(directory: Path, mentors_thing: str = "mentorsearch") -> SessionP
     # sessions module states it: Generation A rows are quarantined for their
     # times and still carry a usable `meetingDuration-TxT`.
     return plan_sessions(
-        users, bookings, trackers, calendar, mentors, export_timezone=source.timezone
+        users,
+        bookings,
+        trackers,
+        calendar,
+        mentors,
+        export_timezone=source.timezone,
+        as_of=as_of,
     )
 
 
@@ -104,10 +120,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-export", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--as-of",
+        type=dt.datetime.fromisoformat,
+        required=True,
+        help="when the export was taken, ISO with offset, e.g. 2026-11-08T03:00+00:00",
+    )
     args = parser.parse_args()
+    if args.as_of.tzinfo is None:
+        parser.error("--as-of needs an offset, e.g. 2026-11-08T03:00+00:00")
 
     configure_streams()
-    plan = build_plan(args.from_export)
+    plan = build_plan(args.from_export, args.as_of)
     print(plan.report())
 
     if not plan.ok:

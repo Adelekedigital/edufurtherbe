@@ -93,10 +93,11 @@ from app.domain.enums import (
     ActorType,
     AttendanceStatus,
     MeetingProvider,
+    SessionReasonCode,
     SessionRole,
     SessionStatus,
 )
-from app.domain.sessions import LIVE_SESSION_STATUSES
+from app.domain.sessions import LIVE_SESSION_STATUSES, request_deadline
 from app.domain.transform.availability import CREATOR_FIELD, DroppedRow
 from app.domain.transform.identity import TransformError
 from app.domain.transform.profiles import (
@@ -207,7 +208,7 @@ DEFAULT_DURATION_MINUTES = 45
 #: produce sessions nobody could find again.
 #:
 #: ``completed`` is then judged by the tracker, when there is one: a party
-#: absent loads ``no_show`` (`_settle_completed`, settled decision 306).
+#: absent loads ``no_show`` (`_settle_by_attendance`, settled decisions 306, 315).
 STATUS_MAP: dict[str, SessionStatus] = {
     "canceled": SessionStatus.CANCELLED,
     "cancelled": SessionStatus.CANCELLED,
@@ -215,7 +216,22 @@ STATUS_MAP: dict[str, SessionStatus] = {
     "declined": SessionStatus.DECLINED,
     "completed": SessionStatus.COMPLETED,
     "pending": SessionStatus.PENDING_MENTOR_APPROVAL,
+    # Production values dev never held (decision 315, owner 2026-11-07).
+    "upcoming": SessionStatus.CONFIRMED,
+    "withdrawn": SessionStatus.WITHDRAWN,
 }
+
+#: Statuses judged by a tracker's attendance (`attendance.outcome`). A legacy
+#: `Missed` is judged too since decision 315: 70 production rows have a tracker
+#: where both attended, and the tracker is the attendance fact.
+JUDGED_BY_ATTENDANCE = frozenset({SessionStatus.COMPLETED, SessionStatus.NO_SHOW})
+
+#: Where a confirmed session can end up. Only these terminal events start from
+#: ``confirmed``; a request expires or is withdrawn from pending, whatever the
+#: legacy accepted flag says (the lifecycle allows no other route).
+AFTER_CONFIRMATION = frozenset(
+    {SessionStatus.COMPLETED, SessionStatus.NO_SHOW, SessionStatus.CANCELLED}
+)
 
 #: Host to provider. The legacy columns hold URLs, so the provider is derived
 #: rather than mapped — `MeetingProvider.ZOOM` has no legacy source and must
@@ -277,6 +293,7 @@ class SessionEventRow:
     actor_type: ActorType
     reason_text: str | None
     created_at: dt.datetime
+    reason_code: SessionReasonCode | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -669,20 +686,41 @@ def _participants(
     ]
 
 
-def _settle_completed(
-    status: SessionStatus, rows: list[ParticipantRow], anchor: str
-) -> tuple[SessionStatus, Disagreement | None]:
-    """A ``completed`` session judged by its tracker (settled decision 306, #474).
+def _started_by(starts_at: dt.datetime, as_of: dt.datetime) -> bool:
+    """Whether a session's slot had begun by the export (decision 315). Bubble is
+    frozen from the export on, so a started session's tracker is as complete as
+    it will ever be. One predicate for bookings and orphan trackers alike."""
+    return starts_at <= as_of
 
-    Legacy marked a session completed once its time passed, whoever attended;
-    the tracker recorded attendance apart. `attendance.outcome` is the rule
-    settlement applies to a session booked after cutover, so old and new data
-    follow one rule: anybody absent is ``NO_SHOW``. Called only with a tracker's
+
+def _pending_pair(anchor: str, mentor: str, mentee: str) -> list[ParticipantRow]:
+    """The two rows a live booking writes (`session_writer.booking`): both
+    ``pending``, nobody joined. A migrated session still live after the load
+    gets exactly these, whatever its tracker held before the session ran, so
+    Join and settlement treat it as they treat a session booked in the app."""
+    return [
+        ParticipantRow(anchor, mentor, SessionRole.MENTOR, None, AttendanceStatus.PENDING),
+        ParticipantRow(anchor, mentee, SessionRole.MENTEE, None, AttendanceStatus.PENDING),
+    ]
+
+
+def _settle_by_attendance(
+    status: SessionStatus, rows: list[ParticipantRow], anchor: str, *, started: bool = True
+) -> tuple[SessionStatus, Disagreement | None]:
+    """A finished session judged by its tracker (decisions 306 and 315, #474).
+
+    Legacy marked a session completed once its time passed, and swept it to
+    missed, whoever attended; the tracker recorded attendance apart.
+    `attendance.outcome` is the rule settlement applies to a session booked
+    after cutover, so old and new data follow one rule: both present is
+    ``COMPLETED``, anybody absent is ``NO_SHOW``. Called only with a tracker's
     two rows; a booking with no tracker has no attendance fact and keeps its
-    status. Only ``COMPLETED`` is judged, as #474 scopes it: a cancellation wins
-    (`session_status`), and a legacy ``Missed`` is not promoted.
+    status. ``JUDGED_BY_ATTENDANCE`` is what is judged, and a ``confirmed``
+    session that had ``started`` by the export (decision 315): a cancellation
+    wins (`session_status`), and a decline or a request never happened.
     """
-    if status is not SessionStatus.COMPLETED:
+    judged = status in JUDGED_BY_ATTENDANCE or (status is SessionStatus.CONFIRMED and started)
+    if not judged:
         return status, None
     came = {row.role: row.attendance_status is AttendanceStatus.ATTENDED for row in rows}
     settled = outcome(
@@ -691,7 +729,7 @@ def _settle_completed(
     if settled is status:
         return status, None
     parties = ", ".join(f"{row.role.value} {row.attendance_status.value}" for row in rows)
-    return settled, Disagreement(anchor, f"would load completed; the tracker has {parties}")
+    return settled, Disagreement(anchor, f"would load {status.value}; the tracker has {parties}")
 
 
 def _terminal_actor(
@@ -705,7 +743,7 @@ def _terminal_actor(
     and ``USER`` with a null id where it does not, because "a person we cannot
     name" is a different claim from "the system did it".
     """
-    if status is SessionStatus.NO_SHOW:
+    if status in (SessionStatus.NO_SHOW, SessionStatus.EXPIRED):
         return None, ActorType.SYSTEM
     return cancelled_by, ActorType.USER
 
@@ -762,6 +800,7 @@ def plan_sessions(
     mentor_records: list[dict[str, Any]],
     *,
     export_timezone: dt.tzinfo,
+    as_of: dt.datetime,
 ) -> SessionPlan:
     """Every session Thing, merged and classified, before anything is written.
 
@@ -770,6 +809,11 @@ def plan_sessions(
     and what a mentor's duration is are mapping decisions, and doing them in
     ``scripts/`` would put business rules in the one directory the gate cannot
     see (settled decision #44).
+
+    ``as_of`` is when the export was taken (decision 315): a request whose slot
+    had started by then expired unanswered, and a confirmed session that had
+    started is judged by its tracker (Bubble is frozen from the export on).
+    Passed in, because the domain reads no clock.
 
     ``mentor_records`` arrived with D88's contract step. Each offering carries its
     own venue and confirmation setting, and until that step they reached the
@@ -835,6 +879,20 @@ def plan_sessions(
         mentee = _text(record, BOOKING_MENTEE_FIELD)
         minutes = _duration(record.get(BOOKING_DURATION_FIELD))
 
+        # Decision 315. Looked up once; a tracker is an attendance fact.
+        tracker = trackers_by_anchor.get(str(record.get(BOOKING_TRACKER_FIELD) or ""))
+        accepted = is_true(record.get(BOOKING_ACCEPTED_FIELD))
+        # A legacy `Upcoming` was confirmed in Bubble whatever the flag says.
+        was_confirmed = status is SessionStatus.CONFIRMED or accepted
+        # A blank status never accepted and with no tracker is a request nobody
+        # answered (58 production rows): pending, then expired like any other.
+        if status is None and not accepted and tracker is None:
+            status = SessionStatus.PENDING_MENTOR_APPROVAL
+        # A request whose slot had begun by the export expired unanswered.
+        # Inclusive, as the live sweep is (`pending_requests._past_deadline`).
+        past = starts_at is not None and request_deadline(None, starts_at) <= as_of
+        if past and status is SessionStatus.PENDING_MENTOR_APPROVAL:
+            status = SessionStatus.EXPIRED
         if status is None:
             dropped.append(DroppedRow(anchor, "no sessionStatus"))
             continue
@@ -871,7 +929,9 @@ def plan_sessions(
                 Disagreement(anchor, f"sessionStatus said {declared!r}; the cancel flag wins")
             )
 
-        tracker = trackers_by_anchor.get(str(record.get(BOOKING_TRACKER_FIELD) or ""))
+        rows: list[ParticipantRow] = []
+        # Set when this load, not a person, decided the status from attendance.
+        settled_by_load = False
         url = _text(record, BOOKING_VENUE_FIELD)
         raw_room = record.get(ROOM_NAME_FIELD)
         if raw_room and room_id(raw_room) is None:
@@ -891,10 +951,29 @@ def plan_sessions(
                     )
                 )
             rows = _participants(tracker, anchor, mentor, mentee, assume=export_timezone)
-            participants.extend(rows)
-            status, overrode = _settle_completed(status, rows, anchor)
+            # A confirmed session that had started by the export is finished as
+            # far as Bubble will ever record, so it is judged; one still ahead is
+            # left confirmed (decision 315).
+            status, overrode = _settle_by_attendance(
+                status, rows, anchor, started=_started_by(starts_at, as_of)
+            )
             if overrode is not None:
                 attendance_overrode.append(overrode)
+                settled_by_load = True
+        elif status is SessionStatus.CONFIRMED and _started_by(starts_at, as_of):
+            # No attendance fact, as for a legacy `Completed` with no tracker.
+            # Left confirmed, the live settlement would judge it on no evidence
+            # and record a no-show (decision 315). Reported, being a promotion.
+            status = SessionStatus.COMPLETED
+            settled_by_load = True
+            attendance_overrode.append(
+                Disagreement(anchor, "would load confirmed; no tracker, so it loads completed")
+            )
+        # Still live after the load, or a request that lapsed: the rows a live
+        # booking has (an expiry leaves them pending), never the tracker's
+        # values for a session that did not happen (decision 315).
+        unheld = status in LIVE_SESSION_STATUSES or status is SessionStatus.EXPIRED
+        participants.extend(_pending_pair(anchor, mentor, mentee) if unheld else rows)
 
         sessions.append(
             SessionRow(
@@ -931,14 +1010,31 @@ def plan_sessions(
             )
 
         # Terminal, unless it never transitioned.
-        if status is SessionStatus.PENDING_MENTOR_APPROVAL or modified_at is None:
+        if status is SessionStatus.PENDING_MENTOR_APPROVAL:
             continue
-        accepted = is_true(record.get(BOOKING_ACCEPTED_FIELD))
-        if accepted and status is not SessionStatus.CONFIRMED:
+        # An expiry is dated by its slot, so it needs no Modified Date, and never
+        # before the request it ends (a retroactive booking can postdate its slot).
+        if status is SessionStatus.EXPIRED:
+            when: dt.datetime | None = max(starts_at, created_at) if created_at else starts_at
+        else:
+            when = modified_at
+        if when is None:
+            continue
+        confirmed_first = was_confirmed and status in AFTER_CONFIRMATION
+        if confirmed_first:
             unplaceable.append(anchor)
         cancelled_by = _text(record, BOOKING_CANCELLED_BY_FIELD)
         actor, actor_type = _terminal_actor(status, cancelled_by)
-        if status is SessionStatus.CANCELLED and modified_at > starts_at:
+        # The mentor confirms and the mentee withdraws; Bubble names neither.
+        if status is SessionStatus.CONFIRMED:
+            actor = mentor
+        elif status is SessionStatus.WITHDRAWN:
+            actor = mentee
+        if settled_by_load:
+            # The attendance rule decided it, as live settlement does: the system.
+            actor, actor_type = None, ActorType.SYSTEM
+        # `when` is the Modified Date here: only an expiry is dated by its slot.
+        if status is SessionStatus.CANCELLED and when > starts_at:
             cancel_late.append(
                 Disagreement(anchor, "cancellation timestamp post-dates the session")
             )
@@ -946,13 +1042,28 @@ def plan_sessions(
             SessionEventRow(
                 session_bubble_id=anchor,
                 from_status=(
-                    SessionStatus.CONFIRMED if accepted else SessionStatus.PENDING_MENTOR_APPROVAL
+                    SessionStatus.CONFIRMED
+                    if confirmed_first
+                    else SessionStatus.PENDING_MENTOR_APPROVAL
                 ),
                 to_status=status,
                 actor_bubble_id=actor if actor in known_users else None,
                 actor_type=actor_type,
-                reason_text=_text(record, BOOKING_CANCEL_MESSAGE_FIELD),
-                created_at=modified_at,
+                # A confirmation or an expiry carries no message, as live ones do
+                # not; Bubble's cancel text belongs to a cancel or a decline.
+                reason_text=(
+                    None
+                    if status in (SessionStatus.CONFIRMED, SessionStatus.EXPIRED)
+                    else _text(record, BOOKING_CANCEL_MESSAGE_FIELD)
+                ),
+                # The code the live sweep writes (`transitions`), so a migrated
+                # expiry reads exactly like a new one.
+                reason_code=(
+                    SessionReasonCode.EXPIRED_NO_RESPONSE
+                    if status is SessionStatus.EXPIRED
+                    else None
+                ),
+                created_at=when,
             )
         )
 
@@ -1021,9 +1132,15 @@ def plan_sessions(
         # "Not cancelled" is no evidence the session happened, so it is judged
         # by its attendance exactly as a completed booking is (decision 306).
         rows = _participants(record, anchor, mentor, mentee, assume=export_timezone)
-        status, overrode = _settle_completed(
-            SessionStatus.CANCELLED if cancelled else SessionStatus.COMPLETED, rows, anchor
-        )
+        # One still ahead of the export has not happened: confirmed, unjudged
+        # (decision 315), so the live session flow takes it from there.
+        ahead = not _started_by(starts_at, as_of)
+        if cancelled:
+            status, overrode = SessionStatus.CANCELLED, None
+        elif ahead:
+            status, overrode = SessionStatus.CONFIRMED, None
+        else:
+            status, overrode = _settle_by_attendance(SessionStatus.COMPLETED, rows, anchor)
         if overrode is not None:
             attendance_overrode.append(overrode)
 
@@ -1046,7 +1163,9 @@ def plan_sessions(
                 from_orphan_tracker=True,
             )
         )
-        participants.extend(rows)
+        participants.extend(
+            _pending_pair(anchor, mentor, mentee) if status in LIVE_SESSION_STATUSES else rows
+        )
 
         # A cancel is a known transition; `Canceled = 'no'` means nothing
         # definite and gets no event. There is no creation event either — an
