@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from app.domain.notifications import AUDIENCE, Notification
+from app.domain.notifications import AUDIENCE, SESSION_REMINDERS, Notification
 from app.domain.push import (
     HIGH,
     MOVED_PUSHES,
@@ -14,18 +14,23 @@ from app.domain.push import (
     PUSH_TTL,
     SESSION_PUSHES,
     SESSION_SOON_TTL,
+    PushMessage,
     PushType,
     message_push,
     session_push,
+    session_push_spec,
 )
 
 SID = UUID("00000000-0000-7000-8000-0000000000aa")
 
 
-def push(notification: Notification, role: str = "mentor", *, moved: bool = False):  # type: ignore[no-untyped-def]
-    return session_push(
-        notification, session_id=SID, recipient_role=role, other_name="Ada", moved=moved, unread=3
-    )
+def push(
+    notification: Notification, role: str = "mentor", *, moved: bool = False
+) -> PushMessage | None:
+    spec = session_push_spec(notification, recipient_role=role, moved=moved)
+    if spec is None:
+        return None
+    return session_push(spec, session_id=SID, other_name="Ada", unread=3, ttl=spec.ttl)
 
 
 @pytest.mark.parametrize(
@@ -138,16 +143,12 @@ def test_moved_only_changes_the_bookings() -> None:
 
 
 def test_a_party_who_left_reads_with_a_capital() -> None:
-    sent = session_push(
-        Notification.SESSION_CANCELLED,
-        session_id=SID,
-        recipient_role="mentee",
-        other_name="your mentor",
-        moved=False,
-        unread=0,
-    )
+    spec = session_push_spec(Notification.SESSION_CANCELLED, recipient_role="mentee", moved=False)
+    assert spec is not None
 
-    assert sent is not None and sent.body == "Your mentor cancelled your session"
+    sent = session_push(spec, session_id=SID, other_name="your mentor", unread=0, ttl=spec.ttl)
+
+    assert sent.body == "Your mentor cancelled your session"
 
 
 def test_an_event_without_a_push_pushes_nothing() -> None:
@@ -173,3 +174,17 @@ def test_a_message_push_opens_the_chat_the_emails_link() -> None:
     sent = message_push(SID, "Ada", None, unread=1)
 
     assert sent.url == f"/messages?with={SID}"
+
+
+def test_starting_soon_lives_no_longer_than_its_lead_before_the_start() -> None:
+    """Queued five minutes before the start, so past five minutes it would
+    announce a session already under way."""
+    lead = min(reminder.before for reminder in SESSION_REMINDERS)
+
+    assert lead == SESSION_SOON_TTL
+
+
+def test_a_moved_booking_skips_the_same_party_as_the_booking() -> None:
+    """Who is pushed is read at queue time from the unmoved spec's audience."""
+    for notification, moved in MOVED_PUSHES.items():
+        assert moved.only == SESSION_PUSHES[notification].only

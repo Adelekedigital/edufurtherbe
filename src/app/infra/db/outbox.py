@@ -22,7 +22,6 @@ import datetime as dt
 import logging
 from collections.abc import Sequence
 from contextvars import ContextVar, Token
-from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
@@ -36,7 +35,7 @@ from app.domain.message_emails import MESSAGE_EMAILS
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.names import addressed_by
 from app.domain.notifications import Channel, Notification
-from app.domain.push import SESSION_PUSHES, session_push
+from app.domain.push import SESSION_PUSHES, session_push, session_push_spec
 from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out
 from app.infra.db.chat_store import unread_total
 from app.infra.db.credit_store import expiring_on
@@ -135,19 +134,7 @@ async def enqueue(
         for recipient_id in recipient_ids
     ]
     if channel is Channel.EMAIL and notification in SESSION_PUSHES:
-        # **A push row beside the email, for whoever has a browser to push to**
-        # (decision 312): same event, same recipients, one row per channel so
-        # each is sent and recorded on its own. Nobody subscribed, no row.
-        browsers = set(
-            await session.scalars(
-                select(PushSubscription.user_id).where(PushSubscription.user_id.in_(recipient_ids))
-            )
-        )
-        rows += [
-            row | {"destination": Channel.PUSH}
-            for row, recipient_id in zip(rows, recipient_ids, strict=True)
-            if recipient_id in browsers
-        ]
+        rows += await _push_rows(session, notification, entity_id, rows, recipient_ids)
     statement = insert(OutboxEvent).values(rows)
     # **A reminder queued twice is an identical email a mentor did not need**,
     # and QStash retries by design — so a second enqueue for the same session
@@ -162,6 +149,44 @@ async def enqueue(
     collecting = _queued.get()
     if collecting is not None:
         collecting.extend(inserted.scalars().all())
+
+
+async def _push_rows(
+    session: AsyncSession,
+    notification: Notification,
+    session_id: UUID,
+    rows: list[dict[str, Any]],
+    recipient_ids: tuple[UUID, ...],
+) -> list[dict[str, Any]]:
+    """**A push row beside the email, for whoever it pushes and who has a
+    browser** (decision 312): same event, one row per channel so each is sent
+    and recorded on its own. Nobody subscribed, no row; nor for the party the
+    push skips (`session_push_spec`), such as the mentee who just booked."""
+    found = (
+        await session.execute(
+            select(Session.mentor_id, Session.rescheduled_from_session_id).where(
+                Session.id == session_id
+            )
+        )
+    ).one_or_none()
+    if found is None:  # pragma: no cover - the row is written with the session
+        return []
+    browsers = set(
+        await session.scalars(
+            select(PushSubscription.user_id).where(PushSubscription.user_id.in_(recipient_ids))
+        )
+    )
+    return [
+        row | {"destination": Channel.PUSH}
+        for row, recipient_id in zip(rows, recipient_ids, strict=True)
+        if recipient_id in browsers
+        and session_push_spec(
+            notification,
+            recipient_role="mentor" if recipient_id == found.mentor_id else "mentee",
+            moved=found.rescheduled_from_session_id is not None,
+        )
+        is not None
+    ]
 
 
 async def drain(
@@ -320,33 +345,39 @@ async def _push(
     ).one_or_none()
     if found is None:  # pragma: no cover - the row is written with the session
         return "skipped", "no session"
-    browsers = await subscriptions_for(session, recipient)
-    if not browsers:
-        return "skipped", "no browser"
     role, other, other_role = (
         ("mentor", found.mentee_id, "mentee")
         if recipient == found.mentor_id
         else ("mentee", found.mentor_id, "mentor")
     )
+    spec = session_push_spec(
+        Notification(str(row["event_type"])),
+        recipient_role=role,
+        moved=found.rescheduled_from_session_id is not None,
+    )
+    if spec is None:  # pragma: no cover - `_push_rows` queues none
+        return "skipped", "not pushed"
+    # **What is left of its life**, checked before any other read and sent as
+    # the push's `TTL`, so a late send also expires on time at the service.
+    left = spec.ttl - (now - row["created_at"])
+    if left <= dt.timedelta(0):
+        return "skipped", "expired"
+    browsers = await subscriptions_for(session, recipient)
+    if not browsers:
+        return "skipped", "no browser"
     named = (await _names_for(session, (other,))).get(other)
     push = session_push(
-        Notification(str(row["event_type"])),
+        spec,
         session_id=row["entity_id"],
-        recipient_role=role,
         # A party who has since left is "your mentor", as in the email (#288).
         other_name=(
             addressed_by(named[2], named[0] or None)
             if named is not None
             else DELETED_PARTY_LABELS[other_role]
         ),
-        moved=found.rescheduled_from_session_id is not None,
-        unread=0,
+        unread=await unread_total(session, recipient),
+        ttl=left,
     )
-    if push is None:
-        return "skipped", "not pushed"
-    if now - row["created_at"] > push.ttl:
-        return "skipped", "expired"
-    push = replace(push, badge=await unread_total(session, recipient))
     targets = [PushTarget(b.endpoint, b.p256dh, b.auth) for b in browsers]
     outcomes = await asyncio.to_thread(fan_out, web_push, targets, push)
     await forget_gone(session, [b.id for b in browsers], outcomes)

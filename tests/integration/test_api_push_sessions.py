@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -71,6 +72,12 @@ async def booked(
     return booking, endpoints
 
 
+def minutes(ttl: dt.timedelta) -> dt.timedelta:
+    """A sent TTL is what is left of the push's life, so a few milliseconds
+    short of it: rounded up to the minute for comparing."""
+    return dt.timedelta(minutes=math.ceil(ttl.total_seconds() / 60))
+
+
 def pushes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row for row in rows if row["destination"] == Channel.PUSH]
 
@@ -82,7 +89,7 @@ async def test_a_request_pushes_the_mentor_only(
     booking, endpoints = await booked(db_engine, api_client, "ps-request", confirmation=True)
 
     sid = booking["id"]
-    assert fake.sent == [
+    assert [(e, b, minutes(ttl), u) for e, b, ttl, u in fake.sent] == [
         (
             endpoints["mentor"],
             {
@@ -115,10 +122,8 @@ async def test_an_auto_confirmed_booking_never_pushes_the_mentee_who_made_it(
         row["payload"]["recipient_id"]: (row["status"], row["error_detail"])
         for row in pushes(await queued(db_engine, booking["id"]))
     }
-    assert statuses == {
-        str(booking["mentor"]): ("sent", None),
-        str(booking["mentee"]): ("skipped", "not pushed"),
-    }
+    # No row for the mentee at all: who is pushed is decided as it is queued.
+    assert statuses == {str(booking["mentor"]): ("sent", None)}
 
 
 async def test_nobody_with_a_browser_means_no_push_row(
@@ -293,7 +298,8 @@ async def test_the_five_minute_reminder_pushes_both_from_its_callback_urgently(
     assert answered.status_code == 200, answered.text
     sid = booking["id"]
     assert sorted(
-        (endpoint, b["type"], b["body"], ttl, urgency) for endpoint, b, ttl, urgency in fake.sent
+        (endpoint, b["type"], b["body"], minutes(ttl), urgency)
+        for endpoint, b, ttl, urgency in fake.sent
     ) == sorted(
         [
             (
@@ -384,3 +390,20 @@ async def test_the_hourly_sweep_sends_what_a_request_left_and_a_dry_run_does_not
     assert [row["status"] for row in pushes(await queued(db_engine, booking["id"]))] == [
         "pending" if dry_run else "sent"
     ]
+
+
+async def test_a_late_send_carries_only_what_is_left_of_its_life(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Sent by a sweep ten hours on, a day-long push may wait fourteen more
+    hours at the push service, not a fresh day."""
+    pushed(api_client, on=False)
+    booking, _ = await booked(db_engine, api_client, "ps-late", confirmation=True)
+    fake = FakePush()
+
+    async with async_sessionmaker(db_engine, expire_on_commit=False)() as session:
+        later = dt.datetime.now(dt.UTC) + dt.timedelta(hours=10)
+        await drain_push(session, web_push=fake, now=later, entity_id=booking["id"])
+        await session.commit()
+
+    assert [minutes(ttl) for _, _, ttl, _ in fake.sent] == [dt.timedelta(hours=14)]

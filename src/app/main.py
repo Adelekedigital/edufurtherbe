@@ -61,7 +61,7 @@ from app.core.errors import ConfigurationError
 from app.domain.rate_limits import SlidingWindow
 from app.infra.clients.ai_router import load_signing_key
 from app.infra.clients.notifications import live_notifier
-from app.infra.clients.web_push import live_web_push
+from app.infra.clients.web_push import sender_for
 from app.infra.db.outbox import collect_queued, deliver, stop_collecting
 from app.infra.observability import configure_logging, configure_sentry
 
@@ -452,7 +452,7 @@ class SendWhatWasQueued:
         # rows are left for the sweep, exactly as before this existed.
         notifier = getattr(state, "notifier", None) or live_notifier(settings)
         # The same for pushes (decision 312): none while push is off.
-        web_push = getattr(state, "web_push", None) or live_web_push(settings)
+        web_push = sender_for(state, settings)
         if notifier is None and web_push is None:
             return
         # The app has returned, so the response is already with the client.

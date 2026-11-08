@@ -19,7 +19,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import http_ece
@@ -39,6 +39,7 @@ __all__ = [
     "WebPushSender",
     "fan_out",
     "live_web_push",
+    "sender_for",
     "web_push_for",
 ]
 
@@ -188,6 +189,12 @@ def fan_out(
 
 
 def live_web_push(settings: Settings) -> WebPushPort | None:
-    """The sender for the outbox's push rows, or ``None`` when push is off: the
-    rows then stay pending, as `live_notifier` leaves an email."""
+    """The sender, or ``None`` when push is off: nothing is pushed, and an
+    outbox push row stays pending, as `live_notifier` leaves an email."""
     return web_push_for(settings) if settings.push_configured else None
+
+
+def sender_for(state: Any, settings: Settings) -> WebPushPort | None:
+    """The sender an app uses: its `web_push` seam, else `live_web_push`. The
+    one place a request, a callback or the middleware chooses it."""
+    return getattr(state, "web_push", None) or live_web_push(settings)

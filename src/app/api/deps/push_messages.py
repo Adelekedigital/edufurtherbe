@@ -28,7 +28,7 @@ from app.api.deps.sessions import _scheduler, callback_url
 from app.core.errors import ValidationError
 from app.domain.push import message_push
 from app.infra.clients.scheduler import SchedulerError
-from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out, web_push_for
+from app.infra.clients.web_push import PushOutcome, PushTarget, fan_out, sender_for
 from app.infra.db.push_messages import message_push_facts
 from app.infra.db.push_store import forget_gone, subscriptions_for
 
@@ -36,17 +36,11 @@ __all__ = [
     "PUSH_MESSAGE_CALLBACK_PATH",
     "PushMessageCallbackDep",
     "schedule_message_push",
-    "web_push",
 ]
 
 #: Where QStash calls back. One constant: it is signed into the token, so the
 #: path published and the path verified must be the same string.
 PUSH_MESSAGE_CALLBACK_PATH = "/api/v1/callbacks/push-messages"
-
-
-def web_push(request: Request) -> WebPushPort:
-    """The sender off `app.state` first, as every adapter seam is read."""
-    return getattr(request.app.state, "web_push", None) or web_push_for(_configured(request))
 
 
 async def schedule_message_push(request: Request, message_id: UUID, at: dt.datetime) -> None:
@@ -85,9 +79,15 @@ async def push_message_callback(request: Request, session: SessionDep) -> int:
     except PydanticValidationError as exc:
         raise ValidationError("not a message push callback") from exc
     facts = await message_push_facts(session, message_id)
-    browsers = [] if facts is None else await subscriptions_for(session, facts.recipient_id)
+    # Push switched off since the job was queued: nothing to push with.
+    sender = sender_for(request.app.state, _configured(request))
+    browsers = (
+        []
+        if facts is None or sender is None
+        else await subscriptions_for(session, facts.recipient_id)
+    )
     outcomes: list[PushOutcome] = []
-    if facts is not None and browsers:
+    if facts is not None and sender is not None and browsers:
         push = message_push(facts.sender_id, facts.first_name, facts.last_name, unread=facts.unread)
         targets = [PushTarget(row.endpoint, row.p256dh, row.auth) for row in browsers]
         ids = [row.id for row in browsers]
@@ -95,7 +95,7 @@ async def push_message_callback(request: Request, session: SessionDep) -> int:
         # not hold a pooled connection idle in a transaction for the fan-out.
         # Everything needed after is copied out above, as the rows expire here.
         await session.rollback()
-        outcomes = await asyncio.to_thread(fan_out, web_push(request), targets, push)
+        outcomes = await asyncio.to_thread(fan_out, sender, targets, push)
         await forget_gone(session, ids, outcomes)
         await session.commit()
     delivered = outcomes.count(PushOutcome.DELIVERED)

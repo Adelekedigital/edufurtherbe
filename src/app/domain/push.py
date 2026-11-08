@@ -21,7 +21,7 @@ from uuid import UUID
 from app.core.config import BASE64URL_PATTERN
 from app.domain.messages import CHAT_PATH, PENDING_REQUEST_PATH, SESSION_PATH
 from app.domain.names import addressed_by
-from app.domain.notifications import Notification
+from app.domain.notifications import LAST_REMINDER_KIND, SESSION_REMINDER_KINDS, Notification
 
 #: The longest push-service endpoint accepted, in bytes. Real ones run to a few
 #: hundred; bytes, not characters, so it also keeps the unique index's entry
@@ -115,9 +115,10 @@ class PushType(StrEnum):
     SESSION_CHANGED = "session_changed"
 
 
-#: How long a "starting soon" push may wait for an offline browser: past this
-#: the session has started and the push would be wrong, not late.
-SESSION_SOON_TTL = dt.timedelta(minutes=10)
+#: How long a "starting soon" push may wait: the last reminder's own lead, as
+#: it is queued that long before the start. Past it the session has started
+#: and the push would be wrong, not late.
+SESSION_SOON_TTL = SESSION_REMINDER_KINDS[LAST_REMINDER_KIND].before
 
 #: `Urgency` (RFC 8030 section 5.3): what a push service may delay for battery.
 NORMAL = "normal"
@@ -241,20 +242,22 @@ MOVED_PUSHES: dict[Notification, SessionPush] = {
 }
 
 
-def session_push(
-    notification: Notification,
-    *,
-    session_id: UUID,
-    recipient_role: str,
-    other_name: str,
-    moved: bool,
-    unread: int,
-) -> PushMessage | None:
-    """The push a session event owes this recipient, or `None` when it owes
-    them none. `other_name` is the party who is not the recipient."""
+def session_push_spec(
+    notification: Notification, *, recipient_role: str, moved: bool
+) -> SessionPush | None:
+    """What a session event pushes to a party in this role, or `None`: the one
+    rule of who is pushed, read when the row is queued and when it is sent."""
     spec = (MOVED_PUSHES if moved else {}).get(notification) or SESSION_PUSHES.get(notification)
     if spec is None or (spec.only is not None and spec.only != recipient_role):
         return None
+    return spec
+
+
+def session_push(
+    spec: SessionPush, *, session_id: UUID, other_name: str, unread: int, ttl: dt.timedelta
+) -> PushMessage:
+    """The push itself. `other_name` is the party who is not the recipient;
+    `ttl` is what is left of the spec's, so a late send expires on time."""
     body = spec.body.format(name=other_name)
     return PushMessage(
         type=spec.type,
@@ -263,6 +266,6 @@ def session_push(
         url=spec.path.format(session_id=session_id),
         tag=f"session:{session_id}",
         badge=unread,
-        ttl=spec.ttl,
+        ttl=ttl,
         urgency=spec.urgency,
     )

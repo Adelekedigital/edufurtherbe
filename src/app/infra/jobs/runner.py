@@ -305,8 +305,11 @@ class RuntimeJobs:
                 # Pushes a request did not send (decision 312); a dry run
                 # pushes nothing, and with push off they wait.
                 web_push = None if dry_run else live_web_push(self.settings)
-                if web_push is not None:
-                    await drain_push(session, web_push=web_push, now=now)
+                pushed = (
+                    {}
+                    if web_push is None
+                    else await drain_push(session, web_push=web_push, now=now)
+                )
                 if dry_run:
                     await session.rollback()
                 else:
@@ -331,6 +334,9 @@ class RuntimeJobs:
                     "return_reminders": returning,
                     "disconnected_calendars": health["disconnected"],
                     "messages": sum(sent.values()),
+                    # Pushes taken, and refused by every browser (decision 312).
+                    "pushes_sent": pushed.get("sent", 0),
+                    "pushes_failed": pushed.get("failed", 0),
                     "released_calendar_events": released,
                 }
         finally:
