@@ -69,6 +69,7 @@ __all__ = [
     "in_session_window",
     "message_select",
     "not_connected",
+    "other_party",
     "pair",
     "people",
     "thread_page",
@@ -149,6 +150,15 @@ def connections(me: UUID, other: UUID | None = None) -> Any:
         .where(scope, Session.status.in_(CONNECTING_STATUSES))
         .group_by(person)
         .subquery("connection")
+    )
+
+
+def other_party(me: Any) -> Any:
+    """**The one statement of "the other person in this chat"** from ``me``'s
+    side: the mentee when ``me`` is the mentor, else the mentor."""
+    return case(
+        (Conversation.mentor_user_id == me, Conversation.mentee_user_id),
+        else_=Conversation.mentor_user_id,
     )
 
 

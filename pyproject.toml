@@ -72,6 +72,7 @@ dependencies = [
     "opencv-python-headless>=5,<6",
     "numpy>=2.5,<3",
     "defusedxml>=0.7.1",
+    "http-ece>=1.2.1",
 ]
 
 [dependency-groups]
@@ -171,6 +172,12 @@ show_error_codes = true
 module = "tests.*"
 disallow_untyped_defs = false
 
+# `http_ece` (Web Push encryption, decision 312) ships no type information.
+# Its one call is wrapped in `infra/clients/web_push.py`.
+[[tool.mypy.overrides]]
+module = "http_ece"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # The repository root, so `from scripts import ...` resolves.
@@ -257,6 +264,7 @@ exempt = [
     "api/deps/preview.py",
     "api/deps/profile.py",
     "api/deps/push.py",
+    "api/deps/push_messages.py",
     "api/deps/reviews.py",
     "api/deps/session_types.py",
     "api/deps/sessions.py",

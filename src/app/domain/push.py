@@ -10,10 +10,16 @@ browser profile, and the two keys a payload is encrypted to.
 
 from __future__ import annotations
 
+import datetime as dt
+import json
 import re
+from dataclasses import dataclass
+from enum import StrEnum
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from app.core.config import BASE64URL_PATTERN
+from app.domain.names import addressed_by
 
 #: The longest push-service endpoint accepted, in bytes. Real ones run to a few
 #: hundred; bytes, not characters, so it also keeps the unique index's entry
@@ -82,3 +88,64 @@ def is_push_service(endpoint: str) -> bool:
     if url.username is not None or url.password is not None or port is not None:
         return False
     return any(host == known or host.endswith("." + known) for known in PUSH_SERVICE_HOSTS)
+
+
+#: How long after a message its push waits. A burst from one sender becomes
+#: one push: each job sends only if its message is still the newest unread.
+MESSAGE_PUSH_DELAY = dt.timedelta(seconds=5)
+
+#: How long a push service holds a push for a browser that is offline. A day:
+#: past that, the app's own badge and inbox say it better than a stale alert.
+PUSH_TTL = dt.timedelta(days=1)
+
+
+class PushType(StrEnum):
+    """What a push is about; the service worker routes on it."""
+
+    MESSAGE = "message"
+
+
+@dataclass(frozen=True)
+class PushMessage:
+    """One push, as the service worker reads it (the agreed payload).
+
+    **Never the content**: a lock screen shows `body`, so it names the event
+    and who caused it, nothing they wrote.
+    """
+
+    type: PushType
+    title: str
+    body: str
+    #: The in-app path the notification opens.
+    url: str
+    #: Collapses repeats on the device: a second push with the tag replaces it.
+    tag: str
+    #: The receiver's unread messages after the event, for the app icon.
+    badge: int
+
+    def payload(self) -> bytes:
+        return json.dumps(
+            {
+                "type": str(self.type),
+                "title": self.title,
+                "body": self.body,
+                "url": self.url,
+                "tag": self.tag,
+                "badge": self.badge,
+            },
+            separators=(",", ":"),
+        ).encode()
+
+
+def message_push(
+    sender_id: UUID, first_name: str | None, last_name: str | None, *, unread: int
+) -> PushMessage:
+    """The push for a new message: who sent it, never what it says."""
+    return PushMessage(
+        type=PushType.MESSAGE,
+        title="New message",
+        body=f"New message from {addressed_by(first_name, last_name)}",
+        url=f"/messages/{sender_id}",
+        tag=f"message:{sender_id}",
+        badge=unread,
+    )

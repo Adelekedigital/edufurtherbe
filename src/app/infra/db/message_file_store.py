@@ -21,14 +21,14 @@ import logging
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, case, delete, exists, func, insert, or_, select, update
+from sqlalchemy import and_, delete, exists, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import FileUnavailableError
 from app.domain.chats import file_storage_key
 from app.domain.enums import IntakeFileType
 from app.domain.intake_files import MAX_PENDING_UPLOADS, unused_cutoff
-from app.infra.db.chat_store import FILE_COLUMNS, connections
+from app.infra.db.chat_store import FILE_COLUMNS, connections, other_party
 from app.infra.db.models.messaging import Conversation, Message, MessageAttachment
 from app.infra.db.uploads import commit_with_object, refuse_pending, within_upload_rate
 from app.infra.storage.supabase import StorageError, SupabaseStorage
@@ -163,10 +163,7 @@ async def readable_message_file(
     thread is), and only while its message is not deleted. Anyone else, a
     missing id and a swept upload are the same ``None``.
     """
-    other = case(
-        (Conversation.mentor_user_id == caller_id, Conversation.mentee_user_id),
-        else_=Conversation.mentor_user_id,
-    )
+    other = other_party(caller_id)
     link = connections(caller_id)
     row = (
         (

@@ -25,15 +25,18 @@ from fastapi import APIRouter, Request, status
 from app.api.deps import (
     BIO_DRAFT_CALLBACK_PATH,
     MESSAGE_EMAIL_CALLBACK_PATH,
+    PUSH_MESSAGE_CALLBACK_PATH,
     BioDraftCallbackDep,
     DailyPresenceDep,
     MessageEmailCallbackDep,
+    PushMessageCallbackDep,
     ReminderCallbackDep,
 )
 from app.api.schemas.jobs import (
     BioDraftRead,
     MessageEmailRead,
     PresenceRecordedRead,
+    PushMessageRead,
     ReminderQueuedRead,
 )
 
@@ -177,3 +180,27 @@ async def draft_mentee_bio(drafted: BioDraftCallbackDep) -> BioDraftRead:
 )
 async def send_unread_message_email(queued: MessageEmailCallbackDep) -> MessageEmailRead:
     return MessageEmailRead(queued=queued)
+
+
+@router.post(
+    PUSH_MESSAGE_CALLBACK_PATH.removeprefix(router.prefix),
+    response_model=PushMessageRead,
+    summary="Push a new message to its recipient's browsers",
+    description=(
+        "**Called by QStash, never by a person** (decision 312), queued by each "
+        "new message a few seconds later while push is configured. Authenticated "
+        "by `Upstash-Signature`, verified against this endpoint and a hash of "
+        'this exact body; the body is `{"message_id"}`.\n\n'
+        "It re-reads everything: nothing is pushed when the message is deleted, "
+        "read, or followed by another unread one from the same sender (whose "
+        "own job pushes the burst once), or when the recipient's account is "
+        "closed. Otherwise every browser the recipient subscribed gets one "
+        "encrypted push naming the sender, never the text; a browser whose push "
+        "service answers `404` or `410` is forgotten.\n\n"
+        "**Every handled outcome is `200`**, `delivered: 0` included: a retry "
+        "would only push again to browsers that already had it."
+    ),
+    responses=CALLBACK_RESPONSES,
+)
+async def push_new_message(delivered: PushMessageCallbackDep) -> PushMessageRead:
+    return PushMessageRead(delivered=delivered)

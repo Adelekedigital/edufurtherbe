@@ -108,12 +108,13 @@ def world(db_engine: AsyncEngine, api_client: httpx.AsyncClient) -> World:
     return World(api_client, db_engine, scheduler, notifier)
 
 
-def signed(body: bytes, *, key: str = SIGNING_KEY) -> dict[str, str]:
+def signed(body: bytes, *, key: str = SIGNING_KEY, path: str = PATH) -> dict[str, str]:
+    """QStash's signature over ``body`` for a delivery to ``path``."""
     now = dt.datetime.now(dt.UTC)
     token = jwt.encode(
         {
             "iss": "Upstash",
-            "sub": f"{BASE}{PATH}",
+            "sub": f"{BASE}{path}",
             "exp": int((now + dt.timedelta(minutes=5)).timestamp()),
             "nbf": int(now.timestamp()),
             "body": base64.urlsafe_b64encode(hashlib.sha256(body).digest()).decode(),

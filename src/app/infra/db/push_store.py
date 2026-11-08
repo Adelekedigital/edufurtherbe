@@ -18,9 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.push import MAX_SUBSCRIPTIONS_PER_USER
 from app.infra.db.models.push import PushSubscription
+from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 from app.infra.db.user_locks import lock_users
 
-__all__ = ["subscribe", "subscribed", "unsubscribe"]
+__all__ = ["forget", "subscribe", "subscribed", "subscriptions_for", "unsubscribe"]
 
 
 async def subscribe(
@@ -87,3 +89,23 @@ async def subscribed(session: AsyncSession, user_id: UUID, endpoint: str) -> boo
             )
         )
     )
+
+
+async def subscriptions_for(session: AsyncSession, user_id: UUID) -> list[PushSubscription]:
+    """Every browser this user subscribed, while their account is live."""
+    return list(
+        (
+            await session.scalars(
+                select(PushSubscription)
+                .join(User, User.id == PushSubscription.user_id)
+                .where(PushSubscription.user_id == user_id, LIVE)
+                .order_by(PushSubscription.id)
+            )
+        ).all()
+    )
+
+
+async def forget(session: AsyncSession, ids: list[UUID]) -> None:
+    """Drop browsers whose push service said they are gone. Does not commit."""
+    if ids:
+        await session.execute(delete(PushSubscription).where(PushSubscription.id.in_(ids)))
