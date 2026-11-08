@@ -305,8 +305,8 @@ async def settle_attendance(
     states.
 
     It does not retrofit loaded rows. The migration transform applies the same
-    rule at load instead (settled decision 306), listing each session it moves
-    from `completed` to `no_show` in its report.
+    rule at load instead (settled decisions 306 and 315), listing each session
+    whose tracker changes its status in its report.
 
     **Set-based, in three statements plus the log.** The whole population is
     about a thousand sessions, so a per-session loop would buy nothing and cost
