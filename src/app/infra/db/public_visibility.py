@@ -26,15 +26,14 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, exists, or_, select
+from sqlalchemy import Select, and_, or_, select
 
 from app.domain.enums import ListingStatus
-from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.availability import AvailabilityRule, SessionTypeSchedulingWindow
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE, live_grant, mentor_approved
+from app.infra.db.predicates import LIVE, holds_live_grant, mentor_approved
 
 __all__ = [
     "bookable_mentors",
@@ -141,13 +140,8 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
         return mentor_is_live()
     return [
         *mentor_exists(),
-        or_(and_(*mentor_is_live()), User.id == viewer, _is_live_admin(viewer)),
+        or_(and_(*mentor_is_live()), User.id == viewer, holds_live_grant(viewer)),
     ]
-
-
-def _is_live_admin(viewer: UUID) -> Any:
-    """``viewer`` holds an unrevoked admin grant, of any role."""
-    return exists().where(AdminUser.user_id == viewer, live_grant())
 
 
 def mentor_is_live() -> list[Any]:

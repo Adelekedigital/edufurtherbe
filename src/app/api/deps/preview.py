@@ -125,8 +125,10 @@ async def started_preview(
 async def switched_preview(
     preview_id: UUID, payload: PreviewSwitch, caller: PreviewCallerDep, session: SessionDep
 ) -> PreviewSessionRead:
-    """Preview another user in the same live preview. `409` once it has ended."""
-    await _read(session, caller, preview_id)
+    """Preview another user in the same live preview. `409` once it has ended,
+    whoever is asked for."""
+    if (await _read(session, caller, preview_id)).ended_at is not None:
+        raise ConflictError(NOT_LIVE)
     target = await _target(session, caller, user_id=payload.user_id)
     if not await preview_store.switch(session, caller.owner, preview_id, target):
         raise ConflictError(NOT_LIVE)

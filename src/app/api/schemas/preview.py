@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.api.schemas.admin_users import AdminUserRead
 from app.domain.enums import PreviewEndReason
-from app.domain.preview import PAGE_PATH_MAX_LENGTH, expires_at
+from app.domain.preview import IDLE_WORDS, MAX_LENGTH_WORDS, PAGE_PATH_MAX_LENGTH, expires_at
 
 
 class PreviewStart(BaseModel):
@@ -67,14 +67,14 @@ class PreviewSessionRead(BaseModel):
     user: AdminUserRead = Field(description="The user being previewed now.")
     started_at: datetime
     expires_at: datetime = Field(
-        description="`started_at` plus two hours: the preview ends then at the latest."
+        description=(f"`started_at` plus {MAX_LENGTH_WORDS}: the preview ends then at the latest.")
     )
     ended_at: datetime | None
     end_reason: PreviewEndReason | None = Field(
         description=(
             "Why it ended: `exit` (the admin left, or started another preview in "
-            "this sign-in), `idle` (30 minutes with no request), `max_length` "
-            "(two hours since it started) or `sign_out`. Null while live."
+            f"this sign-in), `idle` ({IDLE_WORDS} with no request), `max_length` "
+            f"({MAX_LENGTH_WORDS} since it started) or `sign_out`. Null while live."
         )
     )
     revealed: bool = Field(

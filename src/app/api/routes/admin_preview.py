@@ -19,7 +19,7 @@ from app.api.deps import (
 )
 from app.api.routes.admin import ADMIN_RESPONSES
 from app.api.schemas.preview import PreviewSessionRead
-from app.domain.preview import PAGE_PATH_MAX_LENGTH
+from app.domain.preview import IDLE_WORDS, MAX_LENGTH_WORDS, PAGE_PATH_MAX_LENGTH
 
 PREFIX = "/api/v1/admin/preview-sessions"
 
@@ -51,9 +51,9 @@ _NO_USER: dict[int | str, dict[str, str]] = {
 }
 
 _LAPSE = (
-    "A live preview whose time ran out (30 minutes with no request: `idle`; two "
-    "hours since it started: `max_length`) is ended by any call that reads it, "
-    "at the moment it lapsed, and logged."
+    f"A live preview whose time ran out ({IDLE_WORDS} with no request: `idle`; "
+    f"{MAX_LENGTH_WORDS} since it started: `max_length`) is ended by any call that "
+    "reads it, at the moment it lapsed, and logged."
 )
 
 
@@ -84,7 +84,7 @@ async def start_preview(preview: StartedPreviewDep, response: Response) -> Previ
     description=(
         "Switches a live preview to another user. The time with the user "
         "restarts and a reveal is cleared (it was for the user before); the "
-        "preview's own start, and so its two-hour end, does not move. Logs "
+        "preview's own start, and so its `expires_at`, does not move. Logs "
         f"`switch`.\n\n{_OWNED} {_LAPSE}"
     ),
     responses=ADMIN_RESPONSES | _NO_USER | _NOT_LIVE,

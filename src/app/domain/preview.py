@@ -24,6 +24,10 @@ IDLE_TIMEOUT = timedelta(minutes=30)
 #: A preview ends this long after it started, however busy (`max_length`).
 MAX_LENGTH = timedelta(hours=2)
 
+#: The two limits as the API's descriptions state them, derived so they cannot drift.
+IDLE_WORDS = f"{IDLE_TIMEOUT // timedelta(minutes=1)} minutes"
+MAX_LENGTH_WORDS = f"{MAX_LENGTH // timedelta(minutes=1)} minutes"
+
 
 class Lapse(NamedTuple):
     """Why a live preview ended on its own, and the moment it did."""

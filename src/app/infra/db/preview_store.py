@@ -158,31 +158,47 @@ async def load(session: AsyncSession, owner: Owner, preview_id: UUID) -> Any | N
     row = await _read(session, owner, preview_id)
     if row is None or row.ended_at is not None:
         return row
-    ran_out = lapse(started_at=row.started_at, last_active_at=row.last_active_at, now=row.now)
-    if ran_out is None:
+    if not await _end_live(session, owner, row):
         return row
-    await end(session, owner, preview_id, ran_out.reason, ran_out.at)
     return await _read(session, owner, preview_id)
+
+
+async def _end_live(
+    session: AsyncSession, owner: Owner, row: Any, *, otherwise: PreviewEndReason | None = None
+) -> bool:
+    """**The one place the lapse rule is applied**: end a live preview that has
+    lapsed with its reason, at the moment it lapsed; else end it now with
+    ``otherwise``, if given. Whether it ended."""
+    ran_out = lapse(started_at=row.started_at, last_active_at=row.last_active_at, now=row.now)
+    if ran_out is not None:
+        await end(session, owner, row.id, ran_out.reason, ran_out.at)
+        return True
+    if otherwise is not None:
+        await end(session, owner, row.id, otherwise)
+        return True
+    return False
 
 
 async def start(session: AsyncSession, owner: Owner, target: UUID) -> UUID:
     """Start previewing ``target``, ending the owner's live preview in this
-    sign-in first (`exit`, logged), and log `start`.
+    sign-in first (`exit`, or how it lapsed if it had, logged), and log `start`.
 
     **The admin's row is locked first** (`lock_users`), so two starts in one
     sign-in queue rather than both inserting and one failing on
     `uq_preview_sessions_live`.
     """
     await lock_users(session, [owner.admin_id])
-    live = await session.scalars(
-        select(_SESSION.id).where(
+    live = await session.execute(
+        select(
+            _SESSION.id, _SESSION.started_at, _SESSION.last_active_at, func.now().label("now")
+        ).where(
             _SESSION.admin_user_id == owner.admin_id,
             _SESSION.auth_session_id == owner.auth_session_id,
             _SESSION.ended_at.is_(None),
         )
     )
     for replaced in live.all():
-        await end(session, owner, replaced, PreviewEndReason.EXIT)
+        await _end_live(session, owner, replaced, otherwise=PreviewEndReason.EXIT)
     created = (
         await session.execute(
             insert(PreviewSession)

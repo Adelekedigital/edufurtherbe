@@ -12,7 +12,15 @@ from pydantic import ValidationError
 from app.api.schemas.preview import PreviewExit, PreviewPageView, PreviewStart
 from app.domain.admin_permissions import EVERY_GRANT, PREVIEW, REVEAL, holds_any
 from app.domain.enums import AdminRole, PreviewEndReason
-from app.domain.preview import IDLE_TIMEOUT, MAX_LENGTH, PAGE_PATH_MAX_LENGTH, expires_at, lapse
+from app.domain.preview import (
+    IDLE_TIMEOUT,
+    IDLE_WORDS,
+    MAX_LENGTH,
+    MAX_LENGTH_WORDS,
+    PAGE_PATH_MAX_LENGTH,
+    expires_at,
+    lapse,
+)
 from app.infra.auth.dev_tokens import mint_dev_token
 from app.infra.auth.supabase import SupabaseTokenVerifier
 
@@ -28,6 +36,7 @@ def test_the_limits_are_thirty_minutes_idle_and_two_hours_long() -> None:
     assert timedelta(minutes=30) == IDLE_TIMEOUT
     assert timedelta(hours=2) == MAX_LENGTH
     assert expires_at(START) == START + timedelta(hours=2)
+    assert (IDLE_WORDS, MAX_LENGTH_WORDS) == ("30 minutes", "120 minutes")
 
 
 def test_a_preview_holds_until_its_idle_limit_and_lapses_at_it() -> None:

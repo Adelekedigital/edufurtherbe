@@ -7,6 +7,7 @@ ownership (another admin, another sign-in), the lapse rule, and the log.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
@@ -22,6 +23,8 @@ from tests.integration.test_api_admin import make_user
 
 from app.core.config import Settings
 from app.domain.preview import PAGE_PATH_MAX_LENGTH
+from app.infra.db import preview_store
+from app.infra.db.engine import create_session_factory
 from app.infra.db.preview_store import Owner, read_statement
 from conftest import PROBLEM_JSON, add_user, api_token, bearer, build_api_app, client_for
 
@@ -382,6 +385,59 @@ async def test_a_second_start_ends_the_first_in_this_sign_in_only(
     assert [e["kind"] for e in await events(db_engine, other_sign_in)] == ["start"]
 
 
+async def test_a_start_ends_a_lapsed_preview_as_it_lapsed_not_as_exit(
+    client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    admin = await an_admin(db_engine)
+    first = (await start(client, admin, await a_user(db_engine)))["id"]
+    await age(db_engine, first, started=40, active=31)
+
+    await start(client, admin, await a_user(db_engine))
+
+    body = (await client.get(f"{BASE}/{first}", headers=bearer(admin.token))).json()
+    assert body["end_reason"] == "idle"
+    assert datetime.fromisoformat(body["ended_at"]) - datetime.fromisoformat(
+        body["started_at"]
+    ) == timedelta(minutes=39)
+    log = await events(db_engine, first)
+    assert [(e["kind"], e["end_reason"]) for e in log] == [("start", None), ("end", "idle")]
+
+
+async def test_two_starts_at_once_in_one_sign_in_queue_and_leave_one_live(
+    db_engine: AsyncEngine,
+) -> None:
+    """The second start waits on the admin's row while the first is uncommitted,
+    then ends it, rather than failing on the one-live index."""
+    admin = await an_admin(db_engine)
+    owner = Owner(admin_id=admin.id, auth_session_id=admin.sign_in)
+    first_user, second_user = await a_user(db_engine), await a_user(db_engine)
+    sessions = create_session_factory(db_engine)
+
+    async with sessions() as one, sessions() as two:
+        await preview_store.start(one, owner, first_user)
+        second = asyncio.create_task(preview_store.start(two, owner, second_user))
+        await asyncio.sleep(0.5)
+        assert not second.done(), "the second start did not wait for the first"
+        await one.commit()
+        await second
+        await two.commit()
+
+    async with db_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT target_user_id, end_reason FROM preview_sessions "
+                    "WHERE admin_user_id = :a ORDER BY started_at, id"
+                ),
+                {"a": admin.id},
+            )
+        ).all()
+    assert [(r.target_user_id, r.end_reason) for r in rows] == [
+        (first_user, "exit"),
+        (second_user, None),
+    ]
+
+
 # --------------------------------------------------------------------------
 # Ownership
 # --------------------------------------------------------------------------
@@ -508,6 +564,44 @@ async def test_an_ended_preview_takes_no_switch_and_no_page_view(
     assert switched.status_code == 409
     assert viewed.status_code == 409
     assert [e["kind"] for e in await events(db_engine, preview)] == ["start", "end"]
+
+
+@pytest.mark.parametrize("first", ["switch", "end"])
+async def test_a_lapsed_preview_takes_no_switch_and_keeps_its_lapse_on_end(
+    client: httpx.AsyncClient, db_engine: AsyncEngine, first: str
+) -> None:
+    admin = await an_admin(db_engine)
+    user = await a_user(db_engine)
+    preview = (await start(client, admin, user))["id"]
+    await age(db_engine, preview, started=40, active=31)
+
+    if first == "switch":
+        response = await client.patch(
+            f"{BASE}/{preview}", json={"user_id": str(user)}, headers=bearer(admin.token)
+        )
+        assert response.status_code == 409
+    else:
+        response = await client.post(
+            f"{BASE}/{preview}/end", json={"reason": "exit"}, headers=bearer(admin.token)
+        )
+        assert response.status_code == 204
+
+    log = await events(db_engine, preview)
+    assert [(e["kind"], e["end_reason"]) for e in log] == [("start", None), ("end", "idle")]
+
+
+async def test_an_ended_preview_is_409_whoever_the_switch_asks_for(
+    client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    admin = await an_admin(db_engine)
+    preview = (await start(client, admin, await a_user(db_engine)))["id"]
+    await client.post(f"{BASE}/{preview}/end", json={"reason": "exit"}, headers=bearer(admin.token))
+
+    response = await client.patch(
+        f"{BASE}/{preview}", json={"user_id": str(admin.id)}, headers=bearer(admin.token)
+    )
+
+    assert response.status_code == 409
 
 
 async def test_ending_is_idempotent_and_keeps_the_first_reason(

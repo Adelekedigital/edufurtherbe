@@ -69,8 +69,8 @@ def live_grant() -> Any:
 
 
 def holds_live_grant(user_id: Any) -> Any:
-    """Whether `user_id` holds any live admin grant: an admin, whose own view is
-    never previewed (decision 309)."""
+    """Whether `user_id` holds any live admin grant, of any role: an admin, who
+    reads any mentor's profile (decision 297) and is never previewed (309)."""
     return exists().where(AdminUser.user_id == user_id, live_grant())
 
 
