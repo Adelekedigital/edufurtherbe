@@ -54,6 +54,7 @@ from app.core.errors import (
     NotConnectedError,
     NotFoundError,
     OnboardingIncompleteError,
+    PreviewUserNotFoundError,
     RateLimitedError,
     RecipientClosedError,
     RecipientPausedError,
@@ -188,6 +189,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     FileTooLargeError: "/problems/file-too-large",
     FileTypeNotAllowedError: "/problems/file-type-not-allowed",
     FileUnavailableError: "/problems/file-unavailable",
+    PreviewUserNotFoundError: "/problems/preview-user-not-found",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx

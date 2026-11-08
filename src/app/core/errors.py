@@ -28,6 +28,11 @@ class NotFoundError(AppError):
     """
 
 
+class PreviewUserNotFoundError(NotFoundError):
+    """No user an admin may preview matches: unknown, deleted, an admin, or the
+    admin themselves (decision 309). Typed so the picker can say so."""
+
+
 class ConflictError(AppError):
     """The request cannot be applied to the current state of the resource."""
 

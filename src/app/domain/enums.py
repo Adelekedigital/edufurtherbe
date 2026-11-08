@@ -940,9 +940,9 @@ class PreviewEndReason(StrEnum):
     """Why an admin's preview session ended (decision 309).
 
     ``exit`` the admin left it (or started another, which ends this one);
-    ``idle`` 30 minutes passed with no request; ``max_length`` two hours passed
-    since it started; ``sign_out`` the admin's sign-in ended, or the request
-    came from another one.
+    ``idle`` its idle limit passed with no request; ``max_length`` its length
+    limit passed since it started; ``sign_out`` the admin's sign-in ended, or
+    the request came from another one. The limits are ``domain.preview``'s.
     """
 
     EXIT = "exit"
