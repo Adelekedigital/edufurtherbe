@@ -71,7 +71,6 @@ from app.domain.bubble import blank_to_none, legacy_anchor
 from app.domain.credits import CreditLadder, end_of_month
 
 __all__ = [
-    "ACTIVE_WITHIN",
     "CREDIT_FIELD",
     "IMPLAUSIBLE_MULTIPLE",
     "RENEW_DATE_FIELD",
@@ -112,23 +111,6 @@ def implausible_above(ladder: CreditLadder) -> int:
     what an operator is told to go and look at.
     """
     return ladder.monthly * IMPLAUSIBLE_MULTIPLE
-
-
-#: How recently somebody must have used the platform to be grandfathered into
-#: the recurring grant. **Twelve months, and this is the number to change.**
-#:
-#: The owner asked for "six to twelve"; the two ends are not close together. On
-#: the dev export — stale test data, so indicative of shape rather than of
-#: production — six months qualifies 1 user of 43 and twelve qualifies 17. The
-#: generous end is the default because the two errors are not symmetric:
-#: grandfathering somebody dormant costs three credits a month that nobody
-#: spends, while missing somebody active silently switches off a benefit they
-#: have today, which is the exact failure `ReferralUnlock` was made nullable to
-#: avoid.
-#:
-#: The dry run prints how many qualify, so the production number is visible
-#: before the freeze rather than after it.
-ACTIVE_WITHIN = dt.timedelta(days=365)
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +174,9 @@ class CreditPlan:
     unfinished: tuple[str, ...] = ()
 
     #: Migrated users who keep receiving the monthly grant. **Every migrated
-    #: user the platform has seen recently**, whatever their legacy balance was
+    #: user who finished onboarding** (owner, 2026-11-08; this replaced a
+    #: twelve-month activity window),
+    #: whatever their legacy balance was
     #: — including those who never entered the credit system at all.
     #:
     #: The balance is not a condition, and an earlier draft made it one. The
@@ -297,7 +281,6 @@ def plan_opening_balances(
     cutover: dt.datetime,
     ladder: CreditLadder,
     finished: frozenset[str],
-    seen: frozenset[str] = frozenset(),
 ) -> CreditPlan:
     """Every balance the export offers, as a lot, a starter, or a reason.
 
@@ -313,15 +296,6 @@ def plan_opening_balances(
     Re-reading the raw field here would be a second representation of "has this
     person finished", and the two would disagree the first time that derivation
     changed.
-
-    ``seen`` is the same shape and there for the same reason: anchors last
-    active — **or newly signed up** — inside :data:`ACTIVE_WITHIN` of the
-    cutover. Read from the columns rather than from the export, because they are
-    what every other "is this person around" question in the codebase uses.
-
-    **Defaulted to empty, which grandfathers nobody.** A caller that forgets to
-    pass it writes no unlocks — the cliff, not a silent over-grant. Handing out
-    a recurring benefit is the error that is expensive to undo.
     """
     monthly = ladder.monthly
     expires_at = end_of_month(cutover)
@@ -352,15 +326,17 @@ def plan_opening_balances(
         decided.add(anchor)
 
         # **Decided here, before the balance is read, and that is the point.**
-        # Every migrated user the platform has seen recently keeps the recurring
-        # grant. The legacy app granted monthly credits *unconditionally*
-        # (measured finding 4), so what somebody's `bookingCredit` happens to say
-        # describes when they joined rather than what they are entitled to.
+        # Every migrated user who finished onboarding keeps the recurring grant
+        # (owner, 2026-11-08); one who did not starts like a new sign-up. The
+        # legacy app granted monthly credits *unconditionally* (measured finding
+        # 4), so `bookingCredit` describes when they joined, not what they are
+        # entitled to. `finished` is read from the loaded users, so an anchor
+        # the identity load refused is never expected to hold an unlock.
         #
         # A quarantined balance therefore does not cost somebody their
         # entitlement — it costs them the lot, which is the thing an operator
         # looks at.
-        if anchor in seen:
+        if anchor in finished:
             grandfathered.append(anchor)
 
         raw = _text(record.get(CREDIT_FIELD))
@@ -396,10 +372,9 @@ def plan_opening_balances(
             # `ck_credit_lots_quantity_granted_positive` and would be a row
             # saying nothing happened.
             #
-            # **Still grandfathered**, and that is the point of doing it here
-            # rather than off `lots`: `'0'` means they were in the credit system
-            # and reached zero. `''` means they never entered it. Only the second
-            # is a reason not to keep granting.
+            # **Still grandfathered** if onboarded, which is why that is decided
+            # above rather than off `lots`: `'0'` means they reached zero, not
+            # that they are owed nothing.
             spent_down.append(anchor)
             continue
         if quantity > implausible_above(ladder):

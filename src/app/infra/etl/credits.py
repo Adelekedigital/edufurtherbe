@@ -43,7 +43,6 @@ in two places is how the two come to disagree.
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import TYPE_CHECKING
 
 from sqlalchemy import text
@@ -55,7 +54,7 @@ from app.domain.transform.credits import CreditPlan
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncConnection
 
-__all__ = ["CreditLoader", "finished_onboarding", "recently_seen"]
+__all__ = ["CreditLoader", "finished_onboarding"]
 
 
 #: **The starter's own condition, read from the table its producer keys on.**
@@ -72,37 +71,6 @@ FROM users u
 JOIN user_onboarding o ON o.user_id = u.id
 WHERE u.legacy_bubble_id IS NOT NULL AND o.completed_at IS NOT NULL
 """
-
-
-#: **Read from the columns, not from the export's ``Last Active``.**
-#: ``users.last_active_at`` is what every other "is this person around" question
-#: in this codebase uses, and `load_identity` has already written both of these
-#: by the time this runs. Deriving them a second way here is how the two come to
-#: disagree.
-#:
-#: **Or signed up**, which is not the same question and is why this is a
-#: disjunction. Somebody who registered three weeks ago and has not returned has
-#: a recent ``created_at`` and possibly no ``last_active_at`` at all — they are
-#: exactly the new joiner the platform is trying to keep, and an activity-only
-#: filter would cut them off at the first month end.
-RECENTLY_SEEN_ANCHORS = """
-SELECT u.legacy_bubble_id AS anchor
-FROM users u
-WHERE u.legacy_bubble_id IS NOT NULL
-  AND (u.last_active_at >= :since OR u.created_at >= :since)
-"""
-
-
-async def recently_seen(connection: AsyncConnection, *, since: dt.datetime) -> frozenset[str]:
-    """Anchors last active — or newly signed up — on or after ``since``.
-
-    **A null ``last_active_at`` is not a disqualification**, because the second
-    disjunct still answers for them: ``created_at`` is ``NOT NULL`` on every
-    row. A user who never triggered the activity column but registered inside
-    the window qualifies on their signup, which is the intent.
-    """
-    result = await connection.execute(text(RECENTLY_SEEN_ANCHORS), {"since": since})
-    return frozenset(row.anchor for row in result)
 
 
 async def finished_onboarding(connection: AsyncConnection) -> frozenset[str]:

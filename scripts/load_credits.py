@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import get_settings
 from app.domain.credits import CreditLadder, credit_ladder
-from app.domain.transform.credits import ACTIVE_WITHIN, CreditPlan, plan_opening_balances
+from app.domain.transform.credits import CreditPlan, plan_opening_balances
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.etl.cli import (
     EXIT_OK,
@@ -53,7 +53,7 @@ from app.infra.etl.cli import (
     configure_streams,
     open_export,
 )
-from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_seen
+from app.infra.etl.credits import CreditLoader, finished_onboarding
 from app.infra.etl.reconcile import reconcile_credits
 
 
@@ -71,14 +71,11 @@ async def build_plan(
     try:
         async with engine.connect() as connection:
             finished = await finished_onboarding(connection)
-            # The grandfather window, measured back from the cutover rather than
-            # from the wall clock, so a rehearsal and the real run agree.
-            seen = await recently_seen(connection, since=cutover - ACTIVE_WITHIN)
     finally:
         await engine.dispose()
 
     return plan_opening_balances(
-        list(source.read(thing)), cutover=cutover, ladder=ladder, finished=finished, seen=seen
+        list(source.read(thing)), cutover=cutover, ladder=ladder, finished=finished
     )
 
 
