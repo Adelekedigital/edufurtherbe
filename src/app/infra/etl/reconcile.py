@@ -642,9 +642,11 @@ async def reconcile_reviews(connection: AsyncConnection, plan: ReviewPlan) -> Re
     # with itself by construction. This file already records that exact defect
     # shipping once: *"Every test passed, because none of them gave the plan a
     # source list to be missing from."*
-    accounted = {row.legacy_bubble_id for row in plan.reviews} | {
-        row.legacy_bubble_id for row in plan.quarantined
-    }
+    accounted = (
+        {row.legacy_bubble_id for row in plan.reviews}
+        | {row.legacy_bubble_id for row in plan.quarantined}
+        | set(plan.deleted_party)
+    )
     return ReviewReconciliation(
         checks=(
             TableCheck(

@@ -22,8 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
 from app.domain.credits import credit_ladder
-from app.domain.transform.credits import ACTIVE_WITHIN, plan_opening_balances
-from app.infra.etl.credits import CreditLoader, finished_onboarding, recently_seen
+from app.domain.transform.credits import plan_opening_balances
+from app.infra.etl.credits import CreditLoader, finished_onboarding
 from app.infra.etl.reconcile import reconcile_credits
 from conftest import add_user
 
@@ -41,9 +41,7 @@ def record(anchor: str, credit: str) -> dict[str, Any]:
     return {"unique id": anchor, "bookingCredit": credit}
 
 
-async def a_migrated_user(
-    engine: AsyncEngine, anchor: str, *, finished: bool = True, active: bool | None = True
-) -> None:
+async def a_migrated_user(engine: AsyncEngine, anchor: str, *, finished: bool = True) -> None:
     """A user as `load_identity` would leave them, with their onboarding row.
 
     Written straight to the tables rather than through the identity loader: this
@@ -57,22 +55,7 @@ async def a_migrated_user(
             legacy_bubble_id=anchor,
             primary_role="mentee",
             timezone="Africa/Lagos",
-            # True: active inside the window. False: long dormant.
-            # None: never active at all — the signup-only case.
-            last_active_at=None
-            if active is None
-            else (
-                (CUTOVER - dt.timedelta(days=30))
-                if active
-                else (CUTOVER - ACTIVE_WITHIN - dt.timedelta(days=30))
-            ),
-            # **Written explicitly, and the dormant case is why.**
-            # `created_at` defaults to `now()`, which is inside every
-            # window — so a fixture that leaves it alone makes each
-            # user look like a fresh signup and the second half of the
-            # disjunction rescues everybody. A migrated user registered
-            # in Bubble years ago; only the newcomer is recent.
-            created_at=ANCIENT if active is not None else CUTOVER - dt.timedelta(days=21),
+            created_at=ANCIENT,
         )
         await conn.execute(
             text(
@@ -113,10 +96,7 @@ async def run_load(engine: AsyncEngine, records: list[dict[str, Any]]) -> Any:
     """Plan and load in one transaction, returning the reconciliation."""
     async with engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        seen = await recently_seen(conn, since=CUTOVER - ACTIVE_WITHIN)
-        plan = plan_opening_balances(
-            records, cutover=CUTOVER, ladder=LADDER, finished=finished, seen=seen
-        )
+        plan = plan_opening_balances(records, cutover=CUTOVER, ladder=LADDER, finished=finished)
         await CreditLoader(conn, ladder=LADDER).load(plan)
         return await reconcile_credits(conn, plan)
 
@@ -547,7 +527,7 @@ async def unlocks_for(engine: AsyncEngine, anchor: str) -> list[Any]:
         return [r[0] for r in rows]
 
 
-async def test_an_active_holder_gets_an_unlock_with_no_referral_behind_it(
+async def test_an_onboarded_holder_gets_an_unlock_with_no_referral_behind_it(
     db_engine: AsyncEngine,
 ) -> None:
     """**`unlocked_by_referral_id` is NULL, and that is why the column is nullable.**
@@ -562,23 +542,6 @@ async def test_an_active_holder_gets_an_unlock_with_no_referral_behind_it(
 
     assert await unlocks_for(db_engine, "holder") == [None]
     assert result.missing_unlocks == ()
-    assert result.ok
-
-
-async def test_a_dormant_holder_gets_no_unlock(db_engine: AsyncEngine) -> None:
-    """The owner's condition, and the only thing that stops this grandfathering
-    everybody.
-
-    Both halves of the disjunction must miss: last active outside the window
-    *and* registered outside it. They keep the balance they had — the lot still
-    loads — but the recurring grant does not follow them.
-    """
-    await a_migrated_user(db_engine, "dormant", active=False)
-
-    result = await run_load(db_engine, [record("dormant", "3")])
-
-    assert await unlocks_for(db_engine, "dormant") == []
-    assert await lots_of(db_engine, "dormant") == [("opening_balance", 3, 3, EXPIRY)]
     assert result.ok
 
 
@@ -598,7 +561,7 @@ async def test_a_spent_down_user_is_still_unlocked(db_engine: AsyncEngine) -> No
 async def test_somebody_who_never_entered_credits_is_still_unlocked(
     db_engine: AsyncEngine,
 ) -> None:
-    """**Every migrated user the platform has seen recently**, balance or not.
+    """**Every migrated user**, balance or not.
 
     The legacy app granted monthly credits unconditionally, so an empty
     `bookingCredit` says they joined recently rather than that they are owed
@@ -613,20 +576,32 @@ async def test_somebody_who_never_entered_credits_is_still_unlocked(
     assert result.ok
 
 
-async def test_a_signup_with_no_activity_is_still_unlocked(
+async def test_a_user_who_never_finished_onboarding_gets_no_unlock(
     db_engine: AsyncEngine,
 ) -> None:
-    """**The disjunction, and the case an activity-only filter loses.**
+    """Owner, 2026-11-08: they start like a new sign-up. The balance they had
+    still loads; the recurring grant waits on onboarding and an invite."""
+    await a_migrated_user(db_engine, "unfinished", finished=False)
 
-    `last_active_at` is null — they registered and never came back — but
-    `created_at` falls inside the window. An activity-only filter would cut off
-    exactly the new joiner the platform is trying to keep.
-    """
-    await a_migrated_user(db_engine, "newcomer", active=None)
+    result = await run_load(db_engine, [record("unfinished", "2")])
 
-    result = await run_load(db_engine, [record("newcomer", "2")])
+    assert await unlocks_for(db_engine, "unfinished") == []
+    assert await lots_of(db_engine, "unfinished") == [("opening_balance", 2, 2, EXPIRY)]
+    assert result.ok
 
-    assert await unlocks_for(db_engine, "newcomer") == [None]
+
+async def test_an_export_row_whose_user_never_loaded_expects_no_unlock(
+    db_engine: AsyncEngine,
+) -> None:
+    """A spent-down or blank row for a user the identity load refused writes
+    nothing and expects nothing, so the reconciliation still passes."""
+    await a_migrated_user(db_engine, "present")
+
+    result = await run_load(
+        db_engine, [record("present", "3"), record("gone", "0"), record("never", "")]
+    )
+
+    assert result.missing_unlocks == ()
     assert result.ok
 
 
@@ -688,9 +663,8 @@ async def test_a_missing_unlock_is_reported_by_name(db_engine: AsyncEngine) -> N
 
     async with db_engine.begin() as conn:
         finished = await finished_onboarding(conn)
-        seen = await recently_seen(conn, since=CUTOVER - ACTIVE_WITHIN)
         plan = plan_opening_balances(
-            [record("holder", "3")], cutover=CUTOVER, ladder=LADDER, finished=finished, seen=seen
+            [record("holder", "3")], cutover=CUTOVER, ladder=LADDER, finished=finished
         )
         result = await reconcile_credits(conn, plan)
 
