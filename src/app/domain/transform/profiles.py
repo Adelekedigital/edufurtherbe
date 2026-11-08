@@ -38,7 +38,7 @@ from app.domain.bubble import (
     parse_timestamp,
 )
 from app.domain.enums import ApprovalStatus, ListingStatus, MeetingProvider, UnlistedReason
-from app.domain.transform.identity import TransformError
+from app.domain.transform.identity import ROLE_FIELD, TransformError, is_unchosen_role
 
 # --------------------------------------------------------------------------
 # Field names
@@ -649,6 +649,23 @@ def mentor_owner_map(user_records: list[dict[str, Any]]) -> dict[str, str]:
     time in another module would be the same rule in two places.
     """
     return _links(user_records, MENTOR_LINK_FIELD)
+
+
+def unchosen_mentor_owners(user_records: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Users with an empty role who own a legacy mentor record (decision 311).
+
+    They load with the unchosen (mentee) hint, which nothing in the ETL changes,
+    so they would land on the mentee dashboard. Reported by the dry run so the
+    operator sees them; none in the 2026-11-08 production export.
+    """
+    owners = set(mentor_owner_map(user_records).values())
+    return tuple(
+        sorted(
+            legacy_anchor(record)
+            for record in user_records
+            if legacy_anchor(record) in owners and is_unchosen_role(record.get(ROLE_FIELD))
+        )
+    )
 
 
 def _links(user_records: list[dict[str, Any]], field: str) -> dict[str, str]:
