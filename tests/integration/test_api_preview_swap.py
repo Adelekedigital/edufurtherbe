@@ -47,6 +47,7 @@ NO_CALLER = {
     ("POST", "/api/v1/callbacks/daily"),
     ("POST", "/api/v1/callbacks/bio-drafts"),
     ("POST", "/api/v1/callbacks/message-emails"),
+    ("POST", "/api/v1/callbacks/push-messages"),
     ("POST", "/api/v1/internal/jobs/{job_name}"),
 }
 

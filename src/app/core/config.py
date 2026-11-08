@@ -149,7 +149,7 @@ VAPID_PRIVATE_KEY_BYTES = 32
 BASE64URL_PATTERN = "^[A-Za-z0-9_-]+={0,2}$"
 
 
-def _base64url_bytes(value: str) -> bytes | None:
+def base64url_bytes(value: str) -> bytes | None:
     """`value` decoded as base64url, padded or not; `None` if it is not."""
     if not re.fullmatch(BASE64URL_PATTERN, value):
         return None
@@ -978,10 +978,10 @@ class Settings(BaseSettings):
             return self
         if public_key is None or private_key is None or subject is None:
             raise ValueError("VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT go together")
-        public = _base64url_bytes(public_key)
+        public = base64url_bytes(public_key)
         if public is None or len(public) != VAPID_PUBLIC_KEY_BYTES or public[0] != 0x04:
             raise ValueError("VAPID_PUBLIC_KEY must be an uncompressed P-256 point in base64url")
-        private = _base64url_bytes(private_key.get_secret_value())
+        private = base64url_bytes(private_key.get_secret_value())
         if private is None or len(private) != VAPID_PRIVATE_KEY_BYTES:
             raise ValueError("VAPID_PRIVATE_KEY must be a raw 32-byte key in base64url")
         if _vapid_public_half(private) != public:
