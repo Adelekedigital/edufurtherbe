@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -27,7 +28,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from app.core.config import Settings, base64url_bytes
-from app.domain.push import is_push_service
+from app.domain.push import PushMessage, is_push_service
 from app.infra.http.client import shared
 
 __all__ = [
@@ -36,6 +37,8 @@ __all__ = [
     "PushTarget",
     "WebPushPort",
     "WebPushSender",
+    "fan_out",
+    "live_web_push",
     "web_push_for",
 ]
 
@@ -173,3 +176,18 @@ def web_push_for(settings: Settings) -> WebPushPort:
     if key is None:  # the settings validator has already refused this
         return NullWebPush()
     return WebPushSender(public_key=public, private_key=key, subject=subject)
+
+
+def fan_out(
+    sender: WebPushPort, targets: Sequence[PushTarget], push: PushMessage
+) -> list[PushOutcome]:
+    """One push to every browser in turn, as its own `ttl` and `urgency` say.
+    Blocking: callers run it on a worker thread."""
+    payload = push.payload()
+    return [sender.send(target, payload, ttl=push.ttl, urgency=push.urgency) for target in targets]
+
+
+def live_web_push(settings: Settings) -> WebPushPort | None:
+    """The sender for the outbox's push rows, or ``None`` when push is off: the
+    rows then stay pending, as `live_notifier` leaves an email."""
+    return web_push_for(settings) if settings.push_configured else None

@@ -35,13 +35,14 @@ from app.infra.clients.scheduler import (
     UntrustedCallbackError,
     verify_callback,
 )
+from app.infra.clients.web_push import live_web_push
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
 # collision a reader resolves by scrolling, and the wrong one is a plausible
 # mistake rather than an obvious error — `bubble_id` shadowed a local the same
 # way in the M4 transform and raised `UnboundLocalError` far from the edit.
-from app.infra.db.outbox import drain
+from app.infra.db.outbox import drain, drain_push
 from app.infra.db.session_writer import (
     add_meet_link,
     expire_requests,
@@ -142,22 +143,30 @@ async def reminder_callback(request: Request, session: SessionDep) -> bool:
     # the row stays pending and the hourly sweep delivers it instead.
     await session.commit()
     notifier = getattr(request.app.state, "notifier", None) or live_notifier(settings)
+    web_push = getattr(request.app.state, "web_push", None) or live_web_push(settings)
     # An expiry's emails are not drained here: `SendWhatWasQueued` sends exactly
     # the rows this request queued once the response has gone, and a drain by
     # session would also send that session's other pending rows.
-    if queued and notifier is not None and kind != EXPIRY_KIND:
+    if queued and kind != EXPIRY_KIND:
         # **The callback is the moment, so it sends** (Codex on #397). The
         # outbox is otherwise drained only by the hourly settlement, which put a
         # five-minute reminder half an hour into the session. Only the rows this
-        # callback queued; everything else stays the sweep's.
-        await drain(
-            session,
-            notifier=notifier,
-            now=dt.datetime.now(dt.UTC),
-            settings=settings,
-            entity_id=UUID(str(session_id)),
-            kind=str(kind),
-        )
+        # callback queued; everything else stays the sweep's. The push rows
+        # too: "starting soon" rides the last reminder (decision 312).
+        now = dt.datetime.now(dt.UTC)
+        if notifier is not None:
+            await drain(
+                session,
+                notifier=notifier,
+                now=now,
+                settings=settings,
+                entity_id=UUID(str(session_id)),
+                kind=str(kind),
+            )
+        if web_push is not None:
+            await drain_push(
+                session, web_push=web_push, now=now, entity_id=UUID(str(session_id)), kind=str(kind)
+            )
         await session.commit()
     if queued and kind == EXPIRY_KIND:
         # The expired request's calendar event, after its status committed. A

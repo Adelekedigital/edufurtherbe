@@ -10,6 +10,7 @@ because the sender is the part that is allowed to be down.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -51,8 +52,15 @@ class Refuser:
 
 
 async def a_booking(
-    engine: AsyncEngine, client: httpx.AsyncClient, tag: str, *, confirmation: bool = False
+    engine: AsyncEngine,
+    client: httpx.AsyncClient,
+    tag: str,
+    *,
+    confirmation: bool = False,
+    before: Callable[[UUID, UUID], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
+    """A booking between a new mentor and mentee. `before(mentor, mentee)` runs
+    once both exist and before the booking, for what must precede it."""
     mentor = await make_public_mentor(engine, tag)
     session_type = await add_session_type(engine, mentor, duration=60, notice=0)
     for day in range(7):
@@ -79,6 +87,8 @@ async def a_booking(
                 ),
                 {"u": mentor},
             )
+    if before is not None:
+        await before(mentor, mentee)
     slots = await client.get(
         f"/api/v1/users/{mentor}/availability/slots",
         params={"session_type_id": str(session_type)},

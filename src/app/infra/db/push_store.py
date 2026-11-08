@@ -9,6 +9,7 @@ reveals nothing of theirs.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -17,12 +18,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.push import MAX_SUBSCRIPTIONS_PER_USER
+from app.infra.clients.web_push import PushOutcome
 from app.infra.db.models.push import PushSubscription
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
 from app.infra.db.user_locks import lock_users
 
-__all__ = ["forget", "subscribe", "subscribed", "subscriptions_for", "unsubscribe"]
+__all__ = ["forget_gone", "subscribe", "subscribed", "subscriptions_for", "unsubscribe"]
 
 
 async def subscribe(
@@ -105,7 +107,11 @@ async def subscriptions_for(session: AsyncSession, user_id: UUID) -> list[PushSu
     )
 
 
-async def forget(session: AsyncSession, ids: list[UUID]) -> None:
-    """Drop browsers whose push service said they are gone. Does not commit."""
-    if ids:
-        await session.execute(delete(PushSubscription).where(PushSubscription.id.in_(ids)))
+async def forget_gone(
+    session: AsyncSession, ids: Sequence[UUID], outcomes: Sequence[PushOutcome]
+) -> None:
+    """Drop the browsers whose push service said they are gone (`ids` and
+    `outcomes` pair up, as `web_push.fan_out` returns them). Does not commit."""
+    gone = [row_id for row_id, done in zip(ids, outcomes, strict=True) if done is PushOutcome.GONE]
+    if gone:
+        await session.execute(delete(PushSubscription).where(PushSubscription.id.in_(gone)))

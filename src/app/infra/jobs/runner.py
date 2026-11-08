@@ -33,6 +33,7 @@ from app.infra.clients.meetings import (
     rooms_for,
 )
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier, notifier_for
+from app.infra.clients.web_push import live_web_push
 from app.infra.db.account_purge import purge_counts, purge_due_accounts
 from app.infra.db.calendar_store import check_connections, free_busy_reader
 from app.infra.db.credit_expiry import expirable_credit_count, expire_credits
@@ -48,7 +49,7 @@ from app.infra.db.intake_file_store import sweep_counts, sweep_intake_files
 from app.infra.db.mentor_status_store import remind_returning_mentors
 from app.infra.db.message_file_store import message_sweep_counts, sweep_message_files
 from app.infra.db.next_available_store import refresh_next_available
-from app.infra.db.outbox import drain
+from app.infra.db.outbox import drain, drain_push
 from app.infra.db.session_type_store import finalise_scheduled_deletions
 from app.infra.db.session_writer import (
     confirm_presence,
@@ -301,6 +302,11 @@ class RuntimeJobs:
                     notifier=NullNotifier() if dry_run else self._notifier(),
                     now=now,
                 )
+                # Pushes a request did not send (decision 312); a dry run
+                # pushes nothing, and with push off they wait.
+                web_push = None if dry_run else live_web_push(self.settings)
+                if web_push is not None:
+                    await drain_push(session, web_push=web_push, now=now)
                 if dry_run:
                     await session.rollback()
                 else:
