@@ -146,6 +146,8 @@ EXPECTED_MODELS = {
     # An admin's read-only preview as one user, and its log (decision 309).
     "PreviewSession",
     "PreviewEvent",
+    # A browser's Web Push subscription, one row per device (#386).
+    "PushSubscription",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")

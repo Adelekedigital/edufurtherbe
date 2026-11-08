@@ -27,6 +27,7 @@ from app.core.config import get_settings
 from app.domain.bubble import EXPORT_TIMEZONE
 from app.domain.resolve import COUNTRY_ALIASES, LANGUAGE_ALIASES, resolve_names
 from app.domain.transform import IdentityPlan, plan_identity
+from app.domain.transform.profiles import unchosen_mentor_owners
 from app.infra.clients.bubble import JsonExportSource
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.etl.loader import UserLoader
@@ -59,6 +60,9 @@ def describe(plan: IdentityPlan) -> None:
         print(f"   refused  {error}")
     for email, ids in plan.duplicate_emails.items():
         print(f"   DUPLICATE {email}: {', '.join(ids)}")
+    # Ids only: the shared slug is usually a name, and the ids find it in Bubble.
+    for ids in plan.duplicate_slugs:
+        print(f"   DUPLICATE SLUG: {', '.join(ids)}")
 
 
 async def load(plan: IdentityPlan) -> int:
@@ -133,12 +137,19 @@ async def load(plan: IdentityPlan) -> int:
 
 async def run(args: argparse.Namespace) -> int:
     source = JsonExportSource(args.from_export, timezone=EXPORT_TIMEZONE)
+    user_records = list(source.read(args.thing))
     plan = plan_identity(
-        list(source.read(args.thing)),
+        user_records,
         list(source.read(args.profiles)),
         export_timezone=EXPORT_TIMEZONE,
     )
     describe(plan)
+    # Not a refusal: they load with the mentee hint (decision 311). Counted so a
+    # mentor who never set a role is seen before the load, not after.
+    if unchosen := unchosen_mentor_owners(user_records):
+        print(f"empty-role mentor owners (load with the mentee hint): {len(unchosen)}")
+        for bubble_id in unchosen:
+            print(f"   {bubble_id}")
 
     if not plan.ok:
         print("\nrefusing to load — resolve the above first", file=sys.stderr)
