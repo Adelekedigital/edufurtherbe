@@ -130,9 +130,9 @@ async def enqueue(
     )
     # **A reminder queued twice is an identical email a mentor did not need**,
     # and QStash retries by design — so a second enqueue for the same session
-    # and kind is a no-op rather than an error. Nothing else carries a `kind`,
-    # so the index this defers to skips every other message and the conflict
-    # target can never match one.
+    # and kind is a no-op rather than an error. **No conflict target is named**
+    # (`index_where` alone is ignored), so any unique violation is a no-op; the
+    # only unique index here is `uq_outbox_events_reminder`, partial on `kind`.
     inserted = await session.execute(
         statement.on_conflict_do_nothing(index_where=text("payload ? 'kind'")).returning(
             OutboxEvent.id

@@ -446,5 +446,5 @@ a two-sided one *structurally*, which it cannot.
 
 **Its `kind` carries the period** — `c14:2026-10` rather than `c14`.
 `uq_outbox_events_reminder` is unique on `(entity_id, event_type, kind,
-recipient)` and `entity_id` here is the user, so a bare kind would be unique
+recipient, destination)` and `entity_id` here is the user, so a bare kind would be unique
 across their lifetime and they would be nudged once, ever.
