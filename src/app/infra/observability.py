@@ -52,7 +52,9 @@ SENSITIVE_PARTS = ("password", "secret", "signature")
 #: `token_count`.
 SENSITIVE_SUFFIXES = ("token", "tokens")
 
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+#: An address, plain or percent-encoded as a query string carries it (`%40`,
+#: and `%2B` for a `+`): an admin search's `q` reaches the access log that way.
+_EMAIL = re.compile(r"[\w.+%-]+(?:@|%40)[\w-]+(?:\.[\w-]+)+")
 _BEARER = re.compile(r"(?i)\bbearer\s+[\w\-.~+/]+=*")
 #: A query parameter carrying a credential: an OAuth `code` or `state`, a Daily
 #: door token `t`, or any `*token*`, `key`, `sig` or `signature`.

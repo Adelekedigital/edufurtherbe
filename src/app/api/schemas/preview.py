@@ -86,13 +86,7 @@ class PreviewSessionRead(BaseModel):
     def of(cls, row: Any, *, can_reveal: bool) -> PreviewSessionRead:
         return cls(
             id=row.id,
-            user=AdminUserRead(
-                user_id=row.user_id,
-                email=row.email,
-                first_name=row.first_name,
-                last_name=row.last_name,
-                role=row.role,
-            ),
+            user=AdminUserRead.from_row(row._mapping),
             started_at=row.started_at,
             expires_at=expires_at(row.started_at),
             ended_at=row.ended_at,

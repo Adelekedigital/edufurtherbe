@@ -24,7 +24,7 @@ from app.domain.enums import PreviewEndReason, PreviewEventKind
 from app.domain.preview import lapse
 from app.infra.db.models.preview import PreviewEvent, PreviewSession
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE, holds_live_grant
+from app.infra.db.predicates import LIVE, is_live_admin
 from app.infra.db.user_locks import lock_users
 
 __all__ = [
@@ -61,7 +61,7 @@ def _owned(owner: Owner, preview_id: UUID) -> list[Any]:
 def previewable(caller: UUID) -> list[Any]:
     """**Who an admin may preview**: a live account that holds no live admin
     grant and is not the caller."""
-    return [LIVE, User.id != caller, ~holds_live_grant(User.id)]
+    return [LIVE, User.id != caller, ~is_live_admin(User.id)]
 
 
 async def find_previewable(

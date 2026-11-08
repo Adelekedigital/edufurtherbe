@@ -40,6 +40,7 @@ from app.api.deps.admin_mentors import (
     AdminMentorRowsDep,
     AdminMentorsSummaryDep,
 )
+from app.api.deps.admin_users import AdminUsersDep
 from app.api.deps.availability import (
     AvailabilityExceptionsDep,
     AvailabilityRulesDep,
@@ -219,6 +220,7 @@ __all__ = [
     "AdminMentorDep",
     "AdminMentorRowsDep",
     "AdminMentorsSummaryDep",
+    "AdminUsersDep",
     "ApprovedInstitutionDep",
     "AssistedTextDep",
     "AuthoredReviewDep",
