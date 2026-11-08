@@ -17,7 +17,6 @@ import pytest
 from app.core.config import Settings
 from app.domain.credits import credit_ladder
 from app.domain.transform.credits import (
-    ACTIVE_WITHIN,
     CREDIT_FIELD,
     RENEW_DATE_FIELD,
     implausible_above,
@@ -42,11 +41,8 @@ def a_record(anchor: str, credit: object, **extra: object) -> dict[str, object]:
 def plan(
     *records: dict[str, object],
     finished: frozenset[str] = frozenset(),
-    seen: frozenset[str] = frozenset(),
 ):
-    return plan_opening_balances(
-        list(records), cutover=CUTOVER, ladder=LADDER, finished=finished, seen=seen
-    )
+    return plan_opening_balances(list(records), cutover=CUTOVER, ladder=LADDER, finished=finished)
 
 
 # --------------------------------------------------------------------------
@@ -293,108 +289,82 @@ def test_the_report_names_every_quarantine() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_an_active_holder_is_grandfathered() -> None:
+def test_an_onboarded_holder_is_grandfathered() -> None:
     """`ReferralUnlock` was made nullable in #209 for exactly this row. The
     schema was ready and the writer was missing, which is the whole of what
     register 5 turned out to be."""
-    result = plan(a_record("holder", "5"), seen=frozenset({"holder"}))
+    result = plan(a_record("holder", "5"), finished=frozenset({"holder"}))
 
     assert result.grandfathered == ("holder",)
 
 
 def test_the_legacy_balance_is_not_a_condition() -> None:
-    """**Every migrated user the platform has seen recently**, whatever their
-    balance said — a holder, somebody spent down to zero, and somebody who never
-    entered the credit system at all.
+    """**Every migrated user who finished onboarding**, whatever their balance
+    said — a holder, somebody spent down to zero, and somebody who never entered
+    the credit system at all.
 
     The legacy app granted monthly credits unconditionally (measured finding 4),
     so `bookingCredit` records when somebody joined rather than what they are
-    entitled to. An earlier draft gated on it, which would have cut off every
-    recent signup who had not yet been granted anything.
-
-    All three in one test because the bug is the *set* being narrowed; three
-    separate tests would each pass against a transform that kept only one.
+    entitled to. All three in one test because the bug is the *set* being
+    narrowed; three separate tests would each pass against a transform that kept
+    only one.
     """
     result = plan(
         a_record("holder", "5"),
         a_record("spent", "0"),
         a_record("never", ""),
-        finished=frozenset({"never"}),
-        seen=frozenset({"holder", "spent", "never"}),
+        finished=frozenset({"holder", "spent", "never"}),
     )
 
     assert set(result.grandfathered) == {"holder", "spent", "never"}
 
 
-def test_a_recent_signup_who_never_used_the_platform_is_grandfathered() -> None:
-    """**The case an activity-only filter loses.** Somebody who registered three
-    weeks ago and has not returned has a recent `created_at` and possibly no
-    `last_active_at` at all — exactly the new joiner the platform is trying to
-    keep. `recently_seen` is a disjunction for this reason."""
-    result = plan(
-        a_record("newcomer", ""),
-        finished=frozenset({"newcomer"}),
-        seen=frozenset({"newcomer"}),
-    )
+def test_activity_is_not_a_condition() -> None:
+    """Owner, 2026-11-08: the twelve-month window is gone. The transform takes
+    no activity input, so a dormant onboarded user is grandfathered like any
+    other, and their balance still loads as a lot."""
+    result = plan(a_record("dormant", "5"), finished=frozenset({"dormant"}))
 
-    assert result.grandfathered == ("newcomer",)
-    assert len(result.starters) == 1
+    assert result.grandfathered == ("dormant",)
+    assert len(result.lots) == 1
 
 
-def test_a_dormant_holder_is_not_grandfathered() -> None:
-    """The owner's condition: only users active recently. A migrated balance is
-    still loaded — they keep what they had — but the recurring grant does not
-    follow them."""
-    result = plan(a_record("dormant", "5"), seen=frozenset())
+def test_somebody_who_never_finished_onboarding_starts_like_a_new_user() -> None:
+    """Owner, 2026-11-08: no unlock, so finishing onboarding after cutover
+    gives level 1 and an invite is how they reach 3. Their balance, if any,
+    still loads."""
+    result = plan(a_record("unfinished", "4"), a_record("blank", ""))
 
     assert result.grandfathered == ()
     assert len(result.lots) == 1
+    assert result.unfinished == ("blank",)
 
 
 def test_a_quarantined_balance_does_not_cost_somebody_their_entitlement() -> None:
     """**The grandfather is decided before the balance is read.**
 
     A `bookingCredit` nobody can parse costs this user their *lot* — which is
-    what the operator looks at — not their place in the recurring grant. The two
-    are independent facts, and coupling them would punish somebody for a data
-    problem they did not create.
+    what the operator looks at — not their place in the recurring grant.
     """
-    result = plan(a_record("odd", "five"), seen=frozenset({"odd"}))
+    result = plan(a_record("odd", "five"), finished=frozenset({"odd"}))
 
     assert result.grandfathered == ("odd",)
     assert len(result.quarantined) == 1
     assert result.lots == ()
 
 
-def test_grandfathering_defaults_to_nobody() -> None:
-    """**The safe direction on a forgetful caller.** Omitting `active` writes no
-    unlocks — the cliff, which is visible and fixable — rather than handing every
-    migrated user a recurring benefit, which is the error that is expensive to
-    undo."""
-    result = plan(a_record("holder", "5"))
-
-    assert result.grandfathered == ()
-
-
 def test_a_duplicate_anchor_is_grandfathered_once() -> None:
     """The second occurrence is quarantined, and it must not also produce a
     second unlock — `ON CONFLICT DO NOTHING` would absorb it, so this is the
     test that stops the *count* in the cutover report being wrong."""
-    result = plan(a_record("twice", "5"), a_record("twice", "2"), seen=frozenset({"twice"}))
+    result = plan(a_record("twice", "5"), a_record("twice", "2"), finished=frozenset({"twice"}))
 
     assert result.grandfathered == ("twice",)
-
-
-def test_the_window_is_twelve_months() -> None:
-    """Named rather than left implicit, because the owner asked for "six to
-    twelve" and the two ends are not close: on the dev export six qualifies one
-    user of 43 and twelve qualifies seventeen. This is the line to change."""
-    assert ACTIVE_WITHIN.days == 365
 
 
 def test_the_report_counts_the_grandfathered() -> None:
     """An operator reading the cutover report needs this number, because it is
     the one that decides whether ~1,200 people keep receiving credits."""
-    result = plan(a_record("holder", "5"), seen=frozenset({"holder"}))
+    result = plan(a_record("holder", "5"), finished=frozenset({"holder"}))
 
     assert "grandfathered into the monthly grant: 1" in result.report()

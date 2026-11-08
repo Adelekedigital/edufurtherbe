@@ -23,6 +23,8 @@ import pytest
 from app.domain.enums import ApprovalStatus, ListingStatus, MeetingProvider, UnlistedReason
 from app.domain.transform import TransformError
 from app.domain.transform.profiles import (
+    DEGREE_CATEGORIES,
+    EDUCATION_LINK_FIELD,
     MEETING_VENUES,
     SERVICE_OFFERINGS,
     booking_defaults,
@@ -70,7 +72,9 @@ def test_every_legacy_service_value_maps_to_one_of_the_six_parents() -> None:
     renames. At mixed depth ``Document Review`` and ``document preparation`` are
     different strings for one concept and the matching join returns nothing.
     """
-    assert len(SERVICE_OFFERINGS) == 16 - 4  # four differ only by case, folded away
+    # Twelve from dev (sixteen, four differing only by case) plus eleven that
+    # only the production export carries.
+    assert len(SERVICE_OFFERINGS) == 16 - 4 + 11
     assert set(SERVICE_OFFERINGS.values()) == {
         "test-preparation",
         "document-preparation",
@@ -456,3 +460,60 @@ def test_no_short_form_inherits_rather_than_guessing() -> None:
     )
 
     assert row.degree_abbreviation is None
+
+
+# --------------------------------------------------------------------------
+# Values only the production export carries (decision 316)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("legacy", "slug"),
+    [
+        ("Resume", "document-preparation"),
+        ("Resume/CV Review", "document-preparation"),
+        ("Personal Statement Review", "document-preparation"),
+        ("Statement of Purpose Review", "document-preparation"),
+        ("Scholarship Application", "scholarships-financial-aid"),
+        ("Graduate Assistantship", "scholarships-financial-aid"),
+        ("Research Assistantship", "scholarships-financial-aid"),
+        ("General Guidance", "program-selection"),
+        ("Introduction Call", "program-selection"),
+        ("Mentor Selection", "program-selection"),
+        ("Others", "program-selection"),
+    ],
+)
+def test_the_production_only_services_map_to_a_parent(legacy: str, slug: str) -> None:
+    assert service_slugs(legacy, field="f", bubble_id="x") == (slug,)
+
+
+def test_a_mentor_who_listed_only_generic_values_keeps_a_service() -> None:
+    """The owner's rule: no migrated mentor ends with an empty service list."""
+    raw = "Introduction Call , Mentor Selection , Others"
+    assert service_slugs(raw, field="f", bubble_id="x") == ("program-selection",)
+
+
+@pytest.mark.parametrize(("raw", "slug"), [("Master", "masters"), ("Doctorate", "doctorate")])
+def test_the_singular_degree_categories_map(raw: str, slug: str) -> None:
+    assert DEGREE_CATEGORIES[raw.casefold()] == slug
+
+
+def test_an_education_row_without_a_school_is_skipped_and_named() -> None:
+    """Owner, 2026-11-08: skip it, name it, load the rest of the profile."""
+    kept, empty = "1700000000000x000000000000000021", "1700000000000x000000000000000022"
+    plan = plan_profiles(
+        [user(**{EDUCATION_LINK_FIELD: f"{kept} , {empty}"})],
+        education_records=[
+            record(bubble_id=kept, schoolName="University of Lagos"),
+            record(bubble_id=empty, schoolName="  "),
+        ],
+        goal_records=[],
+        service_records=[],
+        mentor_records=[],
+        award_records=[],
+        export_timezone=NY,
+        this_year=THIS_YEAR,
+    )
+    assert plan.errors == ()
+    assert [row.legacy_bubble_id for row in plan.education] == [kept]
+    assert plan.schoolless_education == (empty,)

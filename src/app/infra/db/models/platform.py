@@ -236,6 +236,9 @@ class OutboxEvent(TimestampMixin, Base):
             # conflicts with the first and is dropped in silence — one party
             # reminded, the other not, nothing saying so.
             text("(payload ->> 'recipient_id')"),
+            # And the channel: a reminder's push row agrees with its email row
+            # on everything above (decision 312).
+            "destination",
             unique=True,
             postgresql_where=text("payload ? 'kind'"),
         ),

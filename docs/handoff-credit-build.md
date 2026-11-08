@@ -336,7 +336,7 @@ deferred cost columns. ADR 0026 took the same shape for the review scale.
 |---|---|---|
 | 1 | **No invite UI.** The mechanism the earning model turns on has no screen | reachability, not PR 5 |
 | 2 | Production `bookingCredit` values as a Data-tab export — the same gate M5a's reviews had | PR 10's **rehearsal**, not its build. The loader is written and tested against the dev export: 43 rows, 36 lots carrying 158 credits, 4 starters, 2 spent down, 1 unfinished, 0 quarantined |
-| ~~5~~ | ~~What happens to migrated credits on the first 1st after cutover?~~ **Resolved 2026-08-27**: every migrated user active or signed up within twelve months is grandfathered into the grant. Built in #223; the window is the one number still worth a second look | closed |
+| ~~5~~ | ~~What happens to migrated credits on the first 1st after cutover?~~ **Resolved 2026-08-27, amended 2026-11-08**: every migrated user who finished onboarding is grandfathered into the grant (the twelve-month window was removed) | closed |
 | ~~3~~ | ~~Does the expiry job's first run sweep migrated lots, or grandfather them?~~ **Answered 2026-08-26: no grandfather clause.** The sweep takes whatever the read already refuses. Grandfathering in the *job* would leave `quantity_remaining` standing on a lot the balance has already stopped counting, and the ledger would never explain the drop — the one thing D8 built it to prevent. If an opening-balance lot should outlive cutover, PR 10 writes the expiry it means | closed |
 | 4 | Ships as one phase or splits after PR 6? | sequencing |
 
@@ -366,9 +366,10 @@ legacy app granted monthly credits unconditionally, so `bookingCredit` records
 when somebody joined rather than what they are owed; gating on it would cut off
 every recent signup who had not yet been granted anything.
 
-**Six versus twelve months is still a live number.** On the dev export the ends
-are 15 grandfathered and 1. It is one constant and the dry run prints the count,
-so the production export settles it before the freeze.
+**Superseded 2026-11-08 (owner, after rehearsal 1):** the activity window is
+gone. Every migrated user who **finished onboarding** is grandfathered; one who
+did not starts like a new sign-up (level 1 on finishing, 3 by inviting). On the
+production export the old window grandfathered 314 users. See decision 308.
 
 ---
 

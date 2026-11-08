@@ -345,6 +345,8 @@ async def test_the_reminder_index_distinguishes_recipients(db_engine: AsyncEngin
 
     assert "UNIQUE" in sql
     assert "recipient_id" in sql, "two recipients would collapse into one row"
+    key = sql.split(" WHERE ")[0]
+    assert "destination" in key, "a reminder's push would collapse into its email"
     assert "kind" in sql
     # Partial, so it constrains nothing but reminders.
     assert "WHERE" in sql
