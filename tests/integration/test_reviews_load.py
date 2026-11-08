@@ -223,6 +223,19 @@ async def test_a_quarantined_row_is_not_written(
     assert result.ok
 
 
+async def test_a_review_naming_a_deleted_user_is_skipped_and_still_balances(
+    db_engine: AsyncEngine, users: dict[str, UUID]
+) -> None:
+    """Decision 316: skipped, named, and counted, so reconciliation balances."""
+    result = await load(
+        db_engine, users, [record(), record(**{"unique id": "b", "reviewedBy": "(deleted thing)"})]
+    )
+
+    assert len(await stored(db_engine)) == 1
+    assert result.ok
+    assert result.unaccounted == ()
+
+
 # --------------------------------------------------------------------------
 # Reconciliation has to be able to fail
 # --------------------------------------------------------------------------

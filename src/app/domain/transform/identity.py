@@ -391,8 +391,8 @@ def to_profile(
         raise TransformError(bubble_id, "created_at and modified_at are both required")
 
     languages = normalise_list(profile.get("list-Language"))
-    if single := profile.get("Language"):
-        languages.append(str(single))
+    # The production export joins several names into this "single" field too.
+    languages.extend(normalise_list(profile.get("Language")))
 
     return ProfileRow(
         legacy_bubble_id=bubble_id,

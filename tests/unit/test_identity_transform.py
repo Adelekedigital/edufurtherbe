@@ -8,6 +8,7 @@ onboarding. A role that is set but unknown still refuses.
 """
 
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from tests.conftest import USER_ID
@@ -20,6 +21,7 @@ from app.domain.transform.identity import (
     ROLE_FIELD,
     UNCHOSEN_ROLE,
     to_onboarding,
+    to_profile,
 )
 from app.domain.transform.profiles import MENTOR_LINK_FIELD, unchosen_mentor_owners
 from app.infra.db.models.user import User
@@ -145,3 +147,24 @@ def test_users_without_a_slug_never_share_one() -> None:
 def test_distinct_slugs_pass() -> None:
     report = transform_users([record(), record(**SECOND, Slug="person-two")])
     assert report.ok
+
+
+# --- languages (decision 316) ----------------------------------------------
+
+
+def test_a_comma_joined_single_language_field_is_split() -> None:
+    """The production export joins several names into the "single" field too."""
+    profile = {
+        "bubble_id": "1700000000000x000000000000000050",
+        "created_at": "Sep 3, 2025 5:31 am",
+        "modified_at": "Sep 4, 2025 5:31 am",
+        "list-Language": "",
+        "Language": "English , Yoruba",
+    }
+    row = to_profile(
+        profile,
+        user_bubble_id=USER_ID,
+        user_record=record(),
+        export_timezone=ZoneInfo("America/New_York"),
+    )
+    assert row.language_names == ("English", "Yoruba")

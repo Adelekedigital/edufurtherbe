@@ -323,3 +323,20 @@ def test_the_point_scales_take_their_bounds_from_the_shared_constants() -> None:
     assert plan_reviews([record(npsRecommendScore=str(low))], timezone=LAGOS).reviews
     assert plan_reviews([record(npsRecommendScore=str(high))], timezone=LAGOS).reviews
     assert plan_reviews([record(npsRecommendScore=str(high + 1))], timezone=LAGOS).reviews == ()
+
+
+# --------------------------------------------------------------------------
+# A deleted user (decision 316)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["reviewedBy", "reviewedFor"])
+def test_a_review_naming_a_deleted_user_is_skipped_and_named(field: str) -> None:
+    """Bubble writes ``(deleted thing)`` for a deleted user. There is nobody to
+    attach the review to, so it is skipped and named, not quarantined."""
+    deleted = record(**{field: "(deleted thing)"})
+    plan = plan_reviews([deleted, record(**{"unique id": "2x2"})], timezone=LAGOS)
+    assert [row.legacy_bubble_id for row in plan.reviews] == ["2x2"]
+    assert plan.quarantined == ()
+    assert plan.deleted_party == (deleted["unique id"],)
+    assert "skipped, deleted user: 1" in plan.report()
