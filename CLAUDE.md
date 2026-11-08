@@ -68,9 +68,12 @@ make check                     # the full local gate — CI runs it on every pus
    Secrets are `SecretStr` and never logged.
 7. **Deep checks report findings only.** Never edit during a review, a debug, or
    an audit until the fix and its impact are approved.
-8. **One rule, one representation.** A predicate, mapping, constant or test
-   double that exists in a second place is a **defect**, not a style question —
-   extract it, or pin the copies with a test that fails when they diverge. Every
+8. **One rule, one representation: reuse before you build.** A predicate,
+   mapping, constant, helper, schema, dependency or test double that exists in
+   a second place is a **defect**: consolidate it and move every copy onto it
+   in the same PR, never a follow-up or a divergence note. Search the whole
+   pattern before building and grep your own diff before review; the five
+   steps are in `project-conventions` → *Reuse before you build*. Every
    duplication this project has shipped was found by a human after a copy was
    missed; no gate sees them.
 9. **Conventional Commits.** The release tooling parses them.
