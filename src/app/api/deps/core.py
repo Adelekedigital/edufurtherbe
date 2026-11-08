@@ -186,7 +186,7 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # than an `EXISTS` beside an aggregate that could disagree.
 #
 # **Keyed by exactly one of `:auth_id` (the token's subject) and `:user_id`**
-# (a preview's user, decision 311), the other `NULL`: one column list for the
+# (a preview's user, decision 313), the other `NULL`: one column list for the
 # caller and for the user a preview shows (`_user_row`).
 #
 # `oc` and `cc` are the caller's own origin and current countries, for `/me`
@@ -238,7 +238,7 @@ async def _signed_in_user(claims: TokenClaims, session: AsyncSession) -> dict[st
 
 
 # --------------------------------------------------------------------------
-# Preview as user (decision 311)
+# Preview as user (decision 313)
 #
 # **The swap lives in the one step every authenticated route resolves**, so no
 # router can forget it: with `X-EF-Preview` the caller is the previewed user,
@@ -258,7 +258,7 @@ PreviewHeaderDep = Annotated[
     Header(
         alias=PREVIEW_HEADER,
         description=(
-            "An admin's live preview session id (decision 311), sent beside the "
+            "An admin's live preview session id (decision 313), sent beside the "
             "admin's own bearer token: the request is answered as the previewed "
             "user, read only. `404` when it names no preview of this admin, the "
             "admin lacks the preview permission, or previews are off; `401` "
@@ -370,7 +370,7 @@ async def get_current_user(
     token is genuine; no live account is linked to it.
 
     **With `X-EF-Preview` the caller is the previewed user, read only**
-    (decision 311, `_previewed_user`): any method but GET, HEAD and OPTIONS is
+    (decision 313, `_previewed_user`): any method but GET, HEAD and OPTIONS is
     refused here, before a route's own work runs.
     """
     return await _resolve(request, claims, session, preview)
@@ -407,7 +407,7 @@ async def optional_viewer(
     all get exactly what a visitor with no token gets. A `401`, `404` or `409`
     here would break a page anyone may read, for a reason about the caller.
 
-    **Except in a preview** (decision 311): with `X-EF-Preview` the viewer is
+    **Except in a preview** (decision 313): with `X-EF-Preview` the viewer is
     the previewed user, resolved exactly as `get_current_user` resolves one,
     refusals included. The admin asked for one person's view, and an anonymous
     page in its place would show the wrong view without saying so; an ended

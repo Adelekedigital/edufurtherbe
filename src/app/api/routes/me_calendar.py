@@ -95,7 +95,7 @@ async def read_own_calendar(connection: OwnCalendarDep) -> CalendarConnectionRea
         "calendar to your account.\n\n"
         "Connecting again replaces the existing grant, which is how a mentor "
         "switches Google accounts.\n\n"
-        "**Refused in a preview** (`403`, decision 311): the link would let "
+        "**Refused in a preview** (`403`, decision 313): the link would let "
         "whoever follows it attach a calendar to the previewed user's account."
     ),
     responses=with_declined(OWNER_RESPONSES | UNCONFIGURED)

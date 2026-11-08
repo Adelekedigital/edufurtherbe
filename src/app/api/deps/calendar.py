@@ -155,7 +155,7 @@ async def calendar_consent_url(
     else's account. The seal makes the mentor's id unforgeable and its ten-minute
     TTL makes a captured URL useless by the time anybody finds it.
 
-    **Refused in a preview** (decision 311): the sealed link would let whoever
+    **Refused in a preview** (decision 313): the sealed link would let whoever
     follows it attach a calendar to the previewed user's account.
     """
     del refused

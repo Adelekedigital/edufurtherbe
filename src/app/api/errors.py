@@ -469,7 +469,7 @@ def document_problem_422(application: FastAPI) -> None:
     application.openapi = openapi  # type: ignore[method-assign]
 
 
-#: The `401` a preview header can add to any route that honours it (decision 311).
+#: The `401` a preview header can add to any route that honours it (decision 313).
 PREVIEW_ENDED = (
     "`/problems/preview-ended`: the preview named by `X-EF-Preview` has ended "
     "(`end_reason`: `idle`, `max_length` or `sign_out` when this request ended "

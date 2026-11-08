@@ -25,7 +25,7 @@ IDLE_TIMEOUT = timedelta(minutes=30)
 MAX_LENGTH = timedelta(hours=2)
 
 #: How finely a request in a preview moves its `last_active_at`: at most once
-#: this often, so a busy preview is not one `UPDATE` per request (decision 311).
+#: this often, so a busy preview is not one `UPDATE` per request (decision 313).
 #: Idle is measured from it, so a preview may end up to this much early.
 ACTIVITY_RESOLUTION = timedelta(minutes=1)
 

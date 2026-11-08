@@ -251,7 +251,7 @@ async def for_header(
     session: AsyncSession, admin_id: UUID, preview_id: UUID, sign_in: UUID | None
 ) -> Any | None:
     """The admin's preview an `X-EF-Preview` header names, as `load` reads it;
-    ``None`` when it is not this admin's (decision 311).
+    ``None`` when it is not this admin's (decision 313).
 
     **Scoped to the admin in the statement, and to the sign-in by ending.** A
     preview this admin started in another sign-in (``sign_in`` is the token's

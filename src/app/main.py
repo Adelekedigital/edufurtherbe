@@ -542,7 +542,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # is the one this API cannot work without. `Idempotency-Key` is
             # what booking and admin grants send (ADR 0024): missing here, the
             # browser drops a cross-origin booking before it leaves.
-            # `X-EF-Preview` names an admin's preview (decision 311).
+            # `X-EF-Preview` names an admin's preview (decision 313).
             allow_headers=["Authorization", "Content-Type", "Idempotency-Key", PREVIEW_HEADER],
             # Response headers a browser hides from another origin's script
             # unless exposed: the replay flag a retry reads, a created

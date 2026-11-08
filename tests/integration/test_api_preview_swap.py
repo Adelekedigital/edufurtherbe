@@ -1,4 +1,4 @@
-"""Serving a preview as the previewed user, read only (decision 311).
+"""Serving a preview as the previewed user, read only (decision 313).
 
 With `X-EF-Preview` beside an admin's own token, every route that resolves a
 caller answers as the previewed user; every write is refused `403` and logged.
@@ -169,6 +169,23 @@ async def test_a_header_with_previews_off_is_404(db_engine: AsyncEngine) -> None
         response = await off.get(ME, headers=previewing(admin, preview))
 
     assert response.status_code == 404
+
+
+async def test_an_admin_whose_grant_is_revoked_loses_their_own_preview(
+    db_engine: AsyncEngine,
+) -> None:
+    async with app_client(db_engine) as client:
+        admin, _, preview = await live_preview(client, db_engine)
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE admin_users SET revoked_at = now() WHERE user_id = :u"),
+                {"u": admin.id},
+            )
+
+        response = await client.get(ME, headers=previewing(admin, preview))
+
+    assert response.status_code == 404
+    assert (await preview_row(db_engine, preview))["ended_at"] is None
 
 
 @pytest.mark.parametrize("revoked", [False, True], ids=["no-grant", "revoked"])
@@ -444,6 +461,7 @@ async def test_a_public_profile_is_shown_as_the_previewed_mentor_sees_it(
 
     assert as_mentor.status_code == 200, as_mentor.text
     assert as_mentor.json()["approval_status"] == "pending"
+    assert "x-ef-preview" in as_admin.headers["vary"].lower()
     assert "approval_status" not in as_admin.json()
 
 

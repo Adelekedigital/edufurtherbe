@@ -57,7 +57,7 @@ class ForbiddenError(AppError):
 
 class ReadOnlyViewAsError(ForbiddenError):
     """A write, or a read that hands out the means to write, in an admin's
-    preview of a user (decision 311): previews are read only."""
+    preview of a user (decision 313): previews are read only."""
 
     def problem_members(self) -> dict[str, object]:
         return {"code": "read_only_view_as"}
@@ -370,7 +370,7 @@ class AuthenticationError(AppError):
 
 
 class PreviewEndedError(AuthenticationError):
-    """The admin's preview named by `X-EF-Preview` has ended (decision 311):
+    """The admin's preview named by `X-EF-Preview` has ended (decision 313):
     `end_reason` says why and `session_id` which, so the client returns to the
     admin's own view. Unlike every other `401`, it names its cause, because
     the header, not the token, is what stopped working."""
