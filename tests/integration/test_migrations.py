@@ -208,6 +208,8 @@ EXPECTED_TABLES = [
     "notification_channel_preferences",
     "preview_sessions",
     "preview_events",
+    # A browser's Web Push subscription, one row per device (#386).
+    "push_subscriptions",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

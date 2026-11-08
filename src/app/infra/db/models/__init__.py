@@ -61,6 +61,7 @@ from app.infra.db.models.platform import (
     OutboxEvent,
 )
 from app.infra.db.models.preview import PreviewEvent, PreviewSession
+from app.infra.db.models.push import PushSubscription
 from app.infra.db.models.reference import Country, Language
 from app.infra.db.models.referrals import (
     InviteLink,
@@ -135,6 +136,7 @@ __all__ = [
     "OutboxEvent",
     "PreviewEvent",
     "PreviewSession",
+    "PushSubscription",
     "Referral",
     "ReferralUnlock",
     "Review",
