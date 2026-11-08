@@ -1390,3 +1390,62 @@ def test_an_expiry_is_never_dated_before_its_request() -> None:
 
     creation, expiry = result.events
     assert expiry.created_at >= creation.created_at
+
+
+def test_a_cancelled_upcoming_was_confirmed_before_it_was_cancelled() -> None:
+    """The cancel flag outranks the status column, but `Upcoming` still says the
+    session was confirmed first (GitHub review on #592)."""
+    result = plan(
+        [
+            booking(
+                sessionStatus="Upcoming",
+                bookingRequestAccepted=None,
+                **{"SessionCancel (Y/N)❌": "yes", "Canceled By": MENTOR},
+            )
+        ],
+        as_of=AS_OF,
+    )
+
+    terminal = result.events[-1]
+    assert terminal.to_status is SessionStatus.CANCELLED
+    assert terminal.from_status is SessionStatus.CONFIRMED
+    # When it was confirmed is unknown, and the cancel flag overrode a status.
+    assert "sb-1" in result.unplaceable_confirmations
+    assert [row.legacy_bubble_id for row in result.cancellation_overrode_status] == ["sb-1"]
+
+
+@pytest.mark.parametrize("when", [PAST, FUTURE], ids=["past", "future"])
+def test_a_cancelled_upcoming_with_a_tracker_stays_cancelled(when: str) -> None:
+    result = plan(
+        [
+            booking(
+                sessionStatus="Upcoming",
+                SessionTracker="st-1",
+                **{
+                    "SessionDateTime-UTC(Booked date)": when,
+                    "SessionCancel (Y/N)\u274c": "yes",
+                    "Canceled By": MENTEE,
+                },
+            )
+        ],
+        [tracker(SessionID="sb-1", **attendance("yes", "yes"))],
+        as_of=AS_OF,
+    )
+
+    assert result.sessions[0].status is SessionStatus.CANCELLED
+    assert result.events[-1].from_status is SessionStatus.CONFIRMED
+    assert result.attendance_overrode_status == ()
+
+
+def test_cancelled_spelled_with_two_ls_is_not_an_override() -> None:
+    result = plan([booking(sessionStatus="Cancelled")], as_of=AS_OF)
+
+    assert result.sessions[0].status is SessionStatus.CANCELLED
+    assert result.cancellation_overrode_status == ()
+
+
+def test_an_unmapped_status_refuses_even_when_cancelled() -> None:
+    result = plan([booking(sessionStatus="Rescheduled")], as_of=AS_OF)
+
+    assert "Rescheduled" in result.errors[0]
+    assert not result.sessions
