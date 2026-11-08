@@ -110,6 +110,15 @@ from app.api.deps.messages import (
     SentMessageDep,
     UploadedMessageFileDep,
 )
+from app.api.deps.preview import (
+    CanPreviewDep,
+    EndedPreviewDep,
+    LoggedPageViewDep,
+    PreviewDep,
+    StartedPreviewDep,
+    SwitchedPreviewDep,
+    require_preview_on,
+)
 from app.api.deps.profile import (
     AwardsDep,
     ClaimedReferralDep,
@@ -225,6 +234,7 @@ __all__ = [
     "BulkDecidedDep",
     "CalendarConnectedDep",
     "CalendarConsentDep",
+    "CanPreviewDep",
     "CancelledSessionDep",
     "ClaimedReferralDep",
     "CompletedOnboardingDep",
@@ -257,6 +267,7 @@ __all__ = [
     "DisconnectedCalendarDep",
     "EditedReviewDep",
     "EducationDep",
+    "EndedPreviewDep",
     "FeaturedMentorDep",
     "FeaturedWeekRemovedDep",
     "FeaturedWeekSetDep",
@@ -268,6 +279,7 @@ __all__ = [
     "JoinLeadDep",
     "JoinedSessionDep",
     "ListedMentorDep",
+    "LoggedPageViewDep",
     "LookupPageDep",
     "MenteeCreditsDep",
     "MenteeSearchDep",
@@ -307,6 +319,7 @@ __all__ = [
     "PendingInstitutionsDep",
     "PendingMentorsDep",
     "PickedInviteHandleDep",
+    "PreviewDep",
     "PublicMentorDep",
     "ReadMarkedDep",
     "RecordedOnboardingStepDep",
@@ -340,7 +353,9 @@ __all__ = [
     "SettingsDep",
     "SimilarMentorsDep",
     "SlotsDep",
+    "StartedPreviewDep",
     "SubmittedApplicationDep",
+    "SwitchedPreviewDep",
     "ToggledInviteLinkDep",
     "UpdatedAvailabilityRuleDep",
     "UpdatedAwardDep",
@@ -365,4 +380,5 @@ __all__ = [
     "_rooms",
     "_scheduler",
     "get_storage",
+    "require_preview_on",
 ]

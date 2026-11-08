@@ -25,6 +25,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.admin_permissions import EVERY_GRANT, holds_any
 from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
 from app.domain.enums import AdminRole
@@ -355,13 +356,12 @@ def require_admin(*roles: AdminRole) -> Callable[[dict[str, Any]], uuid.UUID]:
 
     `super_admin` is admitted everywhere without being listed at each call site;
     spelling it out on every route is the kind of repetition that eventually
-    disagrees with itself.
+    disagrees with itself. The rule is `holds_any`, which the flags that tell a
+    caller what they may do read too.
     """
-    permitted = {AdminRole.SUPER_ADMIN, *roles}
 
     def dependency(user: CurrentUserDep) -> uuid.UUID:
-        held = {str(role) for role in user["admin_roles"]}
-        if not held & {str(role) for role in permitted}:
+        if not holds_any(user["admin_roles"], roles):
             raise NotFoundError("no such endpoint")
         # The acting admin's id: `approved_by` and `granted_by` want to know who
         # did it, and taking it from the token is the only answer a caller
@@ -379,7 +379,8 @@ CatalogueAdminDep = Annotated[uuid.UUID, Depends(require_admin())]
 #: removing a review from a public profile is curation, where crediting somebody
 #: is support work that whoever is on shift has to be able to do.
 #:
-#: **Every role listed, which is what "any platform admin" costs here.**
+#: **Every grant (`EVERY_GRANT`), which is what "any platform admin" costs here**,
+#: the one set the queue gate and the preview permissions read too.
 #: `require_admin()` with no arguments admits `super_admin` *only* — the empty
 #: call reads like "any admin" and is the narrowest possible gate, which is how
 #: the first version of this dependency shipped documented as one thing and
@@ -406,19 +407,13 @@ CatalogueAdminDep = Annotated[uuid.UUID, Depends(require_admin())]
 #: Bounded rather than trusted: capped at the monthly grant per action,
 #: soft-deleted recipients refused, and the whole history readable by every
 #: admin — so a grant nobody can justify is one anybody can find.
-CreditAdminDep = Annotated[
-    uuid.UUID,
-    Depends(require_admin(AdminRole.MENTOR_APPROVAL, AdminRole.LIMITED_ACCESS)),
-]
+CreditAdminDep = Annotated[uuid.UUID, Depends(require_admin(*EVERY_GRANT))]
 
 #: Approving mentors, which is what the `mentor_approval` grant is named for.
 MentorAdminDep = Annotated[uuid.UUID, Depends(require_admin(AdminRole.MENTOR_APPROVAL))]
 
 #: Reading either queue. Every live grant may look.
-QueueViewerDep = Annotated[
-    uuid.UUID,
-    Depends(require_admin(AdminRole.MENTOR_APPROVAL, AdminRole.LIMITED_ACCESS)),
-]
+QueueViewerDep = Annotated[uuid.UUID, Depends(require_admin(*EVERY_GRANT))]
 
 
 #: The header every idempotent endpoint reads.

@@ -35,6 +35,8 @@ ADDED = {
         "session_type_limit",
         # The strongest live admin grant (decision 297).
         "admin_role",
+        # Whether the caller may preview as a user (decision 309).
+        "can_preview_as_user",
     ),
     "GoalRead": ("field_of_study", "schools"),
     # New with the goal's schools (Mentee Settings PRD): the link is optional.

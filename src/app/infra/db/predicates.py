@@ -124,7 +124,8 @@ def person_like(user: Any, term: str) -> Any:
 
 def is_live_admin(user_id: Any) -> Any:
     """``user_id`` holds a grant that still stands (`live_grant`), of any role:
-    an admin, whom the public widening admits and the user picker never lists."""
+    an admin, whom the public widening admits, the user picker never lists and
+    a preview never shows (decision 309)."""
     return exists().where(AdminUser.user_id == user_id, live_grant())
 
 

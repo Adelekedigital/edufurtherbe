@@ -254,6 +254,7 @@ exempt = [
     "api/deps/message_emails.py",
     "api/deps/messages.py",
     "api/deps/offerings.py",
+    "api/deps/preview.py",
     "api/deps/profile.py",
     "api/deps/reviews.py",
     "api/deps/session_types.py",
