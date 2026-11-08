@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from sqlalchemy import and_, exists, func, true
+from sqlalchemy import and_, exists, func, or_, true
 
 from app.domain.attendance import PRESENCE_REPORTING
 from app.domain.enums import ApprovalStatus, ListingStatus
@@ -62,16 +62,10 @@ LIVE = live(User)
 
 def live_grant() -> Any:
     """An admin grant that still stands: not revoked. The one statement of it,
-    read by the deciding-admins lookup and the profile's admin widening; the
+    read by the deciding-admins lookup and `is_live_admin`; the
     `/me` lookup in `api/deps/core.CURRENT_USER` is raw SQL and spells the same
     `revoked_at IS NULL` (pinned by a test in `test_admin_mentors.py`)."""
     return AdminUser.revoked_at.is_(None)
-
-
-def holds_live_grant(user_id: Any) -> Any:
-    """Whether `user_id` holds any live admin grant, of any role: an admin, who
-    reads any mentor's profile (decision 297) and is never previewed (309)."""
-    return exists().where(AdminUser.user_id == user_id, live_grant())
 
 
 def has_mentor_profile(user_id: Any) -> Any:
@@ -118,6 +112,21 @@ def name_like(user: Any, term: str) -> Any:
     picker share. The full name covers the first and last names on their own."""
     pattern = "%" + escape_like(term) + "%"
     return func.concat_ws(" ", user.first_name, user.last_name).ilike(pattern, escape=LIKE_ESCAPE)
+
+
+def person_like(user: Any, term: str) -> Any:
+    """``term`` in ``user``'s name (`name_like`) or email, ignoring case, with
+    `LIKE` wildcards escaped: the one "find a person" match every admin search
+    shares (mentors, mentees, the user picker)."""
+    pattern = "%" + escape_like(term) + "%"
+    return or_(name_like(user, term), user.email.ilike(pattern, escape=LIKE_ESCAPE))
+
+
+def is_live_admin(user_id: Any) -> Any:
+    """``user_id`` holds a grant that still stands (`live_grant`), of any role:
+    an admin, whom the public widening admits, the user picker never lists and
+    a preview never shows (decision 309)."""
+    return exists().where(AdminUser.user_id == user_id, live_grant())
 
 
 def application_declined() -> list[Any]:

@@ -47,6 +47,13 @@ def test_addresses_and_bearer_tokens_are_masked_inside_text() -> None:
     assert masked == f"sent to {REDACTED} with Bearer {REDACTED}"
 
 
+def test_an_address_in_a_query_string_is_masked_url_encoded_too() -> None:
+    """An admin search's `q` reaches the access log percent-encoded."""
+    line = "GET /api/v1/admin/users?q=amy.o%2Bx%40mail.example.ng&role=all"
+
+    assert scrub(line) == f"GET /api/v1/admin/users?q={REDACTED}&role=all"
+
+
 def test_sensitive_keys_are_replaced_at_any_depth() -> None:
     event = {
         "request": {"headers": {"Authorization": "Bearer x", "Accept": "json"}},

@@ -33,7 +33,7 @@ from app.infra.db.models.availability import AvailabilityRule, SessionTypeSchedu
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE, holds_live_grant, mentor_approved
+from app.infra.db.predicates import LIVE, is_live_admin, mentor_approved
 
 __all__ = [
     "bookable_mentors",
@@ -140,7 +140,7 @@ def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
         return mentor_is_live()
     return [
         *mentor_exists(),
-        or_(and_(*mentor_is_live()), User.id == viewer, holds_live_grant(viewer)),
+        or_(and_(*mentor_is_live()), User.id == viewer, is_live_admin(viewer)),
     ]
 
 

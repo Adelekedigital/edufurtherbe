@@ -15,16 +15,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.core import CreditAdminDep, LadderDep, SessionDep
 from app.api.schemas.admin_credits import AdminMenteeRead, CreditEntryRead
-from app.api.schemas.common import StorableText, decode_cursor, encode_cursor
+from app.api.schemas.common import (
+    MAX_QUERY_LENGTH,
+    StorableText,
+    decode_cursor,
+    encode_cursor,
+)
 from app.api.schemas.user import CreditsRead
 from app.core.errors import NotFoundError
 from app.domain.credit_log import FILTER_KINDS, CreditLogFilter
 from app.domain.credits import CreditLadder
 from app.infra.db.credit_log import credit_entries, find_mentees, get_mentee
 from app.infra.db.credit_store import get_credit_summary
-
-#: The longest mentee search accepted; a name or an email is far shorter.
-MAX_QUERY_LENGTH = 200
 
 #: Entries per page of the log and of a mentee's history.
 ENTRIES_PER_PAGE = 50

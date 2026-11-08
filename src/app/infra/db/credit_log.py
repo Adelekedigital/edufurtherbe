@@ -26,12 +26,11 @@ from app.domain.credit_log import (
 )
 from app.domain.enums import CreditReason
 from app.infra.db import keyset
-from app.infra.db.catalogue_store import LIKE_ESCAPE, escape_like
 from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTransaction
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserProfile
-from app.infra.db.predicates import LIVE, live, name_like
+from app.infra.db.predicates import LIVE, live, person_like
 from app.infra.db.session_stats import BY_MENTEE, BY_MENTOR
 from app.infra.db.session_store import cancelled_by
 
@@ -118,8 +117,7 @@ async def find_mentees(session: AsyncSession, query: str | None) -> list[dict[st
         if user_id is not None:
             match: Any = User.id == user_id
         else:
-            pattern = "%" + escape_like(query) + "%"
-            match = or_(User.email.ilike(pattern, escape=LIKE_ESCAPE), name_like(User, query))
+            match = person_like(User, query)
         statement = (
             _mentees()
             .where(match)

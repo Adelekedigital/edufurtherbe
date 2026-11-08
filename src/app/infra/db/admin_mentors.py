@@ -16,7 +16,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_, select, true
+from sqlalchemy import and_, case, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -29,7 +29,6 @@ from app.domain.admin_mentors import (
 from app.domain.enums import ListingStatus, MentorStatusType
 from app.domain.refunds import BOOKED_STATUSES
 from app.infra.db.availability_store import list_rules
-from app.infra.db.catalogue_store import LIKE_ESCAPE, escape_like
 from app.infra.db.mentor_listing import newest_unlisting, paused_by_mentor
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.sessions import Session
@@ -43,7 +42,7 @@ from app.infra.db.predicates import (
     application_in_review,
     live,
     mentor_paused,
-    name_like,
+    person_like,
 )
 from app.infra.db.profile_store import latest_decision, list_education
 from app.infra.db.qualifications import top_qualification
@@ -168,8 +167,7 @@ def _row_statement(now: dt.datetime) -> Any:
 
 def _matches(q: str) -> Any:
     """``q`` inside the mentor's name or email, ignoring case."""
-    pattern = "%" + escape_like(q) + "%"
-    return or_(name_like(User, q), User.email.ilike(pattern, escape=LIKE_ESCAPE))
+    return person_like(User, q)
 
 
 def tab_statement(tab: AdminMentorTab, *, now: dt.datetime, q: str | None = None) -> Any:

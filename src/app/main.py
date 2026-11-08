@@ -19,6 +19,7 @@ from app.api.routes import (
     admin_credits,
     admin_mentors,
     admin_preview,
+    admin_users,
     availability,
     callbacks,
     catalogue,
@@ -586,6 +587,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(admin_credits.router)
     application.include_router(admin_mentors.router)
     application.include_router(admin_preview.router)
+    application.include_router(admin_users.router)
     return application
 
 
