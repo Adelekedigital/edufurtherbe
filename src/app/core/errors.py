@@ -406,3 +406,12 @@ class WritingAssistUnavailableError(AppError):
     feature being switched off is this service's own state (decision 142's
     reopen case), and the client is meant to try again later.
     """
+
+
+class PushUnavailableError(AppError):
+    """Web Push is not configured here (#386, decision 312).
+
+    A `503` for the same reason as the writing assistant's: it is this
+    service's own state, and the client is to hide the opt-in rather than
+    retry.
+    """

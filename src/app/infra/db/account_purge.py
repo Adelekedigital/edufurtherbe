@@ -11,8 +11,9 @@ the Supabase account), the contact a migrated account has at Loops, and the rest
 that is only theirs and that nothing kept points at: sign-in identities, calendar
 tokens, social links, awards, onboarding, interest, writing-assist counts,
 idempotency keys, a mentor's availability, listings, guide countries and
-personal meeting links. Every handle their invite link carried goes too, and
-the address of the invite they arrived through (decision 305).
+personal meeting links, and their browsers' push subscriptions. Every handle
+their invite link carried goes too, and the address of the invite they arrived
+through (decision 305).
 
 **Stays, unnamed**: sessions, reviews, the reasons a party gave for missing a
 session (without the note they wrote), the credit ledger and the audit logs, as
@@ -63,6 +64,7 @@ from app.infra.db.models.mentoring import (
 )
 from app.infra.db.models.missed_reasons import SessionMissedReason
 from app.infra.db.models.platform import FeatureInterest, IdempotencyKey
+from app.infra.db.models.push import PushSubscription
 from app.infra.db.models.referrals import Referral
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.sessions import SessionType
@@ -106,6 +108,7 @@ _OWN_ROWS: tuple[tuple[Any, Any], ...] = (
     (MentorGuideCountry, MentorGuideCountry.mentor_user_id),
     (MentorNextAvailability, MentorNextAvailability.mentor_user_id),
     (MentorConferencingOption, MentorConferencingOption.user_id),
+    (PushSubscription, PushSubscription.user_id),
 )
 
 

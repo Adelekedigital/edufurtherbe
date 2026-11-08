@@ -57,9 +57,10 @@ SENSITIVE_SUFFIXES = ("token", "tokens")
 _EMAIL = re.compile(r"[\w.+%-]+(?:@|%40)[\w-]+(?:\.[\w-]+)+")
 _BEARER = re.compile(r"(?i)\bbearer\s+[\w\-.~+/]+=*")
 #: A query parameter carrying a credential: an OAuth `code` or `state`, a Daily
-#: door token `t`, or any `*token*`, `key`, `sig` or `signature`.
+#: door token `t`, a browser's push `endpoint` (decision 312), or any
+#: `*token*`, `key`, `sig` or `signature`.
 _QUERY_SECRET = re.compile(
-    r"(?i)([?&](?:code|state|t|key|sig|signature|[a-z_]*token[a-z_]*)=)[^&#\s\"']+"
+    r"(?i)([?&](?:code|state|t|endpoint|key|sig|signature|[a-z_]*token[a-z_]*)=)[^&#\s\"']+"
 )
 
 #: Marks the handler this module installs, so building a second app replaces it
