@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api import errors
-from app.api.deps.core import get_session_factory
+from app.api.deps.core import PREVIEW_HEADER, READ_ONLY_METHODS, get_session_factory
 from app.api.edge_proxy import EdgeProxyMiddleware
 from app.api.limits import BodyLimitMiddleware
 from app.api.per_viewer import PerViewerHeadersMiddleware
@@ -479,6 +479,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # shape — RFC 9457 Problem Details, never FastAPI's own `{"detail": ...}`.
     errors.register(application)
     errors.document_problem_422(application)
+    errors.document_preview(application, header=PREVIEW_HEADER, read_only_methods=READ_ONLY_METHODS)
 
     # A ceiling on the request body, by declared length and then by counting the
     # bytes that arrive. It has to be middleware: FastAPI parses the multipart
@@ -540,7 +541,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # is the one this API cannot work without. `Idempotency-Key` is
             # what booking and admin grants send (ADR 0024): missing here, the
             # browser drops a cross-origin booking before it leaves.
-            allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+            # `X-EF-Preview` names an admin's preview (decision 311).
+            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", PREVIEW_HEADER],
             # Response headers a browser hides from another origin's script
             # unless exposed: the replay flag a retry reads, a created
             # resource's `Location`, and a rate limit's `Retry-After` (#281).

@@ -14,13 +14,13 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, Request
+from fastapi import Depends
 
 from app.api.deps.core import (
     ClaimsDep,
     CurrentUserDep,
     SessionDep,
-    _configured,
+    preview_switched_on,
     require_admin,
 )
 from app.api.schemas.preview import (
@@ -41,11 +41,6 @@ from app.infra.db import preview_store
 from app.infra.db.preview_store import Owner
 
 NOT_LIVE = "this preview has ended"
-
-
-def preview_switched_on(request: Request) -> bool:
-    """Whether this app runs with previews on (`PREVIEW_AS_USER_ENABLED`)."""
-    return _configured(request).preview_as_user_enabled
 
 
 PreviewOnDep = Annotated[bool, Depends(preview_switched_on)]

@@ -54,8 +54,10 @@ from app.core.errors import (
     NotConnectedError,
     NotFoundError,
     OnboardingIncompleteError,
+    PreviewEndedError,
     PreviewUserNotFoundError,
     RateLimitedError,
+    ReadOnlyViewAsError,
     RecipientClosedError,
     RecipientPausedError,
     ReminderAlreadySentError,
@@ -190,6 +192,8 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     FileTypeNotAllowedError: "/problems/file-type-not-allowed",
     FileUnavailableError: "/problems/file-unavailable",
     PreviewUserNotFoundError: "/problems/preview-user-not-found",
+    PreviewEndedError: "/problems/preview-ended",
+    ReadOnlyViewAsError: "/problems/read-only-view-as",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx
@@ -283,15 +287,23 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
         if isinstance(exc, error_type):
             # Neither the title nor the detail varies with the cause for a 401:
             # the class name would say as much as a message would.
+            # A typed one (an ended preview) adds its type and members, which
+            # name the preview, never the token.
             if code == status.HTTP_401_UNAUTHORIZED:
-                return problem(status_code=code, title="Unauthorized")
+                return problem(
+                    status_code=code,
+                    title="Unauthorized",
+                    type_=_problem_type(exc),
+                    members=exc.problem_members() if isinstance(exc, AppError) else None,
+                )
             # **The exception's own name, not the key it matched.** They are the
             # same for every error with no subclass, and different for exactly the
             # two the `type` slot exists to tell apart — which would otherwise
             # both render `ConflictError` in the one field a human reads.
             response = problem(
                 status_code=code,
-                title=type(exc).__name__,
+                title=(exc.problem_title() if isinstance(exc, AppError) else None)
+                or type(exc).__name__,
                 detail=str(exc) or None,
                 type_=_problem_type(exc),
                 # **Every 422 carries `errors`**, empty when the refusal is about
@@ -452,6 +464,57 @@ def document_problem_422(application: FastAPI) -> None:
         components = schema.setdefault("components", {}).setdefault("schemas", {})
         components["ValidationError"] = VALIDATION_ERROR_SCHEMA
         components["HTTPValidationError"] = PROBLEM_422_SCHEMA
+        return schema
+
+    application.openapi = openapi  # type: ignore[method-assign]
+
+
+#: The `401` a preview header can add to any route that honours it (decision 311).
+PREVIEW_ENDED = (
+    "`/problems/preview-ended`: the preview named by `X-EF-Preview` has ended "
+    "(`end_reason`: `idle`, `max_length` or `sign_out` when this request ended "
+    "it, otherwise the reason it ended with; `session_id`: which preview)."
+)
+
+#: The `403` every write answers in a preview, and a read refused there too.
+READ_ONLY_VIEW_AS = (
+    "`/problems/read-only-view-as` (`code: read_only_view_as`): sent with "
+    "`X-EF-Preview`, an admin's preview of a user is read only."
+)
+
+
+def _described(responses: dict[str, Any], code: str, text: str) -> None:
+    """Document `text` under `code`, beside any description it already has."""
+    held = responses.get(code, {}).get("description")
+    described = f"{held}\n\n{text}" if held else text
+    responses[code] = {**responses.get(code, {}), "description": described}
+
+
+def document_preview(
+    application: FastAPI, *, header: str, read_only_methods: frozenset[str]
+) -> None:
+    """Publish the preview's refusals on every operation that honours ``header``.
+
+    Keyed on the header parameter itself, which the one dependency resolving a
+    caller declares, so the documented set is exactly the honouring set: a
+    `401` on each, and a `403` on each method a preview may not use. A read
+    refused in a preview documents its own `403` (`READ_ONLY_VIEW_AS`).
+    """
+    generate = application.openapi
+
+    def openapi() -> dict[str, Any]:
+        if application.openapi_schema:
+            return application.openapi_schema
+        schema = generate()
+        for operations in schema.get("paths", {}).values():
+            for method, operation in operations.items():
+                parameters = operation.get("parameters", [])
+                if not any(p.get("in") == "header" and p.get("name") == header for p in parameters):
+                    continue
+                responses = operation.setdefault("responses", {})
+                _described(responses, "401", PREVIEW_ENDED)
+                if method.upper() not in read_only_methods:
+                    _described(responses, "403", READ_ONLY_VIEW_AS)
         return schema
 
     application.openapi = openapi  # type: ignore[method-assign]

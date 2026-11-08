@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.emails import normalise_email
 from app.domain.enums import PreviewEndReason, PreviewEventKind
-from app.domain.preview import lapse
+from app.domain.preview import ACTIVITY_RESOLUTION, lapse
 from app.infra.db.models.preview import PreviewEvent, PreviewSession
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE, holds_live_grant
@@ -31,10 +31,13 @@ __all__ = [
     "Owner",
     "end",
     "find_previewable",
+    "for_header",
     "load",
+    "log_blocked_write",
     "log_page_view",
     "start",
     "switch",
+    "touch",
 ]
 
 
@@ -242,3 +245,52 @@ async def log_page_view(session: AsyncSession, owner: Owner, preview_id: UUID, p
         return False
     await _log(session, row, PreviewEventKind.PAGE_VIEW, path=path)
     return True
+
+
+async def for_header(
+    session: AsyncSession, admin_id: UUID, preview_id: UUID, sign_in: UUID | None
+) -> Any | None:
+    """The admin's preview an `X-EF-Preview` header names, as `load` reads it;
+    ``None`` when it is not this admin's (decision 311).
+
+    **Scoped to the admin in the statement, and to the sign-in by ending.** A
+    preview this admin started in another sign-in (``sign_in`` is the token's
+    `session_id`) has outlived that sign-in, so it ends `sign_out`, unless it
+    had already lapsed, which `_end_live` says first. A live one that has
+    lapsed ends as it lapsed.
+    """
+    started_in: UUID | None = await session.scalar(
+        select(_SESSION.auth_session_id).where(
+            _SESSION.id == preview_id, _SESSION.admin_user_id == admin_id
+        )
+    )
+    if started_in is None:
+        return None
+    owner = Owner(admin_id, started_in)
+    row = await _read(session, owner, preview_id)
+    if row is None or row.ended_at is not None:
+        return row
+    otherwise = None if started_in == sign_in else PreviewEndReason.SIGN_OUT
+    if not await _end_live(session, owner, row, otherwise=otherwise):
+        return row
+    return await _read(session, owner, preview_id)
+
+
+async def touch(session: AsyncSession, owner: Owner, preview_id: UUID) -> None:
+    """Record a request in a live preview: `last_active_at` moves to now, **at
+    most once per `ACTIVITY_RESOLUTION`**, in one conditional `UPDATE`."""
+    await session.execute(
+        update(PreviewSession)
+        .where(
+            *_owned(owner, preview_id),
+            _SESSION.ended_at.is_(None),
+            _SESSION.last_active_at <= func.now() - ACTIVITY_RESOLUTION,
+        )
+        .values(last_active_at=func.now())
+    )
+
+
+async def log_blocked_write(session: AsyncSession, row: Any, method: str, endpoint: str) -> None:
+    """Log a write refused in a preview: its method and route template
+    (``endpoint``, never the filled-in path). ``row`` is the live preview."""
+    await _log(session, row, PreviewEventKind.BLOCKED_WRITE, method=method, endpoint=endpoint)

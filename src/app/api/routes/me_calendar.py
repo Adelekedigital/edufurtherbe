@@ -33,7 +33,7 @@ from app.api.deps import (
     DisconnectedCalendarDep,
     OwnCalendarDep,
 )
-from app.api.errors import with_declined
+from app.api.errors import READ_ONLY_VIEW_AS, with_declined
 from app.api.schemas.availability import (
     CalendarConnectedRead,
     CalendarConnectionRead,
@@ -94,9 +94,12 @@ async def read_own_calendar(connection: OwnCalendarDep) -> CalendarConnectionRea
         "their own Google consent against your session and attach **their** "
         "calendar to your account.\n\n"
         "Connecting again replaces the existing grant, which is how a mentor "
-        "switches Google accounts."
+        "switches Google accounts.\n\n"
+        "**Refused in a preview** (`403`, decision 311): the link would let "
+        "whoever follows it attach a calendar to the previewed user's account."
     ),
-    responses=with_declined(OWNER_RESPONSES | UNCONFIGURED),
+    responses=with_declined(OWNER_RESPONSES | UNCONFIGURED)
+    | {status.HTTP_403_FORBIDDEN: {"description": READ_ONLY_VIEW_AS}},
 )
 async def start_connecting(url: CalendarConsentDep) -> CalendarConsentRead:
     return CalendarConsentRead(consent_url=url)
