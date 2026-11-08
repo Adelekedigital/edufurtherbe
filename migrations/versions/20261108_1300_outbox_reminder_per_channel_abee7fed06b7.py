@@ -6,15 +6,19 @@ so ``ON CONFLICT DO NOTHING`` dropped the push in silence. ``destination`` joins
 the key.
 
 **Narrower, so additive**: every row the old index allowed, this one allows,
-and no existing row can violate it. Running code is unaffected: its inserts
-name no conflict target, so any unique violation is still a no-op for it.
+and no existing row can violate it. Running code is unaffected: its insert
+names no conflict target, so any unique violation is still a no-op for it.
 Merged alone, before the code that writes push rows (project-conventions,
 *Migration ordering*).
+
+**Swapped concurrently**, as `7b3e91c4a2d6` does: built under a temporary name,
+the old index dropped, then renamed. `outbox_events` keeps every row it has
+written, so a plain rebuild would hold the table's write lock for the build,
+and every enqueue and drain with it. There is no moment without the index.
 """
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -23,28 +27,35 @@ down_revision: str | Sequence[str] | None = "5b2e9d41c7a3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-NAME = "uq_outbox_events_reminder"
 TABLE = "outbox_events"
+INDEX = "uq_outbox_events_reminder"
+BUILDING = "uq_outbox_events_reminder_next"
+KEY = "entity_id, event_type, (payload ->> 'kind'), (payload ->> 'recipient_id')"
 WHERE = "payload ? 'kind'"
-KEY = [
-    "entity_id",
-    "event_type",
-    sa.text("(payload ->> 'kind')"),
-    sa.text("(payload ->> 'recipient_id')"),
-]
 
 
-def _replace(columns: list[str | sa.TextClause]) -> None:
-    op.execute("SET lock_timeout = '3s'")
-    op.drop_index(NAME, table_name=TABLE)
-    op.create_index(NAME, TABLE, columns, unique=True, postgresql_where=sa.text(WHERE))
+def _swap_index(columns: str) -> None:
+    """Replace the index with one over ``columns``, never going without.
+
+    ``IF EXISTS`` throughout: a failed ``CONCURRENTLY`` build leaves an
+    ``INVALID`` index behind, and a re-run must get past it.
+    """
+    with op.get_context().autocommit_block():
+        op.execute("SET lock_timeout = '3s'")
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {BUILDING}")
+        op.execute(
+            f"CREATE UNIQUE INDEX CONCURRENTLY {BUILDING} ON {TABLE} ({columns}) WHERE {WHERE}"
+        )
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {INDEX}")
+        op.execute(f"ALTER INDEX {BUILDING} RENAME TO {INDEX}")
 
 
 def upgrade() -> None:
-    _replace([*KEY, "destination"])
+    _swap_index(f"{KEY}, destination")
 
 
 def downgrade() -> None:
-    """Back to the key without the channel. Fails, rather than deleting a row,
-    if a reminder is queued on two channels: both are owed messages."""
-    _replace(KEY)
+    """Back to the key without the channel. **Fails, deleting nothing**, if a
+    reminder is queued on two channels: the narrower build refuses, and the
+    wider index stays. Both rows are owed messages."""
+    _swap_index(KEY)

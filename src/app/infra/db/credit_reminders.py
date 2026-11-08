@@ -38,7 +38,7 @@ book.
 THE PERIOD IS IN THE DEDUP KEY
 ==============================
 `uq_outbox_events_reminder` is unique on ``(entity_id, event_type, kind,
-recipient)``. `entity_id` here is the user, so a bare ``c14`` would be unique
+recipient, destination)``. `entity_id` here is the user, so a bare ``c14`` would be unique
 across their entire lifetime and they would be nudged **once, ever**. Every other
 reminder in this codebase hangs off a session and fires once by nature;
 :func:`~app.domain.notifications.credit_reminder_kind` is what makes a recurring

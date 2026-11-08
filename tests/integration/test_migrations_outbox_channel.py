@@ -8,7 +8,10 @@ and `ON CONFLICT DO NOTHING` dropped it in silence (decision 312).
 import asyncpg
 import pytest
 from alembic import command
+from sqlalchemy.exc import IntegrityError
 from tests.integration.test_migrations import ConfigFactory, execute, scalar
+
+from app.domain.notifications import Channel
 
 pytestmark = pytest.mark.db
 
@@ -25,7 +28,7 @@ ROW = (
 COUNT = "SELECT count(*) FROM outbox_events"
 
 
-def row(destination: str) -> str:
+def row(destination: Channel) -> str:
     return ROW.format(session=SESSION, destination=destination, recipient=RECIPIENT)
 
 
@@ -34,8 +37,8 @@ def test_an_email_and_a_push_for_one_reminder_both_stay(
 ) -> None:
     command.upgrade(make_alembic_config(disposable_database), REVISION)
 
-    execute(disposable_database, row("email"))
-    execute(disposable_database, row("push"))
+    execute(disposable_database, row(Channel.EMAIL))
+    execute(disposable_database, row(Channel.PUSH))
 
     assert scalar(disposable_database, COUNT) == 2
 
@@ -44,10 +47,10 @@ def test_the_same_reminder_twice_on_one_channel_is_still_refused(
     disposable_database: str, make_alembic_config: ConfigFactory
 ) -> None:
     command.upgrade(make_alembic_config(disposable_database), REVISION)
-    execute(disposable_database, row("push"))
+    execute(disposable_database, row(Channel.PUSH))
 
     with pytest.raises(asyncpg.UniqueViolationError):
-        execute(disposable_database, row("push"))
+        execute(disposable_database, row(Channel.PUSH))
 
 
 def test_downgrade_restores_the_index_without_the_channel(
@@ -56,7 +59,21 @@ def test_downgrade_restores_the_index_without_the_channel(
     config = make_alembic_config(disposable_database)
     command.upgrade(config, REVISION)
     command.downgrade(config, PREVIOUS)
-    execute(disposable_database, row("email"))
+    execute(disposable_database, row(Channel.EMAIL))
 
     with pytest.raises(asyncpg.UniqueViolationError):
-        execute(disposable_database, row("push"))
+        execute(disposable_database, row(Channel.PUSH))
+
+
+def test_downgrade_fails_and_keeps_both_rows_when_a_reminder_is_on_two_channels(
+    disposable_database: str, make_alembic_config: ConfigFactory
+) -> None:
+    config = make_alembic_config(disposable_database)
+    command.upgrade(config, REVISION)
+    execute(disposable_database, row(Channel.EMAIL))
+    execute(disposable_database, row(Channel.PUSH))
+
+    with pytest.raises(IntegrityError):
+        command.downgrade(config, PREVIOUS)
+
+    assert scalar(disposable_database, COUNT) == 2

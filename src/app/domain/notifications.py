@@ -367,6 +367,9 @@ class Channel(StrEnum):
 
     EMAIL = "email"
     WHATSAPP = "whatsapp"
+    #: Web Push to the recipient's subscribed browsers (decision 312). Queued
+    #: beside the email of an event in `domain.push.SESSION_PUSHES`.
+    PUSH = "push"
 
 
 def unique(ids: Iterable[UUID]) -> tuple[UUID, ...]:
@@ -455,7 +458,7 @@ def credit_reminder_kind(reminder: CreditReminder, expires_at: dt.datetime) -> s
 
     **The period is in the key, and this is the only reminder that needs it.**
     Every other one fires once for one session, so `uq_outbox_events_reminder`
-    on `(entity_id, event_type, kind, recipient)` is already unique per event.
+    on `(entity_id, event_type, kind, recipient, destination)` is already unique per event.
     This message recurs monthly for the same user, and `entity_id` is that user
     — so a bare `c14` would be unique across their whole lifetime and they would
     be nudged exactly once, ever.
