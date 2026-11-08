@@ -19,6 +19,11 @@ class AppError(Exception):
         sets `Retry-After`."""
         return {}
 
+    def problem_title(self) -> str | None:
+        """The problem document's `title`, when a problem type fixes one; the
+        class name otherwise (``None``)."""
+        return None
+
 
 class NotFoundError(AppError):
     """The resource does not exist, or is not visible to this caller.
@@ -48,6 +53,17 @@ class ForbiddenError(AppError):
     session, so the refusal discloses nothing. Anywhere else a refusal is
     :class:`NotFoundError`.
     """
+
+
+class ReadOnlyViewAsError(ForbiddenError):
+    """A write, or a read that hands out the means to write, in an admin's
+    preview of a user (decision 313): previews are read only."""
+
+    def problem_members(self) -> dict[str, object]:
+        return {"code": "read_only_view_as"}
+
+    def problem_title(self) -> str | None:
+        return "Read only"
 
 
 class MissedReasonNotYoursError(ForbiddenError):
@@ -351,6 +367,21 @@ class AuthenticationError(AppError):
     One error for every cause. A caller learning *which* check failed learns
     which half of their guess was right.
     """
+
+
+class PreviewEndedError(AuthenticationError):
+    """The admin's preview named by `X-EF-Preview` has ended (decision 313):
+    `end_reason` says why and `session_id` which, so the client returns to the
+    admin's own view. Unlike every other `401`, it names its cause, because
+    the header, not the token, is what stopped working."""
+
+    def __init__(self, *, end_reason: str, session_id: str) -> None:
+        super().__init__("this preview has ended")
+        self.end_reason = end_reason
+        self.session_id = session_id
+
+    def problem_members(self) -> dict[str, object]:
+        return {"end_reason": self.end_reason, "session_id": self.session_id}
 
 
 class WritingAssistUnavailableError(AppError):

@@ -8,7 +8,13 @@ from uuid import UUID
 
 from fastapi import Depends, Request
 
-from app.api.deps.core import CurrentUserDep, SessionDep, _configured, get_session_factory
+from app.api.deps.core import (
+    CurrentUserDep,
+    RefuseInPreviewDep,
+    SessionDep,
+    _configured,
+    get_session_factory,
+)
 from app.api.schemas.conferencing import ConferencingWrite
 from app.core.errors import (
     AuthenticationError,
@@ -138,7 +144,9 @@ def _token_exchange(request: Request) -> Any:
     return getattr(request.app.state, "calendar_exchange", None) or exchange_code
 
 
-async def calendar_consent_url(request: Request, user: CurrentUserDep, session: SessionDep) -> str:
+async def calendar_consent_url(
+    request: Request, user: CurrentUserDep, session: SessionDep, refused: RefuseInPreviewDep
+) -> str:
     """Where to send this mentor to grant free/busy access.
 
     **The `state` carries the mentor and is sealed**, which is the whole CSRF
@@ -146,7 +154,11 @@ async def calendar_consent_url(request: Request, user: CurrentUserDep, session: 
     consent against a victim's session and attach their calendar to somebody
     else's account. The seal makes the mentor's id unforgeable and its ten-minute
     TTL makes a captured URL useless by the time anybody finds it.
+
+    **Refused in a preview** (decision 313): the sealed link would let whoever
+    follows it attach a calendar to the previewed user's account.
     """
+    del refused
     client_id, _, redirect_uri, key = _calendar_oauth(request)
     await refuse_while_declined(session, user["id"])
     state = sealed_value({"user_id": str(user["id"])}, key=key)
