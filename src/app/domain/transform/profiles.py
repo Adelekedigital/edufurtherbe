@@ -110,6 +110,19 @@ SERVICE_OFFERINGS: dict[str, str] = {
     "interview preparation": "interview-preparation",
     "application interviews": "interview-preparation",
     "visa interview": "interview-preparation",
+    # Production-only values (export of 2026-11-08), mapped by the owner so no
+    # migrated mentor ends with an empty service list.
+    "resume": "document-preparation",
+    "resume/cv review": "document-preparation",
+    "personal statement review": "document-preparation",
+    "statement of purpose review": "document-preparation",
+    "scholarship application": "scholarships-financial-aid",
+    "graduate assistantship": "scholarships-financial-aid",
+    "research assistantship": "scholarships-financial-aid",
+    "general guidance": "program-selection",
+    "introduction call": "program-selection",
+    "mentor selection": "program-selection",
+    "others": "program-selection",
 }
 
 #: Legacy ``degreeCategory`` to a ``degree_levels`` slug.
@@ -122,6 +135,9 @@ DEGREE_CATEGORIES: dict[str, str] = {
     "masters": "masters",
     "doctorates": "doctorate",
     "diploma": "diploma",
+    # The singular spellings appear only in the production export.
+    "master": "masters",
+    "doctorate": "doctorate",
 }
 
 #: The "Program Interest" option set to a ``degree_levels`` slug.
@@ -408,6 +424,11 @@ def _short_form(record: dict[str, Any]) -> str | None:
     return SHORT_FORMS.get(key, raw)
 
 
+class SkippedRowError(TransformError):
+    """A row the plan leaves out by an owner's rule, naming it rather than
+    refusing the load (decision 316)."""
+
+
 def to_education(
     record: dict[str, Any], user_bubble_id: str, *, export_timezone: tzinfo
 ) -> EducationRow:
@@ -421,7 +442,8 @@ def to_education(
     bubble_id = legacy_anchor(record)
     school = _text(record, SCHOOL_FIELD)
     if not school:
-        raise TransformError(bubble_id, f"{SCHOOL_FIELD}: required, and always kept")
+        # Skipped and named by the plan, not refused (decision 316).
+        raise SkippedRowError(bubble_id, f"{SCHOOL_FIELD}: required, and always kept")
 
     category = _text(record, DEGREE_CATEGORY_FIELD)
     return EducationRow(
@@ -619,6 +641,9 @@ class ProfilePlan:
     #: ``"<bubble id>: <value>"`` for award years outside the column's CHECK.
     #: The award still loads with a null year.
     rejected_award_years: tuple[str, ...]
+    #: Education rows a user claims but with no school name. Skipped and named
+    #: (owner, 2026-11-08): the user can add the school again in the app.
+    schoolless_education: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -714,6 +739,7 @@ def plan_profiles(
     errors: list[str] = []
     unattached: dict[str, tuple[str, ...]] = {}
     mismatches: list[str] = []
+    skipped: dict[str, list[str]] = {}
 
     def owner_of(record: dict[str, Any], linked: dict[str, str]) -> str | None:
         """The user-side link, with ``Creator`` checked against it."""
@@ -741,6 +767,8 @@ def plan_profiles(
                 continue
             try:
                 rows.append(build(record, user_id))
+            except SkippedRowError as exc:
+                skipped.setdefault(thing, []).append(exc.bubble_id)
             except TransformError as exc:
                 errors.append(str(exc))
         if orphans:
@@ -824,4 +852,5 @@ def plan_profiles(
         rejected_award_years=tuple(
             sorted(f"{a.legacy_bubble_id}: {a.year_rejected}" for a in awards if a.year_rejected)
         ),
+        schoolless_education=tuple(sorted(skipped.get("education", ()))),
     )

@@ -75,6 +75,9 @@ def describe(plan: ProfilePlan) -> None:
         # Named, not counted. An unattached row is either legacy debris or a
         # broken link, and only the id distinguishes them.
         print(f"unattached {thing}: {len(ids)} — {', '.join(ids)}")
+    if plan.schoolless_education:
+        ids = plan.schoolless_education
+        print(f"skipped education, no school: {len(ids)} — {', '.join(ids)}")
     for mismatch in plan.creator_mismatches:
         print(f"   CREATOR MISMATCH {mismatch}")
     for rejected in plan.rejected_award_years:

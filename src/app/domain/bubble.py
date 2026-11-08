@@ -71,6 +71,9 @@ MODIFIED_AT = "modified_at"
 #: Named for the same reason the three above are.
 EXPORT_ID = "unique id"
 
+#: What Bubble writes in place of a reference to a row that was deleted.
+DELETED_THING = "(deleted thing)"
+
 
 def legacy_anchor(record: Mapping[str, Any]) -> str:
     """The anchor a record carries, from a canonical record or a raw one.

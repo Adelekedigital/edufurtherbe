@@ -44,7 +44,7 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Any
 
-from app.domain.bubble import blank_to_none, legacy_anchor, parse_timestamp
+from app.domain.bubble import DELETED_THING, blank_to_none, legacy_anchor, parse_timestamp
 from app.domain.reviews import RECOMMEND_SCALE, VALUABLE_SCALE
 from app.domain.transform.sessions import Disagreement
 
@@ -156,6 +156,10 @@ class ReviewPlan:
     #: dev row agrees, which is not evidence about 53.
     creator_mismatches: tuple[Disagreement, ...] = ()
 
+    #: Reviews naming a deleted user on either side. Nobody to attach them to,
+    #: so they are skipped and named, not quarantined (owner, 2026-11-08).
+    deleted_party: tuple[str, ...] = ()
+
     @property
     def source_rows(self) -> int:
         """Every row the export offered, however it was accounted for."""
@@ -184,9 +188,11 @@ class ReviewPlan:
             f"reviews to load: {len(self.reviews)}",
             f"quarantined: {len(self.quarantined)}",
             f"Creator disagreed with reviewedBy: {len(self.creator_mismatches)}",
+            f"skipped, deleted user: {len(self.deleted_party)}",
         ]
         lines += [f"  QUARANTINED {row.legacy_bubble_id}: {row.reason}" for row in self.quarantined]
         lines += [f"  CREATOR {row}" for row in self.creator_mismatches]
+        lines += [f"  DELETED USER {anchor}" for anchor in self.deleted_party]
         return "\n".join(lines)
 
 
@@ -273,6 +279,7 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
     rows: list[ReviewRow] = []
     quarantined: list[QuarantinedReview] = []
     mismatches: list[Disagreement] = []
+    deleted: list[str] = []
     seen: set[str] = set()
 
     source_anchors: list[str] = []
@@ -295,6 +302,9 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
             quarantined.append(QuarantinedReview(anchor, "the export repeats this unique id"))
             continue
         seen.add(anchor)
+        if DELETED_THING in (author, subject):
+            deleted.append(anchor)
+            continue
         if not author or not subject:
             quarantined.append(QuarantinedReview(anchor, "reviewedBy or reviewedFor is absent"))
             continue
@@ -369,4 +379,5 @@ def plan_reviews(records: list[dict[str, Any]], *, timezone: dt.tzinfo) -> Revie
         source_anchors=tuple(source_anchors),
         quarantined=tuple(quarantined),
         creator_mismatches=tuple(mismatches),
+        deleted_party=tuple(deleted),
     )

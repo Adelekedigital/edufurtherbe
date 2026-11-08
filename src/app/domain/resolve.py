@@ -34,9 +34,19 @@ from uuid import UUID
 # the moment where anybody had to agree.
 LANGUAGE_ALIASES: Mapping[str, str] = {
     "Abkhaz": "Abkhazian",
+    # Production export, 2026-11-08.
+    "Spanish; Castilian": "Spanish",
+    "Mandarin": "Mandarin Chinese",
+    "Swahili": "Swahili (macrolanguage)",
 }
 
-COUNTRY_ALIASES: Mapping[str, str] = {}
+COUNTRY_ALIASES: Mapping[str, str] = {
+    # Production export, 2026-11-08: ISO's long forms.
+    "Syria": "Syrian Arab Republic",
+    "Tanzania": "Tanzania, United Republic of",
+    "South Korea": "Korea, Republic of",
+    "Turkey": "Türkiye",
+}
 
 K = TypeVar("K")
 
@@ -74,6 +84,8 @@ def resolve_names(
     ``countries`` or ``languages``, since ``domain`` cannot query anything.
     """
     folded = {name.casefold(): identifier for name, identifier in reference.items()}
+    # Alias keys match the way names do: any case, so "TANZANIA" finds "Tanzania".
+    folded_aliases = {name.casefold(): target for name, target in aliases.items()}
 
     resolved: dict[str, UUID] = {}
     unresolved: list[str] = []
@@ -87,7 +99,7 @@ def resolve_names(
             resolved[name] = reference[cleaned]
         elif cleaned.casefold() in folded:
             resolved[name] = folded[cleaned.casefold()]
-        elif (alias := aliases.get(cleaned)) and alias in reference:
+        elif (alias := folded_aliases.get(cleaned.casefold())) and alias in reference:
             resolved[name] = reference[alias]
         else:
             unresolved.append(name)
