@@ -416,6 +416,26 @@ busy" and "the slot is taken" are the same sentence.
 The open one does not block the initial build: **payments are out of scope until the core
 product backend and the migration are done.**
 
+## Reuse before you build
+
+**DRY: reuse before you build, non-negotiable** (owner, 2026-11-08, written
+into both repos):
+
+1. One service, helper, schema or dependency per concept.
+2. Before building, search the whole pattern, not just the obvious unit: the
+   composed piece (service, router dependency, schema mixin), behaviour
+   (timeouts, retries, auth and preview guards, pagination, outbox jobs),
+   helpers and test fixtures.
+3. Before review, grep your own diff for logic that already exists elsewhere.
+4. A second implementation is a defect: consolidate it and migrate every
+   existing copy in the same PR. Never "a follow-up PR", never a divergence
+   note.
+5. Three hand-built copies of anything is a missing shared piece: build it
+   and move all of them onto it.
+
+This is CLAUDE.md non-negotiable 8 in full. A test pinning two copies
+together is no longer an alternative to consolidating them.
+
 ## House conventions
 
 - **Configuration:** everything through `core/config.py`. Only `ENVIRONMENT` and
