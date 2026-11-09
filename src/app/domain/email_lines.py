@@ -28,6 +28,7 @@ __all__ = [
     "LINE_HARD_MAX",
     "LINE_KEY_MAX_LENGTH",
     "LINE_NAMES",
+    "LINE_VARIABLES",
     "OWNED_BY",
     "PLACEHOLDER",
     "SHARED_TEMPLATE_NAMES",
@@ -75,8 +76,16 @@ OWNED_BY: dict[str, frozenset[Notification]] = {
     "reminderMessage": frozenset({N.MENTEE_REQUEST_REMINDER}),
 }
 
-#: The variables lines fill. A line may not name one of these (it would fill itself).
-LINE_NAMES = frozenset({"emailSubject", "emailHeading", "buttonLabel", "buttonUrl"})
+#: The variable each rewordable line fills in a shared template.
+LINE_VARIABLES = {
+    EmailLine.SUBJECT: "emailSubject",
+    EmailLine.HEADING: "emailHeading",
+    EmailLine.BUTTON: "buttonLabel",
+}
+
+#: The variables lines fill, and the button's link. A line may not name one of
+#: these (it would fill itself).
+LINE_NAMES = frozenset({*LINE_VARIABLES.values(), "buttonUrl"})
 
 #: The most characters each line may hold, counted on the raw text with its
 #: ``{name}``s (PRD 28, decision 318). A migration test pins the tables' checks.

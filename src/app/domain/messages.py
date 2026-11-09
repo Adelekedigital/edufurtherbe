@@ -28,6 +28,7 @@ import datetime as dt
 import functools
 import re
 from collections.abc import Callable, Iterable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -35,13 +36,19 @@ from zoneinfo import ZoneInfo
 from app.core.errors import AppError
 from app.domain.email_lines import (
     LINE_NAMES,
+    LINE_VARIABLES,
     LINES,
     OWNED_BY,
     PLACEHOLDER,
     case_for,
     group_of,
-    lines_for,
     variant_of,
+)
+from app.domain.email_values import (
+    FALLBACKS,
+    NO_REASON_TITLE,
+    SESSION_TOPIC_FALLBACK,
+    VENUE_FALLBACK,
 )
 from app.domain.enums import EmailLine, SessionReasonCode
 from app.domain.message_emails import FEW_MAX, SENDER_ROWS
@@ -73,18 +80,6 @@ __all__ = [
 #: role the deleted person had in the session, so the recipient reads "your
 #: mentor" or "your mentee". The one place these words live.
 DELETED_PARTY_LABELS = {"mentor": "your mentor", "mentee": "your mentee"}
-
-#: **What is legitimately absent gets one defined value, not a failed send.**
-#: The dev outbox showed the cost of refusing these (2026-10-03): most bookings
-#: carry no topic and no decline carries a reason code, so `session_requested`
-#: and `request_declined` failed and nobody was told. An unknown *name* is still
-#: refused; these are only for values a real event often lacks. A decline,
-#: withdrawal or cancellation has required a code since 2026-10-10 (decision
-#: 237), so `NO_REASON_TITLE` now serves events written before that. Still
-#: needed: an offer of another time ends a session with no code.
-SESSION_TOPIC_FALLBACK = "Mentorship session"
-VENUE_FALLBACK = "Online"
-NO_REASON_TITLE = "No reason given"
 
 #: A reason code in words, for `reasonTitle`. The one place they live.
 REASON_TITLES: dict[SessionReasonCode, str] = {
@@ -168,10 +163,6 @@ class MessageContext:
     #: An admin's wording for this email, ``(variant, line) -> text`` (decision
     #: 318), laid over its default lines. Empty means every line is its default.
     line_overrides: Mapping[tuple[str, str], str] = field(default_factory=dict)
-
-    #: What filling the lines had to work around, for the caller to log: a
-    #: value that fell back, or an override that could not fill (`LineNote`).
-    line_notes: list[LineNote] = field(default_factory=list)
 
 
 #: Where the session page and the dashboard live in the front-end.
@@ -491,12 +482,30 @@ RESOLVERS["attendee"] = _other_party
 #: is an `OWNED_BY` variable empty for the other emails of its group.
 _SHARED = "emailType"
 
-#: The variable each line fills in a shared template.
-LINE_VARIABLES = {
-    EmailLine.SUBJECT: "emailSubject",
-    EmailLine.HEADING: "emailHeading",
-    EmailLine.BUTTON: "buttonLabel",
-}
+
+#: Where the build in progress collects its `LineNote`s (`build_variables`'
+#: ``notes``). Per call, so no context, and no copy of one, shares a list.
+_NOTES: ContextVar[list[LineNote] | None] = ContextVar("email_line_notes", default=None)
+
+
+def _noted(notes: Iterable[LineNote]) -> None:
+    found = _NOTES.get()
+    if found is not None:
+        found.extend(notes)
+
+
+def _copy_case(context: MessageContext, name: str) -> tuple[Notification, str]:
+    """This copy's email and the `LINES` case it uses, for its lines and its
+    button alike, or a refusal naming ``name``."""
+    email = context.notification
+    case = (
+        None
+        if email is None
+        else case_for(email, context.extras.get("line_case", ""), context.recipient_role)
+    )
+    if email is None or case is None:
+        raise UnresolvedVariableError(f"this email has no lines for {name!r}")
+    return email, case
 
 
 def _line(context: MessageContext, line: EmailLine) -> str:
@@ -508,14 +517,7 @@ def _line(context: MessageContext, line: EmailLine) -> str:
     at all (a value since removed) sends the default instead, noted as an
     error, rather than refusing the send.
     """
-    email = context.notification
-    case = (
-        None
-        if email is None
-        else case_for(email, context.extras.get("line_case", ""), context.recipient_role)
-    )
-    if email is None or case is None:
-        raise UnresolvedVariableError(f"this email has no lines for {LINE_VARIABLES[line]!r}")
+    email, case = _copy_case(context, LINE_VARIABLES[line])
     variant = variant_of(case)
     default = getattr(LINES[email][case], line)
     override = context.line_overrides.get((variant, line))
@@ -525,11 +527,15 @@ def _line(context: MessageContext, line: EmailLine) -> str:
         try:
             filled = _filled(override, context, notes, note)
         except UnresolvedVariableError:
-            context.line_notes.append(note(kind="override_failed"))
+            _noted([note(kind="override_failed")])
         else:
-            context.line_notes.extend(notes)
+            _noted(notes)
             return filled
-    return _filled(default, context, context.line_notes, note)
+    notes = []
+    try:
+        return _filled(default, context, notes, note)
+    finally:
+        _noted(notes)
 
 
 def _filled(
@@ -539,7 +545,6 @@ def _filled(
     note: Callable[..., LineNote],
 ) -> str:
     """A line with each ``{name}`` filled, an empty one by its fallback."""
-    from app.domain.email_registry import FALLBACKS
 
     def one(match: re.Match[str]) -> str:
         name = match.group(1)
@@ -563,23 +568,17 @@ def _filled(
 
 def _button_link(context: MessageContext) -> str:
     """Where the button goes: the email's own link, never an admin's."""
-    found = (
-        lines_for(context.notification, context.extras.get("line_case", ""), context.recipient_role)
-        if context.notification is not None
-        else None
-    )
-    if found is None:
-        raise UnresolvedVariableError("this email has no lines for 'buttonUrl'")
-    return _resolve(found.link, context, shared=False)
+    email, case = _copy_case(context, "buttonUrl")
+    return _resolve(LINES[email][case].link, context, shared=False)
 
 
 RESOLVERS |= {
     "emailType": lambda c: _needs(c.notification, "emailType"),
     "recipientRole": lambda c: c.recipient_role,
-    "emailSubject": lambda c: _line(c, EmailLine.SUBJECT),
-    "emailHeading": lambda c: _line(c, EmailLine.HEADING),
-    "buttonLabel": lambda c: _line(c, EmailLine.BUTTON),
     "buttonUrl": _button_link,
+}
+RESOLVERS |= {
+    variable: functools.partial(_line, line=line) for line, variable in LINE_VARIABLES.items()
 }
 
 
@@ -612,7 +611,11 @@ def resolve(name: str, context: MessageContext) -> str:
     return _resolve(name, context, shared=False)
 
 
-def build_variables(declared: Iterable[str], context: MessageContext) -> dict[str, str]:
+def build_variables(
+    declared: Iterable[str],
+    context: MessageContext,
+    notes: list[LineNote] | None = None,
+) -> dict[str, str]:
     """The values this template asked for, or a refusal naming the first missing.
 
     ``declared`` comes from the provider — the template's own list of merge
@@ -624,6 +627,9 @@ def build_variables(declared: Iterable[str], context: MessageContext) -> dict[st
     exists to prevent, wearing a convincing disguise. The caller checks for it;
     the check is repeated here because both call sites would otherwise have to
     remember.
+
+    ``notes`` collects what the lines worked around (`LineNote`), filled even
+    when a later value refuses, so the caller can log a broken override.
     """
     names = list(declared)
     if not names:
@@ -633,4 +639,12 @@ def build_variables(declared: Iterable[str], context: MessageContext) -> dict[st
         )
 
     shared = _SHARED in names
-    return {name: _resolve(name, context, shared=shared) for name in names}
+    # The lines first, whatever order the template declares: they are what
+    # collects `notes`, so a refusal elsewhere never hides them.
+    lines_first = sorted(names, key=lambda name: ALIASES.get(name, name) not in LINE_NAMES)
+    token = _NOTES.set(notes)
+    try:
+        built = {name: _resolve(name, context, shared=shared) for name in lines_first}
+    finally:
+        _NOTES.reset(token)
+    return {name: built[name] for name in names}
