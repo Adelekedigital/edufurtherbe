@@ -307,7 +307,7 @@ contract.
 | `message_unread_many` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the messages were sent to | as `message_unread_few` |
 | `message_in_session_window` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the message was sent to | as `message_unread_few` |
 
-**A member marked NEEDED fails at the drain** (`template_for()` raises). What happens next depends on the message:
+**A member with no id in `EMAIL_TEMPLATES` fails at the drain** (`template_for()` raises). Every member has one on dev since 2026-11-09; a new member, or an environment missing one, behaves as follows:
 - **Re-checked at send time** (the members of `STILL_DUE` in `infra/db/outbox.py`): the row stays `pending` with **no attempt counted** until an id is mapped. It's dropped as `skipped` once it stops being true, so it never goes out late.
 - **Everything else:** each sweep counts an attempt, and after 5 (about five hours) the row stays `failed` with the error. Map the id before the feature that sends it goes live.
 
