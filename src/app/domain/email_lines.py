@@ -18,18 +18,24 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.domain.enums import EmailLine
 from app.domain.message_emails import ONE_MESSAGE, TWO_FROM_ONE, TWO_FROM_TWO
 from app.domain.notifications import Notification
 
 __all__ = [
+    "DEFAULT_VARIANT",
     "LINES",
+    "LINE_HARD_MAX",
+    "LINE_KEY_MAX_LENGTH",
     "LINE_NAMES",
     "OWNED_BY",
     "PLACEHOLDER",
     "TEMPLATE_GROUPS",
     "EmailLines",
+    "case_of",
     "group_of",
     "lines_for",
+    "variant_of",
 ]
 
 N = Notification
@@ -69,6 +75,15 @@ OWNED_BY: dict[str, frozenset[Notification]] = {
 
 #: The variables lines fill. A line may not name one of these (it would fill itself).
 LINE_NAMES = frozenset({"emailSubject", "emailHeading", "buttonLabel", "buttonUrl"})
+
+#: The most characters each line may hold, counted on the raw text with its
+#: ``{name}``s (PRD 28, decision 318). A migration test pins the tables' checks.
+LINE_HARD_MAX = {EmailLine.SUBJECT: 100, EmailLine.HEADING: 90, EmailLine.BUTTON: 32}
+#: An override's email key and variant: a member's or a case's name.
+LINE_KEY_MAX_LENGTH = 64
+#: The variant an email's own lines (case ``""``) go by outside the code: in
+#: the tables and the admin API (PRD 28).
+DEFAULT_VARIANT = "default"
 
 #: ``{name}`` in a line: a variable name as Loops allows them.
 PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
@@ -254,6 +269,16 @@ LINES: dict[Notification, dict[str, EmailLines]] = {
         )
     },
 }
+
+
+def variant_of(case: str) -> str:
+    """A `LINES` case as the tables and the API name it."""
+    return case or DEFAULT_VARIANT
+
+
+def case_of(variant: str) -> str:
+    """The `LINES` case a stored or requested variant names."""
+    return "" if variant == DEFAULT_VARIANT else variant
 
 
 def group_of(notification: Notification) -> frozenset[Notification]:

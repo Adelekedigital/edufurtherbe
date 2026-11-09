@@ -21,6 +21,7 @@ from app.domain.email_lines import (
     EmailLines,
     group_of,
 )
+from app.domain.enums import EmailLine
 from app.domain.message_emails import EmailedMessage, instant_email, unread_email
 from app.domain.messages import (
     ALIASES,
@@ -267,3 +268,28 @@ def test_a_case_or_a_side_wins_over_the_emails_own_lines(
     assert email_lines.lines_for(N.CREDITS_GRANTED, "", "mentee") is side
     assert email_lines.lines_for(N.CREDITS_GRANTED, "", "") is own
     assert email_lines.lines_for(N.CALENDAR_DISCONNECTED, "", "") is None
+
+
+def test_every_override_key_and_default_fits_the_tables_bounds() -> None:
+    """An admin copying a default into an override must never meet the
+    table's CHECK (decision 318): each key is 1 to 64 as stored."""
+    assert max(len(member.value) for member in N) <= email_lines.LINE_KEY_MAX_LENGTH
+    for cases in LINES.values():
+        for case, lines in cases.items():
+            assert 1 <= len(email_lines.variant_of(case)) <= email_lines.LINE_KEY_MAX_LENGTH
+            for line in EmailLine:
+                assert 1 <= len(getattr(lines, line)) <= email_lines.LINE_HARD_MAX[line]
+
+
+def test_the_rewordable_lines_are_every_field_but_the_link_and_each_has_a_max() -> None:
+    words = {field.name for field in dataclasses.fields(EmailLines)} - {"link"}
+    assert {line.value for line in EmailLine} == words
+    assert set(email_lines.LINE_HARD_MAX) == set(EmailLine)
+
+
+def test_an_emails_own_case_is_default_outside_the_code_and_back() -> None:
+    assert email_lines.variant_of("") == email_lines.DEFAULT_VARIANT == "default"
+    assert email_lines.case_of("default") == ""
+    for cases in LINES.values():
+        for case in cases:
+            assert email_lines.case_of(email_lines.variant_of(case)) == case
