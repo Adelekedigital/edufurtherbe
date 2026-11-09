@@ -267,3 +267,19 @@ def test_a_case_or_a_side_wins_over_the_emails_own_lines(
     assert email_lines.lines_for(N.CREDITS_GRANTED, "", "mentee") is side
     assert email_lines.lines_for(N.CREDITS_GRANTED, "", "") is own
     assert email_lines.lines_for(N.CALENDAR_DISCONNECTED, "", "") is None
+
+
+def test_every_override_key_and_default_fits_the_tables_bounds() -> None:
+    """An admin copying a default into an override must never meet the
+    table's CHECK (decision 318)."""
+    assert max(len(member.value) for member in N) <= email_lines.LINE_KEY_MAX_LENGTH
+    for cases in LINES.values():
+        for case, lines in cases.items():
+            assert len(case) <= email_lines.LINE_KEY_MAX_LENGTH
+            for field in email_lines.LINE_FIELDS:
+                assert 1 <= len(getattr(lines, field)) <= email_lines.LINE_HARD_MAX[field]
+
+
+def test_the_rewordable_fields_are_the_lines_words_and_each_has_a_max() -> None:
+    assert email_lines.LINE_FIELDS == ("subject", "heading", "button")
+    assert tuple(email_lines.LINE_HARD_MAX) == email_lines.LINE_FIELDS

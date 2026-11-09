@@ -24,6 +24,7 @@ from app.infra.db.models.availability import (
 )
 from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTransaction
 from app.infra.db.models.education import DegreeLevel, EducationEntry, Institution
+from app.infra.db.models.email_lines import EmailLineEdit, EmailLineOverride
 from app.infra.db.models.intake import (
     IntakeAnswer,
     IntakeFile,
@@ -106,6 +107,8 @@ __all__ = [
     "CreditTransaction",
     "DegreeLevel",
     "EducationEntry",
+    "EmailLineEdit",
+    "EmailLineOverride",
     "FeatureInterest",
     "FeaturedMentor",
     "IdempotencyKey",

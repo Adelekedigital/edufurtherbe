@@ -16,13 +16,17 @@ only keeps its lines in Loops and asks for none of these.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 from app.domain.message_emails import ONE_MESSAGE, TWO_FROM_ONE, TWO_FROM_TWO
 from app.domain.notifications import Notification
 
 __all__ = [
+    "EDIT_ACTIONS",
     "LINES",
+    "LINE_FIELDS",
+    "LINE_HARD_MAX",
+    "LINE_KEY_MAX_LENGTH",
     "LINE_NAMES",
     "OWNED_BY",
     "PLACEHOLDER",
@@ -70,6 +74,15 @@ OWNED_BY: dict[str, frozenset[Notification]] = {
 #: The variables lines fill. A line may not name one of these (it would fill itself).
 LINE_NAMES = frozenset({"emailSubject", "emailHeading", "buttonLabel", "buttonUrl"})
 
+#: The most characters each line may hold, counted on the raw text with its
+#: ``{name}``s (PRD 28, decision 318). A migration test pins the tables' checks.
+LINE_HARD_MAX = {"subject": 100, "heading": 90, "button": 32}
+#: An override's email key and variant: a member's or a case's name.
+LINE_KEY_MAX_LENGTH = 64
+#: What one row of the email edit history records (PRD 28): a new wording, a
+#: return to the default, or "Keep my edit" after the default changed.
+EDIT_ACTIONS = ("edit", "reset", "keep_edit")
+
 #: ``{name}`` in a line: a variable name as Loops allows them.
 PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
 
@@ -82,6 +95,11 @@ class EmailLines:
     heading: str
     button: str
     link: str
+
+
+#: The lines an admin may reword: every `EmailLines` field but the link, which
+#: names a variable rather than words.
+LINE_FIELDS = tuple(field.name for field in fields(EmailLines) if field.name != "link")
 
 
 _VIEW_SESSION = ("View session", "sessionUrl")
