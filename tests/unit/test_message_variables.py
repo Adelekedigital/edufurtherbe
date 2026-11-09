@@ -29,6 +29,7 @@ from app.domain.messages import (
     UnresolvedVariableError,
     build_variables,
 )
+from app.domain.notifications import AUDIENCE, Notification
 
 LAGOS = "Africa/Lagos"  # UTC+1, no DST ever.
 TORONTO = "America/Toronto"
@@ -374,7 +375,7 @@ def test_every_name_a_live_template_uses_has_a_resolver() -> None:
 
 #: The mapped templates that are about a session, so a bare session fills them.
 SESSION_TEMPLATES = sorted(
-    member for member in live_variables() if not member.startswith(("credits_", "mentor_return"))
+    member for member in live_variables() if Notification(member) in AUDIENCE
 )
 
 
@@ -387,7 +388,16 @@ def test_a_bare_session_fills_every_live_session_template(template: str) -> None
         venue=None,
         session_type_name=None,
         respond_by=dt.datetime.now(dt.UTC) + dt.timedelta(hours=5),
-        extras={"interval": "24 hours", "cancel_initiator": "mentor"},
+        # What every producer of these emails carries, whatever the booking.
+        extras={
+            "interval": "24 hours",
+            "cancel_initiator": "mentor",
+            "suggested_starts_at": "2026-11-21T15:00:00+00:00",
+            "held_until": "2026-11-20T17:30:00+00:00",
+            "reminder_message": "Still keen?",
+        },
+        notification=Notification(template),
+        recipient_role="mentee",
     )
 
     build_variables(live_variables()[template], bare)
@@ -395,7 +405,7 @@ def test_a_bare_session_fills_every_live_session_template(template: str) -> None
 
 def test_the_session_templates_are_all_there() -> None:
     """A filter that silently dropped templates would make the case above vacuous."""
-    assert len(SESSION_TEMPLATES) == 11
+    assert len(SESSION_TEMPLATES) == len(AUDIENCE) == 15
 
 
 def test_a_reason_written_without_a_code_has_no_title() -> None:

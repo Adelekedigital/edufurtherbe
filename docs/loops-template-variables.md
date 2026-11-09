@@ -235,6 +235,14 @@ email's one message / two from one person / two from two people). A line may
 name any variable as `{mentorName}`, filled as the template's own are.
 
 **Rules a shared template relies on:**
+- **Loops treats an empty value as a missing one**, and refuses the send
+  ("Missing required data variable(s)") unless the variable has a fallback. So
+  every variable of a shared template has an **empty fallback** in Loops (the
+  email's *Data variables* settings, or `dataVariablesFallbacks` through the
+  API). The backend is the gatekeeper: a value that must not be empty refuses
+  before the send, so Loops' own check would only reject the values that may
+  be (another email's value, a message nobody wrote, an empty card). Found
+  with a real send, 2026-11-09; previews do not enforce it.
 - A section has **one** condition (no AND/OR). To show one for two of three
   emails, use "`emailType` does not equal" the third.
 - **A shared template shows `{emailSubject}`, `{emailHeading}` or
@@ -271,42 +279,43 @@ in these three lines alone an empty value says its fallback (logged
 **The one reference for which Loops template each email uses.** Every
 `Notification` member has exactly one row, and `tests/unit/test_template_registry.py`
 fails when a member is missing, so code and this table cannot drift. Ids are the
-Railway `development` mapping as of 2026-10-03; ids are not secret. Variables are
-what the live template declared when read from Loops on 2026-10-03; the backend
+Railway `development` mapping as of 2026-11-09, when every email got a template
+(8 shared `App:` templates and 3 single ones); ids are not secret. Variables are
+what the live template declared when read from Loops on 2026-11-09; the backend
 reads them again from Loops at send time, so this column is a record, not a
 contract.
 
 | member | Loops template | id | receives it | variables |
 |---|---|---|---|---|
-| `session_booked` | Session Confirmation | `clyamujcw008npblz54cv0oxw` | both | `attendee`, `location`, `name`, `sessiondate`, `sessionlink`, `sessiontime`, `topic`, `topicDiscuss` |
-| `session_requested` | Session Request | `cmbxizcr3bcvrvs0idfrh81yo` | mentor | `discuss`, `hours`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
-| `request_accepted` | Session Confirmation (shared) | `clyamujcw008npblz54cv0oxw` | mentee | as `session_booked` |
-| `request_declined` | Declined Request | `cmbxk5mzj1ldovu0iw608gzga` | mentee | `menteeName`, `mentorName`, `reasonMessage`, `reasonTitle`, `sessionDate`, `webUrl` |
-| `request_withdrawn` | Withdrawn Request | `cmc4umpfe0a5y5e0in8n13flj` | mentor | as `request_declined` |
+| `session_booked` | App: Session confirmed | `cmw9tssbg01t20j028kz2wkl4` | both | `attendee`, `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `location`, `menteeName`, `mentorName`, `recipientFirstName`, `sessionDate`, `sessionDetail`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
+| `session_requested` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `hours`, `location`, `menteeName`, `recipientFirstName`, `reminderMessage`, `sessionDate`, `sessionDetail`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
+| `request_accepted` | App: Session confirmed | `cmw9tssbg01t20j028kz2wkl4` | mentee | as `session_booked` |
+| `request_declined` | App: Request ended | `cmw9tu8od01w00j0unlhvxzt1` | mentee | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `menteeName`, `mentorName`, `reasonMessage`, `reasonTitle`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
+| `request_withdrawn` | App: Request ended | `cmw9tu8od01w00j0unlhvxzt1` | mentor | as `request_declined` |
 | `session_cancelled` | Session Canceled | `clyvhvwru002hm392q9y8qeje` | the other party | `cancelinitiator`, `cancelmessage`, `dashlink`, `name`, `sessiondate` |
-| `request_expired` | — | **NEEDED** | both | — |
-| `mentor_approved` | — | **NEEDED** | the mentor | — (to build with `recipientName`, `applicationUrl`) |
-| `calendar_disconnected` | — | **NEEDED** | the mentor whose calendar it is | — |
-| `session_reminder` | Session Reminder | `clyao8wx60024h2stw3o2ejh8` | both | `attendee`, `intervaltime`, `location`, `name`, `sessiondate`, `sessionlink`, `sessiontime`, `topic`, `topicDiscuss` |
-| `session_last_reminder` | Session Last Reminder | `clyaoph2m00xzs2yecm330s2u` | both | as `session_booked` |
+| `request_expired` | App: Request expired | `cmw9un3sx030c0jyo2stnkl1w` | both | `attendee`, `dashboardUrl`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
+| `mentor_approved` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the mentor | `buttonLabel`, `buttonUrl`, `declineReason`, `emailHeading`, `emailSubject`, `recipientFirstName` |
+| `calendar_disconnected` | App: Calendar disconnected | `cmw9un43803310jyhz2fbuswx` | the mentor whose calendar it is | `calendarUrl`, `recipientFirstName` |
+| `session_reminder` | App: Session reminders | `cmw9tvg2n01xv0j0unltcedbe` | both | `attendee`, `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `location`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
+| `session_last_reminder` | App: Session reminders | `cmw9tvg2n01xv0j0unltcedbe` | both | as `session_reminder` |
 | `review_requested` | sessionReviewRequest | `cmf1qlt600bjiut0iu5i7yycj` | mentee | `reviewBy`, `reviewFor`, `reviewLink`, `sessTopic` |
 | `review_received` | reviewUpdateToMentors | `cmf1rd22ty7dcxz0iffc6jymd` | mentor | `reviewBy`, `reviewFor`, `reviewLink` |
-| `credits_granted` | Credit: New users update | `cmbn678u30iwz4x0ixz20yfod` | the user | `bookLink`, `fName` |
-| `credits_renewed` | Credit renewal | `cmbk0mv700e4yzn0i6ho1h75s` | the user | `bookLink`, `creditCount`, `fName` |
-| `credits_expiring` | Unused credit | `cmbk13nzg0iv4xw0i90uq1j5s` | the user | `bookLink`, `creditCount`, `fName` |
-| `mentor_application_received` | — | **NEEDED** | admins who can decide it, never the applicant | — |
-| `mentor_declined` | — | **NEEDED** | the applicant | — (to build with `recipientName`, `declineReason`, `applicationUrl`) |
-| `mentor_paused_by_admin` | — | **NEEDED** | the paused mentor | — (to build with `recipientName`; never the reason, which is for admins) |
-| `mentor_response_reminder` | Session Request Reminder | `cmbxjqtne3nt1wu0i5sk5kr2h` | mentor | `discuss`, `hours`, `location`, `menteeName`, `mentorName`, `sessionDate`, `sessionTime`, `sessionTopic`, `webUrl` |
+| `credits_granted` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | `buttonLabel`, `buttonUrl`, `creditCount`, `emailHeading`, `emailSubject`, `intervalTime`, `recipientFirstName` |
+| `credits_renewed` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | as `credits_granted` |
+| `credits_expiring` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | as `credits_granted` |
+| `mentor_application_received` | App: New mentor application | `cmw9un4eg02yv0j0uo3e8dn2j` | admins who can decide it, never the applicant | `mentorName`, `recipientFirstName` |
+| `mentor_declined` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the applicant | as `mentor_approved` |
+| `mentor_paused_by_admin` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the paused mentor | as `mentor_approved` |
+| `mentor_response_reminder` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | as `session_requested` |
 | `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |
-| `session_time_suggested` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
-| `session_suggestion_reminder` | — | **NEEDED** | mentee | — (see *A suggested time* below) |
-| `mentee_request_reminder` | — | **NEEDED** | mentor | — (see *A mentee's reminder* below) |
-| `message_unread_few` | — | **NEEDED** | the person the messages were sent to | — (see *The message emails* below) |
-| `message_unread_many` | — | **NEEDED** | the person the messages were sent to | — (see *The message emails* below) |
-| `message_in_session_window` | — | **NEEDED** | the person the message was sent to | — (see *The message emails* below) |
+| `session_time_suggested` | App: Suggested time | `cmw9snfwr00b60j1l5gbgmsku` | mentee | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `holdUntilTime`, `mentorName`, `reasonMessage`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `suggestedDate`, `suggestedTime` |
+| `session_suggestion_reminder` | App: Suggested time | `cmw9snfwr00b60j1l5gbgmsku` | mentee | as `session_time_suggested` |
+| `mentee_request_reminder` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | as `session_requested` |
+| `message_unread_few` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the messages were sent to | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `message1FileName`, `message1Name`, `message1Text`, `message1Time`, `message2FileName`, `message2Name`, `message2Text`, `message2Time`, `otherSenders`, `sender1Count`, `sender1Name`, `sender2Count`, `sender2Name`, `sender3Count`, `sender3Name`, `sender4Count`, `sender4Name`, `sender5Count`, `sender5Name`, `sessionDate`, `sessionDuration`, `sessionName`, `sessionTime`, `sessionTimezone`, `settingsUrl` |
+| `message_unread_many` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the messages were sent to | as `message_unread_few` |
+| `message_in_session_window` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the message was sent to | as `message_unread_few` |
 
-**A member marked NEEDED fails at the drain** (`template_for()` raises). What happens next depends on the message:
+**A member with no id in `EMAIL_TEMPLATES` fails at the drain** (`template_for()` raises). Every member has one on dev since 2026-11-09; a new member, or an environment missing one, behaves as follows:
 - **Re-checked at send time** (the members of `STILL_DUE` in `infra/db/outbox.py`): the row stays `pending` with **no attempt counted** until an id is mapped. It's dropped as `skipped` once it stops being true, so it never goes out late.
 - **Everything else:** each sweep counts an attempt, and after 5 (about five hours) the row stays `failed` with the error. Map the id before the feature that sends it goes live.
 
@@ -316,7 +325,7 @@ Every mapped id, as one value. `EMAIL_TEMPLATES` **replaces the whole map**:
 there is no merge, so adding a message means re-stating them all.
 
 ```
-EMAIL_TEMPLATES={"session_booked":"clyamujcw008npblz54cv0oxw","request_accepted":"clyamujcw008npblz54cv0oxw","session_requested":"cmbxizcr3bcvrvs0idfrh81yo","request_declined":"cmbxk5mzj1ldovu0iw608gzga","request_withdrawn":"cmc4umpfe0a5y5e0in8n13flj","session_cancelled":"clyvhvwru002hm392q9y8qeje","mentor_response_reminder":"cmbxjqtne3nt1wu0i5sk5kr2h","session_reminder":"clyao8wx60024h2stw3o2ejh8","session_last_reminder":"clyaoph2m00xzs2yecm330s2u","review_requested":"cmf1qlt600bjiut0iu5i7yycj","review_received":"cmf1rd22ty7dcxz0iffc6jymd","credits_granted":"cmbn678u30iwz4x0ixz20yfod","credits_renewed":"cmbk0mv700e4yzn0i6ho1h75s","credits_expiring":"cmbk13nzg0iv4xw0i90uq1j5s","mentor_return_reminder":"cm4w04jbv00r82fxqlo8c6vyh"}
+EMAIL_TEMPLATES={"calendar_disconnected":"cmw9un43803310jyhz2fbuswx","credits_expiring":"cmw9sjloa006r0jy744lviabb","credits_granted":"cmw9sjloa006r0jy744lviabb","credits_renewed":"cmw9sjloa006r0jy744lviabb","mentee_request_reminder":"cmw9t5xib012p0jx7a3hmthex","mentor_application_received":"cmw9un4eg02yv0j0uo3e8dn2j","mentor_approved":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_declined":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_paused_by_admin":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_response_reminder":"cmw9t5xib012p0jx7a3hmthex","mentor_return_reminder":"cm4w04jbv00r82fxqlo8c6vyh","message_in_session_window":"cmw9twkjg02190jzrf5176hyw","message_unread_few":"cmw9twkjg02190jzrf5176hyw","message_unread_many":"cmw9twkjg02190jzrf5176hyw","request_accepted":"cmw9tssbg01t20j028kz2wkl4","request_declined":"cmw9tu8od01w00j0unlhvxzt1","request_expired":"cmw9un3sx030c0jyo2stnkl1w","request_withdrawn":"cmw9tu8od01w00j0unlhvxzt1","review_received":"cmf1rd22ty7dcxz0iffc6jymd","review_requested":"cmf1qlt600bjiut0iu5i7yycj","session_booked":"cmw9tssbg01t20j028kz2wkl4","session_cancelled":"clyvhvwru002hm392q9y8qeje","session_last_reminder":"cmw9tvg2n01xv0j0unltcedbe","session_reminder":"cmw9tvg2n01xv0j0unltcedbe","session_requested":"cmw9t5xib012p0jx7a3hmthex","session_suggestion_reminder":"cmw9snfwr00b60j1l5gbgmsku","session_time_suggested":"cmw9snfwr00b60j1l5gbgmsku"}
 ```
 
 ### Values that may be absent
