@@ -235,6 +235,14 @@ email's one message / two from one person / two from two people). A line may
 name any variable as `{mentorName}`, filled as the template's own are.
 
 **Rules a shared template relies on:**
+- **Loops treats an empty value as a missing one**, and refuses the send
+  ("Missing required data variable(s)") unless the variable has a fallback. So
+  every variable of a shared template has an **empty fallback** in Loops (the
+  email's *Data variables* settings, or `dataVariablesFallbacks` through the
+  API). The backend is the gatekeeper: a value that must not be empty refuses
+  before the send, so Loops' own check would only reject the values that may
+  be (another email's value, a message nobody wrote, an empty card). Found
+  with a real send, 2026-11-09; previews do not enforce it.
 - A section has **one** condition (no AND/OR). To show one for two of three
   emails, use "`emailType` does not equal" the third.
 - **A shared template shows `{emailSubject}`, `{emailHeading}` or
