@@ -38,7 +38,7 @@ from tests.integration.message_helpers import (
 )
 
 from app.domain.message_emails import UNREAD_EMAIL_DELAY, held_until
-from app.domain.messages import MessageContext
+from app.domain.messages import MessageContext, build_variables
 from app.domain.notifications import Channel, Notification
 from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.message_emails import queue_unread_email
@@ -207,7 +207,7 @@ async def test_one_unread_message_sends_the_few_email(world: World) -> None:
     assert await emailed(world.engine, message["id"]) is not None
     [(notification, _, context)] = world.notifier.sent
     assert notification is Notification.MESSAGE_UNREAD_FEW
-    assert context.extras["email_subject"] == "Mo sent you a message"
+    assert build_variables(["emailSubject"], context) == {"emailSubject": "Mo sent you a message"}
     assert context.extras["reply_to"] == str(mentee.id)
     assert context.extras["message1_text"].endswith("…")
     assert len(context.extras["message1_text"]) <= 140

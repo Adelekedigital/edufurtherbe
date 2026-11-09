@@ -31,7 +31,10 @@ from app.domain.notifications import Notification
 __all__ = [
     "FEW_MAX",
     "MESSAGE_EMAILS",
+    "ONE_MESSAGE",
     "SENDER_ROWS",
+    "TWO_FROM_ONE",
+    "TWO_FROM_TWO",
     "UNREAD_EMAILS",
     "UNREAD_EMAIL_DELAY",
     "UNREAD_EMAIL_INTERVAL",
@@ -58,6 +61,11 @@ UNREAD_EMAIL_LOOKBACK = dt.timedelta(hours=24)
 
 #: Up to this many unread messages get the few email, a card each; more get many.
 FEW_MAX = 2
+
+#: The few email's three cases, which pick its lines (`domain.email_lines`).
+ONE_MESSAGE = "one_message"
+TWO_FROM_ONE = "two_from_one"
+TWO_FROM_TWO = "two_from_two"
 
 #: The many email's rows: one per sender, the most messages first. Senders past
 #: this are counted in `other_senders` rather than dropped.
@@ -147,7 +155,8 @@ def unread_email(
     leaves the email, so the many email may end up with fewer than three and
     still fills the many template. One or two are the few email; Q14's default
     covers two from two people: the subject counts them, one card each, and
-    the button opens Messages.
+    the button opens Messages. Its lines are in `domain.email_lines`, chosen by
+    ``line_case``.
     """
     if not messages:
         raise ValueError("an unread email needs a message")
@@ -155,26 +164,20 @@ def unread_email(
     if (kind or unread_kind(len(messages))) is Notification.MESSAGE_UNREAD_MANY:
         return _many(messages)
     first = messages[0]
-    values: dict[str, str] = {"preview_text": _preview(first)}
+    values: dict[str, str] = {
+        "preview_text": _preview(first),
+        "unread_count": str(len(messages)),
+    }
     for number, message in enumerate(messages, start=1):
         values |= _card(number, message, whole=False)
     if len(senders) == 1:
-        name = _first(first)
-        one = len(messages) == 1
         values |= {
-            "email_subject": f"{name} sent you a message" if one else f"2 new messages from {name}",
-            "email_heading": f"{name} sent you a message" if one else f"{name} sent you 2 messages",
-            "button_label": "Reply in Messages",
+            "line_case": ONE_MESSAGE if len(messages) == 1 else TWO_FROM_ONE,
             "reply_to": str(first.sender_id),
-            "replies_name": name,
+            "replies_name": _first(first),
         }
     else:
-        values |= {
-            "email_subject": f"You have {len(messages)} unread messages on EduFurther",
-            "email_heading": f"You have {len(messages)} unread messages",
-            "button_label": "Open Messages",
-            "replies_name": "them",
-        }
+        values |= {"line_case": TWO_FROM_TWO, "replies_name": "them"}
     return values
 
 

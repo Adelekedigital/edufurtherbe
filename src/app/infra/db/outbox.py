@@ -539,6 +539,7 @@ async def _context_for(
         "recipient_first_name": people.get(recipient, nobody)[2],
         "app_base_url": settings.app_base_url or "",
         "extras": extras,
+        "notification": notification,
     }
 
     if str(row["entity_type"]) == "mentor_profile":
@@ -548,6 +549,9 @@ async def _context_for(
         named = _party_name(
             await _names_for(session, (row["entity_id"],)), row["entity_id"], "mentor"
         )
+        # The mentor is the recipient of their own reminder, not of the notice
+        # the admins get.
+        base["recipient_role"] = "mentor" if recipient == row["entity_id"] else ""
         return MessageContext(mentor_name=named, mentee_name="", **base)  # type: ignore[arg-type]
     if str(row["entity_type"]) != "session":
         if row["event_type"] == Notification.CREDITS_EXPIRING and extras.get("expires_at"):
@@ -609,6 +613,14 @@ async def _context_for(
         session_id=str(found["id"]),
         app_base_url=settings.app_base_url or "",
         extras=extras,
+        notification=notification,
+        recipient_role=(
+            "mentor"
+            if recipient == found["mentor_id"]
+            else "mentee"
+            if recipient == found["mentee_id"]
+            else ""
+        ),
     )
 
 

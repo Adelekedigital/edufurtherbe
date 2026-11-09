@@ -63,6 +63,16 @@ def context(extras: dict[str, str], **overrides: object) -> MessageContext:
     return MessageContext(**(base | overrides))  # type: ignore[arg-type]
 
 
+def lines(values: dict[str, str], kind: Notification) -> dict[str, str]:
+    """The subject, heading and button an email's values make (decision 317)."""
+    return build_variables(
+        ["emailSubject", "emailHeading", "buttonLabel"], context(values, notification=kind)
+    )
+
+
+FEW_KIND = Notification.MESSAGE_UNREAD_FEW
+
+
 def test_two_messages_are_few_and_three_are_many() -> None:
     assert unread_kind(1) is Notification.MESSAGE_UNREAD_FEW
     assert unread_kind(2) is Notification.MESSAGE_UNREAD_FEW
@@ -86,9 +96,11 @@ def test_the_hour_ends_on_a_whole_second() -> None:
 def test_one_message_names_its_sender_and_cuts_the_text() -> None:
     values = unread_email([said(LONG)])
 
-    assert values["email_subject"] == "Ada sent you a message"
-    assert values["email_heading"] == "Ada sent you a message"
-    assert values["button_label"] == "Reply in Messages"
+    assert lines(values, FEW_KIND) == {
+        "emailSubject": "Ada sent you a message",
+        "emailHeading": "Ada sent you a message",
+        "buttonLabel": "Reply in Messages",
+    }
     assert values["reply_to"] == str(ADA)
     assert values["replies_name"] == "Ada"
     assert len(values["message1_text"]) <= PREVIEW_LENGTH
@@ -102,8 +114,9 @@ def test_one_message_names_its_sender_and_cuts_the_text() -> None:
 def test_two_from_one_person_count_them() -> None:
     values = unread_email([said("One"), said("Two", minutes=1)])
 
-    assert values["email_subject"] == "2 new messages from Ada"
-    assert values["email_heading"] == "Ada sent you 2 messages"
+    built = lines(values, FEW_KIND)
+    assert built["emailSubject"] == "2 new messages from Ada"
+    assert built["emailHeading"] == "Ada sent you 2 messages"
     assert values["message2_text"] == "Two"
 
 
@@ -111,9 +124,11 @@ def test_two_from_two_people_open_messages_q14() -> None:
     """Q14's default: the subject counts them, a card each, Open Messages."""
     values = unread_email([said("One"), said("Two", sender=BEN, first="Ben", minutes=1)])
 
-    assert values["email_subject"] == "You have 2 unread messages on EduFurther"
-    assert values["email_heading"] == "You have 2 unread messages"
-    assert values["button_label"] == "Open Messages"
+    assert lines(values, FEW_KIND) == {
+        "emailSubject": "You have 2 unread messages on EduFurther",
+        "emailHeading": "You have 2 unread messages",
+        "buttonLabel": "Open Messages",
+    }
     assert values["replies_name"] == "them"
     assert "reply_to" not in values
     assert values["message2_name"] == "Ben Obi"
@@ -151,7 +166,7 @@ def test_many_rows_stop_at_the_limit_and_count_the_rest() -> None:
 
 def test_a_nameless_sender_is_someone() -> None:
     values = unread_email([said(first=None, last=None)])
-    assert values["email_subject"] == "Someone sent you a message"
+    assert lines(values, FEW_KIND)["emailSubject"] == "Someone sent you a message"
     assert values["message1_initials"] == ""
 
 
@@ -215,7 +230,7 @@ INSTANT = [
 
 def test_the_few_email_resolves_every_name_in_the_recipients_zone() -> None:
     values = unread_email([said("One")])
-    built = build_variables(FEW, context(values))
+    built = build_variables(FEW, context(values, notification=FEW_KIND))
 
     assert built["message1Time"] == "15:00"  # 14:00 UTC in Lagos.
     assert built["message2Name"] == ""
@@ -227,14 +242,14 @@ def test_the_few_email_resolves_every_name_in_the_recipients_zone() -> None:
 
 def test_two_people_get_the_inbox_link() -> None:
     values = unread_email([said("One"), said("Two", sender=BEN, minutes=1)])
-    assert build_variables(["buttonUrl"], context(values))["buttonUrl"] == (
+    assert build_variables(["buttonUrl"], context(values, notification=FEW_KIND))["buttonUrl"] == (
         "https://app.example.test/messages"
     )
 
 
 def test_the_many_email_resolves_every_name() -> None:
     values = unread_email([said("a"), said("b"), said("c", sender=BEN, first="Ben")])
-    built = build_variables(MANY, context(values))
+    built = build_variables(MANY, context(values, notification=Notification.MESSAGE_UNREAD_MANY))
     assert built["sender1Name"] == "Ada Obi"
     assert built["sender3Name"] == ""
 
@@ -249,6 +264,7 @@ def test_the_instant_email_resolves_with_its_session() -> None:
             session_id="s-1",
             session_type_name="CV review",
             duration_minutes=45,
+            notification=Notification.MESSAGE_IN_SESSION_WINDOW,
         ),
     )
     assert built["sessionName"] == "CV review"
