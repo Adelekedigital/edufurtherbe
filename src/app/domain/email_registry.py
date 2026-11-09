@@ -409,6 +409,19 @@ _ABOUT_A_MENTOR = frozenset(
         N.MENTOR_APPLICATION_RECEIVED,
     }
 )
+#: Of those, the ones an admin reads rather than the mentor: the outbox gives
+#: the admin's copy the admin's name and no side.
+_READ_BY_ADMINS = frozenset({N.MENTOR_APPLICATION_RECEIVED})
+
+
+#: Who reads each sample copy: the mentor, the mentee, or an admin.
+_READERS = {
+    "mentor": ("Ada Obi", "Ada"),
+    "mentee": ("Mo Bello", "Mo"),
+    "admins": ("Sam Eze", "Sam"),
+}
+#: A sample request's time left to answer, a little over the `hours` example.
+_ANSWER_WITHIN = dt.timedelta(hours=18, minutes=30)
 
 
 def _reader_side(email: Notification, variant: str) -> str:
@@ -416,6 +429,8 @@ def _reader_side(email: Notification, variant: str) -> str:
     mentee's for an email that goes to either."""
     if variant in {"mentor", "mentee"}:
         return variant
+    if email in _READ_BY_ADMINS:
+        return "admins"
     if AUDIENCE.get(email) is Audience.MENTOR or email in _ABOUT_A_MENTOR:
         return "mentor"
     return "mentee"
@@ -428,10 +443,10 @@ def sample_context(email: Notification, variant: str, side: str | None = None) -
     extras = dict(SAMPLES.get(email, {}).get(variant, {}))
     session = email in _ABOUT_A_SESSION
     reader = side or _reader_side(email, variant)
-    to_mentor = reader == "mentor"
+    name, first = _READERS[reader]
     return MessageContext(
-        recipient_name="Ada Obi" if to_mentor else "Mo Bello",
-        recipient_first_name="Ada" if to_mentor else "Mo",
+        recipient_name=name,
+        recipient_first_name=first,
         recipient_timezone="Africa/Lagos",
         mentor_name="Ada Obi" if session or email in _ABOUT_A_MENTOR else "",
         mentee_name="Mo Bello" if session else "",
@@ -439,13 +454,16 @@ def sample_context(email: Notification, variant: str, side: str | None = None) -
         topic="Choosing a master's" if session else None,
         session_type_name="CV review" if session else None,
         venue="Google Meet" if session else None,
-        respond_by=_START - dt.timedelta(hours=6) if email in _REQUESTS else None,
+        # From the moment it is built, so the countdown reads as the example does.
+        respond_by=dt.datetime.now(dt.UTC) + _ANSWER_WITHIN if email in _REQUESTS else None,
         duration_minutes=45 if session else None,
         session_id="00000000-0000-7000-8000-0000000000aa" if session else None,
         app_base_url="https://app.edufurther.example",
         extras=extras,
         notification=email,
-        recipient_role=reader if session or email in _ABOUT_A_MENTOR else "",
+        recipient_role=reader
+        if reader != "admins" and (session or email in _ABOUT_A_MENTOR)
+        else "",
     )
 
 

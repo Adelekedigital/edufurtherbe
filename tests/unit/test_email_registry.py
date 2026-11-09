@@ -150,6 +150,18 @@ def test_a_mentor_only_email_is_previewed_as_the_mentor_reads_it() -> None:
     assert (booked.recipient_name, booked.recipient_role) == ("Mo Bello", "mentee")
 
 
+def test_a_new_application_is_previewed_as_the_admin_reads_it() -> None:
+    context = sample_context(N.MENTOR_APPLICATION_RECEIVED, "default")
+    assert (context.recipient_name, context.recipient_role) == ("Sam Eze", "")
+    assert context.mentor_name == "Ada Obi"
+
+
+def test_a_requests_sample_countdown_reads_as_its_example() -> None:
+    """Built from now, so the preview never drifts to "0 hours left"."""
+    context = sample_context(N.SESSION_REQUESTED, "default")
+    assert build_variables(["hours"], context) == {"hours": "18"}
+
+
 def test_hours_mean_something_only_on_a_request() -> None:
     assert "hours" in values_for(N.SESSION_REQUESTED, "default")
     assert "hours" in values_for(N.MENTEE_REQUEST_REMINDER, "default")
