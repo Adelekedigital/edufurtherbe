@@ -289,8 +289,5 @@ def test_every_email_fills_its_published_shared_template(
     built = build_variables(PUBLISHED_TEMPLATES[group], sample_context(email, variant, side))
     assert built["emailType"] == email
     assert all(built[name] for name in ("emailSubject", "emailHeading", "buttonLabel"))
-    assert (
-        bool(built.get("sessionDate"))
-        is (group != "messages" or email is N.MESSAGE_IN_SESSION_WINDOW)
-        or "sessionDate" not in built
-    )
+    if group == "messages":
+        assert bool(built["sessionDate"]) is (email is N.MESSAGE_IN_SESSION_WINDOW)
