@@ -55,6 +55,7 @@ __all__ = [
     "MessageContext",
     "UnresolvedVariableError",
     "build_variables",
+    "resolve",
     "session_page_url",
 ]
 
@@ -519,6 +520,11 @@ def _resolve(name: str, context: MessageContext, *, shared: bool) -> str:
     ):
         return ""
     return resolver(context)
+
+
+def resolve(name: str, context: MessageContext) -> str:
+    """One value as a line would say it: owned names are never left empty."""
+    return _resolve(name, context, shared=False)
 
 
 def build_variables(declared: Iterable[str], context: MessageContext) -> dict[str, str]:

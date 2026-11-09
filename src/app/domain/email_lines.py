@@ -30,6 +30,7 @@ __all__ = [
     "LINE_NAMES",
     "OWNED_BY",
     "PLACEHOLDER",
+    "SHARED_TEMPLATE_NAMES",
     "TEMPLATE_GROUPS",
     "EmailLines",
     "case_of",
@@ -84,6 +85,10 @@ LINE_KEY_MAX_LENGTH = 64
 #: The variant an email's own lines (case ``""``) go by outside the code: in
 #: the tables and the admin API (PRD 28).
 DEFAULT_VARIANT = "default"
+
+#: What a shared template declares beyond its own words: which email it is,
+#: and its lines (decision 317).
+SHARED_TEMPLATE_NAMES = ("emailType", *sorted(LINE_NAMES))
 
 #: ``{name}`` in a line: a variable name as Loops allows them.
 PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
