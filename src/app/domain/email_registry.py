@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import datetime as dt
 import difflib
+import functools
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
@@ -39,11 +41,20 @@ from app.domain.message_emails import (
     instant_email,
     unread_email,
 )
-from app.domain.messages import ALIASES, MessageContext, UnresolvedVariableError, resolve
+from app.domain.messages import (
+    ALIASES,
+    NO_REASON_TITLE,
+    SESSION_TOPIC_FALLBACK,
+    VENUE_FALLBACK,
+    MessageContext,
+    UnresolvedVariableError,
+    resolve,
+)
 from app.domain.notifications import AUDIENCE, Audience, Notification
 
 __all__ = [
     "EMAILS",
+    "GROUP_NAMES",
     "SAMPLES",
     "VALUES",
     "VARIANT_LABELS",
@@ -70,15 +81,30 @@ class Recipient(StrEnum):
     ADMINS = "admins"
 
 
+#: Each shared template's name, by its group's key: the list card's title and
+#: the Loops template's name, which are one name.
+GROUP_NAMES = {
+    "session_confirmed": "Session confirmed",
+    "request_awaiting": "Request awaiting an answer",
+    "request_closed": "Request ended",
+    "session_reminders": "Session reminders",
+    "suggested_time": "Suggested time",
+    "credits": "Credits",
+    "mentor_status": "Mentor status",
+    "messages": "Messages",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class EmailEntry:
-    """One email as the admin app shows it."""
+    """One email as the admin app shows it. ``own_template`` names the Loops
+    template of an email outside every group."""
 
     key: Notification
     name: str
     trigger: str
-    template_name: str
     recipients: tuple[Recipient, ...]
+    own_template: str | None = None
 
     @property
     def group(self) -> str:
@@ -88,6 +114,14 @@ class EmailEntry:
             str(self.key),
         )
 
+    @property
+    def group_name(self) -> str:
+        return GROUP_NAMES.get(self.group, self.name)
+
+    @property
+    def template_name(self) -> str:
+        return GROUP_NAMES.get(self.group) or self.own_template or self.name
+
 
 _BOTH = (Recipient.MENTOR, Recipient.MENTEE)
 _SIDE = {
@@ -96,166 +130,110 @@ _SIDE = {
     Audience.BOTH: _BOTH,
     Audience.OTHER_PARTY: _BOTH,
 }
-
-#: What each card is called in the list: a shared template's group, by its key.
-GROUP_NAMES = {
-    "session_confirmed": "Session confirmed",
-    "request_awaiting": "Requests awaiting an answer",
-    "request_closed": "Requests that ended",
-    "session_reminders": "Session reminders",
-    "suggested_time": "Suggested times",
-    "credits": "Credits",
-    "mentor_status": "Mentor status",
-    "messages": "Messages",
-}
+_MENTOR = (Recipient.MENTOR,)
+_MENTEE = (Recipient.MENTEE,)
 
 
 def _e(
     key: Notification,
     name: str,
     trigger: str,
-    template: str,
     recipients: tuple[Recipient, ...] | None = None,
+    own_template: str | None = None,
 ) -> EmailEntry:
-    return EmailEntry(key, name, trigger, template, recipients or _SIDE[AUDIENCE[key]])
+    return EmailEntry(key, name, trigger, recipients or _SIDE[AUDIENCE[key]], own_template)
 
 
 #: Every email, in the order the admin list shows them: a shared template's
 #: emails together, its cards in this order.
 EMAILS: tuple[EmailEntry, ...] = (
-    _e(
-        N.SESSION_BOOKED,
-        "Session booked",
-        "A booking is confirmed straight away",
-        "Session confirmed",
-    ),
-    _e(N.REQUEST_ACCEPTED, "Request accepted", "A mentor accepts a request", "Session confirmed"),
-    _e(N.SESSION_REQUESTED, "Session requested", "A mentee requests a session", "Request awaiting"),
-    _e(
-        N.MENTOR_RESPONSE_REMINDER,
-        "Request reminder",
-        "A request is close to its answer deadline",
-        "Request awaiting",
-    ),
+    _e(N.SESSION_BOOKED, "Session booked", "A booking is confirmed straight away"),
+    _e(N.REQUEST_ACCEPTED, "Request accepted", "A mentor accepts a request"),
+    _e(N.SESSION_REQUESTED, "Session requested", "A mentee requests a session"),
+    _e(N.MENTOR_RESPONSE_REMINDER, "Request reminder", "A request is close to its answer deadline"),
     _e(
         N.MENTEE_REQUEST_REMINDER,
         "Mentee's reminder",
         "A mentee presses Remind on a pending request",
-        "Request awaiting",
     ),
-    _e(N.REQUEST_DECLINED, "Request declined", "A mentor declines a request", "Request closed"),
-    _e(N.REQUEST_WITHDRAWN, "Request withdrawn", "A mentee withdraws a request", "Request closed"),
+    _e(N.REQUEST_DECLINED, "Request declined", "A mentor declines a request"),
+    _e(N.REQUEST_WITHDRAWN, "Request withdrawn", "A mentee withdraws a request"),
     _e(
         N.SESSION_REMINDER,
         "Session reminder",
         "24 hours, 1 hour and 30 minutes before a booking",
-        "Session reminders",
     ),
-    _e(N.SESSION_LAST_REMINDER, "Last reminder", "5 minutes before a booking", "Session reminders"),
+    _e(N.SESSION_LAST_REMINDER, "Last reminder", "5 minutes before a booking"),
     _e(
         N.SESSION_TIME_SUGGESTED,
         "New time suggested",
         "A mentor declines or cancels and suggests another time",
-        "Suggested time",
     ),
     _e(
         N.SESSION_SUGGESTION_REMINDER,
         "Suggested time reminder",
         "30 minutes before a suggested time is released",
-        "Suggested time",
     ),
-    _e(
-        N.CREDITS_GRANTED,
-        "Credits granted",
-        "A mentee finishes onboarding",
-        "Credits",
-        (Recipient.MENTEE,),
-    ),
-    _e(
-        N.CREDITS_RENEWED,
-        "Credits renewed",
-        "The month's credits are paid",
-        "Credits",
-        (Recipient.MENTEE,),
-    ),
+    _e(N.CREDITS_GRANTED, "Credits granted", "A mentee finishes onboarding", _MENTEE),
+    _e(N.CREDITS_RENEWED, "Credits renewed", "The month's credits are paid", _MENTEE),
     _e(
         N.CREDITS_EXPIRING,
         "Credits expiring",
         "Two weeks and one week before unused credits expire",
-        "Credits",
-        (Recipient.MENTEE,),
+        _MENTEE,
     ),
-    _e(
-        N.MENTOR_APPROVED,
-        "Mentor approved",
-        "An admin approves an application",
-        "Mentor status",
-        (Recipient.MENTOR,),
-    ),
-    _e(
-        N.MENTOR_DECLINED,
-        "Mentor declined",
-        "An admin declines an application",
-        "Mentor status",
-        (Recipient.MENTOR,),
-    ),
-    _e(
-        N.MENTOR_PAUSED_BY_ADMIN,
-        "Mentor paused",
-        "An admin pauses a mentor's listing",
-        "Mentor status",
-        (Recipient.MENTOR,),
-    ),
-    _e(
-        N.MESSAGE_UNREAD_FEW,
-        "Unread messages",
-        "One or two messages unread for 15 minutes",
-        "Messages",
-        _BOTH,
-    ),
+    _e(N.MENTOR_APPROVED, "Mentor approved", "An admin approves an application", _MENTOR),
+    _e(N.MENTOR_DECLINED, "Mentor declined", "An admin declines an application", _MENTOR),
+    _e(N.MENTOR_PAUSED_BY_ADMIN, "Mentor paused", "An admin pauses a mentor's listing", _MENTOR),
+    _e(N.MESSAGE_UNREAD_FEW, "Unread messages", "One or two messages unread for 15 minutes", _BOTH),
     _e(
         N.MESSAGE_UNREAD_MANY,
         "Many unread messages",
         "Three or more messages unread for 15 minutes",
-        "Messages",
         _BOTH,
     ),
     _e(
         N.MESSAGE_IN_SESSION_WINDOW,
         "Message close to a booking",
         "A message sent within 15 minutes of their booking",
-        "Messages",
         _BOTH,
     ),
     _e(
         N.SESSION_CANCELLED,
         "Session canceled",
         "Either person cancels a booking",
-        "Session Canceled",
+        own_template="Session Canceled",
     ),
-    _e(N.REQUEST_EXPIRED, "Request expired", "A request gets no answer in time", "Request expired"),
-    _e(N.REVIEW_REQUESTED, "Review requested", "A booking is completed", "sessionReviewRequest"),
-    _e(N.REVIEW_RECEIVED, "Review received", "A mentee reviews a booking", "reviewUpdateToMentors"),
+    _e(N.REQUEST_EXPIRED, "Request expired", "A request gets no answer in time"),
+    _e(
+        N.REVIEW_REQUESTED,
+        "Review requested",
+        "A booking is completed",
+        own_template="sessionReviewRequest",
+    ),
+    _e(
+        N.REVIEW_RECEIVED,
+        "Review received",
+        "A mentee reviews a booking",
+        own_template="reviewUpdateToMentors",
+    ),
     _e(
         N.MENTOR_APPLICATION_RECEIVED,
         "New mentor application",
         "A mentor submits a complete application",
-        "New mentor application",
         (Recipient.ADMINS,),
     ),
     _e(
         N.MENTOR_RETURN_REMINDER,
         "Return reminder",
         "Before a paused mentor's return date, or while paused with no date",
-        "Return reminder",
-        (Recipient.MENTOR,),
+        _MENTOR,
     ),
     _e(
         N.CALENDAR_DISCONNECTED,
         "Calendar disconnected",
         "A mentor's Google Calendar link stops working",
-        "Calendar disconnected",
-        (Recipient.MENTOR,),
+        _MENTOR,
     ),
 )
 
@@ -287,15 +265,19 @@ def variants_of(email: EmailEntry) -> tuple[str, ...]:
     return tuple(variant_of(case) for case in LINES.get(email.key, {"": None}))
 
 
+#: The emails a request's answer deadline means something in.
+_REQUESTS = TEMPLATE_GROUPS["request_awaiting"] | {N.REQUEST_EXPIRED}
+
+
 @dataclass(frozen=True, slots=True)
 class Value:
     """A value a line may name: what it means, an example, and what an empty one
     becomes in a line at send time (``None``: the line cannot go without it).
 
     ``needs`` is what the email must be about for the value to mean anything:
-    ``"session"``, or row keys any one of which it carries. A value with a
-    fallback of its own (a topic, a venue) fills anywhere, so filling alone
-    cannot say whether an email carries it.
+    ``"session"``, ``"request"``, or row keys any one of which it carries. A
+    value with a fallback of its own (a topic, a venue) fills anywhere, so
+    filling alone cannot say whether an email carries it.
     """
 
     name: str
@@ -308,7 +290,9 @@ class Value:
 _SESSION = ("session",)
 
 #: The values a line may name, in the order the picker lists them. Card slots,
-#: links and the lines themselves are not words a line says.
+#: links and the lines themselves are not words a line says. A value whose
+#: resolver already falls back (a topic, a venue, a reason) names that constant,
+#: so the catalogue says what is really sent.
 VALUES: tuple[Value, ...] = (
     Value("recipientFirstName", "The reader's first name", "Ada", "there"),
     Value("recipientName", "The reader's full name", "Ada Obi", "there"),
@@ -319,49 +303,40 @@ VALUES: tuple[Value, ...] = (
         "sessionTopic",
         "What this booking is about",
         "Choosing a master's",
-        "your session",
+        SESSION_TOPIC_FALLBACK,
         _SESSION,
     ),
-    Value("sessionName", "The session's name", "CV review", "your session", _SESSION),
+    Value("sessionName", "The session's name", "CV review", SESSION_TOPIC_FALLBACK, _SESSION),
     Value(
         "sessionDate",
-        "The session's date, in the reader's zone",
+        "The booking's date, in the reader's zone",
         "Friday 20 November 2026",
         "the day",
         _SESSION,
     ),
     Value(
         "sessionTime",
-        "The session's start time, in the reader's zone",
+        "The booking's start time, in the reader's zone",
         "15:00",
         "the time",
         _SESSION,
     ),
     Value("sessionTimezone", "The reader's time zone", "Africa/Lagos", "your time zone", _SESSION),
     Value("sessionDuration", "Session length", "45 min", "the session", _SESSION),
-    Value("location", "Where the session happens", "Google Meet", "online", _SESSION),
-    Value("hours", "Whole hours left to answer a request", "18", "a few", _SESSION),
+    Value("location", "Where the booking happens", "Google Meet", VENUE_FALLBACK, _SESSION),
+    Value("hours", "Whole hours left to answer the request", "18", "a few", ("request",)),
     Value("intervalTime", "How soon, in words", "Tomorrow", "soon"),
     Value(
         "reasonTitle",
         "Why it ended, in words",
         "Scheduling conflict",
-        "no reason given",
+        NO_REASON_TITLE,
         ("reason_code", "reason_text"),
     ),
-    Value("cancelInitiator", "Who cancelled", "Ada Obi", "someone"),
     Value("suggestedDate", "The suggested time's date", "Saturday 21 November 2026", "the day"),
     Value("suggestedTime", "The suggested start time", "16:00", "the time"),
     Value("holdUntilTime", "When the suggested time is released", "17:30", "soon"),
     Value("creditCount", "How many credits", "2", "your"),
-    Value(
-        "returnOn",
-        "The date a paused mentor returns",
-        "Saturday 3 October 2026",
-        "your return date",
-    ),
-    Value("daysUntilReturn", "Days until a paused mentor returns", "3", "a few"),
-    Value("daysPaused", "Days a mentor has been paused", "30", "a while"),
     Value("repliesName", 'Who to reply to: a first name, or "them"', "Ada", "them"),
     Value("senderFirstName", "The sender's first name", "Ada", "someone"),
     Value("senderFirstNames", "The senders' first names", "Ada and Ben", "people"),
@@ -385,6 +360,11 @@ def _said(first: str, minutes: int = 0) -> EmailedMessage:
     )
 
 
+_SUGGESTED = {
+    "suggested_starts_at": (_START + dt.timedelta(days=1, hours=2)).isoformat(),
+    "held_until": (_START + dt.timedelta(hours=3, minutes=30)).isoformat(),
+}
+
 #: What each email's producer puts on its outbox row (`variables=` at the
 #: enqueue, or the message email's values), by variant.
 SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
@@ -397,19 +377,8 @@ SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
     N.REQUEST_WITHDRAWN: {"default": {"reason_code": "mentee_no_longer_needed"}},
     N.SESSION_REMINDER: {"default": {"kind": "s24", "interval": "Tomorrow"}},
     N.SESSION_LAST_REMINDER: {"default": {"kind": "s5", "interval": "in 5 Minutes"}},
-    N.SESSION_TIME_SUGGESTED: {
-        "default": {
-            "suggested_after": "declined",
-            "suggested_starts_at": (_START + dt.timedelta(days=1, hours=2)).isoformat(),
-            "held_until": (_START + dt.timedelta(hours=3, minutes=30)).isoformat(),
-        }
-    },
-    N.SESSION_SUGGESTION_REMINDER: {
-        "default": {
-            "suggested_starts_at": (_START + dt.timedelta(days=1, hours=2)).isoformat(),
-            "held_until": (_START + dt.timedelta(hours=3, minutes=30)).isoformat(),
-        }
-    },
+    N.SESSION_TIME_SUGGESTED: {"default": {"suggested_after": "declined", **_SUGGESTED}},
+    N.SESSION_SUGGESTION_REMINDER: {"default": dict(_SUGGESTED)},
     N.CREDITS_GRANTED: {"default": {}},
     N.CREDITS_RENEWED: {"default": {"credit_count": "2"}},
     N.CREDITS_EXPIRING: {"default": {"kind": "c14", "interval": "two weeks", "credit_count": "1"}},
@@ -442,45 +411,66 @@ _ABOUT_A_MENTOR = frozenset(
 )
 
 
-def sample_context(email: Notification, variant: str) -> MessageContext:
+def _reader_side(email: Notification, variant: str) -> str:
+    """Whose copy a variant is: its own side, the email's one audience, or the
+    mentee's for an email that goes to either."""
+    if variant in {"mentor", "mentee"}:
+        return variant
+    if AUDIENCE.get(email) is Audience.MENTOR or email in _ABOUT_A_MENTOR:
+        return "mentor"
+    return "mentee"
+
+
+def sample_context(email: Notification, variant: str, side: str | None = None) -> MessageContext:
     """The context the email's ``variant`` is previewed and checked against:
-    its producer's sample row, shaped as the outbox shapes that email's."""
+    its producer's sample row, shaped as the outbox shapes that email's, read
+    by its recipient (``side`` reads it as the other party of a session)."""
     extras = dict(SAMPLES.get(email, {}).get(variant, {}))
-    role = variant if variant in {"mentor", "mentee"} else ""
     session = email in _ABOUT_A_SESSION
-    mentor = session or email in _ABOUT_A_MENTOR
-    reader = (
-        ("Ada Obi", "Ada") if role == "mentor" or email in _ABOUT_A_MENTOR else ("Mo Bello", "Mo")
-    )
+    reader = side or _reader_side(email, variant)
+    to_mentor = reader == "mentor"
     return MessageContext(
-        recipient_name=reader[0],
-        recipient_first_name=reader[1],
+        recipient_name="Ada Obi" if to_mentor else "Mo Bello",
+        recipient_first_name="Ada" if to_mentor else "Mo",
         recipient_timezone="Africa/Lagos",
-        mentor_name="Ada Obi" if mentor else "",
+        mentor_name="Ada Obi" if session or email in _ABOUT_A_MENTOR else "",
         mentee_name="Mo Bello" if session else "",
         starts_at=_START if session else None,
         topic="Choosing a master's" if session else None,
         session_type_name="CV review" if session else None,
         venue="Google Meet" if session else None,
-        respond_by=_START - dt.timedelta(hours=6) if session else None,
+        respond_by=_START - dt.timedelta(hours=6) if email in _REQUESTS else None,
         duration_minutes=45 if session else None,
         session_id="00000000-0000-7000-8000-0000000000aa" if session else None,
         app_base_url="https://app.edufurther.example",
         extras=extras,
         notification=email,
-        recipient_role=role,
+        recipient_role=reader if session or email in _ABOUT_A_MENTOR else "",
     )
 
 
+def _meets(value: Value, email: Notification, context: MessageContext) -> bool:
+    if not value.needs:
+        return True
+    return any(
+        context.starts_at is not None
+        if need == "session"
+        else email in _REQUESTS
+        if need == "request"
+        else need in context.extras
+        for need in value.needs
+    )
+
+
+@functools.cache
 def values_for(email: Notification, variant: str) -> tuple[str, ...]:
-    """The `VALUES` a line of this variant may name: those its sample fills."""
+    """The `VALUES` a line of this variant may name: those its email is about
+    and its sample fills. A value another email of its group owns does not
+    fill here (`resolve`)."""
     context = sample_context(email, variant)
     found = []
     for value in VALUES:
-        if value.needs and not any(
-            context.starts_at is not None if need == "session" else need in context.extras
-            for need in value.needs
-        ):
+        if not _meets(value, email, context):
             continue
         try:
             if resolve(value.name, context):
@@ -509,13 +499,18 @@ class LineError:
     suggestion: str | None = None
 
 
+#: A brace that is not part of a well-formed ``{name}``: ``{ name }``,
+#: ``{first name}``, a lone ``{`` or ``}``. It would go out as written.
+_STRAY = re.compile(r"\{[^{}]*\}?|\}")
+
+
 def _suggest(name: str) -> str | None:
     """The catalogue name ``name`` most likely meant: the same ignoring case,
     else the closest spelling."""
-    for known in _VALUE_NAMES:
+    for known in sorted(_VALUE_NAMES):
         if known.lower() == name.lower():
             return known
-    close = difflib.get_close_matches(name, sorted(_VALUE_NAMES), n=1, cutoff=0.8)
+    close = difflib.get_close_matches(name.strip(), sorted(_VALUE_NAMES), n=1, cutoff=0.8)
     return close[0] if close else None
 
 
@@ -524,8 +519,7 @@ def check_line(email: Notification, variant: str, line: EmailLine, text: str) ->
 
     The hard max counts the raw text, ``{name}``s included. A name a line may
     not say (a link, a card slot, a line itself) is not in `VALUES`, so it is as
-    unknown as a misspelling. A value another email of the group owns does not
-    fill here (`resolve`), so it is not carried.
+    unknown as a misspelling, and so is a malformed ``{ name }``.
     """
     if not text.strip():
         return [LineError(line, LineErrorCode.EMPTY)]
@@ -539,4 +533,9 @@ def check_line(email: Notification, variant: str, line: EmailLine, text: str) ->
             errors.append(LineError(line, LineErrorCode.UNKNOWN_VALUE, name, _suggest(name)))
         elif canonical not in carried:
             errors.append(LineError(line, LineErrorCode.VALUE_NOT_SENT, name))
+    for stray in dict.fromkeys(_STRAY.findall(PLACEHOLDER.sub("", text))):
+        inner = stray.strip("{}")
+        errors.append(
+            LineError(line, LineErrorCode.UNKNOWN_VALUE, stray, _suggest(inner) if inner else None)
+        )
     return errors

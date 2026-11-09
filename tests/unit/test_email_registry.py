@@ -8,6 +8,7 @@ from app.domain.email_lines import (
     LINE_NAMES,
     LINES,
     PLACEHOLDER,
+    SHARED_TEMPLATE_NAMES,
     TEMPLATE_GROUPS,
     case_of,
     variant_of,
@@ -32,7 +33,7 @@ from app.domain.messages import ALIASES, RESOLVERS, build_variables
 from app.domain.notifications import Notification
 
 N = Notification
-SHOWN = ["emailType", "emailSubject", "emailHeading", "buttonLabel", "buttonUrl"]
+SHOWN = SHARED_TEMPLATE_NAMES
 EVERY_LINE = [
     (email, variant_of(case), line)
     for email, cases in LINES.items()
@@ -56,11 +57,14 @@ def test_a_shared_templates_emails_sit_together_in_the_list() -> None:
             seen.append(group)
 
 
-def test_every_shared_group_has_a_name_and_its_emails_share_a_template_name() -> None:
+def test_a_shared_groups_card_and_template_are_one_name() -> None:
     assert set(GROUP_NAMES) == set(TEMPLATE_GROUPS)
-    for key, members in TEMPLATE_GROUPS.items():
-        names = {email.template_name for email in EMAILS if email.key in members}
-        assert len(names) == 1, key
+    for email in EMAILS:
+        if email.group in GROUP_NAMES:
+            assert email.template_name == email.group_name == GROUP_NAMES[email.group]
+            assert email.own_template is None
+        else:
+            assert email.group_name == email.name
 
 
 def test_an_email_of_its_own_template_is_a_group_of_one() -> None:
@@ -116,10 +120,19 @@ def test_every_default_line_passes_its_own_check(
 
 
 @pytest.mark.parametrize(
-    ("email", "variant"), [(email, variant) for email in LINES for variant in SAMPLES[email]]
+    ("email", "variant", "side"),
+    [
+        (email, variant, side)
+        for email in LINES
+        for variant in SAMPLES[email]
+        for side in ("mentor", "mentee")
+    ],
 )
-def test_every_line_fills_from_its_sample(email: Notification, variant: str) -> None:
-    built = build_variables(SHOWN, sample_context(email, variant))
+def test_every_line_fills_from_its_sample_on_either_side(
+    email: Notification, variant: str, side: str
+) -> None:
+    """Both parties' copies fill: `attendee` is the other person on each."""
+    built = build_variables(SHOWN, sample_context(email, variant, side))
     assert all(built.values()), built
     assert not any("{" in value for value in built.values())
 
@@ -127,6 +140,21 @@ def test_every_line_fills_from_its_sample(email: Notification, variant: str) -> 
 def test_every_unread_case_is_reached_by_its_sample() -> None:
     for case in LINES[N.MESSAGE_UNREAD_FEW]:
         assert SAMPLES[N.MESSAGE_UNREAD_FEW][case]["line_case"] == case
+
+
+def test_a_mentor_only_email_is_previewed_as_the_mentor_reads_it() -> None:
+    context = sample_context(N.SESSION_REQUESTED, "default")
+    assert (context.recipient_name, context.recipient_role) == ("Ada Obi", "mentor")
+    assert build_variables(["attendee"], context) == {"attendee": "Mo Bello"}
+    booked = sample_context(N.SESSION_BOOKED, "mentee")
+    assert (booked.recipient_name, booked.recipient_role) == ("Mo Bello", "mentee")
+
+
+def test_hours_mean_something_only_on_a_request() -> None:
+    assert "hours" in values_for(N.SESSION_REQUESTED, "default")
+    assert "hours" in values_for(N.MENTEE_REQUEST_REMINDER, "default")
+    assert "hours" not in values_for(N.SESSION_REMINDER, "default")
+    assert "hours" not in values_for(N.SESSION_BOOKED, "mentor")
 
 
 def test_values_follow_what_the_email_is_about() -> None:
@@ -163,6 +191,10 @@ def test_the_hard_max_counts_the_raw_text() -> None:
         ("Hi {nobodyKnows}", "nobodyKnows", None),
         ("{emailSubject} again", "emailSubject", None),
         ("Open {sessionUrl}", "sessionUrl", None),
+        ("With { menteeName }", "{ menteeName }", "menteeName"),
+        ("With {mentee name}", "{mentee name}", "menteeName"),
+        ("A lone { brace", "{ brace", None),
+        ("A lone } brace", "}", None),
     ],
 )
 def test_an_unknown_value_is_named_with_a_suggestion(

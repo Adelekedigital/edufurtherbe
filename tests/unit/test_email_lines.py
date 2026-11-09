@@ -16,6 +16,7 @@ from app.domain.email_lines import (
     LINES,
     OWNED_BY,
     PLACEHOLDER,
+    SHARED_TEMPLATE_NAMES,
     TEMPLATE_GROUPS,
     EmailLines,
     group_of,
@@ -33,7 +34,7 @@ from app.domain.notifications import Notification
 
 N = Notification
 START = dt.datetime(2026, 11, 20, 14, 0, tzinfo=dt.UTC)
-SHOWN = ["emailType", "emailSubject", "emailHeading", "buttonLabel", "buttonUrl"]
+SHOWN = SHARED_TEMPLATE_NAMES
 DOC = Path(__file__).resolve().parents[2] / "docs" / "loops-template-variables.md"
 
 
