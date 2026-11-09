@@ -200,6 +200,59 @@ constants in one place, so settling them is a one-file change.
 
 ---
 
+## Shared templates (decision 317)
+
+**Several emails may use one Loops template.** Each email keeps its own rules
+(who hears it, when, which switch governs it); in `EMAIL_TEMPLATES` the members
+of a group simply map to the same id, and the template shows the right
+sections with a **conditional section on a data variable** (Loops: *Sections*,
+"Show if"). The groups are `TEMPLATE_GROUPS` in `domain/email_lines.py`:
+
+| template | emails |
+|---|---|
+| session_confirmed | `session_booked` (both: by `recipientRole`), `request_accepted` |
+| request_awaiting | `session_requested`, `mentor_response_reminder`, `mentee_request_reminder` |
+| request_closed | `request_declined`, `request_withdrawn` |
+| session_reminders | `session_reminder`, `session_last_reminder` |
+| suggested_time | `session_time_suggested`, `session_suggestion_reminder` |
+| credits | `credits_granted`, `credits_renewed`, `credits_expiring` |
+| mentor_status | `mentor_approved`, `mentor_declined`, `mentor_paused_by_admin` |
+| messages | `message_unread_few`, `message_unread_many`, `message_in_session_window` |
+
+**What a shared template may ask for**, beyond the names below:
+
+| name | value |
+|---|---|
+| `emailType` | which email this is: the member's name, e.g. `credits_renewed`. Condition sections on it |
+| `recipientRole` | `mentor` or `mentee`: the recipient's side of the session (or a mentor's own profile); empty otherwise |
+| `emailSubject` | the subject. Put `{emailSubject}` in the template's Subject field: Loops cannot condition a subject |
+| `emailHeading` | the heading |
+| `buttonLabel`, `buttonUrl` | the button's words and where it goes |
+
+**The lines are written by the backend** (`LINES` in `domain/email_lines.py`),
+per email and, where it differs, per `recipientRole` or per case (the unread
+email's one message / two from one person / two from two people). A line may
+name any variable as `{mentorName}`, filled as the template's own are.
+
+**Rules a shared template relies on:**
+- A section has **one** condition (no AND/OR). To show one for two of three
+  emails, use "`emailType` does not equal" the third.
+- **A shared template declares `emailType`**: that is what marks it shared.
+- In a shared template, a variable only some emails of a group carry
+  (`OWNED_BY` in `domain/email_lines.py`, e.g. `unreadCount`, `creditCount`,
+  `intervalTime`) is **empty** for the others in that group, so keep it inside
+  a section only they show. In a template one email uses alone, or for an email
+  outside the group, it still fails by name, and the backend's own lines never
+  name a variable their email does not carry.
+- A template used by one email only keeps its own subject in Loops and needs
+  none of these.
+
+The templates already sending keep working unchanged: they declare none of the
+new names. A group moves to its shared template when its id is pasted for every
+member at once.
+
+---
+
 ## Template registry
 
 **The one reference for which Loops template each email uses.** Every
@@ -319,16 +372,16 @@ content is read when the email is sent, so one whose messages were all read, or
 any deleted, since it was queued is skipped, and an unread email is skipped
 once the recipient has switched them off. Times are `HH:MM` in the
 **recipient's** zone. All three may use `recipientFirstName`, `messagesUrl`
-(`/messages`) and `buttonUrl`.
+(`/messages`) and `buttonUrl`; they are one shared template (*Shared templates*
+above), so the subject, heading and button come as `emailSubject`,
+`emailHeading`, `buttonLabel` and `buttonUrl`.
 
 - **`message_unread_few`**: one or two unread messages, 15 minutes after the
   send, at most one an hour; only messages sent within the last day are
-  gathered. Because Loops has no branches, the lines that
-  differ come as values: `emailSubject` and `emailHeading` ("Ada sent you a
-  message", "2 new messages from Ada" / "Ada sent you 2 messages", or for two
-  people "You have 2 unread messages on EduFurther" / "You have 2 unread
-  messages"), `buttonLabel` ("Reply in Messages", or "Open Messages" for two
-  people) with `buttonUrl` (`/messages?with={sender id}`, or `/messages`),
+  gathered. Its lines differ by case ("Ada sent you a message", "2 new
+  messages from Ada", or for two people "You have 2 unread messages on
+  EduFurther"; "Reply in Messages", or "Open Messages" for two people, with
+  `buttonUrl` `/messages?with={sender id}` or `/messages`), plus `unreadCount`,
   `repliesName` (the first name, or "them"), and `previewText` (the first
   message cut to 140 characters at a word, or its file's name). One card per
   message: `message1Name`, `message1Initials`, `message1Time`, `message1Text`

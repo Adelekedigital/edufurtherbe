@@ -318,6 +318,27 @@ async def test_the_context_carries_the_real_session(
     assert context.recipient_name in (context.mentor_name, context.mentee_name)
 
 
+async def test_each_copy_knows_which_email_and_which_side_it_is(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A template shared by several emails, or sent to both parties, shows the
+    right sections by `emailType` and `recipientRole` (decision 317)."""
+    await a_booking(db_engine, api_client, "nf-role")
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    booked = [m for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED]
+    roles = {}
+    for message in booked:
+        context = message["context"]
+        assert context.notification is Notification.SESSION_BOOKED
+        roles[context.recipient_role] = context.recipient_name
+    assert roles.keys() == {"mentor", "mentee"}
+    assert roles["mentor"] == booked[0]["context"].mentor_name
+    assert roles["mentee"] == booked[0]["context"].mentee_name
+
+
 async def test_each_recipient_gets_their_own_context(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

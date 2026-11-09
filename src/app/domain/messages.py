@@ -31,8 +31,17 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from app.core.errors import AppError
+from app.domain.email_lines import (
+    LINE_NAMES,
+    OWNED_BY,
+    PLACEHOLDER,
+    EmailLines,
+    group_of,
+    lines_for,
+)
 from app.domain.enums import SessionReasonCode
 from app.domain.message_emails import FEW_MAX, SENDER_ROWS
+from app.domain.notifications import Notification
 from app.domain.sessions import request_deadline
 
 __all__ = [
@@ -122,6 +131,12 @@ class MessageContext:
 
     session_id: str | None = None
     app_base_url: str = ""
+
+    #: Which email this is (`emailType`), and the recipient's side of the
+    #: session or profile it is about, ``"mentor"`` / ``"mentee"``, or ``""``
+    #: when they are neither (`recipientRole`). Decision 317.
+    notification: Notification | None = None
+    recipient_role: str = ""
 
     #: Values carried on the outbox row rather than derived from the session —
     #: what a person actually wrote, and which of them acted. They are facts
@@ -309,27 +324,24 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "reminderMessage": lambda c: _needs(c.extras.get("reminder_message"), "reminderMessage"),
     "pendingRequestUrl": _pending_request_url,
     # The message emails (decision 303).
-    "buttonUrl": lambda c: _button_url(c),
     "messagesUrl": lambda c: _app_link(c, MESSAGES_PATH, "messagesUrl"),
     "settingsUrl": lambda c: _app_link(c, MESSAGE_SETTINGS_PATH, "settingsUrl"),
     "sessionName": lambda c: c.session_type_name or SESSION_TOPIC_FALLBACK,
+    "chatUrl": lambda c: _button_url(c, "chatUrl"),
     "sessionDuration": lambda c: f"{_needs(c.duration_minutes, 'sessionDuration')} min",
 }
 
 
-def _button_url(context: MessageContext) -> str:
+def _button_url(context: MessageContext, name: str) -> str:
     """One person's chat when the email is about one person, else Messages."""
     other = context.extras.get("reply_to")
     path = CHAT_PATH.format(user_id=quote(other, safe="")) if other else MESSAGES_PATH
-    return _app_link(context, path, "buttonUrl")
+    return _app_link(context, path, name)
 
 
 #: A message email's values, carried on its row by `domain.message_emails`:
 #: these always have one, so a template asking for one on another email fails.
 _MESSAGE_EMAIL_VALUES = {
-    "emailSubject": "email_subject",
-    "emailHeading": "email_heading",
-    "buttonLabel": "button_label",
     "repliesName": "replies_name",
     "previewText": "preview_text",
     "senderFirstName": "sender_first_name",
@@ -445,6 +457,70 @@ def _other_party(context: MessageContext) -> str:
 RESOLVERS["attendee"] = _other_party
 
 
+def _lines(context: MessageContext, name: str) -> EmailLines:
+    """This email's lines (`domain.email_lines`), or a refusal naming ``name``."""
+    found = (
+        lines_for(context.notification, context.extras.get("line_case", ""), context.recipient_role)
+        if context.notification is not None
+        else None
+    )
+    if found is None:
+        raise UnresolvedVariableError(f"this email has no lines for {name!r}")
+    return found
+
+
+def _filled(text: str, context: MessageContext) -> str:
+    """A line with each ``{name}`` filled as the template's own variables are."""
+    return PLACEHOLDER.sub(lambda match: _placeholder(match.group(1), context), text)
+
+
+#: Set while resolving a shared template (it declares `emailType`): only then
+#: is an `OWNED_BY` variable empty for the other emails of its group.
+_SHARED = "emailType"
+
+
+def _placeholder(name: str, context: MessageContext) -> str:
+    """One ``{name}`` in a line, never left empty for an email that does not
+    carry it. A line naming a line would fill itself forever."""
+    if ALIASES.get(name, name) in LINE_NAMES:
+        raise UnresolvedVariableError(f"a line cannot name {name!r}")
+    return _resolve(name, context, shared=False)
+
+
+RESOLVERS |= {
+    "emailType": lambda c: _needs(c.notification, "emailType"),
+    "recipientRole": lambda c: c.recipient_role,
+    "emailSubject": lambda c: _filled(_lines(c, "emailSubject").subject, c),
+    "emailHeading": lambda c: _filled(_lines(c, "emailHeading").heading, c),
+    "buttonLabel": lambda c: _filled(_lines(c, "buttonLabel").button, c),
+    "buttonUrl": lambda c: _resolve(_lines(c, "buttonUrl").link, c, shared=False),
+}
+
+
+def _resolve(name: str, context: MessageContext, *, shared: bool) -> str:
+    """One variable's value, or a refusal naming it.
+
+    In a ``shared`` template a variable `OWNED_BY` some emails of a group is
+    **empty for the others in that group**: their copy shows it in a hidden
+    section. A template one email still uses alone, and every email outside
+    the group, resolve or fail as they always have.
+    """
+    canonical = ALIASES.get(name, name)
+    resolver = RESOLVERS.get(canonical)
+    if resolver is None:
+        raise UnresolvedVariableError(f"nothing knows how to produce {name!r}")
+    owners = OWNED_BY.get(canonical)
+    if (
+        shared
+        and owners is not None
+        and context.notification is not None
+        and context.notification not in owners
+        and owners & group_of(context.notification)
+    ):
+        return ""
+    return resolver(context)
+
+
 def build_variables(declared: Iterable[str], context: MessageContext) -> dict[str, str]:
     """The values this template asked for, or a refusal naming the first missing.
 
@@ -465,10 +541,5 @@ def build_variables(declared: Iterable[str], context: MessageContext) -> dict[st
             "rather than that it needs none"
         )
 
-    built: dict[str, str] = {}
-    for name in names:
-        resolver = RESOLVERS.get(ALIASES.get(name, name))
-        if resolver is None:
-            raise UnresolvedVariableError(f"nothing knows how to produce {name!r}")
-        built[name] = resolver(context)
-    return built
+    shared = _SHARED in names
+    return {name: _resolve(name, context, shared=shared) for name in names}
