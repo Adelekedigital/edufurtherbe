@@ -28,14 +28,18 @@ __all__ = [
     "LINE_HARD_MAX",
     "LINE_KEY_MAX_LENGTH",
     "LINE_NAMES",
+    "LINE_VARIABLES",
     "OWNED_BY",
     "PLACEHOLDER",
+    "SHARED_SWITCHES",
     "SHARED_TEMPLATE_NAMES",
     "TEMPLATE_GROUPS",
     "EmailLines",
+    "case_for",
     "case_of",
     "group_of",
     "lines_for",
+    "marks_shared",
     "variant_of",
 ]
 
@@ -59,11 +63,15 @@ TEMPLATE_GROUPS: dict[str, frozenset[Notification]] = {
 }
 
 #: A variable only some emails of a group carry. In a shared template (one that
-#: declares `emailType`) the others in a group with an owner fill it **empty**,
+#: `marks_shared`) the others in a group with an owner fill it **empty**,
 #: since their copy has it in a hidden section; anywhere else it still fails by
 #: name. An owner set may span groups (`intervalTime`).
 OWNED_BY: dict[str, frozenset[Notification]] = {
     "intervalTime": frozenset({N.CREDITS_EXPIRING, N.SESSION_REMINDER, N.SESSION_LAST_REMINDER}),
+    # The message near a booking describes it; the unread emails have no session.
+    "sessionDate": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
+    "sessionTime": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
+    "sessionDuration": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
     "unreadCount": frozenset({N.MESSAGE_UNREAD_FEW, N.MESSAGE_UNREAD_MANY}),
     "senderFirstNames": frozenset({N.MESSAGE_UNREAD_MANY}),
     "senderFirstName": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
@@ -74,8 +82,16 @@ OWNED_BY: dict[str, frozenset[Notification]] = {
     "reminderMessage": frozenset({N.MENTEE_REQUEST_REMINDER}),
 }
 
-#: The variables lines fill. A line may not name one of these (it would fill itself).
-LINE_NAMES = frozenset({"emailSubject", "emailHeading", "buttonLabel", "buttonUrl"})
+#: The variable each rewordable line fills in a shared template.
+LINE_VARIABLES = {
+    EmailLine.SUBJECT: "emailSubject",
+    EmailLine.HEADING: "emailHeading",
+    EmailLine.BUTTON: "buttonLabel",
+}
+
+#: The variables lines fill, and the button's link. A line may not name one of
+#: these (it would fill itself).
+LINE_NAMES = frozenset({*LINE_VARIABLES.values(), "buttonUrl"})
 
 #: The most characters each line may hold, counted on the raw text with its
 #: ``{name}``s (PRD 28, decision 318). A migration test pins the tables' checks.
@@ -86,9 +102,20 @@ LINE_KEY_MAX_LENGTH = 64
 #: the tables and the admin API (PRD 28).
 DEFAULT_VARIANT = "default"
 
-#: What a shared template declares beyond its own words: which email it is,
-#: and its lines (decision 317).
-SHARED_TEMPLATE_NAMES = ("emailType", *sorted(LINE_NAMES))
+#: What every shared template receives, declared or not: Loops lists only the
+#: variables a template *shows*, and these only pick its sections.
+SHARED_SWITCHES = ("emailType", "recipientRole")
+
+#: Everything the backend fills on a shared template beyond its own words: its
+#: switches, its lines and the button's link (decision 317).
+SHARED_TEMPLATE_NAMES = (*SHARED_SWITCHES, *sorted(LINE_NAMES))
+
+
+def marks_shared(name: str) -> bool:
+    """Whether a template naming ``name`` is shared: it shows one of the three
+    lines, or names `emailType` (decision 317). The link alone does not."""
+    return name in LINE_VARIABLES.values() or name == "emailType"
+
 
 #: ``{name}`` in a line: a variable name as Loops allows them.
 PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
@@ -294,13 +321,19 @@ def group_of(notification: Notification) -> frozenset[Notification]:
     return frozenset()
 
 
-def lines_for(notification: Notification, case: str, role: str) -> EmailLines | None:
-    """The lines for this email: its carried case, else the recipient's side, else
-    the email's own. ``None`` for an email outside every group."""
+def case_for(notification: Notification, case: str, role: str) -> str | None:
+    """Which of this email's cases a copy uses: its carried case, else the
+    recipient's side, else the email's own. ``None`` outside every group."""
     found = LINES.get(notification)
     if found is None:
         return None
     for key in (*(k for k in (case, role) if k), ""):
         if key in found:
-            return found[key]
+            return key
     return None
+
+
+def lines_for(notification: Notification, case: str, role: str) -> EmailLines | None:
+    """The default lines for this copy (`case_for`), or ``None``."""
+    key = case_for(notification, case, role)
+    return None if key is None else LINES[notification][key]

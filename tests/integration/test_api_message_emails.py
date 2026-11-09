@@ -207,7 +207,7 @@ async def test_one_unread_message_sends_the_few_email(world: World) -> None:
     assert await emailed(world.engine, message["id"]) is not None
     [(notification, _, context)] = world.notifier.sent
     assert notification is Notification.MESSAGE_UNREAD_FEW
-    assert build_variables(["emailSubject"], context) == {"emailSubject": "Mo sent you a message"}
+    assert build_variables(["emailSubject"], context)["emailSubject"] == "Mo sent you a message"
     assert context.extras["reply_to"] == str(mentee.id)
     assert context.extras["message1_text"].endswith("…")
     assert len(context.extras["message1_text"]) <= 140

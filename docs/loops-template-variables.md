@@ -237,7 +237,11 @@ name any variable as `{mentorName}`, filled as the template's own are.
 **Rules a shared template relies on:**
 - A section has **one** condition (no AND/OR). To show one for two of three
   emails, use "`emailType` does not equal" the third.
-- **A shared template declares `emailType`**: that is what marks it shared.
+- **A shared template shows `{emailSubject}`, `{emailHeading}` or
+  `{buttonLabel}`**: that is what marks it shared. Loops lists only the
+  variables a template *shows*, so `emailType` and `recipientRole`, which
+  only pick sections, are sent with every shared template whether or not
+  Loops lists them.
 - In a shared template, a variable only some emails of a group carry
   (`OWNED_BY` in `domain/email_lines.py`, e.g. `unreadCount`, `creditCount`,
   `intervalTime`) is **empty** for the others in that group, so keep it inside
@@ -255,6 +259,10 @@ member at once.
 default line until it is saved back to its default. The admin app lists every
 email from `domain/email_registry.py` (decision 319), and a line may name only
 the `VALUES` its email carries (`values_for`), checked on save by `check_line`.
+At send time the override wins over the default for that variant and line;
+in these three lines alone an empty value says its fallback (logged
+`email_line_fallback`), and an override that cannot fill sends the default
+(logged `email_line_override_failed`). Decision 320.
 
 ---
 
