@@ -33,6 +33,7 @@ __all__ = [
     "SHARED_TEMPLATE_NAMES",
     "TEMPLATE_GROUPS",
     "EmailLines",
+    "case_for",
     "case_of",
     "group_of",
     "lines_for",
@@ -294,13 +295,19 @@ def group_of(notification: Notification) -> frozenset[Notification]:
     return frozenset()
 
 
-def lines_for(notification: Notification, case: str, role: str) -> EmailLines | None:
-    """The lines for this email: its carried case, else the recipient's side, else
-    the email's own. ``None`` for an email outside every group."""
+def case_for(notification: Notification, case: str, role: str) -> str | None:
+    """Which of this email's cases a copy uses: its carried case, else the
+    recipient's side, else the email's own. ``None`` outside every group."""
     found = LINES.get(notification)
     if found is None:
         return None
     for key in (*(k for k in (case, role) if k), ""):
         if key in found:
-            return found[key]
+            return key
     return None
+
+
+def lines_for(notification: Notification, case: str, role: str) -> EmailLines | None:
+    """The default lines for this copy (`case_for`), or ``None``."""
+    key = case_for(notification, case, role)
+    return None if key is None else LINES[notification][key]

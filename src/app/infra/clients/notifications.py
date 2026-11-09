@@ -88,6 +88,26 @@ def template_for(settings: Settings, notification: Notification, channel: Channe
     return template.split(":", 1)[-1]
 
 
+def _log_line_notes(context: MessageContext) -> None:
+    """What filling an email's lines worked around (PRD 28, *Sending*): a
+    fallback is a warning (a value missing in real data), an override that
+    could not fill is an error (the save check should have stopped it)."""
+    for note in context.line_notes:
+        level = logging.WARNING if note.kind == "fallback" else logging.ERROR
+        logger.log(
+            level,
+            "email_line_%s",
+            note.kind,
+            extra={
+                "email": note.email,
+                "variant": note.variant,
+                "line": note.line,
+                "value": note.value,
+            },
+        )
+    context.line_notes.clear()
+
+
 class NullNotifier:
     """Records the intent and delivers nothing. The default.
 
@@ -187,6 +207,7 @@ class LoopsNotifier:
         # session on ". `build_variables` refuses instead, and the drain records
         # a failed row naming the variable.
         variables = build_variables(self._templates.declared(template), context)
+        _log_line_notes(context)
 
         try:
             response = self._client.post(

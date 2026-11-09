@@ -25,7 +25,9 @@ from tests.integration.factories import (
     token_for,
 )
 
+from app.domain.messages import build_variables
 from app.domain.notifications import Channel, Notification
+from app.infra.db import outbox
 from app.infra.db.outbox import MAX_ATTEMPTS, drain
 from app.infra.db.session_writer import expire_requests
 from conftest import A_REASON, add_user, api_token, bearer, fund
@@ -337,6 +339,50 @@ async def test_each_copy_knows_which_email_and_which_side_it_is(
     assert roles.keys() == {"mentor", "mentee"}
     assert roles["mentor"] == booked[0]["context"].mentor_name
     assert roles["mentee"] == booked[0]["context"].mentee_name
+
+
+async def test_an_admins_wording_reaches_its_copy_and_is_read_once_per_sweep(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision 318: the mentor's copy of a booking sends the saved subject, the
+    mentee's its default, and the overrides are read once however many go."""
+    booking = await a_booking(db_engine, api_client, "nf-override")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO email_line_overrides "
+                "(email_key, variant, line, override_text, default_at_edit, updated_by) "
+                "VALUES ('session_booked', 'mentor', 'subject', 'Booked: {menteeName}', "
+                "'New session booked with {menteeName}', "
+                "(SELECT mentor_id FROM sessions WHERE id = :s))"
+            ),
+            {"s": booking["id"]},
+        )
+    reads = 0
+    real = outbox.load_line_overrides
+
+    async def counted(session: Any) -> Any:
+        nonlocal reads
+        reads += 1
+        return await real(session)
+
+    monkeypatch.setattr(outbox, "load_line_overrides", counted)
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    booked = {
+        m["context"].recipient_role: m["context"]
+        for m in recorder.sent
+        if m["notification"] == Notification.SESSION_BOOKED
+    }
+    mentor = build_variables(["emailSubject"], booked["mentor"])["emailSubject"]
+    mentee = build_variables(["emailSubject"], booked["mentee"])["emailSubject"]
+    assert mentor == f"Booked: {booked['mentor'].mentee_name}"
+    assert mentee == f"Your session with {booked['mentee'].mentor_name} is booked"
+    assert reads == 1
+    async with db_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM email_line_overrides"))
 
 
 async def test_each_recipient_gets_their_own_context(

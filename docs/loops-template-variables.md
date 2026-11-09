@@ -255,6 +255,10 @@ member at once.
 default line until it is saved back to its default. The admin app lists every
 email from `domain/email_registry.py` (decision 319), and a line may name only
 the `VALUES` its email carries (`values_for`), checked on save by `check_line`.
+At send time the override wins over the default for that variant and line;
+in these three lines alone an empty value says its fallback (logged
+`email_line_fallback`), and an override that cannot fill sends the default
+(logged `email_line_override_failed`). Decision 320.
 
 ---
 

@@ -54,6 +54,7 @@ from app.domain.notifications import AUDIENCE, Audience, Notification
 
 __all__ = [
     "EMAILS",
+    "FALLBACKS",
     "GROUP_NAMES",
     "SAMPLES",
     "VALUES",
@@ -344,6 +345,10 @@ VALUES: tuple[Value, ...] = (
 )
 
 _VALUE_NAMES = {value.name for value in VALUES}
+
+#: What an empty value says in a line at send time, by name (``None``: the
+#: line cannot go without it). Read by the send path (`domain.messages`).
+FALLBACKS: dict[str, str | None] = {value.name: value.fallback for value in VALUES}
 
 #: When the sample session starts.
 _START = dt.datetime(2026, 11, 20, 14, 0, tzinfo=dt.UTC)
