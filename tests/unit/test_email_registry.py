@@ -241,49 +241,56 @@ def test_every_placeholder_in_a_default_is_a_catalogue_value() -> None:
                 assert set(PLACEHOLDER.findall(getattr(lines, line))) <= names
 
 
-#: What the shared "App: Messages" Loops template shows, as Loops lists it
-#: (2026-11-09): every email of the group must fill all of it.
-MESSAGES_TEMPLATE = [
-    "emailHeading",
-    "emailSubject",
-    "buttonUrl",
-    "buttonLabel",
-    "sessionName",
-    "sessionDate",
-    "sessionTime",
-    "sessionTimezone",
-    "sessionDuration",
-    "message1Name",
-    "message1Time",
-    "message1Text",
-    "message1FileName",
-    "message2Name",
-    "message2Time",
-    "message2Text",
-    "message2FileName",
-    "sender1Name",
-    "sender1Count",
-    "sender2Name",
-    "sender2Count",
-    "sender3Name",
-    "sender3Count",
-    "sender4Name",
-    "sender4Count",
-    "sender5Name",
-    "sender5Count",
-    "otherSenders",
-    "settingsUrl",
-]
+#: What each shared Loops template shows, as Loops listed it when published
+#: (2026-11-09). Every email of the group, on either side, must fill all of it,
+#: or its sends would refuse once the template's id is pasted.
+_LINE_VARS = "emailHeading,emailSubject,buttonUrl,buttonLabel"
+_SESSION = "sessionDate,sessionTime,sessionTimezone"
+PUBLISHED_TEMPLATES: dict[str, list[str]] = {
+    key: f"{_LINE_VARS},{names}".split(",")
+    for key, names in {
+        "credits": "recipientFirstName,intervalTime,creditCount",
+        "mentor_status": "recipientFirstName,declineReason",
+        "suggested_time": f"recipientFirstName,mentorName,{_SESSION},holdUntilTime,"
+        "reasonMessage,suggestedDate,suggestedTime",
+        "request_awaiting": f"recipientFirstName,menteeName,hours,reminderMessage,{_SESSION},"
+        "sessionTopic,location,sessionDetail",
+        "session_confirmed": f"recipientFirstName,menteeName,mentorName,{_SESSION},attendee,"
+        "sessionTopic,location,sessionDetail",
+        "request_closed": f"recipientFirstName,mentorName,{_SESSION},menteeName,sessionTopic,"
+        "reasonTitle,reasonMessage",
+        "session_reminders": f"recipientFirstName,attendee,{_SESSION},sessionTopic,location",
+        "messages": f"sessionName,{_SESSION},sessionDuration,message1Name,message1Time,"
+        "message1Text,message1FileName,message2Name,message2Time,message2Text,"
+        "message2FileName,sender1Name,sender1Count,sender2Name,sender2Count,sender3Name,"
+        "sender3Count,sender4Name,sender4Count,sender5Name,sender5Count,otherSenders,"
+        "settingsUrl",
+    }.items()
+}
+
+
+def test_every_shared_group_has_a_published_template() -> None:
+    assert set(PUBLISHED_TEMPLATES) == set(TEMPLATE_GROUPS)
 
 
 @pytest.mark.parametrize(
-    ("email", "variant"),
-    [(email, variant) for email in TEMPLATE_GROUPS["messages"] for variant in SAMPLES[email]],
+    ("group", "email", "variant", "side"),
+    [
+        (group, email, variant, side)
+        for group, members in TEMPLATE_GROUPS.items()
+        for email in members
+        for variant in SAMPLES[email]
+        for side in ("mentor", "mentee")
+    ],
 )
-def test_every_message_email_fills_the_shared_messages_template(
-    email: Notification, variant: str
+def test_every_email_fills_its_published_shared_template(
+    group: str, email: Notification, variant: str, side: str
 ) -> None:
-    built = build_variables(MESSAGES_TEMPLATE, sample_context(email, variant))
-    session = email is N.MESSAGE_IN_SESSION_WINDOW
-    assert bool(built["sessionDate"]) is session
+    built = build_variables(PUBLISHED_TEMPLATES[group], sample_context(email, variant, side))
     assert built["emailType"] == email
+    assert all(built[name] for name in ("emailSubject", "emailHeading", "buttonLabel"))
+    assert (
+        bool(built.get("sessionDate"))
+        is (group != "messages" or email is N.MESSAGE_IN_SESSION_WINDOW)
+        or "sessionDate" not in built
+    )
