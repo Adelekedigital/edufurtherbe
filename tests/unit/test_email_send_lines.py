@@ -47,7 +47,7 @@ def test_an_override_reaches_only_its_own_variant_and_line() -> None:
     )
     assert subject(mentee) == "Your session with Ada Obi is booked"
     assert subject(mentor) == "For the mentor"
-    assert build_variables(["buttonLabel"], mentor) == {"buttonLabel": "View session"}
+    assert build_variables(["buttonLabel"], mentor)["buttonLabel"] == "View session"
 
 
 def test_an_empty_value_in_a_line_says_its_fallback_and_is_noted() -> None:
@@ -57,9 +57,8 @@ def test_an_empty_value_in_a_line_says_its_fallback_and_is_noted() -> None:
         line_overrides={("default", "heading"): "You have {creditCount} credits"},
     )
     notes: list[LineNote] = []
-    assert build_variables(["emailHeading"], context, notes) == {
-        "emailHeading": "You have your credits"
-    }
+    built = build_variables(["emailHeading"], context, notes)
+    assert built["emailHeading"] == "You have your credits"
     assert notes == [LineNote("fallback", "credits_renewed", "default", "heading", "creditCount")]
 
 

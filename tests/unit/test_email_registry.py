@@ -133,7 +133,7 @@ def test_every_line_fills_from_its_sample_on_either_side(
 ) -> None:
     """Both parties' copies fill: `attendee` is the other person on each."""
     built = build_variables(SHOWN, sample_context(email, variant, side))
-    assert all(built.values()), built
+    assert all(built[name] for name in SHOWN), built
     assert not any("{" in value for value in built.values())
 
 

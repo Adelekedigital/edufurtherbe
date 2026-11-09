@@ -237,7 +237,11 @@ name any variable as `{mentorName}`, filled as the template's own are.
 **Rules a shared template relies on:**
 - A section has **one** condition (no AND/OR). To show one for two of three
   emails, use "`emailType` does not equal" the third.
-- **A shared template declares `emailType`**: that is what marks it shared.
+- **A shared template shows `{emailSubject}`, `{emailHeading}` or
+  `{buttonLabel}`**: that is what marks it shared. Loops lists only the
+  variables a template *shows*, so `emailType` and `recipientRole`, which
+  only pick sections, are sent with every shared template whether or not
+  Loops lists them.
 - In a shared template, a variable only some emails of a group carry
   (`OWNED_BY` in `domain/email_lines.py`, e.g. `unreadCount`, `creditCount`,
   `intervalTime`) is **empty** for the others in that group, so keep it inside

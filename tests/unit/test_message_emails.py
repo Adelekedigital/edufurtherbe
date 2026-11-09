@@ -65,9 +65,9 @@ def context(extras: dict[str, str], **overrides: object) -> MessageContext:
 
 def lines(values: dict[str, str], kind: Notification) -> dict[str, str]:
     """The subject, heading and button an email's values make (decision 317)."""
-    return build_variables(
-        ["emailSubject", "emailHeading", "buttonLabel"], context(values, notification=kind)
-    )
+    shown = ["emailSubject", "emailHeading", "buttonLabel"]
+    built = build_variables(shown, context(values, notification=kind))
+    return {name: built[name] for name in shown}
 
 
 FEW_KIND = Notification.MESSAGE_UNREAD_FEW

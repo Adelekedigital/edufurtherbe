@@ -132,13 +132,34 @@ def test_a_variable_another_email_owns_is_empty_within_the_group() -> None:
         "emailType": "credits_granted",
         "creditCount": "",
         "intervalTime": "",
+        "recipientRole": "",
     }
     window = a_context(N.MESSAGE_IN_SESSION_WINDOW, extras={})
     assert build_variables(["emailType", "unreadCount", "senderFirstNames"], window) == {
         "emailType": "message_in_session_window",
         "unreadCount": "",
         "senderFirstNames": "",
+        "recipientRole": "",
     }
+
+
+def test_a_template_showing_the_lines_is_shared_and_always_gets_its_switches() -> None:
+    """Loops lists only what a template shows, never `emailType`, which only
+    picks its sections: the lines mark it shared, and the switches always go."""
+    built = build_variables(
+        ["emailSubject", "creditCount"], a_context(N.CREDITS_GRANTED, extras={})
+    )
+    assert built == {
+        "emailSubject": "Your session credits are here",
+        "creditCount": "",
+        "emailType": "credits_granted",
+        "recipientRole": "",
+    }
+
+
+def test_a_template_with_neither_lines_nor_type_gets_no_switches() -> None:
+    built = build_variables(["recipientName"], a_context(N.CREDITS_GRANTED, extras={}))
+    assert built == {"recipientName": "Mo Bello"}
 
 
 def test_a_template_one_email_still_uses_alone_fails_as_before() -> None:
