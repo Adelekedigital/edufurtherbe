@@ -1,13 +1,27 @@
-"""Admins' email wording, as the send path reads it (PRD 28, decision 318)."""
+"""Admins' email wording: what the send path reads and what the admin pages save
+(PRD 28, decisions 318 and 321)."""
 
 from __future__ import annotations
 
-from sqlalchemy import select
+import datetime as dt
+from collections.abc import Iterable
+from uuid import UUID
+
+from sqlalchemy import delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infra.db.models.email_lines import EmailLineOverride
+from app.domain.email_admin import LineWrite, StoredLine
+from app.domain.enums import EmailLine
+from app.infra.db.models import User
+from app.infra.db.models.email_lines import EmailLineEdit, EmailLineOverride
 
-__all__ = ["LineOverrides", "load_line_overrides"]
+__all__ = [
+    "LineOverrides",
+    "apply_line_writes",
+    "last_edits",
+    "load_line_overrides",
+    "stored_lines",
+]
 
 #: Every override, ``email_key -> {(variant, line): text}``.
 LineOverrides = dict[str, dict[tuple[str, str], str]]
@@ -28,3 +42,113 @@ async def load_line_overrides(session: AsyncSession) -> LineOverrides:
     for email_key, variant, line, text in rows:
         found.setdefault(email_key, {})[(variant, str(line))] = text
     return found
+
+
+def _name(first: str | None, last: str | None) -> str:
+    return " ".join(part for part in (first, last) if part) or "An admin"
+
+
+async def stored_lines(
+    session: AsyncSession, email_key: str, *, variant: str | None = None, lock: bool = False
+) -> dict[tuple[str, EmailLine], StoredLine]:
+    """This email's overrides (one variant's, when given), with who saved each.
+
+    ``lock`` takes the rows for update, so a save reads, checks and writes them
+    in one transaction while a second admin's save waits its turn.
+    """
+    query = (
+        select(EmailLineOverride, User.first_name, User.last_name)
+        .join(User, User.id == EmailLineOverride.updated_by)
+        .where(EmailLineOverride.email_key == email_key)
+    )
+    if variant is not None:
+        query = query.where(EmailLineOverride.variant == variant)
+    if lock:
+        query = query.with_for_update(of=EmailLineOverride)
+    rows = await session.execute(query)
+    return {
+        (row.variant, EmailLine(row.line)): StoredLine(
+            text=row.override_text,
+            default_at_edit=row.default_at_edit,
+            version=row.version,
+            updated_by_name=_name(first, last),
+            updated_at=row.updated_at,
+        )
+        for row, first, last in rows
+    }
+
+
+async def last_edits(session: AsyncSession) -> dict[str, tuple[str, dt.datetime]]:
+    """Each email's newest history row: who saved it and when (the list's
+    "Last edited"). One statement, by `ix_email_line_edits_email_key_created_at`."""
+    rows = await session.execute(
+        select(
+            EmailLineEdit.email_key,
+            EmailLineEdit.created_at,
+            User.first_name,
+            User.last_name,
+        )
+        .join(User, User.id == EmailLineEdit.admin_id)
+        .distinct(EmailLineEdit.email_key)
+        .order_by(EmailLineEdit.email_key, EmailLineEdit.created_at.desc())
+    )
+    return {key: (_name(first, last), at) for key, at, first, last in rows}
+
+
+async def apply_line_writes(
+    session: AsyncSession,
+    *,
+    email_key: str,
+    variant: str,
+    writes: Iterable[LineWrite],
+    admin_id: UUID,
+) -> None:
+    """Write a save's plan and its history, inside the caller's transaction.
+
+    A first save inserts; a later one updates the row read under lock; a reset
+    deletes it. A second admin's concurrent first save on the same line meets
+    the unique key and raises, which the caller turns into a conflict.
+    """
+    for write in writes:
+        key = (
+            EmailLineOverride.email_key == email_key,
+            EmailLineOverride.variant == variant,
+            EmailLineOverride.line == write.line,
+        )
+        if write.text is None:
+            await session.execute(delete(EmailLineOverride).where(*key))
+        elif write.version == 1:
+            await session.execute(
+                insert(EmailLineOverride).values(
+                    email_key=email_key,
+                    variant=variant,
+                    line=write.line,
+                    override_text=write.text,
+                    default_at_edit=write.default,
+                    version=1,
+                    updated_by=admin_id,
+                )
+            )
+        else:
+            await session.execute(
+                update(EmailLineOverride)
+                .where(*key)
+                .values(
+                    override_text=write.text,
+                    default_at_edit=write.default,
+                    version=write.version,
+                    updated_by=admin_id,
+                )
+            )
+        await session.execute(
+            insert(EmailLineEdit).values(
+                email_key=email_key,
+                variant=variant,
+                line=write.line,
+                before_text=write.before,
+                after_text=write.after,
+                default_text=write.default,
+                action=write.action,
+                admin_id=admin_id,
+            )
+        )

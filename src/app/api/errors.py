@@ -36,6 +36,10 @@ from app.core.errors import (
     BookingWithMentorExistsError,
     ConfigurationError,
     ConflictError,
+    EmailLineConflictError,
+    EmailLineInvalidError,
+    EmailNotFoundError,
+    EmailNotSetUpError,
     FileTooLargeError,
     FileTypeNotAllowedError,
     FileUnavailableError,
@@ -118,6 +122,9 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     WritingAssistUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # 503 likewise: push is unconfigured here, which is ours (decision 312).
     PushUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # 423: the email exists, but its lines are locked until its template is
+    # the shared one (PRD 28).
+    EmailNotSetUpError: status.HTTP_423_LOCKED,
 }
 
 # The `type` slot, used for the first time here.
@@ -200,6 +207,10 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     PreviewEndedError: "/problems/preview-ended",
     PreviewNotFoundError: "/problems/preview-not-found",
     ReadOnlyViewAsError: "/problems/read-only-view-as",
+    EmailNotFoundError: "/problems/email-not-found",
+    EmailNotSetUpError: "/problems/email-not-set-up",
+    EmailLineConflictError: "/problems/email-line-conflict",
+    EmailLineInvalidError: "/problems/email-line-invalid",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx
@@ -316,10 +327,9 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
                 # the request as a whole: one shape, so a client reads the list
                 # without first asking whether it is there.
                 errors=(
-                    [
-                        {"pointer": field, "message": message}
-                        for field, message in getattr(exc, "field_errors", ())
-                    ]
+                    exc.problem_errors()
+                    if isinstance(exc, DomainValidationError)
+                    else []
                     if code == status.HTTP_422_UNPROCESSABLE_CONTENT
                     else None
                 ),
