@@ -7,7 +7,6 @@ import datetime as dt
 import re
 from itertools import combinations
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
@@ -21,8 +20,8 @@ from app.domain.email_lines import (
     EmailLines,
     group_of,
 )
+from app.domain.email_registry import SAMPLES
 from app.domain.enums import EmailLine
-from app.domain.message_emails import EmailedMessage, instant_email, unread_email
 from app.domain.messages import (
     ALIASES,
     RESOLVERS,
@@ -38,67 +37,8 @@ SHOWN = ["emailType", "emailSubject", "emailHeading", "buttonLabel", "buttonUrl"
 DOC = Path(__file__).resolve().parents[2] / "docs" / "loops-template-variables.md"
 
 
-SENDERS = {name: uuid4() for name in ("Ada", "Ben", "Chi")}
-
-
-def _said(first: str, minutes: int = 0) -> EmailedMessage:
-    sent_at = START + dt.timedelta(minutes=minutes)
-    return EmailedMessage(SENDERS[first], first, "Obi", "Hello", None, sent_at)
-
-
-#: What each email's producer actually puts on its outbox row (`variables=` at
-#: the enqueue, or the message email's values), so a line naming a value its
-#: email never carries fails here rather than at send time.
-CARRIED: dict[Notification, list[dict[str, str]]] = {
-    N.SESSION_BOOKED: [{}],
-    N.REQUEST_ACCEPTED: [{}],
-    N.SESSION_REQUESTED: [{}],
-    N.MENTOR_RESPONSE_REMINDER: [{"kind": "t24"}],
-    N.MENTEE_REQUEST_REMINDER: [{"reminder_message": "Still keen"}],
-    N.REQUEST_DECLINED: [{"reason_code": "scheduling_conflict"}],
-    N.REQUEST_WITHDRAWN: [{"reason_text": "Sorry"}],
-    N.SESSION_REMINDER: [{"kind": "s24", "interval": "Tomorrow"}],
-    N.SESSION_LAST_REMINDER: [{"kind": "s5", "interval": "in 5 Minutes"}],
-    N.SESSION_TIME_SUGGESTED: [
-        {
-            "suggested_after": "declined",
-            "suggested_starts_at": START.isoformat(),
-            "held_until": START.isoformat(),
-        }
-    ],
-    N.SESSION_SUGGESTION_REMINDER: [
-        {"suggested_starts_at": START.isoformat(), "held_until": START.isoformat()}
-    ],
-    N.CREDITS_GRANTED: [{}],
-    N.CREDITS_RENEWED: [{"credit_count": "2"}],
-    N.CREDITS_EXPIRING: [{"kind": "c14", "interval": "two weeks", "credit_count": "1"}],
-    N.MENTOR_APPROVED: [{}],
-    N.MENTOR_DECLINED: [{"reason": "Not yet"}],
-    N.MENTOR_PAUSED_BY_ADMIN: [{}],
-    N.MESSAGE_UNREAD_FEW: [
-        unread_email([_said("Ada")]),
-        unread_email([_said("Ada"), _said("Ada", 1)]),
-        unread_email([_said("Ada"), _said("Ben", 1)]),
-    ],
-    N.MESSAGE_UNREAD_MANY: [unread_email([_said("Ada"), _said("Ben"), _said("Chi")])],
-    N.MESSAGE_IN_SESSION_WINDOW: [instant_email(_said("Ada"))],
-}
-
-#: Everything any grouped email may carry, so every line can be filled.
-EXTRAS = {
-    "interval": "Tomorrow",
-    "suggested_starts_at": START.isoformat(),
-    "held_until": START.isoformat(),
-    "suggested_after": "declined",
-    "reminder_message": "Still keen",
-    "credit_count": "2",
-    "reply_to": "u-1",
-    "unread_count": "2",
-    "replies_name": "Ada",
-    "sender_first_names": "Ada and Ben",
-    "sender_first_name": "Ada",
-    "preview_text": "Hi",
-}
+#: A row with nothing on it; the tests that need values pass their own.
+EXTRAS: dict[str, str] = {}
 
 
 def a_context(notification: Notification | None, **overrides: object) -> MessageContext:
@@ -156,36 +96,12 @@ def test_every_placeholder_names_a_variable_and_never_a_line() -> None:
             assert "—" not in lines.subject + lines.heading + lines.button
 
 
-def test_every_grouped_email_says_what_it_carries() -> None:
-    assert set(CARRIED) == set(LINES)
-
-
-@pytest.mark.parametrize(
-    ("notification", "extras", "role"),
-    [
-        (member, carried, role)
-        for member, rows in CARRIED.items()
-        for carried in rows
-        for role in ("mentor", "mentee")
-    ],
-)
-def test_every_line_fills_from_what_its_email_carries(
-    notification: Notification, extras: dict[str, str], role: str
-) -> None:
-    built = build_variables(SHOWN, a_context(notification, recipient_role=role, extras=extras))
-    assert all(built.values()), built
-    assert not any("{" in value for value in built.values())
-
-
-def test_every_case_is_reached() -> None:
-    reached = {
-        case
-        for member, rows in CARRIED.items()
-        for row in rows
-        for case in (row.get("line_case", ""),)
-    }
-    named = {case for cases in LINES.values() for case in cases} - {"", "mentor", "mentee"}
-    assert named <= reached
+def test_every_grouped_email_has_a_sample_per_variant() -> None:
+    """`SAMPLES` is the one table of what each producer carries (rule 8): the
+    registry's tests fill every line from it."""
+    assert set(SAMPLES) == set(LINES)
+    for email, cases in LINES.items():
+        assert set(SAMPLES[email]) == {email_lines.variant_of(case) for case in cases}
 
 
 def test_a_session_booked_reads_from_each_side() -> None:

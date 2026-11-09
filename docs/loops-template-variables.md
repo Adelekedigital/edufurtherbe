@@ -251,6 +251,11 @@ The templates already sending keep working unchanged: they declare none of the
 new names. A group moves to its shared template when its id is pasted for every
 member at once.
 
+**Admins reword the lines** (decision 318, PRD 28): an override replaces a
+default line until it is saved back to its default. The admin app lists every
+email from `domain/email_registry.py` (decision 319), and a line may name only
+the `VALUES` its email carries (`values_for`), checked on save by `check_line`.
+
 ---
 
 ## Template registry
