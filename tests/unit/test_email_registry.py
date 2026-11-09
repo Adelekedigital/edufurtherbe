@@ -239,3 +239,51 @@ def test_every_placeholder_in_a_default_is_a_catalogue_value() -> None:
         for lines in cases.values():
             for line in EmailLine:
                 assert set(PLACEHOLDER.findall(getattr(lines, line))) <= names
+
+
+#: What the shared "App: Messages" Loops template shows, as Loops lists it
+#: (2026-11-09): every email of the group must fill all of it.
+MESSAGES_TEMPLATE = [
+    "emailHeading",
+    "emailSubject",
+    "buttonUrl",
+    "buttonLabel",
+    "sessionName",
+    "sessionDate",
+    "sessionTime",
+    "sessionTimezone",
+    "sessionDuration",
+    "message1Name",
+    "message1Time",
+    "message1Text",
+    "message1FileName",
+    "message2Name",
+    "message2Time",
+    "message2Text",
+    "message2FileName",
+    "sender1Name",
+    "sender1Count",
+    "sender2Name",
+    "sender2Count",
+    "sender3Name",
+    "sender3Count",
+    "sender4Name",
+    "sender4Count",
+    "sender5Name",
+    "sender5Count",
+    "otherSenders",
+    "settingsUrl",
+]
+
+
+@pytest.mark.parametrize(
+    ("email", "variant"),
+    [(email, variant) for email in TEMPLATE_GROUPS["messages"] for variant in SAMPLES[email]],
+)
+def test_every_message_email_fills_the_shared_messages_template(
+    email: Notification, variant: str
+) -> None:
+    built = build_variables(MESSAGES_TEMPLATE, sample_context(email, variant))
+    session = email is N.MESSAGE_IN_SESSION_WINDOW
+    assert bool(built["sessionDate"]) is session
+    assert built["emailType"] == email

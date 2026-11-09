@@ -68,6 +68,10 @@ TEMPLATE_GROUPS: dict[str, frozenset[Notification]] = {
 #: name. An owner set may span groups (`intervalTime`).
 OWNED_BY: dict[str, frozenset[Notification]] = {
     "intervalTime": frozenset({N.CREDITS_EXPIRING, N.SESSION_REMINDER, N.SESSION_LAST_REMINDER}),
+    # The message near a booking describes it; the unread emails have no session.
+    "sessionDate": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
+    "sessionTime": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
+    "sessionDuration": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
     "unreadCount": frozenset({N.MESSAGE_UNREAD_FEW, N.MESSAGE_UNREAD_MANY}),
     "senderFirstNames": frozenset({N.MESSAGE_UNREAD_MANY}),
     "senderFirstName": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
