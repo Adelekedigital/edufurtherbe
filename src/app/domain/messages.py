@@ -40,8 +40,10 @@ from app.domain.email_lines import (
     LINES,
     OWNED_BY,
     PLACEHOLDER,
+    SHARED_SWITCHES,
     case_for,
     group_of,
+    marks_shared,
     variant_of,
 )
 from app.domain.email_values import (
@@ -478,9 +480,9 @@ def _other_party(context: MessageContext) -> str:
 RESOLVERS["attendee"] = _other_party
 
 
-#: What a shared template always receives, declared or not: Loops lists only
-#: the variables a template *shows*, and these two only pick its sections.
-_ALWAYS_SHARED = ("emailType", "recipientRole")
+def _is_line(name: str) -> bool:
+    """Whether ``name`` is one of the variables the backend's lines fill."""
+    return ALIASES.get(name, name) in LINE_NAMES
 
 
 #: Where the build in progress collects its `LineNote`s (`build_variables`'
@@ -549,7 +551,7 @@ def _filled(
     def one(match: re.Match[str]) -> str:
         name = match.group(1)
         canonical = ALIASES.get(name, name)
-        if canonical in LINE_NAMES:
+        if _is_line(name):
             raise UnresolvedVariableError(f"a line cannot name {name!r}")
         try:
             value = _resolve(name, context, shared=False)
@@ -640,13 +642,13 @@ def build_variables(
 
     # **A shared template is one that shows the backend's lines** (or names
     # `emailType`). Only then is an `OWNED_BY` variable empty for the other
-    # emails of its group, and only then are `_ALWAYS_SHARED` sent.
-    shared = any(ALIASES.get(name, name) in LINE_NAMES or name == "emailType" for name in names)
+    # emails of its group, and only then are `SHARED_SWITCHES` sent.
+    shared = any(marks_shared(ALIASES.get(name, name)) for name in names)
     if shared:
-        names += [name for name in _ALWAYS_SHARED if name not in names]
+        names += [name for name in SHARED_SWITCHES if name not in names]
     # The lines first, whatever order the template declares: they are what
     # collects `notes`, so a refusal elsewhere never hides them.
-    lines_first = sorted(names, key=lambda name: ALIASES.get(name, name) not in LINE_NAMES)
+    lines_first = sorted(names, key=lambda name: not _is_line(name))
     token = _NOTES.set(notes)
     try:
         built = {name: _resolve(name, context, shared=shared) for name in lines_first}

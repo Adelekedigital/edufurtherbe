@@ -157,13 +157,22 @@ def test_a_template_showing_the_lines_is_shared_and_always_gets_its_switches() -
     }
 
 
+def test_a_mentors_copy_carries_its_side_and_the_link_alone_marks_nothing() -> None:
+    built = build_variables(
+        ["buttonLabel"], a_context(N.SESSION_BOOKED, recipient_role="mentor", extras={})
+    )
+    assert (built["emailType"], built["recipientRole"]) == ("session_booked", "mentor")
+    alone = build_variables(["buttonUrl"], a_context(N.SESSION_BOOKED, recipient_role="mentor"))
+    assert set(alone) == {"buttonUrl"}
+
+
 def test_a_template_with_neither_lines_nor_type_gets_no_switches() -> None:
     built = build_variables(["recipientName"], a_context(N.CREDITS_GRANTED, extras={}))
     assert built == {"recipientName": "Mo Bello"}
 
 
 def test_a_template_one_email_still_uses_alone_fails_as_before() -> None:
-    """Only a shared template (it declares `emailType`) gets the empty value:
+    """Only a shared template (`marks_shared`) gets the empty value:
     a separate template asking for another email's variable is a template
     pointed at the wrong email."""
     with pytest.raises(UnresolvedVariableError, match="creditCount"):

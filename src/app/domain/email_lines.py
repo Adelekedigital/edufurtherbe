@@ -31,6 +31,7 @@ __all__ = [
     "LINE_VARIABLES",
     "OWNED_BY",
     "PLACEHOLDER",
+    "SHARED_SWITCHES",
     "SHARED_TEMPLATE_NAMES",
     "TEMPLATE_GROUPS",
     "EmailLines",
@@ -38,6 +39,7 @@ __all__ = [
     "case_of",
     "group_of",
     "lines_for",
+    "marks_shared",
     "variant_of",
 ]
 
@@ -61,7 +63,7 @@ TEMPLATE_GROUPS: dict[str, frozenset[Notification]] = {
 }
 
 #: A variable only some emails of a group carry. In a shared template (one that
-#: declares `emailType`) the others in a group with an owner fill it **empty**,
+#: `marks_shared`) the others in a group with an owner fill it **empty**,
 #: since their copy has it in a hidden section; anywhere else it still fails by
 #: name. An owner set may span groups (`intervalTime`).
 OWNED_BY: dict[str, frozenset[Notification]] = {
@@ -96,9 +98,20 @@ LINE_KEY_MAX_LENGTH = 64
 #: the tables and the admin API (PRD 28).
 DEFAULT_VARIANT = "default"
 
-#: What a shared template declares beyond its own words: which email it is,
-#: and its lines (decision 317).
-SHARED_TEMPLATE_NAMES = ("emailType", *sorted(LINE_NAMES))
+#: What every shared template receives, declared or not: Loops lists only the
+#: variables a template *shows*, and these only pick its sections.
+SHARED_SWITCHES = ("emailType", "recipientRole")
+
+#: Everything the backend fills on a shared template beyond its own words: its
+#: switches, its lines and the button's link (decision 317).
+SHARED_TEMPLATE_NAMES = (*SHARED_SWITCHES, *sorted(LINE_NAMES))
+
+
+def marks_shared(name: str) -> bool:
+    """Whether a template naming ``name`` is shared: it shows one of the three
+    lines, or names `emailType` (decision 317). The link alone does not."""
+    return name in LINE_VARIABLES.values() or name == "emailType"
+
 
 #: ``{name}`` in a line: a variable name as Loops allows them.
 PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
