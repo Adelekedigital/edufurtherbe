@@ -22,20 +22,13 @@ from sqlalchemy import (
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.email_lines import (
-    EDIT_ACTIONS,
-    LINE_FIELDS,
-    LINE_HARD_MAX,
-    LINE_KEY_MAX_LENGTH,
-)
+from app.domain.email_lines import LINE_HARD_MAX, LINE_KEY_MAX_LENGTH
+from app.domain.enums import EmailEditAction, EmailLine
 from app.infra.db.base import Base, TimestampMixin
+from app.infra.db.types import check_is_known, str_enum
 
 
-def _listed(values: tuple[str, ...]) -> str:
-    return ", ".join(f"'{value}'" for value in values)
-
-
-def fits_its_line(column: str) -> str:
+def _fits(column: str) -> str:
     """``column`` is 1 to its line's hard max characters."""
     return " OR ".join(
         f"(line = '{line}' AND char_length({column}) BETWEEN 1 AND {most})"
@@ -61,7 +54,7 @@ class EmailLineOverride(TimestampMixin, Base):
     email_key: Mapped[str] = mapped_column(Text, nullable=False)
     #: ``default``, a side, or a carried case.
     variant: Mapped[str] = mapped_column(Text, nullable=False)
-    line: Mapped[str] = mapped_column(Text, nullable=False)
+    line: Mapped[EmailLine] = mapped_column(str_enum(EmailLine), nullable=False)
     override_text: Mapped[str] = mapped_column(Text, nullable=False)
     #: The code default when it was last saved, to spot a changed default.
     default_at_edit: Mapped[str] = mapped_column(Text, nullable=False)
@@ -73,9 +66,9 @@ class EmailLineOverride(TimestampMixin, Base):
 
     __table_args__ = (
         UniqueConstraint("email_key", "variant", "line"),
-        CheckConstraint(f"line IN ({_listed(LINE_FIELDS)})", name="line_known"),
-        CheckConstraint(fits_its_line("override_text"), name="override_text_length"),
-        CheckConstraint(fits_its_line("default_at_edit"), name="default_at_edit_length"),
+        CheckConstraint(check_is_known("line", EmailLine), name="line_is_known"),
+        CheckConstraint(_fits("override_text"), name="override_text_length"),
+        CheckConstraint(_fits("default_at_edit"), name="default_at_edit_length"),
         CheckConstraint(_KEYS, name="key_length"),
         CheckConstraint("version >= 1", name="version_positive"),
         Index("ix_email_line_overrides_updated_by", "updated_by"),
@@ -92,13 +85,13 @@ class EmailLineEdit(Base):
     )
     email_key: Mapped[str] = mapped_column(Text, nullable=False)
     variant: Mapped[str] = mapped_column(Text, nullable=False)
-    line: Mapped[str] = mapped_column(Text, nullable=False)
+    line: Mapped[EmailLine] = mapped_column(str_enum(EmailLine), nullable=False)
     #: What was sent before and after (an override or the default), and the
     #: code default at that moment.
     before_text: Mapped[str] = mapped_column(Text, nullable=False)
     after_text: Mapped[str] = mapped_column(Text, nullable=False)
     default_text: Mapped[str] = mapped_column(Text, nullable=False)
-    action: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[EmailEditAction] = mapped_column(str_enum(EmailEditAction), nullable=False)
     #: The admin who saved it. Restricts, as `preview_events` does: a history
     #: outlives nothing it names (the account purge anonymises, never deletes).
     admin_id: Mapped[uuid.UUID] = mapped_column(
@@ -109,11 +102,11 @@ class EmailLineEdit(Base):
     )
 
     __table_args__ = (
-        CheckConstraint(f"line IN ({_listed(LINE_FIELDS)})", name="line_known"),
-        CheckConstraint(f"action IN ({_listed(EDIT_ACTIONS)})", name="action_known"),
-        CheckConstraint(fits_its_line("before_text"), name="before_text_length"),
-        CheckConstraint(fits_its_line("after_text"), name="after_text_length"),
-        CheckConstraint(fits_its_line("default_text"), name="default_text_length"),
+        CheckConstraint(check_is_known("line", EmailLine), name="line_is_known"),
+        CheckConstraint(check_is_known("action", EmailEditAction), name="action_is_known"),
+        CheckConstraint(_fits("before_text"), name="before_text_length"),
+        CheckConstraint(_fits("after_text"), name="after_text_length"),
+        CheckConstraint(_fits("default_text"), name="default_text_length"),
         CheckConstraint(_KEYS, name="key_length"),
         # The list's "Last edited": the newest row per email.
         Index("ix_email_line_edits_email_key_created_at", "email_key", sql_text("created_at DESC")),

@@ -77,7 +77,7 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "email_key", "variant", "line", name=op.f("uq_email_line_overrides_email_key")
         ),
-        sa.CheckConstraint(LINES, name=op.f("ck_email_line_overrides_line_known")),
+        sa.CheckConstraint(LINES, name=op.f("ck_email_line_overrides_line_is_known")),
         sa.CheckConstraint(
             _fits_its_line("override_text"),
             name=op.f("ck_email_line_overrides_override_text_length"),
@@ -114,10 +114,10 @@ def upgrade() -> None:
         sa.Column("admin_id", sa.Uuid(), nullable=False),
         _now("created_at"),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_email_line_edits")),
-        sa.CheckConstraint(LINES, name=op.f("ck_email_line_edits_line_known")),
+        sa.CheckConstraint(LINES, name=op.f("ck_email_line_edits_line_is_known")),
         sa.CheckConstraint(
             "action IN ('edit', 'reset', 'keep_edit')",
-            name=op.f("ck_email_line_edits_action_known"),
+            name=op.f("ck_email_line_edits_action_is_known"),
         ),
         sa.CheckConstraint(
             _fits_its_line("before_text"), name=op.f("ck_email_line_edits_before_text_length")

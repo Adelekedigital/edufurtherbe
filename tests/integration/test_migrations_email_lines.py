@@ -9,7 +9,8 @@ import pytest
 from alembic import command
 from tests.integration.test_migrations import ConfigFactory, execute, scalar
 
-from app.domain.email_lines import EDIT_ACTIONS, LINE_FIELDS, LINE_HARD_MAX, LINE_KEY_MAX_LENGTH
+from app.domain.email_lines import LINE_HARD_MAX, LINE_KEY_MAX_LENGTH
+from app.domain.enums import EmailEditAction, EmailLine
 
 pytestmark = pytest.mark.db
 
@@ -90,10 +91,11 @@ def test_one_override_per_line_starting_at_version_one(
         {"line": "footer"},
         {"text": ""},
         {"default": ""},
-        {"line": "subject", "text": "x" * (LINE_HARD_MAX["subject"] + 1)},
-        {"line": "heading", "text": "x" * (LINE_HARD_MAX["heading"] + 1)},
-        {"line": "button", "text": "x" * (LINE_HARD_MAX["button"] + 1)},
-        {"line": "button", "default": "x" * (LINE_HARD_MAX["button"] + 1)},
+        *(
+            {"line": line, column: "x" * (LINE_HARD_MAX[line] + 1)}
+            for line in EmailLine
+            for column in ("text", "default")
+        ),
         {"email_key": ""},
         {"email_key": "e" * (LINE_KEY_MAX_LENGTH + 1)},
         {"variant": ""},
@@ -125,7 +127,7 @@ def test_the_bounds_are_the_domains_and_both_edges_are_allowed(
 ) -> None:
     upgraded(disposable_database, make_alembic_config)
 
-    for line in LINE_FIELDS:
+    for line in EmailLine:
         most = "x" * LINE_HARD_MAX[line]
         execute(disposable_database, override(line=line, text=most, default=most))
         execute(disposable_database, edit(line=line, before=most, after=most, default=most))
@@ -133,11 +135,11 @@ def test_the_bounds_are_the_domains_and_both_edges_are_allowed(
         disposable_database,
         override(email_key="e" * LINE_KEY_MAX_LENGTH, variant="v" * LINE_KEY_MAX_LENGTH, text="x"),
     )
-    assert scalar(disposable_database, OVERRIDES) == len(LINE_FIELDS) + 1
-    assert scalar(disposable_database, EDITS) == len(LINE_FIELDS)
+    assert scalar(disposable_database, OVERRIDES) == len(EmailLine) + 1
+    assert scalar(disposable_database, EDITS) == len(EmailLine)
 
 
-@pytest.mark.parametrize("action", EDIT_ACTIONS)
+@pytest.mark.parametrize("action", list(EmailEditAction))
 def test_every_history_action_is_stored(
     disposable_database: str, make_alembic_config: ConfigFactory, action: str
 ) -> None:
@@ -152,9 +154,14 @@ def test_every_history_action_is_stored(
         {"action": "delete"},
         {"line": "footer"},
         {"after": ""},
-        {"before": "x" * (LINE_HARD_MAX["subject"] + 1)},
-        {"line": "button", "default": "x" * (LINE_HARD_MAX["button"] + 1)},
         {"email_key": ""},
+        {"variant": "v" * (LINE_KEY_MAX_LENGTH + 1)},
+        # Every text column, one past its line's max, on every line.
+        *(
+            {"line": line, column: "x" * (LINE_HARD_MAX[line] + 1)}
+            for line in EmailLine
+            for column in ("before", "after", "default")
+        ),
     ],
 )
 def test_the_database_refuses_a_history_row_out_of_bounds(
