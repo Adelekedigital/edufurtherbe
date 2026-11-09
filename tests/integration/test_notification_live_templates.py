@@ -47,7 +47,10 @@ async def test_a_request_with_no_topic_reaches_the_mentor_named_by_its_offering(
 
     (variables,) = sent(recorder, Notification.SESSION_REQUESTED)
     assert variables["sessionTopic"] == "General Mentorship"
-    assert variables["discuss"] == ""
+    assert variables["sessionDetail"] == ""
+    # The shared template's lines and switches (decision 317).
+    assert variables["emailSubject"].startswith("New session request from ")
+    assert (variables["emailType"], variables["recipientRole"]) == ("session_requested", "mentor")
 
 
 async def test_a_decline_with_only_a_code_reaches_the_mentee(
