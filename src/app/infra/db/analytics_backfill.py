@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, func, select, tuple_
+from sqlalchemy import Select, and_, case, func, select, tuple_
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -91,10 +91,36 @@ def session_event_facts(
     """Each `session_events` row that may report something, about its mentee:
     its statuses, who cancelled (`canceller`, as the live `_report` reads it),
     ``moved_from`` (the status the session a move ended had: the `from_status`
-    of its last event, the ending) and ``moved_on`` (a later session was moved
-    from this one, so its ending was the move's)."""
+    of its last event, the ending), ``moved_on`` (a later session was moved
+    from this one, so its ending was the move's) and ``confirmed_at``.
+
+    ``confirmed_at`` is set on a legacy session's ending: it left `confirmed`
+    but no event ever entered it, because the legacy import writes only a
+    creation event and a final one (`domain/transform/sessions`). It is the
+    creation event's time, as Bubble never recorded the acceptance, so the
+    funnel still reads requested, confirmed, outcome."""
     ended = aliased(SessionEvent)
     successor = aliased(Session)
+    entered = aliased(SessionEvent)
+    created = aliased(SessionEvent)
+    never_entered = ~(
+        select(entered.id)
+        .where(
+            entered.session_id == SessionEvent.session_id,
+            entered.to_status == SessionStatus.CONFIRMED,
+        )
+        .exists()
+    )
+    creation = (
+        select(created.created_at)
+        .where(created.session_id == SessionEvent.session_id, created.from_status.is_(None))
+        .order_by(created.created_at, created.id)
+        .limit(1)
+        .scalar_subquery()
+    )
+    confirmed_at = case(
+        (and_(SessionEvent.from_status == SessionStatus.CONFIRMED, never_entered), creation)
+    )
     moved_from = (
         select(ended.from_status)
         .where(ended.session_id == Session.rescheduled_from_session_id)
@@ -118,6 +144,7 @@ def session_event_facts(
             canceller(SessionEvent.actor_id, SessionEvent.actor_type).label("by"),
             moved_from.label("moved_from"),
             moved_on.label("moved_on"),
+            confirmed_at.label("confirmed_at"),
         )
         .select_from(SessionEvent)
         .join(Session, Session.id == SessionEvent.session_id)

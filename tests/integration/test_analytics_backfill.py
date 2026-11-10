@@ -17,21 +17,22 @@ from uuid import UUID, uuid4, uuid5
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 from tests.integration.factories import add_session_type, make_public_mentor
 from tests.integration.test_api_admin_credits import a_user
 
 from app.core.errors import UpstreamError
 from app.domain.analytics_events import HISTORY_NAMESPACE
-from app.infra.analytics_backfill import (
-    backfill_analytics,
-)
+from app.infra.analytics_backfill import BackfillRefusedError, backfill_analytics
+from app.infra.db import analytics_backfill as facts
 from app.infra.db.demo_seed import DEMO_DOMAIN
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 T0 = dt.datetime(2026, 5, 1, 9, 0, tzinfo=dt.UTC)
 CUTOFF = dt.datetime(2026, 6, 1, 12, 0, tzinfo=dt.UTC)
+#: The PostHog project a run sends to (`target_fingerprint`).
+TARGET = "a" * 64
 
 
 def at(hours: float) -> dt.datetime:
@@ -418,7 +419,7 @@ async def test_every_fact_before_the_cutoff_is_sent_as_the_live_event(
     sink = FakeSink()
 
     report = await backfill_analytics(
-        db_engine, sink=sink, cursor=tmp_path / "cursor.json", until=CUTOFF
+        db_engine, sink=sink, cursor=tmp_path / "cursor.json", until=CUTOFF, target=TARGET
     )
 
     assert report.cutoff == CUTOFF
@@ -433,7 +434,9 @@ async def test_a_dry_run_counts_and_sends_nothing(db_engine: AsyncEngine, tmp_pa
     history = await a_history(db_engine)
     cursor = tmp_path / "cursor.json"
 
-    report = await backfill_analytics(db_engine, sink=None, cursor=cursor, until=CUTOFF)
+    report = await backfill_analytics(
+        db_engine, sink=None, cursor=cursor, until=CUTOFF, target=TARGET
+    )
 
     assert report.sent == 0
     assert not cursor.exists()
@@ -446,7 +449,7 @@ async def test_batches_hold_at_most_the_batch_size(db_engine: AsyncEngine, tmp_p
     sink = FakeSink()
 
     await backfill_analytics(
-        db_engine, sink=sink, cursor=tmp_path / "c.json", batch=2, until=CUTOFF
+        db_engine, sink=sink, cursor=tmp_path / "c.json", batch=2, until=CUTOFF, target=TARGET
     )
 
     assert all(1 <= len(batch) <= 2 for batch in sink.batches)
@@ -461,12 +464,16 @@ async def test_a_stopped_run_resumes_after_what_it_sent(
     stopped = FakeSink(fail_on=3)
 
     with pytest.raises(UpstreamError):
-        await backfill_analytics(db_engine, sink=stopped, cursor=cursor, until=CUTOFF, batch=2)
+        await backfill_analytics(
+            db_engine, sink=stopped, cursor=cursor, until=CUTOFF, target=TARGET, batch=2
+        )
     assert len(stopped.batches) == 2
     assert json.loads(cursor.read_text())["kind"] == "session_events"
 
     resumed = FakeSink()
-    await backfill_analytics(db_engine, sink=resumed, cursor=cursor, until=CUTOFF, batch=2)
+    await backfill_analytics(
+        db_engine, sink=resumed, cursor=cursor, until=CUTOFF, target=TARGET, batch=2
+    )
 
     # Nothing sent twice, nothing missed.
     assert stopped.events + resumed.events == in_kind_order(history.expected)
@@ -476,12 +483,14 @@ async def test_a_cursor_past_a_kind_skips_it(db_engine: AsyncEngine, tmp_path: P
     history = await a_history(db_engine)
     cursor = tmp_path / "cursor.json"
     first = FakeSink()
-    await backfill_analytics(db_engine, sink=first, cursor=cursor, until=CUTOFF)
+    await backfill_analytics(db_engine, sink=first, cursor=cursor, until=CUTOFF, target=TARGET)
     saved = json.loads(cursor.read_text())
     assert saved["kind"] == "referral_unlocks"
 
     again = FakeSink()
-    report = await backfill_analytics(db_engine, sink=again, cursor=cursor, until=CUTOFF)
+    report = await backfill_analytics(
+        db_engine, sink=again, cursor=cursor, until=CUTOFF, target=TARGET
+    )
 
     assert again.events == []
     assert report.sent == 0
@@ -494,8 +503,12 @@ async def test_a_rerun_without_its_cursor_yields_the_same_ids(
     await a_history(db_engine)
     first, second = FakeSink(), FakeSink()
 
-    await backfill_analytics(db_engine, sink=first, cursor=tmp_path / "a.json", until=CUTOFF)
-    await backfill_analytics(db_engine, sink=second, cursor=tmp_path / "b.json", until=CUTOFF)
+    await backfill_analytics(
+        db_engine, sink=first, cursor=tmp_path / "a.json", until=CUTOFF, target=TARGET
+    )
+    await backfill_analytics(
+        db_engine, sink=second, cursor=tmp_path / "b.json", until=CUTOFF, target=TARGET
+    )
 
     assert [e["uuid"] for e in second.events] == [e["uuid"] for e in first.events]
     assert len({e["uuid"] for e in first.events}) == len(first.events)
@@ -507,7 +520,9 @@ async def test_an_earlier_until_sends_only_what_is_before_it(
     history = await a_history(db_engine)
     sink = FakeSink()
 
-    report = await backfill_analytics(db_engine, sink=sink, cursor=tmp_path / "c.json", until=at(4))
+    report = await backfill_analytics(
+        db_engine, sink=sink, cursor=tmp_path / "c.json", until=at(4), target=TARGET
+    )
 
     assert report.cutoff == at(4)
     early = [e for e in history.expected if dt.datetime.fromisoformat(e["timestamp"]) < at(4)]
@@ -525,8 +540,111 @@ async def test_a_fact_at_until_is_not_sent_and_one_just_before_is(
         await credit(conn, mentee, CUTOFF)
     sink = FakeSink()
 
-    await backfill_analytics(db_engine, sink=sink, cursor=tmp_path / "c.json", until=CUTOFF)
+    await backfill_analytics(
+        db_engine, sink=sink, cursor=tmp_path / "c.json", until=CUTOFF, target=TARGET
+    )
 
     assert [e for e in sink.events if e["distinct_id"] == str(mentee)] == [
         expected("credit_granted", sent, mentee, before, amount=3, source="monthly_free")
     ]
+
+
+async def test_a_legacy_confirmation_is_sent_at_the_requests_time(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
+    """The legacy import writes a creation event and a final one, never the
+    acceptance: a session that ended from `confirmed` with no event into it was
+    still confirmed, so it reports `session_confirmed`, dated by the request
+    (Bubble never recorded when it was accepted)."""
+    mentor = await make_public_mentor(db_engine, f"bf-{uuid4()}", listed=False)
+    session_type = await add_session_type(db_engine, mentor)
+    mentee = await a_user(db_engine)
+    async with db_engine.begin() as conn:
+        legacy = await session_row(conn, mentor, mentee, session_type, "completed", day=7)
+        made = await session_event(
+            conn, legacy, None, "pending_mentor_approval", at(1), actor=mentee
+        )
+        held = await session_event(conn, legacy, "confirmed", "completed", at(5))
+    sink = FakeSink()
+
+    await backfill_analytics(
+        db_engine, sink=sink, cursor=tmp_path / "c.json", until=CUTOFF, target=TARGET
+    )
+
+    assert [e for e in sink.events if e["distinct_id"] == str(mentee)] == [
+        expected(
+            "booking_requested",
+            made,
+            mentee,
+            at(1),
+            session_id=legacy,
+            session_type_id=session_type,
+        ),
+        expected("session_confirmed", held, mentee, at(1), session_id=legacy),
+        expected("session_completed", held, mentee, at(5), session_id=legacy),
+    ]
+
+
+async def test_the_cursor_records_its_cutoff_and_target(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
+    await a_history(db_engine)
+    cursor = tmp_path / "cursor.json"
+
+    await backfill_analytics(db_engine, sink=FakeSink(), cursor=cursor, until=CUTOFF, target=TARGET)
+
+    saved = json.loads(cursor.read_text())
+    assert saved["until"] == CUTOFF.isoformat()
+    assert saved["target"] == TARGET
+
+
+@pytest.mark.parametrize(
+    ("until", "target", "named"),
+    [
+        (CUTOFF + dt.timedelta(hours=1), TARGET, "--until"),
+        (CUTOFF, "b" * 64, "PostHog"),
+    ],
+)
+async def test_a_cursor_for_another_cutoff_or_target_is_refused(
+    db_engine: AsyncEngine, tmp_path: Path, until: dt.datetime, target: str, named: str
+) -> None:
+    await a_history(db_engine)
+    cursor = tmp_path / "cursor.json"
+    await backfill_analytics(db_engine, sink=FakeSink(), cursor=cursor, until=CUTOFF, target=TARGET)
+    again = FakeSink()
+
+    with pytest.raises(BackfillRefusedError, match=named):
+        await backfill_analytics(db_engine, sink=again, cursor=cursor, until=until, target=target)
+    assert again.events == []
+
+
+async def test_the_session_event_reader_pages_through_ties_in_order(
+    db_engine: AsyncEngine,
+) -> None:
+    """One row a page, every row on the same instant: each comes once, by id."""
+    mentor = await make_public_mentor(db_engine, f"bf-{uuid4()}", listed=False)
+    session_type = await add_session_type(db_engine, mentor)
+    mentee = await a_user(db_engine)
+    tie = dt.datetime(2019, 3, 1, 9, 0, tzinfo=dt.UTC) + dt.timedelta(
+        microseconds=uuid4().int % 1_000_000
+    )
+    async with db_engine.begin() as conn:
+        made = []
+        for day in range(4):
+            row = await session_row(
+                conn, mentor, mentee, session_type, "pending_mentor_approval", day=day
+            )
+            made.append(
+                await session_event(conn, row, None, "pending_mentor_approval", tie, actor=mentee)
+            )
+    before = (tie - dt.timedelta(microseconds=1), UUID(int=2**128 - 1))
+
+    async with AsyncSession(db_engine) as session:
+        read = [
+            row["id"]
+            async for row in facts.session_event_facts(
+                session, until=tie + dt.timedelta(microseconds=1), after=before, page=1
+            )
+        ]
+
+    assert read == sorted(made)

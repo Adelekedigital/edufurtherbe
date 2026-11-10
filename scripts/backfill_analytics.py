@@ -13,8 +13,11 @@ the cutoff and send facts twice under different ids.
 
 Run once, against a test PostHog project first. A dry run (the default) counts
 the events per name and shows three built ones by id; ``--send`` sends them and
-needs analytics configured. A stopped run picks up from ``--cursor``. The rules
-are in `app.infra.analytics_backfill`; this only wires them up.
+needs analytics configured, and prints the host and cutoff before the first
+batch. A stopped run picks up from ``--cursor``, which is bound to its
+``--until`` and PostHog project: either changed is refused. A failure is one
+line and a non-zero exit. The rules are in `app.infra.analytics_backfill`;
+this only wires them up.
 """
 
 from __future__ import annotations
@@ -24,13 +27,23 @@ import asyncio
 import datetime as dt
 from pathlib import Path
 
-from app.core.config import get_settings
-from app.infra.analytics_backfill import BackfillRefusedError, backfill_analytics, historical_sink
+from app.core.config import Settings, get_settings
+from app.core.errors import UpstreamError
+from app.infra.analytics_backfill import (
+    BackfillRefusedError,
+    backfill_analytics,
+    historical_sink,
+    read_cursor,
+    target_fingerprint,
+)
 from app.infra.db.engine import create_database_engine
 from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
 
 #: In the working directory, and ignored by git.
 DEFAULT_CURSOR = Path(".analytics-backfill-cursor.json")
+
+#: Stopped part way: what was sent is in the cursor, so a rerun resumes.
+EXIT_STOPPED = 3
 
 
 def _instant(value: str) -> dt.datetime:
@@ -40,18 +53,42 @@ def _instant(value: str) -> dt.datetime:
     return at
 
 
+def preamble(args: argparse.Namespace, settings: Settings) -> list[str]:
+    """What a run says before it starts: where it sends (the host, never the
+    token) and up to when, and where a cursor resumes it."""
+    lines = []
+    if args.send:
+        lines += [f"host: {settings.analytics_host}", f"cutoff: {args.until.isoformat()}"]
+    resume = read_cursor(args.cursor, until=args.until, target=target_fingerprint(settings))
+    if resume is not None:
+        lines.append(f"resuming from {resume.kind} {resume.at.isoformat()}")
+    return lines
+
+
 async def run(args: argparse.Namespace) -> int:
     settings = get_settings()
     engine = create_database_engine(settings)
     try:
         sink = historical_sink(settings) if args.send else None
-        report = await backfill_analytics(engine, sink=sink, cursor=args.cursor, until=args.until)
+        for line in preamble(args, settings):
+            print(line)
+        report = await backfill_analytics(
+            engine,
+            sink=sink,
+            cursor=args.cursor,
+            until=args.until,
+            target=target_fingerprint(settings),
+        )
     except BackfillRefusedError as exc:
         print(f"refused: {exc}")
         return EXIT_REFUSED
+    except (UpstreamError, OSError) as exc:
+        print(f"stopped, rerun with the same --until and --cursor to resume: {exc}")
+        return EXIT_STOPPED
     finally:
         await engine.dispose()
-    print(f"cutoff: {report.cutoff.isoformat()}")
+    if not args.send:
+        print(f"cutoff: {report.cutoff.isoformat()}")
     for event, count in report.counts.items():
         print(f"{event}: {count}")
     for event in report.sample:

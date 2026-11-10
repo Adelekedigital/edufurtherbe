@@ -21,7 +21,9 @@ same properties, at the fact's own time. Facts are read kind by kind
   `true`"), in batches of at most `BATCH`.
 - **A cursor file** records the last fact sent, written after each batch is
   taken, so a stopped run continues where it stopped (PostHog advises a
-  resumable, cursor-based import, same page).
+  resumable, cursor-based import, same page). It also records ``until`` and
+  the target (`target_fingerprint`), and a resume with either changed is
+  refused: it would skip facts never sent to that project, or mix cutoffs.
 - **A dry run** (no sink) counts and builds every event, sends nothing and
   writes no cursor.
 """
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import json
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
@@ -58,14 +61,18 @@ from app.domain.enums import CreditReason
 from app.domain.ports import AnalyticsSink
 from app.infra.clients.posthog import PostHogSink
 from app.infra.db import analytics_backfill as facts
+from app.infra.http.upstream import trim_origin
 
 __all__ = [
     "BATCH",
     "KINDS",
     "BackfillRefusedError",
     "BackfillReport",
+    "Cursor",
     "backfill_analytics",
     "historical_sink",
+    "read_cursor",
+    "target_fingerprint",
 ]
 
 #: Events per request.
@@ -83,7 +90,15 @@ class BackfillRefusedError(RuntimeError):
 
 
 def _session_events(row: RowMapping) -> list[Event]:
+    """What a `session_events` row reports, after the legacy confirmation its
+    ending carries (``confirmed_at``, `facts.session_event_facts`): that one is
+    dated by the request and keyed by this row, the only fact it has."""
     built = []
+    if row["confirmed_at"] is not None:
+        confirmed = session_properties(row["session_id"])
+        built.append(
+            _event(AnalyticsEvent.SESSION_CONFIRMED, row, confirmed, at=row["confirmed_at"])
+        )
     for name in session_event_names(
         row["from_status"], row["to_status"], moved_from=row["moved_from"], moved_on=row["moved_on"]
     ):
@@ -121,9 +136,16 @@ def _unlock_events(row: RowMapping) -> list[Event]:
     return [_event(AnalyticsEvent.REFERRAL_UNLOCKED, row, {})]
 
 
-def _event(name: AnalyticsEvent, row: RowMapping, properties: dict[str, object]) -> Event:
+def _event(
+    name: AnalyticsEvent,
+    row: RowMapping,
+    properties: dict[str, object],
+    *,
+    at: dt.datetime | None = None,
+) -> Event:
+    """``row``'s event, at the row's own time unless ``at`` says otherwise."""
     return historical_event(
-        name, fact_id=row["id"], user_id=row["user_id"], at=row["at"], properties=properties
+        name, fact_id=row["id"], user_id=row["user_id"], at=at or row["at"], properties=properties
     )
 
 
@@ -161,23 +183,78 @@ def historical_sink(settings: Settings, *, client: httpx.Client | None = None) -
     return PostHogSink(host=host, project_token=token, historical_migration=True, client=client)
 
 
-def _read_cursor(path: Path) -> tuple[str, dt.datetime, UUID] | None:
+def target_fingerprint(settings: Settings) -> str | None:
+    """Which PostHog project a run sends to, without the token: the sha256 of
+    host and project token, or ``None`` while either is unset."""
+    host, token = settings.analytics_host, settings.analytics_project_token
+    if not (host and token):
+        return None
+    return hashlib.sha256(f"{trim_origin(host)}\n{token}".encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class Cursor:
+    """The last fact a run sent: its kind and ``(at, id)`` position."""
+
+    kind: str
+    at: dt.datetime
+    id: UUID
+
+
+def read_cursor(path: Path, *, until: dt.datetime, target: str | None) -> Cursor | None:
+    """The cursor at ``path``, or ``None`` when there is none. Refused when it
+    cannot be read whole, or was written for another ``until`` or target (the
+    target is compared only when known: a dry run may have none)."""
     if not path.exists():
         return None
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    if saved["kind"] not in KINDS:
-        raise BackfillRefusedError(f"the cursor names no kind of fact: {saved['kind']!r}")
-    return saved["kind"], dt.datetime.fromisoformat(saved["at"]), UUID(saved["id"])
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        cursor = Cursor(saved["kind"], dt.datetime.fromisoformat(saved["at"]), UUID(saved["id"]))
+        written_until = dt.datetime.fromisoformat(saved["until"])
+        written_target = saved["target"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise BackfillRefusedError(f"the cursor {path} is unreadable ({exc!r})") from exc
+    if cursor.kind not in KINDS:
+        raise BackfillRefusedError(f"the cursor names no kind of fact: {cursor.kind!r}")
+    if written_until != until:
+        raise BackfillRefusedError(
+            f"the cursor {path} was written for --until {written_until.isoformat()}, "
+            f"not {until.isoformat()}"
+        )
+    if target is not None and written_target != target:
+        raise BackfillRefusedError(
+            f"the cursor {path} was written for another PostHog host or project"
+        )
+    return cursor
 
 
-def _write_cursor(path: Path, kind: str, row: RowMapping) -> None:
+@dataclass(frozen=True)
+class Position:
+    """Where a batch leaves the run: the cursor file and what it records."""
+
+    path: Path
+    kind: str
+    last: RowMapping | None
+    until: dt.datetime
+    target: str | None
+
+
+def _write_cursor(position: Position, last: RowMapping) -> None:
     """Replaced whole, so a run stopped mid-write leaves the last good cursor."""
-    partial = path.with_name(path.name + ".tmp")
+    partial = position.path.with_name(position.path.name + ".tmp")
     partial.write_text(
-        json.dumps({"kind": kind, "at": row["at"].isoformat(), "id": str(row["id"])}),
+        json.dumps(
+            {
+                "kind": position.kind,
+                "at": last["at"].isoformat(),
+                "id": str(last["id"]),
+                "until": position.until.isoformat(),
+                "target": position.target,
+            }
+        ),
         encoding="utf-8",
     )
-    partial.replace(path)
+    partial.replace(position.path)
 
 
 async def backfill_analytics(
@@ -186,26 +263,30 @@ async def backfill_analytics(
     sink: AnalyticsSink | None,
     cursor: Path,
     until: dt.datetime,
+    target: str | None,
     batch: int = BATCH,
 ) -> BackfillReport:
     """Send (or, with no ``sink``, count) every past fact's event before
-    ``until``, from where ``cursor`` says the last run stopped."""
+    ``until``, from where ``cursor`` says the last run stopped. ``target`` is
+    `target_fingerprint`'s, required to send."""
+    if sink is not None and target is None:
+        raise BackfillRefusedError("sending needs the target PostHog host and project")
+    resume = read_cursor(cursor, until=until, target=target)
     async with AsyncSession(engine) as session:
         report = BackfillReport(cutoff=until)
         counts: Counter[str] = Counter()
-        resume = _read_cursor(cursor)
         kinds = list(KINDS)
-        start = kinds.index(resume[0]) if resume else 0
+        start = kinds.index(resume.kind) if resume else 0
 
         for kind in kinds[start:]:
             read, build = KINDS[kind]
-            after = resume[1:] if resume and kind == resume[0] else None
+            after = (resume.at, resume.id) if resume and kind == resume.kind else None
             pending: list[Event] = []
             last: RowMapping | None = None
             async for row in read(session, until=until, after=after):
                 built = build(row)
                 if pending and len(pending) + len(built) > batch:
-                    await _send(sink, pending, cursor, kind, last, report)
+                    await _send(sink, pending, report, Position(cursor, kind, last, until, target))
                     pending = []
                 for event in built:
                     counts[event["event"]] += 1
@@ -214,7 +295,7 @@ async def backfill_analytics(
                 pending.extend(built)
                 last = row
             if pending:
-                await _send(sink, pending, cursor, kind, last, report)
+                await _send(sink, pending, report, Position(cursor, kind, last, until, target))
 
     report.counts = {event.value: counts[event.value] for event in AnalyticsEvent}
     return report
@@ -223,14 +304,12 @@ async def backfill_analytics(
 async def _send(
     sink: AnalyticsSink | None,
     events: list[Event],
-    cursor: Path,
-    kind: str,
-    last: RowMapping | None,
     report: BackfillReport,
+    position: Position,
 ) -> None:
     """One batch out, then the cursor past it. Nothing at all on a dry run."""
-    if sink is None or last is None:
+    if sink is None or position.last is None or position.target is None:
         return
     await asyncio.to_thread(sink.capture, events)
-    _write_cursor(cursor, kind, last)
+    _write_cursor(position, position.last)
     report.sent += len(events)

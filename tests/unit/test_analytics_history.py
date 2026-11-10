@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import hashlib
 import json
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from scripts.backfill_analytics import parser
+from scripts import backfill_analytics as script
+from scripts.backfill_analytics import parser, preamble
 
 from app.core.config import Settings
+from app.core.errors import UpstreamError
 from app.domain.analytics_events import (
     HISTORY_NAMESPACE,
     AnalyticsEvent,
@@ -21,7 +27,12 @@ from app.domain.analytics_events import (
     session_event_names,
 )
 from app.domain.enums import SessionStatus
-from app.infra.analytics_backfill import BackfillRefusedError, historical_sink
+from app.infra.analytics_backfill import (
+    BackfillRefusedError,
+    historical_sink,
+    read_cursor,
+    target_fingerprint,
+)
 
 E = AnalyticsEvent
 S = SessionStatus
@@ -168,3 +179,128 @@ def test_the_script_takes_a_zoned_until() -> None:
     args = parser().parse_args(["--until", "2026-11-10T09:30:00+00:00"])
     assert args.until == dt.datetime(2026, 11, 10, 9, 30, tzinfo=dt.UTC)
     assert args.send is False
+
+
+# --------------------------------------------------------------------------
+# The cursor and the script
+# --------------------------------------------------------------------------
+
+UNTIL = dt.datetime(2026, 11, 10, 9, 30, tzinfo=dt.UTC)
+
+
+def a_cursor(path: Path, **values: object) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "reviews",
+                "at": AT.isoformat(),
+                "id": str(uuid4()),
+                "until": UNTIL.isoformat(),
+                "target": "a" * 64,
+                **values,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_the_target_is_the_hash_of_host_and_token_never_the_token() -> None:
+    target = target_fingerprint(settings(**ON))
+    assert target == hashlib.sha256(b"https://eu.i.posthog.com\nphc_test").hexdigest()
+    assert target != target_fingerprint(settings(**{**ON, "analytics_project_token": "phc_other"}))
+    assert target != target_fingerprint(settings(**{**ON, "analytics_host": "https://x.example"}))
+    assert target_fingerprint(settings(**{**ON, "analytics_host": None})) is None
+
+
+def test_a_good_cursor_is_read(tmp_path: Path) -> None:
+    path = a_cursor(tmp_path / "c.json")
+    saved = json.loads(path.read_text())
+
+    resume = read_cursor(path, until=UNTIL, target="a" * 64)
+
+    assert resume is not None
+    assert (resume.kind, resume.at, str(resume.id)) == ("reviews", AT, saved["id"])
+    assert read_cursor(tmp_path / "none.json", until=UNTIL, target=None) is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not json",
+        "[]",
+        json.dumps({"kind": "reviews", "at": AT.isoformat()}),
+        json.dumps({"kind": "reviews", "at": "yesterday", "id": "x", "until": "y", "target": "a"}),
+    ],
+)
+def test_a_corrupt_or_incomplete_cursor_is_refused(tmp_path: Path, content: str) -> None:
+    path = tmp_path / "c.json"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(BackfillRefusedError, match="cursor"):
+        read_cursor(path, until=UNTIL, target="a" * 64)
+
+
+def test_a_cursor_for_another_until_or_target_is_refused(tmp_path: Path) -> None:
+    path = a_cursor(tmp_path / "c.json")
+    with pytest.raises(BackfillRefusedError, match="--until"):
+        read_cursor(path, until=UNTIL + dt.timedelta(seconds=1), target="a" * 64)
+    with pytest.raises(BackfillRefusedError, match="PostHog"):
+        read_cursor(path, until=UNTIL, target="b" * 64)
+
+
+def test_sending_announces_its_host_and_cutoff_and_never_the_token(tmp_path: Path) -> None:
+    args = parser().parse_args(
+        ["--until", UNTIL.isoformat(), "--send", "--cursor", str(tmp_path / "c.json")]
+    )
+    lines = preamble(args, settings(**ON))
+    assert lines == ["host: https://eu.i.posthog.com", f"cutoff: {UNTIL.isoformat()}"]
+    assert not any("phc_test" in line for line in lines)
+
+
+@pytest.mark.parametrize("send", [True, False])
+def test_a_run_from_a_cursor_says_where_it_resumes(tmp_path: Path, send: bool) -> None:
+    cursor = a_cursor(tmp_path / "c.json", target=target_fingerprint(settings(**ON)))
+    argv = ["--until", UNTIL.isoformat(), "--cursor", str(cursor)] + (["--send"] if send else [])
+
+    lines = preamble(parser().parse_args(argv), settings(**ON))
+
+    assert lines[-1] == f"resuming from reviews {AT.isoformat()}"
+
+
+@dataclass
+class _Engine:
+    async def dispose(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize(
+    ("raised", "code"),
+    [
+        (UpstreamError("analytics capture failed: 503"), 3),
+        (BackfillRefusedError("the cursor c.json is unreadable"), 1),
+        (OSError("disk full"), 3),
+    ],
+)
+def test_a_failed_run_exits_non_zero_with_one_line(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    raised: Exception,
+    code: int,
+) -> None:
+    async def fails(*_: object, **__: object) -> None:
+        raise raised
+
+    monkeypatch.setattr(script, "get_settings", lambda: settings(**ON))
+    monkeypatch.setattr(script, "create_database_engine", lambda _: _Engine())
+    monkeypatch.setattr(script, "backfill_analytics", fails)
+    args = parser().parse_args(
+        ["--until", UNTIL.isoformat(), "--send", "--cursor", str(tmp_path / "c.json")]
+    )
+
+    assert asyncio.run(script.run(args)) == code
+
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1].endswith(str(raised))
+    assert "Traceback" not in "\n".join(out)
+    assert not any("phc_test" in line for line in out)
