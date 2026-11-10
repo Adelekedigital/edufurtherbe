@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from scripts.backfill_analytics import parser
 
 from app.core.config import Settings
 from app.domain.analytics_events import (
@@ -154,3 +155,16 @@ def test_sending_marks_every_batch_a_historical_migration() -> None:
 
     (request,) = seen
     assert json.loads(request.content)["historical_migration"] is True
+
+
+def test_the_script_refuses_to_run_without_until(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exited:
+        parser().parse_args(["--send"])
+    assert exited.value.code == 2
+    assert "--until" in capsys.readouterr().err
+
+
+def test_the_script_takes_a_zoned_until() -> None:
+    args = parser().parse_args(["--until", "2026-11-10T09:30:00+00:00"])
+    assert args.until == dt.datetime(2026, 11, 10, 9, 30, tzinfo=dt.UTC)
+    assert args.send is False

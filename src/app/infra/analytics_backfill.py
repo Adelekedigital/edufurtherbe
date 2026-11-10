@@ -6,9 +6,13 @@ live writer would have queued for it: same name, same person (`users.id`),
 same properties, at the fact's own time. Facts are read kind by kind
 (`infra/db/analytics_backfill`), each kind in time order.
 
-- **The cutoff** is when the first live analytics event was queued (or
-  ``until``): from then on every fact has its live event. Neither known is a
-  refusal, never a guess.
+- **The cutoff** is ``until``, always given by the operator: when the server
+  events started being queued (the production deploy of the server-events
+  PR). Only facts strictly before it are sent; from then on every fact has its
+  live event. It is never derived from the outbox, whose analytics rows can be
+  purged (`forget_unsent_analytics`): that would move the cutoff and send
+  facts twice under different ids. The same ``until`` on every run keeps a
+  rerun's ids identical.
 - **Each event's `uuid` is derived from its fact** (`history_event_id`), so a
   re-run or an overlapping run is dropped by PostHog rather than counted twice.
 - **Sent with `historical_migration`**, which PostHog requires of imported
@@ -181,18 +185,13 @@ async def backfill_analytics(
     *,
     sink: AnalyticsSink | None,
     cursor: Path,
-    until: dt.datetime | None = None,
+    until: dt.datetime,
     batch: int = BATCH,
 ) -> BackfillReport:
-    """Send (or, with no ``sink``, count) every past fact's event before the
-    cutoff, from where ``cursor`` says the last run stopped."""
+    """Send (or, with no ``sink``, count) every past fact's event before
+    ``until``, from where ``cursor`` says the last run stopped."""
     async with AsyncSession(engine) as session:
-        cutoff = until or await facts.first_live_event_at(session)
-        if cutoff is None:
-            raise BackfillRefusedError(
-                "no live analytics event is queued yet, so there is no cutoff: pass --until"
-            )
-        report = BackfillReport(cutoff=cutoff)
+        report = BackfillReport(cutoff=until)
         counts: Counter[str] = Counter()
         resume = _read_cursor(cursor)
         kinds = list(KINDS)
@@ -203,7 +202,7 @@ async def backfill_analytics(
             after = resume[1:] if resume and kind == resume[0] else None
             pending: list[Event] = []
             last: RowMapping | None = None
-            async for row in read(session, until=cutoff, after=after):
+            async for row in read(session, until=until, after=after):
                 built = build(row)
                 if pending and len(pending) + len(built) > batch:
                     await _send(sink, pending, cursor, kind, last, report)

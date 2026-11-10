@@ -24,12 +24,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.domain.enums import CreditReason, MentorStatusType, SessionStatus
-from app.domain.notifications import Channel
 from app.infra.db import keyset
 from app.infra.db.analytics_scope import counted_user
 from app.infra.db.models.credits import CreditLot, CreditTransaction
 from app.infra.db.models.mentoring import MentorStatusEvent
-from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.referrals import ReferralUnlock
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session, SessionEvent
@@ -41,7 +39,6 @@ from app.infra.db.session_stats import canceller
 __all__ = [
     "PAGE",
     "credit_facts",
-    "first_live_event_at",
     "listing_facts",
     "review_facts",
     "session_event_facts",
@@ -52,15 +49,6 @@ __all__ = [
 PAGE = 500
 
 Position = tuple[dt.datetime, UUID]
-
-
-async def first_live_event_at(session: AsyncSession) -> dt.datetime | None:
-    """When the first live analytics event was queued: every fact from then
-    on has its own live event, so the backfill stops before it."""
-    first: dt.datetime | None = await session.scalar(
-        select(func.min(OutboxEvent.created_at)).where(OutboxEvent.destination == Channel.ANALYTICS)
-    )
-    return first
 
 
 async def _paged(

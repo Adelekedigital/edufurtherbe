@@ -1,7 +1,15 @@
 """Send the analytics history from before live events began (PRD 30 PR 7).
 
-    railway run uv run python scripts/backfill_analytics.py            # dry run
-    railway run uv run python scripts/backfill_analytics.py --send     # send
+    railway run uv run python scripts/backfill_analytics.py --until <instant>          # dry run
+    railway run uv run python scripts/backfill_analytics.py --until <instant> --send   # send
+
+``--until`` is required and needs a zone: set it to the moment the server
+events started being queued, i.e. the production deploy of the server-events
+PR. Only facts strictly before it are sent; from then on each has its live
+event. Keep the same value for every run, so a rerun builds the same events
+with the same ids and PostHog drops the repeats. It is never read from the
+outbox: those rows can be purged (`forget_unsent_analytics`), which would move
+the cutoff and send facts twice under different ids.
 
 Run once, against a test PostHog project first. A dry run (the default) counts
 the events per name and shows three built ones by id; ``--send`` sends them and
@@ -52,13 +60,26 @@ async def run(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def parser() -> argparse.ArgumentParser:
+    built = argparse.ArgumentParser(description=__doc__)
+    built.add_argument("--send", action="store_true", help="Send; without it, a dry run.")
+    built.add_argument(
+        "--until",
+        type=_instant,
+        required=True,
+        help=(
+            "Required, with a zone: when server events started being queued (the production "
+            "deploy of the server-events PR). Only facts before it are sent. Use the same "
+            "value on every run so reruns dedupe."
+        ),
+    )
+    built.add_argument("--cursor", type=Path, default=DEFAULT_CURSOR, help="Resume file.")
+    return built
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--send", action="store_true", help="Send; without it, a dry run.")
-    parser.add_argument("--until", type=_instant, help="Cutoff instead of the first live event.")
-    parser.add_argument("--cursor", type=Path, default=DEFAULT_CURSOR, help="Resume file.")
     configure_streams()
-    return asyncio.run(run(parser.parse_args()))
+    return asyncio.run(run(parser().parse_args()))
 
 
 if __name__ == "__main__":

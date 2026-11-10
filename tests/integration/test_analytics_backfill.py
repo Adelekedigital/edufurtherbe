@@ -24,7 +24,6 @@ from tests.integration.test_api_admin_credits import a_user
 from app.core.errors import UpstreamError
 from app.domain.analytics_events import HISTORY_NAMESPACE
 from app.infra.analytics_backfill import (
-    BackfillRefusedError,
     backfill_analytics,
 )
 from app.infra.db.demo_seed import DEMO_DOMAIN
@@ -197,20 +196,6 @@ async def status(conn: AsyncConnection, mentor: UUID, status_type: str, when: dt
             {"m": mentor, "t": status_type, "w": when},
         )
     ).scalar_one()
-
-
-async def mark_cutoff(engine: AsyncEngine, when: dt.datetime = CUTOFF) -> None:
-    """The first live analytics event, at ``when``; and a later one."""
-    async with engine.begin() as conn:
-        for created in (when, when + dt.timedelta(days=1)):
-            await conn.execute(
-                text(
-                    "INSERT INTO outbox_events "
-                    "(event_type, entity_type, entity_id, destination, payload, created_at) "
-                    "VALUES ('mentor_listed', 'user', :u, 'analytics', '{}', :w)"
-                ),
-                {"u": uuid4(), "w": created},
-            )
 
 
 @dataclass
@@ -400,7 +385,6 @@ async def a_history(engine: AsyncEngine) -> History:
         await credit(conn, mentee, CUTOFF)
         await credit(conn, mentee, CUTOFF + dt.timedelta(hours=1))
 
-    await mark_cutoff(engine)
     return History(expected=want)
 
 
@@ -433,7 +417,9 @@ async def test_every_fact_before_the_cutoff_is_sent_as_the_live_event(
     history = await a_history(db_engine)
     sink = FakeSink()
 
-    report = await backfill_analytics(db_engine, sink=sink, cursor=tmp_path / "cursor.json")
+    report = await backfill_analytics(
+        db_engine, sink=sink, cursor=tmp_path / "cursor.json", until=CUTOFF
+    )
 
     assert report.cutoff == CUTOFF
     assert sink.events == in_kind_order(history.expected)
@@ -447,7 +433,7 @@ async def test_a_dry_run_counts_and_sends_nothing(db_engine: AsyncEngine, tmp_pa
     history = await a_history(db_engine)
     cursor = tmp_path / "cursor.json"
 
-    report = await backfill_analytics(db_engine, sink=None, cursor=cursor)
+    report = await backfill_analytics(db_engine, sink=None, cursor=cursor, until=CUTOFF)
 
     assert report.sent == 0
     assert not cursor.exists()
@@ -459,7 +445,9 @@ async def test_batches_hold_at_most_the_batch_size(db_engine: AsyncEngine, tmp_p
     history = await a_history(db_engine)
     sink = FakeSink()
 
-    await backfill_analytics(db_engine, sink=sink, cursor=tmp_path / "c.json", batch=2)
+    await backfill_analytics(
+        db_engine, sink=sink, cursor=tmp_path / "c.json", batch=2, until=CUTOFF
+    )
 
     assert all(1 <= len(batch) <= 2 for batch in sink.batches)
     assert sink.events == in_kind_order(history.expected)
@@ -473,12 +461,12 @@ async def test_a_stopped_run_resumes_after_what_it_sent(
     stopped = FakeSink(fail_on=3)
 
     with pytest.raises(UpstreamError):
-        await backfill_analytics(db_engine, sink=stopped, cursor=cursor, batch=2)
+        await backfill_analytics(db_engine, sink=stopped, cursor=cursor, until=CUTOFF, batch=2)
     assert len(stopped.batches) == 2
     assert json.loads(cursor.read_text())["kind"] == "session_events"
 
     resumed = FakeSink()
-    await backfill_analytics(db_engine, sink=resumed, cursor=cursor, batch=2)
+    await backfill_analytics(db_engine, sink=resumed, cursor=cursor, until=CUTOFF, batch=2)
 
     # Nothing sent twice, nothing missed.
     assert stopped.events + resumed.events == in_kind_order(history.expected)
@@ -488,12 +476,12 @@ async def test_a_cursor_past_a_kind_skips_it(db_engine: AsyncEngine, tmp_path: P
     history = await a_history(db_engine)
     cursor = tmp_path / "cursor.json"
     first = FakeSink()
-    await backfill_analytics(db_engine, sink=first, cursor=cursor)
+    await backfill_analytics(db_engine, sink=first, cursor=cursor, until=CUTOFF)
     saved = json.loads(cursor.read_text())
     assert saved["kind"] == "referral_unlocks"
 
     again = FakeSink()
-    report = await backfill_analytics(db_engine, sink=again, cursor=cursor)
+    report = await backfill_analytics(db_engine, sink=again, cursor=cursor, until=CUTOFF)
 
     assert again.events == []
     assert report.sent == 0
@@ -506,14 +494,16 @@ async def test_a_rerun_without_its_cursor_yields_the_same_ids(
     await a_history(db_engine)
     first, second = FakeSink(), FakeSink()
 
-    await backfill_analytics(db_engine, sink=first, cursor=tmp_path / "a.json")
-    await backfill_analytics(db_engine, sink=second, cursor=tmp_path / "b.json")
+    await backfill_analytics(db_engine, sink=first, cursor=tmp_path / "a.json", until=CUTOFF)
+    await backfill_analytics(db_engine, sink=second, cursor=tmp_path / "b.json", until=CUTOFF)
 
     assert [e["uuid"] for e in second.events] == [e["uuid"] for e in first.events]
     assert len({e["uuid"] for e in first.events}) == len(first.events)
 
 
-async def test_until_overrides_the_cutoff(db_engine: AsyncEngine, tmp_path: Path) -> None:
+async def test_an_earlier_until_sends_only_what_is_before_it(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
     history = await a_history(db_engine)
     sink = FakeSink()
 
@@ -525,10 +515,18 @@ async def test_until_overrides_the_cutoff(db_engine: AsyncEngine, tmp_path: Path
     assert len(early) == 3
 
 
-async def test_with_no_live_event_and_no_until_it_refuses(
+async def test_a_fact_at_until_is_not_sent_and_one_just_before_is(
     db_engine: AsyncEngine, tmp_path: Path
 ) -> None:
+    mentee = await a_user(db_engine)
+    before = CUTOFF - dt.timedelta(microseconds=1)
+    async with db_engine.begin() as conn:
+        sent, _ = await credit(conn, mentee, before)
+        await credit(conn, mentee, CUTOFF)
     sink = FakeSink()
-    with pytest.raises(BackfillRefusedError, match="--until"):
-        await backfill_analytics(db_engine, sink=sink, cursor=tmp_path / "c.json")
-    assert sink.batches == []
+
+    await backfill_analytics(db_engine, sink=sink, cursor=tmp_path / "c.json", until=CUTOFF)
+
+    assert [e for e in sink.events if e["distinct_id"] == str(mentee)] == [
+        expected("credit_granted", sent, mentee, before, amount=3, source="monthly_free")
+    ]
