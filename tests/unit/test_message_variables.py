@@ -554,3 +554,9 @@ def test_first_credits_carry_their_count_and_an_old_row_sends_without_it() -> No
     renewed = context(starts_at=None, notification=Notification.CREDITS_RENEWED)
     with pytest.raises(UnresolvedVariableError):
         build_variables(["creditCount"], renewed)
+
+
+def test_an_answered_count_that_is_not_a_number_refuses_by_name() -> None:
+    bad = context(extras={"answered_questions": "three"})
+    with pytest.raises(UnresolvedVariableError, match="answeredQuestions"):
+        build_variables(["answeredQuestions"], bad)

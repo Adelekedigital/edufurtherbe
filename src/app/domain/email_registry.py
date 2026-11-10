@@ -289,7 +289,8 @@ _ANSWERED = {"answered_questions": "3"}
 #: What each email's producer puts on its outbox row (`variables=` at the
 #: enqueue, or the message email's values), by variant.
 SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
-    N.SESSION_BOOKED: {"mentor": dict(_ANSWERED), "mentee": dict(_ANSWERED)},
+    # The mentee's copy never shows the count: the questions are the mentor's.
+    N.SESSION_BOOKED: {"mentor": dict(_ANSWERED), "mentee": {}},
     N.REQUEST_ACCEPTED: {"default": {}},
     N.SESSION_REQUESTED: {"default": dict(_ANSWERED)},
     N.MENTOR_RESPONSE_REMINDER: {"default": {"kind": "t24"}},

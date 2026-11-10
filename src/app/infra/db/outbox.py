@@ -608,9 +608,9 @@ async def _context_for(
         return MessageContext(mentor_name="", mentee_name="", **base)  # type: ignore[arg-type]
 
     parties = await _names_for(session, (found["mentor_id"], found["mentee_id"], recipient))
-    if notification in OWNED_BY["answeredQuestions"]:
-        # Decision 334: the count the session page's preview shows, read for
-        # the recipient as a party of this session, never the answers.
+    # Decision 334: the count the session page's preview shows, never the
+    # answers, read only for the mentor, whose questions they are.
+    if notification in OWNED_BY["answeredQuestions"] and recipient == found["mentor_id"]:
         previews = await answer_previews(session, [found["id"]], is_a_party(recipient))
         extras["answered_questions"] = str(previews.get(found["id"], {}).get("count", 0))
     return MessageContext(

@@ -324,5 +324,5 @@ def test_the_answered_line_fills_for_every_email_of_its_templates(
     other emails sharing them fill it empty rather than refusing to send."""
     declared = [*PUBLISHED_TEMPLATES[group], "answeredQuestions"]
     built = build_variables(declared, sample_context(email, variant))
-    new_booking = email in {N.SESSION_REQUESTED, N.SESSION_BOOKED}
-    assert built["answeredQuestions"] == ("3 questions" if new_booking else "")
+    to_the_mentor = email in {N.SESSION_REQUESTED, N.SESSION_BOOKED} and variant != "mentee"
+    assert built["answeredQuestions"] == ("3 questions" if to_the_mentor else "")

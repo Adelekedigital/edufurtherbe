@@ -113,11 +113,11 @@ async def test_a_cancellation_names_who_called_it_off(
     assert variables["cancelmessage"] == ""
 
 
-async def test_a_new_booking_tells_both_copies_how_many_questions_were_answered(
+async def test_a_new_booking_tells_the_mentor_how_many_questions_were_answered(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     """Decision 334: the count of answered questions, never the answers; a
-    question left blank is not counted."""
+    question left blank is not counted; the mentee's copy carries none."""
 
     async def two_of_three(session_type: UUID) -> list[dict[str, Any]]:
         asked = [
@@ -137,9 +137,29 @@ async def test_a_new_booking_tells_both_copies_how_many_questions_were_answered(
     copies = [
         m["context"] for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED
     ]
-    assert {c.recipient_role for c in copies} == {"mentor", "mentee"}
-    for copy in copies:
-        assert build_variables(["answeredQuestions"], copy) == {"answeredQuestions": "2 questions"}
+    said = {
+        c.recipient_role: build_variables(["answeredQuestions"], c)["answeredQuestions"]
+        for c in copies
+    }
+    assert said == {"mentor": "2 questions", "mentee": ""}
+
+
+async def test_a_request_with_answers_tells_the_mentor_their_count(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    async def one(session_type: UUID) -> list[dict[str, Any]]:
+        (asked, *_) = await add_question(db_engine, session_type, "Which programme?", order=0)
+        return [{"question_id": str(asked), "text": "MSc Public Policy"}]
+
+    await a_booking(db_engine, api_client, "lt-req-one", confirmation=True, answers=one)
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    (copy,) = [
+        m["context"] for m in recorder.sent if m["notification"] == Notification.SESSION_REQUESTED
+    ]
+    assert build_variables(["answeredQuestions"], copy) == {"answeredQuestions": "1 question"}
 
 
 async def test_a_request_with_no_answers_says_nothing_of_questions(

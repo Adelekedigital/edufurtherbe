@@ -312,8 +312,15 @@ def _hours_left(context: MessageContext) -> str:
 
 def _answered_questions(context: MessageContext) -> str:
     """How many questions the mentee answered, in words, or empty for none
-    (decision 334). Never the answers: they can be long, files, and personal."""
-    count = int(_needs(context.extras.get("answered_questions"), "answeredQuestions"))
+    (decision 334). Never the answers: they can be long, files, and personal.
+    The mentee's copy has none: the questions are the mentor's."""
+    if context.recipient_role == "mentee":
+        return ""
+    raw = _needs(context.extras.get("answered_questions"), "answeredQuestions")
+    try:
+        count = int(raw)
+    except ValueError:
+        raise UnresolvedVariableError(f"answeredQuestions is not a count: {raw!r}") from None
     return counted(count, "question") if count else ""
 
 
