@@ -187,6 +187,8 @@ CALENDAR_PATH = "/calendar"
 EXPLORE_PATH = "/explore"
 #: Where an applicant follows their mentor application (Mentor Onboarding B3).
 MENTOR_APPLICATION_PATH = "/mentor-application"
+#: The admin app's Mentors page, where admins review a new application.
+ADMIN_MENTORS_PATH = "/admin/mentors"
 #: One pending request, open on the Bookings page's pending tab, where the
 #: mentor answers it (decision 294).
 PENDING_REQUEST_PATH = "/bookings?tab=pending&booking={session_id}"
@@ -365,6 +367,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "creditCount": _credit_count,
     "calendarUrl": lambda c: _app_link(c, CALENDAR_PATH, "calendarUrl"),
     "applicationUrl": lambda c: _app_link(c, MENTOR_APPLICATION_PATH, "applicationUrl"),
+    "adminMentorsUrl": lambda c: _app_link(c, ADMIN_MENTORS_PATH, "adminMentorsUrl"),
     # A decline's note, which is optional: empty when the reviewer left none.
     "declineReason": lambda c: c.extras.get("reason", ""),
     # The return reminder is one template for a dated pause and an undated one,

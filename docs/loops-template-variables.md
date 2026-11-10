@@ -110,6 +110,7 @@ of that cost.
 | `location` | the venue **label** — "Google Meet", "Daily". Never a URL |
 | `sessionUrl` | the EduFurther **session page**. Never the meeting link |
 | `dashboardUrl` | the recipient's dashboard |
+| `adminMentorsUrl` | the admin app's Mentors page (`/admin/mentors` on the app's origin), where a new application is reviewed |
 
 **Resolved per recipient, not per message.** `sessionDate` differs between a
 mentor in Lagos and a mentee in Toronto. The outbox already stores one row per
@@ -304,7 +305,7 @@ contract.
 | `credits_granted` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | `buttonLabel`, `buttonUrl`, `creditCount`, `emailHeading`, `emailSubject`, `intervalTime`, `recipientFirstName` |
 | `credits_renewed` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | as `credits_granted` |
 | `credits_expiring` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | as `credits_granted` |
-| `mentor_application_received` | App: New mentor application | `cmw9un4eg02yv0j0uo3e8dn2j` | admins who can decide it, never the applicant | `mentorName`, `recipientFirstName` |
+| `mentor_application_received` | App: New mentor application | `cmw9un4eg02yv0j0uo3e8dn2j` | admins who can decide it, never the applicant | `adminMentorsUrl`, `mentorName`, `recipientFirstName` |
 | `mentor_declined` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the applicant | as `mentor_approved` |
 | `mentor_paused_by_admin` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the paused mentor | as `mentor_approved` |
 | `mentor_response_reminder` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | as `session_requested` |
