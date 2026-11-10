@@ -33,7 +33,7 @@ from app.infra.db.models.intake import (
     SessionTypeQuestion,
     SessionTypeQuestionOption,
 )
-from app.infra.db.models.legal import LegalDocument, UserLegalConsent
+from app.infra.db.models.legal import AnalyticsConsent, LegalDocument, UserLegalConsent
 from app.infra.db.models.mentoring import (
     FeaturedMentor,
     MenteeGoal,
@@ -96,6 +96,7 @@ from app.infra.db.models.writing_assist import WritingAssistRequest
 __all__ = [
     "AdminCreditGrant",
     "AdminUser",
+    "AnalyticsConsent",
     "AuthIdentity",
     "AvailabilityException",
     "AvailabilityRule",

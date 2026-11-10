@@ -187,8 +187,15 @@ class ProvisioningStore:
             return result.scalar_one()
 
     async def grant_admin(self, user_id: UUID, role: AdminRole) -> bool:
-        """Grant a role. ``False`` when it was already held."""
-        async with self._engine.begin() as connection:
+        """Grant a role. ``False`` when it was already held.
+
+        A grant marks its holder internal (`trg_mark_internal_grantee`, an
+        `UPDATE users`), so the trigger is held off as `link` holds it: a
+        migrated admin keeps Bubble's `updated_at`."""
+        async with (
+            self._engine.begin() as connection,
+            timestamps_from_source(connection, "users"),
+        ):
             granted = (
                 await connection.execute(GRANT, {"user_id": user_id, "admin_role": role.value})
             ).first()

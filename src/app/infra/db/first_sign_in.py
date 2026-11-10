@@ -37,26 +37,30 @@ import logging
 from typing import NoReturn
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AccountExistsError
 from app.domain.emails import normalise_email
+from app.domain.enums import AuthMethod
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
 
-__all__ = ["provision_first_sign_in"]
+__all__ = ["provision_first_sign_in", "record_auth_method"]
 
 logger = logging.getLogger(__name__)
 
 
-async def provision_first_sign_in(session: AsyncSession, *, auth_id: UUID, email: str) -> None:
+async def provision_first_sign_in(
+    session: AsyncSession, *, auth_id: UUID, email: str, auth_method: AuthMethod | None = None
+) -> None:
     """Create the account for a sign-in that has none, or refuse.
 
     Returns once a row for `auth_id` exists — created here, or by a request
     that raced this one. Raises `AccountExistsError` when the address belongs
-    to an account this sign-in is not linked to. Commits what it creates.
+    to an account this sign-in is not linked to. Commits what it creates,
+    with how it signed in (``auth_method``) when the token says.
     """
     address = normalise_email(email)
 
@@ -75,7 +79,9 @@ async def provision_first_sign_in(session: AsyncSession, *, auth_id: UUID, email
 
     created = await session.execute(
         insert(User)
-        .values(auth_id=auth_id, email=address, email_verified_at=func.now())
+        .values(
+            auth_id=auth_id, email=address, email_verified_at=func.now(), auth_method=auth_method
+        )
         .on_conflict_do_nothing()
         .returning(User.id)
     )
@@ -95,6 +101,19 @@ async def provision_first_sign_in(session: AsyncSession, *, auth_id: UUID, email
     if linked.first() is not None:
         return
     _refuse(auth_id)
+
+
+async def record_auth_method(session: AsyncSession, user_id: UUID, method: AuthMethod) -> None:
+    """How an account signs in, for one that has none yet: a migrated account
+    at its first sign-in here (PRD 30 A7). Only while still null, in the
+    statement, so a later sign-in by another method never rewrites the first.
+    Commits; runs once per account, since the caller asks only while null."""
+    await session.execute(
+        update(User)
+        .where(User.id == user_id, User.auth_method.is_(None))
+        .values(auth_method=method)
+    )
+    await session.commit()
 
 
 async def _address_is_taken(session: AsyncSession, address: str, *, auth_id: UUID) -> bool:

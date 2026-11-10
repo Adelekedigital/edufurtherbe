@@ -64,7 +64,9 @@ def live_grant() -> Any:
     """An admin grant that still stands: not revoked. The one statement of it,
     read by the deciding-admins lookup and `is_live_admin`; the
     `/me` lookup in `api/deps/core.CURRENT_USER` is raw SQL and spells the same
-    `revoked_at IS NULL` (pinned by a test in `test_admin_mentors.py`)."""
+    `revoked_at IS NULL` (pinned by a test in `test_admin_mentors.py`), as does
+    the database's `internal_account()` behind `users.is_internal` (pinned by
+    `test_internal_accounts.py`)."""
     return AdminUser.revoked_at.is_(None)
 
 

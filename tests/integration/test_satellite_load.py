@@ -84,6 +84,42 @@ async def test_all_five_tables_load_from_one_snapshot(db_engine: AsyncEngine) ->
 
 
 @pytest.mark.asyncio
+async def test_a_migrated_admin_is_internal_and_keeps_bubbles_modified_date(
+    db_engine: AsyncEngine,
+) -> None:
+    """A grant marks its holder internal with an `UPDATE users`; the load holds
+    `trg_set_updated_at` off for it, so Bubble's Modified Date survives."""
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [user(**{"Admin 🎩": "Super Admin"})], [profile()])
+        stored = await conn.execute(
+            text("SELECT is_internal, signup_source, updated_at FROM users")
+        )
+        internal, source, updated_at = stored.one()
+        enabled = await conn.scalar(
+            text(
+                "SELECT tgenabled FROM pg_trigger WHERE tgname = 'trg_set_updated_at' "
+                "AND tgrelid = 'users'::regclass"
+            )
+        )
+
+    assert internal is True
+    assert source == "migrated"
+    assert updated_at.isoformat() == "2025-11-06T11:52:41.383000+00:00"
+    assert enabled == b"O"
+
+
+@pytest.mark.asyncio
+async def test_a_migrated_member_is_migrated_and_not_internal(db_engine: AsyncEngine) -> None:
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [user()], [profile()])
+        internal, source = (
+            await conn.execute(text("SELECT is_internal, signup_source FROM users"))
+        ).one()
+
+    assert (internal, source) == (False, "migrated")
+
+
+@pytest.mark.asyncio
 async def test_the_country_comes_from_the_text_field(db_engine: AsyncEngine) -> None:
     """The canonical field mapping says the opposite, and is wrong.
 

@@ -214,3 +214,95 @@ async def test_an_address_held_by_this_sign_in_is_not_taken(db_engine: AsyncEngi
     await add_user(db_engine, "unlinked-raced@example.com", auth_id=None)
     async with AsyncSession(db_engine) as session:
         assert await _address_is_taken(session, "unlinked-raced@example.com", auth_id=mine)
+
+
+# --------------------------------------------------------------------------
+# How the account signs in (PRD 30 PR 2): at the first sign-in, and at a
+# migrated account's first one here, never rewritten
+# --------------------------------------------------------------------------
+
+EMAIL_CODE = {"amr": [{"method": "otp", "timestamp": 1}], "app_metadata": {"providers": ["email"]}}
+GOOGLE = {"amr": [{"method": "oauth", "timestamp": 1}], "app_metadata": {"providers": ["google"]}}
+
+
+async def auth_method_of(engine: AsyncEngine, auth_id: UUID) -> object:
+    async with engine.begin() as conn:
+        return await conn.scalar(
+            text("SELECT auth_method FROM users WHERE auth_id = :a"), {"a": auth_id}
+        )
+
+
+async def test_a_first_sign_in_records_how_it_signed_in(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    auth_id = uuid4()
+    token = bearer(api_token(auth_id, email=f"{auth_id}@example.com", **GOOGLE))
+
+    response = await api_client.get(URL, headers=token)
+
+    assert response.status_code == 200, response.text
+    assert await auth_method_of(db_engine, auth_id) == "google_oauth"
+
+
+async def test_a_migrated_accounts_first_sign_in_records_it_and_a_later_one_keeps_it(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    auth_id = uuid4()
+    email = f"{auth_id}@example.com"
+    await add_user(db_engine, email, auth_id=auth_id)
+    assert await auth_method_of(db_engine, auth_id) is None
+
+    first = await api_client.get(URL, headers=bearer(api_token(auth_id, email=email, **EMAIL_CODE)))
+    later = await api_client.get(URL, headers=bearer(api_token(auth_id, email=email, **GOOGLE)))
+
+    assert first.status_code == later.status_code == 200
+    assert await auth_method_of(db_engine, auth_id) == "email_code"
+
+
+async def test_a_token_that_does_not_say_leaves_it_unknown(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    auth_id = uuid4()
+
+    response = await api_client.get(URL, headers=token_for(auth_id, f"{auth_id}@example.com"))
+
+    assert response.status_code == 200
+    assert await auth_method_of(db_engine, auth_id) is None
+
+
+async def test_recording_how_it_signs_in_never_rewrites_a_known_method(
+    db_engine: AsyncEngine,
+) -> None:
+    """The statement's own guard, for two first sign-ins racing."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.domain.enums import AuthMethod
+    from app.infra.db.first_sign_in import record_auth_method
+
+    auth_id = uuid4()
+    user = await add_user(db_engine, f"{auth_id}@example.com", auth_id=auth_id)
+
+    async with AsyncSession(db_engine) as session:
+        await record_auth_method(session, user, AuthMethod.GOOGLE_OAUTH)
+        await record_auth_method(session, user, AuthMethod.EMAIL_CODE)
+
+    assert await auth_method_of(db_engine, auth_id) == "google_oauth"
+
+
+async def test_provisioning_writes_how_it_signed_in_with_the_row(db_engine: AsyncEngine) -> None:
+    """In the insert itself, so a new account needs no second write."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.domain.enums import AuthMethod
+    from app.infra.db.first_sign_in import provision_first_sign_in
+
+    auth_id = uuid4()
+    async with AsyncSession(db_engine) as session:
+        await provision_first_sign_in(
+            session,
+            auth_id=auth_id,
+            email=f"{auth_id}@example.com",
+            auth_method=AuthMethod.EMAIL_CODE,
+        )
+
+    assert await auth_method_of(db_engine, auth_id) == "email_code"

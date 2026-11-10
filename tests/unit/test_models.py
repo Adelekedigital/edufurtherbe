@@ -28,6 +28,8 @@ from conftest import PROJECT_ROOT
 # from a silently smaller test run into a failure.
 EXPECTED_MODELS = {
     "Country",
+    # A person's analytics-cookie answer (PRD 30, decision 329).
+    "AnalyticsConsent",
     "FeaturedMentor",
     "MentorAvailabilityChange",
     "MentorNextAvailability",

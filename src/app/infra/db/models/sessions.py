@@ -69,6 +69,7 @@ from app.domain.enums import (
     ActorType,
     ApplicationStage,
     AttendanceStatus,
+    EntryPoint,
     MeetingProvider,
     SessionReasonCode,
     SessionRole,
@@ -496,6 +497,10 @@ class Session(TimestampMixin, Base):
 
     topic: Mapped[str | None] = mapped_column(Text)
     booking_message: Mapped[str | None] = mapped_column(Text)
+    #: Where in the app the booking began (PRD 30), for analytics only. Null
+    #: for older sessions and for a client that sent none; a move carries its
+    #: original's.
+    entry_point: Mapped[EntryPoint | None] = mapped_column(str_enum(EntryPoint))
 
     meeting_provider: Mapped[MeetingProvider | None] = mapped_column(str_enum(MeetingProvider))
     #: Generated per session at confirmation. A static personal room means
@@ -553,6 +558,10 @@ class Session(TimestampMixin, Base):
         CheckConstraint(
             check_is_known("status", SessionStatus),
             name="status_is_known",
+        ),
+        CheckConstraint(
+            f"entry_point IS NULL OR {check_is_known('entry_point', EntryPoint)}",
+            name="entry_point_is_known",
         ),
         CheckConstraint("duration_minutes BETWEEN 5 AND 480", name="duration_minutes_valid"),
         # **The constraint this table exists for.**

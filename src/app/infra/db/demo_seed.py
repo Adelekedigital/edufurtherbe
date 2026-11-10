@@ -50,7 +50,9 @@ __all__ = [
 #: The suffix every demo user's email carries, and the only thing removal reads.
 DEMO_DOMAIN = "demo.edufurther.test"
 #: The `LIKE` pattern that finds every demo user: the one spelling of the
-#: marker as a match, read by removal and by the admin Analytics exclusions.
+#: marker as a match in Python, read by removal. The database's
+#: `internal_account()` spells it too, to mark a demo account internal
+#: (`users.is_internal`), and `test_internal_accounts.py` pins the two.
 DEMO_EMAIL_LIKE = f"%@{DEMO_DOMAIN}"
 
 

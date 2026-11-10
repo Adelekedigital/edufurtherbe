@@ -38,6 +38,7 @@ from app.domain.enums import (
     ApprovalStatus,
     AttachmentScanStatus,
     AttendanceStatus,
+    AuthMethod,
     AuthProvider,
     AvailabilityExceptionType,
     AwardFunding,
@@ -50,6 +51,7 @@ from app.domain.enums import (
     CreditState,
     EmailEditAction,
     EmailLine,
+    EntryPoint,
     FeaturedSource,
     IntakeFileType,
     IntakeStatus,
@@ -77,6 +79,8 @@ from app.domain.enums import (
     SessionRole,
     SessionStatus,
     SessionTypeIcon,
+    SignupChannel,
+    SignupSource,
     UnlistedReason,
     VerificationStatus,
     WritingAssistField,
@@ -237,6 +241,11 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     ConversationStatus: frozenset({"ck_conversations_status_is_known"}),
     MessageType: frozenset({"ck_messages_message_type_is_known"}),
     AttachmentScanStatus: frozenset({"ck_message_attachments_virus_scan_status_is_known"}),
+    # Where an account and a booking came from (PRD 30, decision 329).
+    SignupSource: frozenset({"ck_users_signup_source_is_known"}),
+    SignupChannel: frozenset({"ck_users_signup_channel_is_known"}),
+    AuthMethod: frozenset({"ck_users_auth_method_is_known"}),
+    EntryPoint: frozenset({"ck_sessions_entry_point_is_known"}),
     # Which email a person switched on or off (Messages PRD, decision 303).
     NotificationPreferenceType: frozenset(
         {"ck_notification_channel_preferences_notification_type_is_known"}

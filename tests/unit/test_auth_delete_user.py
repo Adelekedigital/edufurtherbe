@@ -100,3 +100,40 @@ def test_a_missing_loops_contact_is_done_and_a_refusal_raises_without_the_addres
         loops(500, []).delete("ada@example.test")
 
     assert "500" in str(raised.value) and "ada@example.test" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("analytics_on", [True, False])
+async def test_the_job_hands_the_purge_the_analytics_sink_only_while_analytics_is_on(
+    monkeypatch: pytest.MonkeyPatch, analytics_on: bool
+) -> None:
+    """PRD 30 PR 2: the person is erased beside the Loops contact."""
+    from app.infra.clients.posthog import PostHogSink
+    from app.infra.jobs import runner
+
+    handed: dict[str, object] = {}
+
+    async def purge_due_accounts(_factory: object, **kwargs: object) -> dict[str, int]:
+        handed.update(kwargs)
+        return {"due": 0, "purged": 0, "failed": 0}
+
+    monkeypatch.setattr(runner, "purge_due_accounts", purge_due_accounts)
+    monkeypatch.setattr(runner, "auth_admin_for", lambda _s: object())
+    monkeypatch.setattr(runner, "image_storage_for", lambda _s, _c: object())
+    monkeypatch.setattr(runner, "create_database_engine", lambda _s: _Engine())
+    settings = Settings(
+        _env_file=None,
+        analytics_enabled=analytics_on,
+        analytics_host="https://us.i.posthog.com",
+        analytics_project_token="phc_token",  # noqa: S106 - public, made up
+    )
+
+    await RuntimeJobs(settings).run("purge-deleted-users")
+
+    assert isinstance(handed["analytics"], PostHogSink) is analytics_on
+    assert (handed["analytics"] is None) is not analytics_on
+
+
+class _Engine:
+    async def dispose(self) -> None:
+        return None
