@@ -26,7 +26,7 @@ from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError
 from app.domain.accounts import UNLISTED_ON_DELETION
-from app.domain.enums import ApplicationStage, CreditSource, MissedReason, UnlistedReason
+from app.domain.enums import CreditSource, MissedReason, UnlistedReason
 from app.domain.mentor_stats import Window
 
 #: The presets the window control offers, in days ending today.
@@ -435,80 +435,6 @@ class SessionsTab:
     outcomes: dict[str, int]
     top_no_show_reason: TopReason | None
     guardrails: dict[str, Metric]
-
-
-# --- Growth ------------------------------------------------------------------
-
-#: Where a sign-up came from, and through which channel: empty lists until
-#: PRD 30 records `signup_source`.
-SignupSource = Literal["invite", "direct", "campaign", "referral_site"]
-SignupChannel = Literal["linkedin", "whatsapp", "instagram", "google", "newsletter", "other"]
-#: The Growth tab's month series: this many UTC months, ending with this one.
-GROWTH_MONTHS = 6
-#: A session whose type names no stage, or that has no type.
-StageKey = ApplicationStage | Literal["not_set"]
-NOT_SET: Literal["not_set"] = "not_set"
-
-
-@dataclass(frozen=True, slots=True)
-class SignUps:
-    everyone: Metric
-    mentees: Metric
-    mentors: Metric
-
-
-@dataclass(frozen=True, slots=True)
-class TopInviter:
-    name: str
-    joined: int
-
-
-@dataclass(frozen=True, slots=True)
-class InviteCohort:
-    """Invites made in the window, and how far their invitees got."""
-
-    invited: int
-    joined: int
-    qualified: int
-    first_booking: int
-    first_completed: int
-    top_inviter: TopInviter | None
-
-
-@dataclass(frozen=True, slots=True)
-class MonthCount:
-    month: str
-    count: int
-
-
-@dataclass(frozen=True, slots=True)
-class Migrated:
-    count: int
-    on: dt.date | None
-
-
-@dataclass(frozen=True, slots=True)
-class TopicCount:
-    key: str
-    name: str
-    count: int
-
-
-@dataclass(frozen=True, slots=True)
-class StageCount:
-    key: StageKey
-    count: int
-
-
-@dataclass(frozen=True, slots=True)
-class GrowthTab:
-    signups: SignUps
-    invites: InviteCohort
-    months: list[MonthCount]
-    migrated: Migrated | None
-    completed_total: int
-    by_topic: list[TopicCount]
-    by_stage: list[StageCount]
 
 
 # --- Cache -------------------------------------------------------------------
