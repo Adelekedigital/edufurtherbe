@@ -23,10 +23,12 @@ from tests.integration.factories import (
 )
 from tests.integration.test_api_session_transitions import a_booking
 
+from app.domain.analytics_events import AnalyticsEvent
 from app.infra.auth.admin import AdminApiError
 from app.infra.clients.loops_contacts import ContactsError
 from app.infra.db import account_purge
 from app.infra.db.account_purge import purge_due_accounts
+from app.infra.db.outbox import enqueue_analytics
 from conftest import add_user, api_token, bearer
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -304,6 +306,53 @@ async def test_one_account_failing_in_the_database_does_not_stop_the_rest(
     assert counts == {"due": 2, "purged": 1, "failed": 1}
     assert await count(db_engine, "user_profiles", "user_id", first) == 1
     assert await count(db_engine, "user_profiles", "user_id", second) == 0
+
+
+async def test_a_purged_persons_unsent_analytics_are_never_sent(db_engine: AsyncEngine) -> None:
+    """Decision 328: what waits to go to analytics about them goes nowhere."""
+    user, _ = await a_full_account(db_engine, "analytics")
+    other, _ = await a_full_account(db_engine, "analytics-other")
+    async with factory(db_engine)() as session:
+        for person in (user, user, other):
+            await enqueue_analytics(
+                session, AnalyticsEvent.REFERRAL_UNLOCKED, person, {}, at=dt.datetime.now(dt.UTC)
+            )
+        await session.commit()
+    async with db_engine.begin() as conn:
+        # Already sent: the vendor holds it, and its own erasure is another call.
+        await conn.execute(
+            text(
+                "UPDATE outbox_events SET status = 'sent' WHERE id = "
+                "(SELECT id FROM outbox_events WHERE entity_id = :u ORDER BY id LIMIT 1)"
+            ),
+            {"u": user},
+        )
+        # A message about them is not analytics, and stays.
+        await conn.execute(
+            text(
+                "INSERT INTO outbox_events (event_type, entity_type, entity_id, destination) "
+                "VALUES ('credits_renewed', 'user', :u, 'email')"
+            ),
+            {"u": user},
+        )
+    await deleted(db_engine, user, purge_in=-DAY)
+
+    counts = await purge(db_engine, FakeAdmin(), FakeStorage())
+
+    assert counts == {"due": 1, "purged": 1, "failed": 0}
+    async with db_engine.connect() as conn:
+        left = await conn.execute(
+            text(
+                "SELECT entity_id, destination, status FROM outbox_events "
+                "ORDER BY entity_id = :u, destination, status"
+            ),
+            {"u": user},
+        )
+        assert [tuple(row) for row in left.all()] == [
+            (other, "analytics", "pending"),
+            (user, "analytics", "sent"),
+            (user, "email", "pending"),
+        ]
 
 
 async def test_a_dry_run_counts_and_changes_nothing(db_engine: AsyncEngine) -> None:

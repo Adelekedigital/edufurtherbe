@@ -37,10 +37,11 @@ from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ValidationError
-from app.domain.credits import CreditLadder, expiry_for
-from app.domain.enums import CreditReason, CreditSource
+from app.domain.credits import CreditLadder
+from app.domain.enums import CreditSource
 from app.infra.db import keyset
-from app.infra.db.models.credits import AdminCreditGrant, CreditLot, CreditTransaction
+from app.infra.db.credit_writer import grant_many
+from app.infra.db.models.credits import AdminCreditGrant
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
 
@@ -116,52 +117,10 @@ async def grant_credits(
     if not resolved:
         return AdminGrantResult(granted=(), unresolved=unresolved)
 
-    expires_at = expiry_for(CreditSource.ADMIN_GRANT, now=now)
-
-    lots = (
-        (
-            await session.execute(
-                insert(CreditLot).returning(
-                    CreditLot.id,
-                    CreditLot.user_id,
-                    # **Not decoration.** SQLAlchemy's `insertmanyvalues` does
-                    # not guarantee RETURNING rows correspond to input order
-                    # without this, and the response lists recipients from
-                    # these rows — so an admin could be told they credited a
-                    # different set from the one they asked for.
-                    sort_by_parameter_order=True,
-                ),
-                [
-                    {
-                        "user_id": user_id,
-                        "source": CreditSource.ADMIN_GRANT,
-                        "quantity_granted": quantity,
-                        "quantity_remaining": quantity,
-                        "expires_at": expires_at,
-                    }
-                    for user_id in resolved
-                ],
-            )
-        )
-        .mappings()
-        .all()
-    )
-
-    # **The ledger row, derived from the lots that exist.** Same care
-    # `grant_monthly_credits` takes: a movement written for a lot that was not
-    # inserted is a balance claiming to have moved when it did not.
-    await session.execute(
-        insert(CreditTransaction),
-        [
-            {
-                "user_id": lot["user_id"],
-                "credit_lot_id": lot["id"],
-                "delta": quantity,
-                "reason": CreditReason.GRANT,
-                "session_id": None,
-            }
-            for lot in lots
-        ],
+    # **The lots, their ledger rows and their analytics events by the one
+    # writer** (`grant_many`), which every grant goes through.
+    lots = await grant_many(
+        session, dict.fromkeys(resolved, quantity), source=CreditSource.ADMIN_GRANT, now=now
     )
 
     # **And the record of who authorised it**, in the same transaction. An
@@ -171,16 +130,17 @@ async def grant_credits(
         insert(AdminCreditGrant),
         [
             {
-                "credit_lot_id": lot["id"],
-                "user_id": lot["user_id"],
+                "credit_lot_id": lots[user_id],
+                "user_id": user_id,
                 "granted_by": admin_id,
                 "note": note,
             }
-            for lot in lots
+            for user_id in resolved
         ],
     )
 
-    return AdminGrantResult(granted=tuple(lot["user_id"] for lot in lots), unresolved=unresolved)
+    # In the caller's order: `resolved` is it, and each has one lot.
+    return AdminGrantResult(granted=resolved, unresolved=unresolved)
 
 
 #: **Both names, and the grant's own outcome.** An audit asks three things of a
