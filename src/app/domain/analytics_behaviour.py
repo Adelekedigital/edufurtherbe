@@ -1,15 +1,6 @@
-"""The admin Analytics page's product-analytics reads (PRD 31 PR 5, decision 331):
-the five funnels, the seven event cards, the Explore card and the log-in alert.
-
-Pure: no I/O, and the vendor is never named. A funnel is declared here as
-events and property matches; `infra` turns it into the vendor's query. Every
-event name and property value is PRD 30's catalogue verbatim, because those
-names are what the frontend tracks.
-
-**One funnel per journey, a breakdown is a filter** (PRD 30): ``by`` narrows
-the people counted (a person property) or the step a journey starts from (an
-event property), never builds a second funnel. Each funnel's ``by`` is a closed
-set; anything else is refused before anything is read.
+"""Product-analytics reads for admin Analytics (PRD 31 PR 5, decision 331): the
+funnels, event cards, Explore card and log-in alert. Pure; event names are PRD 30's
+catalogue verbatim. A ``by`` breakdown is a filter from a closed set, never a second funnel.
 """
 
 from __future__ import annotations
@@ -37,34 +28,6 @@ from app.domain.analytics import (
 from app.domain.analytics_events import AnalyticsEvent
 from app.domain.enums import EntryPoint, PrimaryRole, SignupSource
 from app.domain.mentor_stats import Window
-
-__all__ = [
-    "BOOKED_WITHIN",
-    "EVERYONE",
-    "FUNNELS",
-    "FUNNEL_NAMES",
-    "BehaviourFigures",
-    "BehaviourTab",
-    "Breakdown",
-    "Counted",
-    "ExploreFigures",
-    "Funnel",
-    "FunnelName",
-    "FunnelStep",
-    "FunnelTab",
-    "LoginCodes",
-    "Match",
-    "Searchers",
-    "Share",
-    "Step",
-    "behaviour_tab",
-    "breakdown_for",
-    "explore_feature",
-    "explore_windows",
-    "funnel_named",
-    "funnel_tab",
-    "login_alert",
-]
 
 FunnelName = Literal[
     "signup", "booking", "mentee_activation", "mentor_activation", "mentor_application"
@@ -465,9 +428,8 @@ def explore_windows(period: Period) -> list[Window]:
 
 
 def explore_feature(figures: ExploreFigures, compare: bool) -> Feature:
-    """The Explore and matching card from `explore_windows`' figures: searchers
-    who went on to a profile or a booking, over searchers; contribution, the
-    window's searchers who requested a booking within `BOOKED_WITHIN`."""
+    """The Explore card: searchers who went on to a profile or a booking, over
+    searchers; contribution, those who requested one within `BOOKED_WITHIN`."""
     rates = [rate(w.led, w.searched) for w in figures.per_window]
     return Feature(
         key="explore",
@@ -489,8 +451,7 @@ def _percent(value: float) -> str:
 
 def login_alert(codes: LoginCodes, today: dt.date) -> Alert | None:
     """An alert when more than `LOGIN_FAILED_OVER` of yesterday's (UTC) log-in
-    attempts failed, raised at the start of today, adding a sentence when
-    migrated users are more than half of the failures."""
+    attempts failed, noting when migrated users are most of the failures."""
     if codes.attempts <= 0 or Fraction(codes.failed, codes.attempts) <= LOGIN_FAILED_OVER:
         return None
     # Rounded up to one decimal, so a share just over the line never reads as it.

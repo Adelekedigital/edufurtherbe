@@ -1,31 +1,9 @@
-"""PostHog, behind `AnalyticsReader` (PRD 31 PR 5, decision 331): plain `httpx`.
-
-**The Query API, not Endpoints.** ``POST {api_host}/api/projects/{project_id}/query/``
-with ``{"query": {...}}`` and ``Authorization: Bearer <personal API key>``; the
-key needs only the **Query Read** scope (https://posthog.com/docs/api/queries).
-PostHog's Endpoints product (https://posthog.com/docs/endpoints) turns a query
-saved in the web app into a named route (``/api/environments/{id}/endpoints/{name}/run``,
-``endpoint:read``), so the definition would live in PostHog where no review sees
-it; here every query is built in this file from fixed text.
-
-**The private host**, `ANALYTICS_API_HOST` (``https://us.posthog.com`` or
-``https://eu.posthog.com``), never the ingestion host (``us.i.posthog.com``)
-the sink sends to.
-
-**Nothing a request sends is written into query text.** A funnel is a
-`FunnelsQuery` (structured JSON: events, property filters, a date range); every
-other read is a `HogQLQuery` whose variable parts are ``{placeholders}`` filled
-from its ``values`` ("Constant values that can be referenced with the
-{placeholder} syntax in the query", PostHog's query schema). The text itself is
-constants of this module and of `domain.analytics_behaviour`.
-
-**Limits** (https://posthog.com/docs/api/queries, "Limits"): 240 queries a
-minute, 2,400 an hour, 3 at once, 10 seconds of execution each. The page reads
-at most three queries per tab and caches results for 10 minutes, so it stays far
-under them. Short timeouts: a slow answer is an unavailable source, never a
-held request.
-
-Synchronous like every adapter; the API layer calls it through `asyncio.to_thread`.
+"""PostHog behind `AnalyticsReader` (decision 331), through its Query API
+(https://posthog.com/docs/api/queries): ``POST {ANALYTICS_API_HOST}/api/projects/{id}/query/``
+with a personal key holding Query Read only. Not Endpoints
+(https://posthog.com/docs/endpoints), whose queries live in PostHog, unreviewed.
+No request input reaches query text: funnels are `FunnelsQuery` JSON, other reads
+`HogQLQuery` filled through ``values``. Limits: 240 a minute, 3 at once, 10 s each.
 """
 
 from __future__ import annotations
@@ -73,13 +51,7 @@ from app.domain.ports import AnalyticsReader
 from app.infra.http.client import shared
 from app.infra.http.upstream import trim_origin
 
-__all__ = [
-    "NOT_INTERNAL",
-    "NullAnalyticsReader",
-    "PostHogReader",
-    "analytics_reader_for",
-    "replay_url_for",
-]
+__all__ = ["NullAnalyticsReader", "PostHogReader", "analytics_reader_for", "replay_url_for"]
 
 logger = logging.getLogger(__name__)
 
@@ -303,10 +275,8 @@ def _filter(match: Match) -> dict[str, Any]:
 def funnel_query(
     funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
 ) -> dict[str, Any]:
-    """The `FunnelsQuery` for ``funnel`` over people entering in ``window``,
-    narrowed by the ``by`` option (already one the funnel offers).
-    ``filterTestAccounts`` stays off: the exclusion is `NOT_INTERNAL` over
-    ``internal``, here, not a project setting nobody reviews."""
+    """The `FunnelsQuery` for ``funnel`` narrowed by ``by``. ``filterTestAccounts``
+    stays off: `NOT_INTERNAL` excludes, not a project setting nobody reviews."""
     breakdown = funnel.by[by]
     series = []
     for i, step in enumerate(funnel.tracked):
@@ -345,9 +315,8 @@ def funnel_query(
 
 
 def hogql(name: str, query: str, values: dict[str, Any]) -> dict[str, Any]:
-    """A `HogQLQuery`: ``query`` as written, every ``{placeholder}`` in its
-    ``values`` (the window's ``values``, else `NAMES`). ``name`` labels it in
-    PostHog's query log."""
+    """A `HogQLQuery`, each ``{placeholder}`` filled from ``values`` else `NAMES`;
+    ``name`` labels it in PostHog's query log."""
     wanted = set(_PLACEHOLDER.findall(query))
     filled = {key: values[key] if key in values else NAMES[key] for key in sorted(wanted)}
     return {"kind": "HogQLQuery", "query": query, "values": filled, "name": name}
@@ -475,10 +444,8 @@ class PostHogReader:
         self._client = client or shared(TAB_TIMEOUT)
 
     def _ask(self, query: dict[str, Any], timeout: httpx.Timeout) -> Any:
-        """The answer's body, or the one unavailable error for any failure:
-        a transport error, a timeout, a non-2xx, or a body that is not JSON.
-        Only the status and the kind of failure are logged: an error body can
-        echo the request, key included."""
+        """The answer's body, or `AnalyticsUpstreamError` for any failure. Only the
+        status and failure kind are logged: an error body can echo the key."""
         response: httpx.Response | None = None
         try:
             response = self._client.post(

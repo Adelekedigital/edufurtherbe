@@ -195,10 +195,7 @@ class SubTracksRead(BaseModel):
 class FeatureRead(BaseModel):
     key: FeatureKey
     value: MetricRead | None = Field(
-        description=(
-            "A percentage. Null only for `explore`, when product analytics are not "
-            "set up or not answering."
-        )
+        description="A percentage. Null only for `explore` when PostHog is not answering."
     )
     spark: list[float | None] | None = Field(
         description=(
@@ -524,15 +521,8 @@ class AnalyticsSupplyRead(SectionRead):
 class FunnelStepRead(BaseModel):
     key: str
     label: str
-    value: int | None = Field(
-        description=(
-            "People who reached this step, of those who entered the funnel in the window. "
-            "Null for a step nothing tracks yet."
-        )
-    )
-    previous: int | None = Field(
-        description="The same over the previous period; null with `compare=false` or with `value`."
-    )
+    value: int | None = Field(description="People who reached it; null when nothing tracks it.")
+    previous: int | None = Field(description="The previous period's; null with `compare=false`.")
 
 
 class AnalyticsFunnelRead(SectionRead):
@@ -570,16 +560,12 @@ class AnalyticsFunnelRead(SectionRead):
 class LoginCodesRead(BaseModel):
     attempts: int = Field(description="Log-in codes verified or failed.")
     failed_rate: float | None = Field(description="Failed over attempts, as a percentage.")
-    failed_migrated_rate: float | None = Field(
-        description="Failures by migrated users over all failures, as a percentage."
-    )
+    failed_migrated_rate: float | None = Field(description="Migrated users' share of failures, %.")
 
 
 class SearchRead(BaseModel):
     searches: int
-    no_results_rate: float | None = Field(
-        description="Searches with no result over searches, as a percentage."
-    )
+    no_results_rate: float | None = Field(description="Searches with no result, %.")
     profile_views_from_search: int
 
 
@@ -592,7 +578,7 @@ class JoiningRead(BaseModel):
     join_clicked: int
     join_failed: int
     median_minutes_from_start: float | None = Field(
-        description="The median `minutes_from_start` of join clicks; null with none."
+        description="Median of join clicks; null with none."
     )
 
 
@@ -604,11 +590,7 @@ class WritingAssistCardRead(BaseModel):
 
 class AppCardRead(BaseModel):
     installed: int = Field(description="App installs in the window.")
-    push_allowed_rate: float | None = Field(
-        description=(
-            "People who allowed push in the window over people active in it, as a percentage."
-        )
-    )
+    push_allowed_rate: float | None = Field(description="Who allowed push over who was active, %.")
 
 
 class RouteFailuresRead(BaseModel):
@@ -621,18 +603,12 @@ class AnalyticsBehaviourRead(SectionRead):
 
     login_codes: LoginCodesRead
     search: SearchRead
-    profile_views_by_source: list[SourceShareRead] = Field(
-        description="One row per source, most first."
-    )
+    profile_views_by_source: list[SourceShareRead] = Field(description="Most first.")
     joining: JoiningRead
     writing_assist: WritingAssistCardRead
     app: AppCardRead
-    errors_by_screen: list[RouteFailuresRead] = Field(
-        description="The top 3 routes by failed requests, most first."
-    )
-    replay_url: str | None = Field(
-        description="This environment's session replay list in PostHog; null when not set up."
-    )
+    errors_by_screen: list[RouteFailuresRead] = Field(description="Top 3 routes by failures.")
+    replay_url: str | None = Field(description="This environment's PostHog replays; null if unset.")
 
     @classmethod
     def of(

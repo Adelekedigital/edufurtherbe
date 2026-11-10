@@ -1,15 +1,8 @@
-"""The admin Analytics page's PostHog reads (PRD 31 PR 5, decision 331).
-
-What carries weight: the gate, the `503` with `Retry-After` whenever PostHog
-cannot answer (and only on the two PostHog routes), Overview and every alert
-still answering without it, the log-in alert's threshold, and the cache keeping
-results but never a failure. PostHog is an `httpx.MockTransport`.
-"""
+"""The admin Analytics page's PostHog reads (PRD 31 PR 5, decision 331): the gate,
+the `503`, the database tabs answering without PostHog, the alert and the cache."""
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -18,41 +11,23 @@ from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import admin_token, token_for
+from tests.posthog_fakes import (
+    CARD_COLUMNS,
+    HOST,
+    Handler,
+    body_of,
+    funnel_answer,
+    posthog_reader,
+    rows,
+)
 
 from app.core.config import Settings
-from app.infra.clients.posthog_reader import PostHogReader
 from app.infra.storage.supabase import SupabaseStorage
 from conftest import add_user, build_api_app, client_for
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 BASE = "/api/v1/admin/analytics"
-HOST = "https://posthog.example.test"
-
-Handler = Callable[[httpx.Request], httpx.Response]
-
-CARD_COLUMNS = [
-    "attempts",
-    "failed",
-    "failed_migrated",
-    "searches",
-    "searches_no_results",
-    "profile_views_from_search",
-    "profile_views",
-    "join_clicked",
-    "join_failed",
-    "median_minutes_from_start",
-    "assist_used",
-    "assist_accepted",
-    "assist_discarded",
-    "app_installed",
-    "push_allowed_people",
-    "active_people",
-]
-
-
-def rows(columns: list[str], *values: list[Any]) -> httpx.Response:
-    return httpx.Response(200, json={"columns": columns, "results": [list(v) for v in values]})
 
 
 class PostHog:
@@ -64,14 +39,12 @@ class PostHog:
         self.seen: list[dict[str, Any]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        query = json.loads(request.content)["query"]
+        query = body_of(request)["query"]
         self.seen.append(query)
         if self.down:
             return httpx.Response(502, text="bad gateway")
         if query["kind"] == "FunnelsQuery":
-            return httpx.Response(
-                200, json={"results": [{"order": i, "count": 50 - 10 * i} for i in range(5)]}
-            )
+            return funnel_answer(*(50 - 10 * i for i in range(len(query["series"]))))
         name = query["name"]
         if name == "admin_analytics_login_codes":
             return rows(["attempts", "failed", "failed_migrated"], list(self.login))
@@ -101,10 +74,7 @@ def app_for(
         engine, storage, Settings(_env_file=None, admin_analytics_enabled=on, **settings)
     )
     if posthog is not None:
-        client = httpx.Client(transport=httpx.MockTransport(posthog))
-        app.state.analytics_reader = PostHogReader(
-            api_host=HOST, project_id="7", api_key="phx_test", client=client
-        )
+        app.state.analytics_reader = posthog_reader(posthog, project="7")[0]
     return app
 
 
@@ -133,7 +103,7 @@ async def test_switched_off_or_not_an_admin_is_a_404(
                 assert answer.headers["Cache-Control"] == "private, no-store"
 
 
-async def test_a_funnel_returns_every_step_compared(
+async def test_a_funnel_returns_every_step_compared_and_refuses_what_it_has_not(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:
     token = await admin_token(db_engine)
@@ -144,94 +114,49 @@ async def test_a_funnel_returns_every_step_compared(
     body = answer.json()
     assert (body["name"], body["by"], body["window_days"]) == ("signup", "migrated", 30)
     assert body["note"].startswith("One sign-up funnel for both roles")
-    assert [s["key"] for s in body["steps"]] == [
-        "started",
-        "code_verified",
-        "onboarded",
-        "first_booking_or_bookable",
-        "first_completed",
-    ]
-    assert body["steps"][0] == {
-        "key": "started",
-        "label": "Started sign-up",
-        "value": 50,
-        "previous": 50,
-    }
+    keys = "started code_verified onboarded first_booking_or_bookable first_completed"
+    assert [s["key"] for s in body["steps"]] == keys.split()
+    first = {"key": "started", "label": "Started sign-up", "value": 50, "previous": 50}
+    assert body["steps"][0] == first
     assert [s["value"] for s in body["steps"]] == [50, 40, 30, 20, 10]
     assert all(a["key"] != "login_code_failed" for a in body["alerts"])
     # This period and the previous: two funnel reads.
     assert posthog.asked("FunnelsQuery") == 2
-
-
-async def test_an_untracked_step_is_null_and_compare_false_reads_once(
-    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
-) -> None:
-    token = await admin_token(db_engine)
-
-    def four(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"results": [{"order": i, "count": 4} for i in range(4)]})
-
-    async with client_for(app_for(db_engine, api_storage, four)) as client:
-        answer = await get(client, token, "/funnels/mentor_activation", compare="false")
-    assert answer.status_code == 200
-    steps = answer.json()["steps"]
-    assert [s["value"] for s in steps] == [4, 4, 4, 4, None]
-    assert all(s["previous"] is None for s in steps)
-
-
-async def test_a_funnel_name_or_breakdown_it_has_not_is_refused(
-    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
-) -> None:
-    token = await admin_token(db_engine)
-    posthog = PostHog()
     async with client_for(app_for(db_engine, api_storage, posthog)) as client:
+        untracked = await get(client, token, "/funnels/mentor_activation", compare="false")
         assert (await get(client, token, "/funnels/sign_up")).status_code == 404
         refused = await get(client, token, "/funnels/booking", by="migrated")
+    steps = untracked.json()["steps"]
+    assert [s["value"] for s in steps] == [50, 40, 30, 20, None]
+    assert all(s["previous"] is None for s in steps)
+    assert posthog.asked("FunnelsQuery") == 3  # once without compare; none refused
     assert refused.status_code == 422
-    body = refused.json()
-    assert body["type"] == "/problems/analytics-window"
-    assert body["errors"][0]["pointer"] == "/query/by"
-    assert posthog.asked("FunnelsQuery") == 0
+    assert refused.json()["type"] == "/problems/analytics-window"
+    assert refused.json()["errors"][0]["pointer"] == "/query/by"
 
 
 async def test_behaviour_returns_the_seven_cards_and_the_replay_link(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:
     token = await admin_token(db_engine)
-    configured = {
-        "analytics_api_host": HOST,
-        "analytics_project_id": "7",
-        "analytics_api_key": SecretStr("phx_test"),
-    }
+    configured = {"analytics_api_host": HOST, "analytics_project_id": "7"}
+    configured |= {"analytics_api_key": SecretStr("phx_test")}
     async with client_for(app_for(db_engine, api_storage, PostHog(), **configured)) as client:
         answer = await get(client, token, "/behaviour")
     assert answer.status_code == 200
     body = answer.json()
-    assert body["login_codes"] == {
-        "attempts": 10,
-        "failed_rate": 20.0,
-        "failed_migrated_rate": 50.0,
-    }
-    assert body["search"] == {
-        "searches": 8,
-        "no_results_rate": 25.0,
-        "profile_views_from_search": 3,
-    }
-    assert body["profile_views_by_source"] == [
-        {"source": "explore", "share": 37.5},
-        {"source": "home", "share": 12.5},
-    ]
-    assert body["joining"] == {
-        "join_clicked": 5,
-        "join_failed": 1,
-        "median_minutes_from_start": 3.0,
-    }
+    login = {"attempts": 10, "failed_rate": 20.0, "failed_migrated_rate": 50.0}
+    assert body["login_codes"] == login
+    search = {"searches": 8, "no_results_rate": 25.0, "profile_views_from_search": 3}
+    assert body["search"] == search
+    shares = [{"source": "explore", "share": 37.5}, {"source": "home", "share": 12.5}]
+    assert body["profile_views_by_source"] == shares
+    joining = {"join_clicked": 5, "join_failed": 1, "median_minutes_from_start": 3.0}
+    assert body["joining"] == joining
     assert body["writing_assist"] == {"used": 6, "accepted_rate": 50.0, "discarded_rate": 33.3}
     assert body["app"] == {"installed": 1, "push_allowed_rate": 10.0}
-    assert body["errors_by_screen"] == [
-        {"route": "explore", "count": 3},
-        {"route": "home", "count": 1},
-    ]
+    routes = [{"route": "explore", "count": 3}, {"route": "home", "count": 1}]
+    assert body["errors_by_screen"] == routes
     assert body["replay_url"] == f"{HOST}/project/7/replay/home"
 
 
@@ -247,22 +172,6 @@ async def test_posthog_down_or_unconfigured_is_a_503_with_retry_after(
         assert answer.headers["Retry-After"] == "60"
         assert answer.json()["type"] == "/problems/analytics-upstream"
         assert "posthog" not in answer.text.lower()
-
-
-async def test_a_result_is_kept_and_a_failure_is_not(
-    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
-) -> None:
-    token = await admin_token(db_engine)
-    posthog = PostHog(down=True)
-    async with client_for(app_for(db_engine, api_storage, posthog)) as client:
-        assert (await get(client, token, "/behaviour")).status_code == 503
-        failed = posthog.asked("admin_analytics_cards")
-        posthog.down = False
-        assert (await get(client, token, "/behaviour")).status_code == 200
-        assert posthog.asked("admin_analytics_cards") == failed + 1
-        assert (await get(client, token, "/behaviour")).status_code == 200
-        # The second answer came from the cache.
-        assert posthog.asked("admin_analytics_cards") == failed + 1
 
 
 async def test_overview_fills_explore_and_answers_without_posthog(
@@ -282,12 +191,8 @@ async def test_overview_fills_explore_and_answers_without_posthog(
             down = await get(client, token, "/overview")
         assert down.status_code == 200
         features = {f["key"]: f for f in down.json()["features"]}
-        assert features["explore"] == {
-            "key": "explore",
-            "value": None,
-            "spark": None,
-            "contribution": None,
-        }
+        empty = {"key": "explore", "value": None, "spark": None, "contribution": None}
+        assert features["explore"] == empty
         assert features["booking"]["value"] is not None
 
 
@@ -342,7 +247,7 @@ async def test_internal_accounts_are_left_out_by_their_database_ids(
         assert str(counted) not in sent
 
 
-async def test_a_failing_posthog_is_asked_once_a_minute_on_the_optional_paths(
+async def test_a_failure_is_kept_a_minute_on_optional_paths_and_never_on_posthog_routes(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:
     token = await admin_token(db_engine)
@@ -354,7 +259,12 @@ async def test_a_failing_posthog_is_asked_once_a_minute_on_the_optional_paths(
         for _ in range(2):
             assert (await get(client, token, "/overview")).status_code == 200
         assert posthog.asked("admin_analytics_explore") == 1
-        # The PostHog routes are never answered from a remembered failure.
+        # The PostHog routes are never answered from a remembered failure...
         for _ in range(2):
             assert (await get(client, token, "/behaviour")).status_code == 503
         assert posthog.asked("admin_analytics_cards") == 2
+        # ...and keep a result once there is one.
+        posthog.down = False
+        for _ in range(2):
+            assert (await get(client, token, "/behaviour")).status_code == 200
+        assert posthog.asked("admin_analytics_cards") == 3

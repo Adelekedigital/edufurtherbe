@@ -134,11 +134,8 @@ async def _kept[T](
     *,
     optional: bool = False,
 ) -> T:
-    """Figures from this app's `TabCache`, or computed and kept. A `503`
-    route keeps only a result, so its failure is retried. An ``optional``
-    read (one a database tab adds) also remembers a PostHog failure for
-    `FAILED_FOR`, so an outage costs a tab its timeout once a minute, not on
-    every view."""
+    """Figures from this app's `TabCache`, or computed and kept. An ``optional``
+    read (one a database tab adds) also keeps a failure for `FAILED_FOR`."""
     cache: TabCache | None = getattr(request.app.state, "analytics_cache", None)
     if cache is None:
         cache = request.app.state.analytics_cache = TabCache()
@@ -168,10 +165,8 @@ async def _cached[T](
 async def _login_alert(
     request: Request, reader: AnalyticsReader, session: SessionDep, now: dt.datetime
 ) -> Alert | None:
-    """The log-in alert from yesterday's codes, or none when the source cannot
-    answer (PRD 31: skipped, not failed). Yesterday's counts are kept like a
-    tab's, so a section does not ask the source on every view; the alert
-    itself is worked out on every request."""
+    """The log-in alert from yesterday's kept codes, or none when PostHog cannot
+    answer (PRD 31: skipped, not failed)."""
     today = now.date()
     day = yesterday(today)
 
@@ -239,9 +234,8 @@ async def analytics_overview(
 async def _explore(
     request: Request, ask: AnalyticsAsk, reader: AnalyticsReader, internal: list[UUID]
 ) -> Feature | None:
-    """The Explore and matching card, kept apart from the database's figures,
-    or ``None`` when the source cannot answer: the card then stays empty and
-    the rest of Overview is unaffected (PRD 31 guardrail)."""
+    """The Explore card, or ``None`` when PostHog cannot answer (the card stays
+    empty, nothing else changes)."""
     windows = explore_windows(ask.period)
     try:
         figures = await _kept(

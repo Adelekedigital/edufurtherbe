@@ -1,8 +1,5 @@
 """PRD 31 PR 5 (decision 331): the funnels, event cards, Explore card and log-in
-alert, and the PostHog reader behind them.
-
-PostHog is an `httpx.MockTransport`; nothing here reaches a network.
-"""
+alert, and the PostHog reader behind them (a fake transport, no network)."""
 
 from __future__ import annotations
 
@@ -16,6 +13,16 @@ from uuid import UUID
 import httpx
 import pytest
 from pydantic import SecretStr
+from tests.posthog_fakes import (
+    CARD_COLUMNS,
+    HOST,
+    KEY,
+    Handler,
+    body_of,
+    funnel_answer,
+    posthog_reader,
+    rows,
+)
 
 from app.core.config import Settings, env_key
 from app.core.errors import AnalyticsUpstreamError, AnalyticsWindowError, NotFoundError
@@ -37,32 +44,25 @@ from app.domain.analytics_behaviour import (
     login_alert,
 )
 from app.domain.mentor_stats import Window
+from app.infra.clients import posthog_reader as queries
 from app.infra.clients.posthog_reader import (
-    BOOKED_QUERY,
-    CARDS_QUERY,
-    EXPLORE_QUERY,
-    LOGIN_QUERY,
     NOT_INTERNAL,
-    ROUTES_QUERY,
-    SOURCES_QUERY,
     NullAnalyticsReader,
     PostHogReader,
     analytics_reader_for,
     replay_url_for,
 )
 
-HOST = "https://posthog.example.test"
-KEY = "phx_personal_key"
 WINDOW = Window(
     since=dt.datetime(2026, 11, 1, tzinfo=dt.UTC), until=dt.datetime(2026, 11, 8, tzinfo=dt.UTC)
 )
+SINCE, UNTIL, WEEK_BEFORE = 1793491200, 1794096000, 1792886400
 TODAY = dt.date(2026, 11, 10)
 #: An internal account (an admin or a demo address), as the database lists it.
 ADMIN = UUID("0190aaaa-0000-7000-8000-00000000000a")
 INTERNAL = (ADMIN,)
 LEFT_OUT = f"NOT has(['{ADMIN}'], distinct_id)"
-
-Handler = Callable[[httpx.Request], httpx.Response]
+LOGIN = ["attempts", "failed", "failed_migrated"]
 
 
 @pytest.fixture(autouse=True)
@@ -72,108 +72,63 @@ def no_process_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-def reader(handler: Handler) -> tuple[PostHogReader, list[httpx.Request]]:
-    seen: list[httpx.Request] = []
-
-    def record(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return handler(request)
-
-    client = httpx.Client(transport=httpx.MockTransport(record))
-    return PostHogReader(api_host=HOST + "/", project_id="42", api_key=KEY, client=client), seen
+def person(key: str, value: str, operator: str = "exact") -> dict[str, Any]:
+    return {"type": "person", "key": key, "operator": operator, "value": [value]}
 
 
-def body_of(request: httpx.Request) -> dict[str, Any]:
-    return json.loads(request.content)  # type: ignore[no-any-return]
+def event(key: str, value: str) -> dict[str, Any]:
+    return {"type": "event", "key": key, "operator": "exact", "value": [value]}
 
 
-def hogql_answer(columns: list[str], *rows: list[Any]) -> httpx.Response:
-    return httpx.Response(200, json={"columns": columns, "results": [list(r) for r in rows]})
+STEPS = {
+    "signup": "started code_verified onboarded first_booking_or_bookable first_completed",
+    "booking": "started type time questions requested completed",
+    "mentee_activation": "signed_up onboarded first_request first_session",
+    "mentor_activation": "approved availability_set session_type_created conferencing_connected "
+    "first_session",
+    "mentor_application": "started about_you education hours submitted approved",
+}
+WINDOWS = {"signup": 30, "booking": 60, "mentee_activation": 14, "mentor_activation": 30}
+BY = {
+    "signup": "all mentee mentor invite direct campaign migrated",
+    "booking": "all mentor_profile explore home onboarding_guest rebook_after_review",
+    "mentee_activation": "all invite direct",
+}
 
 
-def funnel_answer(*counts: int) -> httpx.Response:
-    results = [{"order": i, "count": c, "name": "x"} for i, c in enumerate(counts)]
-    # Out of order on purpose: `order` decides, not position.
-    return httpx.Response(200, json={"results": list(reversed(results))})
+@pytest.mark.parametrize("name", STEPS)
+def test_each_funnel_has_its_steps_window_and_own_breakdowns(name: str) -> None:
+    funnel = FUNNELS[name]  # type: ignore[index]
+    assert " ".join(s.key for s in funnel.steps) == STEPS[name]
+    assert funnel.window_days == WINDOWS.get(name, 30)
+    assert " ".join(funnel.by) == BY.get(name, "all")
 
 
-# --------------------------------------------------------------------------
-# The funnel definitions
-# --------------------------------------------------------------------------
+def test_the_five_funnels_in_order() -> None:
+    names = "signup booking mentee_activation mentor_activation mentor_application"
+    assert " ".join(FUNNEL_NAMES) == names
 
 
-def test_the_five_funnels_with_their_steps_and_windows() -> None:
-    assert FUNNEL_NAMES == (
-        "signup",
-        "booking",
-        "mentee_activation",
-        "mentor_activation",
-        "mentor_application",
-    )
-    steps = {name: [s.key for s in FUNNELS[name].steps] for name in FUNNEL_NAMES}
-    assert steps["signup"] == [
-        "started",
-        "code_verified",
-        "onboarded",
-        "first_booking_or_bookable",
-        "first_completed",
-    ]
-    assert steps["booking"] == ["started", "type", "time", "questions", "requested", "completed"]
-    assert steps["mentee_activation"] == [
-        "signed_up",
-        "onboarded",
-        "first_request",
-        "first_session",
-    ]
-    assert steps["mentor_application"] == [
-        "started",
-        "about_you",
-        "education",
-        "hours",
-        "submitted",
-        "approved",
-    ]
-    assert {name: FUNNELS[name].window_days for name in FUNNEL_NAMES} == {
-        "signup": 30,
-        "booking": 60,
-        "mentee_activation": 14,
-        "mentor_activation": 30,
-        "mentor_application": 30,
-    }
+@pytest.mark.parametrize(
+    ("name", "by", "refused"),
+    [
+        ("signup", "explore", True),
+        ("mentor_application", "migrated", True),
+        ("signup", "migrated", False),
+    ],
+)
+def test_a_breakdown_is_checked_against_the_funnel(name: str, by: str, refused: bool) -> None:
+    funnel = funnel_named(name)
+    assert breakdown_for(funnel, None) == "all"
+    if not refused:
+        assert breakdown_for(funnel, by) == by
+        return
+    with pytest.raises(AnalyticsWindowError) as error:
+        breakdown_for(funnel, by)
+    assert error.value.field_errors[0][0] == "/query/by"
 
 
-def test_each_funnel_offers_only_its_own_breakdowns() -> None:
-    assert list(FUNNELS["signup"].by) == [
-        "all",
-        "mentee",
-        "mentor",
-        "invite",
-        "direct",
-        "campaign",
-        "migrated",
-    ]
-    assert list(FUNNELS["booking"].by) == [
-        "all",
-        "mentor_profile",
-        "explore",
-        "home",
-        "onboarding_guest",
-        "rebook_after_review",
-    ]
-    assert list(FUNNELS["mentee_activation"].by) == ["all", "invite", "direct"]
-    assert list(FUNNELS["mentor_activation"].by) == ["all"]
-    assert list(FUNNELS["mentor_application"].by) == ["all"]
-
-
-def test_a_breakdown_is_checked_against_the_funnel() -> None:
-    signup = funnel_named("signup")
-    assert breakdown_for(signup, None) == "all"
-    assert breakdown_for(signup, "migrated") == "migrated"
-    with pytest.raises(AnalyticsWindowError) as refused:
-        breakdown_for(signup, "explore")  # the booking funnel's, not this one's
-    assert refused.value.field_errors[0][0] == "/query/by"
-    with pytest.raises(AnalyticsWindowError):
-        breakdown_for(funnel_named("mentor_application"), "migrated")
+def test_an_unknown_funnel_is_not_found() -> None:
     with pytest.raises(NotFoundError):
         funnel_named("sign_up")
 
@@ -201,79 +156,69 @@ def test_a_funnel_tab_compares_and_leaves_an_untracked_step_null() -> None:
     assert tab.note == "Bookable target: 7 days from approval."
 
 
-# --------------------------------------------------------------------------
-# The log-in alert
-# --------------------------------------------------------------------------
+@pytest.mark.parametrize(("attempts", "failed"), [(100, 10), (0, 0)])
+def test_the_login_alert_is_quiet_at_or_under_ten_percent(attempts: int, failed: int) -> None:
+    assert (
+        login_alert(LoginCodes(attempts=attempts, failed=failed, failed_migrated=0), TODAY) is None
+    )
 
 
-def test_the_login_alert_fires_over_ten_percent_only() -> None:
-    assert login_alert(LoginCodes(attempts=100, failed=10, failed_migrated=0), TODAY) is None
-    assert login_alert(LoginCodes(attempts=0, failed=0, failed_migrated=0), TODAY) is None
+def test_the_login_alert_fires_over_ten_percent() -> None:
     fired = login_alert(LoginCodes(attempts=1000, failed=101, failed_migrated=50), TODAY)
     assert fired is not None
-    assert fired.key == "login_code_failed"
-    assert fired.title == "Log-in codes failing"
+    assert (fired.key, fired.title) == ("login_code_failed", "Log-in codes failing")
     assert fired.body == "10.1% of log-in attempts failed yesterday (alert at 10%)."
     assert fired.link is not None
     assert (fired.link.tab, fired.link.funnel, fired.link.by) == ("funnels", "signup", "migrated")
     assert fired.raised_at == dt.datetime(2026, 11, 10, tzinfo=dt.UTC)
 
 
-def test_the_login_alert_never_rounds_down_to_the_threshold() -> None:
-    fired = login_alert(LoginCodes(attempts=10_000, failed=1_001, failed_migrated=0), TODAY)
-    assert fired is not None
-    assert fired.body.startswith("10.1% of log-in attempts failed yesterday")
-
-
-def test_the_login_alert_says_when_most_failures_are_migrated_users() -> None:
-    most = login_alert(LoginCodes(attempts=40, failed=10, failed_migrated=6), TODAY)
-    assert most is not None
-    assert most.body == (
-        "25% of log-in attempts failed yesterday (alert at 10%). Most are migrated users."
+@pytest.mark.parametrize(
+    ("attempts", "failed", "migrated", "body"),
+    [
+        (10_000, 1_001, 0, "10.1% of log-in attempts failed yesterday (alert at 10%)."),
+        (
+            40,
+            10,
+            6,
+            "25% of log-in attempts failed yesterday (alert at 10%). Most are migrated users.",
+        ),
+        (40, 10, 5, "25% of log-in attempts failed yesterday (alert at 10%)."),
+    ],
+    ids=["never-rounds-down-to-the-threshold", "most-migrated", "half-migrated"],
+)
+def test_the_login_alert_body(attempts: int, failed: int, migrated: int, body: str) -> None:
+    fired = login_alert(
+        LoginCodes(attempts=attempts, failed=failed, failed_migrated=migrated), TODAY
     )
-    half = login_alert(LoginCodes(attempts=40, failed=10, failed_migrated=5), TODAY)
-    assert half is not None and "migrated" not in half.body
-
-
-# --------------------------------------------------------------------------
-# Cards and Explore
-# --------------------------------------------------------------------------
-
-
-def figures(**changes: Any) -> BehaviourFigures:
-    values: dict[str, Any] = {
-        "login": LoginCodes(attempts=200, failed=20, failed_migrated=15),
-        "searches": 80,
-        "searches_no_results": 20,
-        "profile_views_from_search": 30,
-        "profile_views": [Counted("explore", 3), Counted("home", 1)],
-        "profile_views_total": 8,
-        "join_clicked": 12,
-        "join_failed": 2,
-        "median_minutes_from_start": 2.75,
-        "assist_used": 8,
-        "assist_accepted": 6,
-        "assist_discarded": 2,
-        "app_installed": 4,
-        "push_allowed_people": 5,
-        "active_people": 40,
-        "errors": [Counted(f"/r{i}", 10 - i) for i in range(5)],
-    }
-    return BehaviourFigures(**(values | changes))
+    assert fired is not None and fired.body == body
 
 
 def test_the_cards_turn_counts_into_rates() -> None:
-    tab = behaviour_tab(figures())
+    tab = behaviour_tab(
+        BehaviourFigures(
+            login=LoginCodes(attempts=200, failed=20, failed_migrated=15),
+            searches=80,
+            searches_no_results=20,
+            profile_views_from_search=30,
+            profile_views=[Counted("explore", 3), Counted("home", 1)],
+            profile_views_total=8,
+            join_clicked=12,
+            join_failed=2,
+            median_minutes_from_start=2.75,
+            assist_used=8,
+            assist_accepted=6,
+            assist_discarded=2,
+            app_installed=4,
+            push_allowed_people=5,
+            active_people=40,
+            errors=[Counted(f"/r{i}", 10 - i) for i in range(5)],
+        )
+    )
     assert tab.login_codes == {"attempts": 200, "failed_rate": 10.0, "failed_migrated_rate": 75.0}
-    assert tab.search == {
-        "searches": 80,
-        "no_results_rate": 25.0,
-        "profile_views_from_search": 30,
-    }
-    assert [(r.key, r.share) for r in tab.profile_views_by_source] == [
-        ("explore", 37.5),
-        ("home", 12.5),
-    ]
+    assert tab.search == {"searches": 80, "no_results_rate": 25.0, "profile_views_from_search": 30}
+    shares = [(r.key, r.share) for r in tab.profile_views_by_source]
+    assert shares == [("explore", 37.5), ("home", 12.5)]
     assert tab.joining["median_minutes_from_start"] == 2.8
     assert tab.writing_assist == {"used": 8, "accepted_rate": 75.0, "discarded_rate": 25.0}
     assert tab.app == {"installed": 4, "push_allowed_rate": 12.5}
@@ -295,20 +240,14 @@ def test_the_explore_card_is_searchers_who_went_on_over_searchers() -> None:
     assert off.value is not None and off.value.previous is None
 
 
-# --------------------------------------------------------------------------
-# The reader: what it sends
-# --------------------------------------------------------------------------
-
-
 def test_a_funnel_is_a_funnels_query_to_the_private_query_api() -> None:
-    read, seen = reader(lambda _: funnel_answer(50, 40, 30, 20, 10))
+    read, seen = posthog_reader(lambda _: funnel_answer(50, 40, 30, 20, 10))
     assert read.funnel(FUNNELS["signup"], "migrated", WINDOW, INTERNAL) == [50, 40, 30, 20, 10]
     (request,) = seen
     assert request.method == "POST"
     assert str(request.url) == f"{HOST}/api/projects/42/query/"
     assert request.headers["Authorization"] == f"Bearer {KEY}"
-    body = body_of(request)
-    query = body["query"]
+    query = body_of(request)["query"]
     assert query["kind"] == "FunnelsQuery"
     assert query["dateRange"] == {
         "date_from": "2026-11-01T00:00:00Z",
@@ -318,49 +257,39 @@ def test_a_funnel_is_a_funnels_query_to_the_private_query_api() -> None:
     assert query["funnelsFilter"]["funnelWindowInterval"] == 30
     assert query["funnelsFilter"]["funnelWindowIntervalUnit"] == "day"
     assert query["filterTestAccounts"] is False
-    assert query["properties"] == [
-        {"type": "hogql", "key": LEFT_OUT},
-        {"type": "person", "key": "signup_source", "operator": "exact", "value": ["migrated"]},
-    ]
+    left_out = {"type": "hogql", "key": LEFT_OUT}
+    assert query["properties"] == [left_out, person("signup_source", "migrated")]
     events = [node["event"] for node in query["series"]]
     assert events == ["signup_started", None, "onboarding_completed", None, "session_completed"]
-    assert query["series"][1]["properties"] == [
-        {"type": "hogql", "key": "event IN ('login_code_verified', 'google_oauth_completed')"}
-    ]
+    either = "event IN ('login_code_verified', 'google_oauth_completed')"
+    assert query["series"][1]["properties"] == [{"type": "hogql", "key": either}]
 
 
 def test_an_entry_point_narrows_the_first_booking_step_and_requests_are_the_servers() -> None:
-    read, seen = reader(lambda _: funnel_answer(6, 5, 4, 3, 2, 1))
+    read, seen = posthog_reader(lambda _: funnel_answer(6, 5, 4, 3, 2, 1))
     read.funnel(FUNNELS["booking"], "explore", WINDOW, INTERNAL)
     query = body_of(seen[0])["query"]
     assert query["properties"] == [{"type": "hogql", "key": LEFT_OUT}]
-    first, *_, requested, _completed = query["series"]
-    assert first["properties"] == [
-        {"type": "event", "key": "entry_point", "operator": "exact", "value": ["explore"]}
-    ]
-    assert query["series"][1]["properties"] == [
-        {"type": "event", "key": "step", "operator": "exact", "value": ["type"]}
-    ]
-    assert requested["properties"] == [
-        {"type": "event", "key": "session_id", "operator": "is_set", "value": "is_set"}
-    ]
+    first, step, *_, requested, _completed = query["series"]
+    assert first["properties"] == [event("entry_point", "explore")]
+    assert step["properties"] == [event("step", "type")]
+    server = {"type": "event", "key": "session_id", "operator": "is_set", "value": "is_set"}
+    assert requested["properties"] == [server]
 
 
 def test_mentee_activation_counts_new_mentees_only() -> None:
-    read, seen = reader(lambda _: funnel_answer(4, 3, 2, 1))
+    read, seen = posthog_reader(lambda _: funnel_answer(4, 3, 2, 1))
     read.funnel(FUNNELS["mentee_activation"], "invite", WINDOW, INTERNAL)
     assert body_of(seen[0])["query"]["properties"] == [
         {"type": "hogql", "key": LEFT_OUT},
-        {"type": "person", "key": "role", "operator": "exact", "value": ["mentee"]},
-        {"type": "person", "key": "is_migrated", "operator": "is_not", "value": ["true"]},
-        {"type": "person", "key": "signup_source", "operator": "exact", "value": ["invite"]},
+        person("role", "mentee"),
+        person("is_migrated", "true", "is_not"),
+        person("signup_source", "invite"),
     ]
 
 
 def test_hogql_reads_carry_their_window_as_values_never_in_the_text() -> None:
-    read, seen = reader(
-        lambda _: hogql_answer(["attempts", "failed", "failed_migrated"], [9, 3, 2])
-    )
+    read, seen = posthog_reader(lambda _: rows(LOGIN, [9, 3, 2]))
     assert read.login_codes(WINDOW, INTERNAL) == LoginCodes(attempts=9, failed=3, failed_migrated=2)
     query = body_of(seen[0])["query"]
     assert query["kind"] == "HogQLQuery"
@@ -368,64 +297,51 @@ def test_hogql_reads_carry_their_window_as_values_never_in_the_text() -> None:
         "failed": "login_code_failed",
         "internal": [str(ADMIN)],
         "logins": ["login_code_verified", "login_code_failed"],
-        "since": 1793491200,
-        "until": 1794096000,
+        "since": SINCE,
+        "until": UNTIL,
     }
     assert "{since}" in query["query"] and "{failed}" in query["query"]
-    assert "1793491200" not in query["query"]
+    assert str(SINCE) not in query["query"]
     assert "login_code_failed" not in query["query"]
 
 
-def test_every_hogql_read_leaves_internal_accounts_out() -> None:
-    for text in (
-        LOGIN_QUERY,
-        CARDS_QUERY,
-        SOURCES_QUERY,
-        ROUTES_QUERY,
-        EXPLORE_QUERY,
-        BOOKED_QUERY,
-    ):
-        assert "NOT has({internal}, distinct_id)" in text
-        assert "is_internal" not in text
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LOGIN_QUERY",
+        "CARDS_QUERY",
+        "SOURCES_QUERY",
+        "ROUTES_QUERY",
+        "EXPLORE_QUERY",
+        "BOOKED_QUERY",
+    ],
+)
+def test_every_hogql_read_leaves_internal_accounts_out(name: str) -> None:
+    text = getattr(queries, name)
+    assert "NOT has({internal}, distinct_id)" in text
+    assert "is_internal" not in text
     assert NOT_INTERNAL == "NOT has({internal}, distinct_id)"
 
 
-# --------------------------------------------------------------------------
-# The reader: what it reads back
-# --------------------------------------------------------------------------
+def cards_handler(row: list[Any], *sources: list[Any]) -> Handler:
+    """The cards row, the profile sources, then failed routes for anything else."""
 
-CARD_COLUMNS = [
-    "attempts",
-    "failed",
-    "failed_migrated",
-    "searches",
-    "searches_no_results",
-    "profile_views_from_search",
-    "profile_views",
-    "join_clicked",
-    "join_failed",
-    "median_minutes_from_start",
-    "assist_used",
-    "assist_accepted",
-    "assist_discarded",
-    "app_installed",
-    "push_allowed_people",
-    "active_people",
-]
+    def answer(request: httpx.Request) -> httpx.Response:
+        name = body_of(request)["query"]["name"]
+        if name == "admin_analytics_cards":
+            return rows(CARD_COLUMNS, row)
+        if name == "admin_analytics_profile_sources":
+            return rows(["key", "count"], *sources)
+        return rows(["key", "count"], ["/explore", 4], ["/home", 2])
 
-
-def behaviour_handler(request: httpx.Request) -> httpx.Response:
-    name = body_of(request)["query"]["name"]
-    if name == "admin_analytics_cards":
-        return hogql_answer(CARD_COLUMNS, [10, 2, 1, 8, 2, 3, 40, 5, 1, 4.0, 6, 3, 2, 1, 2, 20])
-    if name == "admin_analytics_profile_sources":
-        # A value the app never sends (spaces, free text) is not shown.
-        return hogql_answer(["key", "count"], ["explore", 6], ["a search text", 1], ["home", 2])
-    return hogql_answer(["key", "count"], ["/explore", 4], ["/home", 2])
+    return answer
 
 
 def test_the_cards_are_three_reads() -> None:
-    read, seen = reader(behaviour_handler)
+    # A value the app never sends (spaces, free text) is not shown.
+    sources = (["explore", 6], ["a search text", 1], ["home", 2])
+    row = [10, 2, 1, 8, 2, 3, 40, 5, 1, 4.0, 6, 3, 2, 1, 2, 20]
+    read, seen = posthog_reader(cards_handler(row, *sources))
     got = read.behaviour(WINDOW, INTERNAL)
     assert len(seen) == 3
     assert got.login == LoginCodes(attempts=10, failed=2, failed_migrated=1)
@@ -435,101 +351,122 @@ def test_the_cards_are_three_reads() -> None:
     assert got.errors == [Counted("/explore", 4), Counted("/home", 2)]
 
 
+def test_profile_view_shares_are_of_every_view_including_unshown_ones() -> None:
+    # 100 views: 40 under the 20 rows shown, the rest past the limit or blank.
+    row = [0, 0, 0, 0, 0, 0, 100, 0, 0, None, 0, 0, 0, 0, 0, 0]
+    sources = [["", 30], *([f"source_{i:02}", 2] for i in range(20))]
+    read, _ = posthog_reader(cards_handler(row, *sources))
+    tab = behaviour_tab(read.behaviour(WINDOW, INTERNAL))
+    assert len(tab.profile_views_by_source) == 20
+    assert {row.share for row in tab.profile_views_by_source} == {2.0}
+
+
 def test_explore_reads_searchers_per_window_and_bookings_after() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        query = body_of(request)["query"]
-        if query["name"] == "admin_analytics_explore":
-            return hogql_answer(["g", "searched", "led"], [1, 10, 4], [3, 2, 1])
-        return hogql_answer(["booked"], [3])
+        if body_of(request)["query"]["name"] == "admin_analytics_explore":
+            return rows(["g", "searched", "led"], [1, 10, 4], [3, 2, 1])
+        return rows(["booked"], [3])
 
-    read, seen = reader(handler)
-    windows = [WINDOW, Window(since=WINDOW.since - dt.timedelta(days=7), until=WINDOW.since)]
-    windows += [WINDOW]
-    got = read.explore(windows, INTERNAL)
+    read, seen = posthog_reader(handler)
+    before = Window(since=WINDOW.since - dt.timedelta(days=7), until=WINDOW.since)
+    got = read.explore([WINDOW, before, WINDOW], INTERNAL)
     assert got.per_window == [Searchers(10, 4), Searchers(0, 0), Searchers(2, 1)]
     assert got.booked == 3
     explore, booked = (body_of(r)["query"] for r in seen)
-    assert explore["values"]["starts"] == [1793491200, 1792886400, 1793491200]
-    assert explore["values"]["since"] == 1792886400
+    assert explore["values"]["starts"] == [SINCE, WEEK_BEFORE, SINCE]
+    assert explore["values"]["since"] == WEEK_BEFORE
     assert booked["values"] == {
         "booked_events": ["mentor_search_performed", "booking_requested"],
         "internal": [str(ADMIN)],
         "requested": "booking_requested",
         "search": "mentor_search_performed",
-        "since": 1793491200,
-        "until": 1794096000,
-        "booked_until": 1794096000 + 7 * 86400,
+        "since": SINCE,
+        "until": UNTIL,
+        "booked_until": UNTIL + 7 * 86400,
         "within": 7 * 86400,
     }
 
 
-@pytest.mark.parametrize(
-    "answer",
-    [
-        lambda _: httpx.Response(503, json={"detail": "down"}),
-        lambda _: httpx.Response(401, json={"detail": "bad key"}),
-        lambda _: httpx.Response(200, content=b"<html>not json</html>"),
-        lambda _: httpx.Response(200, json={"results": [{"order": 0, "count": 1}]}),
-        lambda _: httpx.Response(
-            200, json={"results": [{"order": i, "count": -1} for i in range(5)]}
-        ),
-        lambda _: httpx.Response(200, json=[]),
-        lambda _: httpx.Response(200, json={"results": [1, 2, 3, 4, 5]}),
-        lambda _: httpx.Response(
-            200, content=b'{"results": [{"order": 0, "count": Infinity}, 1, 2, 3, 4]}'
-        ),
-    ],
-    ids=[
-        "5xx",
-        "4xx",
-        "not-json",
-        "too-few-steps",
-        "negative",
-        "not-an-object",
-        "steps-not-objects",
-        "infinite",
-    ],
-)
-def test_any_failure_is_the_one_upstream_error(answer: Handler) -> None:
-    read, _ = reader(answer)
+def _status(code: int, **body: Any) -> Handler:
+    return lambda _: httpx.Response(code, **body)
+
+
+def _timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectTimeout("timed out", request=request)
+
+
+INF_ROW = json.dumps({"columns": CARD_COLUMNS, "results": [[0] * 9 + ["INF"] + [0] * 6]})
+
+
+FAILURES: dict[str, tuple[Handler, str]] = {
+    "5xx": (_status(503, json={"detail": "down"}), "funnel"),
+    "4xx": (_status(401, json={"detail": "bad key"}), "funnel"),
+    "not-json": (_status(200, content=b"<html>not json</html>"), "funnel"),
+    "too-few-steps": (_status(200, json={"results": [{"order": 0, "count": 1}]}), "funnel"),
+    "negative": (_status(200, json={"results": [{"order": 0, "count": -1}] * 5}), "funnel"),
+    "not-an-object": (_status(200, json=[]), "funnel"),
+    "steps-not-objects": (_status(200, json={"results": [1, 2, 3, 4, 5]}), "funnel"),
+    "infinite-count": (
+        _status(200, content=b'{"results": [{"count": Infinity}, 1, 2, 3, 4]}'),
+        "funnel",
+    ),
+    "transport-timeout": (_timeout, "login_codes"),
+    "missing-column": (lambda _: rows(["attempts", "failed"], [1, 2]), "login_codes"),
+    "infinite-median": (
+        _status(200, content=INF_ROW.replace('"INF"', "Infinity").encode()),
+        "behaviour",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", FAILURES)
+def test_any_failure_is_the_one_upstream_error(case: str) -> None:
+    answer, read = FAILURES[case]
+    reader, _ = posthog_reader(answer)
+    calls: dict[str, Callable[[], object]] = {
+        "funnel": lambda: reader.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL),
+        "login_codes": lambda: reader.login_codes(WINDOW, INTERNAL),
+        "behaviour": lambda: reader.behaviour(WINDOW, INTERNAL),
+    }
     with pytest.raises(AnalyticsUpstreamError):
-        read.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL)
-
-
-def test_a_transport_failure_or_timeout_is_an_upstream_error_too() -> None:
-    def down(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectTimeout("timed out", request=request)
-
-    read, _ = reader(down)
-    with pytest.raises(AnalyticsUpstreamError):
-        read.login_codes(WINDOW, INTERNAL)
-    read, _ = reader(lambda _: hogql_answer(["attempts", "failed"], [1, 2]))
-    with pytest.raises(AnalyticsUpstreamError):
-        read.login_codes(WINDOW, INTERNAL)
-
-
-def test_an_infinite_median_is_an_upstream_error_not_a_crash() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if body_of(request)["query"]["name"] == "admin_analytics_cards":
-            row = [10, 2, 1, 8, 2, 3, 9, 5, 1, "INF", 6, 3, 2, 1, 2, 20]
-            text = json.dumps({"columns": CARD_COLUMNS, "results": [row]}).replace(
-                '"INF"', "Infinity"
-            )
-            return httpx.Response(200, content=text.encode())
-        return hogql_answer(["key", "count"])
-
-    read, _ = reader(handler)
-    with pytest.raises(AnalyticsUpstreamError):
-        read.behaviour(WINDOW, INTERNAL)
+        calls[read]()
 
 
 def test_the_upstream_error_says_when_to_retry() -> None:
     assert AnalyticsUpstreamError().problem_headers() == {"Retry-After": "60"}
 
 
-# --------------------------------------------------------------------------
-# Choosing the reader
-# --------------------------------------------------------------------------
+def test_the_optional_reads_are_quick_and_the_tab_reads_wait_for_posthog() -> None:
+    timeouts: list[dict[str, float]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        timeouts.append(request.extensions["timeout"])
+        if body_of(request)["query"]["kind"] == "FunnelsQuery":
+            return funnel_answer(5, 4, 3, 2, 1)
+        return rows(LOGIN, [1, 0, 0])
+
+    read, _ = posthog_reader(handler)
+    read.login_codes(WINDOW, INTERNAL)
+    read.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL)
+    quick, full = timeouts
+    assert quick["read"] <= 2.0 and quick["connect"] <= 2.0
+    assert full["read"] >= 12.0
+
+
+def test_a_refusal_that_echoes_the_key_never_reaches_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def echo(request: httpx.Request) -> httpx.Response:
+        said = request.headers["Authorization"]
+        return httpx.Response(401, json={"detail": f"bad credentials: {said}"})
+
+    read, _ = posthog_reader(echo)
+    with caplog.at_level(logging.DEBUG), pytest.raises(AnalyticsUpstreamError):
+        read.login_codes(WINDOW, INTERNAL)
+    assert caplog.records
+    for record in caplog.records:
+        assert KEY not in record.getMessage()
+        assert all(KEY not in str(value) for value in vars(record).values())
 
 
 def settings(**values: object) -> Settings:
@@ -563,54 +500,3 @@ def test_the_null_reader_refuses_every_read() -> None:
     ):
         with pytest.raises(AnalyticsUpstreamError):
             read()
-
-
-def test_the_optional_reads_are_quick_and_the_tab_reads_wait_for_posthog() -> None:
-    timeouts: list[dict[str, float]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        timeouts.append(request.extensions["timeout"])
-        if body_of(request)["query"]["kind"] == "FunnelsQuery":
-            return funnel_answer(5, 4, 3, 2, 1)
-        return hogql_answer(["attempts", "failed", "failed_migrated"], [1, 0, 0])
-
-    read, _ = reader(handler)
-    read.login_codes(WINDOW, INTERNAL)
-    read.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL)
-    quick, full = timeouts
-    assert quick["read"] <= 2.0 and quick["connect"] <= 2.0
-    assert full["read"] >= 12.0
-
-
-def test_profile_view_shares_are_of_every_view_including_unshown_ones() -> None:
-    sources = [[f"source_{i:02}", 2] for i in range(20)]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        name = body_of(request)["query"]["name"]
-        if name == "admin_analytics_cards":
-            # 100 views: 40 under the 20 rows shown, the rest past the limit or blank.
-            return hogql_answer(CARD_COLUMNS, [0, 0, 0, 0, 0, 0, 100, 0, 0, None, 0, 0, 0, 0, 0, 0])
-        if name == "admin_analytics_profile_sources":
-            return hogql_answer(["key", "count"], ["", 30], *sources)
-        return hogql_answer(["key", "count"])
-
-    read, _ = reader(handler)
-    tab = behaviour_tab(read.behaviour(WINDOW, INTERNAL))
-    assert len(tab.profile_views_by_source) == 20
-    assert {row.share for row in tab.profile_views_by_source} == {2.0}
-
-
-def test_a_refusal_that_echoes_the_key_never_reaches_the_log(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    def echo(request: httpx.Request) -> httpx.Response:
-        said = request.headers["Authorization"]
-        return httpx.Response(401, json={"detail": f"bad credentials: {said}"})
-
-    read, _ = reader(echo)
-    with caplog.at_level(logging.DEBUG), pytest.raises(AnalyticsUpstreamError):
-        read.login_codes(WINDOW, INTERNAL)
-    assert caplog.records
-    for record in caplog.records:
-        assert KEY not in record.getMessage()
-        assert all(KEY not in str(value) for value in vars(record).values())

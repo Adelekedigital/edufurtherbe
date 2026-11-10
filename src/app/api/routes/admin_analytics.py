@@ -89,11 +89,8 @@ async def analytics_credits(read: AnalyticsCreditsDep, response: Response) -> An
         "an 8-point sparkline:\n\n"
         "- `booking`: requests made in the window that became completed sessions "
         "(a moved request by where its moves ended)\n"
-        "- `explore`: searchers who went on to view a mentor's profile or start a "
-        "booking, over people who searched (PostHog); `contribution` is the window's "
-        "searchers who requested a booking within 7 days of their first search. "
-        "`value`, `spark` and `contribution` are null when PostHog is not set up or "
-        "not answering; nothing else changes\n"
+        "- `explore` (PostHog): searchers who then viewed a profile or started a booking; "
+        "`contribution`, those who requested one within 7 days. Null when PostHog is down\n"
         "- `messaging`: chats started in the window answered by the other person "
         "within 24 hours\n"
         "- `mentor_supply`: listed mentors whose card shows a free time within 14 "
@@ -217,11 +214,8 @@ _FUNNELS = (
 
 #: The PostHog routes' `503`.
 _POSTHOG = (
-    "**From PostHog**, read on the server and kept for 10 minutes per window and "
-    "breakdown (a failure is never kept). Internal accounts are left out. When "
-    "PostHog is not set up or not answering: `503` of type "
-    "`/problems/analytics-upstream` with `Retry-After` in seconds; the "
-    "database tabs are unaffected.\n\n"
+    "**From PostHog**, kept 10 minutes. Not set up or not answering: `503` "
+    "`/problems/analytics-upstream` with `Retry-After`.\n\n"
 )
 _POSTHOG_RESPONSES = _RESPONSES | {
     status.HTTP_503_SERVICE_UNAVAILABLE: {
@@ -236,11 +230,11 @@ _POSTHOG_RESPONSES = _RESPONSES | {
     response_model=AnalyticsFunnelRead,
     summary="Analytics: a behaviour funnel",
     description=(
-        "People who entered the funnel in the window and reached each step, in "
-        "order, within the funnel's `window_days`; a step nothing tracks yet has a "
-        "null `value`. An unknown `name` is `404`. `by` narrows who is counted (a "
-        "role or source) or where a booking started, and must be one the funnel "
-        "offers (else the window's `422`, naming them):\n\n" + _FUNNELS + _POSTHOG + _SECTION
+        "People entering the funnel in the window who reached each step within "
+        "`window_days` (untracked: null). `by` must be one the funnel offers, else `422`:\n\n"
+        + _FUNNELS
+        + _POSTHOG
+        + _SECTION
     ),
     responses=_POSTHOG_RESPONSES,
 )
@@ -254,12 +248,8 @@ async def analytics_funnel(read: AnalyticsFunnelDep, response: Response) -> Anal
     response_model=AnalyticsBehaviourRead,
     summary="Analytics: behaviour event cards",
     description=(
-        "The seven event cards for the window, with no `previous`: log-in codes, "
-        "search, profile views by source, joining sessions, writing assist, app "
-        "install and push, and the top three routes by failed requests. "
-        "`replay_url` opens this environment's session replays in PostHog.\n\n"
-        + _POSTHOG
-        + _SECTION
+        "The seven event cards for the window (no `previous`), and `replay_url`, this "
+        "environment's session replays.\n\n" + _POSTHOG + _SECTION
     ),
     responses=_POSTHOG_RESPONSES,
 )
