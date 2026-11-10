@@ -33,6 +33,7 @@ from app.infra.db.stages import write_session_type_stages
 
 __all__ = [
     "DEMO_DOMAIN",
+    "DEMO_EMAIL_LIKE",
     "LEGACY_SESSION_TYPE",
     "DemoMentor",
     "DemoQuestion",
@@ -48,6 +49,9 @@ __all__ = [
 
 #: The suffix every demo user's email carries, and the only thing removal reads.
 DEMO_DOMAIN = "demo.edufurther.test"
+#: The `LIKE` pattern that finds every demo user: the one spelling of the
+#: marker as a match, read by removal and by the admin Analytics exclusions.
+DEMO_EMAIL_LIKE = f"%@{DEMO_DOMAIN}"
 
 
 #: The one session type every demo mentor was seeded with before the catalogue.
@@ -356,7 +360,7 @@ async def demo_mentor_offerings(session: AsyncSession) -> list[tuple[Any, tuple[
             "FROM users u JOIN mentor_profiles mp ON mp.user_id = u.id "
             "WHERE u.email LIKE :s ORDER BY u.email"
         ),
-        {"s": f"%@{DEMO_DOMAIN}"},
+        {"s": DEMO_EMAIL_LIKE},
     )
     result = []
     for row in rows:
@@ -440,7 +444,7 @@ async def demo_avatar_urls(session: AsyncSession) -> list[str]:
             "SELECT p.avatar_url FROM user_profiles p JOIN users u ON u.id = p.user_id "
             "WHERE u.email LIKE :suffix AND p.avatar_url IS NOT NULL"
         ),
-        {"suffix": f"%@{DEMO_DOMAIN}"},
+        {"suffix": DEMO_EMAIL_LIKE},
     )
     return [str(url) for url in rows.scalars()]
 
@@ -512,7 +516,7 @@ async def remove_demo(session: AsyncSession) -> int:
     touching a demo user involves only demo users, and goes first — their keys
     to users `RESTRICT`. Does not commit.
     """
-    demo = {"suffix": f"%@{DEMO_DOMAIN}"}
+    demo = {"suffix": DEMO_EMAIL_LIKE}
     if (shared := int((await session.execute(_REAL_HISTORY, demo)).scalar_one())) > 0:
         raise RealHistoryError(
             f"{shared} session(s) or review(s) link a real user to a demo user; nothing was removed"

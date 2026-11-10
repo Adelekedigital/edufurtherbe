@@ -68,6 +68,8 @@ def test_a_custom_range_reaches_both_permitted_edges() -> None:
         ({"from": "2026-11-01", "to": "2026-11-10"}, "/query/to"),
         ({"from": "2026-11-05", "to": "2026-11-04"}, "/query/from"),
         ({"from": "Nov 3", "to": "2026-11-04"}, "/query/from"),
+        ({"from": "20261103", "to": "2026-11-04"}, "/query/from"),
+        ({"from": "2026-11-03", "to": "2026-W45-3"}, "/query/to"),
     ],
 )
 def test_a_window_that_cannot_be_read_names_its_parameter(
@@ -146,7 +148,7 @@ def test_delivery_fires_above_twenty_only() -> None:
     assert a.delivery_alert(a.DELIVERY_FAILED_OVER, TODAY) is None
     alert = a.delivery_alert(a.DELIVERY_FAILED_OVER + 1, TODAY)
     assert alert is not None
-    assert alert.body == "21 emails or analytics events failed yesterday."
+    assert alert.body == "21 emails, notifications or analytics events failed yesterday."
     assert alert.link is None
 
 

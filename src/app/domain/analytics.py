@@ -14,6 +14,7 @@ like every other dashboard window.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
@@ -35,6 +36,8 @@ EARLIEST_DAY = dt.date(2024, 6, 1)
 DAILY_UP_TO_DAYS = 14
 #: Points in a feature card's sparkline: the window in this many equal parts.
 SPARK_POINTS = 8
+#: How a custom range's dates must be written.
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 SeriesUnit = Literal["day", "week"]
 
@@ -72,7 +75,11 @@ def _refuse(pointer: str, message: str) -> AnalyticsWindowError:
 
 
 def _day(value: str, pointer: str) -> dt.date:
+    """A date written `YYYY-MM-DD` and nothing else (`fromisoformat` alone also
+    reads `20260101` and ISO week dates)."""
     try:
+        if not _ISO_DAY.fullmatch(value):
+            raise ValueError(value)
         return dt.date.fromisoformat(value)
     except ValueError:
         raise _refuse(pointer, "must be a date, YYYY-MM-DD") from None
@@ -251,6 +258,12 @@ def quiet_alert(
     )
 
 
+def yesterday(today: dt.date) -> Period:
+    """The UTC day before ``today``: the delivery alert's window."""
+    day = today - dt.timedelta(days=1)
+    return Period(first=day, last=day)
+
+
 def delivery_alert(failed_yesterday: int, today: dt.date) -> Alert | None:
     """An alert when more than `DELIVERY_FAILED_OVER` outbox rows failed
     yesterday (UTC), raised at the start of today. No link: the PRD hides the
@@ -260,7 +273,7 @@ def delivery_alert(failed_yesterday: int, today: dt.date) -> Alert | None:
     return Alert(
         key="delivery_failed",
         title="Messages not going out",
-        body=f"{failed_yesterday} emails or analytics events failed yesterday.",
+        body=f"{failed_yesterday} emails, notifications or analytics events failed yesterday.",
         link=None,
         raised_at=_midnight(today),
     )

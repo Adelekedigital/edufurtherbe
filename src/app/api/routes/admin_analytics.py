@@ -32,7 +32,7 @@ _SECTION = (
     "write nothing, so nothing of theirs is counted.\n\n"
     "**`alerts`**: every alert firing now, newest first, whatever the window: no "
     "booking requests for 24 hours, no sign-ups for 24 hours (migrated accounts "
-    "are not sign-ups), and more than 20 emails or events given up on yesterday "
+    "are not sign-ups), and more than 20 emails, notifications or events given up on yesterday "
     "(UTC). The log-in code alert arrives with the PostHog reads.\n\n"
     "Every live admin grant may read; anybody else gets `404`, as does everybody "
     "while the page is switched off. `Cache-Control: private, no-store`."

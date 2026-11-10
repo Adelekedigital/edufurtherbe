@@ -37,6 +37,7 @@ from app.domain.mentor_stats import Window
 from app.infra.db.analytics_scope import counted_user
 from app.infra.db.credit_store import paying_sessions
 from app.infra.db.models.credits import CreditLot, CreditTransaction
+from app.infra.db.models.sessions import Session
 from app.infra.db.predicates import during
 
 #: The refund reasons, read from the credit log's one table of kinds.
@@ -82,7 +83,11 @@ def _refunds_by_paying_source(window: Window) -> Any:
     refund = aliased(CreditTransaction)
     debit = aliased(CreditTransaction)
     paid_from = aliased(CreditLot)
-    payers = paying_sessions(None)
+    # Moves stay with one mentee, so only refunded mentees' chains are walked.
+    refunded = select(CreditTransaction.user_id).where(
+        CreditTransaction.reason.in_(REFUND_REASONS), during(CreditTransaction.created_at, window)
+    )
+    payers = paying_sessions(None, roots=Session.mentee_id.in_(refunded))
     return (
         select(paid_from.source, func.sum(refund.delta))
         .select_from(refund)

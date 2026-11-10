@@ -113,6 +113,8 @@ async def test_switched_off_every_route_is_a_404_even_for_an_admin(
     token = await admin_token(db_engine, "super_admin")
     async with client_for(app_for(db_engine, api_storage, on=False)) as client:
         assert (await get(client, token)).status_code == 404
+        # Before the token is read: no token is a 404 too, not a 401.
+        assert (await client.get(CREDITS)).status_code == 404
 
 
 async def test_a_non_admin_gets_a_404_and_every_grant_may_read(

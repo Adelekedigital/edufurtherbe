@@ -93,9 +93,11 @@ async def expiring_on(
     return int(total or 0)
 
 
-def paying_sessions(mentee_id: UUID | None) -> CTE:
+def paying_sessions(mentee_id: UUID | None, *, roots: ColumnElement[bool] | None = None) -> CTE:
     """Each of this mentee's sessions (every mentee's for ``None``, the admin
-    Analytics credits, decision 324), beside the session whose debit paid for it.
+    Analytics, decision 324), beside the session whose debit paid for it.
+    ``roots`` narrows which chains are walked, by a condition on their first
+    session, so a platform-wide read walks only the chains it needs.
 
     **The one statement of "which debit paid for a session"** (decision 300): a
     session paid for itself, unless a move made it, in which case the first
@@ -104,12 +106,14 @@ def paying_sessions(mentee_id: UUID | None) -> CTE:
     chain's first session holds its only debit. Columns `session_id`, `payer_id`.
     """
     moved = aliased(Session)
-    roots: list[ColumnElement[bool]] = [Session.rescheduled_from_session_id.is_(None)]
+    first: list[ColumnElement[bool]] = [Session.rescheduled_from_session_id.is_(None)]
     if mentee_id is not None:
-        roots.append(Session.mentee_id == mentee_id)
+        first.append(Session.mentee_id == mentee_id)
+    if roots is not None:
+        first.append(roots)
     chain = (
         select(Session.id.label("session_id"), Session.id.label("payer_id"))
-        .where(*roots)
+        .where(*first)
         .cte("paying_sessions", recursive=True)
     )
     return chain.union_all(

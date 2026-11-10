@@ -17,11 +17,12 @@ import datetime as dt
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.analytics import Alert, delivery_alert, newest_first, quiet_alert
+from app.domain.analytics import Alert, delivery_alert, newest_first, quiet_alert, yesterday
 from app.infra.db.analytics_scope import counted_session, counted_user
 from app.infra.db.models.platform import OutboxEvent
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
+from app.infra.db.predicates import during
 
 
 async def active_alerts(session: AsyncSession, now: dt.datetime) -> list[Alert]:
@@ -37,14 +38,12 @@ async def active_alerts(session: AsyncSession, now: dt.datetime) -> list[Alert]:
         )
     )
     today = now.astimezone(dt.UTC).date()
-    start = dt.datetime(today.year, today.month, today.day, tzinfo=dt.UTC)
     failed = await session.scalar(
         select(func.count())
         .select_from(OutboxEvent)
         .where(
             OutboxEvent.status == "failed",
-            OutboxEvent.updated_at >= start - dt.timedelta(days=1),
-            OutboxEvent.updated_at < start,
+            during(OutboxEvent.updated_at, yesterday(today).window),
         )
     )
     return newest_first(
