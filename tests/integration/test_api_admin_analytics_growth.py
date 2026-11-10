@@ -197,6 +197,10 @@ async def platform(db_engine: AsyncEngine) -> None:
             conn, mia, cy, status="pending_mentor_approval", starts=ago(-2), type_id=t1
         )
         await session_row(conn, admin, zara, status="completed", starts=ago(1), type_id=t1)
+        # Dee's only booking is with an admin: not a first booking.
+        await session_row(
+            conn, admin, dee, status="pending_mentor_approval", starts=ago(-3), type_id=None
+        )
         await session_row(conn, mia, bo, status="completed", starts=ago(10), type_id=t1)
 
 

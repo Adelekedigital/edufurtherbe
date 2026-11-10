@@ -17,7 +17,10 @@
   in the window (`analytics_sessions.is_completed_in`); by each service
   offering the session's type covers, and by each application stage it is
   aimed at. A session counts under every topic or stage its type names; one
-  whose type names no stage, or with no type, is `not_set`.
+  whose type names no stage, or with no type, is `not_set`: PRD 31 defines the
+  bucket as "Not set = the mentor didn't choose one". Decision 215's "an empty
+  set means any stage" is about which mentees a type suits when booking; spread
+  over all six here, it would inflate every stage and hide that none was chosen.
 
 Everyone `analytics_scope` leaves out is left out.
 """
@@ -48,7 +51,7 @@ from app.domain.enums import ApplicationStage, PrimaryRole
 from app.domain.mentor_stats import Window, month_windows
 from app.domain.names import joined_name
 from app.infra.db import analytics_features as f
-from app.infra.db.analytics_scope import counted_user, per_window
+from app.infra.db.analytics_scope import counted_session, counted_user, per_window
 from app.infra.db.analytics_sessions import completed_in, is_completed_in
 from app.infra.db.models.mentoring import ServiceOffering, SessionTypeOffering
 from app.infra.db.models.referrals import Referral
@@ -106,7 +109,7 @@ async def invite_cohort(session: AsyncSession, window: Window) -> InviteCohort:
                 f.invites_made(window),
                 f.invites_made(window, extra=_joined()),
                 f.invites_made(window, extra=f.qualified()),
-                f.invites_made(window, extra=f.invitee_had()),
+                f.invites_made(window, extra=f.invitee_had(counted_session())),
                 f.invitees_who_met(window),
             )
         )
