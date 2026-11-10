@@ -327,9 +327,7 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
                 # the request as a whole: one shape, so a client reads the list
                 # without first asking whether it is there.
                 errors=(
-                    exc.problem_errors()
-                    if isinstance(exc, DomainValidationError)
-                    else []
+                    (exc.problem_errors() if isinstance(exc, DomainValidationError) else [])
                     if code == status.HTTP_422_UNPROCESSABLE_CONTENT
                     else None
                 ),

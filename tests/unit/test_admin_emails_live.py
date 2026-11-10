@@ -47,10 +47,14 @@ def test_an_email_with_no_template_is_not_live(monkeypatch: pytest.MonkeyPatch) 
     assert admin_emails._live(settings(credits_renewed="shared")) == frozenset({RENEWED})
 
 
-def test_no_provider_or_loops_down_means_nothing_is_live(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_no_provider_means_nothing_is_live(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(admin_emails, "template_variables", lambda _s: None)
     assert admin_emails._live(settings(credits_granted="shared")) == frozenset()
+
+
+def test_loops_down_is_an_upstream_error_not_an_email_not_set_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(admin_emails, "template_variables", lambda _s: Declared({}, fail=True))
-    assert admin_emails._live(settings(credits_granted="shared")) == frozenset()
+    with pytest.raises(UpstreamError):
+        admin_emails._live(settings(credits_granted="shared"))

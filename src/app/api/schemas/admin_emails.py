@@ -52,7 +52,8 @@ class EmailListItem(BaseModel):
         "otherwise its lines are read only."
     )
     last_edited: EmailLastEdited | None = Field(
-        description="The newest saved change, or null for default wording."
+        description="The newest saved change, a reset back to the default included; "
+        "null when no line was ever changed."
     )
 
 
@@ -78,7 +79,10 @@ class EmailLineRead(BaseModel):
     default_text: str
     text: str = Field(description="What is sent now: the admin's text, or the default.")
     edited: bool
-    version: int = Field(description="Send it back with a save; 0 when there is no edit.")
+    version: int = Field(
+        description="Send it back with a save. It only rises: 0 for a line never "
+        "changed, and a reset line keeps its count."
+    )
     default_changed: bool = Field(description="The default moved since this line was edited.")
     new_default: str | None
 

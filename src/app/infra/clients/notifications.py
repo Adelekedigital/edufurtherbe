@@ -290,10 +290,10 @@ def live_notifier(settings: Settings) -> LoopsNotifier | None:
     this: with no provider they leave the row pending for the sweep, rather than
     passing it to a `NullNotifier` that marks it sent and spends its attempts.
     """
-    templates = template_variables(settings)
     key = settings.loops_api_key
-    if templates is None or key is None:
+    if key is None:
         return None
+    templates = LoopsTemplates(key.get_secret_value())
     return LoopsNotifier(key.get_secret_value()).with_settings(settings).with_templates(templates)
 
 

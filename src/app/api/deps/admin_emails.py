@@ -4,6 +4,7 @@ and edit (owner, 2026-11-09)."""
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 from collections.abc import Iterable, Mapping
 from typing import Annotated
 
@@ -32,7 +33,6 @@ from app.core.errors import (
     EmailLineInvalidError,
     EmailNotFoundError,
     EmailNotSetUpError,
-    UpstreamError,
 )
 from app.domain.email_admin import LineSave, StoredLine, default_text, line_view, plan_save
 from app.domain.email_lines import LINES, group_of, marks_shared
@@ -50,7 +50,14 @@ from app.domain.enums import EmailLine
 from app.domain.messages import build_variables
 from app.domain.notifications import Channel, Notification
 from app.infra.clients.notifications import template_for, template_variables
-from app.infra.db.email_lines import apply_line_writes, last_edits, stored_lines
+from app.infra.db.email_lines import (
+    UNNAMED_ADMIN,
+    apply_line_writes,
+    last_edits,
+    last_line_edit,
+    line_saves,
+    stored_lines,
+)
 
 __all__ = [
     "AdminEmailDep",
@@ -67,26 +74,29 @@ def _live(settings: Settings) -> frozenset[Notification]:
     """The emails whose mapped template is the shared one: it shows the lines
     (`marks_shared`). Anything else is Not set up, and its lines read only.
 
-    Fails closed: with no provider, or Loops unreachable, nothing is Live, so
-    no admin edit is accepted that the next send would not use.
+    With no provider nothing is Live, so no edit is accepted that no send would
+    use. Loops unreachable raises its `UpstreamError` (a 502), so an outage is
+    never shown as a template that is not set up.
     """
     templates = template_variables(settings)
     if templates is None:
         return frozenset()
     live = set()
-    try:
-        for email in EMAILS:
-            if email.key not in LINES:
-                continue
-            try:
-                template = template_for(settings, email.key, Channel.EMAIL)
-            except ConfigurationError:
-                continue
-            if any(marks_shared(name) for name in templates.declared(template)):
-                live.add(email.key)
-    except UpstreamError:
-        return frozenset()
+    for email in EMAILS:
+        if email.key not in LINES:
+            continue
+        try:
+            template = template_for(settings, email.key, Channel.EMAIL)
+        except ConfigurationError:
+            continue
+        if any(marks_shared(name) for name in templates.declared(template)):
+            live.add(email.key)
     return frozenset(live)
+
+
+async def _live_now(settings: Settings) -> frozenset[Notification]:
+    # Loops is asked off the event loop: it lists every template over HTTP.
+    return await asyncio.to_thread(_live, settings)
 
 
 def _item(
@@ -115,14 +125,21 @@ def _value(value: object) -> ValueRead:
 
 
 def _variant(
-    email: EmailEntry, variant: str, stored: Mapping[tuple[str, EmailLine], StoredLine]
+    email: EmailEntry,
+    variant: str,
+    stored: Mapping[tuple[str, EmailLine], StoredLine],
+    saves: Mapping[tuple[str, EmailLine], int],
 ) -> EmailVariantRead:
     names = list(values_for(email.key, variant))
     context = sample_context(email.key, variant)
     sample = build_variables(names, context) if names else {}
     lines = {
         line: EmailLineRead.model_validate(
-            line_view(default_text(email, variant, line), stored.get((variant, line))),
+            line_view(
+                default_text(email, variant, line),
+                stored.get((variant, line)),
+                saves.get((variant, line), 0),
+            ),
             from_attributes=True,
         )
         for line in EmailLine
@@ -139,19 +156,20 @@ def _variant(
     )
 
 
-async def _detail(session: AsyncSession, settings: Settings, email: EmailEntry) -> EmailDetailRead:
-    # One session, so its reads go one at a time; Loops is asked meanwhile.
-    live_task = asyncio.create_task(asyncio.to_thread(_live, settings))
-    edits = await last_edits(session)
-    stored = await stored_lines(session, str(email.key))
-    live = await live_task
+async def _detail(
+    session: AsyncSession, live: frozenset[Notification], email: EmailEntry
+) -> EmailDetailRead:
+    key = str(email.key)
+    edits = await last_edits(session, key)
+    stored = await stored_lines(session, key)
+    saves = await line_saves(session, key)
     variants = variants_of(email)
     names = {name for variant in variants for name in values_for(email.key, variant)}
     return EmailDetailRead(
         **_item(email, live, edits),  # type: ignore[arg-type]
         siblings=max(len(group_of(email.key)) - 1, 0),
         values=[_value(value) for value in VALUES if value.name in names],
-        variants=[_variant(email, variant, stored) for variant in variants],
+        variants=[_variant(email, variant, stored, saves) for variant in variants],
     )
 
 
@@ -165,9 +183,8 @@ def _email(key: str) -> EmailEntry:
 async def admin_email_list(
     _: QueueViewerDep, session: SessionDep, settings: SettingsDep
 ) -> Page[EmailListItem]:
-    live_task = asyncio.create_task(asyncio.to_thread(_live, settings))
+    live = await _live_now(settings)
     edits = await last_edits(session)
-    live = await live_task
     return Page(data=[EmailListItem(**_item(e, live, edits)) for e in EMAILS], next_cursor=None)  # type: ignore[arg-type]
 
 
@@ -177,7 +194,8 @@ async def admin_email(
     settings: SettingsDep,
     key: Annotated[str, Path(max_length=64, description="The email's key.")],
 ) -> EmailDetailRead:
-    return await _detail(session, settings, _email(key))
+    email = _email(key)
+    return await _detail(session, await _live_now(settings), email)
 
 
 async def admin_email_values(_: QueueViewerDep) -> Page[EmailValueRead]:
@@ -207,17 +225,20 @@ async def save_admin_email(
     email = _email(key)
     if variant not in variants_of(email):
         raise EmailNotFoundError(f"{key!r} has no variant {variant!r}")
-    if email.key not in await asyncio.to_thread(_live, settings):
+    live = await _live_now(settings)
+    if email.key not in live:
         raise EmailNotSetUpError(f"{key!r} has no shared template yet, so it is read only")
     sent = {
         line: LineSave(getattr(body.lines, line).text, getattr(body.lines, line).version)
         for line in EmailLine
     }
+    # Locked first, so the history counted next is the one this save follows.
     rows = await stored_lines(session, key, variant=variant, lock=True)
     stored = {line: row for (_, line), row in rows.items()}
-    plan = plan_save(email, variant, stored, sent, frozenset(body.keep_edit))
+    saves = {line: n for (_, line), n in (await line_saves(session, key, variant)).items()}
+    plan = plan_save(email, variant, stored, sent, frozenset(body.keep_edit), saves)
     if plan.conflicts:
-        winner = stored.get(plan.conflicts[0])
+        winner = await last_line_edit(session, key, variant, plan.conflicts)
         await session.rollback()
         raise _conflict(winner)
     if plan.errors:
@@ -243,16 +264,16 @@ async def save_admin_email(
     except IntegrityError:
         # A second admin's first save on the same line won the insert.
         await session.rollback()
-        fresh = await stored_lines(session, key, variant=variant)
-        raise _conflict(next(iter(fresh.values()), None)) from None
-    return await _detail(session, settings, email)
+        written = tuple(write.line for write in plan.writes)
+        raise _conflict(await last_line_edit(session, key, variant, written)) from None
+    return await _detail(session, live, email)
 
 
-def _conflict(winner: StoredLine | None) -> EmailLineConflictError:
-    return EmailLineConflictError(
-        updated_by_name=winner.updated_by_name if winner else "Another admin",
-        updated_at=winner.updated_at.isoformat() if winner else "",
-    )
+def _conflict(winner: tuple[str, dt.datetime] | None) -> EmailLineConflictError:
+    # A stale version always follows a saved change, so the history names it;
+    # only a row removed outside the app has none.
+    name, at = winner or (UNNAMED_ADMIN, dt.datetime.now(dt.UTC))
+    return EmailLineConflictError(updated_by_name=name, updated_at=at.isoformat())
 
 
 AdminEmailListDep = Annotated[Page[EmailListItem], Depends(admin_email_list)]

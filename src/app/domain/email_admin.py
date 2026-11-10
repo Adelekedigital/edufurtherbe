@@ -60,10 +60,14 @@ def default_text(email: EmailEntry, variant: str, line: EmailLine) -> str:
     return str(getattr(cases[case_of(variant)], line))
 
 
-def line_view(default: str, stored: StoredLine | None) -> LineView:
-    """The line as sent now, and whether the default moved since it was edited."""
+def line_view(default: str, stored: StoredLine | None, saves: int = 0) -> LineView:
+    """The line as sent now, and whether the default moved since it was edited.
+
+    ``saves`` is how many changes the line's history holds: a line reset to its
+    default keeps counting from there, so its version never repeats.
+    """
     if stored is None:
-        return LineView(default, default, False, 0, False, None)
+        return LineView(default, default, False, saves, False, None)
     changed = stored.default_at_edit != default
     return LineView(
         default_text=default,
@@ -111,6 +115,7 @@ def plan_save(
     stored: Mapping[EmailLine, StoredLine],
     lines: Mapping[EmailLine, LineSave],
     keep_edit: frozenset[EmailLine] = frozenset(),
+    saves: Mapping[EmailLine, int] | None = None,
 ) -> SavePlan:
     """What saving ``lines`` for this variant does (PRD 28, *Rules*).
 
@@ -119,12 +124,18 @@ def plan_save(
     refuses the whole save. Saving the default deletes the override (a reset);
     saving the same text changes nothing, unless "Keep my edit" was pressed on
     a line whose default has moved, which records that the admin saw it.
+
+    **A version only ever rises.** With no edit stored it is the count of the
+    line's saved changes (``saves``, from its history), so a stale editor cannot
+    match a version reused after a reset and overwrite unseen.
     """
-    conflicts = tuple(
-        line
-        for line, sent in lines.items()
-        if sent.version != (stored[line].version if line in stored else 0)
-    )
+    counted = saves or {}
+
+    def read(line: EmailLine) -> int:
+        current = stored.get(line)
+        return current.version if current else counted.get(line, 0)
+
+    conflicts = tuple(line for line, sent in lines.items() if sent.version != read(line))
     if conflicts:
         return SavePlan(conflicts, (), ())
     errors = tuple(
@@ -139,7 +150,7 @@ def plan_save(
         default = default_text(email, variant, line)
         current = stored.get(line)
         before = current.text if current else default
-        version = (current.version if current else 0) + 1
+        version = read(line) + 1
         if sent.text == default:
             if current is not None:
                 writes.append(

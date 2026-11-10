@@ -117,3 +117,14 @@ def test_any_invalid_line_refuses_the_whole_save() -> None:
     )
     assert plan.writes == ()
     assert [(e.line, e.code) for e in plan.errors] == [(B, LineErrorCode.VALUE_NOT_SENT)]
+
+
+def test_a_reset_line_keeps_counting_so_a_stale_version_cannot_match() -> None:
+    """Edited at 1, reset at 2: the line reads version 2 with no edit stored, so
+    an editor still holding 1 conflicts, and the next edit is 3, never 1 again."""
+    saves = {S: 2}
+    stale = plan_save(GRANTED, "default", {}, unchanged(subject=LineSave("Mine", 1)), saves=saves)
+    assert stale.conflicts == (S,)
+    fresh = plan_save(GRANTED, "default", {}, unchanged(subject=LineSave("Mine", 2)), saves=saves)
+    assert [(w.action, w.version) for w in fresh.writes] == [(EmailEditAction.EDIT, 3)]
+    assert line_view(DEFAULTS[S], None, 2).version == 2

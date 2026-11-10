@@ -152,7 +152,8 @@ async def test_a_save_edits_resets_and_records_each_change(
         SAVE, headers=headers, json=body(again.json(), subject="Your session credits are here")
     )
     assert reset.status_code == 200
-    assert reset.json()["variants"][0]["lines"]["subject"]["version"] == 0
+    # A reset keeps counting: edit 1, reset 2 (never back to 0).
+    assert reset.json()["variants"][0]["lines"]["subject"]["version"] == 2
     assert await overrides(db_engine) == []
     assert [row[:2] for row in await history(db_engine)] == [
         ("subject", "edit"),
@@ -231,3 +232,26 @@ async def test_the_values_list_says_where_each_is_used(
     credit = next(value for value in values if value["name"] == "creditCount")
     assert credit["used_in"] == ["Credits renewed", "Credits expiring"]
     assert credit["fallback"] == "your"
+
+
+async def test_a_save_after_a_reset_cannot_reuse_an_old_version(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """An editor that read the edit (version 1) saves after another admin reset
+    the line: the line's count moved on, so it is a 409 naming who reset it."""
+    headers = await an_admin(db_engine)
+    read = (await api_client.get(GRANTED, headers=headers)).json()
+    edited = (await api_client.put(SAVE, headers=headers, json=body(read, subject="Mine"))).json()
+    default = read["variants"][0]["lines"]["subject"]["default_text"]
+    reset = await api_client.put(SAVE, headers=headers, json=body(edited, subject=default))
+    assert reset.json()["variants"][0]["lines"]["subject"]["version"] == 2
+
+    stale = await api_client.put(SAVE, headers=headers, json=body(edited, subject="Late"))
+    assert stale.status_code == 409
+    assert stale.json()["updated_by_name"] == "Ada"
+    assert stale.json()["updated_at"]
+
+    again = await api_client.put(SAVE, headers=headers, json=body(reset.json(), subject="Next"))
+    assert again.status_code == 200
+    assert again.json()["variants"][0]["lines"]["subject"]["version"] == 3
+    assert await overrides(db_engine) == [("subject", "Next", 3)]
