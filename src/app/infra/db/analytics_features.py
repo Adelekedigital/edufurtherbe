@@ -25,7 +25,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import aliased
 
 from app.domain.availability import BookingWindow
@@ -153,43 +153,57 @@ def messaged_first() -> tuple[Measure, Measure]:
 # --- invites ---------------------------------------------------------------
 
 
-def _invites(window: Window, *, extra: Any = None) -> Any:
+def invites_made(window: Window, *, extra: Any = None) -> Any:
+    """Invites created in ``window`` by a counted inviter; with ``extra``, only
+    those it holds for."""
     where = [during(Referral.created_at, window), counted_user(Referral.referrer_id)]
     if extra is not None:
         where.append(extra)
     return _scalar(select(func.count()).select_from(Referral).where(*where))
 
 
+def qualified() -> Any:
+    """The invitee finished their profile."""
+    return Referral.qualified_at.is_not(None)
+
+
+def invitee_had(*where: Any) -> Any:
+    """The invite's invitee has a session as a mentee, matching ``where``."""
+    return select(Session.id).where(Session.mentee_id == Referral.invitee_user_id, *where).exists()
+
+
 def invites() -> tuple[Measure, Measure]:
-    return (
-        lambda w: _invites(w, extra=Referral.qualified_at.is_not(None)),
-        _invites,
-    )
+    return (lambda w: invites_made(w, extra=qualified()), invites_made)
 
 
 def invitees_who_met(window: Window) -> Any:
     """Invites' contribution: invitees from invites created in ``window`` with
     a completed session as a mentee."""
-    return _invites(
-        window,
-        extra=select(Session.id)
-        .where(Session.mentee_id == Referral.invitee_user_id, completed())
-        .exists(),
-    )
+    return invites_made(window, extra=invitee_had(completed()))
 
 
 # --- activation ------------------------------------------------------------
 
 
+def is_sign_up() -> Any:
+    """A counted account made here: a migrated account is not a sign-up."""
+    return and_(User.legacy_bubble_id.is_(None), counted_user(User.id))
+
+
+def sign_ups(window: Window, *, role: PrimaryRole | None = None, extra: Any = None) -> Any:
+    """Sign-ups made in ``window``; with ``role``, only that `primary_role`."""
+    where = [is_sign_up(), during(User.created_at, window)]
+    if role is not None:
+        where.append(User.primary_role == role)
+    if extra is not None:
+        where.append(extra)
+    return _scalar(select(func.count()).select_from(User).where(*where))
+
+
 def new_mentees(window: Window, *, activated: bool = False) -> Any:
-    where = [
-        User.legacy_bubble_id.is_(None),
-        User.primary_role == PrimaryRole.MENTEE,
-        during(User.created_at, window),
-        counted_user(User.id),
-    ]
+    extra = None
     if activated:
-        where.append(
+        extra = (
             select(Session.id)
             .where(
                 Session.mentee_id == User.id,
@@ -198,7 +212,7 @@ def new_mentees(window: Window, *, activated: bool = False) -> Any:
             )
             .exists()
         )
-    return _scalar(select(func.count()).select_from(User).where(*where))
+    return sign_ups(window, role=PrimaryRole.MENTEE, extra=extra)
 
 
 def mentee_activation() -> tuple[Measure, Measure]:

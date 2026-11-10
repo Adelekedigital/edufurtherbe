@@ -96,17 +96,25 @@ def requests(window: Window, *, became: SessionStatus | None = None) -> Any:
     )
 
 
+def is_started_in(window: Window, status: Any) -> Any:
+    """A counted session starting in ``window`` with ``status`` (a predicate)."""
+    return and_(status, counted_session(), during(Session.starts_at, window))
+
+
 def started(window: Window, status: Any) -> Any:
     """Counted sessions starting in ``window`` with ``status`` (a predicate)."""
-    return _count(and_(status, counted_session(), during(Session.starts_at, window)))
+    return _count(is_started_in(window, status))
+
+
+def is_completed_in(window: Window) -> Any:
+    """A counted completed session starting in ``window``."""
+    return is_started_in(window, completed())
 
 
 def completed_in(window: Window, *, distinct: Any = None) -> Any:
     """Completed sessions starting in ``window``, or the distinct ``distinct``
     among them (a mentee or a mentor column)."""
-    return _count(
-        and_(completed(), counted_session(), during(Session.starts_at, window)), of=distinct
-    )
+    return _count(is_completed_in(window), of=distinct)
 
 
 def no_shows_in(window: Window) -> Any:
@@ -151,7 +159,7 @@ def repeat_mentees(window: Window, *, at_least: int) -> Any:
     """Mentees with ``at_least`` completed sessions starting in ``window``."""
     per_mentee = (
         select(Session.mentee_id)
-        .where(completed(), counted_session(), during(Session.starts_at, window))
+        .where(is_completed_in(window))
         .group_by(Session.mentee_id)
         .having(func.count() >= at_least)
         .subquery()
