@@ -18,7 +18,11 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
-from app.domain.analytics_events import AnalyticsEvent
+from app.domain.analytics_events import (
+    AnalyticsEvent,
+    cancelled_properties,
+    session_properties,
+)
 from app.domain.enums import (
     ActorType,
     SessionReasonCode,
@@ -423,7 +427,7 @@ async def queue_session_confirmed(
     """`session_confirmed` about its mentee (PRD 30): the one place it is
     written, for a booking confirmed outright and a request accepted."""
     await enqueue_analytics(
-        session, AnalyticsEvent.SESSION_CONFIRMED, mentee_id, {"session_id": session_id}, at=now
+        session, AnalyticsEvent.SESSION_CONFIRMED, mentee_id, session_properties(session_id), at=now
     )
 
 
@@ -452,7 +456,7 @@ async def _report(
             session,
             AnalyticsEvent.SESSION_CANCELLED,
             row["mentee_id"],
-            {"session_id": session_id, "by": by, "reason_code": reason_code},
+            cancelled_properties(session_id, by, reason_code),
             at=now,
         )
 

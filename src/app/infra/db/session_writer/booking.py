@@ -45,7 +45,11 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
-from app.domain.analytics_events import AnalyticsEvent
+from app.domain.analytics_events import (
+    AnalyticsEvent,
+    first_confirmation,
+    requested_properties,
+)
 from app.domain.availability import BookingWindow
 from app.domain.booking_limits import OVERLAP_MESSAGE
 from app.domain.enums import (
@@ -229,18 +233,6 @@ async def _checked_answers(
             "; ".join(message for _, message in problems), field_errors=tuple(problems)
         )
     return answers, form, file_ids
-
-
-def _first_confirmation(moved_from: Mapping[str, Any] | None) -> bool:
-    """Whether a session booked confirmed is confirmed for the first time.
-
-    A new booking is. A move is only when the session it ends was still
-    waiting on the mentor: a confirmed session moved stays confirmed and is not
-    news. **Assumption:** a confirmed session moved onto a time the mentor must
-    approve is confirmed again when they accept (`transitions`), so analytics
-    may count that session's confirmation twice; the mentor did decide twice.
-    """
-    return moved_from is None or moved_from["status"] == SessionStatus.PENDING_MENTOR_APPROVAL
 
 
 async def book_session(
@@ -587,10 +579,12 @@ async def book_session(
             session,
             AnalyticsEvent.BOOKING_REQUESTED,
             mentee_id,
-            {"session_id": session_id, "session_type_id": payload["session_type_id"]},
+            requested_properties(session_id, payload["session_type_id"]),
             at=now,
         )
-    if status is SessionStatus.CONFIRMED and _first_confirmation(moved_from):
+    if status is SessionStatus.CONFIRMED and first_confirmation(
+        moved_from["status"] if moved_from else None
+    ):
         await queue_session_confirmed(session, mentee_id, session_id, now=now)
 
     # **The request's deadline nudges, scheduled here and fired by a callback
