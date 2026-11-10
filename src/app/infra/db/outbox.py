@@ -33,7 +33,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
 from app.domain.message_emails import MESSAGE_EMAILS
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
-from app.domain.names import addressed_by
+from app.domain.names import addressed_by, joined_name
 from app.domain.notifications import Channel, Notification
 from app.domain.push import SESSION_PUSHES, session_push, session_push_spec
 from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out
@@ -675,7 +675,7 @@ async def _names_for(
     ).mappings()
     return {
         row["id"]: (
-            " ".join(part for part in (row["first_name"], row["last_name"]) if part).strip(),
+            joined_name(row["first_name"], row["last_name"]),
             str(row["timezone"] or "UTC"),
             row["first_name"] or None,
         )

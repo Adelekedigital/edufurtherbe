@@ -17,6 +17,7 @@ from app.api.request_id import RequestIdMiddleware
 from app.api.routes import (
     admin,
     admin_credits,
+    admin_emails,
     admin_mentors,
     admin_preview,
     admin_users,
@@ -602,6 +603,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(admin_mentors.router)
     application.include_router(admin_preview.router)
     application.include_router(admin_users.router)
+    application.include_router(admin_emails.router)
     return application
 
 
