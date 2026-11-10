@@ -113,7 +113,7 @@ def test_any_invalid_line_refuses_the_whole_save() -> None:
         GRANTED,
         "default",
         {},
-        unchanged(subject=LineSave("Fine", 0), button=LineSave("{creditCount}", 0)),
+        unchanged(subject=LineSave("Fine", 0), button=LineSave("{intervalTime}", 0)),
     )
     assert plan.writes == ()
     assert [(e.line, e.code) for e in plan.errors] == [(B, LineErrorCode.VALUE_NOT_SENT)]

@@ -230,7 +230,7 @@ async def test_the_values_list_says_where_each_is_used(
         await api_client.get("/api/v1/admin/email-values", headers=await an_admin(db_engine))
     ).json()["data"]
     credit = next(value for value in values if value["name"] == "creditCount")
-    assert credit["used_in"] == ["Credits renewed", "Credits expiring"]
+    assert credit["used_in"] == ["Credits granted", "Credits renewed", "Credits expiring"]
     assert credit["fallback"] == "your"
 
 

@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.domain.credits import end_of_month
-from conftest import add_user, api_token, bearer, give_mentee_answers
+from conftest import add_qualified_invite, add_user, api_token, bearer, give_mentee_answers
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -437,6 +437,33 @@ async def test_the_starter_credit_is_announced(
 
     assert [row["entity_type"] for row in queued] == ["user"]
     assert queued[0]["payload"]["recipient_id"] == str(user_id)
+
+
+@pytest.mark.parametrize(("invited", "count"), [(False, 1), (True, 2)])
+async def test_the_announcement_carries_what_was_paid(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, invited: bool, count: int
+) -> None:
+    """`creditCount` in the shared Credits template (decision 323): the amount
+    the completion actually paid, so a user whose invite already qualified hears
+    two, not one."""
+    auth_id = uuid4()
+    user_id = await seed(db_engine, auth_id)
+    if invited:
+        async with db_engine.begin() as conn:
+            await add_qualified_invite(conn, user_id)
+
+    await api_client.post(PATH, headers=bearer(api_token(auth_id)))
+
+    async with db_engine.begin() as conn:
+        payload = await conn.scalar(
+            text(
+                "SELECT payload FROM outbox_events "
+                "WHERE event_type = 'credits_granted' AND entity_id = :u"
+            ),
+            {"u": user_id},
+        )
+    assert payload["credit_count"] == count
+    assert await balance_of(db_engine, user_id) == count
 
 
 async def test_a_retried_completion_announces_nothing(

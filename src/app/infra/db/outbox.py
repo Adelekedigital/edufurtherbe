@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
 from app.domain.analytics_events import AnalyticsEvent, analytics_event
+from app.domain.email_lines import OWNED_BY
 from app.domain.message_emails import MESSAGE_EMAILS
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.names import addressed_by, joined_name
@@ -52,6 +53,8 @@ from app.infra.db.models.user import User
 from app.infra.db.pending_requests import request_reminder_state
 from app.infra.db.predicates import LIVE
 from app.infra.db.push_store import forget_gone, subscriptions_for
+from app.infra.db.session_answer_rows import answer_previews
+from app.infra.db.session_store import is_a_party
 
 __all__ = [
     "MAX_ATTEMPTS",
@@ -681,6 +684,11 @@ async def _context_for(
         return MessageContext(mentor_name="", mentee_name="", **base)  # type: ignore[arg-type]
 
     parties = await _names_for(session, (found["mentor_id"], found["mentee_id"], recipient))
+    # Decision 334: the count the session page's preview shows, never the
+    # answers, read only for the mentor, whose questions they are.
+    if notification in OWNED_BY["answeredQuestions"] and recipient == found["mentor_id"]:
+        previews = await answer_previews(session, [found["id"]], is_a_party(recipient))
+        extras["answered_questions"] = str(previews.get(found["id"], {}).get("count", 0))
     return MessageContext(
         recipient_name=parties.get(recipient, nobody)[0],
         recipient_timezone=parties.get(recipient, nobody)[1],

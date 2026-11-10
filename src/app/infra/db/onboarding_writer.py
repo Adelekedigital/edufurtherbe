@@ -144,12 +144,15 @@ async def complete_onboarding(
         # Guarded on `granted` rather than sent unconditionally: a retried
         # completion pays nothing, and telling somebody twice that their first
         # credit arrived is worse than a slightly late first telling.
+        #
+        # With what was paid, as `credits_renewed` carries it (decision 323).
         await enqueue(
             session,
             Notification.CREDITS_GRANTED,
             entity_type="user",
             entity_id=user_id,
             recipient_ids=(user_id,),
+            variables={"credit_count": paid[user_id]},
         )
 
     # **The referrer's half, in this transaction.** Finishing a profile is what

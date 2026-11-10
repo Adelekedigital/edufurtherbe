@@ -339,6 +339,7 @@ instead of failing the send (the dev outbox showed `session_requested` and
 |---|---|---|
 | `sessionTopic` (`topic`, `sessTopic`) | the topic written at booking | the offering's name, else "Mentorship session" |
 | `sessionDetail` (`discuss`, `topicDiscuss`) | the booking message | empty |
+| `answeredQuestions` | `session_requested` and `session_booked` (both copies; only the mentor's section shows it): how many of the mentor's questions the mentee answered, "1 question" / "3 questions", counted at send time as the session page's answer preview counts them (a file answer counts, a question left blank does not). **Never the answers**: they can be long, files, and personal, so they stay on the session page (decision 334). For a line such as "Mo answered your {answeredQuestions}. Read them on the session page.", shown only when the value is not empty | empty when nothing was answered; refused on any other email, except the others sharing those two templates, which fill it empty |
 | `location` | the venue label | "Online" |
 | `reasonTitle` | the reason code in words (`REASON_TITLES`) | empty when a reason was written without a code; "No reason given" when neither |
 | `reasonMessage` (`cancelmessage`) | what the person wrote | empty |
@@ -347,7 +348,7 @@ instead of failing the send (the dev outbox showed `session_requested` and
 | `reviewBy` / `reviewFor` | the mentee (author) / the mentor (subject) | — |
 | `reviewLink` | the session page, where the review lives | — |
 | `bookLink` | the Explore page | — |
-| `creditCount` | credits expiring on that date, carried on the row | required |
+| `creditCount` | `credits_granted` and `credits_renewed`: what was paid, carried on the row; `credits_expiring`: credits expiring on that date, re-read at send time | required |
 
 ### A suggested time (#339)
 
@@ -547,6 +548,11 @@ before the lot exists.
 The copy therefore has to say the credit *has arrived*, not that it is waiting.
 If the intent is instead to prompt a new signup to finish their profile, that is
 a second, different message and it has no producer.
+
+**Since decision 323 it carries `creditCount`**: what the completion actually
+paid, the month topped up to the mentee's credit level (its amount on the
+configured ladder, so 1, 2 or 3 by level), so the shared Credits template
+can show `{creditCount}` for all three emails.
 
 **`Credit renewal` → `credits_renewed`. Built.** Enqueued by
 `grant_monthly_credits` for the users it actually paid — so a second run in one
