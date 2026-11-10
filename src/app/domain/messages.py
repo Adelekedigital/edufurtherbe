@@ -59,6 +59,7 @@ from app.domain.sessions import request_deadline
 
 __all__ = [
     "ALIASES",
+    "DATE_FORMAT",
     "DELETED_PARTY_LABELS",
     "LINE_VARIABLES",
     "NO_REASON_TITLE",
@@ -70,6 +71,7 @@ __all__ = [
     "MessageContext",
     "UnresolvedVariableError",
     "build_variables",
+    "clock",
     "resolve",
     "session_page_url",
 ]
@@ -174,6 +176,10 @@ class MessageContext:
 #: `APP_BASE_URL`, which is the *application's* origin and deliberately not
 #: `PUBLIC_BASE_URL` — that one is this service's own, and a link built from it
 #: would send a mentor to the API.
+#: How every date in an email reads: "Fri 20 Nov 2026" (owner, 2026-11-10:
+#: the details card's WHEN fits one line on a phone, with the zone's code).
+DATE_FORMAT = "%a %d %b %Y"
+
 SESSION_PATH = "/sessions/{session_id}"
 DASHBOARD_PATH = "/dashboard"
 CALENDAR_PATH = "/calendar"
@@ -192,6 +198,19 @@ MESSAGE_SETTINGS_PATH = "/messages?settings=1"
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
     return moment.astimezone(ZoneInfo(timezone))
+
+
+def clock(moment: dt.datetime) -> str:
+    """How every time in every email reads, for mentors and mentees alike:
+    "3:00 PM", "11:30 AM" (owner, 2026-11-10). `%-I` is not portable to
+    Windows, so the hour's zero is stripped by hand."""
+    return moment.strftime("%I:%M %p").lstrip("0")
+
+
+def _zone_code(moment: dt.datetime) -> str:
+    """The zone's code at that moment, "WAT" or "EDT", so summer time is right;
+    a zone with no common code reads as its offset, "+03" (owner, 2026-11-10)."""
+    return moment.strftime("%Z")
 
 
 def _needs(value: object, name: str) -> str:
@@ -299,12 +318,12 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     # `%-d` is not portable to Windows, so the day is formatted without padding
     # by hand. The suite runs on both.
     "sessionDate": lambda c: _local(_as_moment(c, "sessionDate"), c.recipient_timezone).strftime(
-        "%A %d %B %Y"
+        DATE_FORMAT
     ),
-    "sessionTime": lambda c: _local(_as_moment(c, "sessionTime"), c.recipient_timezone).strftime(
-        "%H:%M"
+    "sessionTime": lambda c: clock(_local(_as_moment(c, "sessionTime"), c.recipient_timezone)),
+    "sessionTimezone": lambda c: _zone_code(
+        _local(_as_moment(c, "sessionTimezone"), c.recipient_timezone)
     ),
-    "sessionTimezone": lambda c: _needs(c.recipient_timezone, "sessionTimezone"),
     "sessionTopic": _topic,
     "sessionDetail": lambda c: c.detail or "",
     "location": lambda c: c.venue or VENUE_FALLBACK,
@@ -322,7 +341,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     # The return reminder is one template for a dated pause and an undated one,
     # so the side that does not apply is deliberately empty, not refused.
     "returnOn": lambda c: (
-        dt.date.fromisoformat(c.extras["return_on"]).strftime("%A %d %B %Y")
+        dt.date.fromisoformat(c.extras["return_on"]).strftime(DATE_FORMAT)
         if c.extras.get("return_on")
         else ""
     ),
@@ -335,12 +354,14 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "intervalTime": lambda c: _needs(c.extras.get("interval"), "intervalTime"),
     # A suggested time (#339), in the recipient's zone like the session's own.
     "suggestedDate": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedDate").strftime(
-        "%A %d %B %Y"
+        DATE_FORMAT
     ),
-    "suggestedTime": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedTime").strftime(
-        "%H:%M"
+    "suggestedTime": lambda c: clock(_extra_moment(c, "suggested_starts_at", "suggestedTime")),
+    # Its own code: a suggested time can fall on the other side of a clock change.
+    "suggestedTimezone": lambda c: _zone_code(
+        _extra_moment(c, "suggested_starts_at", "suggestedTimezone")
     ),
-    "holdUntilTime": lambda c: _extra_moment(c, "held_until", "holdUntilTime").strftime("%H:%M"),
+    "holdUntilTime": lambda c: clock(_extra_moment(c, "held_until", "holdUntilTime")),
     "suggestedAfter": lambda c: _needs(c.extras.get("suggested_after"), "suggestedAfter"),
     # A mentee's reminder about a pending request (decision 294): their words
     # from the row, and a link to the request itself.
@@ -398,7 +419,7 @@ def _message_time(context: MessageContext, key: str, name: str) -> str:
     """A message card's time in the recipient's zone, empty with no card."""
     if not context.extras.get(key):
         return ""
-    return _extra_moment(context, key, name).strftime("%H:%M")
+    return clock(_extra_moment(context, key, name))
 
 
 def _carried(key: str, name: str) -> Callable[[MessageContext], str]:

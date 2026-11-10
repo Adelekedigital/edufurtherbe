@@ -18,6 +18,7 @@ from app.api.schemas.common import Normalised
 from app.api.schemas.user import CreditsRead
 from app.domain.credit_log import CreditEntryKind, RefundReason
 from app.domain.enums import CoverColor
+from app.domain.names import joined_name
 
 __all__ = [
     "AdminCreditGrantRead",
@@ -115,22 +116,13 @@ class AdminGrantHistoryRead(BaseModel):
             created_at=row["created_at"],
             note=row["note"],
             user_id=row["user_id"],
-            recipient_name=_full_name(row["recipient_first_name"], row["recipient_last_name"]),
+            recipient_name=joined_name(row["recipient_first_name"], row["recipient_last_name"]),
             granted_by=row["granted_by"],
-            granted_by_name=_full_name(row["granted_by_first_name"], row["granted_by_last_name"]),
+            granted_by_name=joined_name(row["granted_by_first_name"], row["granted_by_last_name"]),
             quantity_granted=row["quantity_granted"],
             quantity_remaining=row["quantity_remaining"],
             expires_at=row["expires_at"],
         )
-
-
-def _full_name(first: str | None, last: str | None) -> str:
-    """Whatever the row actually holds, joined.
-
-    `users.last_name` is nullable and the ETL leaves it empty for some migrated
-    accounts, so a naive f-string renders a trailing space on every one of them.
-    """
-    return " ".join(part for part in (first, last) if part)
 
 
 class AdminMenteeRead(BaseModel):
