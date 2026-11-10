@@ -51,6 +51,7 @@ from app.domain.email_values import (
     NO_REASON_TITLE,
     SESSION_TOPIC_FALLBACK,
     VENUE_FALLBACK,
+    counted,
 )
 from app.domain.enums import EmailLine, SessionReasonCode
 from app.domain.message_emails import FEW_MAX, SENDER_ROWS
@@ -309,6 +310,13 @@ def _hours_left(context: MessageContext) -> str:
     return str(max(0, int(remaining.total_seconds() // 3600)))
 
 
+def _answered_questions(context: MessageContext) -> str:
+    """How many questions the mentee answered, in words, or empty for none
+    (decision 334). Never the answers: they can be long, files, and personal."""
+    count = int(_needs(context.extras.get("answered_questions"), "answeredQuestions"))
+    return counted(count, "question") if count else ""
+
+
 #: Name to value. **One entry per distinct name**, shared by every template that
 #: asks for it.
 def _credit_count(context: MessageContext) -> str:
@@ -339,6 +347,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     ),
     "sessionTopic": _topic,
     "sessionDetail": lambda c: c.detail or "",
+    "answeredQuestions": _answered_questions,
     "location": lambda c: c.venue or VENUE_FALLBACK,
     "sessionUrl": _session_url,
     "dashboardUrl": lambda c: _app_link(c, DASHBOARD_PATH, "dashboardUrl"),

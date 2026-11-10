@@ -10,11 +10,14 @@ build the live templates' variables from them.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
+from uuid import UUID
 
 import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.test_api_notifications import Recorder, a_booking, sweep
+from tests.integration.test_booking_answers import add_question
 from tests.unit.test_template_registry import live_variables
 
 from app.domain.enums import SessionReasonCode
@@ -108,3 +111,46 @@ async def test_a_cancellation_names_who_called_it_off(
     (variables,) = sent(recorder, Notification.SESSION_CANCELLED)
     assert variables["cancelinitiator"] == "Mo"
     assert variables["cancelmessage"] == ""
+
+
+async def test_a_new_booking_tells_both_copies_how_many_questions_were_answered(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Decision 334: the count of answered questions, never the answers; a
+    question left blank is not counted."""
+
+    async def two_of_three(session_type: UUID) -> list[dict[str, Any]]:
+        asked = [
+            (await add_question(db_engine, session_type, words, order=order))[0]
+            for order, words in enumerate(("Which programme?", "Which country?", "Anything?"))
+        ]
+        return [
+            {"question_id": str(asked[0]), "text": "MSc Public Policy"},
+            {"question_id": str(asked[1]), "text": "Canada"},
+        ]
+
+    await a_booking(db_engine, api_client, "lt-answered", answers=two_of_three)
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    copies = [
+        m["context"] for m in recorder.sent if m["notification"] == Notification.SESSION_BOOKED
+    ]
+    assert {c.recipient_role for c in copies} == {"mentor", "mentee"}
+    for copy in copies:
+        assert build_variables(["answeredQuestions"], copy) == {"answeredQuestions": "2 questions"}
+
+
+async def test_a_request_with_no_answers_says_nothing_of_questions(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    await a_booking(db_engine, api_client, "lt-unanswered", confirmation=True)
+    recorder = Recorder()
+
+    await sweep(db_engine, recorder)
+
+    (copy,) = [
+        m["context"] for m in recorder.sent if m["notification"] == Notification.SESSION_REQUESTED
+    ]
+    assert build_variables(["answeredQuestions"], copy) == {"answeredQuestions": ""}

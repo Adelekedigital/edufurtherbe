@@ -283,12 +283,15 @@ _SUGGESTED = {
     "held_until": (_START + dt.timedelta(hours=3, minutes=30)).isoformat(),
 }
 
+#: What the drain adds to a new booking's row (decision 334).
+_ANSWERED = {"answered_questions": "3"}
+
 #: What each email's producer puts on its outbox row (`variables=` at the
 #: enqueue, or the message email's values), by variant.
 SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
-    N.SESSION_BOOKED: {"mentor": {}, "mentee": {}},
+    N.SESSION_BOOKED: {"mentor": dict(_ANSWERED), "mentee": dict(_ANSWERED)},
     N.REQUEST_ACCEPTED: {"default": {}},
-    N.SESSION_REQUESTED: {"default": {}},
+    N.SESSION_REQUESTED: {"default": dict(_ANSWERED)},
     N.MENTOR_RESPONSE_REMINDER: {"default": {"kind": "t24"}},
     N.MENTEE_REQUEST_REMINDER: {"default": {"reminder_message": "Still keen if you have time!"}},
     N.REQUEST_DECLINED: {"default": {"reason_code": "scheduling_conflict"}},
