@@ -322,6 +322,12 @@ class ValidationError(AppError):
         self.field_errors = field_errors
 
 
+class AnalyticsWindowError(ValidationError):
+    """An admin Analytics request asked for a window that cannot be read: a
+    bad preset, half a range, a day before the earliest or after today
+    (decision 324)."""
+
+
 class FileTooLargeError(ValidationError):
     """An uploaded file is over the configured size limit (intake and message
     files alike, decision 302)."""

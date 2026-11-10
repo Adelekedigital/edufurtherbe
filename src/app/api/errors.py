@@ -28,6 +28,7 @@ from app.api.request_id import HEADER as REQUEST_ID_HEADER
 from app.core.errors import (
     AccountExistsError,
     AlreadyReviewedError,
+    AnalyticsWindowError,
     AppError,
     AuthenticationError,
     BookingLimitReachedError,
@@ -200,6 +201,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     PreviewEndedError: "/problems/preview-ended",
     PreviewNotFoundError: "/problems/preview-not-found",
     ReadOnlyViewAsError: "/problems/read-only-view-as",
+    AnalyticsWindowError: "/problems/analytics-window",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx
