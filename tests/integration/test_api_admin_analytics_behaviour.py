@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pytest
 from pydantic import SecretStr
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.factories import admin_token, token_for
 
@@ -37,6 +38,7 @@ CARD_COLUMNS = [
     "searches",
     "searches_no_results",
     "profile_views_from_search",
+    "profile_views",
     "join_clicked",
     "join_failed",
     "median_minutes_from_start",
@@ -74,7 +76,7 @@ class PostHog:
         if name == "admin_analytics_login_codes":
             return rows(["attempts", "failed", "failed_migrated"], list(self.login))
         if name == "admin_analytics_cards":
-            return rows(CARD_COLUMNS, [10, 2, 1, 8, 2, 3, 5, 1, 3.0, 6, 3, 2, 1, 2, 20])
+            return rows(CARD_COLUMNS, [10, 2, 1, 8, 2, 3, 8, 5, 1, 3.0, 6, 3, 2, 1, 2, 20])
         if name in ("admin_analytics_profile_sources", "admin_analytics_failed_routes"):
             return rows(["key", "count"], ["explore", 3], ["home", 1])
         if name == "admin_analytics_explore":
@@ -216,8 +218,8 @@ async def test_behaviour_returns_the_seven_cards_and_the_replay_link(
         "profile_views_from_search": 3,
     }
     assert body["profile_views_by_source"] == [
-        {"source": "explore", "share": 75.0},
-        {"source": "home", "share": 25.0},
+        {"source": "explore", "share": 37.5},
+        {"source": "home", "share": 12.5},
     ]
     assert body["joining"] == {
         "join_clicked": 5,
@@ -315,3 +317,44 @@ async def test_the_login_alert_rides_every_section_over_ten_percent(
         answer = await get(client, token, "/credits")
     assert answer.status_code == 200
     assert all(a["key"] != "login_code_failed" for a in answer.json()["alerts"])
+
+
+async def test_internal_accounts_are_left_out_by_their_database_ids(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    token = await admin_token(db_engine)
+    async with db_engine.begin() as conn:
+        counted = await add_user(conn, "counted@example.test", primary_role="mentee")
+        internal = (await conn.execute(text("SELECT id FROM users WHERE is_internal"))).scalars()
+        internal_ids = {str(user) for user in internal}
+    assert internal_ids, "an admin is an internal account"
+    posthog = PostHog()
+    async with client_for(app_for(db_engine, api_storage, posthog)) as client:
+        assert (await get(client, token, "/funnels/signup", compare="false")).status_code == 200
+        assert (await get(client, token, "/behaviour")).status_code == 200
+    for query in posthog.seen:
+        if query["kind"] == "HogQLQuery":
+            sent = set(query["values"]["internal"])
+        else:
+            (left_out,) = (f["key"] for f in query["properties"] if "distinct_id" in f["key"])
+            sent = {i for i in internal_ids | {str(counted)} if f"'{i}'" in left_out}
+        assert sent == internal_ids, query.get("name", query["kind"])
+        assert str(counted) not in sent
+
+
+async def test_a_failing_posthog_is_asked_once_a_minute_on_the_optional_paths(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    token = await admin_token(db_engine)
+    posthog = PostHog(down=True)
+    async with client_for(app_for(db_engine, api_storage, posthog)) as client:
+        for _ in range(2):
+            assert (await get(client, token, "/credits")).status_code == 200
+        assert posthog.asked("admin_analytics_login_codes") == 1
+        for _ in range(2):
+            assert (await get(client, token, "/overview")).status_code == 200
+        assert posthog.asked("admin_analytics_explore") == 1
+        # The PostHog routes are never answered from a remembered failure.
+        for _ in range(2):
+            assert (await get(client, token, "/behaviour")).status_code == 503
+        assert posthog.asked("admin_analytics_cards") == 2

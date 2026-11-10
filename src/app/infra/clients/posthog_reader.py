@@ -36,6 +36,7 @@ import math
 import re
 from collections.abc import Callable, Sequence
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -49,6 +50,7 @@ from app.domain.analytics_behaviour import (
     BOOKING_STARTED,
     DISCARDED,
     FROM_SEARCH,
+    FROM_SERVER,
     JOIN_CLICKED,
     JOIN_FAILED,
     LOGIN_FAILED,
@@ -69,7 +71,7 @@ from app.domain.analytics_behaviour import (
 from app.domain.mentor_stats import Window
 from app.domain.ports import AnalyticsReader
 from app.infra.http.client import shared
-from app.infra.http.upstream import trim_origin, why
+from app.infra.http.upstream import trim_origin
 
 __all__ = [
     "NOT_INTERNAL",
@@ -81,12 +83,17 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = httpx.Timeout(4.0, connect=2.0)
+#: The two Behaviour routes wait out PostHog's own 10-second query budget.
+TAB_TIMEOUT = httpx.Timeout(12.0, connect=2.0)
+#: What a database tab adds for PostHog (the log-in alert, the Explore card):
+#: about two seconds, then the tab answers without it.
+OPTIONAL_TIMEOUT = httpx.Timeout(2.0, connect=1.0)
 
-#: The one exclusion every read applies: admins and demo accounts carry the
-#: person property `is_internal` (PRD 30, *Internal traffic*); a person
-#: without it is counted. Server events are never sent for them at all.
-NOT_INTERNAL = "coalesce(toString(person.properties.is_internal), '') != 'true'"
+#: The one exclusion every read applies: the internal accounts' `users.id`s,
+#: read from the database (`analytics_scope.internal_ids`), which are the
+#: distinct ids the app identifies people by (ADR 0014). Server events are
+#: never sent for them at all.
+NOT_INTERNAL = "NOT has({internal}, distinct_id)"
 
 #: A name this module writes into query text: an event or property name.
 _NAME = re.compile(r"[a-z_$][a-z0-9_$]*")
@@ -113,11 +120,30 @@ def _since_until(window: Window) -> dict[str, int]:
     return {"since": int(window.since.timestamp()), "until": int(window.until.timestamp())}
 
 
-def _counted_only(text: str) -> str:
-    """``text`` with ``{not_internal}`` written as `NOT_INTERNAL`: the one
-    exclusion, in one place, put in before the text is sent. Every other
-    ``{placeholder}`` is a value (`hogql`)."""
-    return text.replace("{not_internal}", NOT_INTERNAL)
+def _ids(internal: Sequence[UUID]) -> list[str]:
+    """The internal ids as text, each one read back through `UUID`."""
+    return [str(UUID(str(user))) for user in internal]
+
+
+#: Fragments written into several queries, each said once. Every other
+#: ``{placeholder}`` is a value (`hogql`).
+_LOGIN_COUNTS = (
+    "countIf(has({logins}, event)) AS attempts,\n"
+    "    countIf(event = {failed}) AS failed,\n"
+    "    countIf(event = {failed} AND toString(properties.is_migrated) = 'true') AS failed_migrated"
+)
+_FRAGMENTS = {
+    "{not_internal}": NOT_INTERNAL,
+    "{login_counts}": _LOGIN_COUNTS,
+    "{from_server}": f"isNotNull(properties.{_name(FROM_SERVER.key)})",
+}
+
+
+def _written(text: str) -> str:
+    """``text`` with this module's fixed fragments put in before it is sent."""
+    for token, fragment in _FRAGMENTS.items():
+        text = text.replace(token, fragment)
+    return text
 
 
 #: What each name placeholder in the queries below stands for: PRD 30's event
@@ -142,26 +168,23 @@ NAMES: dict[str, str | list[str]] = {
     "booked_events": [SEARCH, BOOKING_REQUESTED],
 }
 
-LOGIN_QUERY = _counted_only("""
+LOGIN_QUERY = _written("""
 SELECT
-    countIf(has({logins}, event)) AS attempts,
-    countIf(event = {failed}) AS failed,
-    countIf(event = {failed} AND toString(properties.is_migrated) = 'true') AS failed_migrated
+    {login_counts}
 FROM events
 WHERE has({logins}, event)
     AND timestamp >= fromUnixTimestamp({since}) AND timestamp < fromUnixTimestamp({until})
     AND {not_internal}
 """)
 
-CARDS_QUERY = _counted_only("""
+CARDS_QUERY = _written("""
 SELECT
-    countIf(has({logins}, event)) AS attempts,
-    countIf(event = {failed}) AS failed,
-    countIf(event = {failed} AND toString(properties.is_migrated) = 'true') AS failed_migrated,
+    {login_counts},
     countIf(event = {search}) AS searches,
     countIf(event = {search} AND toInt(properties.result_count) = 0) AS searches_no_results,
     countIf(event = {viewed} AND toString(properties.source) = {from_search})
         AS profile_views_from_search,
+    countIf(event = {viewed}) AS profile_views,
     countIf(event = {join_clicked}) AS join_clicked,
     countIf(event = {join_failed}) AS join_failed,
     quantileIf(0.5)(toFloat(properties.minutes_from_start), event = {join_clicked})
@@ -178,7 +201,7 @@ WHERE timestamp >= fromUnixTimestamp({since}) AND timestamp < fromUnixTimestamp(
 """)
 
 #: Profile views by their `source`, most first.
-SOURCES_QUERY = _counted_only("""
+SOURCES_QUERY = _written("""
 SELECT toString(properties.source) AS key, count() AS count
 FROM events
 WHERE event = {viewed}
@@ -190,7 +213,7 @@ LIMIT 20
 """)
 
 #: Failed requests by their `route`, most first.
-ROUTES_QUERY = _counted_only("""
+ROUTES_QUERY = _written("""
 SELECT toString(properties.route) AS key, count() AS count
 FROM events
 WHERE event = {request_failed}
@@ -204,7 +227,7 @@ LIMIT 20
 #: Searchers per asked window (``g`` is its 1-based place in ``{starts}`` and
 #: ``{ends}``, Unix seconds): a person who searched, and whether they viewed a
 #: profile or started a booking after their first search in that window.
-EXPLORE_QUERY = _counted_only("""
+EXPLORE_QUERY = _written("""
 SELECT g, countIf(searched) AS searched, countIf(searched AND led) AS led
 FROM (
     SELECT
@@ -236,7 +259,7 @@ ORDER BY g
 #: Searchers of ``[since, until)`` who requested a booking (the server's
 #: event, which carries the session) within ``{within}`` seconds of their
 #: first search in it; events read up to ``{booked_until}``.
-BOOKED_QUERY = _counted_only("""
+BOOKED_QUERY = _written("""
 SELECT countIf(searched AND arrayExists(
     b -> b > first_search AND b <= first_search + {within}, booked_at
 )) AS booked
@@ -249,7 +272,7 @@ FROM (
         )) AS first_search,
         groupArrayIf(
             toUnixTimestamp(timestamp),
-            event = {requested} AND isNotNull(properties.session_id)
+            event = {requested} AND {from_server}
         ) AS booked_at
     FROM events
     WHERE has({booked_events}, event)
@@ -277,11 +300,13 @@ def _filter(match: Match) -> dict[str, Any]:
     return {"type": match.on, "key": _name(match.key), "operator": operator, "value": [match.value]}
 
 
-def funnel_query(funnel: Funnel, by: str, window: Window) -> dict[str, Any]:
+def funnel_query(
+    funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
+) -> dict[str, Any]:
     """The `FunnelsQuery` for ``funnel`` over people entering in ``window``,
     narrowed by the ``by`` option (already one the funnel offers).
-    ``filterTestAccounts`` stays off: the exclusion is `NOT_INTERNAL`, here,
-    not a project setting nobody reviews."""
+    ``filterTestAccounts`` stays off: the exclusion is `NOT_INTERNAL` over
+    ``internal``, here, not a project setting nobody reviews."""
     breakdown = funnel.by[by]
     series = []
     for i, step in enumerate(funnel.tracked):
@@ -295,6 +320,7 @@ def funnel_query(funnel: Funnel, by: str, window: Window) -> dict[str, Any]:
             where.append({"type": "hogql", "key": f"event IN ({_events(step.events)})"})
         node["properties"] = where
         series.append(node)
+    listed = "[" + ", ".join(f"'{user}'" for user in _ids(internal)) + "]"
     people = [*funnel.people, *(breakdown.matches if breakdown.step is None else ())]
     return {
         "kind": "FunnelsQuery",
@@ -311,7 +337,10 @@ def funnel_query(funnel: Funnel, by: str, window: Window) -> dict[str, Any]:
             "funnelVizType": "steps",
         },
         "filterTestAccounts": False,
-        "properties": [{"type": "hogql", "key": NOT_INTERNAL}, *(_filter(m) for m in people)],
+        "properties": [
+            {"type": "hogql", "key": NOT_INTERNAL.replace("{internal}", listed)},
+            *(_filter(m) for m in people),
+        ],
     }
 
 
@@ -393,6 +422,7 @@ _COUNT_COLUMNS = (
     "searches",
     "searches_no_results",
     "profile_views_from_search",
+    "profile_views",
     "join_clicked",
     "join_failed",
     "assist_used",
@@ -410,20 +440,22 @@ class NullAnalyticsReader:
     def _refuse(self) -> AnalyticsUpstreamError:
         return AnalyticsUpstreamError(UNAVAILABLE)
 
-    def funnel(self, funnel: Funnel, by: str, window: Window) -> list[int]:
-        del funnel, by, window
+    def funnel(
+        self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
+    ) -> list[int]:
+        del funnel, by, window, internal
         raise self._refuse()
 
-    def behaviour(self, window: Window) -> BehaviourFigures:
-        del window
+    def behaviour(self, window: Window, internal: Sequence[UUID]) -> BehaviourFigures:
+        del window, internal
         raise self._refuse()
 
-    def explore(self, windows: Sequence[Window]) -> ExploreFigures:
-        del windows
+    def explore(self, windows: Sequence[Window], internal: Sequence[UUID]) -> ExploreFigures:
+        del windows, internal
         raise self._refuse()
 
-    def login_codes(self, window: Window) -> LoginCodes:
-        del window
+    def login_codes(self, window: Window, internal: Sequence[UUID]) -> LoginCodes:
+        del window, internal
         raise self._refuse()
 
 
@@ -440,30 +472,41 @@ class PostHogReader:
     ) -> None:
         self._url = f"{trim_origin(api_host)}/api/projects/{project_id}/query/"
         self._key = api_key
-        self._client = client or shared(TIMEOUT)
+        self._client = client or shared(TAB_TIMEOUT)
 
-    def _ask(self, query: dict[str, Any]) -> Any:
+    def _ask(self, query: dict[str, Any], timeout: httpx.Timeout) -> Any:
         """The answer's body, or the one unavailable error for any failure:
-        a transport error, a timeout, a non-2xx, or a body that is not JSON."""
+        a transport error, a timeout, a non-2xx, or a body that is not JSON.
+        Only the status and the kind of failure are logged: an error body can
+        echo the request, key included."""
         response: httpx.Response | None = None
         try:
             response = self._client.post(
                 self._url,
                 json={"query": query, "refresh": "blocking"},
                 headers={"Authorization": f"Bearer {self._key}"},
-                timeout=TIMEOUT,
+                timeout=timeout,
             )
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError) as exc:
             logger.warning(
                 "analytics read failed",
-                extra={"query_kind": query.get("kind"), "why": why(exc, response)},
+                extra={
+                    "query_kind": query.get("kind"),
+                    "failure": type(exc).__name__,
+                    "status": None if response is None else response.status_code,
+                },
             )
             raise AnalyticsUpstreamError(UNAVAILABLE) from exc
 
-    def _read[T](self, query: dict[str, Any], parse: Callable[[Any], T]) -> T:
-        body = self._ask(query)
+    def _read[T](
+        self,
+        query: dict[str, Any],
+        parse: Callable[[Any], T],
+        timeout: httpx.Timeout = TAB_TIMEOUT,
+    ) -> T:
+        body = self._ask(query, timeout)
         try:
             return parse(body)
         except (_MalformedError, AttributeError, KeyError, TypeError) as exc:
@@ -473,7 +516,9 @@ class PostHogReader:
             )
             raise AnalyticsUpstreamError(UNAVAILABLE) from exc
 
-    def funnel(self, funnel: Funnel, by: str, window: Window) -> list[int]:
+    def funnel(
+        self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
+    ) -> list[int]:
         steps = len(funnel.tracked)
 
         def parse(body: Any) -> list[int]:
@@ -483,14 +528,15 @@ class PostHogReader:
             ordered = sorted(results, key=lambda r: r.get("order", 0))
             return [_int(r["count"]) for r in ordered]
 
-        return self._read(funnel_query(funnel, by, window), parse)
+        return self._read(funnel_query(funnel, by, window, internal), parse)
 
-    def login_codes(self, window: Window) -> LoginCodes:
-        query = hogql("admin_analytics_login_codes", LOGIN_QUERY, _since_until(window))
-        return self._read(query, lambda body: _login(_one(body, _LOGIN_COLUMNS)))
+    def login_codes(self, window: Window, internal: Sequence[UUID]) -> LoginCodes:
+        values = {**_since_until(window), "internal": _ids(internal)}
+        query = hogql("admin_analytics_login_codes", LOGIN_QUERY, values)
+        return self._read(query, lambda body: _login(_one(body, _LOGIN_COLUMNS)), OPTIONAL_TIMEOUT)
 
-    def behaviour(self, window: Window) -> BehaviourFigures:
-        values = _since_until(window)
+    def behaviour(self, window: Window, internal: Sequence[UUID]) -> BehaviourFigures:
+        values = {**_since_until(window), "internal": _ids(internal)}
         cards = self._read(
             hogql("admin_analytics_cards", CARDS_QUERY, values),
             lambda body: _one(body, (*_LOGIN_COLUMNS, *_COUNT_COLUMNS)),
@@ -501,6 +547,7 @@ class PostHogReader:
         routes = self._read(hogql("admin_analytics_failed_routes", ROUTES_QUERY, values), _counted)
         try:
             counts = {name: _int(cards[name]) for name in _COUNT_COLUMNS}
+            counts["profile_views_total"] = counts.pop("profile_views")
             median = _number(cards.get("median_minutes_from_start"))
             login = _login(cards)
         except _MalformedError as exc:
@@ -514,13 +561,14 @@ class PostHogReader:
             **counts,
         )
 
-    def explore(self, windows: Sequence[Window]) -> ExploreFigures:
+    def explore(self, windows: Sequence[Window], internal: Sequence[UUID]) -> ExploreFigures:
         since = min(w.since for w in windows)
         until = max(w.until for w in windows)
         values = {
             **_since_until(Window(since=since, until=until)),
             "starts": [int(w.since.timestamp()) for w in windows],
             "ends": [int(w.until.timestamp()) for w in windows],
+            "internal": _ids(internal),
         }
 
         def per_window(body: Any) -> list[Searchers]:
@@ -532,7 +580,9 @@ class PostHogReader:
                 for i in range(1, len(windows) + 1)
             ]
 
-        searchers = self._read(hogql("admin_analytics_explore", EXPLORE_QUERY, values), per_window)
+        searchers = self._read(
+            hogql("admin_analytics_explore", EXPLORE_QUERY, values), per_window, OPTIONAL_TIMEOUT
+        )
         first = windows[0]
         booked = self._read(
             hogql(
@@ -542,9 +592,11 @@ class PostHogReader:
                     **_since_until(first),
                     "booked_until": int((first.until + BOOKED_WITHIN).timestamp()),
                     "within": int(BOOKED_WITHIN.total_seconds()),
+                    "internal": values["internal"],
                 },
             ),
             lambda body: _int(_one(body, ("booked",))["booked"]),
+            OPTIONAL_TIMEOUT,
         )
         return ExploreFigures(per_window=searchers, booked=booked)
 

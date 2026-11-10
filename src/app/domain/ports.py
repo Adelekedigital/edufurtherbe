@@ -36,23 +36,26 @@ class AnalyticsReader(Protocol):
     """Where product-analytics figures are read from (PRD 31, decision 331).
 
     Every method raises `AnalyticsUpstreamError` when the source
-    cannot answer, whatever the cause; nothing else escapes. Internal accounts
-    are never counted.
+    cannot answer, whatever the cause; nothing else escapes. ``internal`` is
+    the internal accounts' `users.id`s, which the vendor knows as their
+    distinct ids: none of them is counted.
     """
 
-    def funnel(self, funnel: Funnel, by: str, window: Window) -> list[int]:
+    def funnel(
+        self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
+    ) -> list[int]:
         """People reaching each of the funnel's tracked steps, in order, for
         those entering it in ``window`` and narrowed by the ``by`` option."""
         ...
 
-    def behaviour(self, window: Window) -> BehaviourFigures:
+    def behaviour(self, window: Window, internal: Sequence[UUID]) -> BehaviourFigures:
         """The event cards' counts in ``window``."""
         ...
 
-    def explore(self, windows: Sequence[Window]) -> ExploreFigures:
+    def explore(self, windows: Sequence[Window], internal: Sequence[UUID]) -> ExploreFigures:
         """Searchers per window, and the first window's who booked soon after."""
         ...
 
-    def login_codes(self, window: Window) -> LoginCodes:
+    def login_codes(self, window: Window, internal: Sequence[UUID]) -> LoginCodes:
         """Log-in code attempts and failures in ``window``."""
         ...

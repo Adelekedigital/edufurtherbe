@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from collections.abc import Callable, Iterator
 from typing import Any
+from uuid import UUID
 
 import httpx
 import pytest
@@ -55,6 +57,10 @@ WINDOW = Window(
     since=dt.datetime(2026, 11, 1, tzinfo=dt.UTC), until=dt.datetime(2026, 11, 8, tzinfo=dt.UTC)
 )
 TODAY = dt.date(2026, 11, 10)
+#: An internal account (an admin or a demo address), as the database lists it.
+ADMIN = UUID("0190aaaa-0000-7000-8000-00000000000a")
+INTERNAL = (ADMIN,)
+LEFT_OUT = f"NOT has(['{ADMIN}'], distinct_id)"
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -172,6 +178,12 @@ def test_a_breakdown_is_checked_against_the_funnel() -> None:
         funnel_named("sign_up")
 
 
+def test_mentee_activation_starts_when_sign_up_does() -> None:
+    first = FUNNELS["mentee_activation"].steps[0]
+    assert (first.key, first.label, first.events) == ("signed_up", "Signed up", ("signup_started",))
+    assert first.events == FUNNELS["signup"].steps[0].events
+
+
 def test_only_a_trailing_step_is_untracked() -> None:
     for funnel in FUNNELS.values():
         tracked = [bool(step.events) for step in funnel.steps]
@@ -207,6 +219,12 @@ def test_the_login_alert_fires_over_ten_percent_only() -> None:
     assert fired.raised_at == dt.datetime(2026, 11, 10, tzinfo=dt.UTC)
 
 
+def test_the_login_alert_never_rounds_down_to_the_threshold() -> None:
+    fired = login_alert(LoginCodes(attempts=10_000, failed=1_001, failed_migrated=0), TODAY)
+    assert fired is not None
+    assert fired.body.startswith("10.1% of log-in attempts failed yesterday")
+
+
 def test_the_login_alert_says_when_most_failures_are_migrated_users() -> None:
     most = login_alert(LoginCodes(attempts=40, failed=10, failed_migrated=6), TODAY)
     assert most is not None
@@ -229,6 +247,7 @@ def figures(**changes: Any) -> BehaviourFigures:
         "searches_no_results": 20,
         "profile_views_from_search": 30,
         "profile_views": [Counted("explore", 3), Counted("home", 1)],
+        "profile_views_total": 8,
         "join_clicked": 12,
         "join_failed": 2,
         "median_minutes_from_start": 2.75,
@@ -252,8 +271,8 @@ def test_the_cards_turn_counts_into_rates() -> None:
         "profile_views_from_search": 30,
     }
     assert [(r.key, r.share) for r in tab.profile_views_by_source] == [
-        ("explore", 75.0),
-        ("home", 25.0),
+        ("explore", 37.5),
+        ("home", 12.5),
     ]
     assert tab.joining["median_minutes_from_start"] == 2.8
     assert tab.writing_assist == {"used": 8, "accepted_rate": 75.0, "discarded_rate": 25.0}
@@ -283,7 +302,7 @@ def test_the_explore_card_is_searchers_who_went_on_over_searchers() -> None:
 
 def test_a_funnel_is_a_funnels_query_to_the_private_query_api() -> None:
     read, seen = reader(lambda _: funnel_answer(50, 40, 30, 20, 10))
-    assert read.funnel(FUNNELS["signup"], "migrated", WINDOW) == [50, 40, 30, 20, 10]
+    assert read.funnel(FUNNELS["signup"], "migrated", WINDOW, INTERNAL) == [50, 40, 30, 20, 10]
     (request,) = seen
     assert request.method == "POST"
     assert str(request.url) == f"{HOST}/api/projects/42/query/"
@@ -300,7 +319,7 @@ def test_a_funnel_is_a_funnels_query_to_the_private_query_api() -> None:
     assert query["funnelsFilter"]["funnelWindowIntervalUnit"] == "day"
     assert query["filterTestAccounts"] is False
     assert query["properties"] == [
-        {"type": "hogql", "key": NOT_INTERNAL},
+        {"type": "hogql", "key": LEFT_OUT},
         {"type": "person", "key": "signup_source", "operator": "exact", "value": ["migrated"]},
     ]
     events = [node["event"] for node in query["series"]]
@@ -312,9 +331,9 @@ def test_a_funnel_is_a_funnels_query_to_the_private_query_api() -> None:
 
 def test_an_entry_point_narrows_the_first_booking_step_and_requests_are_the_servers() -> None:
     read, seen = reader(lambda _: funnel_answer(6, 5, 4, 3, 2, 1))
-    read.funnel(FUNNELS["booking"], "explore", WINDOW)
+    read.funnel(FUNNELS["booking"], "explore", WINDOW, INTERNAL)
     query = body_of(seen[0])["query"]
-    assert query["properties"] == [{"type": "hogql", "key": NOT_INTERNAL}]
+    assert query["properties"] == [{"type": "hogql", "key": LEFT_OUT}]
     first, *_, requested, _completed = query["series"]
     assert first["properties"] == [
         {"type": "event", "key": "entry_point", "operator": "exact", "value": ["explore"]}
@@ -329,9 +348,9 @@ def test_an_entry_point_narrows_the_first_booking_step_and_requests_are_the_serv
 
 def test_mentee_activation_counts_new_mentees_only() -> None:
     read, seen = reader(lambda _: funnel_answer(4, 3, 2, 1))
-    read.funnel(FUNNELS["mentee_activation"], "invite", WINDOW)
+    read.funnel(FUNNELS["mentee_activation"], "invite", WINDOW, INTERNAL)
     assert body_of(seen[0])["query"]["properties"] == [
-        {"type": "hogql", "key": NOT_INTERNAL},
+        {"type": "hogql", "key": LEFT_OUT},
         {"type": "person", "key": "role", "operator": "exact", "value": ["mentee"]},
         {"type": "person", "key": "is_migrated", "operator": "is_not", "value": ["true"]},
         {"type": "person", "key": "signup_source", "operator": "exact", "value": ["invite"]},
@@ -342,11 +361,12 @@ def test_hogql_reads_carry_their_window_as_values_never_in_the_text() -> None:
     read, seen = reader(
         lambda _: hogql_answer(["attempts", "failed", "failed_migrated"], [9, 3, 2])
     )
-    assert read.login_codes(WINDOW) == LoginCodes(attempts=9, failed=3, failed_migrated=2)
+    assert read.login_codes(WINDOW, INTERNAL) == LoginCodes(attempts=9, failed=3, failed_migrated=2)
     query = body_of(seen[0])["query"]
     assert query["kind"] == "HogQLQuery"
     assert query["values"] == {
         "failed": "login_code_failed",
+        "internal": [str(ADMIN)],
         "logins": ["login_code_verified", "login_code_failed"],
         "since": 1793491200,
         "until": 1794096000,
@@ -365,8 +385,9 @@ def test_every_hogql_read_leaves_internal_accounts_out() -> None:
         EXPLORE_QUERY,
         BOOKED_QUERY,
     ):
-        assert NOT_INTERNAL in text
-    assert NOT_INTERNAL == "coalesce(toString(person.properties.is_internal), '') != 'true'"
+        assert "NOT has({internal}, distinct_id)" in text
+        assert "is_internal" not in text
+    assert NOT_INTERNAL == "NOT has({internal}, distinct_id)"
 
 
 # --------------------------------------------------------------------------
@@ -380,6 +401,7 @@ CARD_COLUMNS = [
     "searches",
     "searches_no_results",
     "profile_views_from_search",
+    "profile_views",
     "join_clicked",
     "join_failed",
     "median_minutes_from_start",
@@ -395,7 +417,7 @@ CARD_COLUMNS = [
 def behaviour_handler(request: httpx.Request) -> httpx.Response:
     name = body_of(request)["query"]["name"]
     if name == "admin_analytics_cards":
-        return hogql_answer(CARD_COLUMNS, [10, 2, 1, 8, 2, 3, 5, 1, 4.0, 6, 3, 2, 1, 2, 20])
+        return hogql_answer(CARD_COLUMNS, [10, 2, 1, 8, 2, 3, 40, 5, 1, 4.0, 6, 3, 2, 1, 2, 20])
     if name == "admin_analytics_profile_sources":
         # A value the app never sends (spaces, free text) is not shown.
         return hogql_answer(["key", "count"], ["explore", 6], ["a search text", 1], ["home", 2])
@@ -404,11 +426,12 @@ def behaviour_handler(request: httpx.Request) -> httpx.Response:
 
 def test_the_cards_are_three_reads() -> None:
     read, seen = reader(behaviour_handler)
-    got = read.behaviour(WINDOW)
+    got = read.behaviour(WINDOW, INTERNAL)
     assert len(seen) == 3
     assert got.login == LoginCodes(attempts=10, failed=2, failed_migrated=1)
     assert (got.searches, got.active_people, got.median_minutes_from_start) == (8, 20, 4.0)
     assert got.profile_views == [Counted("explore", 6), Counted("home", 2)]
+    assert got.profile_views_total == 40
     assert got.errors == [Counted("/explore", 4), Counted("/home", 2)]
 
 
@@ -422,7 +445,7 @@ def test_explore_reads_searchers_per_window_and_bookings_after() -> None:
     read, seen = reader(handler)
     windows = [WINDOW, Window(since=WINDOW.since - dt.timedelta(days=7), until=WINDOW.since)]
     windows += [WINDOW]
-    got = read.explore(windows)
+    got = read.explore(windows, INTERNAL)
     assert got.per_window == [Searchers(10, 4), Searchers(0, 0), Searchers(2, 1)]
     assert got.booked == 3
     explore, booked = (body_of(r)["query"] for r in seen)
@@ -430,6 +453,7 @@ def test_explore_reads_searchers_per_window_and_bookings_after() -> None:
     assert explore["values"]["since"] == 1792886400
     assert booked["values"] == {
         "booked_events": ["mentor_search_performed", "booking_requested"],
+        "internal": [str(ADMIN)],
         "requested": "booking_requested",
         "search": "mentor_search_performed",
         "since": 1793491200,
@@ -469,7 +493,7 @@ def test_explore_reads_searchers_per_window_and_bookings_after() -> None:
 def test_any_failure_is_the_one_upstream_error(answer: Handler) -> None:
     read, _ = reader(answer)
     with pytest.raises(AnalyticsUpstreamError):
-        read.funnel(FUNNELS["signup"], "all", WINDOW)
+        read.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL)
 
 
 def test_a_transport_failure_or_timeout_is_an_upstream_error_too() -> None:
@@ -478,16 +502,16 @@ def test_a_transport_failure_or_timeout_is_an_upstream_error_too() -> None:
 
     read, _ = reader(down)
     with pytest.raises(AnalyticsUpstreamError):
-        read.login_codes(WINDOW)
+        read.login_codes(WINDOW, INTERNAL)
     read, _ = reader(lambda _: hogql_answer(["attempts", "failed"], [1, 2]))
     with pytest.raises(AnalyticsUpstreamError):
-        read.login_codes(WINDOW)
+        read.login_codes(WINDOW, INTERNAL)
 
 
 def test_an_infinite_median_is_an_upstream_error_not_a_crash() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if body_of(request)["query"]["name"] == "admin_analytics_cards":
-            row = [10, 2, 1, 8, 2, 3, 5, 1, "INF", 6, 3, 2, 1, 2, 20]
+            row = [10, 2, 1, 8, 2, 3, 9, 5, 1, "INF", 6, 3, 2, 1, 2, 20]
             text = json.dumps({"columns": CARD_COLUMNS, "results": [row]}).replace(
                 '"INF"', "Infinity"
             )
@@ -496,7 +520,7 @@ def test_an_infinite_median_is_an_upstream_error_not_a_crash() -> None:
 
     read, _ = reader(handler)
     with pytest.raises(AnalyticsUpstreamError):
-        read.behaviour(WINDOW)
+        read.behaviour(WINDOW, INTERNAL)
 
 
 def test_the_upstream_error_says_when_to_retry() -> None:
@@ -532,10 +556,61 @@ def test_the_reader_needs_the_private_host_project_and_key() -> None:
 def test_the_null_reader_refuses_every_read() -> None:
     null = NullAnalyticsReader()
     for read in (
-        lambda: null.funnel(FUNNELS["signup"], "all", WINDOW),
-        lambda: null.behaviour(WINDOW),
-        lambda: null.explore([WINDOW]),
-        lambda: null.login_codes(WINDOW),
+        lambda: null.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL),
+        lambda: null.behaviour(WINDOW, INTERNAL),
+        lambda: null.explore([WINDOW], INTERNAL),
+        lambda: null.login_codes(WINDOW, INTERNAL),
     ):
         with pytest.raises(AnalyticsUpstreamError):
             read()
+
+
+def test_the_optional_reads_are_quick_and_the_tab_reads_wait_for_posthog() -> None:
+    timeouts: list[dict[str, float]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        timeouts.append(request.extensions["timeout"])
+        if body_of(request)["query"]["kind"] == "FunnelsQuery":
+            return funnel_answer(5, 4, 3, 2, 1)
+        return hogql_answer(["attempts", "failed", "failed_migrated"], [1, 0, 0])
+
+    read, _ = reader(handler)
+    read.login_codes(WINDOW, INTERNAL)
+    read.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL)
+    quick, full = timeouts
+    assert quick["read"] <= 2.0 and quick["connect"] <= 2.0
+    assert full["read"] >= 12.0
+
+
+def test_profile_view_shares_are_of_every_view_including_unshown_ones() -> None:
+    sources = [[f"source_{i:02}", 2] for i in range(20)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = body_of(request)["query"]["name"]
+        if name == "admin_analytics_cards":
+            # 100 views: 40 under the 20 rows shown, the rest past the limit or blank.
+            return hogql_answer(CARD_COLUMNS, [0, 0, 0, 0, 0, 0, 100, 0, 0, None, 0, 0, 0, 0, 0, 0])
+        if name == "admin_analytics_profile_sources":
+            return hogql_answer(["key", "count"], ["", 30], *sources)
+        return hogql_answer(["key", "count"])
+
+    read, _ = reader(handler)
+    tab = behaviour_tab(read.behaviour(WINDOW, INTERNAL))
+    assert len(tab.profile_views_by_source) == 20
+    assert {row.share for row in tab.profile_views_by_source} == {2.0}
+
+
+def test_a_refusal_that_echoes_the_key_never_reaches_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def echo(request: httpx.Request) -> httpx.Response:
+        said = request.headers["Authorization"]
+        return httpx.Response(401, json={"detail": f"bad credentials: {said}"})
+
+    read, _ = reader(echo)
+    with caplog.at_level(logging.DEBUG), pytest.raises(AnalyticsUpstreamError):
+        read.login_codes(WINDOW, INTERNAL)
+    assert caplog.records
+    for record in caplog.records:
+        assert KEY not in record.getMessage()
+        assert all(KEY not in str(value) for value in vars(record).values())

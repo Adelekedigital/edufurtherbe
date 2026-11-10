@@ -13,6 +13,7 @@ import datetime as dt
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Path, Query, Request
 
@@ -39,6 +40,8 @@ from app.domain.analytics import (
 )
 from app.domain.analytics_behaviour import (
     FUNNEL_NAMES,
+    BehaviourFigures,
+    LoginCodes,
     behaviour_tab,
     breakdown_for,
     explore_feature,
@@ -52,6 +55,7 @@ from app.infra.clients.posthog_reader import analytics_reader_for, replay_url_fo
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
 from app.infra.db.analytics_growth import growth_tab
+from app.infra.db.analytics_scope import internal_ids
 from app.infra.db.analytics_supply import supply_tab
 from app.infra.db.analytics_tabs import overview_tab, sessions_tab
 
@@ -115,18 +119,40 @@ def analytics_reader(request: Request) -> AnalyticsReader:
 AnalyticsReaderDep = Annotated[AnalyticsReader, Depends(analytics_reader)]
 
 
+#: What an optional read keeps in place of figures when PostHog failed.
+_FAILED = object()
+#: How long an optional read leaves a failed PostHog alone: as long as the
+#: `503` routes tell the page to wait.
+FAILED_FOR = dt.timedelta(seconds=AnalyticsUpstreamError.RETRY_AFTER_SECONDS)
+
+
 async def _kept[T](
-    request: Request, key: tuple[object, ...], now: dt.datetime, compute: Callable[[], Awaitable[T]]
+    request: Request,
+    key: tuple[object, ...],
+    now: dt.datetime,
+    compute: Callable[[], Awaitable[T]],
+    *,
+    optional: bool = False,
 ) -> T:
-    """Figures from this app's `TabCache`, or computed and kept. Only a
-    result is kept: a raise leaves nothing behind, so a failure is retried."""
+    """Figures from this app's `TabCache`, or computed and kept. A `503`
+    route keeps only a result, so its failure is retried. An ``optional``
+    read (one a database tab adds) also remembers a PostHog failure for
+    `FAILED_FOR`, so an outage costs a tab its timeout once a minute, not on
+    every view."""
     cache: TabCache | None = getattr(request.app.state, "analytics_cache", None)
     if cache is None:
         cache = request.app.state.analytics_cache = TabCache()
     hit = cache.get(key, now)
+    if hit is _FAILED:
+        raise AnalyticsUpstreamError("product analytics failed a moment ago")
     if hit is not None:
         return hit  # type: ignore[return-value]
-    value = await compute()
+    try:
+        value = await compute()
+    except AnalyticsUpstreamError:
+        if optional:
+            cache.put(key, _FAILED, now, keep_for=FAILED_FOR)
+        raise
     cache.put(key, value, now)
     return value
 
@@ -139,20 +165,22 @@ async def _cached[T](
     return await _kept(request, key, ask.now, compute)
 
 
-async def _login_alert(request: Request, reader: AnalyticsReader, now: dt.datetime) -> Alert | None:
+async def _login_alert(
+    request: Request, reader: AnalyticsReader, session: SessionDep, now: dt.datetime
+) -> Alert | None:
     """The log-in alert from yesterday's codes, or none when the source cannot
     answer (PRD 31: skipped, not failed). Yesterday's counts are kept like a
     tab's, so a section does not ask the source on every view; the alert
     itself is worked out on every request."""
     today = now.date()
     day = yesterday(today)
+
+    async def compute() -> LoginCodes:
+        internal = await internal_ids(session)
+        return await asyncio.to_thread(reader.login_codes, day.window, internal)
+
     try:
-        codes = await _kept(
-            request,
-            ("login_codes", day.first),
-            now,
-            lambda: asyncio.to_thread(reader.login_codes, day.window),
-        )
+        codes = await _kept(request, ("login_codes", day.first), now, compute, optional=True)
     except AnalyticsUpstreamError:
         return None
     return login_alert(codes, today)
@@ -164,7 +192,7 @@ async def analytics_alerts(
     """Every alert firing now: the database's, and the log-in alert when the
     product-analytics source answers."""
     alerts = await active_alerts(session, ask.now)
-    return newest_first([*alerts, await _login_alert(request, reader, ask.now)])
+    return newest_first([*alerts, await _login_alert(request, reader, session, ask.now)])
 
 
 AlertsDep = Annotated[list[Alert], Depends(analytics_alerts)]
@@ -188,27 +216,40 @@ async def analytics_overview(
     booking_window: BookingWindowDep,
     reader: AnalyticsReaderDep,
 ) -> AnalyticsOverviewRead:
-    tab = await _cached(
-        request,
-        "overview",
-        ask,
-        lambda: overview_tab(session, ask.period, ask.compare, booking_window),
-    )
-    explore = await _explore(request, ask, reader)
+    # The Explore read runs beside the database's, in its own thread and
+    # never on this session: its ids are read first.
+    explore_read = asyncio.create_task(_explore(request, ask, reader, await internal_ids(session)))
+    try:
+        tab = await _cached(
+            request,
+            "overview",
+            ask,
+            lambda: overview_tab(session, ask.period, ask.compare, booking_window),
+        )
+    except BaseException:
+        explore_read.cancel()
+        raise
+    explore = await explore_read
     if explore is not None:
         features = [explore if f.key == "explore" else f for f in tab.features]
         tab = replace(tab, features=features)
     return AnalyticsOverviewRead.of(ask.period, alerts, tab)
 
 
-async def _explore(request: Request, ask: AnalyticsAsk, reader: AnalyticsReader) -> Feature | None:
+async def _explore(
+    request: Request, ask: AnalyticsAsk, reader: AnalyticsReader, internal: list[UUID]
+) -> Feature | None:
     """The Explore and matching card, kept apart from the database's figures,
     or ``None`` when the source cannot answer: the card then stays empty and
     the rest of Overview is unaffected (PRD 31 guardrail)."""
     windows = explore_windows(ask.period)
     try:
-        figures = await _cached(
-            request, "explore", ask, lambda: asyncio.to_thread(reader.explore, windows)
+        figures = await _kept(
+            request,
+            ("explore", ask.period.first, ask.period.last),
+            ask.now,
+            lambda: asyncio.to_thread(reader.explore, windows, internal),
+            optional=True,
         )
     except AnalyticsUpstreamError:
         return None
@@ -261,6 +302,7 @@ async def analytics_funnel(
     ask: AnalyticsAskDep,
     alerts: AlertsDep,
     reader: AnalyticsReaderDep,
+    session: SessionDep,
     by: Annotated[
         str | None,
         Query(description="One of the funnel's breakdowns; `all` (the default) is everyone."),
@@ -270,11 +312,14 @@ async def analytics_funnel(
     chosen = breakdown_for(funnel, by)
 
     async def compute() -> tuple[list[int], list[int] | None]:
-        current = await asyncio.to_thread(reader.funnel, funnel, chosen, ask.period.window)
+        internal = await internal_ids(session)
+        current = await asyncio.to_thread(
+            reader.funnel, funnel, chosen, ask.period.window, internal
+        )
         if not ask.compare:
             return current, None
         before = ask.period.previous().window
-        return current, await asyncio.to_thread(reader.funnel, funnel, chosen, before)
+        return current, await asyncio.to_thread(reader.funnel, funnel, chosen, before, internal)
 
     current, previous = await _cached(request, f"funnel:{funnel.name}:{chosen}", ask, compute)
     return AnalyticsFunnelRead.of(ask.period, alerts, funnel_tab(funnel, chosen, current, previous))
@@ -284,14 +329,17 @@ AnalyticsFunnelDep = Annotated[AnalyticsFunnelRead, Depends(analytics_funnel)]
 
 
 async def analytics_behaviour(
-    request: Request, ask: AnalyticsAskDep, alerts: AlertsDep, reader: AnalyticsReaderDep
+    request: Request,
+    ask: AnalyticsAskDep,
+    alerts: AlertsDep,
+    reader: AnalyticsReaderDep,
+    session: SessionDep,
 ) -> AnalyticsBehaviourRead:
-    figures = await _cached(
-        request,
-        "behaviour",
-        ask,
-        lambda: asyncio.to_thread(reader.behaviour, ask.period.window),
-    )
+    async def compute() -> BehaviourFigures:
+        internal = await internal_ids(session)
+        return await asyncio.to_thread(reader.behaviour, ask.period.window, internal)
+
+    figures = await _cached(request, "behaviour", ask, compute)
     replay = replay_url_for(_configured(request))
     return AnalyticsBehaviourRead.of(ask.period, alerts, behaviour_tab(figures), replay)
 

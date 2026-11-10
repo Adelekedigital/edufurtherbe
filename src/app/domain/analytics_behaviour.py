@@ -15,6 +15,7 @@ set; anything else is refused before anything is read.
 from __future__ import annotations
 
 import datetime as dt
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -138,6 +139,7 @@ MENTOR_LISTED = AnalyticsEvent.MENTOR_LISTED.value
 SEARCH = "mentor_search_performed"
 PROFILE_VIEWED = "mentor_profile_viewed"
 BOOKING_STARTED = "booking_started"
+CONFERENCING_CONNECTED = "conferencing_connected"
 JOIN_CLICKED, JOIN_FAILED = "session_join_clicked", "session_join_failed"
 WRITING_ASSIST = "writing_assist_used"
 APP_INSTALLED, PUSH_ALLOWED = "pwa_installed", "push_permission_granted"
@@ -175,7 +177,7 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
                 Step(
                     "first_booking_or_bookable",
                     "First booking or bookable",
-                    (BOOKING_REQUESTED, "conferencing_connected"),
+                    (BOOKING_REQUESTED, CONFERENCING_CONNECTED),
                 ),
                 Step("first_completed", "First completed session", (SESSION_COMPLETED,)),
             ),
@@ -222,7 +224,7 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
         "mentee_activation": Funnel(
             name="mentee_activation",
             steps=(
-                Step("signed_up", "Signed up", CODE_VERIFIED),
+                Step("signed_up", "Signed up", (SIGNUP_STARTED,)),
                 Step("onboarded", "Onboarding done", (ONBOARDING_COMPLETED,)),
                 Step("first_request", "First request", (BOOKING_REQUESTED,), (FROM_SERVER,)),
                 Step("first_session", "First session (14 days)", (SESSION_COMPLETED,)),
@@ -241,9 +243,9 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
                 Step("availability_set", "Availability set", ("availability_set",)),
                 Step("session_type_created", "Session created", ("session_type_created",)),
                 Step(
-                    "conferencing_connected",
+                    CONFERENCING_CONNECTED,
                     "Video connected (bookable)",
-                    ("conferencing_connected",),
+                    (CONFERENCING_CONNECTED,),
                 ),
                 # `session_completed` is the mentee's event: nothing tells
                 # analytics a mentor delivered one yet.
@@ -330,8 +332,9 @@ def funnel_tab(
 
 # --- Event cards -------------------------------------------------------------
 
-#: `mentor_profile_viewed.source` when the view came from a search result.
-FROM_SEARCH = "explore"
+#: `mentor_profile_viewed.source` when the view came from a search result:
+#: the surfaces share the booking entry points' names (PRD 30).
+FROM_SEARCH = EntryPoint.EXPLORE.value
 #: `writing_assist_used.outcome` values the card shows.
 ACCEPTED, DISCARDED = "accepted", "discarded"
 #: The Errors by screen card's length.
@@ -363,6 +366,8 @@ class BehaviourFigures:
     searches_no_results: int
     profile_views_from_search: int
     profile_views: list[Counted]
+    #: Every profile view, those in no row shown included.
+    profile_views_total: int
     join_clicked: int
     join_failed: int
     median_minutes_from_start: float | None
@@ -395,7 +400,6 @@ class BehaviourTab:
 def behaviour_tab(figures: BehaviourFigures) -> BehaviourTab:
     """The seven cards' rows, rates as percentages (`rate`)."""
     login = figures.login
-    views = sum(row.count for row in figures.profile_views)
     return BehaviourTab(
         login_codes={
             "attempts": login.attempts,
@@ -408,7 +412,8 @@ def behaviour_tab(figures: BehaviourFigures) -> BehaviourTab:
             "profile_views_from_search": figures.profile_views_from_search,
         },
         profile_views_by_source=[
-            Share(key=row.key, share=rate(row.count, views)) for row in figures.profile_views
+            Share(key=row.key, share=rate(row.count, figures.profile_views_total))
+            for row in figures.profile_views
         ],
         joining={
             "join_clicked": figures.join_clicked,
@@ -488,9 +493,10 @@ def login_alert(codes: LoginCodes, today: dt.date) -> Alert | None:
     migrated users are more than half of the failures."""
     if codes.attempts <= 0 or Fraction(codes.failed, codes.attempts) <= LOGIN_FAILED_OVER:
         return None
-    share = rate(codes.failed, codes.attempts)
+    # Rounded up to one decimal, so a share just over the line never reads as it.
+    share = math.ceil(Fraction(codes.failed * 1000, codes.attempts)) / 10
     body = (
-        f"{_percent(share or 0)} of log-in attempts failed yesterday "
+        f"{_percent(share)} of log-in attempts failed yesterday "
         f"(alert at {_percent(float(LOGIN_FAILED_OVER * 100))})."
     )
     if codes.failed_migrated * 2 > codes.failed:

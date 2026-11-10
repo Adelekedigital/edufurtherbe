@@ -20,6 +20,7 @@ from app.api.deps.admin_analytics import (
     require_analytics_on,
 )
 from app.api.deps.core import PRIVATE_NO_STORE
+from app.api.errors import retry_after_header
 from app.api.routes.admin import ADMIN_RESPONSES
 from app.api.schemas.admin_analytics import (
     AnalyticsBehaviourRead,
@@ -225,12 +226,7 @@ _POSTHOG = (
 _POSTHOG_RESPONSES = _RESPONSES | {
     status.HTTP_503_SERVICE_UNAVAILABLE: {
         "description": "PostHog is not set up or not answering.",
-        "headers": {
-            "Retry-After": {
-                "description": "Seconds to wait before asking again.",
-                "schema": {"type": "integer"},
-            }
-        },
+        "headers": retry_after_header("Seconds to wait before asking again."),
     }
 }
 

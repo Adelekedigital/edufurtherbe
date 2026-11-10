@@ -172,6 +172,14 @@ def with_declined(
     return responses | {status.HTTP_409_CONFLICT: {"description": text}}
 
 
+def retry_after_header(description: str) -> dict[str, object]:
+    """The OpenAPI `headers` entry of a response carrying `Retry-After`
+    (`core.errors.retry_after`): whole seconds, at least one."""
+    return {
+        "Retry-After": {"description": description, "schema": {"type": "integer", "minimum": 1}}
+    }
+
+
 TYPE_BY_ERROR: dict[type[AppError], str] = {
     AccountExistsError: "/problems/account-exists",
     InviteForNewAccountsError: "/problems/invite-for-new-accounts",
