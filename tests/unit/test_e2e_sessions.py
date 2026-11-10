@@ -8,16 +8,19 @@ refuses everything would pass every negative test.
 from __future__ import annotations
 
 import json
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, ClassVar
+from uuid import uuid4
 
 import httpx
 import pytest
 
-from app.core.config import Settings
+from app.core.config import Settings, explicit_environment
 from app.infra.auth.e2e_sessions import (
     GENERATE_LINK,
     VERIFY,
     E2ESessionClient,
+    MagicLink,
     NotAnE2EAccountError,
     refuse_e2e_session,
 )
@@ -57,6 +60,25 @@ def test_staging_with_every_lock_open_may_make_a_session() -> None:
         pytest.param({"e2e_supabase_project": "  "}, "staging", id="blank project"),
         pytest.param({"e2e_supabase_project": OTHER}, "staging", id="another project"),
         pytest.param({"supabase_url": None}, "staging", id="no Supabase"),
+        pytest.param(
+            {"supabase_url": f"https://{REF}.supabase.co.attacker.example"},
+            "staging",
+            id="the ref host as a prefix of another",
+        ),
+        pytest.param(
+            {"supabase_url": f"https://attacker.example/?https://{REF}.supabase.co"},
+            "staging",
+            id="the ref host in a query",
+        ),
+        pytest.param(
+            {"supabase_url": f"https://attacker.example/#https://{REF}.supabase.co"},
+            "staging",
+            id="the ref host in a fragment",
+        ),
+        pytest.param(
+            {"supabase_url": f"https://{REF}.supabase.co/x"}, "staging", id="a path on the host"
+        ),
+        pytest.param({"supabase_url": f"http://{REF}.supabase.co"}, "staging", id="not https"),
     ],
 )
 def test_each_lock_refuses_on_its_own(overrides: dict[str, Any], declared: str) -> None:
@@ -74,6 +96,11 @@ def test_an_environment_nobody_set_is_refused() -> None:
     )
     assert "environment" not in unset.model_fields_set
     assert refuse_e2e_session(unset, "staging") is not None
+
+
+def test_explicit_environment_is_only_what_was_set() -> None:
+    assert explicit_environment(Settings(_env_file=None)) is None  # type: ignore[call-arg]
+    assert explicit_environment(Settings(_env_file=None, environment="staging")) == "staging"  # type: ignore[call-arg]
 
 
 def test_a_refusal_never_names_the_project() -> None:
@@ -155,3 +182,65 @@ def test_anything_else_is_refused_before_a_request(address: str) -> None:
     with pytest.raises(NotAnE2EAccountError):
         sessions.ensure_account(address)
     assert recorder.calls == []
+
+
+# --------------------------------------------------------------------------
+# The script checks the seeded row before it creates any Supabase identity, so
+# a mistyped `--run` leaves nothing behind.
+# --------------------------------------------------------------------------
+
+
+class FakeSessions:
+    """Records which Supabase calls the script makes, and makes none."""
+
+    calls: ClassVar[list[str]] = []
+
+    def __init__(self, *_: Any, **__: Any) -> None:
+        FakeSessions.calls = []
+
+    def ensure_account(self, *_: Any) -> Any:
+        FakeSessions.calls.append("ensure_account")
+        return SimpleNamespace(id=uuid4())
+
+    def magic_link(self, *_: Any, **__: Any) -> Any:
+        FakeSessions.calls.append("magic_link")
+        return MagicLink(action_link="L", hashed_token="H")  # noqa: S106 - a stand-in
+
+    def access_token(self, *_: Any) -> str:
+        return "T"
+
+
+def run_script(monkeypatch: pytest.MonkeyPatch, *, seeded: bool, account: str) -> int:
+    from scripts import e2e_session
+
+    async def answer(*_: Any) -> bool:
+        return seeded
+
+    async def linked(*_: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(e2e_session, "get_settings", settings)
+    monkeypatch.setattr(e2e_session, "E2ESessionClient", FakeSessions)
+    monkeypatch.setattr(e2e_session, "_seeded", answer)
+    monkeypatch.setattr(e2e_session, "_link", linked)
+    args = e2e_session.parse_args(
+        ["--env", "staging", "--run", "r1", "--account", account, "--token"]
+    )
+    return int(e2e_session.run(args))
+
+
+def test_an_unseeded_run_creates_no_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert run_script(monkeypatch, seeded=False, account="mentee_with_credits") != 0
+    assert FakeSessions.calls == []
+
+
+def test_a_seeded_account_gets_its_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert run_script(monkeypatch, seeded=True, account="mentee_with_credits") == 0
+    assert FakeSessions.calls == ["ensure_account", "magic_link"]
+
+
+def test_an_account_its_first_sign_in_creates_needs_no_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert run_script(monkeypatch, seeded=False, account="mentee_new") == 0
+    assert FakeSessions.calls == ["ensure_account", "magic_link"]

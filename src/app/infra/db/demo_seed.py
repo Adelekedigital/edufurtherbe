@@ -38,6 +38,7 @@ __all__ = [
     "DEMO_EMAIL_LIKE",
     "E2E_ACCOUNTS",
     "E2E_EMAIL_LIKE",
+    "E2E_PREFIX",
     "E2E_RUN",
     "LEGACY_SESSION_TYPE",
     "DemoMentor",
@@ -51,6 +52,7 @@ __all__ = [
     "create_demo_mentor",
     "demo_avatar_urls",
     "demo_mentor_offerings",
+    "e2e_account_seeded",
     "e2e_email",
     "e2e_ref",
     "link_e2e_account",
@@ -65,9 +67,11 @@ DEMO_DOMAIN = "demo.edufurther.test"
 #: `internal_account()` spells it too, to mark a demo account internal
 #: (`users.is_internal`), and `test_internal_accounts.py` pins the two.
 DEMO_EMAIL_LIKE = f"%@{DEMO_DOMAIN}"
-#: The end-to-end accounts (docs/e2e): on the demo domain, so internal like
-#: every demo user, under a prefix demo removal leaves alone (they are kept).
-E2E_EMAIL_LIKE = f"e2e-%@{DEMO_DOMAIN}"
+#: The local-part prefix of every end-to-end account (docs/e2e): on the demo
+#: domain, so internal like every demo user, under a prefix demo removal
+#: leaves alone (they are kept).
+E2E_PREFIX = "e2e-"
+E2E_EMAIL_LIKE = f"{E2E_PREFIX}%@{DEMO_DOMAIN}"
 
 
 #: The one session type every demo mentor was seeded with before the catalogue.
@@ -166,7 +170,8 @@ E2E_ACCOUNTS: dict[str, E2EAccount] = {
 #: by dozens of `RESTRICT` keys). Old runs stay behind as dev data.
 E2E_RUN = re.compile(r"[a-z0-9]{1,16}")
 _E2E_ADDRESS = re.compile(
-    rf"e2e-(?P<run>[a-z0-9]{{1,16}})-(?P<ref>[a-z0-9-]+)@{re.escape(DEMO_DOMAIN)}"
+    rf"{re.escape(E2E_PREFIX)}(?P<run>{E2E_RUN.pattern})-(?P<ref>[a-z0-9-]+)"
+    rf"@{re.escape(DEMO_DOMAIN)}"
 )
 
 
@@ -174,13 +179,23 @@ class E2ERunError(ValueError):
     """A run tag that is malformed, or already seeded."""
 
 
-def e2e_email(ref: str, run: str) -> str:
-    """An E2E account's address: `e2e-<run>-<ref>@` the demo domain, `_` as `-`."""
-    if ref not in E2E_ACCOUNTS:
-        raise KeyError(ref)
+def _check_run(run: str) -> str:
+    """The run tag, or `E2ERunError` when it is not one."""
     if not E2E_RUN.fullmatch(run):
         raise E2ERunError("a run tag is 1 to 16 lowercase letters or digits")
-    return _email(f"e2e-{run}-{ref.replace('_', '-')}")
+    return run
+
+
+def _e2e_key(ref: str, run: str) -> str:
+    """An E2E account's local part: `e2e-<run>-<ref>`, `_` as `-`."""
+    if ref not in E2E_ACCOUNTS:
+        raise KeyError(ref)
+    return f"{E2E_PREFIX}{_check_run(run)}-{ref.replace('_', '-')}"
+
+
+def e2e_email(ref: str, run: str) -> str:
+    """An E2E account's address: `_e2e_key` at the demo domain."""
+    return _email(_e2e_key(ref, run))
 
 
 def e2e_ref(email: str) -> str | None:
@@ -196,7 +211,7 @@ def e2e_ref(email: str) -> str | None:
 def _e2e_mentor(ref: str, run: str) -> DemoMentor:
     """The E2E mentor: bookable on weekdays, one offering, no history."""
     return DemoMentor(
-        key=f"e2e-{run}-{ref.replace('_', '-')}",
+        key=_e2e_key(ref, run),
         first_name="Eve",
         last_name=f"Tester {run}",
         headline="E2E test mentor",
@@ -221,12 +236,10 @@ async def seed_e2e_accounts(
     start. Rows hold no `auth_id`; `link_e2e_account` sets it from Supabase at
     sign-in. Does not commit.
     """
-    if not E2E_RUN.fullmatch(run):
-        raise E2ERunError("a run tag is 1 to 16 lowercase letters or digits")
     if await _one(
         session,
         "SELECT EXISTS (SELECT 1 FROM users WHERE email LIKE :p)",
-        {"p": f"e2e-{run}-%@{DEMO_DOMAIN}"},
+        {"p": _email(f"{E2E_PREFIX}{_check_run(run)}-%")},
     ):
         raise E2ERunError(f"run {run!r} is already seeded; pick a new tag")
     created = 0
@@ -693,3 +706,16 @@ async def remove_demo(session: AsyncSession) -> int:
         text("DELETE FROM users WHERE email LIKE :suffix AND email NOT LIKE :e2e"), demo
     )
     return int(removed.rowcount or 0)  # type: ignore[attr-defined]
+
+
+async def e2e_account_seeded(session: AsyncSession, email: str) -> bool:
+    """Whether a live seeded E2E account holds this address. A read only, so
+    the session script can ask before it creates anything in Supabase."""
+    return bool(
+        await _one(
+            session,
+            "SELECT EXISTS (SELECT 1 FROM users WHERE email = :e AND email LIKE :like "
+            "AND deleted_at IS NULL)",
+            {"e": email, "like": E2E_EMAIL_LIKE},
+        )
+    )

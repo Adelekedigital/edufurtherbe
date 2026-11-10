@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 import httpx
@@ -44,22 +45,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.infra.auth.admin import AdminApiError
 from app.infra.auth.e2e_sessions import E2E_ENVIRONMENTS, E2ESessionClient, refuse_e2e_session
-from app.infra.db.demo_seed import E2E_ACCOUNTS, E2ERunError, e2e_email, link_e2e_account
+from app.infra.db.demo_seed import (
+    E2E_ACCOUNTS,
+    E2ERunError,
+    e2e_account_seeded,
+    e2e_email,
+    link_e2e_account,
+)
 from app.infra.db.engine import create_database_engine
 from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
 
 TIMEOUT = httpx.Timeout(30.0)
 
 
-async def _link(email: str, auth_id: UUID) -> bool:
+async def _in_session[T](work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_database_engine(get_settings())
     try:
         async with AsyncSession(engine) as session:
-            linked = await link_e2e_account(session, email, auth_id)
+            result = await work(session)
             await session.commit()
-            return linked
+            return result
     finally:
         await engine.dispose()
+
+
+async def _seeded(email: str) -> bool:
+    return await _in_session(lambda session: e2e_account_seeded(session, email))
+
+
+async def _link(email: str, auth_id: UUID) -> bool:
+    return await _in_session(lambda session: link_e2e_account(session, email, auth_id))
 
 
 def run(args: argparse.Namespace) -> int:
@@ -81,13 +96,18 @@ def run(args: argparse.Namespace) -> int:
             service_role_key=settings.supabase_service_role_key.get_secret_value(),
             client=http,
         )
+        seeded = E2E_ACCOUNTS[args.account].seeded
+        # Checked first, so a mistyped `--run` creates no Supabase identity.
+        if seeded and not asyncio.run(_seeded(email)):
+            print(
+                f"{args.account} is not seeded for this run; run seed_demo_mentors.py --e2e <run>",
+                file=sys.stderr,
+            )
+            return EXIT_REFUSED
         try:
             identity = client.ensure_account(email)
-            if E2E_ACCOUNTS[args.account].seeded and not asyncio.run(_link(email, identity.id)):
-                print(
-                    f"{args.account} is not seeded; run seed_demo_mentors.py --e2e <run>",
-                    file=sys.stderr,
-                )
+            if seeded and not asyncio.run(_link(email, identity.id)):
+                print(f"{args.account} could not be linked", file=sys.stderr)
                 return EXIT_REFUSED
             link = client.magic_link(email, redirect_to=args.redirect)
             secret = client.access_token(link) if args.token else link.action_link

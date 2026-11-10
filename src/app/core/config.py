@@ -1228,3 +1228,14 @@ def production_gaps(settings: Settings) -> list[str]:
 def get_settings() -> Settings:
     """Return the process-wide settings, constructed once."""
     return Settings()
+
+
+def explicit_environment(settings: Settings) -> Environment | None:
+    """The environment, only when it was **set**; `None` when it defaulted.
+
+    A tool that writes somewhere must not trust the `local` default: a shell
+    that never set `EDUFURTHER_ENVIRONMENT` would pass a plain "is it
+    production?" check while pointed at production. `model_fields_set` holds
+    what was actually provided.
+    """
+    return settings.environment if "environment" in settings.model_fields_set else None

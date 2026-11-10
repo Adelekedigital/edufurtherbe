@@ -20,10 +20,11 @@ environment guards the script applies first.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 
-from app.core.config import Settings, supabase_project_ref
+from app.core.config import Settings, explicit_environment
 from app.infra.auth.admin import AdminApiError, AuthUser, SupabaseAdminClient
 from app.infra.db.demo_seed import e2e_ref
 
@@ -61,19 +62,34 @@ def refuse_e2e_session(settings: Settings, declared: str) -> str | None:
         return "E2E_ALLOW is not set; refusing"
     if declared not in E2E_ENVIRONMENTS:
         return f"--env {declared!r} is not one E2E sessions may be made in"
-    if "environment" not in settings.model_fields_set:
+    environment = explicit_environment(settings)
+    if environment is None:
         return "EDUFURTHER_ENVIRONMENT is not set; refusing to guess where this is"
-    if settings.environment != declared:
-        return f"EDUFURTHER_ENVIRONMENT is {settings.environment!r}, not {declared!r}; refusing"
+    if environment != declared:
+        return f"EDUFURTHER_ENVIRONMENT is {environment!r}, not {declared!r}; refusing"
     if settings.supabase_url is None or settings.supabase_service_role_key is None:
         return "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are needed"
     expected = (settings.e2e_supabase_project or "").strip()
     if not expected:
         return "E2E_SUPABASE_PROJECT is not set; refusing"
-    if supabase_project_ref(settings.supabase_url) != expected:
+    if not _is_project_url(settings.supabase_url, expected):
         # Neither ref is printed: the repository and its logs are public.
-        return "SUPABASE_URL does not name the E2E_SUPABASE_PROJECT project; refusing"
+        return "SUPABASE_URL is not exactly the E2E_SUPABASE_PROJECT project's URL; refusing"
     return None
+
+
+def _is_project_url(url: str, ref: str) -> bool:
+    """`https://<ref>.supabase.co` and nothing else: no other host that merely
+    contains it, and no path, query or fragment to hide it in. Stricter than
+    `supabase_project_ref`, which finds a ref anywhere in a value."""
+    parts = urlsplit(url)
+    return (
+        parts.scheme == "https"
+        and parts.hostname == f"{ref}.supabase.co"
+        and parts.port is None
+        and not (parts.path or parts.query or parts.fragment)
+        and not (parts.username or parts.password)
+    )
 
 
 class NotAnE2EAccountError(AdminApiError):

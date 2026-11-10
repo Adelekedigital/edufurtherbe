@@ -47,7 +47,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_storage
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, explicit_environment, get_settings
 from app.domain.assets import AssetKind
 from app.infra.db.asset_store import store_image
 from app.infra.db.demo_seed import (
@@ -312,14 +312,13 @@ def roster(
 def refuse(settings: Settings) -> str | None:
     """Why this run must not proceed, or `None` when it may.
 
-    **The environment must be set explicitly**, not merely not be production.
-    It defaults to `local`, so a run against a production database from a
-    shell that never set it would pass a plain "is it production?" check.
-    `model_fields_set` holds the settings that were actually provided.
+    **The environment must be set explicitly** (`explicit_environment`), not
+    merely not be production.
     """
-    if "environment" not in settings.model_fields_set:
+    environment = explicit_environment(settings)
+    if environment is None:
         return "EDUFURTHER_ENVIRONMENT is not set; refusing to guess where this is"
-    if settings.environment == "production":
+    if environment == "production":
         return "refusing to seed demo mentors into production"
     return None
 

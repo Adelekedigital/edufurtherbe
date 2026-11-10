@@ -116,7 +116,7 @@ uv run python scripts/e2e_session.py --env staging --run r1 --account mentee_wit
 
 | Who | Does |
 |---|---|
-| Backend agent | Seeds staging, runs `kind: api` steps and `assertions`, files defects |
+| Backend agent | Seeds staging, runs `kind: api` steps and `assertions` (database checks inside `BEGIN READ ONLY`), files defects |
 | Frontend agent | Runs `kind: ui` steps with Playwright at the given viewports, with screenshots and an accessibility scan where asked |
 | Human testers | Run each P0 by hand from the generated doc, and every `human_only` scenario |
 | Founder | Signs off: go or no-go against the exit criteria |
@@ -195,4 +195,7 @@ This repository is public.
 - Secrets are referenced by environment variable **name** only.
 - Test accounts live only on the demo domain; the session script refuses any
   other address and any environment but staging.
-- Database checks in `assertions` are read-only `SELECT`s.
+- Database checks in `assertions` are single `SELECT`s, and the backend agent
+  runs each inside `BEGIN READ ONLY` (or with
+  `SET default_transaction_read_only = on`), so a mistaken query cannot write.
+  The unit test also refuses any write keyword, data-modifying CTEs included.

@@ -171,13 +171,50 @@ def test_every_api_step_is_a_route_the_app_serves() -> None:
             assert method in paths[call["path"]], f"{where}: {method} {call['path']}"
 
 
+#: A statement that writes, anywhere in a query, data-modifying CTEs included.
+#: The runner also opens `BEGIN READ ONLY` (README), so this is the first lock.
+WRITES = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|MERGE|TRUNCATE|ALTER|DROP|GRANT|CREATE|COPY)\b", re.IGNORECASE
+)
+
+
+def read_only_problem(query: str) -> str | None:
+    """Why a db assertion is not a single read, or `None` when it is."""
+    text = query.strip()
+    if not text.upper().startswith(("SELECT", "WITH")):
+        return "not a SELECT"
+    if ";" in text.rstrip(";"):
+        return "more than one statement"
+    # Keywords, not values: `reason = 'grant'` is a read.
+    if found := WRITES.search(re.sub(r"'[^']*'", "''", text)):
+        return f"writes ({found.group(1)})"
+    return None
+
+
 def test_db_assertions_only_read() -> None:
     for scenario in SCENARIOS:
         for check in scenario.get("assertions", []):
             if check["check"] == "db":
-                query = check["query"].strip()
-                assert query.upper().startswith(("SELECT", "WITH")), check["id"]
-                assert ";" not in query.rstrip(";"), check["id"]
+                assert read_only_problem(check["query"]) is None, check["id"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH d AS (DELETE FROM users RETURNING id) SELECT count(*) FROM d",
+        "SELECT 1; DROP TABLE users",
+        "UPDATE users SET email = 'x'",
+        "SELECT * FROM users WHERE id IN (SELECT id FROM t) FOR UPDATE",
+        "with x as (insert into t values (1) returning 1) select * from x",
+    ],
+)
+def test_a_query_that_writes_is_refused(query: str) -> None:
+    assert read_only_problem(query) is not None
+
+
+def test_a_plain_read_passes() -> None:
+    assert read_only_problem("SELECT count(*) AS n FROM sessions WHERE id = :s") is None
+    assert read_only_problem("SELECT 1 FROM t WHERE reason = 'grant'") is None
 
 
 #: Shapes that look like a credential: a JWT, a Stripe/PostHog/Supabase key.

@@ -33,6 +33,7 @@ from app.infra.db.demo_seed import (
     apply_demo_session_types,
     create_demo_mentor,
     demo_mentor_offerings,
+    e2e_account_seeded,
     e2e_email,
     link_e2e_account,
     remove_demo,
@@ -566,3 +567,13 @@ async def test_e2e_link_points_only_an_e2e_row_at_an_identity(db_engine: AsyncEn
             await conn.execute(text("SELECT email FROM users WHERE auth_id = :a"), {"a": identity})
         ).scalar_one()
     assert linked == e2e_email("mentee_with_credits", "r1")
+
+
+async def test_whether_an_e2e_account_is_seeded(db_engine: AsyncEngine) -> None:
+    await seed(db_engine, OPEN)
+    await seed_e2e(db_engine)
+    async with AsyncSession(db_engine) as session:
+        assert await e2e_account_seeded(session, e2e_email("mentee_with_credits", "r1"))
+        assert not await e2e_account_seeded(session, e2e_email("mentee_with_credits", "r9"))
+        assert not await e2e_account_seeded(session, e2e_email("mentee_new", "r1"))
+        assert not await e2e_account_seeded(session, f"demo-open@{DEMO_DOMAIN}")
