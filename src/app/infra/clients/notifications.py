@@ -47,6 +47,7 @@ __all__ = [
     "NullNotifier",
     "ZernioNotifier",
     "template_for",
+    "template_variables",
 ]
 
 LOOPS_API = "https://app.loops.so/api/v1/transactional"
@@ -275,6 +276,13 @@ class ZernioNotifier:
         )
 
 
+def template_variables(settings: Settings) -> LoopsTemplates | None:
+    """What each Loops template declares, or ``None`` with no provider. The
+    admin Emails pages read it to tell a shared template from an old one."""
+    key = settings.loops_api_key
+    return None if key is None else LoopsTemplates(key.get_secret_value())
+
+
 def live_notifier(settings: Settings) -> LoopsNotifier | None:
     """The notifier for sending **now**, or ``None`` with no provider configured.
 
@@ -285,8 +293,8 @@ def live_notifier(settings: Settings) -> LoopsNotifier | None:
     key = settings.loops_api_key
     if key is None:
         return None
-    secret = key.get_secret_value()
-    return LoopsNotifier(secret).with_settings(settings).with_templates(LoopsTemplates(secret))
+    templates = LoopsTemplates(key.get_secret_value())
+    return LoopsNotifier(key.get_secret_value()).with_settings(settings).with_templates(templates)
 
 
 def notifier_for(settings: Settings) -> LoopsNotifier | NullNotifier:
