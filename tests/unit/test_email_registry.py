@@ -276,7 +276,7 @@ PUBLISHED_TEMPLATES: dict[str, list[str]] = {
         "request_closed": f"recipientFirstName,mentorName,{_SESSION},menteeName,sessionTopic,"
         "reasonTitle,reasonMessage",
         "session_reminders": f"recipientFirstName,attendee,{_SESSION},sessionTopic,location",
-        "messages": f"sessionName,{_SESSION},message1Name,message1Time,"
+        "messages": f"sessionName,{_SESSION},sessionDuration,message1Name,message1Time,"
         "message1Text,message1FileName,message2Name,message2Time,message2Text,"
         "message2FileName,sender1Name,sender1Count,sender2Name,sender2Count,sender3Name,"
         "sender3Count,sender4Name,sender4Count,sender5Name,sender5Count,otherSenders,"
