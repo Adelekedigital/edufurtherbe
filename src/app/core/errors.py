@@ -321,6 +321,11 @@ class ValidationError(AppError):
         super().__init__(message)
         self.field_errors = field_errors
 
+    def problem_errors(self) -> list[dict[str, str]]:
+        """The 422's `errors`: a pointer and a message each (#195). A problem
+        type may add members to each entry, never take these away."""
+        return [{"pointer": field, "message": message} for field, message in self.field_errors]
+
 
 class AnalyticsWindowError(ValidationError):
     """An admin Analytics request asked for a window that cannot be read: a
@@ -421,3 +426,37 @@ class PushUnavailableError(AppError):
     service's own state, and the client is to hide the opt-in rather than
     retry.
     """
+
+
+class EmailNotFoundError(NotFoundError):
+    """No registered email has this key, or it has no such variant (PRD 28)."""
+
+
+class EmailNotSetUpError(AppError):
+    """The email's template is not the shared one, so its lines are read only
+    and a save is refused (PRD 28, 423)."""
+
+
+class EmailLineConflictError(ConflictError):
+    """Another admin saved this email's line since it was read, so nothing was
+    written (PRD 28). Names who saved and when, for the editor's bar."""
+
+    def __init__(self, *, updated_by_name: str, updated_at: str) -> None:
+        super().__init__("another admin saved this email first")
+        self.updated_by_name = updated_by_name
+        self.updated_at = updated_at
+
+    def problem_members(self) -> dict[str, object]:
+        return {"updated_by_name": self.updated_by_name, "updated_at": self.updated_at}
+
+
+class EmailLineInvalidError(ValidationError):
+    """A line breaks a rule (PRD 28). Each entry adds the line, a code the
+    editor maps to its copy, and the value and suggestion it is about."""
+
+    def __init__(self, entries: tuple[dict[str, str], ...]) -> None:
+        super().__init__("a line breaks a rule")
+        self.entries = entries
+
+    def problem_errors(self) -> list[dict[str, str]]:
+        return [dict(entry) for entry in self.entries]

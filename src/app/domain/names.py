@@ -11,7 +11,7 @@ Pure: whether each part is a valid name is the boundary's rule, not this one.
 
 from __future__ import annotations
 
-__all__ = ["NAMELESS", "addressed_by", "split_full_name"]
+__all__ = ["NAMELESS", "addressed_by", "joined_name", "split_full_name"]
 
 #: A person with no name on their account, wherever one is shown to another.
 NAMELESS = "Someone"
@@ -21,6 +21,13 @@ def addressed_by(first_name: str | None, last_name: str | None) -> str:
     """What to call somebody in a notification: their first name, else their
     last, else `NAMELESS`. The one rule the emails and the pushes share."""
     return first_name or last_name or NAMELESS
+
+
+def joined_name(first_name: str | None, last_name: str | None) -> str:
+    """Whatever the row holds, trimmed and joined with one space, or empty.
+    `last_name` is nullable, and empty or padded for some migrated accounts, so
+    an f-string would leave stray spaces."""
+    return " ".join(part.strip() for part in (first_name, last_name) if part and part.strip())
 
 
 def split_full_name(value: str) -> tuple[str, str]:
