@@ -218,3 +218,27 @@ async def test_a_soft_deleted_user_cannot_sign_in(
     assert (
         await api_client.get("/api/v1/me", headers=bearer(api_token(auth_id)))
     ).status_code == 404
+
+
+async def test_is_migrated_says_whether_the_account_came_from_the_old_app(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The frontend sets it as a person property (PRD 30): true exactly when the
+    account's sign-up source is `migrated`, and never required on `/me`."""
+    migrated, direct = uuid4(), uuid4()
+    await seed_user(db_engine, migrated, email="old@example.com")
+    await seed_user(db_engine, direct, email="new@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET signup_source = 'migrated' WHERE auth_id = :a"),
+            {"a": migrated},
+        )
+
+    old = (await api_client.get("/api/v1/me", headers=bearer(api_token(migrated)))).json()
+    new = (await api_client.get("/api/v1/me", headers=bearer(api_token(direct)))).json()
+
+    assert old["is_migrated"] is True
+    assert new["is_migrated"] is False
+    schema = api_client._transport.app.openapi()["components"]["schemas"]["UserRead"]  # type: ignore[attr-defined]
+    assert "is_migrated" in schema["properties"]
+    assert "is_migrated" not in schema.get("required", [])
