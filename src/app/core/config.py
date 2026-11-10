@@ -861,6 +861,17 @@ class Settings(BaseSettings):
         default=False, validation_alias=env_key("admin_analytics_enabled")
     )
 
+    #: Lets `scripts/e2e_session.py` sign in as a seeded E2E account on staging
+    #: (docs/e2e). Read by that script only, never by the running app; off by
+    #: default, and the script refuses production whatever this says.
+    e2e_allow: bool = Field(default=False, validation_alias=env_key("e2e_allow"))
+    #: The Supabase project ref E2E sessions may be made in, set by the
+    #: operator. `SUPABASE_URL` must name exactly this project, or the script
+    #: refuses; the ref itself is never written in the repository.
+    e2e_supabase_project: str | None = Field(
+        default=None, validation_alias=env_key("e2e_supabase_project")
+    )
+
     #: The writing assistant (Onboarding v5 B7, decision 267): drafting or
     #: improving a bio through the EduFurther AI Router. **Off by default**, and
     #: off answers `503` without calling or counting anything. On needs the

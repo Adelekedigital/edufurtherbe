@@ -3,6 +3,7 @@
     railway run uv run python scripts/seed_demo_mentors.py --avatars <folder>
     railway run uv run python scripts/seed_demo_mentors.py --remove
     railway run uv run python scripts/seed_demo_mentors.py --session-types
+    railway run uv run python scripts/seed_demo_mentors.py --e2e r1
 
 **Never production.** It refuses before touching anything when the environment
 is `production`, whatever else is configured.
@@ -23,6 +24,12 @@ the catalogue's session types for their offerings plus an intro call — 2 to 4,
 each with a description, duration, notice, stage and intake questions. Their
 original single type becomes the first one, so their history stays attached.
 Safe to run again.
+
+`--e2e <run>` creates one run's end-to-end accounts (docs/e2e,
+`E2E_ACCOUNTS`): `e2e-<run>-*` addresses on the same domain, bare, with one
+listed mentor and two admins. Each run tag is seeded once, so a run starts
+clean; earlier runs are kept (their history pins them), and demo removal
+never touches them.
 
 The roster below is data; the SQL is in `app.infra.db.demo_seed` (a script may
 hold none).
@@ -47,6 +54,7 @@ from app.infra.db.demo_seed import (
     DemoMentor,
     DemoQuestion,
     DemoSessionType,
+    E2ERunError,
     RealHistoryError,
     apply_demo_session_types,
     catalogue_offerings,
@@ -54,6 +62,7 @@ from app.infra.db.demo_seed import (
     demo_avatar_urls,
     demo_mentor_offerings,
     remove_demo,
+    seed_e2e_accounts,
 )
 from app.infra.db.engine import create_database_engine
 from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
@@ -325,6 +334,8 @@ async def run(args: argparse.Namespace) -> int:
     try:
         if args.session_types:
             return await _upgrade_session_types(engine)
+        if args.e2e:
+            return await _seed_e2e(engine, args.e2e)
         async with AsyncSession(engine) as session:
             old_avatars = await demo_avatar_urls(session)
             try:
@@ -376,6 +387,21 @@ async def _upgrade_session_types(engine: object) -> int:
     return EXIT_OK
 
 
+async def _seed_e2e(engine: object, run: str) -> int:
+    """Create one run's E2E accounts, leaving the demo mentors as they are."""
+    async with AsyncSession(engine) as session:  # type: ignore[arg-type]
+        try:
+            created = await seed_e2e_accounts(
+                session, await catalogue_offerings(session), run=run, now=dt.datetime.now(dt.UTC)
+            )
+        except E2ERunError as exc:
+            print(exc)
+            return EXIT_REFUSED
+        await session.commit()
+    print(f"seeded {created} E2E accounts for run {run}")
+    return EXIT_OK
+
+
 async def _delete_avatars(storage: object, urls: list[str]) -> None:
     for url in urls:
         await asyncio.to_thread(storage.drop_url, url)  # type: ignore[attr-defined]
@@ -396,6 +422,9 @@ def main() -> int:
         "--session-types",
         action="store_true",
         help="Give the demo mentors already seeded the catalogue's session types, in place.",
+    )
+    group.add_argument(
+        "--e2e", metavar="RUN", help="Create the end-to-end test accounts for a new run tag."
     )
     configure_streams()
     return asyncio.run(run(parser.parse_args()))
