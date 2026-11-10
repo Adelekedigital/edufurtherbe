@@ -71,6 +71,7 @@ __all__ = [
     "MessageContext",
     "UnresolvedVariableError",
     "build_variables",
+    "clock",
     "resolve",
     "session_page_url",
 ]
@@ -199,6 +200,13 @@ def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
     return moment.astimezone(ZoneInfo(timezone))
 
 
+def clock(moment: dt.datetime) -> str:
+    """How every time in every email reads, for mentors and mentees alike:
+    "3:00 PM", "11:30 AM" (owner, 2026-11-10). `%-I` is not portable to
+    Windows, so the hour's zero is stripped by hand."""
+    return moment.strftime("%I:%M %p").lstrip("0")
+
+
 def _zone_code(moment: dt.datetime) -> str:
     """The zone's code at that moment, "WAT" or "EDT", so summer time is right;
     a zone with no common code reads as its offset, "+03" (owner, 2026-11-10)."""
@@ -312,9 +320,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "sessionDate": lambda c: _local(_as_moment(c, "sessionDate"), c.recipient_timezone).strftime(
         DATE_FORMAT
     ),
-    "sessionTime": lambda c: _local(_as_moment(c, "sessionTime"), c.recipient_timezone).strftime(
-        "%H:%M"
-    ),
+    "sessionTime": lambda c: clock(_local(_as_moment(c, "sessionTime"), c.recipient_timezone)),
     "sessionTimezone": lambda c: _zone_code(
         _local(_as_moment(c, "sessionTimezone"), c.recipient_timezone)
     ),
@@ -350,14 +356,12 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "suggestedDate": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedDate").strftime(
         DATE_FORMAT
     ),
-    "suggestedTime": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedTime").strftime(
-        "%H:%M"
-    ),
+    "suggestedTime": lambda c: clock(_extra_moment(c, "suggested_starts_at", "suggestedTime")),
     # Its own code: a suggested time can fall on the other side of a clock change.
     "suggestedTimezone": lambda c: _zone_code(
         _extra_moment(c, "suggested_starts_at", "suggestedTimezone")
     ),
-    "holdUntilTime": lambda c: _extra_moment(c, "held_until", "holdUntilTime").strftime("%H:%M"),
+    "holdUntilTime": lambda c: clock(_extra_moment(c, "held_until", "holdUntilTime")),
     "suggestedAfter": lambda c: _needs(c.extras.get("suggested_after"), "suggestedAfter"),
     # A mentee's reminder about a pending request (decision 294): their words
     # from the row, and a link to the request itself.
@@ -415,7 +419,7 @@ def _message_time(context: MessageContext, key: str, name: str) -> str:
     """A message card's time in the recipient's zone, empty with no card."""
     if not context.extras.get(key):
         return ""
-    return _extra_moment(context, key, name).strftime("%H:%M")
+    return clock(_extra_moment(context, key, name))
 
 
 def _carried(key: str, name: str) -> Callable[[MessageContext], str]:

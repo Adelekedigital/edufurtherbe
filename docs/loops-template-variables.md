@@ -132,9 +132,9 @@ know which one they are reading.
 | `cancelInitiator` | cancelled | which party called it off |
 | `feedbackUrl` | feedback | where to leave it |
 | `suggestedDate` | time suggested, its reminder | the offered time's date, in the mentee's zone |
-| `suggestedTime` | time suggested, its reminder | the offered time, `HH:MM` in the mentee's zone |
+| `suggestedTime` | time suggested, its reminder | the offered time on a 12-hour clock (`3:00 PM`) in the mentee's zone |
 | `suggestedTimezone` | time suggested, its reminder | the offered time's zone code, which can differ from `sessionTimezone` across a clock change |
-| `holdUntilTime` | time suggested, its reminder | when the hold lapses, `HH:MM` in the mentee's zone |
+| `holdUntilTime` | time suggested, its reminder | when the hold lapses, `3:00 PM` style, in the mentee's zone |
 | `suggestedAfter` | time suggested | `declined` or `cancelled` — what happened to the original |
 
 A resolver asked for something the message has no basis for — `hours` on a
@@ -393,7 +393,7 @@ Three templates for two emails (Messages PRD, "Message emails"), as drawn in
 the messages stay marked emailed, so none is emailed twice. The
 content is read when the email is sent, so one whose messages were all read, or
 any deleted, since it was queued is skipped, and an unread email is skipped
-once the recipient has switched them off. Times are `HH:MM` in the
+once the recipient has switched them off. Times are 12-hour (`3:00 PM`) in the
 **recipient's** zone. All three may use `recipientFirstName`, `messagesUrl`
 (`/messages`) and `buttonUrl`; they are one shared template (*Shared templates*
 above), so the subject, heading and button come as `emailSubject`,

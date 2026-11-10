@@ -28,6 +28,7 @@ from app.domain.messages import (
     MessageContext,
     UnresolvedVariableError,
     build_variables,
+    clock,
 )
 from app.domain.notifications import AUDIENCE, Notification
 
@@ -87,8 +88,8 @@ def test_the_time_is_rendered_in_the_recipients_zone() -> None:
         ["sessionTime", "sessionTimezone"], context(recipient_timezone=TORONTO)
     )
 
-    assert lagos["sessionTime"] == "09:00"
-    assert toronto["sessionTime"] == "04:00"
+    assert lagos["sessionTime"] == "9:00 AM"
+    assert toronto["sessionTime"] == "4:00 AM"
     # The zone reads as its code at the session's moment: summer time in September.
     assert (lagos["sessionTimezone"], toronto["sessionTimezone"]) == ("WAT", "EDT")
 
@@ -104,7 +105,7 @@ def test_a_suggested_time_names_its_own_zone_across_a_clock_change() -> None:
     names = ["sessionTimezone", "suggestedTimezone", "suggestedTime"]
     filled = build_variables(names, across)
     assert (filled["sessionTimezone"], filled["suggestedTimezone"]) == ("EDT", "EST")
-    assert filled["suggestedTime"] == "10:00"
+    assert filled["suggestedTime"] == "10:00 AM"
 
 
 def test_a_zone_with_no_common_code_reads_as_its_offset() -> None:
@@ -510,3 +511,14 @@ def test_hours_left_on_a_request_with_no_deadline_counts_to_its_start() -> None:
     )
 
     assert built == {"hours": "5"}
+
+
+def test_every_time_reads_on_a_twelve_hour_clock() -> None:
+    """Owner, 2026-11-10: "3:00 PM" for every reader; noon and midnight too."""
+    at = dt.datetime(2026, 9, 1, tzinfo=dt.UTC)
+    assert [clock(at.replace(hour=h)) for h in (0, 9, 12, 15)] == [
+        "12:00 AM",
+        "9:00 AM",
+        "12:00 PM",
+        "3:00 PM",
+    ]
