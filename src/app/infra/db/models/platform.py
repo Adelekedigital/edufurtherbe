@@ -154,14 +154,14 @@ class OutboxEvent(TimestampMixin, Base):
     about a booking that rolled back.
 
     **The package designed this for analytics dispatch and it fits unchanged.**
-    ``destination`` defaults to ``'posthog'`` there and answers *where does this
-    go*; a channel is the same question, so notifications write ``'email'`` and
-    the analytics consumer the package anticipates can write ``'posthog'`` into
-    the same table without either knowing about the other.
+    ``destination`` answers *where does this go*; a channel is the same
+    question, so notifications write ``'email'`` and analytics events write
+    ``'analytics'`` (PRD 30) into the same table without either knowing about
+    the other.
 
-    **No divergence from the canonical DDL** — the first table this milestone
-    where the package already gave the surrogate ``id`` ADR 0015 requires, so
-    there was nothing to reconcile.
+    **One divergence from the canonical DDL**: ``destination`` has no default,
+    where the package's is ``'posthog'`` (dropped by ``e2a9c4f7b153``). A row
+    that named no destination was swept as a message; every writer names one.
 
     **No foreign key on ``entity_id``**, and the package has none either. The
     column points at whichever table ``entity_type`` names, so a key could only
@@ -192,7 +192,8 @@ class OutboxEvent(TimestampMixin, Base):
         JSONB, nullable=False, server_default=text("'{}'")
     )
 
-    destination: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'posthog'"))
+    #: A `Channel` value. Each drain selects its own, never "not push".
+    destination: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
 
     #: Incremented on every attempt whatever the outcome, which is what makes

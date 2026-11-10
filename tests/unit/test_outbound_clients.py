@@ -18,6 +18,7 @@ import pytest
 from app.infra.clients import meetings
 from app.infra.clients.meetings import DailyRooms, GoogleCalendar
 from app.infra.clients.notifications import LoopsNotifier
+from app.infra.clients.posthog import PostHogSink
 from app.infra.clients.scheduler import QStashScheduler
 from app.infra.clients.templates import LoopsTemplates
 from app.infra.http import client as shared_module
@@ -56,6 +57,7 @@ def test_adapters_share_their_clients(built: list[dict[str, Any]]) -> None:
         LoopsNotifier(FAKE_KEY)
         QStashScheduler(FAKE_KEY, "https://qstash.example.test")
         LoopsTemplates(FAKE_KEY)
+        PostHogSink(host="https://ingest.example.test", project_token=FAKE_KEY)
 
     assert len(built) <= len({str(kwargs.get("timeout")) for kwargs in built})
     assert len(built) <= 2
