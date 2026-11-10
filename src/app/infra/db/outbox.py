@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
 from typing import Any
 from uuid import UUID
@@ -31,11 +31,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
+from app.domain.analytics_events import AnalyticsEvent, analytics_event
 from app.domain.email_lines import OWNED_BY
 from app.domain.message_emails import MESSAGE_EMAILS
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
 from app.domain.names import addressed_by, joined_name
 from app.domain.notifications import Channel, Notification
+from app.domain.ports import AnalyticsSink
 from app.domain.push import SESSION_PUSHES, session_push, session_push_spec
 from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out
 from app.infra.db.chat_store import unread_total
@@ -59,8 +61,10 @@ __all__ = [
     "collect_queued",
     "deliver",
     "drain",
+    "drain_analytics",
     "drain_push",
     "enqueue",
+    "enqueue_analytics",
     "stop_collecting",
 ]
 
@@ -82,6 +86,13 @@ MAX_ATTEMPTS = 5
 #: load — it bounds how long one run holds a transaction open, which matters
 #: because a slow provider makes every row slow at once.
 BATCH = 100
+
+#: What each drain sweeps, **named rather than "everything else"**: a drain
+#: that took every row but the push rows read an analytics event as a message,
+#: found no recipient and aborted the sweep for everybody (PRD 30).
+MESSAGE_CHANNELS = (Channel.EMAIL, Channel.WHATSAPP)
+PUSH_CHANNELS = (Channel.PUSH,)
+ANALYTICS_CHANNELS = (Channel.ANALYTICS,)
 
 #: The rows this request has queued, when a request is collecting them.
 #:
@@ -155,6 +166,31 @@ async def enqueue(
         collecting.extend(inserted.scalars().all())
 
 
+async def enqueue_analytics(
+    session: AsyncSession,
+    event: AnalyticsEvent,
+    user_id: UUID,
+    properties: Mapping[str, object],
+    *,
+    at: dt.datetime,
+) -> None:
+    """Record that this event happened, for the analytics drain. Does not commit.
+
+    In the caller's transaction, like `enqueue`, so the event exists exactly
+    when the fact it reports does. The payload is the event as the vendor's
+    batch takes it (`analytics_event`), so the drain sends it as stored.
+    """
+    await session.execute(
+        insert(OutboxEvent).values(
+            event_type=event,
+            entity_type="user",
+            entity_id=user_id,
+            destination=Channel.ANALYTICS,
+            payload=analytics_event(event, user_id=user_id, at=at, properties=properties),
+        )
+    )
+
+
 async def _push_rows(
     session: AsyncSession,
     notification: Notification,
@@ -221,7 +257,7 @@ async def drain(
     — which matters right now, because WhatsApp can reach nobody until the
     `phone_*` columns exist.
     """
-    pending = await _pending(session, push=False, entity_id=entity_id, kind=kind, ids=ids)
+    pending = await _pending(session, MESSAGE_CHANNELS, entity_id=entity_id, kind=kind, ids=ids)
     settings = settings or get_settings()
     # Admins' wording, once per sweep (decision 318), not once per message.
     overrides = await load_line_overrides(session) if pending else {}
@@ -306,7 +342,7 @@ async def drain_push(
     ids: Sequence[UUID] | None = None,
 ) -> dict[str, int]:
     """Send the pending push rows (decision 312). Counts by outcome. Does not
-    commit. Narrowed like `drain`; every other channel's rows are `drain`'s.
+    commit. Narrowed like `drain`; only `PUSH_CHANNELS` rows.
 
     **One attempt each**, never retried: a push is about now, and a retry an
     hour later would alert again the browsers that already had it. `STILL_DUE`
@@ -315,7 +351,7 @@ async def drain_push(
     Sent if any browser took it; browsers whose service says gone are forgotten.
     """
     counts = {"sent": 0, "failed": 0, "skipped": 0}
-    for row in await _pending(session, push=True, entity_id=entity_id, kind=kind, ids=ids):
+    for row in await _pending(session, PUSH_CHANNELS, entity_id=entity_id, kind=kind, ids=ids):
         state = await _state(session, row, now)
         if state == "wait":
             continue
@@ -334,6 +370,48 @@ async def drain_push(
             final=True,
         )
         counts[status] += 1
+    return counts
+
+
+async def drain_analytics(
+    session: AsyncSession,
+    *,
+    sink: AnalyticsSink,
+    now: dt.datetime,
+    max_batches: int = 10,
+) -> dict[str, int]:
+    """Send the pending analytics events, oldest first, `BATCH` to a request.
+    Counts by outcome. Does not commit.
+
+    **One request per batch, so a batch succeeds or fails whole**: every row
+    in it is `sent`, or counts an attempt under `MAX_ATTEMPTS` and keeps the
+    error, as a message does. A refused batch ends the run, so a vendor that
+    is down is asked once an hour, not `max_batches` times. ``max_batches``
+    bounds how long the run holds its row locks.
+    """
+    counts = {"sent": 0, "failed": 0}
+    for _ in range(max_batches):
+        rows = await _pending(session, ANALYTICS_CHANNELS, entity_id=None, kind=None, ids=None)
+        if not rows:
+            break
+        try:
+            # Each event's `uuid` is its row id, so a batch resent after a lost
+            # answer is a duplicate PostHog drops (decision 137): "Events that
+            # share the same uuid, event name, timestamp, and distinct_id are
+            # treated as duplicates" (https://posthog.com/docs/data/events,
+            # "Event deduplication"; /api/capture does not list the field).
+            events = [{**row["payload"], "uuid": str(row["id"])} for row in rows]
+            await asyncio.to_thread(sink.capture, events)
+        except Exception as exc:
+            for row in rows:
+                await _finish(session, row["id"], "failed", row["attempts"], str(exc)[:500])
+            counts["failed"] += len(rows)
+            break
+        for row in rows:
+            await _finish(session, row["id"], "sent", row["attempts"], None, sent_at=now)
+        counts["sent"] += len(rows)
+        if len(rows) < BATCH:
+            break
     return counts
 
 
@@ -396,13 +474,13 @@ async def _push(
 
 async def _pending(
     session: AsyncSession,
+    destinations: tuple[Channel, ...],
     *,
-    push: bool,
     entity_id: UUID | None,
     kind: str | None,
     ids: Sequence[UUID] | None,
 ) -> Sequence[Any]:
-    """The pending rows of one drain: the push rows, or every other channel's."""
+    """The pending rows of one drain: those bound for its ``destinations``."""
     return (
         (
             await session.execute(
@@ -423,9 +501,7 @@ async def _pending(
                 .where(
                     OutboxEvent.status == "pending",
                     OutboxEvent.attempts < MAX_ATTEMPTS,
-                    (OutboxEvent.destination == Channel.PUSH)
-                    if push
-                    else (OutboxEvent.destination != Channel.PUSH),
+                    OutboxEvent.destination.in_(destinations),
                     OutboxEvent.entity_id == entity_id if entity_id is not None else true(),
                     OutboxEvent.payload["kind"].astext == kind if kind is not None else true(),
                     OutboxEvent.id.in_(ids) if ids is not None else true(),

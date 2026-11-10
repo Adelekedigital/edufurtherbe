@@ -1,5 +1,6 @@
 """The admin Analytics page's rules (PRD 31, decision 324): windows, buckets,
-rates, the credit source groups and the alert copy.
+rates, the credit source groups, which places the Supply tab shows, and the
+alert copy.
 
 Pure: no I/O. The stores in `infra/db/analytics_*.py` count; this module says
 what a window is, how a count becomes a rate, and what an alert reads.
@@ -18,12 +19,14 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from fractions import Fraction
 from itertools import pairwise
 from types import MappingProxyType
 from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError
-from app.domain.enums import CreditSource
+from app.domain.accounts import UNLISTED_ON_DELETION
+from app.domain.enums import CreditSource, MissedReason, UnlistedReason
 from app.domain.mentor_stats import Window
 
 #: The presets the window control offers, in days ending today.
@@ -150,21 +153,36 @@ def spark_buckets(window: Window) -> list[Window]:
     return [Window(since=a, until=b) for a, b in pairwise(edges)]
 
 
+def rounded(value: object, places: int = 1) -> float | None:
+    """``value`` (a `Decimal`, or a number from the database) to ``places``
+    decimals, halves away from zero (decision 171's rounding): the one rounding
+    every analytics figure goes through. ``None`` stays ``None``."""
+    if value is None:
+        return None
+    quantum = Decimal(1).scaleb(-places)
+    return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP))
+
+
 def rate(numerator: int, denominator: int) -> float | None:
     """``numerator / denominator`` as a percentage, one decimal, halves away
-    from zero (decision 171's rounding); ``None`` with nothing to divide by."""
+    from zero; ``None`` with nothing to divide by."""
     if denominator <= 0:
         return None
-    percent = Decimal(numerator) * 100 / Decimal(denominator)
-    return float(percent.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+    return rounded(Decimal(numerator) * 100 / Decimal(denominator))
 
 
 def ratio(numerator: int, denominator: int, places: int = 2) -> float | None:
     """A plain ratio rounded half up to ``places``; ``None`` over zero."""
     if denominator <= 0:
         return None
-    value = Decimal(numerator) / Decimal(denominator)
-    return float(value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP))
+    return rounded(Decimal(numerator) / Decimal(denominator), places)
+
+
+def days_of(seconds: float | None) -> float | None:
+    """A duration in seconds as days, one decimal, half up; ``None`` stays."""
+    if seconds is None:
+        return None
+    return rounded(Decimal(str(seconds)) / 86400)
 
 
 # --- Credits -----------------------------------------------------------------
@@ -202,6 +220,60 @@ class CreditFigures:
 class CreditsTab:
     flow: CreditFigures
     by_source: dict[CreditGroup, CreditFigures]
+
+
+# --- Supply ------------------------------------------------------------------
+
+#: Unlistings that are a side effect of something else, so not counted as one:
+#: a decline (`decide` writes `never_approved`) and a deleted account.
+SIDE_EFFECT_UNLISTINGS: tuple[str, ...] = (
+    UnlistedReason.NEVER_APPROVED.value,
+    UNLISTED_ON_DELETION,
+)
+#: The most places a by-country or by-school list shows.
+TOP_PLACES = 5
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyCohort:
+    """Applications submitted in the window, by where they stand now."""
+
+    applied: int
+    approved: int
+    listed: int
+    bookable: int
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyPlace:
+    """A country or school mentees aim for, and the mentors who can take them."""
+
+    key: str
+    name: str
+    mentees: int
+    bookable_mentors: int
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyTab:
+    cohort: SupplyCohort
+    median_review_days: float | None
+    unlisted: int
+    by_country: list[SupplyPlace]
+    by_school: list[SupplyPlace]
+
+
+def neediest(places: list[SupplyPlace]) -> list[SupplyPlace]:
+    """The `TOP_PLACES` places mentees are least served in: no bookable mentor
+    first, then most mentees per mentor, then by name. With no mentor the
+    ratio is unbounded, so those places tie and read by name."""
+
+    def need(place: SupplyPlace) -> tuple[bool, Fraction, str]:
+        served = place.bookable_mentors > 0
+        per_mentor = Fraction(place.mentees, place.bookable_mentors) if served else Fraction(0)
+        return served, -per_mentor, place.name
+
+    return sorted(places, key=need)[:TOP_PLACES]
 
 
 # --- Alerts ------------------------------------------------------------------
@@ -283,3 +355,114 @@ def newest_first(alerts: list[Alert | None]) -> list[Alert]:
     """The alerts that fired, newest first (PRD 31: one banner each)."""
     fired = [alert for alert in alerts if alert is not None]
     return sorted(fired, key=lambda alert: alert.raised_at, reverse=True)
+
+
+# --- Overview and Sessions ---------------------------------------------------
+
+Number = int | float
+
+#: The seven feature cards, always all, in this order (PRD 31).
+FeatureKey = Literal[
+    "booking",
+    "explore",
+    "messaging",
+    "mentor_supply",
+    "invites",
+    "mentee_activation",
+    "mentor_activation",
+]
+FEATURES: tuple[FeatureKey, ...] = get_args(FeatureKey)
+
+
+@dataclass(frozen=True, slots=True)
+class Metric:
+    """A figure and the same measure over the previous period, or ``None``
+    when nothing is compared or the figure exists only now."""
+
+    value: Number | None
+    previous: Number | None
+
+
+def compared(value: Number | None, previous: Number | None, compare: bool) -> Metric:
+    return Metric(value=value, previous=previous if compare else None)
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesPoint:
+    start: dt.date
+    value: int
+    previous: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class NorthStar:
+    completed: Metric
+    unit: SeriesUnit
+    series: list[SeriesPoint]
+
+
+@dataclass(frozen=True, slots=True)
+class SubTracks:
+    unique_mentees: Metric
+    mentors_delivered: Metric
+    sessions_per_mentee: Metric
+
+
+@dataclass(frozen=True, slots=True)
+class Feature:
+    key: FeatureKey
+    value: Metric | None
+    spark: list[float | None] | None
+    contribution: Number | None
+
+
+@dataclass(frozen=True, slots=True)
+class OverviewTab:
+    north_star: NorthStar
+    sub_tracks: SubTracks
+    features: list[Feature]
+
+
+@dataclass(frozen=True, slots=True)
+class TopReason:
+    reason: MissedReason
+    share: float
+
+
+@dataclass(frozen=True, slots=True)
+class SessionsTab:
+    kpis: dict[str, Metric]
+    outcomes: dict[str, int]
+    top_no_show_reason: TopReason | None
+    guardrails: dict[str, Metric]
+
+
+# --- Cache -------------------------------------------------------------------
+
+#: How long a tab's database figures may be served again (PRD 31: "cached for
+#: up to 10 minutes, keyed on the query"). Alerts are never cached.
+CACHE_FOR = dt.timedelta(minutes=10)
+#: Entries kept; the oldest goes first past it, so memory stays bounded.
+CACHE_SIZE = 64
+
+
+class TabCache:
+    """A tab's figures by (tab, first day, last day, compare), each kept until
+    `CACHE_FOR` after it was computed. In-process and per app, so a figure is
+    at most `CACHE_FOR` old and each instance warms its own."""
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[object, ...], tuple[dt.datetime, object]] = {}
+
+    def get(self, key: tuple[object, ...], now: dt.datetime) -> object | None:
+        entry = self._entries.get(key)
+        if entry is None or entry[0] <= now:
+            self._entries.pop(key, None)
+            return None
+        return entry[1]
+
+    def put(self, key: tuple[object, ...], value: object, now: dt.datetime) -> None:
+        self._entries.pop(key, None)
+        while len(self._entries) >= CACHE_SIZE:
+            self._entries.pop(next(iter(self._entries)))
+        self._entries[key] = (now + CACHE_FOR, value)
