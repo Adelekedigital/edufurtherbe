@@ -33,6 +33,7 @@ from app.infra.clients.meetings import (
     rooms_for,
 )
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier, notifier_for
+from app.infra.clients.posthog import live_analytics_sink
 from app.infra.clients.web_push import live_web_push
 from app.infra.db.account_purge import purge_counts, purge_due_accounts
 from app.infra.db.calendar_store import check_connections, free_busy_reader
@@ -49,7 +50,7 @@ from app.infra.db.intake_file_store import sweep_counts, sweep_intake_files
 from app.infra.db.mentor_status_store import remind_returning_mentors
 from app.infra.db.message_file_store import message_sweep_counts, sweep_message_files
 from app.infra.db.next_available_store import refresh_next_available
-from app.infra.db.outbox import drain, drain_push
+from app.infra.db.outbox import drain, drain_analytics, drain_push
 from app.infra.db.session_type_store import finalise_scheduled_deletions
 from app.infra.db.session_writer import (
     confirm_presence,
@@ -310,6 +311,14 @@ class RuntimeJobs:
                     if web_push is None
                     else await drain_push(session, web_push=web_push, now=now)
                 )
+                # Email and push marks are committed before analytics, so a
+                # failure there cannot roll them back and resend them.
+                if not dry_run:
+                    await session.commit()
+                # Analytics events (PRD 30); a dry run sends none, and with
+                # analytics off they wait.
+                sink = None if dry_run else live_analytics_sink(self.settings)
+                tracked = {} if sink is None else await drain_analytics(session, sink=sink, now=now)
                 if dry_run:
                     await session.rollback()
                 else:
@@ -337,6 +346,8 @@ class RuntimeJobs:
                     # Pushes taken, and refused by every browser (decision 312).
                     "pushes_sent": pushed.get("sent", 0),
                     "pushes_failed": pushed.get("failed", 0),
+                    "analytics_sent": tracked.get("sent", 0),
+                    "analytics_failed": tracked.get("failed", 0),
                     "released_calendar_events": released,
                 }
         finally:

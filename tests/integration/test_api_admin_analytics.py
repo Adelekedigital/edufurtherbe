@@ -256,8 +256,8 @@ async def test_more_than_twenty_failures_yesterday_raise_the_delivery_alert(
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO outbox_events (event_type, entity_type, entity_id, status, "
-                "updated_at) SELECT 'x', 'session', gen_random_uuid(), 'failed', "
+                "INSERT INTO outbox_events (event_type, entity_type, entity_id, destination, "
+                "status, updated_at) SELECT 'x', 'session', gen_random_uuid(), 'email', 'failed', "
                 "date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' "
                 "- interval '12 hours' FROM generate_series(1, :n)"
             ),
@@ -266,9 +266,10 @@ async def test_more_than_twenty_failures_yesterday_raise_the_delivery_alert(
         # Failed today, and a pending row yesterday: neither counts.
         await conn.execute(
             text(
-                "INSERT INTO outbox_events (event_type, entity_type, entity_id, status, "
-                "updated_at) VALUES ('x', 'session', gen_random_uuid(), 'failed', now()), "
-                "('x', 'session', gen_random_uuid(), 'pending', now() - interval '1 day')"
+                "INSERT INTO outbox_events (event_type, entity_type, entity_id, destination, "
+                "status, updated_at) VALUES "
+                "('x', 'session', gen_random_uuid(), 'email', 'failed', now()), "
+                "('x', 'session', gen_random_uuid(), 'email', 'pending', now() - interval '1 day')"
             )
         )
     async with client_for(app_for(db_engine, api_storage)) as client:

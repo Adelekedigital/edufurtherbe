@@ -371,6 +371,9 @@ class Channel(StrEnum):
     #: Web Push to the recipient's subscribed browsers (decision 312). Queued
     #: beside the email of an event in `domain.push.SESSION_PUSHES`.
     PUSH = "push"
+    #: A product analytics event (PRD 30), not a message to anybody: an
+    #: `outbox_events.destination` only, sent by `drain_analytics`.
+    ANALYTICS = "analytics"
 
 
 def unique(ids: Iterable[UUID]) -> tuple[UUID, ...]:

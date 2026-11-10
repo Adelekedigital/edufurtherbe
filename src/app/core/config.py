@@ -34,7 +34,7 @@ from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ENV_PREFIX = "EDUFURTHER_"
@@ -467,24 +467,25 @@ class Settings(BaseSettings):
             raise ValueError("DAILY_WEBHOOK_SECRET must decode to at least 16 bytes")
         return value
 
-    @field_validator("app_base_url")
+    @field_validator("app_base_url", "analytics_host")
     @classmethod
-    def an_absolute_web_origin(cls, value: str | None) -> str | None:
+    def an_absolute_web_origin(cls, value: str | None, info: ValidationInfo) -> str | None:
         """Every link into the app is this with a path appended, in emails and on
         calendar invites, so a value that cannot take one is refused at start-up:
         no web scheme sends links no client can open, no host is no link at all,
         and a query or fragment swallows the path (Codex on #390 —
         ``?tenant=a/sessions/{id}`` opens the home page). A path prefix is
         fine. Unset stays allowed: then a message that links fails rather than
-        sends.
+        sends. The analytics host takes its endpoint path the same way.
         """
         if not value:
             return value
         parts = urlsplit(value)
+        name = env_key(str(info.field_name))
         if parts.scheme not in ("https", "http") or not parts.netloc:
-            raise ValueError("APP_BASE_URL must be an absolute http(s) URL")
+            raise ValueError(f"{name} must be an absolute http(s) URL")
         if parts.query or parts.fragment or value.rstrip("/").endswith(("?", "#")):
-            raise ValueError("APP_BASE_URL must not carry a query or fragment")
+            raise ValueError(f"{name} must not carry a query or fragment")
         return value
 
     @field_validator("cors_origins", mode="before")
@@ -905,6 +906,24 @@ class Settings(BaseSettings):
     #: Who a push service contacts about our pushes: `mailto:` or `https:`.
     vapid_subject: str | None = Field(default=None, validation_alias=env_key("vapid_subject"))
 
+    #: Product analytics (PRD 30): outcome events queued in the outbox and sent
+    #: by the hourly settlement. **Off by default**, and off nothing is sent;
+    #: on, the app refuses to start without the host and project token
+    #: (`analytics_gaps`).
+    analytics_enabled: bool = Field(default=False, validation_alias=env_key("analytics_enabled"))
+    #: The vendor's ingestion origin, such as its US or EU host. No default: the
+    #: region is the owner's choice.
+    analytics_host: str | None = Field(default=None, validation_alias=env_key("analytics_host"))
+    #: The project's public ingestion token. Public by design (the browser
+    #: sends it too), so not a `SecretStr`.
+    analytics_project_token: str | None = Field(
+        default=None, validation_alias=env_key("analytics_project_token")
+    )
+    #: A private API key, for erasing a person and reading results.
+    analytics_api_key: SecretStr | None = Field(
+        default=None, validation_alias=env_key("analytics_api_key")
+    )
+
     #: How many Google free/busy calls one worker process makes in any minute,
     #: for every caller together (decision 242). The public `/slots` read can
     #: call Google per request; past this, a read answers from declared hours as
@@ -924,6 +943,9 @@ class Settings(BaseSettings):
         "vapid_public_key",
         "vapid_private_key",
         "vapid_subject",
+        "analytics_host",
+        "analytics_project_token",
+        "analytics_api_key",
         mode="before",
     )
     @classmethod
@@ -1128,9 +1150,29 @@ PRODUCTION_REQUIRED = (
 WRITING_ASSIST_REQUIRED = ("ai_router_url", "ai_router_private_key")
 
 
+#: What analytics needs once `ANALYTICS_ENABLED` is on, in every environment.
+ANALYTICS_REQUIRED = ("analytics_host", "analytics_project_token")
+
+
 def _is_set(value: object) -> bool:
     raw = value.get_secret_value() if isinstance(value, SecretStr) else value
     return raw is not None and bool(str(raw).strip())
+
+
+def _unset(settings: Settings, names: tuple[str, ...]) -> list[str]:
+    """Each of ``names`` that has no value, as the operator reads it."""
+    return [f"{env_key(name)} is not set" for name in names if not _is_set(getattr(settings, name))]
+
+
+def analytics_gaps(settings: Settings) -> list[str]:
+    """Why analytics, switched on, cannot send; empty when off or ready.
+
+    **Checked by the web app at startup in every environment**, not only
+    production: on but unconfigured would queue every event and send none,
+    with nothing saying so. Not a model validator, for the reason
+    `production_gaps` gives.
+    """
+    return _unset(settings, ANALYTICS_REQUIRED) if settings.analytics_enabled else []
 
 
 def production_gaps(settings: Settings) -> list[str]:
@@ -1140,11 +1182,7 @@ def production_gaps(settings: Settings) -> list[str]:
     every script build the same object and need only a DSN, so a model
     validator would stop ``alembic upgrade`` in production too.
     """
-    gaps = [
-        f"{env_key(name)} is not set"
-        for name in PRODUCTION_REQUIRED
-        if not _is_set(getattr(settings, name))
-    ]
+    gaps = _unset(settings, PRODUCTION_REQUIRED)
     if not (settings.supabase_jwks_url or settings.supabase_jwt_secret):
         gaps.append("neither SUPABASE_JWKS_URL nor SUPABASE_JWT_SECRET is set")
     if not settings.cors_origins:
@@ -1153,9 +1191,7 @@ def production_gaps(settings: Settings) -> list[str]:
         gaps.append(f"{env_key('debug')} is on")
     # Required only while the writing assistant is on: off, nothing calls it.
     if settings.writing_assist_enabled:
-        for name in WRITING_ASSIST_REQUIRED:
-            if not _is_set(getattr(settings, name)):
-                gaps.append(f"{env_key(name)} is not set")
+        gaps += _unset(settings, WRITING_ASSIST_REQUIRED)
     return gaps
 
 
