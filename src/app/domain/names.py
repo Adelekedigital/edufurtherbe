@@ -24,10 +24,10 @@ def addressed_by(first_name: str | None, last_name: str | None) -> str:
 
 
 def joined_name(first_name: str | None, last_name: str | None) -> str:
-    """Whatever the row holds, joined with one space, or empty. `last_name` is
-    nullable and empty for some migrated accounts, so an f-string would leave a
-    trailing space."""
-    return " ".join(part for part in (first_name, last_name) if part)
+    """Whatever the row holds, trimmed and joined with one space, or empty.
+    `last_name` is nullable, and empty or padded for some migrated accounts, so
+    an f-string would leave stray spaces."""
+    return " ".join(part.strip() for part in (first_name, last_name) if part and part.strip())
 
 
 def split_full_name(value: str) -> tuple[str, str]:
