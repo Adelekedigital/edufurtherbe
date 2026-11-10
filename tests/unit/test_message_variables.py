@@ -13,6 +13,7 @@ wrong produces a plausible email that sends somebody to the wrong hour.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 
 import pytest
 from tests.unit.test_template_registry import live_variables
@@ -522,3 +523,16 @@ def test_every_time_reads_on_a_twelve_hour_clock() -> None:
         "12:00 PM",
         "3:00 PM",
     ]
+
+
+def test_first_credits_carry_their_count_and_an_old_row_sends_without_it() -> None:
+    """Decision 323: the count reaches the template; a row queued before it has
+    none and sends empty (the box hides) instead of failing; any other credit
+    email still refuses without it."""
+    granted = context(starts_at=None, notification=Notification.CREDITS_GRANTED)
+    filled = build_variables(["creditCount"], replace(granted, extras={"credit_count": 2}))
+    assert filled["creditCount"] == "2"
+    assert build_variables(["creditCount"], granted)["creditCount"] == ""
+    renewed = context(starts_at=None, notification=Notification.CREDITS_RENEWED)
+    with pytest.raises(UnresolvedVariableError):
+        build_variables(["creditCount"], renewed)

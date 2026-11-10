@@ -24,7 +24,7 @@ from app.domain.enums import CreditSource
 from app.infra.db.credit_grants import grant_monthly_credits, top_up_levels
 from app.infra.db.credit_writer import grant
 from app.infra.db.engine import create_session_factory
-from conftest import add_user
+from conftest import add_qualified_invite, add_user
 
 #: Built from explicit settings, so this suite is about the code rather than
 #: about the environment the machine happens to hold.
@@ -75,13 +75,7 @@ async def a_user(
                 {"u": user_id},
             )
         if invited:
-            await conn.execute(
-                text(
-                    "INSERT INTO referrals (referrer_id, code, signed_up_at, qualified_at) "
-                    "VALUES (:u, :c, now(), now())"
-                ),
-                {"u": user_id, "c": uuid4().hex},
-            )
+            await add_qualified_invite(conn, user_id)
         return UUID(str(user_id))
 
 
@@ -338,13 +332,7 @@ async def test_a_rerun_after_a_rise_with_no_event_pays_the_rest_as_a_top_up(
     user = await a_user(db_engine, unlocked=False, onboarded=True)
     await run_grant(db_engine, now=SEPTEMBER)
     async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO referrals (referrer_id, code, signed_up_at, qualified_at) "
-                "VALUES (:u, :c, now(), now())"
-            ),
-            {"u": user, "c": uuid4().hex},
-        )
+        await add_qualified_invite(conn, user)
 
     assert await run_grant(db_engine, now=SEPTEMBER) == 1
 

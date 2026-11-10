@@ -311,6 +311,19 @@ def _hours_left(context: MessageContext) -> str:
 
 #: Name to value. **One entry per distinct name**, shared by every template that
 #: asks for it.
+def _credit_count(context: MessageContext) -> str:
+    """How many credits: required, except for the first credits.
+
+    A `credits_granted` row queued before decision 323 carries no count, and
+    the Credits template hides its count box when it is empty, so that email
+    goes out without the number rather than not at all.
+    """
+    count = context.extras.get("credit_count")
+    if count in (None, "") and context.notification is Notification.CREDITS_GRANTED:
+        return ""
+    return _needs(count, "creditCount")
+
+
 RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "recipientName": lambda c: _needs(c.recipient_name, "recipientName"),
     "mentorName": lambda c: _needs(c.mentor_name, "mentorName"),
@@ -333,7 +346,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "recipientFirstName": lambda c: (
         c.recipient_first_name or _needs(c.recipient_name, "recipientFirstName")
     ),
-    "creditCount": lambda c: _needs(c.extras.get("credit_count"), "creditCount"),
+    "creditCount": _credit_count,
     "calendarUrl": lambda c: _app_link(c, CALENDAR_PATH, "calendarUrl"),
     "applicationUrl": lambda c: _app_link(c, MENTOR_APPLICATION_PATH, "applicationUrl"),
     # A decline's note, which is optional: empty when the reviewer left none.

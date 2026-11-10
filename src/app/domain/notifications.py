@@ -153,7 +153,8 @@ class Notification(StrEnum):
     #: that goes out sounding like a first ask.
 
     #: **The first credits landed**: finishing onboarding topped the month up to
-    #: the mentee's credit level (decision 308).
+    #: the mentee's credit level (decision 308), with `credit_count`, what that
+    #: paid (decision 323).
     #:
     #: **Fired on profile completion, not on signup**, and that is the whole
     #: point rather than a scheduling detail: the credit is *granted* on
