@@ -114,6 +114,7 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "mentors alike.\n\n"
         "`session_type_limit` is how many session types a mentor may have (the "
         "default, or support's limit for them), null without a mentor profile.\n\n"
+        "`is_migrated` is true when the account came from the old app.\n\n"
         "`analytics_consent` is the caller's answer to analytics cookies, null "
         "until they give one (`PUT /me/consents/analytics`).\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "

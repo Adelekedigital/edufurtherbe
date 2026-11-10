@@ -34,7 +34,7 @@ from app.core.errors import (
 from app.domain.admin_permissions import EVERY_GRANT, PREVIEW, holds_any
 from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
-from app.domain.enums import AdminRole
+from app.domain.enums import AdminRole, SignupSource
 from app.domain.idempotency import request_fingerprint
 from app.domain.sessions import response_window_hours
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims, issuer_for
@@ -196,6 +196,7 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 CURRENT_USER = text("""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at, u.auth_method,
+           (u.signup_source = :migrated) AS is_migrated,
            p.about_me, p.about_me_drafted_at, p.gender, p.avatar_url, p.banner_url,
            p.avatar_focus_x, p.avatar_focus_y,
            p.social_linkedin,
@@ -222,7 +223,10 @@ async def _user_row(
     session: AsyncSession, *, auth_id: UUID | None = None, user_id: UUID | None = None
 ) -> dict[str, Any] | None:
     """`CURRENT_USER` by exactly one of a token's subject or our own user id."""
-    result = await session.execute(CURRENT_USER, {"auth_id": auth_id, "user_id": user_id})
+    result = await session.execute(
+        CURRENT_USER,
+        {"auth_id": auth_id, "user_id": user_id, "migrated": SignupSource.MIGRATED.value},
+    )
     row = result.mappings().first()
     return None if row is None else dict(row)
 
