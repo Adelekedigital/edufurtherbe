@@ -341,6 +341,13 @@ class UserRead(NormalisedEmail):
             "`409 /problems/session-type-limit-reached`. Null without a mentor profile."
         ),
     )
+    is_migrated: bool = Field(
+        default=False,
+        description=(
+            "Whether the account was carried over from the old app (its sign-up "
+            "source is `migrated`), for the frontend's analytics person properties."
+        ),
+    )
     analytics_consent: AnalyticsConsentRead | None = Field(
         default=None,
         description=(
