@@ -392,7 +392,13 @@ async def drain_analytics(
         if not rows:
             break
         try:
-            await asyncio.to_thread(sink.capture, [dict(row["payload"]) for row in rows])
+            # Each event's `uuid` is its row id, so a batch resent after a lost
+            # answer is a duplicate PostHog drops (decision 137): "Events that
+            # share the same uuid, event name, timestamp, and distinct_id are
+            # treated as duplicates" (https://posthog.com/docs/data/events,
+            # "Event deduplication"; /api/capture does not list the field).
+            events = [{**row["payload"], "uuid": str(row["id"])} for row in rows]
+            await asyncio.to_thread(sink.capture, events)
         except Exception as exc:
             for row in rows:
                 await _finish(session, row["id"], "failed", row["attempts"], str(exc)[:500])

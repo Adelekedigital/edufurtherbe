@@ -18,8 +18,14 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.core.config import Settings, analytics_gaps, env_key
 from app.core.errors import ConfigurationError, UpstreamError
-from app.domain.analytics_events import PERSONAL_KEYS, AnalyticsEvent, analytics_event
+from app.domain.analytics_events import (
+    PERSONAL_KEYS,
+    PERSONAL_WORDS,
+    AnalyticsEvent,
+    analytics_event,
+)
 from app.domain.notifications import Channel
+from app.infra.clients import posthog
 from app.infra.clients.posthog import (
     NullAnalyticsSink,
     PostHogSink,
@@ -82,7 +88,13 @@ def test_an_event_is_the_batch_shape_in_utc_with_the_user_id_as_identity() -> No
         "event": "session_cancelled",
         "distinct_id": str(USER),
         "timestamp": "2026-11-20T14:00:00+00:00",
-        "properties": {"session_id": str(SESSION), "by": "email", "count": 2, "late": False},
+        "properties": {
+            "session_id": str(SESSION),
+            "by": "email",
+            "count": 2,
+            "late": False,
+            "$geoip_disable": True,
+        },
     }
     assert json.loads(json.dumps(event)) == event
 
@@ -90,10 +102,20 @@ def test_an_event_is_the_batch_shape_in_utc_with_the_user_id_as_identity() -> No
 def test_an_event_without_properties_has_an_empty_set() -> None:
     event = analytics_event(AnalyticsEvent.MENTOR_LISTED, user_id=USER, at=AT)
 
-    assert event["properties"] == {}
+    assert event["properties"] == {"$geoip_disable": True}
 
 
-@pytest.mark.parametrize("key", [*sorted(PERSONAL_KEYS), "Email", "FIRST_NAME"])
+def test_every_event_skips_geoip_so_the_servers_address_is_not_read_as_the_users() -> None:
+    """The server's IP would place every event in the data centre."""
+    event = analytics_event(
+        AnalyticsEvent.SESSION_COMPLETED, user_id=USER, at=AT, properties={"minutes": 45}
+    )
+
+    assert event["properties"]["$geoip_disable"] is True
+    assert event["properties"]["minutes"] == 45
+
+
+@pytest.mark.parametrize("key", [*sorted(PERSONAL_KEYS), *PERSONAL_WORDS, "Email", "FIRST_NAME"])
 def test_a_key_naming_personal_data_is_refused(key: str) -> None:
     with pytest.raises(ValueError, match="personal data"):
         analytics_event(AnalyticsEvent.REVIEW_SUBMITTED, user_id=USER, at=AT, properties={key: 1})
@@ -107,6 +129,60 @@ def test_a_value_that_is_not_an_id_enum_count_or_code_is_refused(value: object) 
         analytics_event(
             AnalyticsEvent.REVIEW_SUBMITTED, user_id=USER, at=AT, properties={"rating": value}
         )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "mentor_name",
+        "display_name",
+        "Contact_Email",
+        "phone_e164",
+        "home_address",
+        "bio_html",
+        "free_text",
+        "last_message",
+        "username",
+    ],
+)
+def test_a_key_containing_a_personal_word_is_refused(key: str) -> None:
+    with pytest.raises(ValueError, match="personal data"):
+        analytics_event(AnalyticsEvent.SESSION_CONFIRMED, user_id=USER, at=AT, properties={key: 1})
+
+
+@pytest.mark.parametrize(
+    "value", ["Ada Lovelace", "two words", "", "x" * 65, "a/b", "café", "line\nbreak"]
+)
+def test_a_string_that_is_not_an_id_enum_or_code_is_refused(value: str) -> None:
+    with pytest.raises(ValueError, match="analytics property 'source'"):
+        analytics_event(
+            AnalyticsEvent.BOOKING_REQUESTED, user_id=USER, at=AT, properties={"source": value}
+        )
+
+
+def test_every_server_event_still_takes_ids_enums_counts_and_codes() -> None:
+    """The positive case beside the guards: what the outcome events carry
+    (ids, enum values, counts, flags, short codes) all leave."""
+    properties: dict[str, object] = {
+        "session_id": SESSION,
+        "mentor_id": str(SESSION),
+        "channel": Channel.WHATSAPP,
+        "entry_point": "explore_card",
+        "stage": "post-offer",
+        "month": "2026-11",
+        "version": "v1.2:beta",
+        "credits": 3,
+        "rating": 5,
+        "late": True,
+        "reason": None,
+        "code": "x" * 64,
+    }
+
+    for event in AnalyticsEvent:
+        sent = analytics_event(event, user_id=USER, at=AT, properties=properties)
+        assert sent["properties"]["session_id"] == str(SESSION)
+        assert sent["properties"]["channel"] == "whatsapp"
+        assert sent["properties"]["code"] == "x" * 64
 
 
 def test_a_time_without_a_zone_is_refused() -> None:
@@ -206,6 +282,14 @@ def test_off_or_unconfigured_is_the_null_sink(values: dict[str, Any]) -> None:
 
     assert isinstance(analytics_sink_for(found), NullAnalyticsSink)
     assert live_analytics_sink(found) is None
+
+
+def test_readiness_is_the_one_analytics_gaps_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The factory and the startup check cannot disagree: a gap the startup
+    rule names is the null sink, whatever the settings look like."""
+    monkeypatch.setattr(posthog, "analytics_gaps", lambda _settings: ["ANALYTICS_X is not set"])
+
+    assert isinstance(analytics_sink_for(settings(**ON)), NullAnalyticsSink)
 
 
 def test_on_and_configured_is_posthog() -> None:

@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from app.core.config import Settings
+from app.core.config import Settings, analytics_gaps
 from app.core.errors import UpstreamError
 from app.domain.ports import AnalyticsSink
 from app.infra.http.client import shared
@@ -73,13 +73,13 @@ class PostHogSink:
 
 
 def analytics_sink_for(settings: Settings) -> AnalyticsSink:
-    """PostHog when analytics is on and configured, else the null sink. The
-    one place either is chosen."""
-    if not (
-        settings.analytics_enabled and settings.analytics_host and settings.analytics_project_token
-    ):
+    """PostHog when analytics is on and `analytics_gaps` names nothing, else
+    the null sink: the startup check's rule, so the two cannot disagree."""
+    host, token = settings.analytics_host, settings.analytics_project_token
+    # `analytics_gaps` decides; the last test only narrows the types for mypy.
+    if not settings.analytics_enabled or analytics_gaps(settings) or not (host and token):
         return NullAnalyticsSink()
-    return PostHogSink(host=settings.analytics_host, project_token=settings.analytics_project_token)
+    return PostHogSink(host=host, project_token=token)
 
 
 def live_analytics_sink(settings: Settings) -> AnalyticsSink | None:

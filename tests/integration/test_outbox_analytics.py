@@ -220,6 +220,20 @@ async def test_pending_events_go_in_batches_of_a_hundred_oldest_first(
     assert {(row["status"], row["attempts"], row["sent_at"]) for row in found} == {("sent", 1, AT)}
 
 
+async def test_each_event_is_sent_with_its_row_id_as_its_uuid(db_engine: AsyncEngine) -> None:
+    """A batch resent after a lost answer carries the same `uuid`s, so the
+    vendor drops the copies (decision 137); the stored payload is unchanged."""
+    ids = await queue(db_engine, 3)
+    sink = FakeSink()
+
+    await run(db_engine, sink)
+
+    (batch,) = sink.batches
+    assert [event["uuid"] for event in batch] == [str(row_id) for row_id in ids]
+    assert [event["properties"]["amount"] for event in batch] == [0, 1, 2]
+    assert all("uuid" not in row["payload"] for row in await rows(db_engine))
+
+
 async def test_a_sent_event_is_not_sent_again(db_engine: AsyncEngine) -> None:
     await queue(db_engine, 2)
     await run(db_engine, FakeSink())

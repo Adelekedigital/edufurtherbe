@@ -311,6 +311,10 @@ class RuntimeJobs:
                     if web_push is None
                     else await drain_push(session, web_push=web_push, now=now)
                 )
+                # Email and push marks are committed before analytics, so a
+                # failure there cannot roll them back and resend them.
+                if not dry_run:
+                    await session.commit()
                 # Analytics events (PRD 30); a dry run sends none, and with
                 # analytics off they wait.
                 sink = None if dry_run else live_analytics_sink(self.settings)
