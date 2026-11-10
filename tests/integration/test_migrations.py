@@ -210,6 +210,9 @@ EXPECTED_TABLES = [
     "preview_events",
     # A browser's Web Push subscription, one row per device (#386).
     "push_subscriptions",
+    # Admins' wording for shared emails, and its history (decision 318).
+    "email_line_overrides",
+    "email_line_edits",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

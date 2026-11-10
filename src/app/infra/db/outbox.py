@@ -39,6 +39,7 @@ from app.domain.push import SESSION_PUSHES, session_push, session_push_spec
 from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out
 from app.infra.db.chat_store import unread_total
 from app.infra.db.credit_store import expiring_on
+from app.infra.db.email_lines import LineOverrides, load_line_overrides
 from app.infra.db.holds import suggestion_reminder_state
 from app.infra.db.mentor_listing import return_reminder_state
 from app.infra.db.message_email_content import message_email_values
@@ -219,6 +220,8 @@ async def drain(
     """
     pending = await _pending(session, push=False, entity_id=entity_id, kind=kind, ids=ids)
     settings = settings or get_settings()
+    # Admins' wording, once per sweep (decision 318), not once per message.
+    overrides = await load_line_overrides(session) if pending else {}
 
     counts = {"sent": 0, "failed": 0, "skipped": 0}
     for row in pending:
@@ -239,7 +242,7 @@ async def drain(
             counts["skipped"] += 1
             continue
         try:
-            context = await _context_for(session, row, recipient, settings)
+            context = await _context_for(session, row, recipient, settings, overrides)
         except Superseded:
             await _finish(session, row["id"], "skipped", row["attempts"], "superseded")
             counts["skipped"] += 1
@@ -510,7 +513,11 @@ CARRIED_IDS = frozenset({"recipient_id", "message_ids"})
 
 
 async def _context_for(
-    session: AsyncSession, row: Any, recipient: UUID, settings: Settings
+    session: AsyncSession,
+    row: Any,
+    recipient: UUID,
+    settings: Settings,
+    overrides: LineOverrides,
 ) -> MessageContext:
     """Everything the resolvers may read, loaded by what the message is about.
 
@@ -539,6 +546,8 @@ async def _context_for(
         "recipient_first_name": people.get(recipient, nobody)[2],
         "app_base_url": settings.app_base_url or "",
         "extras": extras,
+        "notification": notification,
+        "line_overrides": overrides.get(str(notification), {}),
     }
 
     if str(row["entity_type"]) == "mentor_profile":
@@ -548,6 +557,9 @@ async def _context_for(
         named = _party_name(
             await _names_for(session, (row["entity_id"],)), row["entity_id"], "mentor"
         )
+        # The mentor is the recipient of their own reminder, not of the notice
+        # the admins get.
+        base["recipient_role"] = "mentor" if recipient == row["entity_id"] else ""
         return MessageContext(mentor_name=named, mentee_name="", **base)  # type: ignore[arg-type]
     if str(row["entity_type"]) != "session":
         if row["event_type"] == Notification.CREDITS_EXPIRING and extras.get("expires_at"):
@@ -609,6 +621,15 @@ async def _context_for(
         session_id=str(found["id"]),
         app_base_url=settings.app_base_url or "",
         extras=extras,
+        notification=notification,
+        line_overrides=overrides.get(str(notification), {}),
+        recipient_role=(
+            "mentor"
+            if recipient == found["mentor_id"]
+            else "mentee"
+            if recipient == found["mentee_id"]
+            else ""
+        ),
     )
 
 

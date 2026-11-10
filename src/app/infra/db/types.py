@@ -48,6 +48,8 @@ from app.domain.enums import (
     CreditReason,
     CreditSource,
     CreditState,
+    EmailEditAction,
+    EmailLine,
     FeaturedSource,
     IntakeFileType,
     IntakeStatus,
@@ -249,6 +251,11 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     ),
     PreviewEventKind: frozenset({"ck_preview_events_kind_is_known"}),
     PreviewRevealField: frozenset({"ck_preview_events_field_type_is_known"}),
+    # Admins' email wording (decision 318): which line, and what a history row did.
+    EmailLine: frozenset(
+        {"ck_email_line_overrides_line_is_known", "ck_email_line_edits_line_is_known"}
+    ),
+    EmailEditAction: frozenset({"ck_email_line_edits_action_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.

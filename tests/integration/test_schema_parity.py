@@ -535,6 +535,10 @@ RETAINED_ON_USER_DELETE = frozenset(
         # saw as someone else (decision 309); purging either party keeps them.
         "preview_sessions",
         "preview_events",
+        # Admins' email wording and its history name who saved them
+        # (decision 318); the purge anonymises the admin and keeps both.
+        "email_line_overrides",
+        "email_line_edits",
     }
 )
 

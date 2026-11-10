@@ -36,7 +36,7 @@ import httpx
 
 from app.core.config import Settings
 from app.core.errors import AppError, ConfigurationError
-from app.domain.messages import MessageContext, build_variables
+from app.domain.messages import LineNote, MessageContext, build_variables
 from app.domain.notifications import Channel, Notification
 from app.infra.clients.templates import LoopsTemplates, StaticTemplates, TemplateVariables
 from app.infra.http.client import shared
@@ -86,6 +86,25 @@ def template_for(settings: Settings, notification: Notification, channel: Channe
     # A value without one is taken as-is, so a single-provider deployment need
     # not carry a prefix it has no use for.
     return template.split(":", 1)[-1]
+
+
+def _log_line_notes(notes: list[LineNote]) -> None:
+    """What filling an email's lines worked around (PRD 28, *Sending*): a
+    fallback is a warning (a value missing in real data), an override that
+    could not fill is an error (the save check should have stopped it)."""
+    for note in notes:
+        level = logging.WARNING if note.kind == "fallback" else logging.ERROR
+        logger.log(
+            level,
+            "email_line_%s",
+            note.kind,
+            extra={
+                "email": note.email,
+                "variant": note.variant,
+                "line": note.line,
+                "value": note.value,
+            },
+        )
 
 
 class NullNotifier:
@@ -186,7 +205,13 @@ class LoopsNotifier:
         # resolve is otherwise invisible — a delivered email reading "Hi , your
         # session on ". `build_variables` refuses instead, and the drain records
         # a failed row naming the variable.
-        variables = build_variables(self._templates.declared(template), context)
+        notes: list[LineNote] = []
+        try:
+            variables = build_variables(self._templates.declared(template), context, notes)
+        finally:
+            # Logged even when a later value refuses, so a broken override is
+            # reported rather than lost with the failed send.
+            _log_line_notes(notes)
 
         try:
             response = self._client.post(

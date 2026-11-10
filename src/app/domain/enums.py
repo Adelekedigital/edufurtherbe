@@ -971,3 +971,21 @@ class PreviewRevealField(StrEnum):
     """What an admin may reveal in a preview: today the messages alone."""
 
     MESSAGES = "messages"
+
+
+class EmailLine(StrEnum):
+    """A line of a shared email an admin may reword (PRD 28, decision 318):
+    every `domain.email_lines.EmailLines` field but the link."""
+
+    SUBJECT = "subject"
+    HEADING = "heading"
+    BUTTON = "button"
+
+
+class EmailEditAction(StrEnum):
+    """What one row of the email edit history records (PRD 28): a new wording,
+    a return to the default, or "Keep my edit" after the default changed."""
+
+    EDIT = "edit"
+    RESET = "reset"
+    KEEP_EDIT = "keep_edit"

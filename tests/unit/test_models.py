@@ -148,6 +148,9 @@ EXPECTED_MODELS = {
     "PreviewEvent",
     # A browser's Web Push subscription, one row per device (#386).
     "PushSubscription",
+    # Admins' email wording and its history (decision 318).
+    "EmailLineOverride",
+    "EmailLineEdit",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
@@ -182,6 +185,8 @@ APPEND_ONLY = frozenset(
         "MentorAdminNote",
         # A preview log row is what an admin did in a preview, then.
         "PreviewEvent",
+        # An email edit history row is one line an admin changed, then.
+        "EmailLineEdit",
     }
 )
 
