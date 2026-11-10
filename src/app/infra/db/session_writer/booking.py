@@ -45,6 +45,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.analytics_events import AnalyticsEvent
 from app.domain.availability import BookingWindow
 from app.domain.booking_limits import OVERLAP_MESSAGE
 from app.domain.enums import (
@@ -85,7 +86,7 @@ from app.infra.db.models.sessions import (
 )
 from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User
-from app.infra.db.outbox import enqueue
+from app.infra.db.outbox import enqueue, enqueue_analytics
 from app.infra.db.predicates import LIVE
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
 from app.infra.db.slot_store import offered_slot
@@ -566,6 +567,25 @@ async def book_session(
         entity_id=session_id,
         recipient_ids=recipients(booked, mentor_id=mentor_id, mentee_id=mentee_id),
     )
+    # **The analytics events, in this transaction** (PRD 30). A move is the
+    # same session at a new time, so it is neither a new request nor a new
+    # confirmation (decision 300).
+    if moved_from is None:
+        await enqueue_analytics(
+            session,
+            AnalyticsEvent.BOOKING_REQUESTED,
+            mentee_id,
+            {"session_id": session_id, "session_type_id": payload["session_type_id"]},
+            at=now,
+        )
+        if status is SessionStatus.CONFIRMED:
+            await enqueue_analytics(
+                session,
+                AnalyticsEvent.SESSION_CONFIRMED,
+                mentee_id,
+                {"session_id": session_id},
+                at=now,
+            )
 
     # **The request's deadline nudges, scheduled here and fired by a callback
     # later.** These are not the session reminders: a session confirmed outright

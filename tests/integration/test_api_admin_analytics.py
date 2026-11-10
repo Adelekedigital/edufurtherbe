@@ -257,9 +257,9 @@ async def test_more_than_twenty_failures_yesterday_raise_the_delivery_alert(
         await conn.execute(
             text(
                 "INSERT INTO outbox_events (event_type, entity_type, entity_id, status, "
-                "updated_at) SELECT 'x', 'session', gen_random_uuid(), 'failed', "
+                "updated_at, destination) SELECT 'x', 'session', gen_random_uuid(), 'failed', "
                 "date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' "
-                "- interval '12 hours' FROM generate_series(1, :n)"
+                "- interval '12 hours', 'email' FROM generate_series(1, :n)"
             ),
             {"n": failed},
         )
@@ -267,8 +267,9 @@ async def test_more_than_twenty_failures_yesterday_raise_the_delivery_alert(
         await conn.execute(
             text(
                 "INSERT INTO outbox_events (event_type, entity_type, entity_id, status, "
-                "updated_at) VALUES ('x', 'session', gen_random_uuid(), 'failed', now()), "
-                "('x', 'session', gen_random_uuid(), 'pending', now() - interval '1 day')"
+                "updated_at, destination) VALUES "
+                "('x', 'session', gen_random_uuid(), 'failed', now(), 'email'), "
+                "('x', 'session', gen_random_uuid(), 'pending', now() - interval '1 day', 'email')"
             )
         )
     async with client_for(app_for(db_engine, api_storage)) as client:

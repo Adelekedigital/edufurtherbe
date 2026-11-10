@@ -18,6 +18,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.analytics_events import AnalyticsEvent
 from app.domain.enums import (
     ActorType,
     SessionReasonCode,
@@ -46,8 +47,9 @@ from app.infra.db.models.sessions import (
     SessionEvent,
 )
 from app.infra.db.models.user import User
-from app.infra.db.outbox import enqueue
+from app.infra.db.outbox import enqueue, enqueue_analytics
 from app.infra.db.pending_requests import awaiting_mentor, lapsed_request, upcoming_session
+from app.infra.db.session_stats import canceller
 from app.infra.db.session_writer.follow_ups import on_ended
 
 #: What a mentor reads beside this block in their own availability.
@@ -243,13 +245,15 @@ async def _end(
     now: dt.datetime,
     refunds: RefundPolicy,
     notify: bool,
-    refund: bool = True,
+    moved: bool = False,
 ) -> None:
     """**What every transition does once it is allowed**: the status, the
     mentor's kept hour, the event, the refund and the message. Shared by the
     four endpoints, which check first in :func:`transition`, and by account
     deletion, which ends each open session for a reason no party may give.
-    ``row`` is the session as :func:`transition` reads it. Does not commit."""
+    ``row`` is the session as :func:`transition` reads it. ``moved`` is a move's
+    ending (decision 300): no refund, and no analytics event, since the session
+    carries on at its new time. Does not commit."""
     rule = TRANSITIONS[action]
     await session.execute(update(Session).where(Session.id == session_id).values(status=rule.to))
 
@@ -268,8 +272,9 @@ async def _end(
             timezone=row["timezone"],
             reason=BLOCKED_BY_CANCELLATION,
         )
-    await session.execute(
-        insert(SessionEvent).values(
+    event_id = await session.scalar(
+        insert(SessionEvent)
+        .values(
             session_id=session_id,
             from_status=row["status"],
             to_status=rule.to,
@@ -278,7 +283,10 @@ async def _end(
             reason_code=reason_code,
             reason_text=reason_text,
         )
+        .returning(SessionEvent.id)
     )
+    if not moved:
+        await _report(session, session_id, row, rule.to, event_id, reason_code, now=now)
 
     # **Whether the mentee's credit comes back is `domain.refunds`'s call**
     # (decision 229): a request that never became a session always refunds; a
@@ -291,7 +299,7 @@ async def _end(
         rule.to, actor=role, starts_at=row["starts_at"], now=now, policy=refunds
     )
     # A move carries the credit to the new session instead (decision 300).
-    if refund and owed is not None:
+    if not moved and owed is not None:
         await refund_credit(session, row["mentee_id"], session_id, reason=owed, now=now)
 
     # **The party who did not act.** `cancel` is the only action either of them
@@ -404,9 +412,45 @@ async def end_for_move(
         now=now,
         refunds=refunds,
         notify=False,
-        refund=False,
+        moved=True,
     )
     return row
+
+
+async def _report(
+    session: AsyncSession,
+    session_id: UUID,
+    row: RowMapping,
+    to: SessionStatus,
+    event_id: Any,
+    reason_code: SessionReasonCode | str | None,
+    *,
+    now: dt.datetime,
+) -> None:
+    """The analytics event for a session confirmed or cancelled, about its
+    mentee (PRD 30). Who cancelled is `session_stats.canceller` read off the
+    event just written, the one rule the dashboard and the session read use."""
+    if to is SessionStatus.CONFIRMED:
+        await enqueue_analytics(
+            session,
+            AnalyticsEvent.SESSION_CONFIRMED,
+            row["mentee_id"],
+            {"session_id": session_id},
+            at=now,
+        )
+    elif to is SessionStatus.CANCELLED:
+        by = await session.scalar(
+            select(canceller(SessionEvent.actor_id, SessionEvent.actor_type))
+            .join(Session, Session.id == SessionEvent.session_id)
+            .where(SessionEvent.id == event_id)
+        )
+        await enqueue_analytics(
+            session,
+            AnalyticsEvent.SESSION_CANCELLED,
+            row["mentee_id"],
+            {"session_id": session_id, "by": by, "reason_code": reason_code},
+            at=now,
+        )
 
 
 def _past(action: str) -> str:

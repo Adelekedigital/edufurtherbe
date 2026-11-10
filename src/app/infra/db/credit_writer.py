@@ -27,10 +27,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InsufficientCreditError
+from app.domain.analytics_events import AnalyticsEvent
 from app.domain.credits import expiry_for, refund_expiry
 from app.domain.enums import CreditReason, CreditSource
 from app.infra.db.credit_store import paying_sessions, spendable_now
 from app.infra.db.models.credits import _REFUND_PREDICATE, CreditLot, CreditTransaction
+from app.infra.db.outbox import enqueue_analytics, enqueue_analytics_each
 
 __all__ = ["grant", "grant_many", "refund_credit", "spend_credit"]
 
@@ -91,6 +93,12 @@ async def grant_many(
             }
             for user_id, lot_id in lots.items()
         ],
+    )
+    await enqueue_analytics_each(
+        session,
+        AnalyticsEvent.CREDIT_GRANTED,
+        [(user_id, {"amount": quantities[user_id], "source": source}) for user_id in lots],
+        at=now,
     )
     return lots
 
@@ -217,6 +225,13 @@ async def spend_credit(
             reason=CreditReason.SESSION_BOOKED,
             session_id=session_id,
         )
+    )
+    await enqueue_analytics(
+        session,
+        AnalyticsEvent.CREDIT_SPENT,
+        user_id,
+        {"amount": 1, "session_id": session_id},
+        at=now,
     )
 
     return UUID(str(lot_id))

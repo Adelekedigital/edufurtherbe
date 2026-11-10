@@ -39,13 +39,15 @@ from app.core.errors import (
     NotFoundError,
     ReviewIntervalError,
 )
+from app.domain.analytics_events import AnalyticsEvent
 from app.domain.enums import SessionStatus
 from app.domain.notifications import Notification
 from app.domain.reviews import edit_window_open
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session
-from app.infra.db.outbox import enqueue
+from app.infra.db.outbox import enqueue, enqueue_analytics
 from app.infra.db.review_eligibility import already_reviewed, within_interval
+from app.infra.db.review_stats import review_value
 
 __all__ = ["ONE_PER_SESSION", "edit_review", "write_review"]
 
@@ -109,7 +111,7 @@ async def write_review(
         written = await session.execute(
             insert(Review)
             .values(reviewed_by=author, reviewed_for=target.mentor_id, **values)
-            .returning(Review.id)
+            .returning(Review.id, review_value())
         )
     except IntegrityError as exc:
         if ONE_PER_SESSION not in str(exc.orig):
@@ -119,7 +121,11 @@ async def write_review(
         # with `InFailedSQLTransaction` and bury this cause under that one.
         await session.rollback()
         raise AlreadyReviewedError("you have already reviewed this session") from exc
-    review_id = UUID(str(written.scalar_one()))
+    review_id, rating = written.one()
+    # About the reviewer, with the review's value (`review_stats`), 1-5 (PRD 30).
+    await enqueue_analytics(
+        session, AnalyticsEvent.REVIEW_SUBMITTED, author, {"rating": rating}, at=now
+    )
 
     # **In the writing transaction**, so a message about a review that rolled
     # back cannot exist — the same rule `settle_attendance` follows for the
@@ -133,7 +139,7 @@ async def write_review(
         entity_id=session_id,
         recipient_ids=(target.mentor_id,),
     )
-    return review_id
+    return UUID(str(review_id))
 
 
 async def edit_review(
