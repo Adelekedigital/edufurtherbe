@@ -71,6 +71,7 @@ OWNED_BY: dict[str, frozenset[Notification]] = {
     # The message near a booking describes it; the unread emails have no session.
     "sessionDate": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
     "sessionTime": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
+    "sessionTimezone": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
     "sessionDuration": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
     "unreadCount": frozenset({N.MESSAGE_UNREAD_FEW, N.MESSAGE_UNREAD_MANY}),
     "senderFirstNames": frozenset({N.MESSAGE_UNREAD_MANY}),

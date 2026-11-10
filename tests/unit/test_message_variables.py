@@ -89,7 +89,27 @@ def test_the_time_is_rendered_in_the_recipients_zone() -> None:
 
     assert lagos["sessionTime"] == "09:00"
     assert toronto["sessionTime"] == "04:00"
-    assert (lagos["sessionTimezone"], toronto["sessionTimezone"]) == (LAGOS, TORONTO)
+    # The zone reads as its code at the session's moment: summer time in September.
+    assert (lagos["sessionTimezone"], toronto["sessionTimezone"]) == ("WAT", "EDT")
+
+
+def test_a_suggested_time_names_its_own_zone_across_a_clock_change() -> None:
+    """Toronto leaves summer time on 1 November 2026: a session in October and a
+    time suggested for mid-November read in different zones, so each says its own."""
+    across = context(
+        recipient_timezone=TORONTO,
+        starts_at=dt.datetime(2026, 10, 20, 15, tzinfo=dt.UTC),
+        extras={"suggested_starts_at": "2026-11-17T15:00:00+00:00"},
+    )
+    names = ["sessionTimezone", "suggestedTimezone", "suggestedTime"]
+    filled = build_variables(names, across)
+    assert (filled["sessionTimezone"], filled["suggestedTimezone"]) == ("EDT", "EST")
+    assert filled["suggestedTime"] == "10:00"
+
+
+def test_a_zone_with_no_common_code_reads_as_its_offset() -> None:
+    filled = build_variables(["sessionTimezone"], context(recipient_timezone="Asia/Dubai"))
+    assert filled["sessionTimezone"] == "+04"
 
 
 def test_a_date_can_differ_between_the_two_parties() -> None:
@@ -103,8 +123,8 @@ def test_a_date_can_differ_between_the_two_parties() -> None:
         ["sessionDate"], context(starts_at=at_midnight.starts_at, recipient_timezone=TORONTO)
     )
 
-    assert "02 September" in lagos["sessionDate"]
-    assert "01 September" in toronto["sessionDate"]
+    assert "02 Sep" in lagos["sessionDate"]
+    assert "01 Sep" in toronto["sessionDate"]
 
 
 def test_the_other_party_is_whoever_the_recipient_is_not() -> None:

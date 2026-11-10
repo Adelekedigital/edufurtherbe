@@ -73,7 +73,7 @@ VALUES: tuple[Value, ...] = (
     Value(
         "sessionDate",
         "The booking's date, in the reader's zone",
-        "Fri 20 November 2026",
+        "Fri 20 Nov 2026",
         "the day",
         _SESSION,
     ),
@@ -84,7 +84,9 @@ VALUES: tuple[Value, ...] = (
         "the time",
         _SESSION,
     ),
-    Value("sessionTimezone", "The reader's time zone", "Africa/Lagos", "your time zone", _SESSION),
+    Value(
+        "sessionTimezone", "The reader's time zone, as a code", "WAT", "your time zone", _SESSION
+    ),
     Value("sessionDuration", "Session length", "45 min", "the session", _SESSION),
     Value("location", "Where the booking happens", "Google Meet", VENUE_FALLBACK, _SESSION),
     Value("hours", "Whole hours left to answer the request", "18", "a few", ("request",)),
@@ -96,8 +98,9 @@ VALUES: tuple[Value, ...] = (
         NO_REASON_TITLE,
         ("reason_code", "reason_text"),
     ),
-    Value("suggestedDate", "The suggested time's date", "Sat 21 November 2026", "the day"),
+    Value("suggestedDate", "The suggested time's date", "Sat 21 Nov 2026", "the day"),
     Value("suggestedTime", "The suggested start time", "16:00", "the time"),
+    Value("suggestedTimezone", "The suggested time's zone, as a code", "WAT", "your time zone"),
     Value("holdUntilTime", "When the suggested time is released", "17:30", "soon"),
     Value("creditCount", "How many credits", "2", "your"),
     Value("repliesName", 'Who to reply to: a first name, or "them"', "Ada", "them"),

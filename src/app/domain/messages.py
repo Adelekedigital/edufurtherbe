@@ -175,9 +175,9 @@ class MessageContext:
 #: `APP_BASE_URL`, which is the *application's* origin and deliberately not
 #: `PUBLIC_BASE_URL` — that one is this service's own, and a link built from it
 #: would send a mentor to the API.
-#: How every date in an email reads: "Fri 20 November 2026" (owner,
-#: 2026-11-10: a three-letter day keeps the details card's one-line WHEN short).
-DATE_FORMAT = "%a %d %B %Y"
+#: How every date in an email reads: "Fri 20 Nov 2026" (owner, 2026-11-10:
+#: the details card's WHEN fits one line on a phone, with the zone's code).
+DATE_FORMAT = "%a %d %b %Y"
 
 SESSION_PATH = "/sessions/{session_id}"
 DASHBOARD_PATH = "/dashboard"
@@ -197,6 +197,12 @@ MESSAGE_SETTINGS_PATH = "/messages?settings=1"
 
 def _local(moment: dt.datetime, timezone: str) -> dt.datetime:
     return moment.astimezone(ZoneInfo(timezone))
+
+
+def _zone_code(moment: dt.datetime) -> str:
+    """The zone's code at that moment, "WAT" or "EDT", so summer time is right;
+    a zone with no common code reads as its offset, "+03" (owner, 2026-11-10)."""
+    return moment.strftime("%Z")
 
 
 def _needs(value: object, name: str) -> str:
@@ -309,7 +315,9 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "sessionTime": lambda c: _local(_as_moment(c, "sessionTime"), c.recipient_timezone).strftime(
         "%H:%M"
     ),
-    "sessionTimezone": lambda c: _needs(c.recipient_timezone, "sessionTimezone"),
+    "sessionTimezone": lambda c: _zone_code(
+        _local(_as_moment(c, "sessionTimezone"), c.recipient_timezone)
+    ),
     "sessionTopic": _topic,
     "sessionDetail": lambda c: c.detail or "",
     "location": lambda c: c.venue or VENUE_FALLBACK,
@@ -344,6 +352,10 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     ),
     "suggestedTime": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedTime").strftime(
         "%H:%M"
+    ),
+    # Its own code: a suggested time can fall on the other side of a clock change.
+    "suggestedTimezone": lambda c: _zone_code(
+        _extra_moment(c, "suggested_starts_at", "suggestedTimezone")
     ),
     "holdUntilTime": lambda c: _extra_moment(c, "held_until", "holdUntilTime").strftime("%H:%M"),
     "suggestedAfter": lambda c: _needs(c.extras.get("suggested_after"), "suggestedAfter"),

@@ -104,7 +104,7 @@ of that cost.
 | `menteeName` | always the mentee |
 | `sessionDate` | the date, in the **recipient's** timezone |
 | `sessionTime` | the time, in the **recipient's** timezone |
-| `sessionTimezone` | the zone those two are rendered in |
+| `sessionTimezone` | the zone those two are rendered in, as its code at the session's moment: `WAT`, `EDT`; an offset such as `+04` where the zone has no common code |
 | `sessionTopic` | what the session is about |
 | `sessionDetail` | what the mentee wants to discuss |
 | `location` | the venue **label** — "Google Meet", "Daily". Never a URL |
@@ -133,6 +133,7 @@ know which one they are reading.
 | `feedbackUrl` | feedback | where to leave it |
 | `suggestedDate` | time suggested, its reminder | the offered time's date, in the mentee's zone |
 | `suggestedTime` | time suggested, its reminder | the offered time, `HH:MM` in the mentee's zone |
+| `suggestedTimezone` | time suggested, its reminder | the offered time's zone code, which can differ from `sessionTimezone` across a clock change |
 | `holdUntilTime` | time suggested, its reminder | when the hold lapses, `HH:MM` in the mentee's zone |
 | `suggestedAfter` | time suggested | `declined` or `cancelled` — what happened to the original |
 
@@ -441,7 +442,7 @@ template may use:
 
 - `recipientName`
 - `daysUntilReturn`: `7`, `3` or `0` (`0` is "today"), or empty with no date
-- `returnOn`: the return date in words (e.g. `Sat 03 October 2026`), or empty
+- `returnOn`: the return date in words (e.g. `Sat 03 Oct 2026`), or empty
 - `daysPaused`: `30` or `59` with no date, else empty
 - `calendarUrl`: where they switch back on
 
