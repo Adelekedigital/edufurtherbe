@@ -196,20 +196,17 @@ EMAILS: tuple[EmailEntry, ...] = (
         N.SESSION_CANCELLED,
         "Session canceled",
         "Either person cancels a booking",
-        own_template="Session Canceled",
     ),
     _e(N.REQUEST_EXPIRED, "Request expired", "A request gets no answer in time"),
     _e(
         N.REVIEW_REQUESTED,
         "Review requested",
         "A booking is completed",
-        own_template="sessionReviewRequest",
     ),
     _e(
         N.REVIEW_RECEIVED,
         "Review received",
         "A mentee reviews a booking",
-        own_template="reviewUpdateToMentors",
     ),
     _e(
         N.MENTOR_APPLICATION_RECEIVED,

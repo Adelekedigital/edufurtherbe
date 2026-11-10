@@ -281,8 +281,9 @@ in these three lines alone an empty value says its fallback (logged
 **The one reference for which Loops template each email uses.** Every
 `Notification` member has exactly one row, and `tests/unit/test_template_registry.py`
 fails when a member is missing, so code and this table cannot drift. Ids are the
-Railway `development` mapping as of 2026-11-09, when every email got a template
-(8 shared `App:` templates and 3 single ones); ids are not secret. Variables are
+Railway mapping, the same in `development` and `production`, as of 2026-11-10,
+when every email got an `App:` template (8 shared and 7 single); ids are not
+secret. Variables are
 what the live template declared when read from Loops on 2026-11-10, after the
 `App:` templates moved to the "EduFurther 2026" theme (the old "main start"
 theme and every pre-`App:` template are unchanged); the backend reads them
@@ -295,14 +296,14 @@ again from Loops at send time, so this column is a record, not a contract.
 | `request_accepted` | App: Session confirmed | `cmw9tssbg01t20j028kz2wkl4` | mentee | as `session_booked` |
 | `request_declined` | App: Request ended | `cmw9tu8od01w00j0unlhvxzt1` | mentee | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `menteeName`, `mentorName`, `reasonMessage`, `reasonTitle`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
 | `request_withdrawn` | App: Request ended | `cmw9tu8od01w00j0unlhvxzt1` | mentor | as `request_declined` |
-| `session_cancelled` | Session Canceled | `clyvhvwru002hm392q9y8qeje` | the other party | `cancelinitiator`, `cancelmessage`, `dashlink`, `name`, `sessiondate` |
+| `session_cancelled` | App: Session canceled | `cmwasg6h600ok0jwr274zn3pr` | the other party | `cancelInitiator`, `dashboardUrl`, `reasonMessage`, `reasonTitle`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
 | `request_expired` | App: Request expired | `cmw9un3sx030c0jyo2stnkl1w` | both | `attendee`, `dashboardUrl`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
 | `mentor_approved` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the mentor | `buttonLabel`, `buttonUrl`, `declineReason`, `emailHeading`, `emailSubject`, `recipientFirstName` |
 | `calendar_disconnected` | App: Calendar disconnected | `cmw9un43803310jyhz2fbuswx` | the mentor whose calendar it is | `calendarUrl`, `recipientFirstName` |
 | `session_reminder` | App: Session reminders | `cmw9tvg2n01xv0j0unltcedbe` | both | `attendee`, `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `location`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
 | `session_last_reminder` | App: Session reminders | `cmw9tvg2n01xv0j0unltcedbe` | both | as `session_reminder` |
-| `review_requested` | sessionReviewRequest | `cmf1qlt600bjiut0iu5i7yycj` | mentee | `reviewBy`, `reviewFor`, `reviewLink`, `sessTopic` |
-| `review_received` | reviewUpdateToMentors | `cmf1rd22ty7dcxz0iffc6jymd` | mentor | `reviewBy`, `reviewFor`, `reviewLink` |
+| `review_requested` | App: Review requested | `cmwasg7ig00nm0j1t5n98vs6x` | mentee | `mentorName`, `recipientFirstName`, `sessionDate`, `sessionTopic`, `sessionUrl` |
+| `review_received` | App: Review received | `cmwasg80g00qh0j0k9fgsc884` | mentor | `menteeName`, `recipientFirstName`, `sessionDate`, `sessionTopic`, `sessionUrl` |
 | `credits_granted` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | `buttonLabel`, `buttonUrl`, `creditCount`, `emailHeading`, `emailSubject`, `intervalTime`, `recipientFirstName` |
 | `credits_renewed` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | as `credits_granted` |
 | `credits_expiring` | App: Credits | `cmw9sjloa006r0jy744lviabb` | the user | as `credits_granted` |
@@ -310,7 +311,7 @@ again from Loops at send time, so this column is a record, not a contract.
 | `mentor_declined` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the applicant | as `mentor_approved` |
 | `mentor_paused_by_admin` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the paused mentor | as `mentor_approved` |
 | `mentor_response_reminder` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | as `session_requested` |
-| `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |
+| `mentor_return_reminder` | App: Return reminder | `cmwasg71800m80j0bq0mactem` | the paused mentor | `calendarUrl`, `daysPaused`, `recipientFirstName`, `returnOn` |
 | `session_time_suggested` | App: Suggested time | `cmw9snfwr00b60j1l5gbgmsku` | mentee | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `holdUntilTime`, `mentorName`, `reasonMessage`, `recipientFirstName`, `sessionDate`, `sessionTime`, `suggestedDate`, `suggestedTime`, `suggestedTimezone` |
 | `session_suggestion_reminder` | App: Suggested time | `cmw9snfwr00b60j1l5gbgmsku` | mentee | as `session_time_suggested` |
 | `mentee_request_reminder` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | as `session_requested` |
@@ -328,7 +329,7 @@ Every mapped id, as one value. `EMAIL_TEMPLATES` **replaces the whole map**:
 there is no merge, so adding a message means re-stating them all.
 
 ```
-EMAIL_TEMPLATES={"calendar_disconnected":"cmw9un43803310jyhz2fbuswx","credits_expiring":"cmw9sjloa006r0jy744lviabb","credits_granted":"cmw9sjloa006r0jy744lviabb","credits_renewed":"cmw9sjloa006r0jy744lviabb","mentee_request_reminder":"cmw9t5xib012p0jx7a3hmthex","mentor_application_received":"cmw9un4eg02yv0j0uo3e8dn2j","mentor_approved":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_declined":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_paused_by_admin":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_response_reminder":"cmw9t5xib012p0jx7a3hmthex","mentor_return_reminder":"cm4w04jbv00r82fxqlo8c6vyh","message_in_session_window":"cmw9twkjg02190jzrf5176hyw","message_unread_few":"cmw9twkjg02190jzrf5176hyw","message_unread_many":"cmw9twkjg02190jzrf5176hyw","request_accepted":"cmw9tssbg01t20j028kz2wkl4","request_declined":"cmw9tu8od01w00j0unlhvxzt1","request_expired":"cmw9un3sx030c0jyo2stnkl1w","request_withdrawn":"cmw9tu8od01w00j0unlhvxzt1","review_received":"cmf1rd22ty7dcxz0iffc6jymd","review_requested":"cmf1qlt600bjiut0iu5i7yycj","session_booked":"cmw9tssbg01t20j028kz2wkl4","session_cancelled":"clyvhvwru002hm392q9y8qeje","session_last_reminder":"cmw9tvg2n01xv0j0unltcedbe","session_reminder":"cmw9tvg2n01xv0j0unltcedbe","session_requested":"cmw9t5xib012p0jx7a3hmthex","session_suggestion_reminder":"cmw9snfwr00b60j1l5gbgmsku","session_time_suggested":"cmw9snfwr00b60j1l5gbgmsku"}
+EMAIL_TEMPLATES={"calendar_disconnected":"cmw9un43803310jyhz2fbuswx","credits_expiring":"cmw9sjloa006r0jy744lviabb","credits_granted":"cmw9sjloa006r0jy744lviabb","credits_renewed":"cmw9sjloa006r0jy744lviabb","mentee_request_reminder":"cmw9t5xib012p0jx7a3hmthex","mentor_application_received":"cmw9un4eg02yv0j0uo3e8dn2j","mentor_approved":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_declined":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_paused_by_admin":"cmw9sm2jj00bh0jx9f2vzhle3","mentor_response_reminder":"cmw9t5xib012p0jx7a3hmthex","mentor_return_reminder":"cmwasg71800m80j0bq0mactem","message_in_session_window":"cmw9twkjg02190jzrf5176hyw","message_unread_few":"cmw9twkjg02190jzrf5176hyw","message_unread_many":"cmw9twkjg02190jzrf5176hyw","request_accepted":"cmw9tssbg01t20j028kz2wkl4","request_declined":"cmw9tu8od01w00j0unlhvxzt1","request_expired":"cmw9un3sx030c0jyo2stnkl1w","request_withdrawn":"cmw9tu8od01w00j0unlhvxzt1","review_received":"cmwasg80g00qh0j0k9fgsc884","review_requested":"cmwasg7ig00nm0j1t5n98vs6x","session_booked":"cmw9tssbg01t20j028kz2wkl4","session_cancelled":"cmwasg6h600ok0jwr274zn3pr","session_last_reminder":"cmw9tvg2n01xv0j0unltcedbe","session_reminder":"cmw9tvg2n01xv0j0unltcedbe","session_requested":"cmw9t5xib012p0jx7a3hmthex","session_suggestion_reminder":"cmw9snfwr00b60j1l5gbgmsku","session_time_suggested":"cmw9snfwr00b60j1l5gbgmsku"}
 ```
 
 ### Values that may be absent
@@ -452,11 +453,11 @@ template may use:
 **The last two are the operationally urgent ones**, and this list is where an
 operator would look.
 
-`review_requested` maps to `sessionReviewRequest` and covers the nudge a day
+`review_requested` maps to `App: Review requested` and covers the nudge a day
 later as well as the first ask — the repeat carries `interval`, whose absence
-marks the original, so one template renders both.
+marks the original; the template words both the same way and does not show it.
 
-`review_received` maps to `reviewUpdateToMentors` and is the only review
+`review_received` maps to `App: Review received` and is the only review
 message addressed to a mentor. It should **link rather than quote**: the
 author has ten minutes to correct a typo, which `sessionUrl` already settles —
 the link is where the content lives. `template_for()` raises `ConfigurationError` rather than
