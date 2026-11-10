@@ -39,6 +39,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, InviteForNewAccountsError, NotFoundError
+from app.domain.analytics_events import AnalyticsEvent
 from app.domain.credits import CreditLadder
 from app.domain.referrals import NO_INVITE, make_code, may_qualify
 from app.infra.db.credit_grants import top_up_levels
@@ -46,6 +47,7 @@ from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserOnboarding
+from app.infra.db.outbox import enqueue_analytics_each
 from app.infra.db.session_stats import attended_by
 from app.infra.db.user_locks import lock_users
 
@@ -385,8 +387,15 @@ async def unlock_referrers(
         pg_insert(ReferralUnlock)
         .from_select(["user_id", "unlocked_by_referral_id"], first_qualified)
         .on_conflict_do_nothing(index_elements=["user_id"])
-        .returning(ReferralUnlock.id)
+        .returning(ReferralUnlock.user_id)
     )
-    count = len(unlocked.all())
+    unlocked_ids = unlocked.scalars().all()
+    await enqueue_analytics_each(
+        session,
+        AnalyticsEvent.REFERRAL_UNLOCKED,
+        [(user_id, {}) for user_id in unlocked_ids],
+        at=now,
+    )
+    count = len(unlocked_ids)
     await top_up_levels(session, user_ids, ladder=ladder, now=now)
     return count

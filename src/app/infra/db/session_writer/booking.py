@@ -45,6 +45,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.analytics_events import AnalyticsEvent
 from app.domain.availability import BookingWindow
 from app.domain.booking_limits import OVERLAP_MESSAGE
 from app.domain.enums import (
@@ -85,9 +86,10 @@ from app.infra.db.models.sessions import (
 )
 from app.infra.db.models.suggestions import SessionSuggestion
 from app.infra.db.models.user import User
-from app.infra.db.outbox import enqueue
+from app.infra.db.outbox import enqueue, enqueue_analytics
 from app.infra.db.predicates import LIVE
 from app.infra.db.public_visibility import mentor_is_public, session_type_is_live
+from app.infra.db.session_writer.transitions import queue_session_confirmed
 from app.infra.db.slot_store import offered_slot
 
 logger = logging.getLogger(__name__)
@@ -229,6 +231,18 @@ async def _checked_answers(
     return answers, form, file_ids
 
 
+def _first_confirmation(moved_from: Mapping[str, Any] | None) -> bool:
+    """Whether a session booked confirmed is confirmed for the first time.
+
+    A new booking is. A move is only when the session it ends was still
+    waiting on the mentor: a confirmed session moved stays confirmed and is not
+    news. **Assumption:** a confirmed session moved onto a time the mentor must
+    approve is confirmed again when they accept (`transitions`), so analytics
+    may count that session's confirmation twice; the mentor did decide twice.
+    """
+    return moved_from is None or moved_from["status"] == SessionStatus.PENDING_MENTOR_APPROVAL
+
+
 async def book_session(
     session: AsyncSession,
     mentee_id: UUID,
@@ -264,7 +278,7 @@ async def book_session(
     legality was already asked of `list_slots` rather than re-derived.
 
     ``moved_from`` is the session a move just ended in this transaction
-    (decision 300): its ``id`` and ``mentor_id``. The new session
+    (decision 300): its ``id``, ``mentor_id`` and ``status`` before the move. The new session
     must be with the same mentor; it takes no credit, since the one that paid
     for the old session carries over; its intake is the old one's, copied
     rather than asked again; and the news is the one booked or requested message.
@@ -566,6 +580,18 @@ async def book_session(
         entity_id=session_id,
         recipient_ids=recipients(booked, mentor_id=mentor_id, mentee_id=mentee_id),
     )
+    # **The analytics events, in this transaction** (PRD 30). A move is the
+    # same session at a new time, so it is never a new request (decision 300).
+    if moved_from is None:
+        await enqueue_analytics(
+            session,
+            AnalyticsEvent.BOOKING_REQUESTED,
+            mentee_id,
+            {"session_id": session_id, "session_type_id": payload["session_type_id"]},
+            at=now,
+        )
+    if status is SessionStatus.CONFIRMED and _first_confirmation(moved_from):
+        await queue_session_confirmed(session, mentee_id, session_id, now=now)
 
     # **The request's deadline nudges, scheduled here and fired by a callback
     # later.** These are not the session reminders: a session confirmed outright

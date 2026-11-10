@@ -93,6 +93,11 @@ def mentor_approved() -> Any:
     return MentorProfile.approval_status == ApprovalStatus.APPROVED
 
 
+def mentor_listed() -> Any:
+    """The mentor is listed, approved or not: the one statement of it."""
+    return MentorProfile.listing_status == ListingStatus.LISTED
+
+
 def application_approved() -> list[Any]:
     """An approved mentor, on a live profile, listed or not."""
     return [mentor_approved(), MentorProfile.deleted_at.is_(None)]

@@ -17,6 +17,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, JoinWindowClosedError, NotFoundError
+from app.domain.analytics_events import AnalyticsEvent
 from app.domain.attendance import (
     DOOR_STATUSES,
     JOIN_CLOSES,
@@ -51,7 +52,7 @@ from app.infra.db.models.sessions import (
     SessionEvent,
     SessionParticipant,
 )
-from app.infra.db.outbox import enqueue
+from app.infra.db.outbox import enqueue, enqueue_analytics_each
 from app.infra.db.predicates import presence_decides_sql
 from app.infra.db.referral_writer import unlock_referrers
 from app.infra.db.review_eligibility import within_interval
@@ -282,6 +283,13 @@ def _window_shut(now: dt.datetime) -> Any:
     return _join_closes_sql() <= now
 
 
+#: The analytics event each settled outcome reports (PRD 30).
+SETTLED_EVENTS = {
+    SessionStatus.COMPLETED: AnalyticsEvent.SESSION_COMPLETED,
+    SessionStatus.NO_SHOW: AnalyticsEvent.SESSION_NO_SHOW,
+}
+
+
 async def settle_attendance(
     session: AsyncSession,
     *,
@@ -486,6 +494,19 @@ async def settle_attendance(
         )
         if owed is not None:
             await refund_credit(session, row["mentee_id"], row["id"], reason=owed, now=now)
+
+    # The analytics events, about each mentee, in the settling transaction.
+    for outcome, event in SETTLED_EVENTS.items():
+        await enqueue_analytics_each(
+            session,
+            event,
+            [
+                (row["mentee_id"], {"session_id": row["id"]})
+                for row in settled
+                if row["status"] == outcome
+            ],
+            at=now,
+        )
 
     await _request_reviews(
         session,

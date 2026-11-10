@@ -419,7 +419,7 @@ async def moved_session(
         require_answers=False,
         window=booking_window(_configured(request)),
         response_window=response_window(_configured(request)),
-        moved_from={"id": session_id, "mentor_id": old["mentor_id"]},
+        moved_from={"id": session_id, "mentor_id": old["mentor_id"], "status": old["status"]},
     )
     await on_confirmed(session, new_id, _follow_ups(request), now=now)
     await on_ended(session, session_id, calendar=_calendar(request))

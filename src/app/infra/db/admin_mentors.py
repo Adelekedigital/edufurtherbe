@@ -26,7 +26,7 @@ from app.domain.admin_mentors import (
     ShowUpTier,
     show_up_tier,
 )
-from app.domain.enums import ListingStatus, MentorStatusType
+from app.domain.enums import MentorStatusType
 from app.domain.refunds import BOOKED_STATUSES
 from app.infra.db.availability_store import list_rules
 from app.infra.db.mentor_listing import newest_unlisting, paused_by_mentor
@@ -41,6 +41,7 @@ from app.infra.db.predicates import (
     application_declined,
     application_in_review,
     live,
+    mentor_listed,
     mentor_paused,
     person_like,
 )
@@ -56,7 +57,7 @@ TABS: dict[AdminMentorTab, list[Any]] = {
     AdminMentorTab.APPLICATIONS: application_in_review(),
     AdminMentorTab.APPROVED: [
         *application_approved(),
-        MentorProfile.listing_status == ListingStatus.LISTED,
+        mentor_listed(),
     ],
     AdminMentorTab.PAUSED: mentor_paused(),
     AdminMentorTab.NOT_APPROVED: application_declined(),

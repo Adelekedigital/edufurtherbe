@@ -25,8 +25,8 @@ from contextvars import ContextVar, Token
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text, true, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Uuid, column, delete, literal, select, text, true, update, values
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
@@ -40,6 +40,7 @@ from app.domain.notifications import Channel, Notification
 from app.domain.ports import AnalyticsSink
 from app.domain.push import SESSION_PUSHES, session_push, session_push_spec
 from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out
+from app.infra.db.analytics_scope import counted_user
 from app.infra.db.chat_store import unread_total
 from app.infra.db.credit_store import expiring_on
 from app.infra.db.email_lines import LineOverrides, load_line_overrides
@@ -65,6 +66,8 @@ __all__ = [
     "drain_push",
     "enqueue",
     "enqueue_analytics",
+    "enqueue_analytics_each",
+    "forget_unsent_analytics",
     "stop_collecting",
 ]
 
@@ -175,18 +178,64 @@ async def enqueue_analytics(
     at: dt.datetime,
 ) -> None:
     """Record that this event happened, for the analytics drain. Does not commit.
+    :func:`enqueue_analytics_each` for one, so the skip below is written once."""
+    await enqueue_analytics_each(session, event, [(user_id, properties)], at=at)
+
+
+#: Events per statement: two parameters each, well inside asyncpg's 32,767.
+ANALYTICS_CHUNK = 1000
+
+
+async def enqueue_analytics_each(
+    session: AsyncSession,
+    event: AnalyticsEvent,
+    facts: Sequence[tuple[UUID, Mapping[str, object]]],
+    *,
+    at: dt.datetime,
+) -> None:
+    """One `event` per ``(user_id, properties)``, all at ``at``. Does not commit.
 
     In the caller's transaction, like `enqueue`, so the event exists exactly
     when the fact it reports does. The payload is the event as the vendor's
     batch takes it (`analytics_event`), so the drain sends it as stored.
+
+    **An internal account's event is never written** (PRD 30): the admin
+    Analytics rule (`analytics_scope.counted_user`) filters the insert itself,
+    so the two can never disagree about who is left out. A statement per chunk,
+    not per event, so the 1st's grant to every mentee stays a few round trips.
     """
+    for start in range(0, len(facts), ANALYTICS_CHUNK):
+        chunk = facts[start : start + ANALYTICS_CHUNK]
+        rows = values(column("user_id", Uuid), column("payload", JSONB), name="facts").data(
+            [
+                (user_id, analytics_event(event, user_id=user_id, at=at, properties=properties))
+                for user_id, properties in chunk
+            ]
+        )
+        await session.execute(
+            insert(OutboxEvent).from_select(
+                ["event_type", "entity_type", "entity_id", "destination", "payload"],
+                select(
+                    literal(event.value),
+                    literal("user"),
+                    rows.c.user_id,
+                    literal(Channel.ANALYTICS.value),
+                    rows.c.payload,
+                ).where(counted_user(rows.c.user_id)),
+            )
+        )
+
+
+async def forget_unsent_analytics(session: AsyncSession, user_id: UUID) -> None:
+    """Drop this person's analytics events not yet sent (decision 328). Does not
+    commit. The account purge's, so nothing about an erased person leaves later;
+    what was sent already is the vendor's to erase."""
     await session.execute(
-        insert(OutboxEvent).values(
-            event_type=event,
-            entity_type="user",
-            entity_id=user_id,
-            destination=Channel.ANALYTICS,
-            payload=analytics_event(event, user_id=user_id, at=at, properties=properties),
+        delete(OutboxEvent).where(
+            OutboxEvent.entity_type == "user",
+            OutboxEvent.entity_id == user_id,
+            OutboxEvent.destination == Channel.ANALYTICS,
+            OutboxEvent.status == "pending",
         )
     )
 

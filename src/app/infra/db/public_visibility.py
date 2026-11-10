@@ -28,12 +28,11 @@ from uuid import UUID
 
 from sqlalchemy import Select, and_, or_, select
 
-from app.domain.enums import ListingStatus
 from app.infra.db.models.availability import AvailabilityRule, SessionTypeSchedulingWindow
 from app.infra.db.models.mentoring import MentorProfile
 from app.infra.db.models.sessions import SessionType, SessionTypeBookingConfig
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE, is_live_admin, mentor_approved
+from app.infra.db.predicates import LIVE, is_live_admin, mentor_approved, mentor_listed
 
 __all__ = [
     "bookable_mentors",
@@ -105,10 +104,7 @@ def mentor_is_published() -> Any:
     """Approved **and** listed — the half of `mentor_is_public` that a mentor's
     own state decides, as one expression so a `SELECT` can read it as a column
     as well as filter on it."""
-    return and_(
-        mentor_approved(),
-        MentorProfile.listing_status == ListingStatus.LISTED,
-    )
+    return and_(mentor_approved(), mentor_listed())
 
 
 def mentor_is_visible_to(viewer: UUID | None) -> list[Any]:
