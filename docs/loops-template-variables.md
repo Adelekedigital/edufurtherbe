@@ -468,6 +468,16 @@ what makes that free rather than three more field lists.
 
 ---
 
+## Admins reword the lines (decisions 318-321)
+
+The admin app's Emails pages read and save each shared email's subject, heading
+and button through `/api/v1/admin/emails` (list), `/emails/{key}` (one email with
+its variants, lines, values and a filled sample), `PUT /emails/{key}/variants/{variant}`
+(save the three lines with the `version` read) and `/email-values` (every value
+and where it is used). An email whose template is not yet the shared one reads
+as `not_set_up` and cannot be saved (423). The next send uses a saved line; a line
+that cannot fill sends the default.
+
 ## Open questions
 
 - ~~**`reasonTitle` needs a code-to-words mapping.**~~ **Settled 2026-10-03:**
