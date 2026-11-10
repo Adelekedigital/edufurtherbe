@@ -118,12 +118,15 @@ def no_shows_in(window: Window) -> Any:
 
 
 def _decisions(window: Window, into: tuple[SessionStatus, ...]) -> Any:
+    """Decisions on requests (`is_request`): a moved session going back for
+    approval is not a second decision on the same request, as `requests` and
+    `outcomes` count a request once."""
     return and_(
         SessionEvent.session_id == Session.id,
         SessionEvent.from_status == SessionStatus.PENDING_MENTOR_APPROVAL,
         SessionEvent.to_status.in_(into),
         during(SessionEvent.created_at, window),
-        counted_session(),
+        is_request(),
     )
 
 
