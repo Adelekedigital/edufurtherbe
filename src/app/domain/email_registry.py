@@ -283,12 +283,16 @@ _SUGGESTED = {
     "held_until": (_START + dt.timedelta(hours=3, minutes=30)).isoformat(),
 }
 
+#: What the drain adds to a new booking's row (decision 334).
+_ANSWERED = {"answered_questions": "3"}
+
 #: What each email's producer puts on its outbox row (`variables=` at the
 #: enqueue, or the message email's values), by variant.
 SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
-    N.SESSION_BOOKED: {"mentor": {}, "mentee": {}},
+    # The mentee's copy never shows the count: the questions are the mentor's.
+    N.SESSION_BOOKED: {"mentor": dict(_ANSWERED), "mentee": {}},
     N.REQUEST_ACCEPTED: {"default": {}},
-    N.SESSION_REQUESTED: {"default": {}},
+    N.SESSION_REQUESTED: {"default": dict(_ANSWERED)},
     N.MENTOR_RESPONSE_REMINDER: {"default": {"kind": "t24"}},
     N.MENTEE_REQUEST_REMINDER: {"default": {"reminder_message": "Still keen if you have time!"}},
     N.REQUEST_DECLINED: {"default": {"reason_code": "scheduling_conflict"}},
@@ -297,7 +301,7 @@ SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
     N.SESSION_LAST_REMINDER: {"default": {"kind": "s5", "interval": "in 5 Minutes"}},
     N.SESSION_TIME_SUGGESTED: {"default": {"suggested_after": "declined", **_SUGGESTED}},
     N.SESSION_SUGGESTION_REMINDER: {"default": dict(_SUGGESTED)},
-    N.CREDITS_GRANTED: {"default": {}},
+    N.CREDITS_GRANTED: {"default": {"credit_count": "1"}},
     N.CREDITS_RENEWED: {"default": {"credit_count": "2"}},
     N.CREDITS_EXPIRING: {"default": {"kind": "c14", "interval": "two weeks", "credit_count": "1"}},
     N.MENTOR_APPROVED: {"default": {}},

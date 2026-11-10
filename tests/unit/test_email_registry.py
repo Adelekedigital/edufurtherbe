@@ -170,7 +170,11 @@ def test_hours_mean_something_only_on_a_request() -> None:
 
 
 def test_values_follow_what_the_email_is_about() -> None:
-    assert values_for(N.CREDITS_GRANTED, "default") == ("recipientFirstName", "recipientName")
+    assert values_for(N.CREDITS_GRANTED, "default") == (
+        "recipientFirstName",
+        "recipientName",
+        "creditCount",
+    )
     assert "creditCount" in values_for(N.CREDITS_RENEWED, "default")
     assert "sessionTopic" not in values_for(N.CREDITS_RENEWED, "default")
     assert "mentorName" in values_for(N.MENTOR_APPROVED, "default")
@@ -178,6 +182,14 @@ def test_values_follow_what_the_email_is_about() -> None:
     assert "reasonTitle" in values_for(N.REQUEST_DECLINED, "default")
     assert "reasonTitle" not in values_for(N.SESSION_BOOKED, "mentor")
     assert "unreadCount" not in values_for(N.MESSAGE_IN_SESSION_WINDOW, "default")
+
+
+def test_answered_questions_mean_something_only_on_a_new_booking() -> None:
+    """Decision 334: the request and the booking carry the count, nothing else."""
+    assert "answeredQuestions" in values_for(N.SESSION_REQUESTED, "default")
+    assert "answeredQuestions" in values_for(N.SESSION_BOOKED, "mentor")
+    assert "answeredQuestions" not in values_for(N.REQUEST_ACCEPTED, "default")
+    assert "answeredQuestions" not in values_for(N.MENTOR_RESPONSE_REMINDER, "default")
 
 
 def test_an_empty_line_is_refused_alone() -> None:
@@ -218,13 +230,16 @@ def test_an_unknown_value_is_named_with_a_suggestion(
 
 
 def test_a_value_the_email_does_not_carry_is_refused() -> None:
-    assert check_line(N.CREDITS_GRANTED, "default", EmailLine.HEADING, "{creditCount} credits") == [
-        LineError(EmailLine.HEADING, LineErrorCode.VALUE_NOT_SENT, "creditCount")
+    assert check_line(N.CREDITS_GRANTED, "default", EmailLine.HEADING, "{intervalTime} left") == [
+        LineError(EmailLine.HEADING, LineErrorCode.VALUE_NOT_SENT, "intervalTime")
     ]
+    assert (
+        check_line(N.CREDITS_GRANTED, "default", EmailLine.HEADING, "{creditCount} credits") == []
+    )
 
 
 def test_every_reason_is_reported_once_per_value() -> None:
-    text = "{creditCount} {creditCount} {nope} " + "x" * 100
+    text = "{intervalTime} {intervalTime} {nope} " + "x" * 100
     errors = check_line(N.CREDITS_GRANTED, "default", EmailLine.SUBJECT, text)
     assert [error.code for error in errors] == [
         LineErrorCode.TOO_LONG,
@@ -291,3 +306,23 @@ def test_every_email_fills_its_published_shared_template(
     assert all(built[name] for name in ("emailSubject", "emailHeading", "buttonLabel"))
     if group == "messages":
         assert bool(built["sessionDate"]) is (email is N.MESSAGE_IN_SESSION_WINDOW)
+
+
+@pytest.mark.parametrize(
+    ("group", "email", "variant"),
+    [
+        (group, email, variant)
+        for group in ("session_confirmed", "request_awaiting")
+        for email in TEMPLATE_GROUPS[group]
+        for variant in SAMPLES[email]
+    ],
+)
+def test_the_answered_line_fills_for_every_email_of_its_templates(
+    group: str, email: Notification, variant: str
+) -> None:
+    """When the owner adds `answeredQuestions` to these templates in Loops, the
+    other emails sharing them fill it empty rather than refusing to send."""
+    declared = [*PUBLISHED_TEMPLATES[group], "answeredQuestions"]
+    built = build_variables(declared, sample_context(email, variant))
+    to_the_mentor = email in {N.SESSION_REQUESTED, N.SESSION_BOOKED} and variant != "mentee"
+    assert built["answeredQuestions"] == ("3 questions" if to_the_mentor else "")

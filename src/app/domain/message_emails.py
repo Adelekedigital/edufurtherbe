@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.domain.chats import preview
+from app.domain.email_values import counted
 from app.domain.names import NAMELESS, addressed_by, joined_name
 from app.domain.notifications import Notification
 
@@ -116,10 +117,6 @@ def _initials(message: EmailedMessage) -> str:
     return "".join(part[0] for part in (message.first_name, message.last_name) if part).upper()
 
 
-def _messages(count: int) -> str:
-    return "1 message" if count == 1 else f"{count} messages"
-
-
 def _card(number: int, message: EmailedMessage, *, whole: bool) -> dict[str, str]:
     """One message card: who, when, and the text (cut unless ``whole``)."""
     text = message.body or ""
@@ -200,7 +197,7 @@ def _many(messages: Sequence[EmailedMessage]) -> dict[str, str]:
         values |= {
             f"sender{number}_name": _full(message),
             f"sender{number}_initials": _initials(message),
-            f"sender{number}_count": _messages(counts[message.sender_id]),
+            f"sender{number}_count": counted(counts[message.sender_id], "message"),
         }
     left = len(ranked) - SENDER_ROWS
     values["other_senders"] = f"and {left} more" if left > 0 else ""
