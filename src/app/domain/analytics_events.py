@@ -122,21 +122,29 @@ def _plain(key: str, value: object) -> str | int | bool | None:
 # --------------------------------------------------------------------------
 
 
-def requested_properties(session_id: UUID, session_type_id: UUID | None) -> dict[str, object]:
+def _entered(properties: dict[str, object], entry_point: object) -> dict[str, object]:
+    """``properties`` with the session's `entry_point` (PRD 30) when it has one:
+    an older session or a client that sent none carries no key at all."""
+    return properties if entry_point is None else {**properties, "entry_point": entry_point}
+
+
+def requested_properties(
+    session_id: UUID, session_type_id: UUID | None, entry_point: object
+) -> dict[str, object]:
     """`booking_requested`."""
-    return {"session_id": session_id, "session_type_id": session_type_id}
+    return _entered({"session_id": session_id, "session_type_id": session_type_id}, entry_point)
 
 
-def session_properties(session_id: UUID) -> dict[str, object]:
+def session_properties(session_id: UUID, entry_point: object) -> dict[str, object]:
     """`session_confirmed`, `session_completed` and `session_no_show`."""
-    return {"session_id": session_id}
+    return _entered({"session_id": session_id}, entry_point)
 
 
 def cancelled_properties(
-    session_id: UUID, by: str | None, reason_code: object
+    session_id: UUID, by: str | None, reason_code: object, entry_point: object
 ) -> dict[str, object]:
     """`session_cancelled`: who cancelled (`session_stats.canceller`) and why."""
-    return {"session_id": session_id, "by": by, "reason_code": reason_code}
+    return _entered({"session_id": session_id, "by": by, "reason_code": reason_code}, entry_point)
 
 
 def spent_properties(amount: int, session_id: UUID | None) -> dict[str, object]:

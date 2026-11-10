@@ -34,6 +34,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     TIMESTAMP,
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -46,6 +47,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import (
+    AuthMethod,
     AuthProvider,
     CoverArt,
     CoverColor,
@@ -53,6 +55,8 @@ from app.domain.enums import (
     LinkKind,
     LinkPlatform,
     PrimaryRole,
+    SignupChannel,
+    SignupSource,
 )
 from app.domain.profile_text import PROMPT_VERSION_MAX_LENGTH, PROMPT_VERSION_PATTERN
 from app.domain.social_links import MAX_LENGTH
@@ -139,6 +143,26 @@ class User(TimestampMixin, Base):
 
     legacy_bubble_id: Mapped[str | None] = mapped_column(Text, unique=True)
 
+    #: Left out of every analytics figure (PRD 30, decision 329): a live admin
+    #: grant or a demo address. **A projection, never written by hand**:
+    #: `trg_mark_internal_user` recomputes it on every insert and on any change
+    #: of `email` or of itself, and `trg_mark_internal_grantee` on every change
+    #: to `admin_users`, both through `internal_account()` (`f6b1d3a8c925`).
+    is_internal: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    #: How the account arrived. `migrated` only by the migration and the
+    #: loader; a visitor's own is recorded once (`acquired_at`).
+    signup_source: Mapped[SignupSource] = mapped_column(
+        str_enum(SignupSource), nullable=False, server_default=text("'direct'")
+    )
+    signup_channel: Mapped[SignupChannel | None] = mapped_column(str_enum(SignupChannel))
+    #: When the visitor's acquisition was recorded: null until then, and the
+    #: guard that makes it write-once. Every account older than the column
+    #: was settled at its `created_at` (`f6b1d3a8c925`).
+    acquired_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    #: How the account signs in: at its first sign-in, or at a migrated
+    #: account's first one after the move. Null until known.
+    auth_method: Mapped[AuthMethod | None] = mapped_column(str_enum(AuthMethod))
+
     __table_args__ = (
         # THE PARTIAL UNIQUE INDEX PEOPLE FORGET. Without `WHERE deleted_at IS
         # NULL` a soft-deleted user permanently blocks their own email from
@@ -195,6 +219,17 @@ class User(TimestampMixin, Base):
         CheckConstraint(
             check_is_known("primary_role", PrimaryRole),
             name="primary_role_is_known",
+        ),
+        CheckConstraint(
+            check_is_known("signup_source", SignupSource), name="signup_source_is_known"
+        ),
+        CheckConstraint(
+            f"signup_channel IS NULL OR {check_is_known('signup_channel', SignupChannel)}",
+            name="signup_channel_is_known",
+        ),
+        CheckConstraint(
+            f"auth_method IS NULL OR {check_is_known('auth_method', AuthMethod)}",
+            name="auth_method_is_known",
         ),
         # A purge date on a live account, or one not after the deletion, would
         # let the purge job delete an account early.

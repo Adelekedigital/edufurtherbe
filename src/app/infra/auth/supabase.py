@@ -20,6 +20,8 @@ import jwt
 from jwt import PyJWKClient
 
 from app.core.errors import AuthenticationError, ConfigurationError
+from app.domain.attribution import auth_method_from
+from app.domain.enums import AuthMethod
 
 # Supabase sets `aud` to `authenticated` for a signed-in user's access token.
 # Verified rather than ignored: a token minted for a different audience is a
@@ -60,6 +62,9 @@ class TokenClaims:
     #: when absent or not a uuid, which owns nothing rather than failing a
     #: sign-in over a claim only previews read.
     session_id: UUID | None = None
+    #: How this sign-in signed in (`attribution.auth_method_from`), or
+    #: ``None`` when the token does not say in words we know.
+    auth_method: AuthMethod | None = None
 
 
 class SupabaseTokenVerifier:
@@ -116,6 +121,7 @@ class SupabaseTokenVerifier:
                 subject=UUID(str(subject)),
                 email=payload.get("email"),
                 session_id=_uuid_or_none(payload.get("session_id")),
+                auth_method=_auth_method(payload),
             )
         except ValueError as exc:
             # A `sub` that is not a uuid cannot match `users.auth_id`, and
@@ -140,6 +146,21 @@ class SupabaseTokenVerifier:
 
         assert self._secret is not None  # noqa: S101 — guaranteed by __init__
         return dict(jwt.decode(token, self._secret, algorithms=[SYMMETRIC_ALGORITHM], **checks))
+
+
+def _auth_method(payload: dict[str, Any]) -> AuthMethod | None:
+    """`amr` (a list of `{method, timestamp}`) and `app_metadata.providers`,
+    read defensively: a claim of another shape says nothing
+    (https://supabase.com/docs/guides/auth/jwt-fields)."""
+    amr = payload.get("amr")
+    methods = [
+        str(entry["method"])
+        for entry in (amr if isinstance(amr, list) else [])
+        if isinstance(entry, dict) and "method" in entry
+    ]
+    metadata = payload.get("app_metadata")
+    providers = metadata.get("providers") if isinstance(metadata, dict) else None
+    return auth_method_from(methods, map(str, providers) if isinstance(providers, list) else ())
 
 
 def _uuid_or_none(value: object) -> UUID | None:

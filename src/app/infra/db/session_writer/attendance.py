@@ -418,6 +418,7 @@ async def settle_attendance(
                     # addressed without a second read of rows this statement has
                     # already touched.
                     Session.mentee_id,
+                    Session.entry_point,
                     mentor_came.label("mentor_came"),
                     mentee_came.label("mentee_came"),
                     presence_decides_sql().label("observed"),
@@ -494,7 +495,7 @@ async def settle_attendance(
             session,
             event,
             [
-                (row["mentee_id"], session_properties(row["id"]))
+                (row["mentee_id"], session_properties(row["id"], row["entry_point"]))
                 for row in settled
                 if row["status"] == outcome
             ],

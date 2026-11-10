@@ -321,7 +321,9 @@ async def booked_session(
         key=idempotency_key,
         user_id=user["id"],
         endpoint=ENDPOINT_BOOKING,
-        body=payload.model_dump(mode="json"),
+        # Without `entry_point`: an analytics hint must never turn a retry from
+        # another screen into a mismatch (it never fails a booking).
+        body=payload.model_dump(mode="json", exclude={"entry_point"}),
     )
     if isinstance(reservation, Replayed):
         return reservation.body, reservation.status_code, True
@@ -411,6 +413,8 @@ async def moved_session(
             # The mentee's note about the move, which the mentor reads on the
             # session and in its booking email; else the old note carries.
             "booking_message": payload.message or old["booking_message"],
+            # The same booking at a new time, so it began where the original did.
+            "entry_point": old["entry_point"],
         },
         now=now,
         scheduler=_scheduler(request),

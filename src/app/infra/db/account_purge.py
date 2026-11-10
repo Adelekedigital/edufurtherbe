@@ -7,12 +7,13 @@ job removes what the person put on the platform and anonymises the account row.
 WHAT GOES AND WHAT STAYS
 ========================
 **Goes**: the PRD's list (profile, goals, education, languages, avatar files,
-the Supabase account), the contact a migrated account has at Loops, and the rest
+the Supabase account), the contact a migrated account has at Loops, the person
+and their events in product analytics (PRD 30), and the rest
 that is only theirs and that nothing kept points at: sign-in identities, calendar
 tokens, social links, awards, onboarding, interest, writing-assist counts,
 idempotency keys, a mentor's availability, listings, guide countries and
-personal meeting links, their browsers' push subscriptions and the analytics
-events about them not yet sent. Every handle
+personal meeting links, their browsers' push subscriptions, their analytics
+cookie answer and the analytics events about them not yet sent. Every handle
 their invite link carried goes too, and the address of the invite they arrived
 through (decision 305).
 
@@ -43,7 +44,8 @@ from sqlalchemy import delete, not_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, UpstreamError
+from app.domain.ports import AnalyticsSink
 from app.infra.auth.admin import AdminApiError
 from app.infra.clients.loops_contacts import ContactsError
 from app.infra.db.invite_links import forget_invite_link
@@ -54,7 +56,7 @@ from app.infra.db.models.availability import (
     MentorNextAvailability,
 )
 from app.infra.db.models.education import EducationEntry
-from app.infra.db.models.legal import UserLegalConsent
+from app.infra.db.models.legal import AnalyticsConsent, UserLegalConsent
 from app.infra.db.models.mentoring import (
     FeaturedMentor,
     MenteeGoal,
@@ -111,6 +113,7 @@ _OWN_ROWS: tuple[tuple[Any, Any], ...] = (
     (MentorNextAvailability, MentorNextAvailability.mentor_user_id),
     (MentorConferencingOption, MentorConferencingOption.user_id),
     (PushSubscription, PushSubscription.user_id),
+    (AnalyticsConsent, AnalyticsConsent.user_id),
 )
 
 
@@ -264,6 +267,7 @@ async def purge_due_accounts(
     contacts: Contacts | None,
     storage: Images,
     now: dt.datetime,
+    analytics: AnalyticsSink | None = None,
     dry_run: bool = False,
 ) -> dict[str, int]:
     """Purge every due account, one transaction each. The daily job.
@@ -272,7 +276,10 @@ async def purge_due_accounts(
     address and the Supabase sign-in by `auth_id`, both of which our purge
     clears, so if either provider refuses, our row is left as it was and the
     next run tries again. Already gone counts as removed at both, so a run that
-    died between a provider and our commit simply finishes next time.
+    died between a provider and our commit simply finishes next time. The
+    analytics person (by `users.id`, which stays) is erased the same way, so a
+    refusal there defers the account like the others: an erase repeated for a
+    person already gone finds nobody and is accepted.
 
     **One account's failure is that account's.** A database error rolls its
     transaction back, counts it failed and moves on: the earliest-due account is
@@ -280,7 +287,9 @@ async def purge_due_accounts(
 
     Images go after the commit: dropped first, a failed commit would leave a
     profile pointing at nothing. `drop_url` never raises. ``contacts`` is
-    ``None`` where Loops is not configured, and the contact is then kept.
+    ``None`` where Loops is not configured, and the contact is then kept;
+    ``analytics`` is ``None`` while analytics is off, and nothing is erased;
+    on without the erase's settings, every account is deferred until they are set.
     """
     async with factory() as session:
         due = (
@@ -309,13 +318,15 @@ async def purge_due_accounts(
                     address = await _loops_contact(session, user_id, email)
                     if address is not None:
                         await asyncio.to_thread(contacts.delete, address)
+                if analytics is not None:
+                    await asyncio.to_thread(analytics.delete_person, user_id)
                 if auth_id is not None:
                     await asyncio.to_thread(admin.delete_user, auth_id)
                 images = await purge_account(session, user_id, now=now)
                 if images is None:  # pragma: no cover - the lock above holds the row
                     continue
                 await session.commit()
-        except (AdminApiError, ContactsError, SQLAlchemyError) as exc:
+        except (AdminApiError, ContactsError, UpstreamError, SQLAlchemyError) as exc:
             logger.warning("purge of account %s deferred: %s", user_id, type(exc).__name__)
             counts["failed"] += 1
             continue

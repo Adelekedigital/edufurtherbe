@@ -196,6 +196,7 @@ async def _locked_session(
                     Session.session_type_id,
                     Session.topic,
                     Session.booking_message,
+                    Session.entry_point,
                     # **The mentor's own zone, not the rule's.** A kept block
                     # appears on their calendar beside the ones they wrote by
                     # hand, so it is stored the way those are.
@@ -422,12 +423,21 @@ async def end_for_move(
 
 
 async def queue_session_confirmed(
-    session: AsyncSession, mentee_id: UUID, session_id: UUID, *, now: dt.datetime
+    session: AsyncSession,
+    mentee_id: UUID,
+    session_id: UUID,
+    entry_point: object,
+    *,
+    now: dt.datetime,
 ) -> None:
     """`session_confirmed` about its mentee (PRD 30): the one place it is
     written, for a booking confirmed outright and a request accepted."""
     await enqueue_analytics(
-        session, AnalyticsEvent.SESSION_CONFIRMED, mentee_id, session_properties(session_id), at=now
+        session,
+        AnalyticsEvent.SESSION_CONFIRMED,
+        mentee_id,
+        session_properties(session_id, entry_point),
+        at=now,
     )
 
 
@@ -445,7 +455,9 @@ async def _report(
     mentee (PRD 30). Who cancelled is `session_stats.canceller` read off the
     event just written, the one rule the dashboard and the session read use."""
     if to is SessionStatus.CONFIRMED:
-        await queue_session_confirmed(session, row["mentee_id"], session_id, now=now)
+        await queue_session_confirmed(
+            session, row["mentee_id"], session_id, row["entry_point"], now=now
+        )
     elif to is SessionStatus.CANCELLED:
         by = await session.scalar(
             select(canceller(SessionEvent.actor_id, SessionEvent.actor_type))
@@ -456,7 +468,7 @@ async def _report(
             session,
             AnalyticsEvent.SESSION_CANCELLED,
             row["mentee_id"],
-            cancelled_properties(session_id, by, reason_code),
+            cancelled_properties(session_id, by, reason_code, row["entry_point"]),
             at=now,
         )
 
@@ -632,6 +644,7 @@ async def end_for_deleted_account(
                     Session.mentor_id,
                     Session.mentee_id,
                     Session.duration_minutes,
+                    Session.entry_point,
                     User.timezone,
                 )
                 .join(User, User.id == Session.mentor_id)

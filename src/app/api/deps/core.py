@@ -40,7 +40,7 @@ from app.domain.sessions import response_window_hours
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims, issuer_for
 from app.infra.db import preview_store
 from app.infra.db.engine import create_database_engine, create_session_factory
-from app.infra.db.first_sign_in import provision_first_sign_in
+from app.infra.db.first_sign_in import provision_first_sign_in, record_auth_method
 from app.infra.db.idempotency import Held, Mismatched, Replayed, reserve
 from app.infra.db.preview_store import Owner
 
@@ -195,7 +195,7 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # query and widen no scope.
 CURRENT_USER = text("""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
-           u.timezone, u.email_verified_at, u.created_at,
+           u.timezone, u.email_verified_at, u.created_at, u.auth_method,
            p.about_me, p.about_me_drafted_at, p.gender, p.avatar_url, p.banner_url,
            p.avatar_focus_x, p.avatar_focus_y,
            p.social_linkedin,
@@ -231,10 +231,16 @@ async def _signed_in_user(claims: TokenClaims, session: AsyncSession) -> dict[st
     """The token's own user, created on a first sign-in (decision 178)."""
     row = await _user_row(session, auth_id=claims.subject)
     if row is None and claims.email:
-        await provision_first_sign_in(session, auth_id=claims.subject, email=claims.email)
+        await provision_first_sign_in(
+            session, auth_id=claims.subject, email=claims.email, auth_method=claims.auth_method
+        )
         row = await _user_row(session, auth_id=claims.subject)
     if row is None:
         raise NotFoundError("no account is linked to this identity")
+    if row["auth_method"] is None and claims.auth_method is not None:
+        # A migrated account's first sign-in here (PRD 30 A7): once, then never.
+        await record_auth_method(session, row["id"], claims.auth_method)
+        row["auth_method"] = claims.auth_method
     return row
 
 

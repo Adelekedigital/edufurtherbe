@@ -26,13 +26,15 @@ import datetime as dt
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field
 
 from app.api.schemas.common import Normalised, PersonBaseRead, SessionTypeRefRead
 from app.domain.attendance import DOOR_STATUSES, door_window, join_window
+from app.domain.attribution import entry_point_or_none
 from app.domain.enums import (
     ActorType,
     AttendanceStatus,
+    EntryPoint,
     MeetingProvider,
     MissedReason,
     SessionReasonCode,
@@ -650,6 +652,16 @@ class SessionBookingWrite(BaseModel):
         default=None,
         max_length=2000,
         description="A note to the mentor. Visible to both parties, like every other message here.",
+    )
+    entry_point: Annotated[EntryPoint | None, BeforeValidator(entry_point_or_none)] = Field(
+        default=None,
+        description=(
+            "Where in the app this booking began: `mentor_profile`, `explore`, "
+            "`home`, `onboarding_guest` or `rebook_after_review`. For analytics "
+            "only, and optional; a value outside the list is dropped rather "
+            "than refused, so it never fails a booking. A move keeps its "
+            "original's."
+        ),
     )
     answers: list[AnswerWrite] = Field(
         default_factory=list,
