@@ -392,6 +392,36 @@ async def test_the_hourly_sweep_sends_what_a_request_left_and_a_dry_run_does_not
     ]
 
 
+async def test_a_failing_analytics_drain_cannot_unsend_the_pushes_before_it(
+    api_client: httpx.AsyncClient,
+    db_engine: AsyncEngine,
+    migrated_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Email and push marks are committed before the analytics drain runs, so
+    its failure cannot roll them back and send the pushes again next hour."""
+    pushed(api_client, on=False)
+    booking, endpoints = await booked(
+        db_engine, api_client, "ps-analytics-fails", confirmation=True
+    )
+    fake = FakePush()
+    monkeypatch.setattr(runner, "live_web_push", lambda _settings: fake)
+    monkeypatch.setattr(runner, "live_analytics_sink", lambda _settings: object())
+
+    async def broken(*_args: object, **_kwargs: object) -> dict[str, int]:
+        raise RuntimeError("analytics drain broke")
+
+    monkeypatch.setattr(runner, "drain_analytics", broken)
+
+    with pytest.raises(RuntimeError, match="analytics drain broke"):
+        await RuntimeJobs(Settings(_env_file=None, database_url=SecretStr(migrated_database))).run(  # type: ignore[call-arg]
+            "settle-sessions"
+        )
+
+    assert [endpoint for endpoint, *_ in fake.sent] == [endpoints["mentor"]]
+    assert [row["status"] for row in pushes(await queued(db_engine, booking["id"]))] == ["sent"]
+
+
 async def test_a_late_send_carries_only_what_is_left_of_its_life(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
