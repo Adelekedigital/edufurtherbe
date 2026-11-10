@@ -110,7 +110,8 @@ async def analytics_overview(
     description=(
         "KPIs: `requests` made in the window (a move is not a request); "
         "`acceptance_rate`, accepted over accepted, declined and expired, for "
-        "requests decided in the window; `median_reply_hours` from request to "
+        "requests decided in the window (a move going back for approval is not a "
+        "second decision); `median_reply_hours` from request to "
         "accept or decline, for replies in the window; `show_up_rate`, completed "
         "over completed and no-show, for sessions starting in the window; "
         "`repeat_booking_rate`, mentees with two or more completed sessions in the "

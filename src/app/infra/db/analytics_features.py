@@ -32,7 +32,7 @@ from app.domain.availability import BookingWindow
 from app.domain.enums import MentorStatusType, PrimaryRole, SessionStatus
 from app.domain.mentor_stats import Window
 from app.infra.db.analytics_scope import Measure, counted_session, counted_user
-from app.infra.db.analytics_sessions import requests
+from app.infra.db.analytics_sessions import is_request, requests
 from app.infra.db.chat_store import pair
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
@@ -121,7 +121,8 @@ def _confirmed_in(window: Window, *, messaged_first: bool) -> Any:
     where = [
         SessionEvent.to_status == SessionStatus.CONFIRMED,
         during(SessionEvent.created_at, window),
-        counted_session(),
+        # A move confirmed again is the same request, not a new confirmation.
+        is_request(),
     ]
     if messaged_first:
         where.append(

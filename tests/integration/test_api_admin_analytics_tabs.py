@@ -110,7 +110,7 @@ async def platform(db_engine: AsyncEngine) -> dict[str, UUID]:
         r4 = await session_row(
             conn, mentor, ada, status="withdrawn", created=ago(3), starts=ago(-5)
         )
-        await session_row(
+        moved = await session_row(
             conn,
             mentor,
             ada,
@@ -119,6 +119,9 @@ async def platform(db_engine: AsyncEngine) -> dict[str, UUID]:
             starts=ago(2),
             moved_from=r4,
         )
+        # The move went back for approval and was accepted: not a decision on
+        # a new request, so the acceptance rate below is unchanged by it.
+        await decision(conn, moved, "confirmed", ago(2, 19))
         # R5: made 4 days ago, confirmed at once, and Bo did not come.
         r5 = await session_row(conn, mentor, bo, status="no_show", created=ago(4), starts=ago(1, 3))
         await conn.execute(
