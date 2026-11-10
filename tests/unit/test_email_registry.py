@@ -257,8 +257,9 @@ def test_every_placeholder_in_a_default_is_a_catalogue_value() -> None:
 
 
 #: What each shared Loops template shows, as Loops listed it when published
-#: (2026-11-09). Every email of the group, on either side, must fill all of it,
-#: or its sends would refuse once the template's id is pasted.
+#: (2026-11-09; the "EduFurther 2026" redesign, 2026-11-10). Every email of the
+#: group, on either side, must fill all of it, or its sends would refuse once
+#: the template's id is pasted.
 _LINE_VARS = "emailHeading,emailSubject,buttonUrl,buttonLabel"
 _SESSION = "sessionDate,sessionTime,sessionTimezone"
 PUBLISHED_TEMPLATES: dict[str, list[str]] = {
@@ -266,16 +267,16 @@ PUBLISHED_TEMPLATES: dict[str, list[str]] = {
     for key, names in {
         "credits": "recipientFirstName,intervalTime,creditCount",
         "mentor_status": "recipientFirstName,declineReason",
-        "suggested_time": f"recipientFirstName,mentorName,{_SESSION},holdUntilTime,"
-        "reasonMessage,suggestedDate,suggestedTime",
+        "suggested_time": "recipientFirstName,mentorName,sessionDate,sessionTime,holdUntilTime,"
+        "reasonMessage,suggestedDate,suggestedTime,suggestedTimezone",
         "request_awaiting": f"recipientFirstName,menteeName,hours,reminderMessage,{_SESSION},"
-        "sessionTopic,location,sessionDetail",
+        "sessionTopic,location,sessionDetail,answeredQuestions",
         "session_confirmed": f"recipientFirstName,menteeName,mentorName,{_SESSION},attendee,"
-        "sessionTopic,location,sessionDetail",
+        "sessionTopic,location,sessionDetail,answeredQuestions",
         "request_closed": f"recipientFirstName,mentorName,{_SESSION},menteeName,sessionTopic,"
         "reasonTitle,reasonMessage",
         "session_reminders": f"recipientFirstName,attendee,{_SESSION},sessionTopic,location",
-        "messages": f"sessionName,{_SESSION},sessionDuration,message1Name,message1Time,"
+        "messages": f"sessionName,{_SESSION},message1Name,message1Time,"
         "message1Text,message1FileName,message2Name,message2Time,message2Text,"
         "message2FileName,sender1Name,sender1Count,sender2Name,sender2Count,sender3Name,"
         "sender3Count,sender4Name,sender4Count,sender5Name,sender5Count,otherSenders,"
@@ -295,7 +296,8 @@ def test_every_shared_group_has_a_published_template() -> None:
         for group, members in TEMPLATE_GROUPS.items()
         for email in members
         for variant in SAMPLES[email]
-        for side in ("mentor", "mentee")
+        # A side's own copy is only ever read by that side.
+        for side in ((variant,) if variant in ("mentor", "mentee") else ("mentor", "mentee"))
     ],
 )
 def test_every_email_fills_its_published_shared_template(
@@ -320,9 +322,8 @@ def test_every_email_fills_its_published_shared_template(
 def test_the_answered_line_fills_for_every_email_of_its_templates(
     group: str, email: Notification, variant: str
 ) -> None:
-    """When the owner adds `answeredQuestions` to these templates in Loops, the
-    other emails sharing them fill it empty rather than refusing to send."""
-    declared = [*PUBLISHED_TEMPLATES[group], "answeredQuestions"]
-    built = build_variables(declared, sample_context(email, variant))
+    """The two templates show `answeredQuestions`; the other emails sharing them
+    fill it empty rather than refusing to send."""
+    built = build_variables(PUBLISHED_TEMPLATES[group], sample_context(email, variant))
     to_the_mentor = email in {N.SESSION_REQUESTED, N.SESSION_BOOKED} and variant != "mentee"
     assert built["answeredQuestions"] == ("3 questions" if to_the_mentor else "")

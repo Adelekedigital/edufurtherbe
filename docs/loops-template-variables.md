@@ -282,14 +282,15 @@ in these three lines alone an empty value says its fallback (logged
 fails when a member is missing, so code and this table cannot drift. Ids are the
 Railway `development` mapping as of 2026-11-09, when every email got a template
 (8 shared `App:` templates and 3 single ones); ids are not secret. Variables are
-what the live template declared when read from Loops on 2026-11-09; the backend
-reads them again from Loops at send time, so this column is a record, not a
-contract.
+what the live template declared when read from Loops on 2026-11-10, after the
+`App:` templates moved to the "EduFurther 2026" theme (the old "main start"
+theme and every pre-`App:` template are unchanged); the backend reads them
+again from Loops at send time, so this column is a record, not a contract.
 
 | member | Loops template | id | receives it | variables |
 |---|---|---|---|---|
-| `session_booked` | App: Session confirmed | `cmw9tssbg01t20j028kz2wkl4` | both | `attendee`, `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `location`, `menteeName`, `mentorName`, `recipientFirstName`, `sessionDate`, `sessionDetail`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
-| `session_requested` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `hours`, `location`, `menteeName`, `recipientFirstName`, `reminderMessage`, `sessionDate`, `sessionDetail`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
+| `session_booked` | App: Session confirmed | `cmw9tssbg01t20j028kz2wkl4` | both | `attendee`, `buttonLabel`, `buttonUrl`, `emailHeading`, `answeredQuestions`, `emailSubject`, `location`, `menteeName`, `mentorName`, `recipientFirstName`, `sessionDate`, `sessionDetail`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
+| `session_requested` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | `answeredQuestions`, `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `hours`, `location`, `menteeName`, `recipientFirstName`, `reminderMessage`, `sessionDate`, `sessionDetail`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
 | `request_accepted` | App: Session confirmed | `cmw9tssbg01t20j028kz2wkl4` | mentee | as `session_booked` |
 | `request_declined` | App: Request ended | `cmw9tu8od01w00j0unlhvxzt1` | mentee | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `menteeName`, `mentorName`, `reasonMessage`, `reasonTitle`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `sessionTopic` |
 | `request_withdrawn` | App: Request ended | `cmw9tu8od01w00j0unlhvxzt1` | mentor | as `request_declined` |
@@ -309,10 +310,10 @@ contract.
 | `mentor_paused_by_admin` | App: Mentor status | `cmw9sm2jj00bh0jx9f2vzhle3` | the paused mentor | as `mentor_approved` |
 | `mentor_response_reminder` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | as `session_requested` |
 | `mentor_return_reminder` | Return reminder | `cm4w04jbv00r82fxqlo8c6vyh` | the paused mentor | `mentorName` |
-| `session_time_suggested` | App: Suggested time | `cmw9snfwr00b60j1l5gbgmsku` | mentee | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `holdUntilTime`, `mentorName`, `reasonMessage`, `recipientFirstName`, `sessionDate`, `sessionTime`, `sessionTimezone`, `suggestedDate`, `suggestedTime` |
+| `session_time_suggested` | App: Suggested time | `cmw9snfwr00b60j1l5gbgmsku` | mentee | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `holdUntilTime`, `mentorName`, `reasonMessage`, `recipientFirstName`, `sessionDate`, `sessionTime`, `suggestedDate`, `suggestedTime`, `suggestedTimezone` |
 | `session_suggestion_reminder` | App: Suggested time | `cmw9snfwr00b60j1l5gbgmsku` | mentee | as `session_time_suggested` |
 | `mentee_request_reminder` | App: Request awaiting an answer | `cmw9t5xib012p0jx7a3hmthex` | mentor | as `session_requested` |
-| `message_unread_few` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the messages were sent to | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `message1FileName`, `message1Name`, `message1Text`, `message1Time`, `message2FileName`, `message2Name`, `message2Text`, `message2Time`, `otherSenders`, `sender1Count`, `sender1Name`, `sender2Count`, `sender2Name`, `sender3Count`, `sender3Name`, `sender4Count`, `sender4Name`, `sender5Count`, `sender5Name`, `sessionDate`, `sessionDuration`, `sessionName`, `sessionTime`, `sessionTimezone`, `settingsUrl` |
+| `message_unread_few` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the messages were sent to | `buttonLabel`, `buttonUrl`, `emailHeading`, `emailSubject`, `message1FileName`, `message1Name`, `message1Text`, `message1Time`, `message2FileName`, `message2Name`, `message2Text`, `message2Time`, `otherSenders`, `sender1Count`, `sender1Name`, `sender2Count`, `sender2Name`, `sender3Count`, `sender3Name`, `sender4Count`, `sender4Name`, `sender5Count`, `sender5Name`, `sessionDate`, `sessionName`, `sessionTime`, `sessionTimezone`, `settingsUrl` |
 | `message_unread_many` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the messages were sent to | as `message_unread_few` |
 | `message_in_session_window` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the message was sent to | as `message_unread_few` |
 
