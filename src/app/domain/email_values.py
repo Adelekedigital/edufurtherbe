@@ -17,6 +17,7 @@ __all__ = [
     "VALUE_NAMES",
     "VENUE_FALLBACK",
     "Value",
+    "counted",
 ]
 
 #: **What is legitimately absent gets one defined value, not a failed send.**
@@ -30,6 +31,11 @@ __all__ = [
 SESSION_TOPIC_FALLBACK = "Mentorship session"
 VENUE_FALLBACK = "Online"
 NO_REASON_TITLE = "No reason given"
+
+
+def counted(count: int, noun: str) -> str:
+    """A count in words, as every email says one: "1 question", "3 questions"."""
+    return f"1 {noun}" if count == 1 else f"{count} {noun}s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +95,15 @@ VALUES: tuple[Value, ...] = (
     ),
     Value("sessionDuration", "Session length", "45 min", "the session", _SESSION),
     Value("location", "Where the booking happens", "Google Meet", VENUE_FALLBACK, _SESSION),
+    # Decision 334: the count alone, empty when none were answered; in a line
+    # an empty one says the fallback rather than "your  questions".
+    Value(
+        "answeredQuestions",
+        "How many of the mentor's questions the mentee answered",
+        "3 questions",
+        "no questions",
+        ("answered_questions",),
+    ),
     Value("hours", "Whole hours left to answer the request", "18", "a few", ("request",)),
     Value("intervalTime", "How soon, in words", "Tomorrow", "soon"),
     Value(

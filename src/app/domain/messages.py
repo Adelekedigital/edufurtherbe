@@ -51,6 +51,7 @@ from app.domain.email_values import (
     NO_REASON_TITLE,
     SESSION_TOPIC_FALLBACK,
     VENUE_FALLBACK,
+    counted,
 )
 from app.domain.enums import EmailLine, SessionReasonCode
 from app.domain.message_emails import FEW_MAX, SENDER_ROWS
@@ -309,8 +310,35 @@ def _hours_left(context: MessageContext) -> str:
     return str(max(0, int(remaining.total_seconds() // 3600)))
 
 
+def _answered_questions(context: MessageContext) -> str:
+    """How many questions the mentee answered, in words, or empty for none
+    (decision 334). Never the answers: they can be long, files, and personal.
+    The mentee's copy has none: the questions are the mentor's."""
+    if context.recipient_role == "mentee":
+        return ""
+    raw = _needs(context.extras.get("answered_questions"), "answeredQuestions")
+    try:
+        count = int(raw)
+    except ValueError:
+        raise UnresolvedVariableError(f"answeredQuestions is not a count: {raw!r}") from None
+    return counted(count, "question") if count else ""
+
+
 #: Name to value. **One entry per distinct name**, shared by every template that
 #: asks for it.
+def _credit_count(context: MessageContext) -> str:
+    """How many credits: required, except for the first credits.
+
+    A `credits_granted` row queued before decision 323 carries no count, and
+    the Credits template hides its count box when it is empty, so that email
+    goes out without the number rather than not at all.
+    """
+    count = context.extras.get("credit_count")
+    if count in (None, "") and context.notification is Notification.CREDITS_GRANTED:
+        return ""
+    return _needs(count, "creditCount")
+
+
 RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "recipientName": lambda c: _needs(c.recipient_name, "recipientName"),
     "mentorName": lambda c: _needs(c.mentor_name, "mentorName"),
@@ -326,6 +354,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     ),
     "sessionTopic": _topic,
     "sessionDetail": lambda c: c.detail or "",
+    "answeredQuestions": _answered_questions,
     "location": lambda c: c.venue or VENUE_FALLBACK,
     "sessionUrl": _session_url,
     "dashboardUrl": lambda c: _app_link(c, DASHBOARD_PATH, "dashboardUrl"),
@@ -333,7 +362,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "recipientFirstName": lambda c: (
         c.recipient_first_name or _needs(c.recipient_name, "recipientFirstName")
     ),
-    "creditCount": lambda c: _needs(c.extras.get("credit_count"), "creditCount"),
+    "creditCount": _credit_count,
     "calendarUrl": lambda c: _app_link(c, CALENDAR_PATH, "calendarUrl"),
     "applicationUrl": lambda c: _app_link(c, MENTOR_APPLICATION_PATH, "applicationUrl"),
     # A decline's note, which is optional: empty when the reviewer left none.

@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings
 from app.infra.storage.supabase import SupabaseStorage
-from conftest import add_user, api_token, bearer, build_api_app, client_for
+from conftest import add_qualified_invite, add_user, api_token, bearer, build_api_app, client_for
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -541,18 +541,6 @@ async def test_unlocked_is_exactly_who_the_monthly_grant_pays(
 # --------------------------------------------------------------------------
 
 
-async def invite_qualified(engine: AsyncEngine, user_id: UUID) -> None:
-    """An invite of theirs that qualified: their invitee finished onboarding."""
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO referrals (referrer_id, code, signed_up_at, qualified_at) "
-                "VALUES (:u, :c, now(), now())"
-            ),
-            {"u": user_id, "c": uuid4().hex},
-        )
-
-
 @pytest.mark.parametrize(
     ("goal", "onboarded", "invited", "unlocked", "level"),
     [
@@ -584,7 +572,8 @@ async def test_the_level_is_published_unfloored(
     if onboarded:
         await onboard(db_engine, user_id)
     if invited:
-        await invite_qualified(db_engine, user_id)
+        async with db_engine.begin() as conn:
+            await add_qualified_invite(conn, user_id)
     if unlocked:
         await unlock(db_engine, user_id)
 

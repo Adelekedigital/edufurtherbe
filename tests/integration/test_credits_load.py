@@ -25,7 +25,7 @@ from app.domain.credits import credit_ladder
 from app.domain.transform.credits import plan_opening_balances
 from app.infra.etl.credits import CreditLoader, finished_onboarding
 from app.infra.etl.reconcile import reconcile_credits
-from conftest import add_user
+from conftest import add_qualified_invite, add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -624,16 +624,10 @@ async def test_an_unlock_earned_the_ordinary_way_is_not_overwritten(
     than `DO UPDATE` is what preserves the evidence."""
     await a_migrated_user(db_engine, "inviter")
     async with db_engine.begin() as conn:
-        referral = (
-            await conn.execute(
-                text(
-                    "INSERT INTO referrals (referrer_id, code, invitee_email, "
-                    "signed_up_at, qualified_at) "
-                    "SELECT id, 'INVITER1', 'friend@example.com', now(), now() FROM users "
-                    "WHERE legacy_bubble_id = 'inviter' RETURNING id"
-                )
-            )
+        inviter = (
+            await conn.execute(text("SELECT id FROM users WHERE legacy_bubble_id = 'inviter'"))
         ).scalar_one()
+        referral = await add_qualified_invite(conn, inviter, invitee_email="friend@example.com")
         await conn.execute(
             text(
                 "INSERT INTO referral_unlocks (user_id, unlocked_by_referral_id) "
