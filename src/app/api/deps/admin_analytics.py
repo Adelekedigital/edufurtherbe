@@ -14,12 +14,17 @@ from typing import Annotated
 
 from fastapi import Depends, Query, Request
 
-from app.api.deps.core import QueueViewerDep, SessionDep, _configured
-from app.api.schemas.admin_analytics import AnalyticsCreditsRead
+from app.api.deps.core import BookingWindowDep, QueueViewerDep, SessionDep, _configured
+from app.api.schemas.admin_analytics import (
+    AnalyticsCreditsRead,
+    AnalyticsOverviewRead,
+    AnalyticsSessionsRead,
+)
 from app.core.errors import NotFoundError
 from app.domain.analytics import Alert, Period, resolve_compare, resolve_period
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
+from app.infra.db.analytics_tabs import overview_tab, sessions_tab
 
 
 def require_analytics_on(request: Request) -> None:
@@ -87,3 +92,23 @@ async def analytics_credits(
 
 
 AnalyticsCreditsDep = Annotated[AnalyticsCreditsRead, Depends(analytics_credits)]
+
+
+async def analytics_overview(
+    ask: AnalyticsAskDep, alerts: AlertsDep, session: SessionDep, booking_window: BookingWindowDep
+) -> AnalyticsOverviewRead:
+    tab = await overview_tab(session, ask.period, ask.compare, booking_window)
+    return AnalyticsOverviewRead.of(ask.period, alerts, tab)
+
+
+AnalyticsOverviewDep = Annotated[AnalyticsOverviewRead, Depends(analytics_overview)]
+
+
+async def analytics_sessions(
+    ask: AnalyticsAskDep, alerts: AlertsDep, session: SessionDep
+) -> AnalyticsSessionsRead:
+    tab = await sessions_tab(session, ask.period, ask.compare)
+    return AnalyticsSessionsRead.of(ask.period, alerts, tab)
+
+
+AnalyticsSessionsDep = Annotated[AnalyticsSessionsRead, Depends(analytics_sessions)]

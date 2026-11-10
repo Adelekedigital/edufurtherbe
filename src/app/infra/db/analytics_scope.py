@@ -11,10 +11,13 @@ A deleted account is **counted**: what it did happened.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.mentor_stats import Window
 from app.infra.db.demo_seed import DEMO_EMAIL_LIKE
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
@@ -36,3 +39,12 @@ def counted_session() -> Any:
     """A session both of whose people are counted."""
     excluded = _excluded_users()
     return Session.mentor_id.not_in(excluded) & Session.mentee_id.not_in(excluded)
+
+
+async def per_window(
+    session: AsyncSession, windows: Sequence[Window], measure: Callable[[Window], Any]
+) -> list[Any]:
+    """``measure`` (a window to a scalar subquery) for every window, in one
+    statement and one snapshot, in the windows' order."""
+    row = (await session.execute(select(*(measure(window) for window in windows)))).one()
+    return list(row)

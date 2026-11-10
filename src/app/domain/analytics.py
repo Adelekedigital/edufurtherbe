@@ -23,7 +23,7 @@ from types import MappingProxyType
 from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError
-from app.domain.enums import CreditSource
+from app.domain.enums import CreditSource, MissedReason
 from app.domain.mentor_stats import Window
 
 #: The presets the window control offers, in days ending today.
@@ -283,3 +283,91 @@ def newest_first(alerts: list[Alert | None]) -> list[Alert]:
     """The alerts that fired, newest first (PRD 31: one banner each)."""
     fired = [alert for alert in alerts if alert is not None]
     return sorted(fired, key=lambda alert: alert.raised_at, reverse=True)
+
+
+# --- Overview and Sessions ---------------------------------------------------
+
+Number = int | float
+
+#: The seven feature cards, always all, in this order (PRD 31).
+FeatureKey = Literal[
+    "booking",
+    "explore",
+    "messaging",
+    "mentor_supply",
+    "invites",
+    "mentee_activation",
+    "mentor_activation",
+]
+FEATURES: tuple[FeatureKey, ...] = get_args(FeatureKey)
+
+
+@dataclass(frozen=True, slots=True)
+class Metric:
+    """A figure and the same measure over the previous period, or ``None``
+    when nothing is compared or the figure exists only now."""
+
+    value: Number | None
+    previous: Number | None
+
+
+def compared(value: Number | None, previous: Number | None, compare: bool) -> Metric:
+    return Metric(value=value, previous=previous if compare else None)
+
+
+def rounded(value: object, places: int) -> float | None:
+    """A database number rounded half up to ``places``, or ``None``."""
+    if value is None:
+        return None
+    quantum = Decimal(1).scaleb(-places)
+    return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP))
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesPoint:
+    start: dt.date
+    value: int
+    previous: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class NorthStar:
+    completed: Metric
+    unit: SeriesUnit
+    series: list[SeriesPoint]
+
+
+@dataclass(frozen=True, slots=True)
+class SubTracks:
+    unique_mentees: Metric
+    mentors_delivered: Metric
+    sessions_per_mentee: Metric
+
+
+@dataclass(frozen=True, slots=True)
+class Feature:
+    key: FeatureKey
+    value: Metric | None
+    spark: list[float | None] | None
+    contribution: Number | None
+
+
+@dataclass(frozen=True, slots=True)
+class OverviewTab:
+    north_star: NorthStar
+    sub_tracks: SubTracks
+    features: list[Feature]
+
+
+@dataclass(frozen=True, slots=True)
+class TopReason:
+    reason: MissedReason
+    share: float
+
+
+@dataclass(frozen=True, slots=True)
+class SessionsTab:
+    kpis: dict[str, Metric]
+    outcomes: dict[str, int]
+    top_no_show_reason: TopReason | None
+    guardrails: dict[str, Metric]
