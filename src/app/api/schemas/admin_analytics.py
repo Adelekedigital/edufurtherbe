@@ -32,7 +32,8 @@ from app.domain.analytics import (
     SupplyPlace,
     SupplyTab,
 )
-from app.domain.enums import MissedReason
+from app.domain.analytics_behaviour import BehaviourTab, FunnelName, FunnelTab
+from app.domain.enums import MissedReason, ProfileViewSource
 
 
 class WindowRead(BaseModel):
@@ -194,7 +195,7 @@ class SubTracksRead(BaseModel):
 class FeatureRead(BaseModel):
     key: FeatureKey
     value: MetricRead | None = Field(
-        description="A percentage. Null only for `explore` until it reads PostHog."
+        description="A percentage. Null only for `explore` when PostHog is not answering."
     )
     spark: list[float | None] | None = Field(
         description=(
@@ -511,4 +512,126 @@ class AnalyticsSupplyRead(SectionRead):
             unlisted=tab.unlisted,
             by_country=[SupplyPlaceRead.of(place) for place in tab.by_country],
             by_school=[SupplyPlaceRead.of(place) for place in tab.by_school],
+        )
+
+
+# --- Behaviour (PostHog) -----------------------------------------------------
+
+
+class FunnelStepRead(BaseModel):
+    key: str
+    label: str
+    value: int | None = Field(description="People who reached it; null when nothing tracks it.")
+    previous: int | None = Field(description="The previous period's; null with `compare=false`.")
+
+
+class AnalyticsFunnelRead(SectionRead):
+    """One Behaviour funnel."""
+
+    name: FunnelName
+    by: str = Field(description="The breakdown read; `all` when none was asked.")
+    note: str = Field(description="The funnel's footer note.")
+    window_days: int = Field(description="Days a person has from the first step to the last.")
+    steps: list[FunnelStepRead] = Field(description="Every step, in order.")
+
+    @classmethod
+    def of(cls, period: Period, alerts: list[Alert], tab: FunnelTab) -> AnalyticsFunnelRead:
+        return cls(
+            window=WindowRead.of(period),
+            alerts=[AlertRead.of(alert) for alert in alerts],
+            name=tab.name,
+            by=tab.by,
+            note=tab.note,
+            window_days=tab.window_days,
+            steps=[
+                FunnelStepRead(
+                    key=step.key,
+                    label=step.label,
+                    value=None if step.count is None else int(step.count.value or 0),
+                    previous=None
+                    if step.count is None or step.count.previous is None
+                    else int(step.count.previous),
+                )
+                for step in tab.steps
+            ],
+        )
+
+
+class LoginCodesRead(BaseModel):
+    attempts: int = Field(description="Log-in codes verified or failed.")
+    failed_rate: float | None = Field(description="Failed over attempts, as a percentage.")
+    failed_migrated_rate: float | None = Field(description="Migrated users' share of failures, %.")
+
+
+class SearchRead(BaseModel):
+    searches: int
+    no_result_rate: float | None = Field(description="Searches with no result, %.")
+    profile_views: int = Field(description="Profile views from a search result.")
+
+
+class SourceShareRead(BaseModel):
+    source: ProfileViewSource = Field(
+        description="Where the views came from; `other` for the rest."
+    )
+    share: float | None = Field(description="Its share of profile views, as a percentage.")
+
+
+class JoiningRead(BaseModel):
+    clicked: int
+    failed: int
+    median_minutes_before: float | None = Field(
+        description="Median minutes before the start that Join was clicked; null with none."
+    )
+
+
+class WritingAssistCardRead(BaseModel):
+    used: int
+    accepted_rate: float | None
+    discarded_rate: float | None
+
+
+class AppCardRead(BaseModel):
+    installed: int = Field(description="App installs in the window.")
+    push_allowed_rate: float | None = Field(description="Who allowed push over who was active, %.")
+
+
+class RouteFailuresRead(BaseModel):
+    route: str
+    count: int
+
+
+class AnalyticsBehaviourRead(SectionRead):
+    """The Behaviour tab's event cards. Now and for the window only: no `previous`."""
+
+    login: LoginCodesRead
+    search: SearchRead
+    profile_views_by_source: list[SourceShareRead] = Field(description="Most first.")
+    joining: JoiningRead
+    writing_assist: WritingAssistCardRead
+    app: AppCardRead
+    errors_by_screen: list[RouteFailuresRead] = Field(description="Top 3 routes by failures.")
+    replays_url: str | None = Field(
+        description="This environment's PostHog replays; null if unset."
+    )
+
+    @classmethod
+    def of(
+        cls, period: Period, alerts: list[Alert], tab: BehaviourTab, replays_url: str | None
+    ) -> AnalyticsBehaviourRead:
+        return cls(
+            window=WindowRead.of(period),
+            alerts=[AlertRead.of(alert) for alert in alerts],
+            login=LoginCodesRead.model_validate(tab.login),
+            search=SearchRead.model_validate(tab.search),
+            profile_views_by_source=[
+                SourceShareRead(source=row.key, share=row.share)
+                for row in tab.profile_views_by_source
+            ],
+            joining=JoiningRead.model_validate(tab.joining),
+            writing_assist=WritingAssistCardRead.model_validate(tab.writing_assist),
+            app=AppCardRead.model_validate(tab.app),
+            errors_by_screen=[
+                RouteFailuresRead(route=row.key, count=row.count) for row in tab.errors_by_screen
+            ],
+            replays_url=replays_url,
         )

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +29,12 @@ def _excluded_users() -> Any:
     rule here; the union of grants and demo addresses it replaced is the
     database's `internal_account()` now."""
     return select(User.id).where(User.is_internal)
+
+
+async def internal_ids(session: AsyncSession) -> list[UUID]:
+    """The internal accounts' ids, for a reader that cannot join this
+    database (PostHog knows them as distinct ids): the same rule, read out."""
+    return list((await session.scalars(_excluded_users())).all())
 
 
 def counted_user(user_id: Any) -> Any:

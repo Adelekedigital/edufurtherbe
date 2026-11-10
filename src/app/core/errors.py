@@ -293,6 +293,11 @@ class MoveTooLateError(ConflictError):
     longer be moved, only cancelled (decision 300)."""
 
 
+def retry_after(seconds: int) -> dict[str, str]:
+    """The `Retry-After` header a refusal that resolves with time carries."""
+    return {"Retry-After": str(seconds)}
+
+
 class RateLimitedError(AppError):
     """The caller has done this too often recently (#281).
 
@@ -305,7 +310,7 @@ class RateLimitedError(AppError):
         self.retry_after_seconds = retry_after_seconds
 
     def problem_headers(self) -> dict[str, str]:
-        return {"Retry-After": str(self.retry_after_seconds)}
+        return retry_after(self.retry_after_seconds)
 
 
 class ValidationError(AppError):
@@ -330,7 +335,7 @@ class ValidationError(AppError):
 class AnalyticsWindowError(ValidationError):
     """An admin Analytics request asked for a window that cannot be read: a
     bad preset, half a range, a day before the earliest or after today
-    (decision 324)."""
+    (decision 324), or a breakdown its funnel does not offer (decision 331)."""
 
 
 class FileTooLargeError(ValidationError):
@@ -417,6 +422,22 @@ class WritingAssistUnavailableError(AppError):
     feature being switched off is this service's own state (decision 142's
     reopen case), and the client is meant to try again later.
     """
+
+
+class AnalyticsUpstreamError(AppError):
+    """The product-analytics source cannot answer: not configured here, out of
+    reach, out of time, or an answer we cannot read (decision 331).
+
+    A `503` with `Retry-After`, like the writing assistant's: unconfigured is
+    this service's own state, and the admin page says to try again in a few
+    minutes. The cause is logged, never sent.
+    """
+
+    #: How long the page is told to wait before asking again.
+    RETRY_AFTER_SECONDS = 60
+
+    def problem_headers(self) -> dict[str, str]:
+        return retry_after(self.RETRY_AFTER_SECONDS)
 
 
 class PushUnavailableError(AppError):

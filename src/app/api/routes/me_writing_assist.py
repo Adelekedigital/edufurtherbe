@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import AssistedTextDep
+from app.api.errors import retry_after_header
 from app.api.schemas.writing_assist import WritingAssistRead
 from app.domain.profile_text import ABOUT_ME_MAX_LENGTH
 
@@ -56,12 +57,7 @@ router = APIRouter(prefix="/api/v1/me", tags=["writing-assist"])
                 "`/problems/rate-limited`: the daily limit for this field is reached. "
                 "`Retry-After` says how many seconds until the next is allowed."
             ),
-            "headers": {
-                "Retry-After": {
-                    "description": "Seconds until another request is allowed.",
-                    "schema": {"type": "integer", "minimum": 1},
-                }
-            },
+            "headers": retry_after_header("Seconds until another request is allowed."),
         },
         status.HTTP_503_SERVICE_UNAVAILABLE: {
             "description": (

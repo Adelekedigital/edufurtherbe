@@ -71,6 +71,7 @@ from app.domain.enums import (
     PreviewEventKind,
     PreviewRevealField,
     PrimaryRole,
+    ProfileViewSource,
     QuestionOptionsSource,
     QuestionType,
     ReviewReportOutcome,
@@ -295,6 +296,8 @@ UNCONSTRAINED_ENUMS: dict[type[StrEnum], str] = {
     CreditState: "credit_state is banded from a balance at read time; no column holds it",
     # What a writing-assist request asks for; nothing stores it (decision 267).
     WritingAssistMode: "writing-assist mode is request-only; no column holds it",
+    # A PostHog event property read back for the admin page; no column holds it.
+    ProfileViewSource: "profile-view source is PostHog's; no column holds it",
 }
 
 
