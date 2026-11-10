@@ -144,7 +144,7 @@ class Notification(StrEnum):
 
     #: **There is deliberately no separate reminder member.** The nudge a day
     #: later is the *same message asked again*, carrying `interval` so the
-    #: template can say so — one template exists (`sessionReviewRequest`) and a
+    #: template can say so — one template words both (`App: Review requested`) and a
     #: second member would need a second one nobody wrote.
     #:
     #: #21 governs: a vocabulary does not carry a member for a message nobody has

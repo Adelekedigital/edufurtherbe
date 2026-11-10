@@ -458,7 +458,15 @@ def test_a_reason_written_without_a_code_has_no_title() -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["sessionUrl", "dashboardUrl", "exploreUrl", "calendarUrl", "applicationUrl"]
+    "name",
+    [
+        "sessionUrl",
+        "dashboardUrl",
+        "exploreUrl",
+        "calendarUrl",
+        "applicationUrl",
+        "adminMentorsUrl",
+    ],
 )
 def test_a_link_with_no_app_origin_is_refused(name: str) -> None:
     """Codex on #340: with `APP_BASE_URL` unset a link went out as `/explore`,
@@ -480,6 +488,14 @@ def test_the_approval_email_links_to_the_mentor_application_page() -> None:
     built = build_variables(["applicationUrl"], context(app_base_url="https://app.example.test"))
 
     assert built == {"applicationUrl": "https://app.example.test/mentor-application"}
+
+
+def test_the_new_application_email_links_admins_to_the_mentors_page() -> None:
+    """Owner, 2026-11-10: the admins' email had no button; it opens the admin
+    app's Mentors page, where the application is reviewed."""
+    built = build_variables(["adminMentorsUrl"], context(app_base_url="https://app.example.test"))
+
+    assert built == {"adminMentorsUrl": "https://app.example.test/admin/mentors"}
 
 
 def test_a_decline_carries_its_note_and_reads_empty_without_one() -> None:

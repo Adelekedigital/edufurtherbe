@@ -179,3 +179,14 @@ def test_the_booking_contract_lists_the_entry_points() -> None:
 
     assert published == [point.value for point in EntryPoint]
     assert "messages" not in published
+
+
+def test_the_consent_answer_is_optional_on_me() -> None:
+    """Not in `/me`'s required list, as the other optional fields are not: the
+    frontend's type-checked `/me` mock would break otherwise."""
+    from app.main import create_app
+
+    schema = create_app().openapi()["components"]["schemas"]["UserRead"]
+
+    assert "analytics_consent" in schema["properties"]
+    assert "analytics_consent" not in schema.get("required", [])
