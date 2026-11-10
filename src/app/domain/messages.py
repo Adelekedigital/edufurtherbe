@@ -59,6 +59,7 @@ from app.domain.sessions import request_deadline
 
 __all__ = [
     "ALIASES",
+    "DATE_FORMAT",
     "DELETED_PARTY_LABELS",
     "LINE_VARIABLES",
     "NO_REASON_TITLE",
@@ -174,6 +175,10 @@ class MessageContext:
 #: `APP_BASE_URL`, which is the *application's* origin and deliberately not
 #: `PUBLIC_BASE_URL` — that one is this service's own, and a link built from it
 #: would send a mentor to the API.
+#: How every date in an email reads: "Fri 20 November 2026" (owner,
+#: 2026-11-10: a three-letter day keeps the details card's one-line WHEN short).
+DATE_FORMAT = "%a %d %B %Y"
+
 SESSION_PATH = "/sessions/{session_id}"
 DASHBOARD_PATH = "/dashboard"
 CALENDAR_PATH = "/calendar"
@@ -299,7 +304,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     # `%-d` is not portable to Windows, so the day is formatted without padding
     # by hand. The suite runs on both.
     "sessionDate": lambda c: _local(_as_moment(c, "sessionDate"), c.recipient_timezone).strftime(
-        "%A %d %B %Y"
+        DATE_FORMAT
     ),
     "sessionTime": lambda c: _local(_as_moment(c, "sessionTime"), c.recipient_timezone).strftime(
         "%H:%M"
@@ -322,7 +327,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     # The return reminder is one template for a dated pause and an undated one,
     # so the side that does not apply is deliberately empty, not refused.
     "returnOn": lambda c: (
-        dt.date.fromisoformat(c.extras["return_on"]).strftime("%A %d %B %Y")
+        dt.date.fromisoformat(c.extras["return_on"]).strftime(DATE_FORMAT)
         if c.extras.get("return_on")
         else ""
     ),
@@ -335,7 +340,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "intervalTime": lambda c: _needs(c.extras.get("interval"), "intervalTime"),
     # A suggested time (#339), in the recipient's zone like the session's own.
     "suggestedDate": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedDate").strftime(
-        "%A %d %B %Y"
+        DATE_FORMAT
     ),
     "suggestedTime": lambda c: _extra_moment(c, "suggested_starts_at", "suggestedTime").strftime(
         "%H:%M"

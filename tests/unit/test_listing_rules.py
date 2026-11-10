@@ -116,7 +116,7 @@ def test_the_one_template_hears_how_far_away_the_return_is() -> None:
 
     assert built == {
         "daysUntilReturn": "3",
-        "returnOn": "Saturday 03 October 2026",
+        "returnOn": "Sat 03 October 2026",
         "daysPaused": "",
         "calendarUrl": "https://app.example/calendar",
     }

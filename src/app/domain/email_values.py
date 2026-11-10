@@ -73,7 +73,7 @@ VALUES: tuple[Value, ...] = (
     Value(
         "sessionDate",
         "The booking's date, in the reader's zone",
-        "Friday 20 November 2026",
+        "Fri 20 November 2026",
         "the day",
         _SESSION,
     ),
@@ -96,7 +96,7 @@ VALUES: tuple[Value, ...] = (
         NO_REASON_TITLE,
         ("reason_code", "reason_text"),
     ),
-    Value("suggestedDate", "The suggested time's date", "Saturday 21 November 2026", "the day"),
+    Value("suggestedDate", "The suggested time's date", "Sat 21 November 2026", "the day"),
     Value("suggestedTime", "The suggested start time", "16:00", "the time"),
     Value("holdUntilTime", "When the suggested time is released", "17:30", "soon"),
     Value("creditCount", "How many credits", "2", "your"),

@@ -441,7 +441,7 @@ template may use:
 
 - `recipientName`
 - `daysUntilReturn`: `7`, `3` or `0` (`0` is "today"), or empty with no date
-- `returnOn`: the return date in words (e.g. `Saturday 03 October 2026`), or empty
+- `returnOn`: the return date in words (e.g. `Sat 03 October 2026`), or empty
 - `daysPaused`: `30` or `59` with no date, else empty
 - `calendarUrl`: where they switch back on
 
