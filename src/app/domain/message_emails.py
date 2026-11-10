@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.domain.chats import preview
-from app.domain.names import NAMELESS, addressed_by
+from app.domain.names import NAMELESS, addressed_by, joined_name
 from app.domain.notifications import Notification
 
 __all__ = [
@@ -109,8 +109,7 @@ def _first(message: EmailedMessage) -> str:
 
 
 def _full(message: EmailedMessage) -> str:
-    named = " ".join(part for part in (message.first_name, message.last_name) if part)
-    return named or NAMELESS
+    return joined_name(message.first_name, message.last_name) or NAMELESS
 
 
 def _initials(message: EmailedMessage) -> str:

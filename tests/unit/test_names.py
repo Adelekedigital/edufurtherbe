@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.api.schemas.profile import UserProfileWrite
-from app.domain.names import split_full_name
+from app.domain.names import joined_name, split_full_name
 from app.domain.text import hidden_characters
 
 
@@ -42,3 +42,12 @@ def test_the_writer_receives_the_two_names_and_not_the_full_name() -> None:
         "first_name": "Grace",
         "last_name": "Brewster Hopper",
     }
+
+
+def test_a_name_is_joined_trimmed_whatever_the_row_holds() -> None:
+    """Migrated rows can carry an empty, missing or padded part (PR 608 review)."""
+    assert joined_name("Ada", "Obi") == "Ada Obi"
+    assert joined_name("Ada", None) == "Ada"
+    assert joined_name(" Ada ", " ") == "Ada"
+    assert joined_name(None, "  Obi") == "Obi"
+    assert joined_name(" ", None) == ""

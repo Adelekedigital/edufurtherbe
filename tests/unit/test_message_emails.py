@@ -232,7 +232,7 @@ def test_the_few_email_resolves_every_name_in_the_recipients_zone() -> None:
     values = unread_email([said("One")])
     built = build_variables(FEW, context(values, notification=FEW_KIND))
 
-    assert built["message1Time"] == "15:00"  # 14:00 UTC in Lagos.
+    assert built["message1Time"] == "3:00 PM"  # 14:00 UTC in Lagos.
     assert built["message2Name"] == ""
     assert built["message2Time"] == ""
     assert built["buttonUrl"] == f"https://app.example.test/messages?with={ADA}"
@@ -269,7 +269,7 @@ def test_the_instant_email_resolves_with_its_session() -> None:
     )
     assert built["sessionName"] == "CV review"
     assert built["sessionDuration"] == "45 min"
-    assert built["sessionTime"] == "15:00"
+    assert built["sessionTime"] == "3:00 PM"
     assert built["sessionUrl"] == "https://app.example.test/sessions/s-1"
 
 

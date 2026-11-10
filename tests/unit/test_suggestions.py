@@ -53,9 +53,9 @@ def test_the_offer_renders_in_the_mentees_zone() -> None:
     )
 
     assert built == {
-        "suggestedDate": "Monday 05 October 2026",
-        "suggestedTime": "15:00",
-        "holdUntilTime": "15:00",
+        "suggestedDate": "Mon 05 Oct 2026",
+        "suggestedTime": "3:00 PM",
+        "holdUntilTime": "3:00 PM",
         "suggestedAfter": "declined",
     }
 

@@ -11,12 +11,19 @@ from fastapi import APIRouter, Depends, Response, status
 
 from app.api.deps.admin_analytics import (
     AnalyticsCreditsDep,
+    AnalyticsOverviewDep,
+    AnalyticsSessionsDep,
     AnalyticsSupplyDep,
     require_analytics_on,
 )
 from app.api.deps.core import PRIVATE_NO_STORE
 from app.api.routes.admin import ADMIN_RESPONSES
-from app.api.schemas.admin_analytics import AnalyticsCreditsRead, AnalyticsSupplyRead
+from app.api.schemas.admin_analytics import (
+    AnalyticsCreditsRead,
+    AnalyticsOverviewRead,
+    AnalyticsSessionsRead,
+    AnalyticsSupplyRead,
+)
 
 router = APIRouter(
     prefix="/api/v1/admin/analytics",
@@ -59,6 +66,64 @@ _RESPONSES = ADMIN_RESPONSES | {
     responses=_RESPONSES,
 )
 async def analytics_credits(read: AnalyticsCreditsDep, response: Response) -> AnalyticsCreditsRead:
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
+    return read
+
+
+@router.get(
+    "/overview",
+    response_model=AnalyticsOverviewRead,
+    summary="Analytics: overview",
+    description=(
+        "The platform North Star (completed sessions, by `starts_at`, with a series), "
+        "its sub-tracks, and the seven feature North Stars, each a percentage with "
+        "an 8-point sparkline:\n\n"
+        "- `booking`: requests made in the window that became completed sessions "
+        "(a moved request by where its moves ended)\n"
+        "- `explore`: null until it reads PostHog\n"
+        "- `messaging`: chats started in the window answered by the other person "
+        "within 24 hours\n"
+        "- `mentor_supply`: listed mentors whose card shows a free time within 14 "
+        "days, now (no `previous`, no sparkline)\n"
+        "- `invites`: invites made in the window whose invitee finished their profile\n"
+        "- `mentee_activation`: mentees who signed up in the window (migrated accounts "
+        "are not sign-ups) with a completed session within 14 days\n"
+        "- `mentor_activation`: mentors approved in the window who are taking "
+        "bookings now (an application must be bookable to be submitted, so this "
+        "catches a mentor who stopped)\n\n" + _SECTION
+    ),
+    responses=_RESPONSES,
+)
+async def analytics_overview(
+    read: AnalyticsOverviewDep, response: Response
+) -> AnalyticsOverviewRead:
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
+    return read
+
+
+@router.get(
+    "/sessions",
+    response_model=AnalyticsSessionsRead,
+    summary="Analytics: sessions",
+    description=(
+        "KPIs: `requests` made in the window (a move is not a request); "
+        "`acceptance_rate`, accepted over accepted, declined and expired, for "
+        "requests decided in the window; `median_reply_hours` from request to "
+        "accept or decline, for replies in the window; `show_up_rate`, completed "
+        "over completed and no-show, for sessions starting in the window; "
+        "`repeat_booking_rate`, mentees with two or more completed sessions in the "
+        "60 days ending at the window's end over those with one; `average_rating`, "
+        "the mean session value of reviews written in the window (one decimal); "
+        "`review_rate`, those reviews over sessions completed in the window (can "
+        "pass 100); `reports` made in the window. Guardrails: `no_show_rate`, "
+        "`request_expiry_rate` (expired over decided, in the window) and "
+        "`credit_expiry_rate` (expired over granted, refunds left out).\n\n" + _SECTION
+    ),
+    responses=_RESPONSES,
+)
+async def analytics_sessions(
+    read: AnalyticsSessionsDep, response: Response
+) -> AnalyticsSessionsRead:
     response.headers["Cache-Control"] = PRIVATE_NO_STORE
     return read
 
