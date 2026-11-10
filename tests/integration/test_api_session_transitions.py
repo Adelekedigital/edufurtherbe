@@ -33,7 +33,12 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 
 async def a_booking(
-    engine: AsyncEngine, client: httpx.AsyncClient, tag: str, *, confirmed: bool = False
+    engine: AsyncEngine,
+    client: httpx.AsyncClient,
+    tag: str,
+    *,
+    confirmed: bool = False,
+    entry_point: str | None = None,
 ) -> dict[str, Any]:
     """A real booking, made through the endpoint that makes them.
 
@@ -79,7 +84,11 @@ async def a_booking(
     starts_at = str(slots.json()["data"][-1]["start"])
     created = await client.post(
         "/api/v1/sessions",
-        json={"session_type_id": str(session_type), "starts_at": starts_at},
+        json={
+            "session_type_id": str(session_type),
+            "starts_at": starts_at,
+            **({"entry_point": entry_point} if entry_point is not None else {}),
+        },
         headers=bearer(api_token(mentee_auth)) | {"Idempotency-Key": str(uuid4())},
     )
     assert created.status_code == 201, created.text

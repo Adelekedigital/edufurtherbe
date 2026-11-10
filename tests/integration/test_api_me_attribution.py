@@ -1,8 +1,9 @@
-"""`POST /me/acquisition` (PRD 30 PR 2, decision 329).
+"""`POST /me/acquisition` and `PUT /me/consents/analytics` (PRD 30 PR 2, decision 329).
 
 What carries weight: acquisition is recorded **once** and never for a migrated
-account, untrusted values are coerced rather than refused, and an invite is the
-one `resolve_code` finds.
+account, untrusted values are coerced rather than refused, an invite is the one
+`resolve_code` finds; the consent answer is the caller's own, a decline kept
+and replaced by a later grant.
 """
 
 from __future__ import annotations
@@ -188,3 +189,97 @@ async def test_a_code_naming_no_live_invite_of_somebody_else_is_not_an_invite(
 
 async def test_acquisition_needs_a_sign_in(api_client: httpx.AsyncClient) -> None:
     assert (await api_client.post(ACQUISITION, json={})).status_code == 401
+
+
+# --------------------------------------------------------------------------
+# Consent
+# --------------------------------------------------------------------------
+
+
+async def me(client: httpx.AsyncClient, token: dict[str, str]) -> dict[str, Any]:
+    response = await client.get("/api/v1/me", headers=token)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_never_answered_reads_null(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, token = await signed_in(db_engine)
+
+    assert (await me(api_client, token))["analytics_consent"] is None
+
+
+async def test_a_decline_is_kept_and_a_later_grant_replaces_it(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    user, token = await signed_in(db_engine)
+
+    declined = await api_client.put(
+        CONSENT, json={"granted": False, "version": "2026-11"}, headers=token
+    )
+    after_decline = (await me(api_client, token))["analytics_consent"]
+    granted = await api_client.put(
+        CONSENT, json={"granted": True, "version": "2026-12"}, headers=token
+    )
+    after_grant = (await me(api_client, token))["analytics_consent"]
+
+    assert declined.status_code == 200, declined.text
+    assert declined.json()["granted"] is False
+    assert after_decline["granted"] is False
+    assert after_decline["version"] == "2026-11"
+    assert granted.json()["granted"] is True
+    assert after_grant["granted"] is True
+    assert after_grant["version"] == "2026-12"
+    assert after_grant["answered_at"] >= after_decline["answered_at"]
+    async with db_engine.begin() as conn:
+        rows = await conn.scalar(
+            text("SELECT count(*) FROM analytics_consents WHERE user_id = :u"), {"u": user}
+        )
+    assert rows == 1
+
+
+async def test_an_answer_is_the_callers_own_and_nobody_elses(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    ada, ada_token = await signed_in(db_engine)
+    _, bo_token = await signed_in(db_engine)
+    await api_client.put(CONSENT, json={"granted": True, "version": "v1"}, headers=ada_token)
+
+    # A body naming another person is refused, not obeyed.
+    smuggled = await api_client.put(
+        CONSENT,
+        json={"granted": False, "version": "v1", "user_id": str(ada)},
+        headers=bo_token,
+    )
+
+    assert smuggled.status_code == 422
+    assert (await me(api_client, ada_token))["analytics_consent"]["granted"] is True
+    assert (await me(api_client, bo_token))["analytics_consent"] is None
+    await api_client.put(CONSENT, json={"granted": False, "version": "v1"}, headers=bo_token)
+    assert (await me(api_client, ada_token))["analytics_consent"]["granted"] is True
+    assert (await me(api_client, bo_token))["analytics_consent"]["granted"] is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"granted": True},
+        {"version": "v1"},
+        {"granted": "maybe", "version": "v1"},
+        {"granted": True, "version": ""},
+        {"granted": True, "version": "x" * 65},
+    ],
+)
+async def test_a_malformed_answer_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, body: dict[str, Any]
+) -> None:
+    _, token = await signed_in(db_engine)
+
+    assert (await api_client.put(CONSENT, json=body, headers=token)).status_code == 422
+
+
+async def test_consent_needs_a_sign_in(api_client: httpx.AsyncClient) -> None:
+    response = await api_client.put(CONSENT, json={"granted": True, "version": "v"})
+
+    assert response.status_code == 401

@@ -1,22 +1,30 @@
-"""PRD 30 PR 2: where an account came from, read off what we are sent."""
+"""PRD 30 PR 2: where an account and a booking came from, read off what we are sent."""
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from app.api.schemas.attribution import AcquisitionWrite
+from app.api.schemas.sessions import SessionBookingWrite
+from app.domain.analytics_events import (
+    cancelled_properties,
+    requested_properties,
+    session_properties,
+)
 from app.domain.attribution import (
     auth_method_from,
     signup_channel,
     signup_source,
 )
-from app.domain.enums import AuthMethod, SignupChannel, SignupSource
+from app.domain.enums import AuthMethod, EntryPoint, SignupChannel, SignupSource
 from app.infra.auth.dev_tokens import mint_dev_token
 from app.infra.auth.supabase import SupabaseTokenVerifier
 
 SECRET = "unit-test-signing-secret-of-enough-length"  # noqa: S105
+SESSION = UUID("0190aaaa-0000-7000-8000-0000000000aa")
+TYPE = UUID("0190aaaa-0000-7000-8000-0000000000bb")
 
 
 @pytest.mark.parametrize(
@@ -121,3 +129,64 @@ def test_the_token_says_how_it_signed_in() -> None:
 )
 def test_a_claim_of_another_shape_says_nothing(claims: dict[str, object]) -> None:
     assert verify(**claims) is None
+
+
+def test_an_entry_point_is_carried_only_when_there_is_one() -> None:
+    assert requested_properties(SESSION, TYPE, None) == {
+        "session_id": SESSION,
+        "session_type_id": TYPE,
+    }
+    assert requested_properties(SESSION, TYPE, EntryPoint.EXPLORE)["entry_point"] is (
+        EntryPoint.EXPLORE
+    )
+    assert session_properties(SESSION, None) == {"session_id": SESSION}
+    assert session_properties(SESSION, EntryPoint.HOME) == {
+        "session_id": SESSION,
+        "entry_point": EntryPoint.HOME,
+    }
+    assert cancelled_properties(SESSION, "mentee", "other", EntryPoint.MENTOR_PROFILE) == {
+        "session_id": SESSION,
+        "by": "mentee",
+        "reason_code": "other",
+        "entry_point": EntryPoint.MENTOR_PROFILE,
+    }
+    assert "entry_point" not in cancelled_properties(SESSION, "mentee", "other", None)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("explore", EntryPoint.EXPLORE),
+        ("rebook_after_review", EntryPoint.REBOOK_AFTER_REVIEW),
+        ("messages", None),
+        ("nonsense", None),
+        (None, None),
+    ],
+)
+def test_a_bookings_entry_point_outside_the_list_is_dropped_not_refused(
+    raw: object, expected: EntryPoint | None
+) -> None:
+    body = SessionBookingWrite.model_validate(
+        {"session_type_id": str(TYPE), "starts_at": "2026-12-01T10:00:00Z", "entry_point": raw}
+    )
+
+    assert body.entry_point == expected
+
+
+def test_the_booking_contract_lists_the_entry_points() -> None:
+    schema = SessionBookingWrite.model_json_schema()
+    published = schema["$defs"]["EntryPoint"]["enum"]
+
+    assert published == [point.value for point in EntryPoint]
+    assert "messages" not in published
+
+
+def test_the_consent_answer_is_optional_on_me() -> None:
+    """Not in `/me`'s required list, as the other optional fields are not: the
+    frontend's type-checked `/me` mock would break otherwise."""
+    from app.main import create_app
+
+    schema = create_app().openapi()["components"]["schemas"]["UserRead"]
+
+    assert "analytics_consent" in schema["properties"]
+    assert "analytics_consent" not in schema.get("required", [])

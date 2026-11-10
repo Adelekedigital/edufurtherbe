@@ -441,6 +441,7 @@ class RuntimeJobs:
                     admin=admin,
                     contacts=loops_contacts_for(self.settings),
                     storage=storage,
+                    analytics=live_analytics_sink(self.settings),
                     now=dt.datetime.now(dt.UTC),
                     dry_run=dry_run,
                 )

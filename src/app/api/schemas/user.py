@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.api.schemas.attribution import AnalyticsConsentRead
 from app.api.schemas.catalogue import CountryRef
 from app.api.schemas.common import AvatarFocusRead, LinkedInRead, StoredEmail
 from app.api.schemas.links import LinkRead
@@ -338,6 +339,14 @@ class UserRead(NormalisedEmail):
             "you, or the platform default. Every session type not deleted counts, "
             "hidden and scheduled for deletion included; creating one past it is "
             "`409 /problems/session-type-limit-reached`. Null without a mentor profile."
+        ),
+    )
+    analytics_consent: AnalyticsConsentRead | None = Field(
+        default=None,
+        description=(
+            "The caller's answer to analytics cookies (`PUT /me/consents/analytics`): "
+            "`granted`, the consent text's `version`, and `answered_at`. Null "
+            "until they answer, which is when the banner shows."
         ),
     )
 

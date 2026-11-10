@@ -95,7 +95,7 @@ def _session_events(row: RowMapping) -> list[Event]:
     dated by the request and keyed by this row, the only fact it has."""
     built = []
     if row["confirmed_at"] is not None:
-        confirmed = session_properties(row["session_id"])
+        confirmed = session_properties(row["session_id"], row["entry_point"])
         built.append(
             _event(AnalyticsEvent.SESSION_CONFIRMED, row, confirmed, at=row["confirmed_at"])
         )
@@ -103,11 +103,15 @@ def _session_events(row: RowMapping) -> list[Event]:
         row["from_status"], row["to_status"], moved_from=row["moved_from"], moved_on=row["moved_on"]
     ):
         if name is AnalyticsEvent.BOOKING_REQUESTED:
-            properties = requested_properties(row["session_id"], row["session_type_id"])
+            properties = requested_properties(
+                row["session_id"], row["session_type_id"], row["entry_point"]
+            )
         elif name is AnalyticsEvent.SESSION_CANCELLED:
-            properties = cancelled_properties(row["session_id"], row["by"], row["reason_code"])
+            properties = cancelled_properties(
+                row["session_id"], row["by"], row["reason_code"], row["entry_point"]
+            )
         else:
-            properties = session_properties(row["session_id"])
+            properties = session_properties(row["session_id"], row["entry_point"])
         built.append(_event(name, row, properties))
     return built
 
