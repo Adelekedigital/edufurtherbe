@@ -450,6 +450,18 @@ async def give_mentee_answers(conn: AsyncConnection, user_id: uuid.UUID) -> None
     )
 
 
+async def add_qualified_invite(conn: AsyncConnection, user_id: uuid.UUID) -> None:
+    """An invite of theirs that qualified: their invitee finished onboarding,
+    which raises their credit level to 2 (decision 308)."""
+    await conn.execute(
+        text(
+            "INSERT INTO referrals (referrer_id, code, signed_up_at, qualified_at) "
+            "VALUES (:u, :c, now(), now())"
+        ),
+        {"u": user_id, "c": uuid.uuid4().hex},
+    )
+
+
 async def add_user(
     conn: AsyncConnection,
     email: str,

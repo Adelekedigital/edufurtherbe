@@ -127,10 +127,10 @@ def test_which_email_and_which_side_travel_as_values() -> None:
 
 
 def test_a_variable_another_email_owns_is_empty_within_the_group() -> None:
-    granted = a_context(N.CREDITS_GRANTED, extras={})
+    granted = a_context(N.CREDITS_GRANTED, extras={"credit_count": "2"})
     assert build_variables(["emailType", "creditCount", "intervalTime"], granted) == {
         "emailType": "credits_granted",
-        "creditCount": "",
+        "creditCount": "2",
         "intervalTime": "",
         "recipientRole": "",
     }
@@ -147,11 +147,11 @@ def test_a_template_showing_the_lines_is_shared_and_always_gets_its_switches() -
     """Loops lists only what a template shows, never `emailType`, which only
     picks its sections: the lines mark it shared, and the switches always go."""
     built = build_variables(
-        ["emailSubject", "creditCount"], a_context(N.CREDITS_GRANTED, extras={})
+        ["emailSubject", "intervalTime"], a_context(N.CREDITS_GRANTED, extras={})
     )
     assert built == {
         "emailSubject": "Your session credits are here",
-        "creditCount": "",
+        "intervalTime": "",
         "emailType": "credits_granted",
         "recipientRole": "",
     }
@@ -175,13 +175,14 @@ def test_a_template_one_email_still_uses_alone_fails_as_before() -> None:
     """Only a shared template (`marks_shared`) gets the empty value:
     a separate template asking for another email's variable is a template
     pointed at the wrong email."""
-    with pytest.raises(UnresolvedVariableError, match="creditCount"):
-        build_variables(["creditCount"], a_context(N.CREDITS_GRANTED, extras={}))
+    with pytest.raises(UnresolvedVariableError, match="intervalTime"):
+        build_variables(["intervalTime"], a_context(N.CREDITS_GRANTED, extras={}))
 
 
-def test_an_owner_still_needs_its_variable() -> None:
+@pytest.mark.parametrize("email", [N.CREDITS_GRANTED, N.CREDITS_RENEWED])
+def test_an_owner_still_needs_its_variable(email: Notification) -> None:
     with pytest.raises(UnresolvedVariableError, match="creditCount"):
-        build_variables(["emailType", "creditCount"], a_context(N.CREDITS_RENEWED, extras={}))
+        build_variables(["emailType", "creditCount"], a_context(email, extras={}))
 
 
 def test_outside_the_group_a_variable_still_fails_by_name() -> None:
