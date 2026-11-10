@@ -297,7 +297,7 @@ SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
     N.SESSION_LAST_REMINDER: {"default": {"kind": "s5", "interval": "in 5 Minutes"}},
     N.SESSION_TIME_SUGGESTED: {"default": {"suggested_after": "declined", **_SUGGESTED}},
     N.SESSION_SUGGESTION_REMINDER: {"default": dict(_SUGGESTED)},
-    N.CREDITS_GRANTED: {"default": {}},
+    N.CREDITS_GRANTED: {"default": {"credit_count": "1"}},
     N.CREDITS_RENEWED: {"default": {"credit_count": "2"}},
     N.CREDITS_EXPIRING: {"default": {"kind": "c14", "interval": "two weeks", "credit_count": "1"}},
     N.MENTOR_APPROVED: {"default": {}},

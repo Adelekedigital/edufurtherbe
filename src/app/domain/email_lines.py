@@ -78,7 +78,7 @@ OWNED_BY: dict[str, frozenset[Notification]] = {
     "senderFirstName": frozenset({N.MESSAGE_IN_SESSION_WINDOW}),
     "previewText": frozenset({N.MESSAGE_UNREAD_FEW, N.MESSAGE_IN_SESSION_WINDOW}),
     "repliesName": frozenset({N.MESSAGE_UNREAD_FEW}),
-    "creditCount": frozenset({N.CREDITS_RENEWED, N.CREDITS_EXPIRING}),
+    "creditCount": frozenset({N.CREDITS_GRANTED, N.CREDITS_RENEWED, N.CREDITS_EXPIRING}),
     "suggestedAfter": frozenset({N.SESSION_TIME_SUGGESTED}),
     "reminderMessage": frozenset({N.MENTEE_REQUEST_REMINDER}),
 }

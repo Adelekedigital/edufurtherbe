@@ -170,7 +170,11 @@ def test_hours_mean_something_only_on_a_request() -> None:
 
 
 def test_values_follow_what_the_email_is_about() -> None:
-    assert values_for(N.CREDITS_GRANTED, "default") == ("recipientFirstName", "recipientName")
+    assert values_for(N.CREDITS_GRANTED, "default") == (
+        "recipientFirstName",
+        "recipientName",
+        "creditCount",
+    )
     assert "creditCount" in values_for(N.CREDITS_RENEWED, "default")
     assert "sessionTopic" not in values_for(N.CREDITS_RENEWED, "default")
     assert "mentorName" in values_for(N.MENTOR_APPROVED, "default")
@@ -218,13 +222,16 @@ def test_an_unknown_value_is_named_with_a_suggestion(
 
 
 def test_a_value_the_email_does_not_carry_is_refused() -> None:
-    assert check_line(N.CREDITS_GRANTED, "default", EmailLine.HEADING, "{creditCount} credits") == [
-        LineError(EmailLine.HEADING, LineErrorCode.VALUE_NOT_SENT, "creditCount")
+    assert check_line(N.CREDITS_GRANTED, "default", EmailLine.HEADING, "{intervalTime} left") == [
+        LineError(EmailLine.HEADING, LineErrorCode.VALUE_NOT_SENT, "intervalTime")
     ]
+    assert (
+        check_line(N.CREDITS_GRANTED, "default", EmailLine.HEADING, "{creditCount} credits") == []
+    )
 
 
 def test_every_reason_is_reported_once_per_value() -> None:
-    text = "{creditCount} {creditCount} {nope} " + "x" * 100
+    text = "{intervalTime} {intervalTime} {nope} " + "x" * 100
     errors = check_line(N.CREDITS_GRANTED, "default", EmailLine.SUBJECT, text)
     assert [error.code for error in errors] == [
         LineErrorCode.TOO_LONG,
