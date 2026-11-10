@@ -51,9 +51,6 @@ class FakeSink:
             raise UpstreamError("analytics capture failed: 503")
         self.batches.append(events)
 
-    def delete_person(self, user_id: UUID) -> None:
-        del user_id
-
 
 async def queue(engine: AsyncEngine, count: int = 1, *, user: UUID | None = None) -> list[UUID]:
     """`count` events queued, each in its own transaction, oldest first."""

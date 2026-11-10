@@ -9,7 +9,6 @@ factory there chooses the real one or the null one from settings (decision
 from __future__ import annotations
 
 from typing import Any, Protocol
-from uuid import UUID
 
 __all__ = ["AnalyticsSink"]
 
@@ -20,8 +19,4 @@ class AnalyticsSink(Protocol):
     def capture(self, events: list[dict[str, Any]]) -> None:
         """Send these events, built by `analytics_event`, in one request.
         Raises `UpstreamError` when they were not taken."""
-        ...
-
-    def delete_person(self, user_id: UUID) -> None:
-        """Erase everything held about this person, for an account deletion."""
         ...

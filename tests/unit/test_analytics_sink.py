@@ -221,7 +221,6 @@ def test_the_null_sink_takes_everything_and_sends_nothing() -> None:
     assert (
         sink.capture([analytics_event(AnalyticsEvent.MENTOR_LISTED, user_id=USER, at=AT)]) is None
     )
-    assert sink.delete_person(USER) is None
 
 
 # --------------------------------------------------------------------------
@@ -291,10 +290,3 @@ def test_a_network_failure_is_an_upstream_error() -> None:
 
     with pytest.raises(UpstreamError, match="refused"):
         sink.capture(EVENTS)
-
-
-def test_erasing_a_person_is_not_wired_and_says_why() -> None:
-    sink = PostHogSink(host=HOST, project_token=TOKEN, client=recording())
-
-    with pytest.raises(NotImplementedError, match="bulk_delete"):
-        sink.delete_person(USER)
