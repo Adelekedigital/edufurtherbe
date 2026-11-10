@@ -184,6 +184,14 @@ def test_values_follow_what_the_email_is_about() -> None:
     assert "unreadCount" not in values_for(N.MESSAGE_IN_SESSION_WINDOW, "default")
 
 
+def test_answered_questions_mean_something_only_on_a_new_booking() -> None:
+    """Decision 334: the request and the booking carry the count, nothing else."""
+    assert "answeredQuestions" in values_for(N.SESSION_REQUESTED, "default")
+    assert "answeredQuestions" in values_for(N.SESSION_BOOKED, "mentor")
+    assert "answeredQuestions" not in values_for(N.REQUEST_ACCEPTED, "default")
+    assert "answeredQuestions" not in values_for(N.MENTOR_RESPONSE_REMINDER, "default")
+
+
 def test_an_empty_line_is_refused_alone() -> None:
     assert check_line(N.CREDITS_GRANTED, "default", EmailLine.SUBJECT, "  ") == [
         LineError(EmailLine.SUBJECT, LineErrorCode.EMPTY)
@@ -298,3 +306,23 @@ def test_every_email_fills_its_published_shared_template(
     assert all(built[name] for name in ("emailSubject", "emailHeading", "buttonLabel"))
     if group == "messages":
         assert bool(built["sessionDate"]) is (email is N.MESSAGE_IN_SESSION_WINDOW)
+
+
+@pytest.mark.parametrize(
+    ("group", "email", "variant"),
+    [
+        (group, email, variant)
+        for group in ("session_confirmed", "request_awaiting")
+        for email in TEMPLATE_GROUPS[group]
+        for variant in SAMPLES[email]
+    ],
+)
+def test_the_answered_line_fills_for_every_email_of_its_templates(
+    group: str, email: Notification, variant: str
+) -> None:
+    """When the owner adds `answeredQuestions` to these templates in Loops, the
+    other emails sharing them fill it empty rather than refusing to send."""
+    declared = [*PUBLISHED_TEMPLATES[group], "answeredQuestions"]
+    built = build_variables(declared, sample_context(email, variant))
+    to_the_mentor = email in {N.SESSION_REQUESTED, N.SESSION_BOOKED} and variant != "mentee"
+    assert built["answeredQuestions"] == ("3 questions" if to_the_mentor else "")

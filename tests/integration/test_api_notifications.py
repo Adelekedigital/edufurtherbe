@@ -60,9 +60,11 @@ async def a_booking(
     *,
     confirmation: bool = False,
     before: Callable[[UUID, UUID], Awaitable[None]] | None = None,
+    answers: Callable[[UUID], Awaitable[list[dict[str, Any]]]] | None = None,
 ) -> dict[str, Any]:
     """A booking between a new mentor and mentee. `before(mentor, mentee)` runs
-    once both exist and before the booking, for what must precede it."""
+    once both exist and before the booking, for what must precede it;
+    `answers(session_type)` sets up its questions and returns the answers sent."""
     mentor = await make_public_mentor(engine, tag)
     session_type = await add_session_type(engine, mentor, duration=60, notice=0)
     for day in range(7):
@@ -100,6 +102,7 @@ async def a_booking(
         json={
             "session_type_id": str(session_type),
             "starts_at": str(slots.json()["data"][-1]["start"]),
+            **({"answers": await answers(session_type)} if answers is not None else {}),
         },
         headers=bearer(api_token(mentee_auth)) | {"Idempotency-Key": str(uuid4())},
     )

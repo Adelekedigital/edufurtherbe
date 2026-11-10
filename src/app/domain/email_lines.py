@@ -81,6 +81,9 @@ OWNED_BY: dict[str, frozenset[Notification]] = {
     "creditCount": frozenset({N.CREDITS_GRANTED, N.CREDITS_RENEWED, N.CREDITS_EXPIRING}),
     "suggestedAfter": frozenset({N.SESSION_TIME_SUGGESTED}),
     "reminderMessage": frozenset({N.MENTEE_REQUEST_REMINDER}),
+    # Decision 334: the mentor reads it about a new booking; the drain counts
+    # the answers for exactly these emails.
+    "answeredQuestions": frozenset({N.SESSION_REQUESTED, N.SESSION_BOOKED}),
 }
 
 #: The variable each rewordable line fills in a shared template.

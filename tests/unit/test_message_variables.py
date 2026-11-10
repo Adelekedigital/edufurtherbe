@@ -383,6 +383,24 @@ def test_credit_count_is_required_where_asked() -> None:
         build_variables(["creditCount"], context())
 
 
+@pytest.mark.parametrize(
+    ("carried", "said"), [("1", "1 question"), ("3", "3 questions"), ("0", "")]
+)
+def test_answered_questions_are_a_count_in_words(carried: str, said: str) -> None:
+    """Decision 334: the mentor reads how many questions were answered, never
+    the answers; none answered is empty, so the template hides the line."""
+    built = build_variables(["answeredQuestions"], context(extras={"answered_questions": carried}))
+
+    assert built == {"answeredQuestions": said}
+
+
+def test_answered_questions_are_required_where_asked() -> None:
+    """Only a new booking's email carries the count; any other asking for it
+    is a template pointed at the wrong email."""
+    with pytest.raises(UnresolvedVariableError, match="answeredQuestions"):
+        build_variables(["answeredQuestions"], context())
+
+
 def test_every_name_a_live_template_uses_has_a_resolver() -> None:
     """The gap the dev outbox found, closed for every template at once."""
     known = set(RESOLVERS) | set(ALIASES)
@@ -536,3 +554,9 @@ def test_first_credits_carry_their_count_and_an_old_row_sends_without_it() -> No
     renewed = context(starts_at=None, notification=Notification.CREDITS_RENEWED)
     with pytest.raises(UnresolvedVariableError):
         build_variables(["creditCount"], renewed)
+
+
+def test_an_answered_count_that_is_not_a_number_refuses_by_name() -> None:
+    bad = context(extras={"answered_questions": "three"})
+    with pytest.raises(UnresolvedVariableError, match="answeredQuestions"):
+        build_variables(["answeredQuestions"], bad)
